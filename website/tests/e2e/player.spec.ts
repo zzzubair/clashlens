@@ -166,7 +166,7 @@ for (const ageSeconds of [30, 60, 61, 120]) {
     await expect(refusal).toBeVisible();
     await page.waitForLoadState("networkidle");
     expect(submissions).toHaveLength(automaticCount + 2);
-    expect(new URLSearchParams(submissions.at(-1)).get("trigger")).toBe("manual");
+    expect(new URLSearchParams(submissions.at(-1)).get("trigger")).toBeNull();
   });
 }
 

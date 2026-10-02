@@ -27,13 +27,20 @@ beforeEach(() => {
   vi.stubEnv("CLASHLENS_PUBLIC_ORIGIN", "https://clashlens.example");
 });
 
-async function refresh(trigger = "automatic", peer = VISITOR, tag = "#2PP") {
+async function refresh(
+  trigger: string | null = "automatic",
+  peer = VISITOR,
+  tag = "#2PP",
+) {
   const request = new Request(
     `https://clashlens.example/resources/players/${encodeURIComponent(tag)}/refresh`,
     {
       method: "POST",
       headers: { Origin: "https://clashlens.example" },
-      body: new URLSearchParams({ idempotencyKey: crypto.randomUUID(), trigger }),
+      body: new URLSearchParams({
+        idempotencyKey: crypto.randomUUID(),
+        ...(trigger === null ? {} : { trigger }),
+      }),
     },
   );
   return refreshAction({
@@ -71,9 +78,10 @@ it("keeps all six manual requests available after six automatic profile refresh 
   await expect(startPlayerLookup(VISITOR, "#LQQP")).resolves.toMatchObject({
     state: "checking",
   });
+  expect((await refresh("manual")).init?.status).toBe(400);
   for (let index = 0; index < 5; index++)
-    expect((await refresh("manual")).init?.status).toBe(202);
-  expect((await refresh("manual")).init?.status).toBe(429);
+    expect((await refresh(null)).init?.status).toBe(202);
+  expect((await refresh(null)).init?.status).toBe(429);
 });
 
 it("quietly skips automatic requests after three, isolates visitors, and allows them after a minute", async () => {

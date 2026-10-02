@@ -318,10 +318,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     automaticRefreshHandled.current = true;
     if (!isDocumentReload && trackedPlayer.profile.freshness.ageSeconds <= 60) return;
     refreshFetcher.submit(
-      {
-        idempotencyKey: data.noJsIdempotencyKey,
-        trigger: isDocumentReload ? "manual" : "automatic",
-      },
+      isDocumentReload
+        ? { idempotencyKey: data.noJsIdempotencyKey }
+        : { idempotencyKey: data.noJsIdempotencyKey, trigger: "automatic" },
       {
         method: "post",
         action: `/resources/players/${encodeURIComponent(trackedPlayer.tag)}/refresh`,

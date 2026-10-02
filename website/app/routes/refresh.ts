@@ -103,7 +103,7 @@ async function readRefreshForm(
     values.length !== 1 ||
     !isCanonicalUuid(values[0]) ||
     triggers.length > 1 ||
-    (triggers.length === 1 && !["manual", "automatic"].includes(triggers[0]))
+    (triggers.length === 1 && triggers[0] !== "automatic")
   ) {
     return null;
   }
