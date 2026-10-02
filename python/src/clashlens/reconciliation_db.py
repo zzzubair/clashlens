@@ -1245,13 +1245,15 @@ def enqueue_current_season_republication(
     database: Database,
     *,
     max_jobs: int = 100,
-) -> list[int]:
+) -> dict[str, Any]:
     """Queue a bounded batch of published current-season days missing v3.
 
     This rebuilds derived ranked-day publications from canonical database
     evidence; it does not replay archived source observations. Repeating
     the call advances past already queued targets, so an operator can drain
     a season in measured batches without an unbounded deployment action.
+    A batch that re-checks partial Reset pairs reports only that work; see
+    ``reset_baselines.repair_current_season_reset_baselines``.
     """
 
     if isinstance(max_jobs, bool) or not 1 <= max_jobs <= 1000:
@@ -1261,7 +1263,7 @@ def enqueue_current_season_republication(
     repaired = reset_baselines.repair_current_season_reset_baselines(
         database, max_works=max_jobs
     )
-    if repaired:
+    if repaired["evaluated_count"]:
         return repaired
     with database.pool.connection() as connection:
         with connection.transaction():
@@ -1377,6 +1379,6 @@ def enqueue_current_season_republication(
                 ).fetchone()
                 if row is not None:
                     job_ids.append(int(row[0]))
-            return job_ids
+            return {**repaired, "job_ids": job_ids}
 
 

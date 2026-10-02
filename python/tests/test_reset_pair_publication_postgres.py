@@ -5,6 +5,7 @@ import time
 from datetime import timedelta
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation, text
 from test_reconciliation_postgres import (
     DAY_END,
@@ -144,11 +145,13 @@ def test_reset_pair_with_production_parser_versions_publishes_army_day(
             database.close()
 
 
+@pytest.mark.parametrize("stale", [False, True])
 def test_republication_finishes_days_left_by_partial_reset_pairs(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, stale: bool
 ) -> None:
     # Production state on 2026-10-02: both Reset results were processed but
-    # the pair's latest check said partial, so the day stayed Live.
+    # the pair's latest check said partial, so the day stayed Live. A pair
+    # saved before its Reset fails the re-check and queues nothing.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         pairs = [
             _store_baseline_pair(
@@ -158,6 +161,7 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                 boundary=boundary,
                 trophies=trophies,
                 empty_battle_log=True,
+                observed_at=boundary - timedelta(hours=1) if stale else None,
                 profile_parser_version=PROFILE_PARSER_VERSION,
             )
             for key, boundary, trophies in (
@@ -203,17 +207,22 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                 )
                 connection.commit()
 
-            jobs = reconciliation_db.enqueue_current_season_republication(
+            report = reconciliation_db.enqueue_current_season_republication(
                 database, max_jobs=10
             )
-            assert len(jobs) == 1
-            assert processor.process_job(jobs[0], owner="repair").outcome == "processed"
-            assert (
-                reconciliation_db.enqueue_current_season_republication(
-                    database, max_jobs=10
-                )
-                == []
-            )
+            if stale:
+                assert report == {
+                    "job_ids": [],
+                    "evaluated_count": 1,
+                    "failure_reasons": {"battle_log_stale": 1, "profile_stale": 1},
+                }
+                return
+            assert (len(report["job_ids"]), report["evaluated_count"]) == (1, 1)
+            job = report["job_ids"][0]
+            assert processor.process_job(job, owner="repair").outcome == "processed"
+            assert reconciliation_db.enqueue_current_season_republication(
+                database, max_jobs=10
+            ) == {"job_ids": [], "evaluated_count": 0, "failure_reasons": {}}
             with database.pool.connection() as connection:
                 day_state = connection.execute(
                     """

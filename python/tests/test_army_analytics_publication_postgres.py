@@ -1548,7 +1548,7 @@ def test_current_season_without_completed_days_names_previous_season(
             database.close()
 
 
-def test_current_season_ended_but_withheld_day_is_unavailable(
+def test_current_season_reads_latest_finished_days_it_has(
     database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
@@ -1575,14 +1575,14 @@ def test_current_season_ended_but_withheld_day_is_unavailable(
                     now=DAY_START + timedelta(days=1, hours=1),
                 )
             assert unavailable.value.affected_days == [1]
-            # Later ended-but-withheld days stay named alongside missing
-            # earlier days instead of being silently clipped away.
-            with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                api_analytics.get_army_analytics(api,
-                    _selection(season="current", start_day=1, end_day=28),
-                    now=DAY_START + timedelta(days=24, hours=12),
-                )
-            assert unavailable.value.affected_days == list(range(1, 23)) + [24]
+            # The default range reads the finished days it has instead of
+            # failing because earlier days were never finished.
+            covered = api_analytics.get_army_analytics(api,
+                _selection(season="current", start_day=1, end_day=28),
+                now=DAY_START + timedelta(days=24, hours=12),
+            )
+            assert (covered["selection"]["start_day"], covered["selection"]["end_day"]) == (23, 23)
+            assert (covered["collection_coverage"]["completed_days"], covered["total_attacks"]) == (1, 1)
             # The completed day itself stays reachable through the chronology.
             resolved = api_analytics.get_army_analytics(api,
                 _selection(season="current", start_day=23, end_day=28),

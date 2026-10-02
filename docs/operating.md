@@ -353,17 +353,21 @@ That happened for every Reset before the October 2026 fix: profiles and battle l
 processed under different parser versions, and each Reset check looked for
 both results under one of them.
 
-**Backfill:** run outside 04:45–05:15 UTC and repeat until `enqueued_count`
-is zero:
+**Backfill:** run outside 04:45–05:15 UTC and repeat until `evaluated_count`
+and `enqueued_count` are both zero:
 
 ```sh
 podman exec clashlens-python-worker \
   python -m clashlens.cli republish-current-season --max-jobs 100
 ```
 
-Each run re-checks current-season Reset pairs left `partial` although both
-results were processed, one short transaction per player, and returns the
-end-of-day jobs it queued. The worker then publishes the days on its own.
+Each run re-checks at most `--max-jobs` current-season Reset pairs left
+`partial` although both results were processed, one short transaction per
+player. It reports how many pairs it checked (`evaluated_count`), the
+end-of-day jobs it queued, and how often each reason a pair failed was seen
+(`failure_reasons`). A run that checks pairs but queues nothing stops there;
+read its `failure_reasons` before running again. The worker then publishes
+the days on its own.
 Only days whose Reset evidence is still in the database can be rebuilt;
 older days need the archived raw responses replayed, which this does not do.
 
@@ -377,8 +381,11 @@ retired. Building a day in 500-player batches adds about 76 MB to the worker,
 against about 2 GB for a whole day at once. Reading two days took 0.03 s
 for Top 100 and 0.93 s for all tracked players.
 
-**Recovered:** `army_analytics_completed_days` lists the backfilled days and
-the Armies page shows them.
+**Recovered:** `army_analytics_completed_days` lists the backfilled days.
+For the current season the Armies page shows the latest unbroken run of
+finished days in the chosen range, for example days 24–25, with a note that
+earlier days were not tracked. Asking only for days that never finished still
+shows no statistics.
 
 ### When alerts themselves fail
 

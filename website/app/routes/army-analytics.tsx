@@ -401,6 +401,7 @@ export default function ArmyAnalyticsRoute() {
   const pendingChange = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selected = analytics?.selection;
   const isHistorical = historicalSummary === true;
+  const requestedStartDay = params.get("start_day") ?? "1";
   const lens = selected?.lens ?? params.get("lens") ?? "offense";
   const population = selected?.population ?? params.get("population") ?? "top-100";
   const category =
@@ -478,7 +479,7 @@ export default function ArmyAnalyticsRoute() {
       category: showCategory,
       sort: selected?.sort ?? params.get("sort") ?? "usage-rate",
       season: requestedSeason,
-      start_day: String(selected?.startDay ?? params.get("start_day") ?? 1),
+      start_day: requestedStartDay,
       end_day: String(selected?.endDay ?? params.get("end_day") ?? 28),
     };
     for (const [name, value] of Object.entries(values)) {
@@ -721,7 +722,7 @@ export default function ArmyAnalyticsRoute() {
                     required
                     min="1"
                     max="28"
-                    defaultValue={selected?.startDay ?? params.get("start_day") ?? 1}
+                    defaultValue={requestedStartDay}
                     disabled={isHistorical}
                   />
                 </label>
@@ -824,6 +825,14 @@ export default function ArmyAnalyticsRoute() {
               · {analytics.selection.lens === "offense" ? "Attacks" : "Defenses"}
             </span>
           </div>
+          {!isHistorical &&
+          !snapshot &&
+          analytics.selection.startDay > Number(requestedStartDay) ? (
+            <p className="section-note analytics-coverage-note">
+              Days {analytics.selection.startDay}–{analytics.selection.endDay} of 28;
+              earlier days were not tracked.
+            </p>
+          ) : null}
           <p className="section-note analytics-coverage-note" id="army-rate-help">
             Star rates show how often battles using each component ended with that result.
             Each battle counts once per component.

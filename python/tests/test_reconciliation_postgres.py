@@ -1061,7 +1061,7 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                     ),
                 )
                 connection.commit()
-            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1) == []
+            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1)["job_ids"] == []
             with database.pool.connection() as connection:
                 # The source setup runs under v3 and therefore queued a normal
                 # reconciliation. Simulate a deployment whose v2 work is
@@ -1077,9 +1077,9 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                 connection.commit()
             republication_jobs = reconciliation_db.enqueue_current_season_republication(database,
                 max_jobs=1
-            )
+            )["job_ids"]
             assert len(republication_jobs) == 1
-            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1) == []
+            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1)["job_ids"] == []
             with database.pool.connection() as connection:
                 republication_input = connection.execute(
                     "SELECT input_json FROM python_processing_jobs WHERE id = %s",

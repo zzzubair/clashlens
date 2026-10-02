@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -44,93 +45,90 @@ def _refresh_reset_baseline_evidence(
 
 def repair_current_season_reset_baselines(
     database: Database, *, max_works: int
-) -> list[int]:
+) -> dict[str, Any]:
     """Re-check current-season Reset pairs left partial with both results saved.
 
     Until profiles and battle logs were read under their own parser versions,
-    every such pair stayed partial, so its Legend day was never finished. Each
-    pair is re-checked from saved results in its own short transaction, at most
-    ``max_works`` per batch. Returns the end-of-day reconciliation jobs queued;
-    an empty list means no such pair is left.
+    every such pair stayed partial, so its Legend day was never finished. One
+    batch of at most ``max_works`` pairs is re-checked from saved results, each
+    in its own short transaction. Returns the end-of-day reconciliation jobs
+    queued, how many pairs were checked, and how often each failure reason was
+    seen; a checked count of zero means no such pair is left.
     """
 
-    after_work_id = 0
     with database.pool.connection() as connection:
-        while True:
+        with connection.transaction():
+            candidates = connection.execute(
+                """
+                WITH current_anchor AS (
+                    SELECT current_start
+                    FROM legend_season_anchors
+                    WHERE state = 'confirmed' AND anchor_rule_version = %s
+                    ORDER BY current_start DESC
+                    LIMIT 1
+                )
+                SELECT work.profile_observation_id, (
+                    SELECT outcome.parser_version
+                    FROM observation_processing_outcomes AS outcome
+                    WHERE outcome.observation_id = work.profile_observation_id
+                      AND outcome.processing_version = %s
+                    ORDER BY outcome.id DESC
+                    LIMIT 1
+                )
+                FROM collector_work AS work
+                JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
+                JOIN current_anchor AS anchor
+                  ON sweep.boundary_at > anchor.current_start
+                 AND sweep.boundary_at <= anchor.current_start + interval '28 days'
+                WHERE work.kind = 'reset_baseline'
+                  AND (
+                      SELECT evidence.state
+                      FROM reset_baseline_evidence AS evidence
+                      WHERE evidence.collector_work_id = work.id
+                      ORDER BY evidence.version DESC, evidence.id DESC
+                      LIMIT 1
+                  ) = 'partial'
+                  AND EXISTS (
+                      SELECT 1 FROM observation_processing_outcomes AS outcome
+                      WHERE outcome.observation_id = work.profile_observation_id
+                        AND outcome.processing_version = %s
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM observation_processing_outcomes AS outcome
+                      WHERE outcome.observation_id = work.battle_log_observation_id
+                        AND outcome.processing_version = %s
+                  )
+                ORDER BY work.id
+                LIMIT %s
+                """,
+                (
+                    SEASON_ANCHOR_RULE_VERSION,
+                    PROCESSING_VERSION,
+                    PROCESSING_VERSION,
+                    PROCESSING_VERSION,
+                    max_works,
+                ),
+            ).fetchall()
+        job_ids = []
+        failure_reasons: Counter[str] = Counter()
+        for profile_observation_id, profile_parser_version in candidates:
             with connection.transaction():
-                candidates = connection.execute(
-                    """
-                    WITH current_anchor AS (
-                        SELECT current_start
-                        FROM legend_season_anchors
-                        WHERE state = 'confirmed' AND anchor_rule_version = %s
-                        ORDER BY current_start DESC
-                        LIMIT 1
-                    )
-                    SELECT work.id, work.profile_observation_id, (
-                        SELECT outcome.parser_version
-                        FROM observation_processing_outcomes AS outcome
-                        WHERE outcome.observation_id = work.profile_observation_id
-                          AND outcome.processing_version = %s
-                        ORDER BY outcome.id DESC
-                        LIMIT 1
-                    )
-                    FROM collector_work AS work
-                    JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
-                    JOIN current_anchor AS anchor
-                      ON sweep.boundary_at > anchor.current_start
-                     AND sweep.boundary_at <= anchor.current_start + interval '28 days'
-                    WHERE work.kind = 'reset_baseline'
-                      AND work.id > %s
-                      AND (
-                          SELECT evidence.state
-                          FROM reset_baseline_evidence AS evidence
-                          WHERE evidence.collector_work_id = work.id
-                          ORDER BY evidence.version DESC, evidence.id DESC
-                          LIMIT 1
-                      ) = 'partial'
-                      AND EXISTS (
-                          SELECT 1 FROM observation_processing_outcomes AS outcome
-                          WHERE outcome.observation_id = work.profile_observation_id
-                            AND outcome.processing_version = %s
-                      )
-                      AND EXISTS (
-                          SELECT 1 FROM observation_processing_outcomes AS outcome
-                          WHERE outcome.observation_id = work.battle_log_observation_id
-                            AND outcome.processing_version = %s
-                      )
-                    ORDER BY work.id
-                    LIMIT %s
-                    """,
-                    (
-                        SEASON_ANCHOR_RULE_VERSION,
-                        PROCESSING_VERSION,
-                        after_work_id,
-                        PROCESSING_VERSION,
-                        PROCESSING_VERSION,
-                        max_works,
-                    ),
-                ).fetchall()
-            if not candidates:
-                return []
-            job_ids = []
-            for work_id, profile_observation_id, profile_parser_version in candidates:
-                with connection.transaction():
-                    job_id = _evaluate_reset_baseline(
-                        database,
-                        connection,
-                        observation_id=int(profile_observation_id),
-                        observation_endpoint="profile",
-                        parser_version=_text_value(profile_parser_version),
-                        processing_version=PROCESSING_VERSION,
-                    )
-                if job_id is not None:
-                    job_ids.append(job_id)
-                after_work_id = int(work_id)
-            # A batch whose pairs all failed queued nothing; keep going so an
-            # empty result still means no partial pair is left.
-            if job_ids:
-                return job_ids
+                job_id, reasons = _evaluate_reset_baseline(
+                    database,
+                    connection,
+                    observation_id=int(profile_observation_id),
+                    observation_endpoint="profile",
+                    parser_version=_text_value(profile_parser_version),
+                    processing_version=PROCESSING_VERSION,
+                )
+            if job_id is not None:
+                job_ids.append(job_id)
+            failure_reasons.update(reasons)
+    return {
+        "job_ids": job_ids,
+        "evaluated_count": len(candidates),
+        "failure_reasons": dict(sorted(failure_reasons.items())),
+    }
 
 
 def _evaluate_reset_baseline(
@@ -143,14 +141,15 @@ def _evaluate_reset_baseline(
     processing_version: str,
     failure_category: str | None = None,
     failure_retryable: bool = False,
-) -> int | None:
+) -> tuple[int | None, list[str]]:
     """Record the Reset pair evidence seen from one of its observations.
 
-    Returns the end-of-day reconciliation job queued when the pair is complete.
+    Returns the end-of-day reconciliation job queued when the pair is complete,
+    and the pair's failure reasons.
     """
     context = _load_reset_baseline_context(connection, observation_id)
     if context is None:
-        return None
+        return None, []
     work_id, player_id, normalized_tag, sweep_id, boundary_at = context
     # The profile and battle-log jobs of one Reset pair often run at the same
     # time. Lock before reading so the later job sees the earlier job's
@@ -293,14 +292,14 @@ def _evaluate_reset_baseline(
             state=state,
         )
     if state != "complete":
-        return None
+        return None, reasons
     return _enqueue_reset_reconciliation(
         connection,
         baseline_id=evidence_id,
         baseline_version=version,
         player_id=int(player_id),
         boundary_at=boundary_at,
-    )
+    ), reasons
 
 
 def _record_boundary_baseline(

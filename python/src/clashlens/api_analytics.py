@@ -195,10 +195,10 @@ def get_army_analytics(
                     # recently published season.
                     raise CurrentSeasonEmpty(None)
                 # The default range ends at the latest Legend day whose
-                # interval has ended in reset chronology (05:00 UTC), not
-                # at the latest day with published source data. The
-                # completed-day gates below then report any ended but
-                # withheld day as unavailable instead of hiding it.
+                # interval has ended in reset chronology (05:00 UTC). The
+                # completed-day gates below then narrow it to the latest
+                # unbroken run of finished days, and the response selection
+                # names the days covered.
                 current_time = (
                     now.astimezone(UTC) if now is not None else datetime.now(tz=UTC)
                 )
@@ -255,8 +255,22 @@ def get_army_analytics(
                 (resolved.season, resolved.start_day, resolved.end_day),
             ).fetchall()
             completed_days = {int(row[0]) for row in completed_day_rows}
+            available_days = completed_days.intersection(day_starts)
+            if selection.season == "current" and available_days:
+                end_day = start_day = max(available_days)
+                while start_day - 1 in available_days:
+                    start_day -= 1
+                resolved = ArmyAnalyticsSelection.parse(
+                    **{
+                        **resolved.as_dict(),
+                        "start_day": start_day,
+                        "end_day": end_day,
+                    }
+                )
             completed_day_signature = tuple(
-                (int(row[0]), _text(row[1])) for row in completed_day_rows
+                (int(row[0]), _text(row[1]))
+                for row in completed_day_rows
+                if resolved.start_day <= int(row[0]) <= resolved.end_day
             )
             missing_days = [
                 day

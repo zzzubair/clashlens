@@ -224,6 +224,51 @@ describe("army analytics route historical reads", () => {
     expect(data).toMatchObject({ error: null, seasonEmpty: null });
   });
 
+  it("names the finished days covered when earlier current-season days are missing", async () => {
+    const selection = {
+      season: SEASON,
+      lens: "offense",
+      startDay: 24,
+      endDay: 25,
+      population: "top-100",
+      category: "troops",
+      sort: "usage-rate",
+    };
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue({
+        kind: "army-analytics",
+        selection,
+        totalAttacks: 0,
+        usableArmySample: 0,
+        armyStates: {},
+        armyStatesSumConfirmed: true,
+        unknownAffectedAttacks: 0,
+        unknownComponentOccurrences: 0,
+        perspectiveDisagreementCount: 0,
+        missingTrophyMembershipEvidence: 0,
+        cohortEvidence: {
+          staleOrUncertainCohortMembers: 0,
+          streakExcludedPlayers: 0,
+          shieldedPlayerDays: 0,
+        },
+        collectionCoverage: { state: "complete", completedDays: 2 },
+        freshness: { state: "frozen" },
+        reproducibility: {
+          officialSeasonId: SEASON,
+          legendDays: [24, 25],
+          snapshotVersions: [],
+        },
+        versions: { decoder: "decoder", catalog: "catalog", analytics: "v3" },
+        publicationIdentity: "publication",
+        rows: [],
+      }),
+    });
+    const text = renderedText(await renderArmyRoute("season=current"));
+    expect(text).toContain("Days 24–25 of 28; earlier days were not tracked.");
+    const chosen = renderedText(await renderArmyRoute("season=current&start_day=24"));
+    expect(chosen).not.toContain("earlier days were not tracked");
+  });
+
   it("reads individual Clan Castle troops when the toggle is on", async () => {
     const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
     mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });

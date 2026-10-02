@@ -368,9 +368,9 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
         database: FakeDatabase,
         *,
         max_jobs: int,
-    ) -> list[int]:
+    ) -> dict[str, object]:
         assert max_jobs == 7
-        return [41, 42]
+        return {"job_ids": [41, 42], "evaluated_count": 0, "failure_reasons": {}}
 
     monkeypatch.setattr("clashlens.cli.Database", FakeDatabase)
     monkeypatch.setattr(
@@ -392,6 +392,8 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
     assert json.loads(capsys.readouterr().out) == {
         "enqueued_count": 2,
         "job_ids": [41, 42],
+        "evaluated_count": 0,
+        "failure_reasons": {},
     }
 
 
