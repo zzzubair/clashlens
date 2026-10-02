@@ -186,7 +186,12 @@ Zubair's approval. Use the [existing service lifecycle](deployment.md#existing-s
 for an approved stop or restart; do not keep restarting a broken service.
 An approved restart of one service is
 `systemctl --user restart clashlens-worker.service`, with `worker` replaced by
-`api`, `website` or `collector`; only that container restarts. Restarting
+`api`, `website` or `collector`; only that container restarts. This holds only
+after the next `./ops up` re-renders the service files and reloads systemd;
+before that, a one-service restart restarts the whole stack. To check it, run
+`podman ps --format '{{.Names}} {{.StartedAt}}'`, restart the one service, run
+it again, and confirm the PostgreSQL and collector start times are unchanged
+(when the restarted service is the collector, only PostgreSQL's). Restarting
 `clashlens-postgres.service` also restarts the worker, API and collector, which
 use the database. `./ops down` and `./ops up` stop and start the whole stack.
 
