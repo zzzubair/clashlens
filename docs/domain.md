@@ -241,14 +241,24 @@ A domain change is complete only when every affected source observation, derived
 - A battle saved after its ended day's result was published is added to that
   day by a once-per-Reset check. From 05:30 UTC, every 10 minutes until it
   runs, the worker waits for the Reset sweep to finish and for every response
-  fetched before it finished to be processed. It then finds each player's own
-  battle reports from the previous 7 Legend days that were saved within 5
-  minutes of their day's end or later and are missing from that day's latest
-  saved result. For each such player it queues the normal ranked-day
-  recalculation for that day and every later day that already has a saved
-  result, oldest first and 5 minutes apart, because each day's result uses the
-  day before it. It never creates a day that was never saved. A battle saved
-  after the check has run is added after the next Reset.
+  fetched before it finished to be processed. It then looks at every battle,
+  on any ended Legend day still kept, with a report saved within 5 minutes of
+  its day's end or later. For each player who reported that battle, the day's
+  latest saved result must list their report and whether the two players'
+  reports currently agree; a late report from the other player can change
+  that. Days of a season whose detail is retired cannot be recalculated and are
+  skipped. For each player with a mismatch it queues the normal ranked-day
+  recalculation for that day, then for every later day that already had a
+  saved result when the correction started, one at a time: each later day is
+  queued only once the day before it has finished, because each day's result
+  uses the day before it. It never creates a day that was never saved. Checks
+  continue every 10 minutes until every correction has finished. Each queued
+  job's key names the player, the day and the late report, so a re-run, or a
+  restarted worker, continues a correction rather than repeating it. Each
+  check reads every kept battle report once: about 200,000 a day at 12,500
+  players, so about 5.6 million for each full 28-day season kept. That read
+  time has not been measured at that size. A battle saved after the last check of a
+  Reset is added after the next Reset.
 - A **frozen leaderboard snapshot** is the accepted, versioned ordering of actively tracked players at a reset baseline.
 - Continue serving the previously frozen snapshot while the next snapshot is assembled. Publish the replacement atomically so users never receive a mixture of snapshot versions.
 - Target snapshot publication at approximately 05:05 UTC on normal days, after the daily no-attack matchmaking window.
