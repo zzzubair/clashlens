@@ -306,8 +306,23 @@ def test_new_malformed_row_older_than_the_newest_still_gets_its_retry() -> None:
     assert not state.log(TAG, now + timedelta(seconds=61), newest, malformed)
     assert state.due(TAG, now + timedelta(seconds=63))
 
+    # A Refresh 30 seconds later may get the same cached log back.
     assert state.log(TAG, now + timedelta(seconds=91), newest, malformed)
-    assert not state.due(TAG, now + timedelta(seconds=93))
+    assert state.due(TAG, now + timedelta(seconds=93))
+
+    assert state.log(TAG, now + timedelta(seconds=121), newest, malformed)
+    assert not state.due(TAG, now + timedelta(seconds=123))
+
+
+def test_malformed_row_seen_by_a_refresh_is_retried_by_the_next_check(
+    game: SimpleNamespace,
+) -> None:
+    game.settle()
+    bad_row = {"opponentPlayerTag": None}
+    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0], attack=False) | bad_row]
+
+    assert game.check(lane="interactive") == BOTH
+    assert [game.check() for _ in range(2)] == [BOTH, PROFILE]
 
 
 def test_failed_log_fetch_keeps_the_obligation(game: SimpleNamespace) -> None:
@@ -329,11 +344,14 @@ def _at(clock: str) -> datetime:
 def test_zero_trophy_defense_of_battle_6964051_arrives_within_a_check(
     game: SimpleNamespace,
 ) -> None:
-    """Production times and profiles. Both players tracked.
+    """Production check and battle times. Both players tracked.
 
-    The attacker's profile showed none of these attacks until 07:14, and both
-    players' win counts stayed 0. Only the defender's count of defenses won
-    moved. The defense was saved at 07:13:46, by the safety fetch.
+    Retained data: neither player's trophies changed until 07:14, and both
+    players' attackWins and defenseWins were 0 before and after the battle
+    (archived bodies 842532, 863696, 847729, 867663), so 0 throughout. The
+    defender's Unbreakable rose from 1767 to 1768 between 06:33 and 07:26; that
+    it rose as soon as the battle ended is modelled. The defense was saved at
+    07:13:46, by the safety fetch.
     """
     attacker, defender, earlier_defender = "#2990QRJY9", "#P9YJR8QY", "#92C9G8YJ9"
     logs = game.client.logs
@@ -569,11 +587,12 @@ def test_valid_battle_in_a_partly_malformed_log_still_marks_the_opponent() -> No
     assert state.due(TAG, later)
 
 
-def test_corrected_older_row_still_marks_the_opponent() -> None:
+@pytest.mark.parametrize("age", [timedelta(seconds=40), timedelta(minutes=15)])
+def test_corrected_older_row_still_marks_the_opponent(age: timedelta) -> None:
     state = _Schedule()
     now = state.settle(TAG)
     state.settle(OPPONENT)
-    older = _battle(OPPONENT, now - timedelta(seconds=40))
+    older = _battle(OPPONENT, now - age)
     newer = _battle(UNTRACKED, now - timedelta(seconds=20))
     state.log(TAG, now, newer, older | {"stars": None})
     assert not state.due(OPPONENT, now + timedelta(seconds=2))

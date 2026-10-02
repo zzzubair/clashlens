@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -47,6 +48,11 @@ SAME_BATTLE_GAP = timedelta(minutes=5)
 # measures how much later battle details appear. The same group in SQL:
 # get_byte(sha256(convert_to(normalized_tag, 'UTF8')), 0) < 13
 CONTROL_BYTE_LIMIT = 13
+# One remembered battle: its time in whole seconds, wrapping in 2106, and a
+# 4-byte digest of its opponent and side.
+_BATTLE = struct.Struct(">I4s")
+# Bytes of each remembered malformed row's content digest.
+_ROW_DIGEST_BYTES = 8
 
 
 def in_control_group(normalized_tag: str) -> bool:
@@ -66,12 +72,12 @@ class _Player:
     follow_up_after: datetime | None = None
     battle_log_at: datetime | None = None
     latest_battle_at: datetime | None = None
-    # Time, opponent and side of the battles near the newest, to recognise a
-    # battle that an opponent's log reports under its own timestamp, and to
-    # tell an opponent about each battle only once.
-    recent: tuple[tuple[datetime, str, bool], ...] = ()
-    # The malformed rows of the last log, each identified by its own content.
-    malformed: frozenset[bytes] = frozenset()
+    # The valid battles of the last log, packed as _BATTLE records, to
+    # recognise a battle that an opponent's log reports under its own
+    # timestamp, and to tell an opponent about each battle only once.
+    battles: bytes = b""
+    # Digests of the malformed rows of the last log, each of its own content.
+    malformed: bytes = b""
 
 
 class BattleLogSchedule:
@@ -101,12 +107,15 @@ class BattleLogSchedule:
                 return False
             battles, malformed = read
             player = self._players.setdefault(normalized_tag, _Player())
-            # A newly seen malformed row holds the log owed once, for a
-            # corrected copy. Live logs keep rows with no opponent for days.
-            complete = malformed <= player.malformed
+            # A newly seen malformed row owes one fetch past the API cache, for
+            # a corrected copy. Live logs keep rows with no opponent for days.
+            complete = _row_digests(malformed) <= _row_digests(player.malformed)
             player.malformed = malformed
             if complete:
                 _note_complete_log(player, started_at, completed_at)
+            else:
+                player.owed = max(player.owed, 1)
+                _start_no_earlier_than(player, started_at + FOLLOW_UP_GAP)
             self._note_battles(normalized_tag, player, battles, completed_at)
             return complete
         return False
@@ -119,7 +128,9 @@ class BattleLogSchedule:
         completed_at: datetime,
     ) -> None:
         previous = player.latest_battle_at
-        known = set(player.recent)
+        known = set(_BATTLE.iter_unpack(player.battles))
+        records = [_record(*battle) for battle in battles]
+        player.battles = b"".join(_BATTLE.pack(*record) for record in records)
         for battle_at, _opponent_tag, attack in battles:
             if player.latest_battle_at is None or battle_at > player.latest_battle_at:
                 player.latest_battle_at = battle_at
@@ -130,20 +141,10 @@ class BattleLogSchedule:
             ):
                 player.owed = max(player.owed, 1)
                 _start_no_earlier_than(player, battle_at + ATTACK_WATCH)
-        newest = player.latest_battle_at
-        if newest is not None:
-            player.recent = tuple(
-                battle
-                for battle in {*player.recent, *battles}
-                if battle[0] >= newest - 2 * SAME_BATTLE_GAP
-            )
-        for battle in battles:
-            battle_at, opponent_tag, attack = battle
-            # Only a battle this player's logs show for the first time tells
-            # its opponent. One older than `recent` keeps was shown before.
-            if battle in known or (
-                previous is not None and battle_at < previous - 2 * SAME_BATTLE_GAP
-            ):
+        for (battle_at, opponent_tag, attack), record in zip(battles, records):
+            # Only a battle missing from this player's last log tells its
+            # opponent, so an unchanged log never does.
+            if record in known:
                 continue
             opponent = self._players.get(opponent_tag)
             if opponent is not None and not _has_battle(
@@ -183,11 +184,18 @@ def _has_battle(
         return False
     if player.latest_battle_at > battle_at + SAME_BATTLE_GAP:
         return True
+    at, side = _record(battle_at, opponent_tag, attack)
     return any(
-        tag == opponent_tag
-        and side == attack
-        and abs(at - battle_at) <= SAME_BATTLE_GAP
-        for at, tag, side in player.recent
+        key == side and abs(seconds - at) <= SAME_BATTLE_GAP.total_seconds()
+        for seconds, key in _BATTLE.iter_unpack(player.battles)
+    )
+
+
+def _record(battle_at: datetime, opponent_tag: str, attack: bool) -> tuple[int, bytes]:
+    side = f"{opponent_tag} {attack}".encode()
+    return (
+        int(battle_at.timestamp()) & 0xFFFFFFFF,
+        hashlib.blake2b(side, digest_size=4).digest(),
     )
 
 
@@ -262,11 +270,11 @@ def _count(value: object) -> bool:
 
 def _battles(
     body: bytes, normalized_tag: str
-) -> tuple[list[tuple[datetime, str, bool]], frozenset[bytes]] | None:
+) -> tuple[list[tuple[datetime, str, bool]], bytes] | None:
     """Each valid Legend battle's time, opponent and side, and malformed rows.
 
     A row is valid when it passes the worker's own row rules with an explicit
-    battleTimestamp. Each malformed Legend row is identified by a hash of its
+    battleTimestamp. Malformed Legend rows come as joined digests of their
     content. None means the body is not a battle log at all.
     """
     try:
@@ -297,8 +305,16 @@ def _battles(
                     row.battle.perspective == "attacker",
                 )
             )
-    return battles, frozenset(malformed)
+    return battles, b"".join(sorted(malformed))
 
 
 def _row_identity(item: object) -> bytes:
-    return hashlib.sha256(json.dumps(item, sort_keys=True).encode()).digest()
+    content = json.dumps(item, sort_keys=True).encode()
+    return hashlib.blake2b(content, digest_size=_ROW_DIGEST_BYTES).digest()
+
+
+def _row_digests(packed: bytes) -> set[bytes]:
+    return {
+        packed[start : start + _ROW_DIGEST_BYTES]
+        for start in range(0, len(packed), _ROW_DIGEST_BYTES)
+    }

@@ -198,8 +198,11 @@ and only when every Legend row in it passes the worker's row checks (valid side,
 stars, destruction and opponent tag) and has an explicit `battleTimestamp`;
 `battleTime`, the battle's length, never stands in for it. A failed log leaves
 the fetch owed for the next check and does not reset the 15-minute safety
-clock. A malformed row does the same once, the first time a log shows it, in
-case a corrected copy follows. The collector recognises a row it has seen by
+clock. A malformed row does the same once, the first time any saved log shows
+it, in case a corrected copy follows: whether a regular check, Refresh or Reset
+saved that log, one more fetch is owed that starts at least 60 seconds after
+that log's request started, so neither a Refresh nor a quick re-check inside
+the API cache can use it up. The collector recognises a row it has seen by
 the row's own content, not its time: live logs keep rows with no opponent for
 days; 448 players' logs had shown one by 2026-10-02. Valid rows in such a log
 still count as seen battles and still mark tracked opponents.
@@ -209,7 +212,9 @@ attacker's `battleTimestamp` was 108–211 seconds after the defender's. So the
 opponent fetch treats a battle as already seen when this player's log has a
 battle against that opponent within 5 minutes of it on the other side (the
 opponent's defense matches only this player's attack, and the reverse), or any
-battle more than 5 minutes after it. It does not compare Legend days: the two
+battle more than 5 minutes after it: that log was fetched after this battle
+ended, and rows are appended in order, so it holds this battle, valid or as a
+malformed row with its own retry. It does not compare Legend days: the two
 timestamps of one battle can fall on either side of the Reset. Comparing times
 alone made each defender look behind every time the attacker's log was fetched
 again: replaying the production window, that was 0.34 of the 0.49 extra
@@ -221,10 +226,9 @@ count goes up, so B's next check fetches B's log. If A attacked in the 10
 minutes before, A's log shows it too, and the opponent fetch then covers B as
 well. A valid battle marks its opponent once, on the first saved log of this
 player that shows it, including the first log after a restart and a row that
-was malformed in an earlier copy; later logs showing it again do not. The
-collector only remembers battles up to 10 minutes older than this player's
-newest one, so a row corrected when it is already more than 10 minutes older
-than that counts as seen and does not mark its opponent.
+was malformed in an earlier copy, however old; later logs showing it again do
+not. The collector remembers only the battles in each player's last log (about
+32 Legend rows): a battle that has left the log can no longer be corrected.
 Only players the collector has already checked since starting get an opponent
 fetch. Anything still left, such as a tracked player's first 0-star attack
 under 10% on an untracked player, waits for the attacker's profile or the
@@ -236,10 +240,10 @@ battle reported by both players is stored once. A daily result already
 published for an earlier Legend day is not recalculated when a late battle
 arrives.
 
-The collector keeps this state in memory: one entry of about 555 bytes per
-player it has checked since it started (measured with real battle logs), about
-7.4 MB for 13,263 players. It grows only with the number of players checked,
-and is not saved. After a restart every player's first two checks fetch both
+The collector keeps this state in memory: one entry per player it has checked
+since it started, at most about 660 bytes (measured with full 32-row battle
+logs, 8 bytes per remembered battle), about 8.8 MB for 13,263 players. It
+grows only with the number of players checked, and is not saved. After a restart every player's first two checks fetch both
 responses again: up to about 26,500 extra battle-log requests, three minutes of
 all six keys, but never a missed battle.
 
@@ -256,12 +260,17 @@ check between the two groups.
 
 **Production, 2026-10-02.** The first version of these rules ran for 30
 minutes and was rolled back. One 0-star 30% defense, battle 6964051, was saved
-14 minutes late: neither player's profile moved, the attacker's one log fetch
-after it came 11 seconds after the battle (inside the API cache), and both logs
-waited for the safety fetch. Checks made 1.50 requests, not 1.2, and came every
-166 seconds (median), not ~106. The test
+14 minutes late: the attacker's one log fetch after it came 11 seconds after
+the battle (inside the API cache), and both logs waited for the safety fetch.
+Retained data shows neither player's trophies changed until 07:14, and both
+players' `attackWins` and `defenseWins` were 0 before and after the battle
+(archived bodies 842532, 863696, 847729 and 867663); these counts only ever
+rise, so they stayed 0. The defender's `Unbreakable` rose from 1767 to 1768
+between 06:33 and 07:26; exactly when is not retained. Checks made 1.50
+requests, not 1.2, and came every 166 seconds (median), not ~106. The test
 `test_zero_trophy_defense_of_battle_6964051_arrives_within_a_check` replays
-that battle's real checks.
+that battle's real check and battle times, and assumes `Unbreakable` rose as
+soon as the battle ended.
 
 **Replay, 2026-10-02.** A scratch replay fed every real battle from production,
 both players' timestamps, and when each attacker's profile really showed each
