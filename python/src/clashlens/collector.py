@@ -441,6 +441,8 @@ class Collector:
                         return "capacity_paused"
                     # Bytes that compact to state are never kept, so an
                     # unchanged regular response skips the spool's disk flushes.
+                    # A crash before its commit loses only this sighting; the
+                    # next poll records it again.
                     compacted = await _drain_awaitable(
                         self._database_call(
                             self.database.record_unchanged_response, handoff

@@ -476,7 +476,9 @@ failures for the first five minutes so it cannot restart a replay in progress.
 
 The collector records an unchanged ordinary response before saving it, so about
 97% of responses no longer reach the spool. Each saved response cost about
-147 KiB of disk writes, mostly the forced flushes that make it crash-safe.
+147 KiB of disk writes, mostly the forced flushes that make it crash-safe. A hard
+crash can therefore lose the few unchanged sightings still waiting for their
+database commit; no kept data is lost, and the next poll records them again.
 
 ### Restore into a separate database
 

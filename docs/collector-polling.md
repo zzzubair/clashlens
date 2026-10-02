@@ -342,7 +342,11 @@ succeed. Identical bytes share one spool/archive object. The fields listed in
 fields match the retained response, changes to ignored fields need no new
 observation, processing job, archive upload or spool file: the collector records
 such an ordinary response before saving it, so its bytes never reach the disk
-(about 97% of responses in October 2026). The profile's official season rank
+(about 97% of responses in October 2026). The trade-off: until its database commit
+lands, such a response is not crash-safe, so a hard crash can lose the few
+unchanged sightings still waiting (their seen time and poll count). No raw
+response, observation, job, battle or archive object is lost, and the next poll
+records the sighting again about 90 seconds later. The profile's official season rank
 (`legendStatistics.currentSeason.rank`) is ignored: it moves whenever other
 players battle and nothing reads it, so a rank-only change counts as unchanged.
 A changed response is still stored in full, including the rank. Fingerprints
