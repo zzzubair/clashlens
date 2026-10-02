@@ -19,7 +19,9 @@
 
 /* A sunny wash behind the top of every page; the header floats over it. */
 body {
-  background: var(--cl-glow) no-repeat, var(--cl-paper);
+  background:
+    var(--cl-glow) no-repeat,
+    var(--cl-paper);
 }
 .site-header {
   box-shadow: var(--cl-header-shadow);
@@ -34,7 +36,8 @@ body {
 }
 
 /* In dark mode an ember edge separates the main cards from the page. */
-:root[data-theme="dark"] :is(.home-leaderboard, .standings-board, .player-page .player-header) {
+:root[data-theme="dark"]
+  :is(.home-leaderboard, .standings-board, .player-page .player-header) {
   border-top: 3px solid var(--cl-action);
 }
 
@@ -79,7 +82,8 @@ body {
   --cl-shadow: 0 2px 4px rgb(0 0 0 / 0.4), 0 22px 44px -18px rgb(0 0 0 / 0.8);
   --cl-raise: 0 1px 2px rgb(0 0 0 / 0.5), 0 6px 14px -8px rgb(0 0 0 / 0.7);
   --cl-header-shadow: 0 10px 30px -14px rgb(0 0 0 / 0.8);
-  --cl-button-shadow: 0 2px 0 var(--cl-action-shade), 0 8px 18px -6px rgb(255 122 26 / 0.35);
+  --cl-button-shadow:
+    0 2px 0 var(--cl-action-shade), 0 8px 18px -6px rgb(255 122 26 / 0.35);
 }
 
 .theme-toggle {
