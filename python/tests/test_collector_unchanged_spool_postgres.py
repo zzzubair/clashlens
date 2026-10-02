@@ -82,7 +82,8 @@ def test_unchanged_profile_is_recorded_without_saving_its_bytes(
             assert await poll() == ["recorded"]
             polls, sighting, observations = _sightings(connection_info)
             assert (polls, observations) == (2, 1)
-            assert sighting > first_sighting
+            # Under 10 minutes later, the shared body's sighting time stays put.
+            assert sighting == first_sighting
             assert hashlib.sha256(ignored).hexdigest() not in spool.final_hashes()
             assert spool.iter_handoffs() == []
 
@@ -208,31 +209,61 @@ def test_unchanged_check_saves_at_once_when_the_worker_holds_a_row(
             spool.close()
 
 
+# The 28-day season grid in clashlens_season_retire_after (migration 0026).
+_SEASON = timedelta(days=28)
+_ANCHOR = datetime.fromtimestamp(1783918800, UTC)
+_SEASON_START = _ANCHOR + _SEASON * ((NOW - _ANCHOR) // _SEASON + 1)
+
+
+@pytest.mark.parametrize(
+    ("first_at", "again_at", "recorded_while_held"),
+    [
+        # Sighted 5 minutes ago: its shared rows are left alone, so a held
+        # upload row does not matter.
+        (NOW, NOW + timedelta(minutes=5), True),
+        # A day later the sighting time moves, so the held row is skipped.
+        (NOW, NOW + timedelta(days=1), False),
+        # Minutes apart but across a season start, the retention deadline
+        # moves, so the held row is skipped too.
+        (
+            _SEASON_START - timedelta(minutes=2),
+            _SEASON_START + timedelta(minutes=2),
+            False,
+        ),
+    ],
+)
 def test_unchanged_check_skips_a_shared_body_another_sighting_holds(
     database_url: str,
+    first_at: datetime,
+    again_at: datetime,
+    recorded_while_held: bool,
 ) -> None:
     # Players can share one body (hundreds get the same not-found profile),
-    # so a held upload row must send the sighting to the saved path at once.
+    # so a held upload row must never make the sighting wait.
     with domain_database(database_url) as connection_info:
         database = CollectorDatabase(connection_info)
-        first = _handoff(
-            occurrence_key="first",
-            response_hash="a" * 64,
-            player_id=_player(connection_info),
-        )
-        again = replace(
-            first, occurrence_key="again", response_completed_at=NOW + timedelta(1)
-        )
+        player_id = _player(connection_info)
+
+        def poll(key: str, at: datetime) -> ResponseHandoff:
+            return _handoff(
+                occurrence_key=key, response_hash="a" * 64,
+                player_id=player_id, completed_at=at,
+            )
+
         try:
-            database.record_response(first)
+            database.record_response(poll("first", first_at))
             with psycopg.connect(connection_info) as holder:
                 holder.execute("SELECT 1 FROM collector_response_uploads FOR UPDATE")
                 started = time.monotonic()
-                assert not database.record_unchanged_response(again)
+                recorded = database.record_unchanged_response(poll("again", again_at))
                 assert time.monotonic() - started < 1
-                assert _sightings(connection_info)[0] == 1
-            assert database.record_unchanged_response(again)
-            assert _sightings(connection_info)[0] == 2
+                assert recorded is recorded_while_held
+                assert _sightings(connection_info)[0] == (2 if recorded else 1)
+            if not recorded:
+                assert database.record_unchanged_response(poll("again", again_at))
+            polls, sighting, _ = _sightings(connection_info)
+            assert polls == 2
+            assert sighting == (first_at if recorded_while_held else again_at)
         finally:
             database.close()
 
