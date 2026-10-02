@@ -1275,8 +1275,8 @@ trial_report() {
         "$PLAYERS" "$endpoint_requests"
       awk -v median="$revisit_median" -v worst="$revisit_worst" \
         -v seen="$revisited_players" -v requests="$endpoint_requests" \
-        -v expected="$PLAYERS" \
-        'BEGIN { exit !(seen == expected && requests >= 2 * expected && median < 300 && worst < 600) }' || \
+        -v expected="$PLAYERS" -v kind="$endpoint" \
+        'BEGIN { exit !(seen == expected && (kind == "battle_log" ? worst <= 1020 : requests >= 2 * expected && median < 300 && worst < 600)) }' || \
         report_status=1
     else
       printf '%s per-player revisit gap: unavailable (0/%s requested players revisited)\n' \

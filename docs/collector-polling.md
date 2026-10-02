@@ -366,5 +366,8 @@ The interactive key is never borrowed for regular work.
 ## Validation and live-run boundary
 
 `./dev trial` measures per-player gaps, coverage, failures, queue age, database
-growth, spool recovery, and memory/swap behavior. It uses loopback fixtures; a
-real Legend-day run still needs separate authorization.
+growth, spool recovery, and memory/swap behavior. Profiles must meet the
+300-second median and 600-second worst gap; battle logs, which are skipped until
+they can have changed, need only every player revisited with a worst gap within
+the 15-minute safety fetch plus one check (1,020 seconds). It uses loopback
+fixtures; a real Legend-day run still needs separate authorization.
