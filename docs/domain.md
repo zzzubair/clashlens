@@ -238,6 +238,17 @@ A domain change is complete only when every affected source observation, derived
 ## 6. Ranked-day and leaderboard snapshots
 
 - At 05:00 UTC, event ownership moves to the new ranked day. A battle first observed later is still added to the ended day when its timestamp falls before the boundary.
+- A battle saved after its ended day's result was published is added to that
+  day by a once-per-Reset check. From 05:30 UTC, every 10 minutes until it
+  runs, the worker waits for the Reset sweep to finish and for every response
+  fetched before it finished to be processed. It then finds each player's own
+  battle reports from the previous 7 Legend days that were saved within 5
+  minutes of their day's end or later and are missing from that day's latest
+  saved result. For each such player it queues the normal ranked-day
+  recalculation for that day and every later day that already has a saved
+  result, oldest first and 5 minutes apart, because each day's result uses the
+  day before it. It never creates a day that was never saved. A battle saved
+  after the check has run is added after the next Reset.
 - A **frozen leaderboard snapshot** is the accepted, versioned ordering of actively tracked players at a reset baseline.
 - Continue serving the previously frozen snapshot while the next snapshot is assembled. Publish the replacement atomically so users never receive a mixture of snapshot versions.
 - Target snapshot publication at approximately 05:05 UTC on normal days, after the daily no-attack matchmaking window.

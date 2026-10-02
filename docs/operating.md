@@ -308,6 +308,10 @@ With the [worker's queue ordering](architecture.md#structured-data-and-evidence)
 this age can stay high while the Live Leaderboard is already current. Worker
 `job_result` lines with outcome `superseded` identify jobs skipped under those
 rules.
+A response fetched before the Reset sweep finished that is still waiting also
+holds back that day's [late-battle check](domain.md#6-ranked-day-and-leaderboard-snapshots);
+the worker logs a `late_battle_sweep` line with status `complete` once it has
+run for a Reset.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
