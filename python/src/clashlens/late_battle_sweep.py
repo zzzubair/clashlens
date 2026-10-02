@@ -96,7 +96,7 @@ WHERE NOT coalesce(version.contribution_evidence @> pair.expected, false)
 ORDER BY pair.player_id, pair.ranked_day_start
 """
 
-# A saved day in the window whose latest result was built from an older
+# A saved day in the window, or today's saved day, whose latest result was built from an older
 # version of the previous day than the one now current, for example after a
 # rolled-back correction whose first day an existing job then recalculated.
 _OUTDATED_DAYS = """
@@ -105,7 +105,6 @@ FROM (
     SELECT DISTINCT log.player_id, log.ranked_day_start
     FROM api_player_daily_logs AS log
     WHERE log.ranked_day_start >= %(window_start)s
-      AND log.ranked_day_start < %(boundary)s
 ) AS saved
 CROSS JOIN LATERAL (
     SELECT version.input_evidence -> 'previous_day' ->> 'version_id' AS previous_id
@@ -177,7 +176,6 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
         outdated_days = connection.execute(
             _OUTDATED_DAYS,
             {
-                "boundary": boundary,
                 "window_start": boundary - WINDOW,
                 "rule": RECONCILIATION_RULE_VERSION,
             },

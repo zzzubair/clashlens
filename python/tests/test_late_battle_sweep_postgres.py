@@ -549,8 +549,9 @@ def test_failed_player_is_rolled_back_logged_and_retried_next_run(
             database.close()
 
 
+@pytest.mark.parametrize("next_day_is_today", [False, True])
 def test_later_day_is_retried_after_an_existing_job_fixes_only_the_first_day(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, next_day_is_today: bool
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
@@ -559,7 +560,8 @@ def test_later_day_is_retried_after_an_existing_job_fixes_only_the_first_day(
                 connection_info, archive_server, processor, database
             )
             next_day = DAY + timedelta(days=1)
-            boundary = DAY + timedelta(days=2)
+            # Today's saved Live result is retried like an ended day.
+            boundary = next_day if next_day_is_today else DAY + timedelta(days=2)
             _finish_reset_sweep(connection_info, boundary)
             existing_job = reconciliation_db.enqueue_reconciliation(
                 database,
