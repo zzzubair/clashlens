@@ -892,6 +892,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 max_jobs=arguments.max_jobs,
                 lease_seconds=arguments.lease_seconds,
                 stop_requested=stop_requested,
+                fill_idle_lanes=arguments.run_forever,
             )
 
         if not arguments.run_forever:

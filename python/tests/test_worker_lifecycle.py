@@ -986,6 +986,7 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         max_jobs: int,
         lease_seconds: int,
         stop_requested: object,
+        fill_idle_lanes: bool,
     ) -> list[ProcessResult]:
         recorded["concurrent_args"] = {
             "concurrency": concurrency,

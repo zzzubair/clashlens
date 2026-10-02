@@ -144,6 +144,13 @@ per second; threads still use the ordinary claim query when it has no candidate.
 That query measured about 4 ms when it found nothing, so idle claims stay per
 thread.
 
+The running worker claims `--max-jobs` jobs per batch and runs queue
+maintenance between batches. When the budget runs out while a job is still
+running, the other threads keep claiming until that job finishes, so one slow
+job does not stop the rest. A job holds a lock on its queue row from the start
+of its work until it commits. Claims and maintenance skip locked rows, so the
+job keeps its claim even if the work outlasts the lease time.
+
 An ordinary check's job is finished as `superseded`, without being
 applied, when newer processed evidence from the same player and Legend day
 already covers it: a later accepted profile, or a newer battle log while every

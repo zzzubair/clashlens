@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -10,7 +11,7 @@ import pytest
 from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import make_conninfo
 
-from clashlens import ingestion, reset_baselines
+from clashlens import ingestion, reconciliation_db, reset_baselines
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database, LeaseLost
 from clashlens.worker import ObservationProcessor, ProcessResult
@@ -703,6 +704,61 @@ def test_claim_skips_reconciliation_with_unsupported_analytics_rule_version(
                     (job_id,),
                 )
                 == "pending"
+            )
+        finally:
+            database.close()
+
+
+def test_repair_outlasting_its_lease_completes_on_its_first_attempt(
+    database_url: str, monkeypatch
+) -> None:
+    # On 2026-10-02 a repair ran for minutes with a 60 s lease. It was rolled
+    # back at completion, retried from scratch and failed after three tries.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            _insert_observation(connection, occurrence_key="long-repair-source")
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+            ).fetchone()[0]
+            job_id = _insert_job(
+                connection,
+                work_type="reconcile_ranked_day",
+                deduplication_key="reconcile:long-repair",
+                input_json={
+                    "player_id": player_id,
+                    "ranked_day_start": "2026-08-03T05:00:00Z",
+                },
+                due_at="2026-08-03T19:35:01+00:00",
+                max_attempts=3,
+            )
+
+        database = Database(connection_info)
+        try:
+            taken_while_running: list[object] = []
+
+            def slow_rebuild(*_args, **_kwargs) -> None:
+                time.sleep(1.5)
+                taken_while_running.append(database.maintain_queue(max_jobs=10))
+                taken_while_running.append(
+                    database.claim_job(owner="other-lane", job_id=job_id)
+                )
+
+            monkeypatch.setattr(
+                reconciliation_db, "recalculate_ranked_day", slow_rebuild
+            )
+            result = ObservationProcessor(database, archive=object()).process_job(
+                job_id, owner="slow-repair", lease_seconds=1
+            )
+
+            assert taken_while_running == [0, None]
+            assert result == ProcessResult(job_id, "processed")
+            assert (
+                database.scalar(
+                    "SELECT status || ':' || attempt_count FROM python_processing_jobs "
+                    "WHERE id = %s",
+                    (job_id,),
+                )
+                == "complete:1"
             )
         finally:
             database.close()

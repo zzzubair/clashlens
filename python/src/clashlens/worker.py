@@ -163,6 +163,7 @@ def process_concurrently(
     max_jobs: int,
     lease_seconds: int = 30,
     stop_requested: Event | None = None,
+    fill_idle_lanes: bool = False,
 ) -> list[ProcessResult]:
     """Process up to ``max_jobs`` jobs across up to ``concurrency`` lanes.
 
@@ -173,6 +174,12 @@ def process_concurrently(
     jobs are claimed per call. When ``stop_requested`` is set, lanes finish
     their current job and do not claim another; the call then waits for the
     bounded in-flight set and returns its results.
+
+    The call cannot return before its slowest job finishes. With
+    ``fill_idle_lanes``, lanes that find ``max_jobs`` spent keep claiming
+    while any job that was running when it ran out is still running, so one
+    slow job does not leave the other lanes idle. Jobs claimed meanwhile do
+    not extend that wait, so the call still ends after the slowest of them.
 
     An unexpected exception escaping one lane is isolated: other lanes finish
     their in-flight job, no further claims are made, and a sanitized
@@ -193,21 +200,31 @@ def process_concurrently(
     results_lock = threading.Lock()
     jobs_remaining = max_jobs
     jobs_lock = threading.Lock()
+    busy_lanes: set[int] = set()
+    # Lanes still on the job they held when max_jobs ran out.
+    holdout_lanes: set[int] | None = None
     first_failure: Exception | None = None
     failure_lock = threading.Lock()
     stop_claiming = Event()
 
     def lane(lane_index: int) -> None:
-        nonlocal first_failure, jobs_remaining
+        nonlocal first_failure, jobs_remaining, holdout_lanes
         while True:
             if stop_claiming.is_set():
                 return
             if stop_requested is not None and stop_requested.is_set():
                 return
             with jobs_lock:
-                if jobs_remaining <= 0:
+                if jobs_remaining > 0:
+                    jobs_remaining -= 1
+                elif not fill_idle_lanes:
                     return
-                jobs_remaining -= 1
+                else:
+                    if holdout_lanes is None:
+                        holdout_lanes = set(busy_lanes)
+                    if not holdout_lanes:
+                        return
+                busy_lanes.add(lane_index)
             try:
                 result = processor.process_once(
                     owner=lane_owner(owner, lane_index),
@@ -219,6 +236,11 @@ def process_concurrently(
                         first_failure = error
                 stop_claiming.set()
                 return
+            finally:
+                with jobs_lock:
+                    busy_lanes.discard(lane_index)
+                    if holdout_lanes is not None:
+                        holdout_lanes.discard(lane_index)
             if result is None:
                 return
             with results_lock:

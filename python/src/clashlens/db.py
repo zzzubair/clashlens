@@ -1231,6 +1231,10 @@ class Database:
         )
         if attempt.rowcount != 1:
             raise LeaseLost("processing attempt fence was lost")
+        # Every caller locked this row with _lock_live_claim while its lease
+        # was live. Claims and queue maintenance skip locked rows, so nothing
+        # can take the job while this transaction works, however long that
+        # takes. Checking the clock here only threw away finished work.
         completed = connection.execute(
             f"""
             UPDATE {self._jobs_relation}
@@ -1239,7 +1243,6 @@ class Database:
                 completed_at = clock_timestamp(), updated_at = clock_timestamp()
             WHERE id = %s AND state = 'leased'
               AND lease_owner = %s AND lease_token = %s
-              AND lease_expires_at > clock_timestamp()
             """,
             (state, outcome, claim.job_id, claim.lease_owner, claim.lease_token),
         )
