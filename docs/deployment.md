@@ -453,6 +453,31 @@ and disk space: PostgreSQL retains unarchived WAL locally during a storage outag
 and that queue is not capped by `max_wal_size`. Never delete unarchived WAL to
 free space.
 
+### Disk writes and change-log volume
+
+On 2026-10-02 production wrote 14 MB/s from PostgreSQL and 18 MB/s from the
+collector. The change log was 3.1 MB/s (271 GB/day, 127 GB/day after upload
+compression); 87% of it was whole 8 KB page copies. Data checksums make
+PostgreSQL copy each page into the change log the first time it changes after a
+checkpoint, and the old 1 GB `max_wal_size` forced a checkpoint every three
+minutes. The 128 MB page cache also wrote 8.6 MB/s of table pages as it evicted
+them.
+
+The PostgreSQL unit now sets `shared_buffers` from
+`CLASHLENS_POSTGRES_SHARED_BUFFERS` (2 GB, inside the 4 GB memory cap),
+`checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
+Commit flushing, full-page writes, checksums and archiving are unchanged. A
+70-minute page-by-page replay of production's change log predicts 225 instead of
+393 page copies per second; zstd shrinks each copy to about 37%. Expect roughly
+1 MB/s of change log (about 85 GB/day) and 60–70 GB/day of backup uploads.
+Crash recovery replays at most about 2 GB: on rogue 845 MB took 90 seconds plus
+14 seconds to save, so allow up to four minutes. The health check ignores
+failures for the first five minutes so it cannot restart a replay in progress.
+
+The collector records an unchanged ordinary response before saving it, so about
+97% of responses no longer reach the spool. Each saved response cost about
+147 KiB of disk writes, mostly the forced flushes that make it crash-safe.
+
 ### Restore into a separate database
 
 Use the pinned backup image from the release manifest and the read-only key.

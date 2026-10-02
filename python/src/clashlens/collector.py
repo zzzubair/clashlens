@@ -439,21 +439,31 @@ class Collector:
                     # Recovery must run before any successor can become current.
                     if self._handoff_recovery_required:
                         return "capacity_paused"
+                    # Bytes that compact to state are never kept, so an
+                    # unchanged regular response skips the spool's disk flushes.
+                    compacted = await _drain_awaitable(
+                        self._database_call(
+                            self.database.record_unchanged_response, handoff
+                        )
+                    )
                     published = False
                     try:
-                        await _drain_to_thread(
-                            self.spool.publish_handoff,
-                            response.body,
-                            digest,
-                            name,
-                            payload,
-                            current_reservation,
-                        )
-                        published = True
-                        await _drain_awaitable(
-                            self._database_call(self.database.record_response, handoff)
-                        )
-                        await _drain_to_thread(self.spool.remove_handoff, name)
+                        if not compacted:
+                            await _drain_to_thread(
+                                self.spool.publish_handoff,
+                                response.body,
+                                digest,
+                                name,
+                                payload,
+                                current_reservation,
+                            )
+                            published = True
+                            await _drain_awaitable(
+                                self._database_call(
+                                    self.database.record_response, handoff
+                                )
+                            )
+                            await _drain_to_thread(self.spool.remove_handoff, name)
                     except BaseException as error:
                         if published or self._sidecar_exists(name):
                             self._handoff_recovery_required = True

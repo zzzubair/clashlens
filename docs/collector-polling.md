@@ -306,9 +306,9 @@ saving time, key limits, Refresh or Reset, and it assumes the defender's
 profile shows a battle as soon as it ends.
 
 Ordinary transport failures wait for the next pass. Interactive, Reset and
-ranking work gets bounded retries. Raw responses are published to the local
-spool before their compact database handoff; restart recovery finishes either
-half without creating another observation or processing job.
+ranking work gets bounded retries. Raw responses that will be kept are published
+to the local spool before their compact database handoff; restart recovery
+finishes either half without creating another observation or processing job.
 
 Refresh and initial collection use the separate interactive key. Refreshes
 coalesce while active, have a 30-second cooldown, and never change the regular
@@ -340,7 +340,9 @@ A local spool file is deletable only after its processing and upload both
 succeed. Identical bytes share one spool/archive object. The fields listed in
 `response_fields.py` decide whether an ordinary response changed. When those
 fields match the retained response, changes to ignored fields need no new
-observation, processing job, or archive upload. The profile's official season rank
+observation, processing job, archive upload or spool file: the collector records
+such an ordinary response before saving it, so its bytes never reach the disk
+(about 97% of responses in October 2026). The profile's official season rank
 (`legendStatistics.currentSeason.rank`) is ignored: it moves whenever other
 players battle and nothing reads it, so a rank-only change counts as unchanged.
 A changed response is still stored in full, including the rank. Fingerprints

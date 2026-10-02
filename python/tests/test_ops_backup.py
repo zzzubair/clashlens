@@ -366,6 +366,15 @@ render_units
     pod_stop = int(pod["Pod"]["StopTimeout"])
     assert pod_stop >= postgres_stop == 85
     assert int(pod["Service"]["TimeoutStopSec"]) > pod_stop
+    # The database's own page cache must leave room inside its memory cap.
+    mib = {"MB": 1, "GB": 1024, "m": 1, "g": 1024}
+    buffers = next(
+        arg.split("=")[1]
+        for arg in postgres["Container"]["Exec"].split()
+        if arg.startswith("shared_buffers=")
+    )
+    memory = postgres["Container"]["Memory"]
+    assert int(buffers[:-2]) * mib[buffers[-2:]] * 2 <= int(memory[:-1]) * mib[memory[-1]]
     if mode == "fixture":
         assert not network.has_option("Network", "Subnet")
         assert not pod.has_option("Pod", "IP")

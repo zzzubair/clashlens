@@ -163,6 +163,9 @@ class _Store:
         self.cooldowns: list[tuple[str, int]] = []
         self.pool = MagicMock()
 
+    def record_unchanged_response(self, _handoff: Any) -> bool:
+        return False
+
     def record_response(self, handoff: Any) -> object:
         assert handoff.occurrence_key in self.spool.handoffs
         self.spool.events.append("database")
