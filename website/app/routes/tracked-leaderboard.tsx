@@ -1,17 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   data,
+  Form,
   Link,
   redirect,
   useLoaderData,
+  useNavigation,
   type LoaderFunctionArgs,
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark } from "../components/LeaderboardShared";
 import { formatAge, LocalTimestamp } from "../components/Provenance";
-import { canonicalPlayerPath } from "../lib/player-tag";
-import type { SnapshotSelector } from "../lib/contracts";
+import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
+import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
+import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
+import "../leaderboard-search.css";
 
 const PAGE_SIZE = 100;
 const OLD_UPDATE_SECONDS = 600;
@@ -32,6 +36,10 @@ function leaderboardUrl(
   }
   query.set("page", String(page));
   return `/leaderboards/tracked?${query.toString()}`;
+}
+
+function playerRankUrl(tag: string, rank: number) {
+  return `${leaderboardUrl("live", Math.ceil(rank / PAGE_SIZE))}&player=${encodeURIComponent(tag)}`;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -58,13 +66,27 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const page = Number(pageValue);
   if (!Number.isSafeInteger(page) || !Number.isSafeInteger((page - 1) * PAGE_SIZE))
     throw new Response(null, { status: 422 });
+  const query = (url.searchParams.get("q") ?? "").trim();
+  const player = url.searchParams.get("player");
+  const focusTag = player === null ? null : normalizePlayerTag(player);
+  if (
+    query.length > MAX_SEARCH_QUERY_LENGTH ||
+    (player !== null && !focusTag) ||
+    (viewValue === "daily" && (query || player !== null))
+  )
+    throw new Response(null, { status: 422 });
   try {
     const { createPythonClient } = await import("../services/python.server");
-    const leaderboard = await createPythonClient().getTrackedLeaderboard(
+    const client = createPythonClient();
+    const search = query ? await client.searchLeaderboard(query) : null;
+    if (search?.exactTag)
+      throw redirect(playerRankUrl(search.exactTag, search.results[0].rank));
+    const leaderboard = await client.getTrackedLeaderboard(
       PAGE_SIZE,
       viewValue,
       (page - 1) * PAGE_SIZE,
       selector,
+      focusTag ?? undefined,
     );
     if (viewValue === "daily" && !selector && leaderboard.daily)
       throw redirect(leaderboardUrl("daily", page, leaderboard.daily));
@@ -73,9 +95,31 @@ export async function loader({ request }: LoaderFunctionArgs) {
       error: null,
       pageUnavailableUrl: null,
       view: viewValue,
+      query,
+      search,
+      focusTag,
     } as const;
   } catch (cause) {
     const { PythonApiError } = await import("../services/python.server");
+    if (focusTag && cause instanceof PythonApiError && cause.status === 404) {
+      const { createPythonClient } = await import("../services/python.server");
+      const missing: WebsiteErrorResponse = {
+        error: {
+          code: "missing",
+          message:
+            "That player is no longer on the Live Leaderboard. Search again to find another player.",
+        },
+      };
+      return {
+        leaderboard: await createPythonClient().getTrackedLeaderboard(PAGE_SIZE, "live"),
+        error: missing,
+        pageUnavailableUrl: null,
+        view: viewValue,
+        query,
+        search: null,
+        focusTag: null,
+      } as const;
+    }
     if (cause instanceof PythonApiError && cause.status === 404 && page > 1)
       return data(
         {
@@ -83,6 +127,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
           error: null,
           pageUnavailableUrl: leaderboardUrl(viewValue, 1, selector),
           view: viewValue,
+          query,
+          search: null,
+          focusTag: null,
         } as const,
         { status: 404 },
       );
@@ -95,6 +142,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       error: safeWebsiteError(cause),
       pageUnavailableUrl: null,
       view: viewValue,
+      query,
+      search: null,
+      focusTag: null,
     } as const;
   }
 }
@@ -114,7 +164,16 @@ function useCurrentTime(loadedAt: string | undefined) {
 }
 
 export default function TrackedLeaderboardRoute() {
-  const { leaderboard, error, pageUnavailableUrl, view } = useLoaderData<typeof loader>();
+  const { leaderboard, error, pageUnavailableUrl, view, query, search, focusTag } =
+    useLoaderData<typeof loader>();
+  const navigation = useNavigation();
+  const selectedRow = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    if (focusTag && selectedRow.current) {
+      selectedRow.current.focus({ preventScroll: true });
+      selectedRow.current.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+  }, [focusTag, leaderboard]);
   const daily = leaderboard?.daily;
   const entries = leaderboard?.entries ?? [];
   const newestObservedAt = leaderboard?.sourceObservations?.newestObservedAt ?? null;
@@ -174,6 +233,68 @@ export default function TrackedLeaderboardRoute() {
       </section>
 
       {error ? <ErrorNotice error={error} /> : null}
+
+      {view === "live" ? (
+        <section className="leaderboard-search" aria-label="Find your rank">
+          <Form method="get" role="search" aria-label="Find your leaderboard rank">
+            <input type="hidden" name="view" value="live" />
+            <input type="hidden" name="page" value="1" />
+            <label htmlFor="rank-query">Find your rank</label>
+            <div className="rank-search-controls">
+              <input
+                id="rank-query"
+                type="search"
+                name="q"
+                defaultValue={query}
+                key={query}
+                placeholder="Player name or #tag"
+                maxLength={MAX_SEARCH_QUERY_LENGTH}
+                autoCapitalize="none"
+                autoCorrect="off"
+                enterKeyHint="search"
+              />
+              <button
+                className="button button-primary"
+                type="submit"
+                disabled={navigation.state !== "idle"}
+              >
+                {navigation.state !== "idle" ? "Searching…" : "Search"}
+              </button>
+            </div>
+          </Form>
+          {search ? (
+            <div aria-live="polite" aria-busy={navigation.state !== "idle"}>
+              <p>
+                {search.results.length
+                  ? `Players matching “${query}”. Choose a player to see their place on the board.`
+                  : `No tracked players matching “${query}”. Try another name or an exact tag.`}
+              </p>
+              <ul className="rank-search-results">
+                {search.results.map((entry) => (
+                  <li key={entry.tag}>
+                    <Link to={playerRankUrl(entry.tag, entry.rank)}>
+                      <span>
+                        <strong>{entry.name}</strong>
+                        <small>{entry.tag}</small>
+                      </span>
+                      <span>
+                        Rank {entry.rank.toLocaleString()}
+                        <small>{entry.trophies.toLocaleString()} trophies</small>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+              {search.hasMore ? (
+                <p>
+                  Showing the first 20 matches. Add more of the name or use a tag to
+                  narrow your search.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {pageUnavailableUrl ? (
         <div className="empty-state">
@@ -246,6 +367,14 @@ export default function TrackedLeaderboardRoute() {
                     {entries.map((entry) => (
                       <tr
                         className="leaderboard-row"
+                        data-selected={entry.tag === focusTag ? "true" : undefined}
+                        aria-label={
+                          entry.tag === focusTag
+                            ? `Selected player ${entry.name}, rank ${entry.rank}`
+                            : undefined
+                        }
+                        ref={entry.tag === focusTag ? selectedRow : undefined}
+                        tabIndex={entry.tag === focusTag ? -1 : undefined}
                         data-podium-rank={entry.rank <= 3 ? entry.rank : undefined}
                         key={entry.tag}
                       >

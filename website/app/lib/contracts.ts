@@ -53,6 +53,12 @@ export interface SnapshotSelector {
   dayNumber: number;
 }
 
+export interface LeaderboardSearch {
+  exactTag: string | null;
+  hasMore: boolean;
+  results: Array<Pick<TrackedPlayerEntry, "tag" | "name" | "rank" | "trophies">>;
+}
+
 export interface TrackedLeaderboard {
   kind: "tracked-leaderboard";
   view: "live" | "daily";

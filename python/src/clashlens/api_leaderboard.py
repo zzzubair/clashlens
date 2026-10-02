@@ -42,6 +42,51 @@ WHERE player.active = true
   )
 """
 
+_LIVE_ORDER_SQL = "trophies DESC, md5(normalized_tag), normalized_tag"
+_LIVE_RANKED_SQL = f"""
+SELECT *, row_number() OVER (ORDER BY {_LIVE_ORDER_SQL}) AS position
+FROM ({_LIVE_PLAYERS_SQL}) AS live
+"""
+
+
+def search_live_leaderboard(
+    database: ApiDatabase, query: str, *, limit: int = 20
+) -> dict[str, Any]:
+    """Filter after ranking the board, using only indexed current-profile reads."""
+    query = query.strip()
+    if not query or len(query) > 80 or not 1 <= limit <= 50:
+        raise ValueError("invalid leaderboard search")
+    tag = "#" + query.removeprefix("#").upper()
+    with database.pool.connection() as connection:
+        rows = connection.execute(
+            f"""
+            WITH ranked AS MATERIALIZED ({_LIVE_RANKED_SQL}), exact AS (
+                SELECT * FROM ranked WHERE normalized_tag = %s
+            )
+            SELECT normalized_tag, name, trophies, position,
+                   EXISTS (SELECT 1 FROM exact) AS exact_match
+            FROM ranked
+            WHERE CASE WHEN EXISTS (SELECT 1 FROM exact)
+                THEN normalized_tag = %s
+                ELSE strpos(lower(name), lower(%s)) > 0 END
+            ORDER BY position LIMIT %s
+            """,
+            (tag, tag, query, limit + 1),
+        ).fetchall()
+    return {
+        "exact_tag": tag if rows and rows[0][4] else None,
+        "has_more": len(rows) > limit,
+        "results": [
+            {
+                "tag": _text(row[0]),
+                "name": _text(row[1]),
+                "trophies": int(row[2]),
+                "rank": int(row[3]),
+            }
+            for row in rows[:limit]
+        ],
+    }
+
 
 def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str, Any]:
     """Measure the whole Live Leaderboard, without sorting or fetching a page."""
@@ -79,6 +124,7 @@ def get_live_leaderboard(
     limit: int,
     offset: int = 0,
     now: datetime,
+    focus_tag: str | None = None,
 ) -> dict[str, Any] | None:
     if offset < 0 or offset % limit:
         raise ValueError("offset must be non-negative and aligned to limit")
@@ -86,7 +132,12 @@ def get_live_leaderboard(
         rows = connection.execute(
             f"""
             WITH selected AS MATERIALIZED (
-                {_LIVE_PLAYERS_SQL}
+                {_LIVE_RANKED_SQL}
+            ), location AS (
+                SELECT CASE WHEN %s::text IS NULL THEN %s::bigint ELSE
+                    (SELECT ((position - 1) / %s) * %s FROM selected
+                     WHERE normalized_tag = %s)
+                END AS page_offset
             ), stats AS (
                 SELECT count(*) AS total_entries,
                        count(*) FILTER (
@@ -97,28 +148,35 @@ def get_live_leaderboard(
                 FROM selected
             ), page AS MATERIALIZED (
                 SELECT * FROM selected
-                ORDER BY trophies DESC, md5(normalized_tag), normalized_tag
-                LIMIT %s OFFSET %s
+                ORDER BY position
+                LIMIT %s OFFSET (SELECT coalesce(page_offset, 0) FROM location)
             ), totals AS (
                 SELECT count(*)::bigint AS tracked_population FROM players WHERE active
             )
             SELECT page.normalized_tag, page.name, page.trophies,
                    page.observed_at, page.eligibility_state, page.clan,
-                   CASE WHEN page.normalized_tag IS NOT NULL THEN
-                       row_number() OVER (
-                           ORDER BY page.trophies DESC, md5(page.normalized_tag),
-                                    page.normalized_tag
-                       ) + %s
-                   END AS position,
+                   page.position,
                    stats.total_entries, stats.stale_count,
                    stats.oldest_observed_at, stats.newest_observed_at,
-                   totals.tracked_population
-            FROM stats CROSS JOIN totals
+                   totals.tracked_population, location.page_offset
+            FROM stats CROSS JOIN totals CROSS JOIN location
             LEFT JOIN page ON true
             ORDER BY position NULLS LAST
             """,
-            (now, _LIVE_FRESHNESS_SECONDS, limit, offset, offset),
+            (
+                focus_tag,
+                offset,
+                limit,
+                limit,
+                focus_tag,
+                now,
+                _LIVE_FRESHNESS_SECONDS,
+                limit,
+            ),
         ).fetchall()
+        if rows[0][12] is None:
+            return None
+        offset = int(rows[0][12])
         total_entries = int(rows[0][7]) if rows else 0
         if offset and offset >= total_entries:
             return None

@@ -1,4 +1,5 @@
 import type {
+  LeaderboardSearch,
   ArmyAnalytics,
   HistoricalSeasonSummary,
   PlayerPage,
@@ -8,6 +9,7 @@ import type {
   SummarizedSeasonRef,
   TrackedLeaderboard,
 } from "../lib/contracts";
+import { searchLeaderboard } from "./leaderboard-search.server";
 import type {
   AccountSummary,
   ClashLensAccount,
@@ -86,7 +88,9 @@ export interface PythonClient {
     view?: "live" | "daily",
     offset?: number,
     selector?: { officialSeasonId: string; dayNumber: number },
+    focusTag?: string,
   ): Promise<TrackedLeaderboard>;
+  searchLeaderboard(query: string): Promise<LeaderboardSearch>;
   searchPlayers(query: string, limit?: number): Promise<SearchResponse>;
   getPlayer(tag: string): Promise<PlayerPage>;
   getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]>;
@@ -175,6 +179,7 @@ export function createPythonClient(
   );
   return {
     getTrackedLeaderboard,
+    searchLeaderboard,
     searchPlayers,
     getPlayer: getPlayerPage,
     getPlayerSeasons,
@@ -200,8 +205,10 @@ async function getTrackedLeaderboard(
   view: "live" | "daily" = "live",
   offset = 0,
   selector?: { officialSeasonId: string; dayNumber: number },
+  focusTag?: string,
 ): Promise<TrackedLeaderboard> {
   const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (focusTag) query.set("focus_tag", focusTag);
   if (selector) {
     query.set("official_season_id", selector.officialSeasonId);
     query.set("season_day_number", String(selector.dayNumber));
