@@ -200,6 +200,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const [pollingError, setPollingError] = useState<WebsiteErrorResponse | null>(null);
   const [lookupTimedOut, setLookupTimedOut] = useState(false);
   const lookupStartedAt = useRef(Date.now());
+  const automaticRefreshHandled = useRef(false);
   useEffect(() => {
     const status = data.refreshStatus;
     if (status && status.tag === data.requestedTag) {
@@ -297,16 +298,21 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   }, [location.hash, location.key, player?.tag]);
 
   useEffect(() => {
-    if (documentReloadHandled) return;
-    documentReloadHandled = true;
+    if (automaticRefreshHandled.current) return;
     const navigation = performance.getEntriesByType?.("navigation")[0] as
       PerformanceNavigationTiming | undefined;
-    if (
-      navigation?.type !== "reload" ||
-      new URL(navigation.name).pathname !== window.location.pathname ||
-      trackedPlayer === null
-    )
-      return;
+    const isDocumentReload =
+      !documentReloadHandled &&
+      navigation?.type === "reload" &&
+      new URL(navigation.name).pathname === window.location.pathname;
+    documentReloadHandled = true;
+    if (trackedPlayer === null) return;
+    // Decide once per visit, including when saved data is already recent.
+    // Fetcher updates and revalidation must not spend another Refresh allowance.
+    automaticRefreshHandled.current = true;
+    const savedCheckAge =
+      Date.now() - Date.parse(trackedPlayer.profile.freshness.observedAt);
+    if (!isDocumentReload && savedCheckAge <= 60_000) return;
     refreshFetcher.submit(
       { idempotencyKey: data.noJsIdempotencyKey },
       {

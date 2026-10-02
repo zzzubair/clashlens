@@ -1,5 +1,67 @@
 import { expect, test } from "@playwright/test";
 
+for (const ageMs of [30_000, 60_000, 60_001, 120_000]) {
+  test(`profile visit refreshes once only when its saved check is older than 60 seconds (${ageMs}ms)`, async ({
+    page,
+    browser,
+    baseURL,
+  }) => {
+    // Reuse one saved document so background collection cannot move the boundary.
+    // Reading it without JavaScript must not initiate a Refresh.
+    const savedContext = await browser.newContext({ javaScriptEnabled: false, baseURL });
+    let html: Buffer;
+    let observedAt: string;
+    try {
+      const savedPage = await savedContext.newPage();
+      const response = await savedPage.goto("/players/%232PP");
+      html = await response!.body();
+      observedAt = (await savedPage.locator(".player-updated").getAttribute("datetime"))!;
+    } finally {
+      await savedContext.close();
+    }
+    await page.route("**/players/%232PP", (route) =>
+      route.fulfill({ contentType: "text/html", body: html }),
+    );
+    await page.clock.setFixedTime(new Date(Date.parse(observedAt) + ageMs));
+    const submissions: string[] = [];
+    await page.route("**/resources/players/*/refresh*", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      submissions.push(route.request().postData() ?? "");
+      // Exercise the existing refusal display without spending the shared allowance.
+      await route.continue({ postData: "idempotencyKey=invalid" });
+    });
+
+    await page.goto("/players/%232PP");
+    const automaticCount = ageMs > 60_000 ? 1 : 0;
+    const refusal = page
+      .getByRole("alert")
+      .filter({ hasText: "Check the submitted value" });
+    if (automaticCount) await expect(refusal).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(submissions).toHaveLength(automaticCount);
+    await expect(page.locator(".player-updated")).toHaveAttribute("datetime", observedAt);
+    await expect(page.getByText("Current trophies", { exact: true })).toBeVisible();
+
+    // The rejected automatic request has re-rendered the page. Manual Refresh
+    // must still submit the same valid form, without another automatic attempt.
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(refusal).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(submissions).toHaveLength(automaticCount + 1);
+    const key = await page.locator('input[name="idempotencyKey"]').inputValue();
+    for (const submission of submissions) {
+      expect(new URLSearchParams(submission).get("idempotencyKey")).toBe(key);
+    }
+
+    // A full reload retains its existing unconditional Refresh behavior, and
+    // stale data must not add a second request on top of it.
+    await page.reload();
+    await expect(refusal).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(submissions).toHaveLength(automaticCount + 2);
+  });
+}
+
 test("player page canonicalizes the tag and shows collected profile data", async ({
   page,
 }) => {

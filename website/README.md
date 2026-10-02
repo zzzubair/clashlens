@@ -27,6 +27,11 @@ only instead of a season day number. This adds no weekly recheck or clan discove
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
+Opening a tracked player's profile with JavaScript enabled automatically submits
+the existing Refresh request once when its saved check is more than 60 seconds
+old. Saved data stays visible while the existing Refresh flow runs, including if
+the request is refused. Manual Refresh and browser-reload Refresh still work.
+
 ## Requirements and setup
 
 - Node.js 24 LTS and npm with the committed `package-lock.json`; and
