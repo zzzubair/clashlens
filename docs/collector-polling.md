@@ -356,8 +356,10 @@ cancelled. Many players can share one body, such as the same not-found profile,
 so the check does not wait while another response updates that body's records,
 or while the worker holds that player or their last saved response; it saves
 the response instead. A shared body already sighted within the last 10 minutes
-of the same season keeps its earlier latest sighting time, which only orders
-spool cleanup and starts the archive retention clock. No response waits on the
+keeps its earlier latest sighting time, which only orders spool cleanup and
+starts the archive retention clock, so its deletion can come up to 10 minutes
+early. A body already marked for deletion is never recorded this way; it is
+saved again. No response waits on the
 database while holding the shared lock: the lock covers only the spool write,
 so a later response is saved before it waits for an earlier one's database
 commit. Saved responses for the same lock

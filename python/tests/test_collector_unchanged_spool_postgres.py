@@ -12,10 +12,17 @@ import psycopg
 import pytest
 from domain_test_support import domain_database
 from test_collector import _collector
-from test_collector_uploads_postgres import NOW, _handoff, _player
+from test_collector_uploads_postgres import (
+    NOW,
+    _archive_instance,
+    _handoff,
+    _player,
+    upload_database,
+)
 
 from clashlens.collector_db import CollectorDatabase, CollectorWork, ResponseHandoff
 from clashlens.collector_http import FetchedResponse, KeyPool
+from clashlens.collector_uploads import claim_upload, complete_upload
 from clashlens.spool import Spool
 
 
@@ -209,12 +216,6 @@ def test_unchanged_check_saves_at_once_when_the_worker_holds_a_row(
             spool.close()
 
 
-# The 28-day season grid in clashlens_season_retire_after (migration 0026).
-_SEASON = timedelta(days=28)
-_ANCHOR = datetime.fromtimestamp(1783918800, UTC)
-_SEASON_START = _ANCHOR + _SEASON * ((NOW - _ANCHOR) // _SEASON + 1)
-
-
 @pytest.mark.parametrize(
     ("first_at", "again_at", "recorded_while_held"),
     [
@@ -223,13 +224,6 @@ _SEASON_START = _ANCHOR + _SEASON * ((NOW - _ANCHOR) // _SEASON + 1)
         (NOW, NOW + timedelta(minutes=5), True),
         # A day later the sighting time moves, so the held row is skipped.
         (NOW, NOW + timedelta(days=1), False),
-        # Minutes apart but across a season start, the retention deadline
-        # moves, so the held row is skipped too.
-        (
-            _SEASON_START - timedelta(minutes=2),
-            _SEASON_START + timedelta(minutes=2),
-            False,
-        ),
     ],
 )
 def test_unchanged_check_skips_a_shared_body_another_sighting_holds(
@@ -264,6 +258,42 @@ def test_unchanged_check_skips_a_shared_body_another_sighting_holds(
             polls, sighting, _ = _sightings(connection_info)
             assert polls == 2
             assert sighting == (first_at if recorded_while_held else again_at)
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize(("availability", "recorded"), [("verified", True), ("retiring", False)])
+def test_recent_sighting_of_a_marked_response_is_not_recorded_unchanged(
+    database_url: str, availability: str, recorded: bool
+) -> None:
+    with upload_database(database_url) as connection_info:
+        database = CollectorDatabase(connection_info)
+        player_id = _player(connection_info)
+        _archive_instance(connection_info)
+
+        def poll(key: str, at: datetime) -> ResponseHandoff:
+            return _handoff(
+                occurrence_key=key, response_hash="a" * 64,
+                player_id=player_id, completed_at=at,
+            )
+
+        try:
+            database.record_response(poll("first", NOW))
+            claim = claim_upload(database, owner="uploader", now=NOW)
+            assert claim is not None
+            complete_upload(
+                database, claim, archive_reference="s3://evidence/marked",
+                archive_instance_id="fixture-instance", now=NOW,
+            )
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE archive_catalogue SET availability = %s, retiring_since = %s",
+                    (availability, NOW if availability == "retiring" else None),
+                )
+            # Sighted 5 minutes ago, but a marked response must be saved again.
+            again = database.record_unchanged_response(poll("again", NOW + timedelta(minutes=5)))
+            assert again is recorded
+            assert _sightings(connection_info)[0] == (2 if recorded else 1)
         finally:
             database.close()
 
