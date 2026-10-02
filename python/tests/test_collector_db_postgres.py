@@ -1325,8 +1325,7 @@ def test_rankings_and_discovery_use_unleased_compact_work(
                 == 0
             )
         assert [
-            intent.kind
-            for intent in database.pending_intents(limit=10, now=due_at)
+            intent.kind for intent in database.pending_intents(limit=10, now=due_at)
         ] == ["global_player_rankings"]
         with psycopg.connect(connection_info) as connection:
             assert (
