@@ -283,12 +283,16 @@ def mount_facts(path: str | Path) -> dict[str, object]:
         os.close(fd)
 
 
-def filesystem_capacity(path: str | Path) -> dict[str, object]:
+def filesystem_capacity(
+    path: str | Path, *, filesystem_type: str | None = None
+) -> dict[str, object]:
     """Return truthful capacity facts with explicit inode-model meaning.
 
     Opens the resolved target once, measures with fstatvfs, verifies the
     mount via fdinfo mnt_id. Open/fstatvfs failures propagate; identity
     failures degrade the type to unknown while a valid pool stays finite.
+    A caller that already identified the path passes its type to skip the
+    mount-table read; free space and inodes are still measured.
     """
     target = os.fspath(path)
     resolved = os.path.realpath(target)
@@ -299,7 +303,8 @@ def filesystem_capacity(path: str | Path) -> dict[str, object]:
         avail = int(filesystem.f_favail)
         free_bytes = int(filesystem.f_bavail * filesystem.f_frsize)
         block_size = int(filesystem.f_frsize)
-        filesystem_type = _identify_via_fd(resolved, fd)
+        if filesystem_type is None:
+            filesystem_type = _identify_via_fd(resolved, fd)
     finally:
         os.close(fd)
     inode_model = classify_inode_model(filesystem_type, total, avail)
