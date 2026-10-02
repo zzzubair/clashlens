@@ -29,6 +29,7 @@ from . import (
     api_accounts,
     api_verification,
     boundary_publication,
+    late_battle_sweep,
     reconciliation_db,
 )
 from . import (
@@ -860,6 +861,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             database.stage_metrics = stage_metrics
         next_queue_maintenance_at = float("-inf")
         next_publication_reevaluation_at = float("-inf")
+        late_battles = late_battle_sweep.LateBattleSweep(database)
 
         def process_batch() -> list[ProcessResult]:
             nonlocal next_queue_maintenance_at, next_publication_reevaluation_at
@@ -871,6 +873,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             if current_time >= next_publication_reevaluation_at:
                 if callable(reevaluate):
                     reevaluate()
+                late_battles.run_when_due()
                 next_publication_reevaluation_at = current_time + 10
             if current_time >= next_queue_maintenance_at:
                 maintenance_started_at = monotonic()
