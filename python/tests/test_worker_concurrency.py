@@ -22,9 +22,7 @@ class RecordingProcessor:
         self._lock = threading.Lock()
         self.available_jobs = available_jobs
 
-    def process_once(
-        self, *, owner: str, lease_seconds: int, claimed: Event | None = None
-    ) -> ProcessResult | None:
+    def process_once(self, *, owner: str, lease_seconds: int) -> ProcessResult | None:
         with self._lock:
             if self.available_jobs is not None:
                 if self.available_jobs <= 0:
@@ -32,8 +30,6 @@ class RecordingProcessor:
                 self.available_jobs -= 1
             call_index = len(self.calls) + 1
             self.calls.append((owner, lease_seconds))
-        if claimed is not None:
-            claimed.set()
         return ProcessResult(call_index, "processed")
 
 
@@ -143,84 +139,6 @@ def test_empty_queue_drains_lanes_without_runaway_claims() -> None:
     assert len(processor.calls) == 1
     assert processor.calls[0][0].startswith("draining-queue.lane-")
     assert processor.calls[0][1] == 30
-
-
-def test_probe_on_empty_queue_searches_once_instead_of_once_per_lane() -> None:
-    claims = 0
-
-    class EmptyQueue:
-        def process_once(self, **_kwargs: object) -> None:
-            nonlocal claims
-            claims += 1
-
-    probed = process_concurrently(
-        EmptyQueue(), concurrency=12, owner="idle", max_jobs=100, probe_first=True
-    )
-    assert probed == []
-    assert claims == 1
-    fanned_out = process_concurrently(
-        EmptyQueue(), concurrency=12, owner="idle", max_jobs=100
-    )
-    assert fanned_out == []
-    assert claims == 13
-
-
-def test_probe_that_finds_work_fans_out_to_every_lane() -> None:
-    class SlowProcessor(RecordingProcessor):
-        def process_once(
-            self, *, owner: str, lease_seconds: int, **_unreported: object
-        ) -> ProcessResult | None:
-            time.sleep(0.01)
-            return super().process_once(owner=owner, lease_seconds=lease_seconds)
-
-    processor = SlowProcessor(available_jobs=40)
-
-    results = process_concurrently(
-        processor, concurrency=4, owner="probe", max_jobs=30, probe_first=True
-    )
-
-    assert len(results) == 30
-    assert processor.calls[0][0] == "probe.lane-1"
-    assert len({owner for owner, _ in processor.calls}) == 4
-
-
-def test_probe_starts_other_lanes_while_its_first_job_is_still_processing() -> None:
-    release_first_job = Event()
-    other_lane_claimed = Event()
-
-    class SlowFirstJob(RecordingProcessor):
-        def process_once(
-            self, *, owner: str, lease_seconds: int, claimed: Event | None = None
-        ) -> ProcessResult | None:
-            result = super().process_once(
-                owner=owner, lease_seconds=lease_seconds, claimed=claimed
-            )
-            if result is not None and result.job_id == 1:
-                assert release_first_job.wait(10), "test gate was not released"
-            elif result is not None:
-                other_lane_claimed.set()
-            return result
-
-    processor = SlowFirstJob(available_jobs=5)
-    captured: list[list[ProcessResult]] = []
-    thread = threading.Thread(
-        target=lambda: captured.append(
-            process_concurrently(
-                processor, concurrency=3, owner="probe", max_jobs=10, probe_first=True
-            )
-        ),
-        daemon=True,
-    )
-    thread.start()
-
-    try:
-        assert other_lane_claimed.wait(5), "other lanes waited for the first job"
-    finally:
-        release_first_job.set()
-    thread.join(10)
-    assert not thread.is_alive(), "concurrent worker did not terminate in time"
-    assert len(captured[0]) == 5
-    assert processor.calls[0][0] == "probe.lane-1"
 
 
 def test_concurrency_rejects_out_of_bounds_values() -> None:

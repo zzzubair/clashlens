@@ -138,6 +138,10 @@ Every fourth claim keeps the existing oldest-first order so daily results and
 other derived work keep moving. If all planned claims are rejected, that call
 falls back to the existing order without refreshing the plan again.
 
+Each worker thread searches for its own next job, including when the queue is
+idle. A search that finds nothing costs about 4 ms, so idle polling stays per
+thread instead of going through one shared search.
+
 An ordinary check's job is finished as `superseded`, without being
 applied, when newer processed evidence from the same player and Legend day
 already covers it: a later accepted profile, or a newer battle log while every

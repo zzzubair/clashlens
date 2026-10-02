@@ -893,10 +893,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 max_jobs=arguments.max_jobs,
                 lease_seconds=arguments.lease_seconds,
                 stop_requested=stop_requested,
-                probe_first=queue_drained,
             )
 
-        queue_drained = False
         if not arguments.run_forever:
             results = process_batch()
             print(
@@ -986,7 +984,6 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         try:
             while not stop_requested.is_set():
                 results = process_batch()
-                queue_drained = len(results) < arguments.max_jobs
                 processed_count += len(results)
                 recent_results.extend(results)
                 for result in results:
