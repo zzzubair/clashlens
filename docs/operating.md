@@ -367,15 +367,19 @@ player. It reports how many pairs it checked (`evaluated_count`), the
 end-of-day jobs it queued, and how often each reason a pair failed was seen
 (`failure_reasons`). A run that checks pairs but queues nothing stops there;
 read its `failure_reasons` before running again. The season's opening Reset
-is re-checked too, as day 1's starting evidence, but queues no rebuild of the
-previous season's last day. The worker then publishes the days on its own.
+is re-checked too, as day 1's starting evidence, but queues no leaderboard,
+army or day rebuild for the previous season. A repaired pair rebuilds both
+current-season days it touches once they have ended, so a day already
+finished without its starting pair is corrected. The worker then publishes
+the days on its own.
 Only days whose Reset evidence is still in the database can be rebuilt;
 older days need the archived raw responses replayed, which this does not do.
 
 **Cost:** on 2026-10-02 this re-checks 25,599 pairs for the 2026-10-01 and
-2026-10-02 Resets and queues the same number of end-of-day jobs, about 8% of
-a day's normal reconciliation work (about 332,000 jobs a day in early
-October 2026). One army day is about 183,000 facts. Measured with synthetic
+2026-10-02 Resets. Each queues its end-of-day job, and each 2026-10-01 pair
+also rebuilds the ended day it starts: about 38,400 jobs if the pairs split
+evenly between the two Resets, about 12% of a day's normal reconciliation
+work (about 332,000 jobs a day in early October 2026). One army day is about 183,000 facts. Measured with synthetic
 facts built from production armies: 1,787 bytes per fact with its indexes,
 so about 330 MB per day and 9.2 GB per 28-day season until the season is
 retired. Building a day in 500-player batches adds about 76 MB to the worker,

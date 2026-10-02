@@ -55,7 +55,9 @@ def repair_current_season_reset_baselines(
     queued, how many pairs were checked, and how often each failure reason was
     seen; a checked count of zero means no such pair is left. The season's
     opening Reset is re-checked as day 1's starting evidence but queues no
-    rebuild of the previous season's last day.
+    leaderboard, army or day rebuild for the previous season. A completed pair
+    also rebuilds the ended current-season day it starts, which may already
+    have been finished without it.
     """
 
     with database.pool.connection() as connection:
@@ -76,7 +78,9 @@ def repair_current_season_reset_baselines(
                       AND outcome.processing_version = %s
                     ORDER BY outcome.id DESC
                     LIMIT 1
-                ), sweep.boundary_at > anchor.current_start
+                ), sweep.boundary_at > anchor.current_start,
+                sweep.boundary_at < anchor.current_start + interval '28 days'
+                AND sweep.boundary_at + interval '1 day' <= clock_timestamp()
                 FROM collector_work AS work
                 JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
                 JOIN current_anchor AS anchor
@@ -113,19 +117,24 @@ def repair_current_season_reset_baselines(
             ).fetchall()
         job_ids = []
         failure_reasons: Counter[str] = Counter()
-        for profile_observation_id, profile_parser_version, ends_day in candidates:
+        for (
+            profile_observation_id,
+            profile_parser_version,
+            ends_day,
+            starts_ended_day,
+        ) in candidates:
             with connection.transaction():
-                job_id, reasons = _evaluate_reset_baseline(
+                pair_job_ids, reasons = _evaluate_reset_baseline(
                     database,
                     connection,
                     observation_id=int(profile_observation_id),
                     observation_endpoint="profile",
                     parser_version=_text_value(profile_parser_version),
                     processing_version=PROCESSING_VERSION,
-                    queue_reconciliation=bool(ends_day),
+                    ends_day=bool(ends_day),
+                    starts_ended_day=bool(starts_ended_day),
                 )
-            if job_id is not None:
-                job_ids.append(job_id)
+            job_ids.extend(pair_job_ids)
             failure_reasons.update(reasons)
     return {
         "job_ids": job_ids,
@@ -144,16 +153,18 @@ def _evaluate_reset_baseline(
     processing_version: str,
     failure_category: str | None = None,
     failure_retryable: bool = False,
-    queue_reconciliation: bool = True,
-) -> tuple[int | None, list[str]]:
+    ends_day: bool = True,
+    starts_ended_day: bool = False,
+) -> tuple[list[int], list[str]]:
     """Record the Reset pair evidence seen from one of its observations.
 
-    Returns the end-of-day reconciliation job queued when the pair is complete,
-    and the pair's failure reasons.
+    Returns the reconciliation jobs queued when the pair is complete: the day
+    the Reset ends, when ``ends_day``, and the day it starts, when
+    ``starts_ended_day``. Also returns the pair's failure reasons.
     """
     context = _load_reset_baseline_context(connection, observation_id)
     if context is None:
-        return None, []
+        return [], []
     work_id, player_id, normalized_tag, sweep_id, boundary_at = context
     # The profile and battle-log jobs of one Reset pair often run at the same
     # time. Lock before reading so the later job sees the earlier job's
@@ -287,7 +298,7 @@ def _evaluate_reset_baseline(
         assert inserted is not None
         evidence_id = int(inserted[0])
 
-    if state in {"complete", "failed"}:
+    if state in {"complete", "failed"} and ends_day:
         _record_boundary_baseline(database, 
             connection,
             boundary_at=boundary_at,
@@ -295,15 +306,23 @@ def _evaluate_reset_baseline(
             player_id=int(player_id),
             state=state,
         )
-    if state != "complete" or not queue_reconciliation:
-        return None, reasons
-    return _enqueue_reset_reconciliation(
-        connection,
-        baseline_id=evidence_id,
-        baseline_version=version,
-        player_id=int(player_id),
-        boundary_at=boundary_at,
-    ), reasons
+    if state != "complete":
+        return [], reasons
+    day_starts = [boundary_at - timedelta(days=1)] if ends_day else []
+    if starts_ended_day:
+        day_starts.append(boundary_at)
+    job_ids = [
+        _enqueue_reset_reconciliation(
+            connection,
+            baseline_id=evidence_id,
+            baseline_version=version,
+            player_id=int(player_id),
+            boundary_at=boundary_at,
+            ranked_day_start=ranked_day_start,
+        )
+        for ranked_day_start in day_starts
+    ]
+    return [job_id for job_id in job_ids if job_id is not None], reasons
 
 
 def _record_boundary_baseline(
@@ -742,15 +761,17 @@ def _enqueue_reset_reconciliation(
     baseline_version: int,
     player_id: int,
     boundary_at: datetime,
+    ranked_day_start: datetime,
 ) -> int | None:
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    ranked_day_start = boundary_at - timedelta(days=1)
     ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     deduplication_key = (
         f"reconcile:reset-baseline:{baseline_id}:v{baseline_version}"
     )
+    if ranked_day_start == boundary_at:
+        deduplication_key += f":{ranked_day_start_text}"
     row = connection.execute(
         """
         INSERT INTO python_processing_jobs_worker (

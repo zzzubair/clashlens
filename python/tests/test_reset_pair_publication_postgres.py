@@ -233,8 +233,36 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                     database, max_jobs=1
                 )
 
-            # The opening Reset finishes without rebuilding last season's day.
-            assert repair() == {"job_ids": [], "evaluated_count": 1, "failure_reasons": {}}
+            def queued_days(job_ids: list[int]) -> dict[str, int]:
+                with database.pool.connection() as connection:
+                    return {
+                        text(row[0]): int(row[1])
+                        for row in connection.execute(
+                            "SELECT input_json->>'ranked_day_start', id"
+                            " FROM python_processing_jobs WHERE id = ANY(%s)",
+                            (job_ids,),
+                        ).fetchall()
+                    }
+
+            def iso(moment) -> str:
+                return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # The opening Reset rebuilds day 1, which has ended, and queues
+            # nothing for the previous season.
+            report = repair()
+            assert (report["evaluated_count"], report["failure_reasons"]) == (1, {})
+            assert list(queued_days(report["job_ids"])) == [iso(opening)]
+            with database.pool.connection() as connection:
+                previous_season_jobs = connection.execute(
+                    """
+                    SELECT count(*) FROM python_processing_jobs
+                    WHERE (work_type <> 'reconcile_ranked_day'
+                           AND input_json->>'boundary_at' = %s)
+                       OR input_json->>'ranked_day_start' = %s
+                    """,
+                    (iso(opening), iso(opening - timedelta(days=1))),
+                ).fetchone()[0]
+            assert previous_season_jobs == 0
             assert latest_states() == ["complete", "partial", "partial"]
             # A batch that queues nothing reports why and leaves later pairs.
             assert repair() == {
@@ -243,10 +271,14 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                 "failure_reasons": {"profile_after_first_event": 1},
             }
             assert latest_states() == ["complete", "failed", "partial"]
+            # A repaired pair rebuilds the day it ends and the ended day it
+            # starts, even if that day was already finished without it.
             report = repair()
-            assert (len(report["job_ids"]), report["evaluated_count"]) == (1, 1)
+            assert report["evaluated_count"] == 1
+            days = queued_days(report["job_ids"])
+            assert sorted(days) == [iso(DAY_START), iso(DAY_END)]
             assert latest_states() == ["complete", "failed", "complete"]
-            job = report["job_ids"][0]
+            job = days[iso(DAY_START)]
             assert processor.process_job(job, owner="repair").outcome == "processed"
             assert repair() == {"job_ids": [], "evaluated_count": 0, "failure_reasons": {}}
             with database.pool.connection() as connection:
