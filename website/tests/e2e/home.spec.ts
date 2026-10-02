@@ -13,9 +13,10 @@ test("fan content notice is exact, linked and readable on phones in both themes"
     footer.getByRole("link", { name: "www.supercell.com/fan-content-policy" }),
   ).toHaveAttribute("href", "https://www.supercell.com/fan-content-policy");
   for (const theme of ["light", "dark"]) {
-    await page.evaluate((value) => {
-      document.documentElement.dataset.theme = value;
-    }, theme);
+    // Save the choice like the theme toggle does; the page resets an unsaved theme.
+    await page.evaluate((value) => localStorage.setItem("clashlens-theme", value), theme);
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     await footer.scrollIntoViewIfNeeded();
     await expect(footer).toBeVisible();
     const bounds = await footer.boundingBox();
