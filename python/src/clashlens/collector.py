@@ -115,6 +115,12 @@ class Collector:
             asyncio.Lock() for _index in range(_HANDOFF_LOCK_STRIPES)
         )
         self._handoff_recovery_required = False
+        # Each stripe's newest saved response; it resolves once that response
+        # has committed or failed, so the next one commits after it.
+        self._handoff_turns: dict[asyncio.Lock, asyncio.Future[None]] = {}
+        # Newest committed (seen time, field fingerprint) per scope, identity
+        # and endpoint, from this process only; empty after a restart.
+        self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
         self._metrics_lock = asyncio.Lock()
         self._metrics_refresh_after = 0.0
         self._database_metrics: dict[str, int | float] = {}
@@ -433,25 +439,90 @@ class Collector:
                 digest = hashlib.sha256(response.body).hexdigest()
                 handoff = self._make_handoff(work, response, digest)
                 name, payload = self.serialize_handoff(handoff)
-                async with self._handoff_lock(handoff):
-                    # A predecessor may have failed after its durable publish
-                    # while this response was waiting for the same stripe.
-                    # Recovery must run before any successor can become current.
-                    if self._handoff_recovery_required:
-                        return "capacity_paused"
-                    published = False
-                    try:
-                        await _drain_to_thread(
-                            self.spool.publish_handoff,
-                            response.body,
-                            digest,
-                            name,
-                            payload,
-                            current_reservation,
+                # Only a known-unchanged sighting may skip the spool: an
+                # ordinary, work-free response whose used fields match the ones
+                # this process last committed for the same endpoint, checked
+                # while no response for its lock stripe is in flight. A crash
+                # before its database commit loses only that sighting; the next
+                # poll records it again. The check holds no lock, so no other
+                # response waits behind it. Every other response (first since
+                # restart, changed, reset or work-bound) is saved to the spool
+                # before its own database work, as is a known-unchanged one
+                # the check does not compact.
+                identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
+                lock = self._handoff_lock(handoff)
+                pending = self._handoff_turns.get(lock)
+                committed = self._committed.get(identity)
+                cancelled = False
+                compacted = False
+                if (
+                    lane == "ordinary"
+                    and handoff.collector_work_id is None
+                    and committed is not None
+                    and committed[1] == handoff.content_fingerprint
+                    and not lock.locked()
+                    and (pending is None or pending.done())
+                    and not self._handoff_recovery_required
+                ):
+                    check = asyncio.ensure_future(
+                        asyncio.to_thread(
+                            self.database.record_unchanged_response, handoff
                         )
-                        published = True
+                    )
+                    try:
+                        await _drain_awaitable(check)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                    except Exception:  # noqa: BLE001, S110 - the spool handoff keeps it.
+                        pass
+                    compacted = (
+                        not check.cancelled()
+                        and check.exception() is None
+                        and check.result() is True
+                    )
+                seen = (handoff.response_completed_at, handoff.content_fingerprint)
+                if compacted:
+                    self._committed[identity] = max(
+                        seen, self._committed.get(identity) or seen
+                    )
+                else:
+                    published = False
+                    turn = asyncio.get_running_loop().create_future()
+                    try:
+                        async with lock:
+                            # A predecessor may have failed after its durable
+                            # publish while this response was waiting for the
+                            # same stripe. Recovery must run before any
+                            # successor can become current.
+                            if self._handoff_recovery_required:
+                                if cancelled:
+                                    raise asyncio.CancelledError
+                                return "capacity_paused"
+                            await _drain_to_thread(
+                                self.spool.publish_handoff,
+                                response.body,
+                                digest,
+                                name,
+                                payload,
+                                current_reservation,
+                            )
+                            published = True
+                            previous = self._handoff_turns.get(lock)
+                            self._handoff_turns[lock] = turn
+                        # Saved responses commit in publish order, but no
+                        # database wait holds the lock, so a later response
+                        # always reaches the spool first.
+                        if previous is not None:
+                            await asyncio.shield(previous)
+                        if self._handoff_recovery_required:
+                            if cancelled:
+                                raise asyncio.CancelledError
+                            return "capacity_paused"
                         await _drain_awaitable(
                             self._database_call(self.database.record_response, handoff)
+                        )
+                        self._committed[identity] = max(
+                            seen, self._committed.get(identity) or seen
                         )
                         await _drain_to_thread(self.spool.remove_handoff, name)
                     except BaseException as error:
@@ -462,6 +533,10 @@ class Collector:
                                     "durable response handoff requires restart recovery"
                                 ) from error
                         raise
+                    finally:
+                        turn.set_result(None)
+                if cancelled:
+                    raise asyncio.CancelledError
                 self._count("recorded")
                 # Discovery work (ordinary lane with a work row) is not tracked.
                 noted = (
@@ -603,9 +678,28 @@ class Collector:
         return ResponseHandoff(**value), protocol == _HANDOFF_PROTOCOL
 
     def recover_handoffs(self) -> int:
+        records = [
+            (name, *self._deserialize_handoff(payload))
+            for name, payload in self.spool.iter_handoffs()
+        ]
+        # Responses already applied go first, then the rest in the order they
+        # were received, so a later one never compacts away an earlier change
+        # or replaces the commit marker of one already applied.
+        applied = (
+            self.database.applied_occurrence_keys(
+                [handoff.occurrence_key for _name, handoff, _serialized in records]
+            )
+            if records
+            else set()
+        )
+        records.sort(
+            key=lambda record: (
+                record[1].occurrence_key not in applied,
+                record[1].response_completed_at,
+            )
+        )
         recovered = 0
-        for name, payload in self.spool.iter_handoffs():
-            handoff, serialized = self._deserialize_handoff(payload)
+        for name, handoff, serialized in records:
             if self.spool.verify(handoff.response_hash, handoff.byte_size) is None:
                 raise SpoolError("handoff raw response is missing or corrupt")
             self.database.record_recovered_response(handoff, serialized=serialized)

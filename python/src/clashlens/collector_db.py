@@ -995,6 +995,7 @@ class CollectorDatabase:
         connection: Any,
         handoff: ResponseHandoff,
         observation_id: int | None,
+        saved: bool = True,
     ) -> None:
         connection.execute(
             """
@@ -1025,8 +1026,9 @@ class CollectorDatabase:
                     collector_response_state.last_seen_at
                     THEN EXCLUDED.last_occurrence_key
                     ELSE collector_response_state.last_occurrence_key END,
-                last_applied_occurrence_key =
-                    EXCLUDED.last_applied_occurrence_key,
+                last_applied_occurrence_key = CASE WHEN %s
+                    THEN EXCLUDED.last_applied_occurrence_key
+                    ELSE collector_response_state.last_applied_occurrence_key END,
                 last_seen_at = GREATEST(
                     EXCLUDED.last_seen_at, collector_response_state.last_seen_at
                 ),
@@ -1058,6 +1060,7 @@ class CollectorDatabase:
                 handoff.response_completed_at
                 if handoff.endpoint == "profile" and handoff.http_status == 404
                 else None,
+                saved,
             ),
         )
         if (
@@ -1080,6 +1083,108 @@ class CollectorDatabase:
             handoff, recovering=True, serialized=serialized
         )
 
+    def record_unchanged_response(self, handoff: ResponseHandoff) -> bool:
+        # Compaction keeps no upload or observation for these bytes, so they
+        # need no spool copy. False: nothing recorded, use record_response.
+        self._validate_handoff(handoff)
+        if handoff.collector_work_id is not None:
+            return False
+        with self.pool.connection(timeout=2.0) as connection:
+            with connection.transaction():
+                connection.execute("SET LOCAL transaction_timeout = '2s'")
+                state = self._lock_response_state(connection, handoff)
+                return self._record_unchanged(connection, handoff, state, None, False)
+
+    @staticmethod
+    def _lock_response_state(
+        connection: Any, handoff: ResponseHandoff
+    ) -> tuple[Any, ...] | None:
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"{handoff.scope}:{handoff.identity_key}:{handoff.endpoint}",),
+        )
+        return connection.execute(
+            """
+            SELECT last_response_hash, last_seen_at, last_observation_id,
+                   last_occurrence_key, last_content_fingerprint,
+                   last_applied_occurrence_key
+            FROM collector_response_state
+            WHERE scope = %s AND identity_key = %s AND endpoint = %s
+            FOR UPDATE
+            """,
+            (handoff.scope, handoff.identity_key, handoff.endpoint),
+        ).fetchone()
+
+    def _record_unchanged(
+        self,
+        connection: Any,
+        handoff: ResponseHandoff,
+        state: tuple[Any, ...] | None,
+        work_kind: str | None,
+        saved: bool,
+    ) -> bool:
+        # Reset needs boundary-time proof even when the used fields
+        # match the previous poll. Ordinary unchanged responses compact
+        # to state: no observation, job, or upload row is created.
+        # state[4] is the field fingerprint; rows upgraded before the
+        # column existed hold the old byte hash there, so matching the
+        # response hash also counts as unchanged. state[2] must name a
+        # live observation: pruning can NULL it, and a work endpoint
+        # marked observed with no observation can never complete.
+        if (
+            state is None
+            or state[2] is None
+            or state[4] not in (handoff.content_fingerprint, handoff.response_hash)
+            or work_kind == "reset_baseline"
+        ):
+            return False
+        retained = connection.execute(
+            """
+            SELECT response_hash, archive_reference
+            FROM collector_observations WHERE id = %s FOR UPDATE
+            """,
+            (state[2],),
+        ).fetchone()
+        if retained is None:
+            return False
+        if retained[1] is not None:
+            availability = connection.execute(
+                """
+                SELECT availability FROM archive_catalogue
+                WHERE response_hash = %s AND archive_reference = %s
+                FOR UPDATE
+                """,
+                retained,
+            ).fetchone()
+            if availability is None or availability[0] != "verified":
+                return False
+        self._upsert_response_state(connection, handoff, state[2], saved)
+        self._record_intent_endpoint(connection, handoff, state[2])
+        connection.execute(
+            """UPDATE collector_response_uploads
+            SET latest_sighting_at = GREATEST(latest_sighting_at, %s)
+            WHERE response_hash = %s""",
+            (handoff.response_completed_at, retained[0]),
+        )
+        # A body still being returned in a later season keeps that
+        # season's retirement deadline.
+        connection.execute(
+            """
+            UPDATE archive_catalogue
+            SET retire_after = clashlens_season_retire_after(%s)
+            WHERE response_hash = %s AND archive_reference = %s
+              AND availability = 'verified'
+              AND retire_after < clashlens_season_retire_after(%s)
+            """,
+            (
+                handoff.response_completed_at,
+                retained[0],
+                retained[1],
+                handoff.response_completed_at,
+            ),
+        )
+        return True
+
     def _record_response(
         self,
         handoff: ResponseHandoff,
@@ -1089,7 +1194,6 @@ class CollectorDatabase:
     ) -> ResponseResult:
         self._validate_handoff(handoff)
         parser_version = self._parser_for(handoff.endpoint)
-        state_key = f"{handoff.scope}:{handoff.identity_key}:{handoff.endpoint}"
         with self._connection() as connection:
             with connection.transaction():
                 if recovering:
@@ -1099,21 +1203,7 @@ class CollectorDatabase:
                     if recorded is not None:
                         return recorded
                 work_kind = self._validate_work_identity(connection, handoff)
-                connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (state_key,),
-                )
-                state = connection.execute(
-                    """
-                    SELECT last_response_hash, last_seen_at, last_observation_id,
-                           last_occurrence_key, last_content_fingerprint,
-                           last_applied_occurrence_key
-                    FROM collector_response_state
-                    WHERE scope = %s AND identity_key = %s AND endpoint = %s
-                    FOR UPDATE
-                    """,
-                    (handoff.scope, handoff.identity_key, handoff.endpoint),
-                ).fetchone()
+                state = self._lock_response_state(connection, handoff)
                 if state is not None and state[5] == handoff.occurrence_key:
                     recorded = connection.execute(
                         """
@@ -1146,69 +1236,7 @@ class CollectorDatabase:
                         "legacy response handoff has no durable commit identity"
                     )
 
-                # Reset needs boundary-time proof even when the used fields
-                # match the previous poll. Ordinary unchanged responses compact
-                # to state: no observation, job, or upload row is created.
-                # state[4] is the field fingerprint; rows upgraded before the
-                # column existed hold the old byte hash there, so matching the
-                # response hash also counts as unchanged. state[2] must name a
-                # live observation: pruning can NULL it, and a work endpoint
-                # marked observed with no observation can never complete.
-                unchanged = (
-                    state is not None
-                    and state[2] is not None
-                    and state[4] in (handoff.content_fingerprint, handoff.response_hash)
-                    and work_kind != "reset_baseline"
-                )
-                retained = None
-                archive_current = True
-                if unchanged:
-                    retained = connection.execute(
-                        """
-                        SELECT response_hash, archive_reference
-                        FROM collector_observations WHERE id = %s FOR UPDATE
-                        """,
-                        (state[2],),
-                    ).fetchone()
-                    archive_current = retained is not None
-                    if retained is not None and retained[1] is not None:
-                        availability = connection.execute(
-                            """
-                            SELECT availability FROM archive_catalogue
-                            WHERE response_hash = %s AND archive_reference = %s
-                            FOR UPDATE
-                            """,
-                            retained,
-                        ).fetchone()
-                        archive_current = (
-                            availability is not None and availability[0] == "verified"
-                        )
-                if unchanged and archive_current:
-                    self._upsert_response_state(connection, handoff, state[2])
-                    self._record_intent_endpoint(connection, handoff, state[2])
-                    connection.execute(
-                        """UPDATE collector_response_uploads
-                        SET latest_sighting_at = GREATEST(latest_sighting_at, %s)
-                        WHERE response_hash = %s""",
-                        (handoff.response_completed_at, retained[0]),
-                    )
-                    # A body still being returned in a later season keeps that
-                    # season's retirement deadline.
-                    connection.execute(
-                        """
-                        UPDATE archive_catalogue
-                        SET retire_after = clashlens_season_retire_after(%s)
-                        WHERE response_hash = %s AND archive_reference = %s
-                          AND availability = 'verified'
-                          AND retire_after < clashlens_season_retire_after(%s)
-                        """,
-                        (
-                            handoff.response_completed_at,
-                            retained[0],
-                            retained[1],
-                            handoff.response_completed_at,
-                        ),
-                    )
+                if self._record_unchanged(connection, handoff, state, work_kind, True):
                     return ResponseResult(
                         False, None, None, handoff.response_hash, parser_version
                     )
@@ -1268,7 +1296,7 @@ class CollectorDatabase:
                 processing_job_id = self._upsert_processing_job(
                     connection, handoff, observation_id, parser_version
                 )
-                self._upsert_response_state(connection, handoff, observation_id)
+                self._upsert_response_state(connection, handoff, observation_id, True)
                 self._record_intent_endpoint(connection, handoff, observation_id)
         return ResponseResult(
             True,
@@ -1362,6 +1390,15 @@ class CollectorDatabase:
             ).fetchone()
             assert row is not None
         return int(row[0])
+
+    def applied_occurrence_keys(self, keys: list[str]) -> set[str]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT last_applied_occurrence_key FROM collector_response_state
+                WHERE last_applied_occurrence_key = ANY(%s)""",
+                (keys,),
+            ).fetchall()
+        return {row[0] for row in rows}
 
     def referenced_spool_hashes(self) -> set[str]:
         with self._connection() as connection:

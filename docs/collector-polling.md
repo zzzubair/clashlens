@@ -307,9 +307,9 @@ saving time, key limits, Refresh or Reset, and it assumes the defender's
 profile shows a battle as soon as it ends.
 
 Ordinary transport failures wait for the next pass. Interactive, Reset and
-ranking work gets bounded retries. Raw responses are published to the local
-spool before their compact database handoff; restart recovery finishes either
-half without creating another observation or processing job.
+ranking work gets bounded retries. Raw responses that will be kept are published
+to the local spool before their compact database handoff; restart recovery
+finishes either half without creating another observation or processing job.
 
 Refresh and initial collection use the separate interactive key. Refreshes
 coalesce while active, have a 30-second cooldown, and never change the regular
@@ -341,7 +341,34 @@ A local spool file is deletable only after its processing and upload both
 succeed. Identical bytes share one spool/archive object. The fields listed in
 `response_fields.py` decide whether an ordinary response changed. When those
 fields match the retained response, changes to ignored fields need no new
-observation, processing job, or archive upload. The profile's official season rank
+observation, processing job, archive upload or spool file (about 97% of
+responses in October 2026). The collector remembers, in memory, the used-field
+fingerprint it last committed for each player and endpoint. An ordinary response
+with no work row whose fingerprint matches is a known-unchanged sighting: the
+collector records it in the database without saving it, so its bytes never
+reach the disk. That check holds no lock, so no other response waits behind
+it, and it runs only while no other response sharing its lock is being saved.
+Every other response (the first per player and endpoint since the collector
+started, a changed one, a reset or work-bound one) is saved to the spool before
+its own database work. So is a known-unchanged one when the database does not
+accept it as unchanged, or when that one-attempt check fails, times out or is
+cancelled. No response waits on the database while holding the shared lock:
+the lock covers only the spool write, so a later response is saved before it
+waits for an earlier one's database commit. Saved responses for the same lock
+still commit in the order they were saved. Restart recovery first finishes any
+saved response the database already shows as committed, then replays the rest
+in the order they were received, so a later response never hides an earlier
+change and none is counted twice. A recorded unchanged sighting leaves the
+saved response's commit record alone. A changed or unknown response is therefore never lost to a
+database wait. The trade-off: a hard crash before a known-unchanged
+sighting commits loses that sighting, meaning its seen time, its poll count, and
+the later sighting time and archive retirement deadline it would have given the
+kept response. No raw response,
+observation, job, battle or archive object is lost, and the next poll records
+the sighting again about 90 seconds later. The poll count (`request_count`) is
+also approximate: if an unchanged sighting commits but the confirmation is lost,
+the collector saves and records that response again, counting one poll twice.
+This is an accepted trade-off. The profile's official season rank
 (`legendStatistics.currentSeason.rank`) is ignored: it moves whenever other
 players battle and nothing reads it, so a rank-only change counts as unchanged.
 A changed response is still stored in full, including the rank. Fingerprints

@@ -453,6 +453,54 @@ and disk space: PostgreSQL retains unarchived WAL locally during a storage outag
 and that queue is not capped by `max_wal_size`. Never delete unarchived WAL to
 free space.
 
+### Disk writes and change-log volume
+
+On 2026-10-02 production wrote 14 MB/s from PostgreSQL and 18 MB/s from the
+collector. The change log was 3.1 MB/s (271 GB/day, 127 GB/day after upload
+compression); 87% of it was whole 8 KB page copies. Data checksums make
+PostgreSQL copy each page into the change log the first time it changes after a
+checkpoint, and the old 1 GB `max_wal_size` forced a checkpoint every three
+minutes. The 128 MB page cache also wrote 8.6 MB/s of table pages as it evicted
+them.
+
+The PostgreSQL unit now sets `shared_buffers=2GB` (inside the 4 GB memory cap;
+128 MB for fake-service runs; `./ops` refuses a `CLASHLENS_POSTGRES_MEMORY`
+below twice the cache), `checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
+Commit flushing, full-page writes, checksums and archiving are unchanged. A
+70-minute page-by-page replay of production's change log predicts 225 instead of
+393 page copies per second; zstd shrinks each copy to about 37%. Expect roughly
+1 MB/s of change log (about 85 GB/day) and 60–70 GB/day of backup uploads.
+Crash recovery replays the change log written since the last checkpoint.
+`max_wal_size` is a soft limit that heavy load or stalled archiving can exceed,
+so 2 GB is the usual size, not a ceiling: on rogue 845 MB took 90 seconds plus
+14 seconds to save, so 2 GB takes about four minutes. The health check ignores
+failures for its first five minutes, but the unit still waits for a healthy
+check within its five-minute start limit (`TimeoutStartSec`), so a replay that
+runs longer is stopped and started again.
+
+The collector remembers, in memory, the used fields it last committed for each
+player and endpoint. An ordinary response that matches them is recorded in the
+database without being saved to the spool, so most of the roughly 97% unchanged
+responses no longer reach it. Each saved response cost about 147 KiB of disk
+writes, mostly the forced flushes that make it crash-safe. The unchanged check
+holds no lock, so no other response waits behind it. Any other response (the
+first per player and endpoint after a restart, a changed one, a reset or
+work-bound one) is saved to the spool before its own database work, exactly as
+before; so is a matching one the database does not accept as unchanged, or
+whose check fails or is cancelled. No response waits on the database while
+holding the shared lock, so a later response is saved before it waits for an
+earlier one's commit; saved responses still commit in saved order. Restart
+recovery finishes any already committed saved response first, then replays the
+rest in the order they were received. A hard crash can therefore
+lose only an unchanged sighting's seen time, poll count, and the sighting time
+and retirement deadline it would have extended; no raw response or other kept
+data is lost, and the next poll records the sighting again. The poll count can
+also count one poll twice when an unchanged sighting commits but the
+confirmation is lost and the response is then saved and recorded again; this is
+an accepted trade-off. The memory record
+holds one entry per player and endpoint polled since the collector started:
+about 26,500 entries and 9 MB for 13,263 players.
+
 ### Restore into a separate database
 
 Use the pinned backup image from the release manifest and the read-only key.

@@ -248,6 +248,7 @@ load_production_config() {
   WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE 12)
   WORKER_ARCHIVE_POOL=$(setting CLASHLENS_WORKER_ARCHIVE_POOL_SIZE 12)
   POSTGRES_MEMORY=$(setting CLASHLENS_POSTGRES_MEMORY 4g)
+  POSTGRES_SHARED_BUFFERS=2048MB
   POSTGRES_SHM=$(setting CLASHLENS_POSTGRES_SHM_SIZE 1g)
   POSTGRES_CPUS=$(setting CLASHLENS_POSTGRES_CPUS 4)
   POSTGRES_PIDS=$(setting CLASHLENS_POSTGRES_PIDS 512)
@@ -292,6 +293,7 @@ load_fixture_config() {
   WORKER_DB_POOL=4
   WORKER_ARCHIVE_POOL=4
   POSTGRES_MEMORY=640m
+  POSTGRES_SHARED_BUFFERS=128MB
   POSTGRES_SHM=128m
   POSTGRES_CPUS=2
   POSTGRES_PIDS=256
@@ -321,6 +323,16 @@ validate_runtime_values() {
   [[ "$WEBSITE_PORT" != "$HEALTH_PORT" ]] || die "website and health ports must differ"
   for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
   for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done
+  local memory_mib=${POSTGRES_MEMORY%[bBkKmMgGtT]}
+  case "$POSTGRES_MEMORY" in
+    *[kK]) memory_mib=$((memory_mib / 1024)) ;;
+    *[mM]) ;;
+    *[gG]) memory_mib=$((memory_mib * 1024)) ;;
+    *[tT]) memory_mib=$((memory_mib * 1048576)) ;;
+    *) memory_mib=$((memory_mib / 1048576)) ;;
+  esac
+  (( memory_mib >= 2 * ${POSTGRES_SHARED_BUFFERS%MB} )) || \
+    die "POSTGRES_MEMORY must be at least twice the fixed ${POSTGRES_SHARED_BUFFERS} database cache"
   for item in PREFIX NETWORK_NAME POSTGRES_VOLUME SPOOL_ROOT STATE_DIR; do safe_env_value "$item" "${!item}"; done
   [[ -z "$ARCHIVE_ROOT" ]] || safe_env_value ARCHIVE_ROOT "$ARCHIVE_ROOT"
   validate_directory_ancestry "$STATE_DIR"
@@ -721,6 +733,7 @@ render_units() {
       FIXTURES_IMAGE "${RELEASE[FIXTURES_IMAGE]-unused}" LOGIN_IMAGE "${RELEASE[LOGIN_IMAGE]-unused}" \
       POSTGRES_USER "$POSTGRES_USER" POSTGRES_DB "$POSTGRES_DB" POSTGRES_SHM "$POSTGRES_SHM" \
       POSTGRES_MEMORY "$POSTGRES_MEMORY" POSTGRES_CPUS "$POSTGRES_CPUS" POSTGRES_PIDS "$POSTGRES_PIDS" \
+      POSTGRES_SHARED_BUFFERS "$POSTGRES_SHARED_BUFFERS" \
       COLLECTOR_MEMORY "$COLLECTOR_MEMORY" COLLECTOR_CPUS "$COLLECTOR_CPUS" COLLECTOR_PIDS "$COLLECTOR_PIDS" \
       API_MEMORY "$API_MEMORY" API_CPUS "$API_CPUS" API_PIDS "$API_PIDS" \
       WORKER_MEMORY "$WORKER_MEMORY" WORKER_CPUS "$WORKER_CPUS" WORKER_PIDS "$WORKER_PIDS" \

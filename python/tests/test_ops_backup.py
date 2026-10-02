@@ -329,6 +329,24 @@ def test_production_refuses_unsafe_key_settings(mode_config, setting, message):
     assert message in result.stderr
 
 
+@pytest.mark.parametrize(("memory", "accepted"), [("3g", False), ("4096m", True)])
+def test_production_refuses_memory_below_the_database_cache(
+    mode_config, memory, accepted
+):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(f"CLASHLENS_POSTGRES_MEMORY={memory}\n")
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + "validate_runtime_values\n", "memory-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr
+    assert ("database cache" in result.stderr) is not accepted
+
+
 @pytest.mark.parametrize("mode", ["production", "fixture"])
 def test_pod_address_and_stop_limits_are_rendered(
     tmp_path, mode_config, mode
@@ -366,6 +384,15 @@ render_units
     pod_stop = int(pod["Pod"]["StopTimeout"])
     assert pod_stop >= postgres_stop == 85
     assert int(pod["Service"]["TimeoutStopSec"]) > pod_stop
+    # The database's own page cache must leave room inside its memory cap.
+    mib = {"MB": 1, "GB": 1024, "m": 1, "g": 1024}
+    buffers = next(
+        arg.split("=")[1]
+        for arg in postgres["Container"]["Exec"].split()
+        if arg.startswith("shared_buffers=")
+    )
+    memory = postgres["Container"]["Memory"]
+    assert int(buffers[:-2]) * mib[buffers[-2:]] * 2 <= int(memory[:-1]) * mib[memory[-1]]
     if mode == "fixture":
         assert not network.has_option("Network", "Subnet")
         assert not pod.has_option("Pod", "IP")
