@@ -53,6 +53,27 @@ test("leaderboard updates stay visible and expandable on a 375 px phone", async 
   expect(await table.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(375);
 });
 
+test("leaderboard ages and old-data labels advance while the page stays open", async ({
+  page,
+}) => {
+  await page.clock.install({ time: Date.now() + 60 * 60_000 });
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  const update = page
+    .getByRole("table", { name: "Live Leaderboard", exact: true })
+    .locator('tbody tr td[data-label="Last updated"]')
+    .first();
+  await expect(update).toContainText("Over 10 min old");
+  const observedAt = Date.parse(
+    (await update.locator("time").getAttribute("datetime")) ?? "",
+  );
+  await page.clock.setSystemTime(observedAt + 2 * 60_000);
+  await page.clock.runFor(30_000);
+  await expect(update).toContainText("2 minutes ago");
+  await expect(update).not.toContainText("Over 10 min old");
+  await page.clock.runFor(9 * 60_000);
+  await expect(update).toContainText("11 minutes ago · Over 10 min old");
+});
+
 test("an out-of-range leaderboard page offers a working link to page one", async ({
   page,
 }) => {

@@ -13,8 +13,11 @@ Empty standings show a message without a table or pagination. A missing page
 after page one retains its HTTP 404 status and offers page one in the same view.
 Daily recovery links preserve the selected season and day. Listed and tracked
 player counts are distinct. No ordering, collection or player freshness rules
-changed. Relative ages use the saved response age and update on navigation or
-reload; this change adds no automatic refresh.
+changed. Each relative age and old-data label is worked out from the player's
+last-updated time against the current time. The server-rendered page uses the
+time the standings were loaded; in the browser, ages and labels recount about
+every 30 seconds without fetching new standings. The standings themselves still
+change only on navigation or reload.
 
 ## Results
 
@@ -28,6 +31,9 @@ reload; this change adds no automatic refresh.
 - Three targeted Playwright tests passed against the built website with sample
   backend responses: 375 px update visibility and expansion, out-of-range recovery,
   and no serious or critical accessibility findings on the leaderboard.
+- A fourth Playwright test fakes the browser clock: a row shown as 2 minutes
+  old gains "Over 10 min old" after 9 more minutes with no reload. It failed
+  against the previous route and passed with the change.
 - Chrome inspection at 375 × 812 and 1440 × 1000 used `chrome-devtools-axi`.
   All 100 phone rows had visible update controls; the document was 375 px wide
   and the table 339 px wide. Opening a timestamp introduced no sideways scroll.

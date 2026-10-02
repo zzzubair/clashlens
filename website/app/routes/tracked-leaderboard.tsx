@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   data,
   Link,
@@ -13,6 +14,7 @@ import { canonicalPlayerPath } from "../lib/player-tag";
 import type { SnapshotSelector } from "../lib/contracts";
 
 const PAGE_SIZE = 100;
+const OLD_UPDATE_SECONDS = 600;
 const formatDate = (value: string) =>
   new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(
     new Date(value),
@@ -101,12 +103,25 @@ export function headers() {
   return { "Cache-Control": "no-store" };
 }
 
+function useCurrentTime(loadedAt: string | undefined) {
+  const [now, setNow] = useState(() => (loadedAt ? Date.parse(loadedAt) : 0));
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [loadedAt]);
+  return now;
+}
+
 export default function TrackedLeaderboardRoute() {
   const { leaderboard, error, pageUnavailableUrl, view } = useLoaderData<typeof loader>();
   const daily = leaderboard?.daily;
   const entries = leaderboard?.entries ?? [];
   const newestObservedAt = leaderboard?.sourceObservations?.newestObservedAt ?? null;
   const oldestObservedAt = leaderboard?.sourceObservations?.oldestObservedAt ?? null;
+  const now = useCurrentTime(leaderboard?.generatedAt);
+  const ageSeconds = (observedAt: string) =>
+    Math.max(0, Math.floor((now - Date.parse(observedAt)) / 1000));
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell rankings-page">
@@ -249,11 +264,13 @@ export default function TrackedLeaderboardRoute() {
                             <summary>
                               Last updated{" "}
                               {view === "live" ? (
-                                `${formatAge(entry.freshness.ageSeconds)} ago`
+                                `${formatAge(ageSeconds(entry.freshness.observedAt))} ago`
                               ) : (
                                 <LocalTimestamp value={entry.freshness.observedAt} />
                               )}
-                              {view === "live" && entry.freshness.state === "stale" ? (
+                              {view === "live" &&
+                              ageSeconds(entry.freshness.observedAt) >
+                                OLD_UPDATE_SECONDS ? (
                                 <span className="player-update-age">Over 10 min old</span>
                               ) : null}
                             </summary>
@@ -269,8 +286,8 @@ export default function TrackedLeaderboardRoute() {
                           <LocalTimestamp value={entry.freshness.observedAt} />
                           {view === "live" ? (
                             <span className="player-update-age">
-                              {formatAge(entry.freshness.ageSeconds)} ago
-                              {view === "live" && entry.freshness.state === "stale"
+                              {formatAge(ageSeconds(entry.freshness.observedAt))} ago
+                              {ageSeconds(entry.freshness.observedAt) > OLD_UPDATE_SECONDS
                                 ? " · Over 10 min old"
                                 : null}
                             </span>

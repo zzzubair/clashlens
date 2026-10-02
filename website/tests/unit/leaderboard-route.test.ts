@@ -103,15 +103,18 @@ it("explains tracked ranks and distinguishes whole-board times from the row's co
 });
 
 it.each([
-  [600, "fresh", false],
-  [601, "stale", true],
+  ["2026-10-02T11:50:00Z", "10 minutes ago", false],
+  ["2026-10-02T11:49:59Z", "10 minutes ago", true],
+  ["2026-10-02T11:58:00Z", "2 minutes ago", false],
 ] as const)(
-  "keeps the ten-minute freshness boundary at %s seconds",
-  async (ageSeconds, state, stale) => {
+  "measures a row updated at %s from its timestamp at page load",
+  async (observedAt, age, stale) => {
     const fixture = structuredClone(board);
-    fixture.entries[0].freshness = { ...fixture.entries[0].freshness, ageSeconds, state };
+    fixture.entries[0].freshness = { ...fixture.entries[0].freshness, observedAt };
     mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
     const { html } = await render();
+    expect(html).toContain(`<summary>Last updated ${age}`);
+    expect(html).toContain(`${age}${stale ? " · Over 10 min old" : ""}</span>`);
     expect(html.includes("Over 10 min old")).toBe(stale);
   },
 );
