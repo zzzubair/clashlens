@@ -68,10 +68,8 @@ The collector's `/metrics` exports these gauges with the
 
 - `check_age_p50_seconds`, `check_age_p95_seconds`, `check_age_max_seconds`:
   successful check ages across active tracked players, excluding players hidden
-  as not found by the Live Leaderboard. A player is excluded when the profile's
-  `last_not_found_at` exists and either it is newer than `last_success_at` or no
-  profile success exists. A success at or after that not-found time includes the
-  player again; other failures do not change membership. Each player's age uses
+  by the Live Leaderboard's
+  [profile not-found rule](domain.md#live-leaderboard-ordering). Each player's age uses
   the older of the profile and battle-log `last_success_at` values. Unchanged
   successful responses advance these times; failures do not. Both times must
   exist for a player to contribute an age.
