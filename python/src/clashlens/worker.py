@@ -175,9 +175,10 @@ def process_concurrently(
     their current job and do not claim another; the call then waits for the
     bounded in-flight set and returns its results.
 
-    With ``probe_first``, one lane processes a single job before the others
-    start, and an empty probe returns at once. An idle queue then costs one
-    claim search per poll instead of one per lane.
+    With ``probe_first``, one lane searches first and the others start once it
+    claims a job, or once it returns if the processor does not report claims.
+    An empty probe returns at once, so an idle queue costs one claim search per
+    poll instead of one per lane.
 
     An unexpected exception escaping one lane is isolated: other lanes finish
     their in-flight job, no further claims are made, and a sanitized
@@ -202,7 +203,7 @@ def process_concurrently(
     failure_lock = threading.Lock()
     stop_claiming = Event()
 
-    def lane(lane_index: int, *, once: bool = False) -> None:
+    def lane(lane_index: int, claimed: Event | None = None) -> None:
         nonlocal first_failure, jobs_remaining
         while True:
             if stop_claiming.is_set():
@@ -213,10 +214,12 @@ def process_concurrently(
                 if jobs_remaining <= 0:
                     return
                 jobs_remaining -= 1
+            claim_report = {} if claimed is None else {"claimed": claimed}
             try:
                 result = processor.process_once(
                     owner=lane_owner(owner, lane_index),
                     lease_seconds=lease_seconds,
+                    **claim_report,
                 )
             except Exception as error:  # noqa: BLE001 - lane isolation boundary
                 with failure_lock:
@@ -228,13 +231,29 @@ def process_concurrently(
                 return
             with results_lock:
                 results.append(result)
-            if once:
+            if claimed is not None and not claimed.is_set():
                 return
 
+    probes: list[threading.Thread] = []
     lanes = range(1, concurrency + 1)
     if probe_first:
-        lane(1, once=True)
-        if not results:
+        claimed = Event()
+
+        def probe_lane() -> None:
+            try:
+                lane(1, claimed)
+            finally:
+                claimed.set()
+
+        probe = threading.Thread(
+            target=probe_lane, name="clashlens-worker-lane-1", daemon=True
+        )
+        probe.start()
+        probes.append(probe)
+        claimed.wait()
+        if probe.is_alive():
+            lanes = range(2, concurrency + 1)
+        elif not results:
             lanes = range(0)
     threads = [
         threading.Thread(
@@ -247,7 +266,7 @@ def process_concurrently(
     ]
     for thread in threads:
         thread.start()
-    for thread in threads:
+    for thread in probes + threads:
         thread.join()
     if first_failure is not None:
         raise RuntimeError("worker lane failed; job details are not available")
@@ -276,13 +295,15 @@ class ObservationProcessor:
             self.stage_metrics.record(stage, monotonic() - started_at)
 
     def process_once(
-        self, *, owner: str, lease_seconds: int = 30
+        self, *, owner: str, lease_seconds: int = 30, claimed: Event | None = None
     ) -> ProcessResult | None:
         started_at = monotonic()
         claim = self._claim_next(owner=owner, lease_seconds=lease_seconds)
         self._record_stage("python_claim", started_at)
         if claim is None:
             return None
+        if claimed is not None:
+            claimed.set()
         return self._process_claim(claim, lease_seconds=lease_seconds)
 
     def _claim_next(self, *, owner: str, lease_seconds: int) -> Claim | None:
