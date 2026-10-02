@@ -17,6 +17,9 @@ from pathlib import Path
 import pytest
 
 OPS = Path(__file__).resolve().parents[2] / "ops"
+# A full ops command makes over 100 calls to the Python Podman stand-in below, each starting
+# Python, so it takes about 3 seconds locally and over 15 on slow CI runners.
+OPS_TIMEOUT = 60
 MODE_CONFIG = r"""
 source "$1" help >/dev/null
 MODE=$TEST_MODE
@@ -181,7 +184,7 @@ def run_ops(runtime, rows, *args, upload_exit=0):
         env=dict(env, BACKUPS=json.dumps(rows), UPLOAD_EXIT=str(upload_exit)),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=OPS_TIMEOUT,
         check=False,
     )
 
@@ -629,7 +632,7 @@ def test_scheduled_backup_waits_for_operation_lock(runtime):
             time.sleep(0.2)
             assert process.poll() is None
             fcntl.flock(lock, fcntl.LOCK_UN)
-            stdout, stderr = process.communicate(timeout=60)
+            stdout, stderr = process.communicate(timeout=OPS_TIMEOUT)
         except BaseException:
             process.kill()
             process.communicate()
@@ -651,7 +654,7 @@ def test_changed_checkout_is_rejected_before_remote_activity(runtime, tmp_path):
         env=dict(env, BACKUPS=json.dumps([backup_row(1, 1)])),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=OPS_TIMEOUT,
         check=False,
     )
 
@@ -706,7 +709,7 @@ def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
             env=dict(env, LC_ALL=language),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=OPS_TIMEOUT,
             check=False,
         )
         assert result.returncode == 0, result.stderr
@@ -720,7 +723,7 @@ def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
         env=dict(env, LC_ALL=english),
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=OPS_TIMEOUT,
         check=False,
     )
     assert result.returncode != 0
@@ -842,12 +845,11 @@ def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
     env = dict(mode_config, **{k: env[k] for k in ("SYSTEMCTL_BIN", "PATH")}, PODMAN_BIN=str(podman))
     lock_path = tmp_path / "state" / "clashlens" / "ops.lock"
     with lock_path.open("w") as lock:
-        # A deployment or backup holding the operation lock does not delay cleanup. Each run makes
-        # about 100 Podman checks through the Python stand-in, so slow CI runners need 60 seconds.
+        # A deployment or backup holding the operation lock does not delay cleanup.
         fcntl.flock(lock, fcntl.LOCK_EX)
         scheduled = subprocess.run(
             ["bash", str(OPS), "archive-prune", "--scheduled"],
-            env=env, capture_output=True, text=True, timeout=60, check=False,
+            env=env, capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
         )
     assert (scheduled.returncode == 0) is deletes, scheduled.stderr
     if deletes:
@@ -859,12 +861,12 @@ def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
         assert not runs.exists()
         preview = subprocess.run(
             ["bash", str(OPS), "archive-prune"],
-            env=env, capture_output=True, text=True, timeout=60, check=False,
+            env=env, capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
         )
         assert preview.returncode == 0, preview.stderr
         assert not runs.read_text().rstrip().endswith("--apply")
     manual = subprocess.run(
         ["bash", str(OPS), "archive-prune", "--apply"],
-        env=env, capture_output=True, text=True, timeout=60, check=False,
+        env=env, capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
     )
     assert (manual.returncode == 0) is deletes, manual.stderr
