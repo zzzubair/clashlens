@@ -111,7 +111,9 @@ def test_existing_deadlines_count_from_latest_sighting_or_verification(database_
                 if path.name.startswith("0046_"):
                     break
                 connection.execute(path.read_text(encoding="utf-8"))
-            now = connection.execute("SELECT clock_timestamp()").fetchone()[0].replace(microsecond=0)
+            # UTC so day arithmetic is exact elapsed time even if the session
+            # time zone has a daylight-saving change inside the 86 days.
+            now = connection.execute("SELECT clock_timestamp()").fetchone()[0].astimezone(UTC).replace(microsecond=0)
             day = timedelta(days=1)
             # (latest retained sighting, first verification, availability). Old
             # code marked responses 56 days after their season ended, so a
