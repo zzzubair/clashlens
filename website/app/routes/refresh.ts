@@ -51,7 +51,9 @@ async function safeStatusErrorResponse(error: unknown) {
   });
 }
 
-async function readIdempotencyKey(request: Request): Promise<string | null> {
+async function readRefreshForm(
+  request: Request,
+): Promise<{ idempotencyKey: string; automatic: boolean } | null> {
   const contentType = request.headers
     .get("Content-Type")
     ?.split(";", 1)[0]
@@ -96,7 +98,16 @@ async function readIdempotencyKey(request: Request): Promise<string | null> {
     return null;
   }
   const values = form.getAll("idempotencyKey");
-  return values.length === 1 ? values[0] : null;
+  const triggers = form.getAll("trigger");
+  if (
+    values.length !== 1 ||
+    !isCanonicalUuid(values[0]) ||
+    triggers.length > 1 ||
+    (triggers.length === 1 && triggers[0] !== "automatic")
+  ) {
+    return null;
+  }
+  return { idempotencyKey: values[0], automatic: triggers[0] === "automatic" };
 }
 
 export async function action({ request, params, context }: Route.ActionArgs) {
@@ -112,8 +123,8 @@ export async function action({ request, params, context }: Route.ActionArgs) {
   if (!normalized) {
     return safeErrorResponse({ status: 400, payload: { error: "invalid_input" } });
   }
-  const idempotencyKey = await readIdempotencyKey(request);
-  if (idempotencyKey === null || !isCanonicalUuid(idempotencyKey)) {
+  const form = await readRefreshForm(request);
+  if (form === null) {
     return safeErrorResponse({ status: 400, payload: { error: "invalid_input" } });
   }
 
@@ -122,8 +133,14 @@ export async function action({ request, params, context }: Route.ActionArgs) {
   if (!identity) {
     return safeErrorResponse({ status: 503, payload: { error: "service_unavailable" } });
   }
-  const { allowPublicRefresh } = await import("../server/abuse.server");
-  if (!allowPublicRefresh(identity)) {
+  const { allowPublicRefresh, allowAutomaticRefresh } =
+    await import("../server/abuse.server");
+  if (form.automatic) {
+    if (!allowAutomaticRefresh(identity)) {
+      // No work or error to show: leave the saved profile and its timestamp visible.
+      return data(null, { status: 200, headers: NO_STORE_HEADERS });
+    }
+  } else if (!allowPublicRefresh(identity)) {
     return safeErrorResponse({
       status: 429,
       payload: { error: "rate_limited", retry_after_seconds: 60 },
@@ -134,7 +151,7 @@ export async function action({ request, params, context }: Route.ActionArgs) {
     const client = await import("../services/python.server");
     const work = await client
       .createPythonClient()
-      .requestRefresh(normalized, idempotencyKey);
+      .requestRefresh(normalized, form.idempotencyKey);
     return data(work, { status: 202, headers: NO_STORE_HEADERS });
   } catch (error) {
     return safeErrorResponse(error);

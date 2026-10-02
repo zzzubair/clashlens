@@ -5,7 +5,7 @@ import { expect, test, type Page } from "@playwright/test";
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
 
 // Sends Refresh submissions with an invalid key, so the server refuses them
-// before they spend the per-visitor allowance (6 a minute) that lookups share.
+// before they spend either per-visitor allowance.
 async function refuseRefreshes(page: Page, allowNext = () => false) {
   const submissions: string[] = [];
   await page.route("**/resources/players/*/refresh*", async (route) => {
@@ -154,6 +154,9 @@ for (const ageSeconds of [30, 60, 61, 120]) {
     for (const submission of submissions) {
       expect(new URLSearchParams(submission).get("idempotencyKey")).toBe(key);
     }
+    if (automaticCount)
+      expect(new URLSearchParams(submissions[0]).get("trigger")).toBe("automatic");
+    expect(new URLSearchParams(submissions.at(-1)).get("trigger")).toBeNull();
 
     // A full reload retains its existing unconditional Refresh behavior, and
     // stale data must not add a second request on top of it.
@@ -163,8 +166,52 @@ for (const ageSeconds of [30, 60, 61, 120]) {
     await expect(refusal).toBeVisible();
     await page.waitForLoadState("networkidle");
     expect(submissions).toHaveLength(automaticCount + 2);
+    expect(new URLSearchParams(submissions.at(-1)).get("trigger")).toBeNull();
   });
 }
+
+test("a skipped automatic refresh leaves saved data and its time without an alert", async ({
+  page,
+  request,
+}) => {
+  const saved = await request.get("/players/%232PP");
+  const savedHtml = await saved.text();
+  await page.route("**/players/%232PP", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: withServerAge(savedHtml, 120),
+    }),
+  );
+  let submissions = 0;
+  await page.route("**/resources/players/*/refresh*", (route) => {
+    submissions++;
+    expect(route.request().method()).toBe("POST");
+    expect(new URLSearchParams(route.request().postData() ?? "").get("trigger")).toBe(
+      "automatic",
+    );
+    return route.fulfill({
+      status: 200,
+      contentType: "text/x-script",
+      headers: { "X-Remix-Response": "yes" },
+      body: encodePageData({ data: null }),
+    });
+  });
+  const automatic = refreshSubmitted(page);
+  await page.goto("/players/%232PP");
+  await automatic;
+  await page.waitForLoadState("networkidle");
+  expect(submissions).toBe(1);
+  await expect(
+    page.getByRole("heading", { name: "Synthetic Clasher 001" }),
+  ).toBeVisible();
+  await expect(page.getByText("Current trophies", { exact: true })).toBeVisible();
+  const updated = page.locator(".player-updated");
+  await expect(updated).toBeVisible();
+  expect(Date.parse((await updated.getAttribute("datetime"))!)).not.toBeNaN();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Player refresh" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+});
 
 test("a battle processed shortly after a completed Refresh reaches the open page", async ({
   page,
@@ -379,24 +426,10 @@ test("not-found and uncertain eligibility are different outcomes", async ({ page
 test("first lookup works without JavaScript and exposes a temporary failure with retry", async ({
   browser,
 }) => {
-  test.setTimeout(100_000);
   const context = await browser.newContext({ javaScriptEnabled: false });
   try {
     const page = await context.newPage();
     await page.goto("/?q=%23LQQJ");
-    // Every browser context shares the same socket address. On the long-lived
-    // dev check stack, earlier stale-profile visits can spend the six-request
-    // allowance. Wait only for that explicit refusal to clear, then exercise
-    // the original no-JavaScript lookup and failure assertions unchanged.
-    const limited = page.getByRole("alert").filter({
-      hasText: "Refresh requests are temporarily limited",
-    });
-    if (await limited.isVisible()) {
-      await expect(async () => {
-        await page.reload();
-        await expect(limited).toHaveCount(0);
-      }).toPass({ timeout: 65_000, intervals: [1000] });
-    }
     await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
       "Checking this tag",
     );
