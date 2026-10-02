@@ -18,10 +18,8 @@ test("home and the full leaderboard show collected synthetic players", async ({
 
   await page.getByRole("link", { name: "Full rankings" }).click();
   await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=live&page=1$/);
-  await expect(
-    page.getByRole("heading", { name: "Latest saved standings" }),
-  ).toBeVisible();
-  await expect(page.getByRole("table", { name: "Latest saved standings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Live Leaderboard" })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Live Leaderboard" })).toBeVisible();
 });
 
 test("player search uses saved backend data", async ({ page }) => {
@@ -32,6 +30,63 @@ test("player search uses saved backend data", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByText("Synthetic Clasher 001").first()).toBeVisible();
   await expect(page.getByText("#2PP", { exact: true }).first()).toBeVisible();
+});
+
+test("leaderboard updates stay visible and expandable on a 375 px phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  const table = page.getByRole("table", { name: "Live Leaderboard", exact: true });
+  const rows = table.locator("tbody tr");
+  expect(await rows.count()).toBeGreaterThan(0);
+  for (const row of await rows.all()) {
+    await expect(row.locator("summary")).toBeVisible();
+    await expect(row.locator("summary")).toContainText("Last updated");
+  }
+  const update = rows.first().locator("details");
+  await update.locator("summary").click();
+  await expect(update.locator("time")).toBeVisible();
+  await expect(update.locator("time")).toHaveAttribute("datetime", /.+/);
+  await expect(update.locator("time")).toHaveAttribute("title", /UTC$/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  expect(await table.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(375);
+});
+
+test("leaderboard ages and old-data labels advance while the page stays open", async ({
+  page,
+}) => {
+  await page.clock.install({ time: Date.now() + 60 * 60_000 });
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  const update = page
+    .getByRole("table", { name: "Live Leaderboard", exact: true })
+    .locator('tbody tr td[data-label="Last updated"]')
+    .first();
+  await expect(update).toContainText("Over 10 min old");
+  const observedAt = Date.parse(
+    (await update.locator("time").getAttribute("datetime")) ?? "",
+  );
+  await page.clock.setSystemTime(observedAt + 2 * 60_000);
+  await page.clock.runFor(30_000);
+  await expect(update).toContainText("2 minutes ago");
+  await expect(update).not.toContainText("Over 10 min old");
+  await page.clock.runFor(9 * 60_000);
+  await expect(update).toContainText("11 minutes ago · Over 10 min old");
+});
+
+test("an out-of-range leaderboard page offers a working link to page one", async ({
+  page,
+}) => {
+  const response = await page.goto("/leaderboards/tracked?view=live&page=999999");
+  expect(response?.status()).toBe(404);
+  await expect(
+    page.getByRole("heading", { name: "This standings page is unavailable" }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Go to page 1" }).click();
+  await expect(page).toHaveURL(/view=live&page=1$/);
+  await expect(
+    page.getByRole("table", { name: "Live Leaderboard", exact: true }),
+  ).toBeVisible();
 });
 
 test("search navigates without rebuilding the document and opens a matching player", async ({
