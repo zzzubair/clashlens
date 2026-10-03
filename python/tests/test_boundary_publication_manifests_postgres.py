@@ -274,6 +274,21 @@ def _freeze_army_inputs(connection_info: str, archive_server, processor):
 
     Returns a pending-jobs lookup for that Reset and the army job and input.
     """
+    jobs = _reconcile_day(connection_info, archive_server, processor)
+    [(army_job, army_input)] = jobs("build_army_analytics")
+    [(snapshot_job, _input)] = jobs("build_snapshot")
+    _process_snapshot_and_analytics(
+        connection_info,
+        processor.database,
+        processor,
+        snapshot_job,
+        owner_prefix="snapshot",
+    )
+    return jobs, army_job, army_input
+
+
+def _reconcile_day(connection_info: str, archive_server, processor):
+    """Process one Legend day's reports and Reset; return a pending-jobs lookup."""
     pairs = [
         _store_baseline_pair(
             connection_info,
@@ -313,16 +328,7 @@ def _freeze_army_inputs(connection_info: str, archive_server, processor):
 
     for job_id, _input in jobs("reconcile_ranked_day"):
         assert processor.process_job(job_id, owner="day").outcome == "processed"
-    [(army_job, army_input)] = jobs("build_army_analytics")
-    [(snapshot_job, _input)] = jobs("build_snapshot")
-    _process_snapshot_and_analytics(
-        connection_info,
-        processor.database,
-        processor,
-        snapshot_job,
-        owner_prefix="snapshot",
-    )
-    return jobs, army_job, army_input
+    return jobs
 
 
 def _process_changed_army(
@@ -751,18 +757,28 @@ def test_army_frozen_after_a_merge_reads_the_moved_report(
                     " WHERE manifest_id = %s",
                     (army_input["manifest_id"],),
                 ).fetchall()
-                assert (frozen["battle_ids"], frozen["evidence_ids"]) == ([old], [])
                 [(moved_report,)] = connection.execute(
                     "SELECT evidence_id FROM battle_day_repairs"
                     " WHERE perspective = 'attacker'"
                 ).fetchall()
+                [(moved_decode,)] = connection.execute(
+                    "SELECT id FROM battle_army_decodes"
+                    " WHERE battle_id = %s AND perspective = 'attacker'"
+                    " AND is_active",
+                    (target,),
+                ).fetchall()
+                # The moved side's report and decode are frozen where they are.
+                assert (
+                    frozen["battle_ids"],
+                    frozen["evidence_ids"],
+                    frozen["decode_ids"],
+                ) == ([old], [moved_report], [moved_decode])
             assert processor.process_job(army_job, owner="army").outcome == "processed"
             with database.pool.connection() as connection:
-                # Its decode was frozen as missing, as it was then.
                 assert connection.execute(
                     "SELECT battle_id, evidence_id, decode_id"
                     " FROM army_analytics_battle_facts WHERE is_current"
-                ).fetchall() == [(target, moved_report, None)]
+                ).fetchall() == [(target, moved_report, moved_decode)]
                 # A side with no recorded move still fails clearly.
                 connection.execute("DELETE FROM battle_day_repairs")
                 with pytest.raises(
@@ -889,5 +905,51 @@ def test_army_readiness_counts_a_battle_merged_after_its_day(
                     (target,),
                 )
                 assert readiness() == "pending"
+        finally:
+            database.close()
+
+
+def test_reevaluation_recovers_armies_saved_pending_after_a_merge(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Before readiness followed 0057's moves, a player listing a merged
+    # battle was saved army-pending, and nothing checked them again: the
+    # Reset's army build never started.
+    monkeypatch.setattr(
+        boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending"
+    )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            jobs = _reconcile_day(connection_info, archive_server, processor)
+            assert jobs("build_army_analytics") == []
+            with database.pool.connection() as connection:
+                [(old,)] = connection.execute("SELECT id FROM legend_battles").fetchall()
+                target = _merge_into_day_before(connection, old)
+            monkeypatch.undo()
+            boundary_publication.reevaluate_boundary_publications(database)
+            [(army_job, army_input)] = jobs("build_army_analytics")
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT member.army_status"
+                    " FROM boundary_publication_generation_members AS member"
+                    " JOIN boundary_publication_manifests AS manifest"
+                    "   ON manifest.generation_id = member.generation_id"
+                    " WHERE manifest.id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall() == [("complete",)]
+                [(frozen,)] = connection.execute(
+                    "SELECT input_identity FROM boundary_publication_manifest_rows"
+                    " WHERE manifest_id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT battle_id, evidence_id, decode_id"
+                    " FROM army_analytics_battle_facts WHERE is_current"
+                ).fetchall() == [
+                    (target, frozen["evidence_ids"][0], frozen["decode_ids"][0])
+                ]
         finally:
             database.close()
