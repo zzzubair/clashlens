@@ -9,7 +9,7 @@ import pytest
 from test_api_db_verification import NOW, verification_binding
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts, api_verification, job_outcomes
+from clashlens import api_accounts, api_player_lookup, api_verification, job_outcomes
 from clashlens.api_db import ApiDatabase, RequestBinding
 from clashlens.verification import VerificationOutcome
 
@@ -302,24 +302,40 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
                     completed_at=NOW,
                 )
 
+            def lookup(tag: str):
+                return api_player_lookup.submit_lookup(database,
+                    account_binding(owner_id, "lookup.submit", f"/v1/players/{tag}/lookup", {"tag": tag}),
+                    normalized_tag=tag,
+                )
+
+            def refresh(tag: str):
+                return api_accounts.submit_refresh(database,
+                    account_binding(owner_id, "refresh.submit", f"/v1/players/{tag}/refresh", {"tag": tag}),
+                    normalized_tag=tag,
+                    cooldown_seconds=30,
+                )
+
             # A wait here would block forever, so give up after 10 seconds.
             executor = ThreadPoolExecutor(max_workers=9)
             try:
                 created = executor.submit(create, "Main", ["#2PP", "#8PY"])
                 assert created.result(timeout=10).status_code == 201
 
-                # The worker also holds the per-tag check lock and has saved a
-                # new player it has not committed yet. Eight site requests
+                # The worker also holds the per-tag check lock and has saved
+                # new players it has not committed yet. Eight site requests
                 # that need those fill every API connection, and each must
                 # fail at once so a page read still answers.
-                job_outcomes._upsert_player(worker, "#9QQ", active=True)
+                for tag in ("#9QQ", "#LQG", "#RJC"):
+                    job_outcomes._upsert_player(worker, tag, active=True)
                 worker.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended('#2PP', 0))"
                 )
                 blocked = [
-                    *(executor.submit(create, f"Tag {n}", ["#2PP"]) for n in range(3)),
-                    *(executor.submit(create, f"New {n}", ["#9QQ"]) for n in range(3)),
+                    *(executor.submit(create, f"Tag {n}", ["#2PP"]) for n in range(2)),
+                    *(executor.submit(create, f"New {n}", ["#9QQ"]) for n in range(2)),
                     *(executor.submit(verify, binding) for binding in verifications),
+                    executor.submit(lookup, "#LQG"),
+                    executor.submit(refresh, "#RJC"),
                 ]
                 started = time.monotonic()
                 groups = executor.submit(api_accounts.list_groups, database, owner_id)

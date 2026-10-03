@@ -937,27 +937,32 @@ describe("account routes", () => {
         "The group no longer exists. Refresh the page.",
       );
 
-      client.createGroup = vi.fn(async () => {
-        throw new PythonApiError(503, { error: "unavailable" });
-      });
-      const unavailable = await groupsAction({
-        request: formRequest("/account/groups", {
-          action: "create",
-          name: "Clanmates",
-          tags: TAG,
-          idempotencyKey: IDEMPOTENCY_KEY,
-        }),
-      } as never);
-      const { data, status, headers } = dataOf<{
-        generalError: { error: { code: string; message: string } };
-      }>(unavailable);
-      expect(status).toBe(422);
-      expect(data.generalError.error.code).toBe("unavailable");
-      expect(data.generalError.error.message).toBe(
-        "Could not confirm the group was created. Refresh the page before trying again.",
-      );
-      assertNoStoreHeaders(headers);
-      assertNoProviderData(data);
+      for (const [status, code] of [
+        [503, "unavailable"],
+        [502, "malformed"],
+      ] as const) {
+        client.createGroup = vi.fn(async () => {
+          throw new PythonApiError(status, { error: code });
+        });
+        const unconfirmed = await groupsAction({
+          request: formRequest("/account/groups", {
+            action: "create",
+            name: "Clanmates",
+            tags: TAG,
+            idempotencyKey: IDEMPOTENCY_KEY,
+          }),
+        } as never);
+        const result = dataOf<{
+          generalError: { error: { code: string; message: string } };
+        }>(unconfirmed);
+        expect(result.status).toBe(422);
+        expect(result.data.generalError.error.code).toBe(code);
+        expect(result.data.generalError.error.message).toBe(
+          "Could not confirm the group was created. Refresh the page before trying again.",
+        );
+        assertNoStoreHeaders(result.headers);
+        assertNoProviderData(result.data);
+      }
     });
 
     it("redirects an unresolved account to setup from the action", async () => {

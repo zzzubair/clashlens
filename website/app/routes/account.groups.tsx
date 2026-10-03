@@ -238,10 +238,11 @@ export async function action({ request }: Route.ActionArgs) {
               message: "The group no longer exists. Refresh the page.",
             },
           }
-        : actionMode === "create" && safeError.error.code === "unavailable"
+        : actionMode === "create" &&
+            (safeError.error.code === "unavailable" || safeError.error.code === "malformed")
           ? {
               error: {
-                code: "unavailable",
+                code: safeError.error.code,
                 message: "Could not confirm the group was created. Refresh the page before trying again.",
               },
             }

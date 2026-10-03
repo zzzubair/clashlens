@@ -572,7 +572,8 @@ def submit_refresh(
             existing = api_db._reserve_request(database, connection, binding)
             if existing is not None:
                 return existing
-            row = connection.execute(
+            row = api_db._execute_without_waiting(
+                connection,
                 """
                 SELECT *
                 FROM clashlens_enqueue_interactive('live_refresh', %s, %s)

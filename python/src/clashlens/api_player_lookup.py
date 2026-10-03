@@ -106,7 +106,8 @@ def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
             (normalized_tag,),
         ).fetchone()
         if recent is None:
-            connection.execute(
+            api_db._execute_without_waiting(
+                connection,
                 "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
                 (normalized_tag,),
             ).fetchone()
