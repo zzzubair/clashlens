@@ -710,11 +710,13 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert "battle_time_trophies BETWEEN" not in aggregate_queries[0]
                 assert "home_troops AS component_payload" not in aggregate_queries[0]
                 assert "heroes" not in aggregate_queries[0]
+                # Top 5 is one rank band (from rank 1) with no facts that day.
+                band_digest = json.dumps([[DAY_NUMBER, 1, None]], separators=(",", ":"))
                 expected_top_source_hash = hashlib.sha256(
                     json.dumps(
                         {
                             "selection": _selection(population="top-5").as_dict(),
-                            "facts": [],
+                            "rank_band_facts": hashlib.sha256(band_digest.encode()).hexdigest(),
                             "snapshots": [snapshot_id],
                         },
                         sort_keys=True,
