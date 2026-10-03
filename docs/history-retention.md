@@ -201,10 +201,10 @@ A missing, non-adjacent or unknown previous EOD leaves it unknown. Its
 `eod_state` and `eod_change_state` are `accepted` only when the EOD comes from
 a Complete day whose Reset reading has a settled boundary (both ends, for the
 change), otherwise `provisional`. This is summary format
-`player-season-summary-v2`; the website reads only the current format, so an
-older summary stays hidden until the command below rebuilds it from retained
-detail. Season closure already refuses a summary that no longer matches a fresh
-projection.
+`player-season-summary-v2`. An older summary stays listed and readable with
+those three fields unknown; the command below rebuilds it from retained detail
+where the Season's detail has not been retired. Season closure already refuses
+a summary that no longer matches a fresh projection.
 
 ```sh
 python -m clashlens.cli materialize-season-summaries --season-id 1785714000 --max-players 100

@@ -223,15 +223,34 @@ def test_eod_change_uses_previous_day_and_day_one_5000(database_url: str) -> Non
                 }
             page = api_players.get_player_season_summary(database, "#2PP", SEASON)
             assert [day["eod_change"] for day in page["daily_entries"]] == [50, -100, 50]
-            # A summary in the older format lacks movement, so readers
-            # skip it until rebuilt instead of showing movement as zero.
+            # A summary stored in the older format stays listed and readable,
+            # with movement and its evidence states unknown, never zero.
             with database.pool.connection() as connection:
                 connection.execute(
-                    "UPDATE player_season_summaries SET projection_version = 'player-season-summary-v1'"
+                    """
+                    UPDATE player_season_summaries
+                    SET projection_version = 'player-season-summary-v1',
+                        daily_entries = (
+                            SELECT jsonb_agg(
+                                entry - 'eod_change' - 'eod_state' - 'eod_change_state'
+                                ORDER BY position
+                            )
+                            FROM jsonb_array_elements(daily_entries)
+                                WITH ORDINALITY AS item(entry, position)
+                        )
+                    """
                 )
                 connection.commit()
-            assert api_players.get_player_season_summary(database, "#2PP", SEASON) is None
-            assert api_players.list_player_seasons(database, "#2PP") == []
+            older = api_players.get_player_season_summary(database, "#2PP", SEASON)
+            assert older["source"] == "tracked_summary"
+            assert [
+                (day["end_trophies"], day["eod_change"], day["eod_state"], day["eod_change_state"])
+                for day in older["daily_entries"]
+            ] == [(5050, None, None, None), (4950, None, None, None), (5000, None, None, None)]
+            assert [
+                (season["official_season_id"], season["source"])
+                for season in api_players.list_player_seasons(database, "#2PP")
+            ] == [(SEASON, "tracked_summary")]
         finally:
             database.close()
 

@@ -27,7 +27,7 @@ from typing import Any
 
 from .domain import SEASON_ANCHOR_RULE_VERSION
 
-# v2 added eod_change and its evidence states; readers reject other versions.
+# v2 added eod_change and its evidence states; readers report them unknown for v1.
 PROJECTION_VERSION = "player-season-summary-v2"
 MAX_DAILY_ENTRIES = 28
 _SEASON_DAYS = tuple(range(1, 29))

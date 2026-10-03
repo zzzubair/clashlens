@@ -18,7 +18,6 @@ from .api_db import (
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .domain import SEASON_DURATION, DomainRuleError, validate_legend_season_start
-from .season_summaries import PROJECTION_VERSION as SEASON_SUMMARY_VERSION
 
 _LEGEND_I_TIER_ID = 105000036
 
@@ -407,12 +406,7 @@ def get_player_page(
 def list_player_seasons(
     database: ApiDatabase, normalized_tag: str
 ) -> list[dict[str, Any]]:
-    """List compact summaries plus official history-only seasons.
-
-    A summary in an older format lacks fields the reader promises, such as
-    EOD movement, so it is skipped until rebuilt rather than shown with
-    those fields as zero.
-    """
+    """List compact summaries plus official history-only seasons."""
     with database.pool.connection() as connection:
         rows = connection.execute(
             """
@@ -423,9 +417,8 @@ def list_player_seasons(
             FROM player_season_summaries AS summary
             JOIN players AS player ON player.id = summary.player_id
             WHERE player.normalized_tag = %s
-              AND summary.projection_version = %s
             """,
-            (normalized_tag, SEASON_SUMMARY_VERSION),
+            (normalized_tag,),
         ).fetchall()
         seasons = {
             _text(row[0]): {
@@ -477,7 +470,11 @@ def list_player_seasons(
 def get_player_season_summary(
     database, normalized_tag: str, official_season_id: str
 ) -> dict[str, Any] | None:
-    """Read tracked detail when retained, with honest official fallback."""
+    """Read tracked detail when retained, with honest official fallback.
+
+    A summary stored before EOD movement was kept reports that movement
+    and its evidence states as unknown.
+    """
     with database.pool.connection() as connection:
         cursor = connection.execute(
             """
@@ -486,9 +483,8 @@ def get_player_season_summary(
             JOIN players AS player ON player.id = summary.player_id
             WHERE player.normalized_tag = %s
               AND summary.official_season_id = %s
-              AND summary.projection_version = %s
             """,
-            (normalized_tag, official_season_id, SEASON_SUMMARY_VERSION),
+            (normalized_tag, official_season_id),
         )
         row = cursor.fetchone()
         history_rows = _official_history_rows(
@@ -499,6 +495,9 @@ def get_player_season_summary(
             columns = [d.name for d in cursor.description]
             record = dict(zip(columns, row))
             result = _historical_season_summary(record)
+            for entry in result["daily_entries"]:
+                for key in ("eod_state", "eod_change", "eod_change_state"):
+                    entry.setdefault(key, None)
             result["source"] = "tracked_summary"
             result["official_history"] = (
                 None if history is None else _official_history_payload(history)
