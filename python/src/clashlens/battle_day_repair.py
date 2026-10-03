@@ -86,6 +86,59 @@ def merged_battles(
     return moved, unlisted
 
 
+# Each published day a listed move is not yet reflected in: the moved
+# report's old day still lists it, or its new day lacks the report now
+# selected for that battle side.
+UNFINISHED_MOVES = """
+SELECT own.player_id, own.evidence_id, own.from_day, own.to_day,
+       day.ranked_day_start, day.season_id
+FROM (
+    SELECT CASE repair.perspective
+               WHEN 'attacker' THEN repair.attacker_player_id
+               ELSE repair.defender_player_id
+           END AS player_id,
+           repair.evidence_id, repair.from_day, repair.to_day,
+           jsonb_build_array(jsonb_build_object(
+               'source_evidence_id', repair.evidence_id
+           )) AS moved,
+           jsonb_build_array(jsonb_build_object(
+               'source_evidence_id', coalesce(
+                   selected.evidence_id, repair.evidence_id
+               )
+           )) AS shown
+    FROM battle_day_repairs AS repair
+    LEFT JOIN battle_perspectives AS selected
+      ON selected.battle_id = repair.to_battle_id
+     AND selected.perspective = repair.perspective
+) AS own
+LEFT JOIN LATERAL (
+    SELECT log.battles, log.official_season_id
+    FROM api_player_daily_logs AS log
+    WHERE log.player_id = own.player_id
+      AND log.ranked_day_start = own.from_day
+    ORDER BY log.version DESC
+    LIMIT 1
+) AS from_log ON true
+LEFT JOIN LATERAL (
+    SELECT log.battles, log.official_season_id
+    FROM api_player_daily_logs AS log
+    WHERE log.player_id = own.player_id
+      AND log.ranked_day_start = own.to_day
+    ORDER BY log.version DESC
+    LIMIT 1
+) AS to_log ON true
+CROSS JOIN LATERAL (
+    VALUES (own.from_day, from_log.battles, from_log.official_season_id),
+           (own.to_day, to_log.battles, to_log.official_season_id)
+) AS day(ranked_day_start, battles, season_id)
+WHERE day.battles IS NOT NULL
+  AND (
+      (from_log.battles @> own.moved) IS TRUE
+      OR (to_log.battles @> own.shown) IS FALSE
+  )
+"""
+
+
 def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
     """Queue at most ``max_jobs`` rebuilds of players not yet done.
 
@@ -113,55 +166,9 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
             ],
         )
         rows = connection.execute(
-            """
-            WITH own AS (
-                SELECT CASE repair.perspective
-                           WHEN 'attacker' THEN repair.attacker_player_id
-                           ELSE repair.defender_player_id
-                       END AS player_id,
-                       repair.from_day, repair.to_day,
-                       jsonb_build_array(jsonb_build_object(
-                           'source_evidence_id', repair.evidence_id
-                       )) AS moved,
-                       jsonb_build_array(jsonb_build_object(
-                           'source_evidence_id', coalesce(
-                               selected.evidence_id, repair.evidence_id
-                           )
-                       )) AS shown
-                FROM battle_day_repairs AS repair
-                LEFT JOIN battle_perspectives AS selected
-                  ON selected.battle_id = repair.to_battle_id
-                 AND selected.perspective = repair.perspective
-            ), pending AS (
-                SELECT own.player_id, day.ranked_day_start, day.season_id
-                FROM own
-                LEFT JOIN LATERAL (
-                    SELECT log.battles, log.official_season_id
-                    FROM api_player_daily_logs AS log
-                    WHERE log.player_id = own.player_id
-                      AND log.ranked_day_start = own.from_day
-                    ORDER BY log.version DESC
-                    LIMIT 1
-                ) AS from_log ON true
-                LEFT JOIN LATERAL (
-                    SELECT log.battles, log.official_season_id
-                    FROM api_player_daily_logs AS log
-                    WHERE log.player_id = own.player_id
-                      AND log.ranked_day_start = own.to_day
-                    ORDER BY log.version DESC
-                    LIMIT 1
-                ) AS to_log ON true
-                CROSS JOIN LATERAL (
-                    VALUES (own.from_day, from_log.battles,
-                            from_log.official_season_id),
-                           (own.to_day, to_log.battles,
-                            to_log.official_season_id)
-                ) AS day(ranked_day_start, battles, season_id)
-                WHERE day.battles IS NOT NULL
-                  AND (
-                      (from_log.battles @> own.moved) IS TRUE
-                      OR (to_log.battles @> own.shown) IS FALSE
-                  )
+            f"""
+            WITH pending AS (
+                {UNFINISHED_MOVES}
             ), player AS (
                 SELECT pending.player_id,
                        min(pending.ranked_day_start) AS first_day,

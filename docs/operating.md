@@ -467,7 +467,7 @@ that Season that the 2-star/55% payout, five-minute day move, catalogue v2
 decodes and accepted Reset settlements change, and which are excluded (raw
 response gone, Season finalized, correction window closed). `--campaign
 register` saves that list as a dormant campaign that holds nothing and queues
-nothing. `--campaign activate` refuses until every repair stage is installed;
+nothing; registering again replaces it with what is still outstanding. `--campaign activate` refuses until every repair stage is installed;
 an active campaign holds its listed Reset publications until each is done.
 Every campaign write for a Season is refused from its end plus seven days
 (September 2026: from 2026-10-12 05:00 UTC). On 2026-10-03 a September

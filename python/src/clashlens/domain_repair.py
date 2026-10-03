@@ -7,22 +7,27 @@ alone would republish every Reset several times from half-fixed inputs, so a
 campaign lists everything they change once, for one coordinated rebuild:
 
 - ``source``: one selected report the payout or day fix changes, listed once
-  with every reason, including a needed decode.
+  with every reason, including a needed decode. A battle day move counts
+  only while a published day does not yet show it.
 - ``decode_batch``: up to 100 battles (keyed by battle id / 100) whose
   selected reports need only a catalogue v2 decode.
 - ``day``: one player's saved Legend day, from the first their own reports
-  change through every later saved day of the Season, plus the next Season's
-  first day, which starts from day 28's end.
+  change through every later saved day of the Season, then each next-Season
+  day whose day before can still change, before the correction window closes.
+  A day reads its day before's completeness and defenses only when its own
+  coverage is complete and it had 1 to 7 defenses, or no battles; the chain
+  stops after the first next-Season day that reads neither.
 - ``publication``: one Reset whose publication uses a listed day or decode.
 
 A payout report whose raw response is gone, or an item in a finalized Season
 or past its own Season's correction window, is excluded, never done.
 
 The ``republish-current-season`` command's ``preview`` writes nothing;
-``register`` saves the list and holds nothing; ``activate`` refuses until
-every stage in ``REQUIRED_STAGES`` has a handler. An active or paused campaign
-holds each listed Reset until its item is done: no new publication build, and
-corrections, even from decode jobs queued before the campaign, stay queued.
+``register`` saves the list, or replaces a dormant campaign's list, and holds
+nothing; ``activate`` refuses until every stage in ``REQUIRED_STAGES`` has a
+handler. An active or paused campaign holds each listed Reset until its item
+is done: no new publication build, and corrections, even from decode jobs
+queued before the campaign, stay queued.
 At the Season's end plus seven days the command refuses every write for it.
 """
 
@@ -95,7 +100,7 @@ def boundary_held(connection: Any, boundary_at: datetime) -> bool:
 
 
 _INVENTORY = """
-WITH selected AS (
+WITH RECURSIVE selected AS (
     SELECT p.battle_id, p.evidence_id, b.ranked_day_start, e.stars,
            e.destruction_percentage, e.trophy_rule_version, e.army_share_code,
            date_bin('1 day', e.battle_timestamp - %(grace)s,
@@ -114,7 +119,8 @@ WITH selected AS (
     SELECT evidence_id, ranked_day_start, own_day, 'moved'
     FROM selected WHERE ranked_day_start <> own_day
     UNION ALL
-    SELECT evidence_id, from_day, to_day, 'moved' FROM battle_day_repairs
+    SELECT evidence_id, from_day, to_day, 'moved'
+    FROM ({unfinished_moves}) AS move
     WHERE from_day >= %(start)s AND from_day < %(end)s
        OR to_day >= %(start)s AND to_day < %(end)s
 ), needs_decode AS (
@@ -139,17 +145,32 @@ WITH selected AS (
     SELECT player_id, boundary_at - interval '1 day', 'settlement'
     FROM reset_boundary_settlements
     WHERE state = 'settled' AND boundary_at > %(start)s AND boundary_at <= %(end)s
-), days AS (
-    SELECT v.player_id, v.ranked_day_start, min(v.official_season_id) AS season,
-           coalesce(array_agg(DISTINCT t.reason) FILTER (WHERE t.reason IS NOT NULL),
-                    ARRAY['dependency']) AS reasons
+), saved AS (
+    SELECT DISTINCT ON (v.player_id, v.ranked_day_start)
+           v.player_id, v.ranked_day_start, v.official_season_id,
+           v.coverage_complete AND (v.defense_count BETWEEN 1 AND 7
+               OR v.attack_count = 0 AND v.defense_count = 0) AS reads_previous
     FROM (SELECT player_id, min(day) AS first_day FROM touched GROUP BY 1) AS chain
     JOIN ranked_day_versions AS v
       ON v.player_id = chain.player_id
-     AND v.ranked_day_start >= chain.first_day AND v.ranked_day_start <= %(end)s
+     AND v.ranked_day_start >= chain.first_day AND v.ranked_day_start < %(deadline)s
+    ORDER BY v.player_id, v.ranked_day_start, v.version DESC
+), reached AS (
+    SELECT * FROM saved WHERE ranked_day_start <= %(end)s
+    UNION ALL
+    SELECT later.* FROM reached
+    JOIN saved AS later
+      ON later.player_id = reached.player_id
+     AND later.ranked_day_start = reached.ranked_day_start + interval '1 day'
+    WHERE reached.ranked_day_start >= %(end)s AND reached.reads_previous
+), days AS (
+    SELECT r.player_id, r.ranked_day_start, r.official_season_id AS season,
+           coalesce(array_agg(DISTINCT t.reason) FILTER (WHERE t.reason IS NOT NULL),
+                    ARRAY['dependency']) AS reasons
+    FROM reached AS r
     LEFT JOIN touched AS t
-      ON t.player_id = v.player_id AND t.day = v.ranked_day_start
-    GROUP BY 1, 2
+      ON t.player_id = r.player_id AND t.day = r.ranked_day_start
+    GROUP BY 1, 2, 3
 )
 SELECT 'source', 'evidence:' || evidence_id,
        reasons || CASE WHEN evidence_id IN (SELECT evidence_id FROM needs_decode)
@@ -191,15 +212,10 @@ _COLUMNS = (
     "observation_id", "ranked_day_start", "from_day", "to_day",
     "official_season_id", "boundary_at", "battle_ids", "exclusion",
 )
-_UPSERT = f"""
+_INSERT = f"""
 INSERT INTO domain_repair_items (campaign_id, {", ".join(_COLUMNS)}, state)
 VALUES (%s, {", ".join(["%s"] * len(_COLUMNS))},
         CASE WHEN %s::text IS NULL THEN 'pending' ELSE 'excluded' END)
-ON CONFLICT (campaign_id, kind, target_key) DO UPDATE SET
-    reasons = ARRAY(SELECT DISTINCT unnest(
-        domain_repair_items.reasons || EXCLUDED.reasons) ORDER BY 1),
-    battle_ids = nullif(ARRAY(SELECT DISTINCT unnest(
-        domain_repair_items.battle_ids || EXCLUDED.battle_ids) ORDER BY 1), '{{}}')
 """
 
 
@@ -210,13 +226,17 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
             "SELECT official_season_id FROM season_detail_retirements"
         ).fetchall()
     }
+    from .battle_day_repair import UNFINISHED_MOVES
+
+    end, deadline = campaign_window(start)
     parameters = {
-        "start": start, "end": campaign_window(start)[0], "grace": BATTLE_DAY_GRACE,
+        "start": start, "end": end, "deadline": deadline, "grace": BATTLE_DAY_GRACE,
         "old_rule": HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
         "decoder": DECODER_VERSION, "catalog": CATALOG_VERSION,
     }
     items = []
-    for row in connection.execute(_INVENTORY, parameters).fetchall():
+    query = _INVENTORY.format(unfinished_moves=UNFINISHED_MOVES)
+    for row in connection.execute(query, parameters).fetchall():
         item = dict(zip(_COLUMNS, row, strict=True))
         item.update(kind=_text_value(item["kind"]),
                     reasons=sorted({_text_value(value) for value in item["reasons"]}))
@@ -307,8 +327,8 @@ def preview(database: Database, season_id: str, *, now: datetime | None = None) 
 def register(database: Database, season_id: str, *, now: datetime | None = None) -> dict:
     """Save the Season's campaign list, holding nothing until activation.
 
-    Registering again adds what is newly found and merges reasons; no listed
-    item is removed. Refused once the campaign is activated.
+    Registering again replaces the list with what is still outstanding.
+    Refused once the campaign is activated, so no held item is dropped.
     """
     with database.pool.connection() as connection, connection.transaction():
         start, deadline, now = _open(connection, season_id, now, write=True)
@@ -331,21 +351,15 @@ def register(database: Database, season_id: str, *, now: datetime | None = None)
         ).fetchone()
         if _text_value(state) != "registered":
             raise CampaignRefused(f"season {season_id} campaign is {_text_value(state)}")
+        connection.execute(
+            "DELETE FROM domain_repair_items WHERE campaign_id = %s", (campaign_id,)
+        )
         with connection.cursor() as cursor:
-            cursor.executemany(_UPSERT, [
+            cursor.executemany(_INSERT, [
                 (campaign_id, *(item[column] for column in _COLUMNS), item["exclusion"])
                 for item in items
             ])
-        summary = _summary([
-            {"kind": _text_value(row[0]), "target_key": _text_value(row[1]),
-             "reasons": sorted(map(_text_value, row[2])), "battle_ids": row[3],
-             "exclusion": _text_value(row[4]) if row[4] else None}
-            for row in connection.execute(
-                "SELECT kind, target_key, reasons, battle_ids, exclusion"
-                " FROM domain_repair_items WHERE campaign_id = %s",
-                (campaign_id,),
-            ).fetchall()
-        ])
+        summary = _summary(items)
         connection.execute(
             """
             UPDATE domain_repair_campaigns

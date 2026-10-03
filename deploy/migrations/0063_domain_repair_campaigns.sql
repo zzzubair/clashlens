@@ -81,6 +81,8 @@ CREATE INDEX IF NOT EXISTS domain_repair_items_held_boundary
 REVOKE ALL ON domain_repair_campaigns, domain_repair_items FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON domain_repair_campaigns, domain_repair_items
     TO clashlens_python_worker;
+-- Registering again replaces a dormant campaign's items.
+GRANT DELETE ON domain_repair_items TO clashlens_python_worker;
 GRANT USAGE ON SEQUENCE domain_repair_campaigns_id_seq,
     domain_repair_items_id_seq TO clashlens_python_worker;
 

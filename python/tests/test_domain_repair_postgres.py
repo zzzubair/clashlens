@@ -13,8 +13,11 @@ import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.types.json import Jsonb
 
 from clashlens import boundary, boundary_publication, domain_repair, reset_baselines
+from clashlens.army_decoder import DECODER_VERSION
+from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database
 from clashlens.domain import HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION
 
@@ -103,7 +106,8 @@ def _report(
 
 
 def _saved_day(
-    connection, player_id: int, day: datetime, season: str = SEASON, version: int = 1
+    connection, player_id: int, day: datetime, season: str = SEASON, version: int = 1,
+    *, state: str = "Complete", attacks: int = 0, defenses: int = 0,
 ) -> None:
     connection.execute(
         """
@@ -111,11 +115,13 @@ def _saved_day(
             player_id, ranked_day_start, ranked_day_end, official_season_id,
             season_day_number, season_anchor_rule_version,
             reconciliation_rule_version, result_hash, version, state, confidence,
-            input_hash, evidence_complete, coverage_complete
+            input_hash, evidence_complete, coverage_complete, attack_count,
+            defense_count
         ) VALUES (%s, %s, %s, %s, 1, 'legend-season-anchor-v1', 'test', %s, %s,
-                  'Complete', 'exact', %s, true, true)
+                  %s, 'exact', %s, true, true, %s, %s)
         """,
-        (player_id, day, day + DAY, season, f"{version:x}" * 64, version, "a" * 64),
+        (player_id, day, day + DAY, season, f"{version:x}" * 64, version, state,
+         "a" * 64, attacks, defenses),
     )
 
 
@@ -225,7 +231,9 @@ def test_campaign_includes_closing_boundary_and_next_season_dependency(
             day28 = END - DAY
             _report(connection, player, opponent, day28)
             _saved_day(connection, player, day28)
-            _saved_day(connection, player, END, NEXT_SEASON)
+            # The next Season's first day only attacked, so its result does not
+            # read day 28's and its second day cannot change.
+            _saved_day(connection, player, END, NEXT_SEASON, attacks=1)
             _saved_day(connection, player, END + DAY, NEXT_SEASON)
         domain_repair.register(worker, SEASON, now=NOW)
         # Day 28 ends at the October 5 Reset; the next Season's first day
@@ -242,6 +250,119 @@ def test_campaign_includes_closing_boundary_and_next_season_dependency(
         assert not late["open"]
         assert late["excluded"] == {"raw_unavailable": 1, "window_expired": 2}
         assert late["items"] == {"source": 1, "day": 2, "publication": 2}
+
+
+def test_campaign_follows_next_season_days_that_can_change(database_url: str) -> None:
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            player, opponent = _player(connection, "#CHAIN"), _player(connection, "#IDLE")
+            day28 = END - DAY
+            _report(connection, player, opponent, day28)
+            _saved_day(connection, player, day28)
+            # Day 1's one defense takes its automatic loss from day 28's
+            # defenses, so day 28's 17 can make it Complete, which day 2's
+            # automatic loss needs. Day 2 only attacked, so day 3 cannot change.
+            _saved_day(connection, player, END, NEXT_SEASON, state="Partial", defenses=1)
+            _saved_day(connection, player, END + DAY, NEXT_SEASON, attacks=1)
+            _saved_day(connection, player, END + 2 * DAY, NEXT_SEASON)
+            # Days with no battles carry the chain, but never past the window.
+            _report(connection, opponent, player, day28)
+            for day in range(9):
+                _saved_day(connection, opponent, day28 + day * DAY,
+                           SEASON if day == 0 else NEXT_SEASON)
+        domain_repair.register(worker, SEASON, now=NOW)
+        days = [row[0] for row in _items(connection_info, "day")]
+        assert sorted(days) == sorted(
+            [_key("day", player, day) for day in (day28, END, END + DAY)]
+            + [_key("day", opponent, day28 + day * DAY) for day in range(8)]
+        )
+        # The last listed Reset is the window's close.
+        assert {row[0] for row in _items(connection_info, "publication")} == {
+            _key("boundary", END + day * DAY) for day in range(8)
+        }
+
+
+def test_campaign_lists_only_moves_not_yet_published(database_url: str) -> None:
+    with _campaign_database(database_url) as (connection_info, worker):
+        day2, day3 = START + DAY, START + 2 * DAY
+        with _owner(connection_info) as connection:
+            shown, stale = _player(connection, "#SHOWN"), _player(connection, "#STALE")
+            opponent = _player(connection, "#OPP")
+            for player in (shown, stale):
+                evidence_id = _report(connection, player, opponent, day2, destruction=56)
+                connection.execute(
+                    """
+                    INSERT INTO battle_day_repairs (
+                        from_battle_id, to_battle_id, perspective, evidence_id,
+                        attacker_player_id, defender_player_id, from_day, to_day
+                    ) SELECT 0, battle_id, 'attacker', id, %s, %s, %s, %s
+                    FROM battle_evidence WHERE id = %s
+                    """,
+                    (player, opponent, day3, day2, evidence_id),
+                )
+                # The moved report is published on its new day for one
+                # player; the other's old day still shows it.
+                listed = [{"source_evidence_id": evidence_id}]
+                for day, battles in ((day2, listed if player == shown else []),
+                                     (day3, [] if player == shown else listed)):
+                    connection.execute(
+                        "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
+                        " version, state, coverage, battles) VALUES (%s, %s, 1,"
+                        " 'Complete', 'complete', %s)",
+                        (player, day, Jsonb(battles)),
+                    )
+                    _saved_day(connection, player, day)
+            stale_evidence = evidence_id
+        report = domain_repair.register(worker, SEASON, now=NOW)
+        assert [row[:2] for row in _items(connection_info, "source")] == [
+            (f"evidence:{stale_evidence}", ["moved"])
+        ]
+        assert [row[0] for row in _items(connection_info, "day")] == [
+            _key("day", stale, day2), _key("day", stale, day3)
+        ]
+        assert report["items"] == {"source": 1, "day": 2, "publication": 2}
+
+
+def test_campaign_registration_drops_finished_work_until_activated(
+    database_url: str, monkeypatch
+) -> None:
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            player, opponent = _player(connection, "#CODE"), _player(connection, "#OTHER")
+            first = _report(connection, player, opponent, START, destruction=56, code="u1x0-2x1")
+        assert domain_repair.register(worker, SEASON, now=NOW)["items"] == {
+            "decode_batch": 1, "publication": 1
+        }
+        # The decode queued before the campaign finishes and publishes, so
+        # registering again leaves nothing listed or held for it.
+        _decoded(connection_info, first)
+        assert domain_repair.register(worker, SEASON, now=NOW)["items"] == {}
+        assert _items(connection_info, "decode_batch") == []
+        assert _items(connection_info, "publication") == []
+
+        with _owner(connection_info) as connection:
+            second = _report(connection, player, opponent, START, destruction=56, code="u1x0-2x1")
+        domain_repair.register(worker, SEASON, now=NOW)
+        monkeypatch.setattr(domain_repair, "HANDLERS", dict.fromkeys(domain_repair.REQUIRED_STAGES))
+        domain_repair.activate(worker, SEASON, now=NOW)
+        _decoded(connection_info, second)
+        with pytest.raises(domain_repair.CampaignRefused, match="campaign is active"):
+            domain_repair.register(worker, SEASON, now=NOW)
+        assert [row[2] for row in _items(connection_info, "publication")] == ["pending"]
+
+
+def _decoded(connection_info: str, evidence_id: int) -> None:
+    with _owner(connection_info) as connection:
+        connection.execute(
+            """
+            INSERT INTO battle_army_decodes (
+                battle_id, evidence_id, perspective, decoder_version,
+                catalog_version, catalog_hash, status, failure_category
+            ) SELECT battle_id, id, 'attacker', %s, %s, %s, 'failed', 'undecodable'
+            FROM battle_evidence WHERE id = %s
+            """,
+            (DECODER_VERSION, CATALOG_VERSION, "a" * 64, evidence_id),
+        )
 
 
 def test_campaign_hold_defers_only_affected_artifacts(
