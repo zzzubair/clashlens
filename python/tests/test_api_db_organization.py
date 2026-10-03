@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+import psycopg
+import pytest
+from test_api_db_verification import NOW, verification_binding
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts
+from clashlens import api_accounts, api_player_lookup, api_verification, job_outcomes
 from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.verification import VerificationOutcome
 
 
 def account_binding(
@@ -239,4 +245,157 @@ def test_group_update_and_delete_require_the_owning_account(
             assert deleted.payload == {"deleted": True, "group_id": group_id}
             assert api_accounts.list_groups(database, owner_id) == []
         finally:
+            database.close()
+
+
+def test_simultaneous_group_creates_naming_one_new_player_all_succeed(
+    database_url: str,
+) -> None:
+    # Failing at once on a busy player is for worker locks. Site requests about
+    # the same player at the same moment wait for each other instead.
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info, min_size=8, max_size=8)
+        try:
+            owner_id = create_owner(database)
+
+            def create(name: str):
+                return api_accounts.create_group(database,
+                    account_binding(
+                        owner_id,
+                        "groups.create",
+                        "/v1/account/groups",
+                        {"name": name, "tags": ["#9QQ"]},
+                    ),
+                    name=name,
+                    normalized_name=name.lower(),
+                    normalized_tags=["#9QQ"],
+                )
+
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                results = list(executor.map(create, [f"Group {n}" for n in range(6)]))
+            assert [result.status_code for result in results] == [201] * 6
+            assert len(api_accounts.list_groups(database, owner_id)) == 6
+        finally:
+            database.close()
+
+
+def test_group_creation_does_not_queue_behind_a_worker_transaction(
+    database_url: str,
+) -> None:
+    # On 2026-10-03 a worker rebuild kept one transaction open for minutes.
+    # Every Create group click waited on its player row locks until all API
+    # connections were stuck and every page timed out.
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info, min_size=8, max_size=8)
+        worker = psycopg.connect(connection_info)
+        try:
+            owner_id = create_owner(database)
+            job_outcomes._upsert_player(worker, "#2PP", active=True)
+            job_outcomes._upsert_player(worker, "#8PY", active=False)
+            worker.commit()
+            verifications = [
+                verification_binding(owner_id, "group-owner-subject", "#2PP")
+                for _ in range(2)
+            ]
+            for binding in verifications:
+                assert api_verification.reserve_verification(
+                    database, binding, normalized_tag="#2PP"
+                ).fresh
+            # The worker updates one player and saves a row referencing the
+            # other, which locks it the way a foreign key check does.
+            job_outcomes._upsert_player(worker, "#2PP", active=True)
+            worker.execute(
+                "SELECT 1 FROM players WHERE normalized_tag = '#8PY' FOR KEY SHARE"
+            )
+
+            def create(name: str, tags: list[str], binding: RequestBinding | None = None):
+                binding = binding or account_binding(
+                    owner_id,
+                    "groups.create",
+                    "/v1/account/groups",
+                    {"name": name, "tags": tags},
+                )
+                return api_accounts.create_group(database,
+                    binding,
+                    name=name,
+                    normalized_name=name.lower(),
+                    normalized_tags=tags,
+                )
+
+            def verify(binding: RequestBinding):
+                return api_verification.complete_verification(database,
+                    binding,
+                    normalized_tag="#2PP",
+                    outcome=VerificationOutcome.VERIFIED,
+                    account_id=owner_id,
+                    completed_at=NOW,
+                )
+
+            def lookup(tag: str):
+                return api_player_lookup.submit_lookup(database,
+                    account_binding(owner_id, "lookup.submit", f"/v1/players/{tag}/lookup", {"tag": tag}),
+                    normalized_tag=tag,
+                )
+
+            def refresh(tag: str):
+                return api_accounts.submit_refresh(database,
+                    account_binding(owner_id, "refresh.submit", f"/v1/players/{tag}/refresh", {"tag": tag}),
+                    normalized_tag=tag,
+                    cooldown_seconds=30,
+                )
+
+            # A wait here would block forever, so give up after 10 seconds.
+            executor = ThreadPoolExecutor(max_workers=9)
+            try:
+                created = executor.submit(create, "Main", ["#2PP", "#8PY"])
+                assert created.result(timeout=10).status_code == 201
+
+                # The worker also holds the per-tag check lock and has saved
+                # new players it has not committed yet. Eight site requests
+                # that need those fill every API connection, and each must
+                # fail at once so a page read still answers.
+                for tag in ("#9QQ", "#LQG", "#RJC"):
+                    job_outcomes._upsert_player(worker, tag, active=True)
+                worker.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended('#2PP', 0))"
+                )
+                blocked = [
+                    *(executor.submit(create, f"Tag {n}", ["#2PP"]) for n in range(2)),
+                    *(executor.submit(create, f"New {n}", ["#9QQ"]) for n in range(2)),
+                    *(executor.submit(verify, binding) for binding in verifications),
+                    executor.submit(lookup, "#LQG"),
+                    executor.submit(refresh, "#RJC"),
+                ]
+                started = time.monotonic()
+                groups = executor.submit(api_accounts.list_groups, database, owner_id)
+                assert [group["name"] for group in groups.result(timeout=10)] == [
+                    "Main"
+                ]
+                assert time.monotonic() - started < 1
+                for request in blocked:
+                    with pytest.raises(psycopg.errors.LockNotAvailable):
+                        request.result(timeout=10)
+                assert time.monotonic() - started < 1
+            finally:
+                executor.shutdown(wait=False)
+
+            binding = account_binding(
+                owner_id,
+                "groups.create",
+                "/v1/account/groups",
+                {"name": "Alts", "tags": ["#2PP", "#9QQ"]},
+            )
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                create("Alts", ["#2PP", "#9QQ"], binding)
+            worker.commit()
+            assert create("Alts", ["#2PP", "#9QQ"], binding).status_code == 201
+            assert sorted(group["name"] for group in api_accounts.list_groups(
+                database, owner_id
+            )) == ["Alts", "Main"]
+        finally:
+            worker.close()
             database.close()

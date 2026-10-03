@@ -24,6 +24,10 @@ ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS = 5.0
 ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS = 0.1
 ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 0.1
 ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
+# Player writes that a worker may also lock fail at once with a retryable 503.
+# Any other lock wait gives up after this long instead of holding a pool
+# connection behind a long worker transaction until every page times out.
+API_LOCK_TIMEOUT = "2s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,12 +93,18 @@ class ApiDatabase:
         self._army_cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
         self._army_cache_lock = Lock()
         self._army_troop_slots = BoundedSemaphore(max(1, max_size // 2))
+
+        def configure(connection: Any) -> None:
+            connection.execute(f"SET lock_timeout = '{API_LOCK_TIMEOUT}'")
+            connection.commit()
+
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=min_size,
             max_size=max_size,
             timeout=timeout_seconds,
             open=True,
+            configure=configure,
         )
         self._supports_content_dedup: bool | None = None
 
@@ -378,18 +388,48 @@ def _complete_request(
 
 
 def _ensure_player(connection: Any, normalized_tag: str) -> int:
-    row = connection.execute(
-        """
-        INSERT INTO players (normalized_tag, active)
-        VALUES (%s, false)
-        ON CONFLICT (normalized_tag) DO UPDATE
-            SET normalized_tag = EXCLUDED.normalized_tag
-        RETURNING id
-        """,
-        (normalized_tag,),
-    ).fetchone()
+    # Read an existing player without locking it. An upsert that updates the
+    # row takes its strongest lock, which waits for every worker transaction
+    # that saved anything referencing this player.
+    query = "SELECT id FROM players WHERE normalized_tag = %s"
+    row = connection.execute(query, (normalized_tag,)).fetchone()
+    if row is None:
+        _execute_without_waiting(
+            connection,
+            normalized_tag,
+            """
+            INSERT INTO players (normalized_tag, active)
+            VALUES (%s, false)
+            ON CONFLICT (normalized_tag) DO NOTHING
+            """,
+            (normalized_tag,),
+        )
+        row = connection.execute(query, (normalized_tag,)).fetchone()
     assert row is not None
     return int(row[0])
+
+
+def _lock_api_player(connection: Any, normalized_tag: str) -> None:
+    """Queue behind other site requests for this player, never behind a worker.
+
+    Workers never take this lock, so once it is held, any lock on the player
+    that is still busy belongs to a worker and a no-wait step fails at once.
+    """
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended('api-player:' || %s, 0))",
+        (normalized_tag,),
+    )
+
+
+def _execute_without_waiting(
+    connection: Any, normalized_tag: str, query: str, params: Any
+) -> Any:
+    """Run one statement in a transaction, failing instead of waiting for a lock."""
+    _lock_api_player(connection, normalized_tag)
+    connection.execute("SET LOCAL lock_timeout = '1ms'")
+    cursor = connection.execute(query, params)
+    connection.execute(f"SET LOCAL lock_timeout = '{API_LOCK_TIMEOUT}'")
+    return cursor
 
 
 def _account_context(row: Any) -> AccountContext:

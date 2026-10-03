@@ -172,9 +172,11 @@ def complete_verification(
     with database.pool.connection() as connection:
         with connection.transaction():
             api_db._assert_request_binding(connection, binding)
+            api_db._lock_api_player(connection, normalized_tag)
             player = connection.execute(
                 """
-                SELECT id FROM players WHERE normalized_tag = %s FOR UPDATE
+                SELECT id FROM players WHERE normalized_tag = %s
+                FOR NO KEY UPDATE NOWAIT
                 """,
                 (normalized_tag,),
             ).fetchone()

@@ -1,4 +1,11 @@
-import { data, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  Form,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { PrivateGroup } from "../lib/account-contracts";
@@ -222,6 +229,7 @@ export async function action({ request }: Route.ActionArgs) {
       );
     }
     const { safeWebsiteError } = await import("../server/errors.server");
+    const safeError = safeWebsiteError(cause);
     const generalError: WebsiteErrorResponse =
       pythonError.status === 404 && payload.error === "group_not_found"
         ? {
@@ -230,7 +238,17 @@ export async function action({ request }: Route.ActionArgs) {
               message: "The group no longer exists. Refresh the page.",
             },
           }
-        : safeWebsiteError(cause);
+        : actionMode === "create" &&
+            (safeError.error.code === "unavailable" ||
+              safeError.error.code === "malformed")
+          ? {
+              error: {
+                code: safeError.error.code,
+                message:
+                  "Could not confirm the group was created. Refresh the page before trying again.",
+              },
+            }
+          : safeError;
     return data<GroupsActionData>(
       {
         action: actionMode as "create" | "update" | "delete",
@@ -297,6 +315,9 @@ export function headers() {
 export default function GroupsRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<GroupsActionData>();
+  const navigation = useNavigation();
+  const creating =
+    navigation.state !== "idle" && navigation.formData?.get("action") === "create";
 
   const createKey =
     actionData && actionData.action === "create"
@@ -318,7 +339,7 @@ export default function GroupsRoute() {
 
       <section className="form-panel" aria-label="Create a group">
         <h2>Create a group</h2>
-        <form method="post" className="stack-form">
+        <Form key={createKey} method="post" action="." className="stack-form">
           <input type="hidden" name="action" value="create" />
           <input type="hidden" name="idempotencyKey" value={createKey} />
           <GroupFields
@@ -330,10 +351,10 @@ export default function GroupsRoute() {
             nameId="group-create-name"
             tagsId="group-create-tags"
           />
-          <button type="submit" className="button button-primary">
-            Create group
+          <button type="submit" className="button button-primary" disabled={creating}>
+            {creating ? "Creating group…" : "Create group"}
           </button>
-        </form>
+        </Form>
       </section>
 
       <section className="data-section" aria-labelledby="group-list-title">
