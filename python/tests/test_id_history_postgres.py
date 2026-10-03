@@ -264,7 +264,7 @@ def test_corrected_unknown_history_survives_retirement_retry_and_later_naming(
             before = {category: api_analytics.get_army_season_summary(api, SEASON_ID, "offense", category, "usage-rate") for category in HISTORY_READ_CATEGORIES}
             assert {row["unit_id"] for row in before["troops"]["rows"]} == {"troop:58", "troop:900", "troop:901"}
             with database.pool.connection() as connection:
-                finalized = finalize_season_detail(connection, SEASON_ID, SEASON_END + timedelta(days=1), apply=True)
+                finalized = finalize_season_detail(connection, SEASON_ID, SEASON_END + timedelta(days=7), apply=True)
                 assert finalized["status"] == "finalized", json.dumps(finalized, default=str)
                 connection.commit()
                 retire_season_detail(connection, SEASON_ID, max_rows=1, apply=True)
@@ -365,7 +365,7 @@ def test_all_players_keep_28_daily_trophy_entries_and_totals(database_url):
             before = {tag: api_players.get_player_season_summary(api, tag, SEASON_ID) for tag in ("#2PP", "#8PP", "#9PP")}
             assert all(len(result["daily_entries"]) == 28 for result in before.values())
             with psycopg.connect(ci) as connection:
-                assert finalize_season_detail(connection, SEASON_ID, SEASON_END + timedelta(days=1), apply=True)["status"] == "finalized"
+                assert finalize_season_detail(connection, SEASON_ID, SEASON_END + timedelta(days=7), apply=True)["status"] == "finalized"
                 connection.commit()
                 for _ in range(10):
                     result = retire_season_detail(connection, SEASON_ID, max_rows=10, apply=True)

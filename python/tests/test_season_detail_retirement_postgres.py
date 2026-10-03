@@ -41,6 +41,7 @@ LIVE_SEASON = "1785714001"
 DAY0 = datetime(2026, 5, 1, 5, 0, tzinfo=UTC)
 SEASON_END = DAY0 + timedelta(days=28)
 AFTER_SEASON = SEASON_END + timedelta(hours=1)
+CLOSE_AT = SEASON_END + timedelta(days=7, hours=1)
 LIVE_DAY0 = SEASON_END
 
 
@@ -292,7 +293,7 @@ def _battle_chain(connection, day_start, attacker_id, defender_id, *, battle_day
 
 
 def _finalize_and_commit(connection, season=SEASON):
-    report = finalize_season_detail(connection, season, AFTER_SEASON, apply=True)
+    report = finalize_season_detail(connection, season, CLOSE_AT, apply=True)
     assert report["status"] == "finalized", report
     connection.commit()
     return report
@@ -318,7 +319,7 @@ def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
                 )
                 assert before_player is not None and len(before_player["daily_entries"]) == 28
                 assert before_army is not None
-                preview = finalize_season_detail(connection, SEASON, AFTER_SEASON)
+                preview = finalize_season_detail(connection, SEASON, CLOSE_AT)
                 assert preview["status"] == "ready"
                 assert preview["player_summary_count"] == 1
                 assert connection.execute(
@@ -521,7 +522,7 @@ def test_observationless_army_work_uses_half_open_season_scope(
                         """,
                         job_row,
                     )
-                blocked = finalize_season_detail(connection, SEASON, AFTER_SEASON)
+                blocked = finalize_season_detail(connection, SEASON, CLOSE_AT)
                 assert blocked["status"] == "blocked"
                 assert blocked["blocking_work"]["observationless_army_jobs"] == 2
                 connection.execute(
@@ -535,7 +536,7 @@ def test_observationless_army_work_uses_half_open_season_scope(
                         "retirement-redecode-next-season",
                     ),
                 )
-                ready = finalize_season_detail(connection, SEASON, AFTER_SEASON)
+                ready = finalize_season_detail(connection, SEASON, CLOSE_AT)
                 assert ready["status"] == "ready"
                 connection.rollback()
         finally:
@@ -584,12 +585,12 @@ def test_finalize_blocks_unfinished_and_stale_work(database_url: str) -> None:
                 _log(connection, player_id, 1, live_version, live_start, season=LIVE_SEASON)
                 _seed_army(connection, season=LIVE_SEASON, day0=live_start)
                 connection.commit()
-                live = finalize_season_detail(connection, LIVE_SEASON, AFTER_SEASON, apply=True)
+                live = finalize_season_detail(connection, LIVE_SEASON, CLOSE_AT, apply=True)
                 assert live["status"] in ("not_completed", "blocked")
                 connection.rollback()
             # Unknown season fails closed.
             with database.pool.connection() as connection:
-                unknown = finalize_season_detail(connection, "no-such-season", AFTER_SEASON, apply=True)
+                unknown = finalize_season_detail(connection, "no-such-season", CLOSE_AT, apply=True)
                 assert unknown["status"] in ("not_completed", "blocked")
                 connection.rollback()
             # Missing summaries block.
@@ -598,7 +599,7 @@ def test_finalize_blocks_unfinished_and_stale_work(database_url: str) -> None:
                 _full_season(connection, player_id)
                 connection.commit()
                 unknown_bounds = finalize_season_detail(
-                    connection, SEASON, AFTER_SEASON, apply=True
+                    connection, SEASON, CLOSE_AT, apply=True
                 )
                 assert unknown_bounds["reason"] == "unknown_season_boundary"
                 assert connection.execute(
@@ -607,7 +608,7 @@ def test_finalize_blocks_unfinished_and_stale_work(database_url: str) -> None:
                 connection.rollback()
                 _ensure_canonical_anchor(connection)
                 connection.commit()
-                missing = finalize_season_detail(connection, SEASON, AFTER_SEASON, apply=True)
+                missing = finalize_season_detail(connection, SEASON, CLOSE_AT, apply=True)
                 assert missing["status"] == "blocked"
                 assert missing["reason"] == "verification_failed"
                 assert missing["missing_player_count"] >= 1
@@ -635,7 +636,7 @@ def test_finalize_blocks_stale_summaries_and_pending_work(
                     " WHERE official_season_id = %s",
                     (SEASON,),
                 )
-                stale = finalize_season_detail(connection, SEASON, AFTER_SEASON, apply=True)
+                stale = finalize_season_detail(connection, SEASON, CLOSE_AT, apply=True)
                 assert stale["status"] == "blocked"
                 assert stale["stale_player_count"] == 1
                 connection.rollback()
@@ -678,7 +679,7 @@ def test_finalize_blocks_stale_summaries_and_pending_work(
                         ),
                     ),
                 )
-                blocked = finalize_season_detail(connection, SEASON, AFTER_SEASON, apply=True)
+                blocked = finalize_season_detail(connection, SEASON, CLOSE_AT, apply=True)
                 assert blocked["status"] == "blocked"
                 assert blocked["blocking_work"].get("processing_jobs") == 1
                 assert blocked["blocking_work"].get("observationless_army_jobs") == 1
@@ -1054,7 +1055,7 @@ def test_two_connections_see_fence_and_serialize_finalize(
             # A second connection sees the fence after commit.
             with psycopg.connect(connection_info) as other:
                 assert is_season_detail_retired(other, SEASON) is True
-                repeat = finalize_season_detail(other, SEASON, AFTER_SEASON, apply=True)
+                repeat = finalize_season_detail(other, SEASON, CLOSE_AT, apply=True)
                 assert repeat["already_finalized"] is True
                 other.rollback()
             # Concurrent first materialization loses to the fence.
@@ -1147,7 +1148,7 @@ def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
         def finalize() -> None:
             with psycopg.connect(connection_info) as finalizer:
                 finalized.append(
-                    finalize_season_detail(finalizer, SEASON, AFTER_SEASON, apply=True)
+                    finalize_season_detail(finalizer, SEASON, CLOSE_AT, apply=True)
                 )
                 finalizer.commit()
 
@@ -1227,7 +1228,7 @@ def test_season_writers_share_the_lock_and_stay_fenced(
             with psycopg.connect(connection_info) as connection:
                 finalized.append(
                     finalize_season_detail(
-                        connection, SEASON, AFTER_SEASON, apply=True
+                        connection, SEASON, CLOSE_AT, apply=True
                     )
                 )
                 connection.commit()
