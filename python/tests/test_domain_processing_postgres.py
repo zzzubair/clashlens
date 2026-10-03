@@ -300,7 +300,7 @@ def test_reset_baseline_evidence_is_created_from_one_compact_work_and_is_version
             database.close()
 
 
-def test_malformed_reset_evidence_is_failed_without_reconciliation_enqueue(
+def test_malformed_reset_evidence_is_failed_and_finishes_only_the_ended_day(
     database_url: str,
     archive_server,
 ) -> None:
@@ -328,16 +328,16 @@ def test_malformed_reset_evidence_is_failed_without_reconciliation_enqueue(
                 state, reasons = connection.execute(
                     "SELECT state, failure_reasons FROM reset_baseline_evidence ORDER BY version DESC LIMIT 1"
                 ).fetchone()
-                reconciliation_count = connection.execute(
+                reconciled_days = connection.execute(
                     """
-                    SELECT count(*)
+                    SELECT array_agg(input_json->>'ranked_day_start')
                     FROM python_processing_jobs
                     WHERE work_type = 'reconcile_ranked_day'
                     """
                 ).fetchone()[0]
             assert text(state) == "failed"
             assert "battle_log_malformed_json" in [text(reason) for reason in reasons]
-            assert reconciliation_count == 0
+            assert reconciled_days == ["2026-08-03T05:00:00Z"]
         finally:
             database.close()
 

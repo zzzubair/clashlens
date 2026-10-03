@@ -598,10 +598,12 @@ def _evaluate_reset_baseline(
             state=state,
         )
     reset_settlement.refresh_boundary(database, connection, int(player_id), boundary_at)
-    if state != "complete":
+    if state == "partial":
         return [], reasons
+    # Failed evidence still finishes the day it ends, as incomplete; only a
+    # complete pair is new starting evidence for the day it starts.
     day_starts = [boundary_at - timedelta(days=1)] if ends_day else []
-    if starts_ended_day:
+    if starts_ended_day and state == "complete":
         day_starts.append(boundary_at)
     if not day_starts:
         return [], reasons

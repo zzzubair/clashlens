@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -361,13 +361,15 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                 ).fetchone()[0]
             assert previous_season_jobs == 0
             assert latest_states() == ["complete", "partial", "partial"]
-            # A batch that queues nothing reports why and leaves later pairs.
-            assert repair() == {
-                "job_ids": [],
-                "evaluated_count": 1,
-                "failure_reasons": {"profile_after_first_event": 1},
-                "failed_blockers": [],
-            }
+            # A failed pair reports why and finishes only the day it ends; it
+            # is no starting evidence for the day it starts.
+            report = repair()
+            assert (report["evaluated_count"], report["failure_reasons"]) == (
+                1, {"profile_after_first_event": 1}
+            )
+            assert list(queued_days(report["job_ids"])) == [
+                iso(DAY_START - timedelta(days=1))
+            ]
             assert latest_states() == ["complete", "failed", "partial"]
             # A repaired pair rebuilds the day it ends and the ended day it
             # starts, even if that day was already finished without it.
@@ -619,9 +621,10 @@ def test_republication_retries_failed_reset_repair_left_live(
                 f"reconcile:reset-recovery:{failed[1][0]}"
             ]
 
-            # A recovery that fails too is reported, not queued again.
+            # A recovery that fails too is reported, not queued again. The day
+            # still Live gets one rebuild of its own, never repeated.
             set_status(third["job_ids"], "cancelled")
-            assert repair() == {
+            blocked = {
                 **idle,
                 "failed_blockers": [
                     reported_blocker,
@@ -633,6 +636,13 @@ def test_republication_retries_failed_reset_repair_left_live(
                     },
                 ],
             }
+            fourth = repair()
+            assert {**fourth, "job_ids": []} == blocked
+            assert [row[2].split(":")[1] for row in jobs(fourth["job_ids"])] == [
+                "ended-live"
+            ]
+            set_status(fourth["job_ids"], "cancelled")
+            assert repair() == blocked
             set_status([recoveries[0][0]], "pending")
             assert (
                 processor.process_job(recoveries[0][0], owner="recovery").outcome
@@ -806,3 +816,356 @@ def test_reset_evidence_holds_its_pair_while_the_collector_saves_a_retry(
     # The evidence names the pair it read; the retry lands after it.
     assert evidence == [(observed["first_log"],)]
     assert work == (observed["retried_log"],)
+
+
+def _live_day_with_battle(connection_info, archive_server, monkeypatch, *, start=True):
+    """A day with one battle, last calculated while Live, and a complete
+    starting Reset check unless ``start`` is false."""
+    jobs = _store_baseline_pair(
+        connection_info, archive_server, key="start", boundary=DAY_START,
+        trophies=6000, empty_battle_log=True,
+        profile_parser_version=PROFILE_PARSER_VERSION,
+    )[2:] if start else ()
+    middle = store_observation(
+        connection_info, archive_server, occurrence_key="middle",
+        endpoint="battle_log", body=_battle_log(),
+        observed_at=DAY_START + timedelta(hours=7), normalized_tag="#2PP",
+    )[1]
+    database, processor = _processor(connection_info, archive_server)
+    for job_id in (*jobs, middle):
+        assert processor.process_job(job_id, owner="source").outcome == "processed"
+    with database.pool.connection() as connection:
+        player_id = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE python_processing_jobs SET status = 'cancelled'"
+            " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'"
+        )
+        with monkeypatch.context() as patch:
+            original = reconciliation_db.reconcile_ranked_day
+            patch.setattr(
+                reconciliation_db,
+                "reconcile_ranked_day",
+                lambda data: original(replace(data, now=DAY_START + timedelta(hours=7))),
+            )
+            reconciliation_db.recalculate_ranked_day(
+                database, connection, player_id=player_id, day_start=DAY_START,
+                parser_version=DEFAULT_PARSER_VERSION,
+                processing_version=PROCESSING_VERSION,
+                domain_rule_version=DOMAIN_RULE_VERSION,
+                analytics_rule_version=ANALYTICS_RULE_VERSION,
+            )
+        connection.commit()
+    return database, processor, player_id
+
+
+def _latest_day(database, player_id, day_start=DAY_START):
+    with database.pool.connection() as connection:
+        return connection.execute(
+            """
+            SELECT log.state, version.state, version.final_trophies_before_reset,
+                   version.net_trophy_change, version.failure_reasons,
+                   version.attack_count + version.defense_count, version.id,
+                   (SELECT count(*) FROM ranked_day_versions AS other
+                    WHERE other.player_id = log.player_id
+                      AND other.ranked_day_start = log.ranked_day_start)
+            FROM api_player_daily_logs AS log
+            JOIN ranked_day_versions AS version
+              ON version.id = log.ranked_day_version_id
+            WHERE log.player_id = %s AND log.ranked_day_start = %s
+            ORDER BY log.version DESC LIMIT 1
+            """,
+            (player_id, day_start),
+        ).fetchone()
+
+
+@pytest.mark.parametrize("start", [True, False])
+@pytest.mark.parametrize(
+    ("profile_at", "battle_log_at", "reason"),
+    [
+        # The ending profile arrived after the next day's first battle.
+        (DAY_END + timedelta(days=1, minutes=10), DAY_END + timedelta(days=1, minutes=10),
+         "profile_late"),
+        # The battle log was read before the profile, so it cannot prove it.
+        (DAY_END + timedelta(minutes=10), DAY_END, "battle_log_before_profile"),
+    ],
+)
+def test_failed_ending_reset_finishes_the_day_without_inventing_a_total(
+    database_url: str, archive_server, monkeypatch, profile_at, battle_log_at, reason,
+    start,
+) -> None:
+    # Production on 2026-10-03: 4,703 ended days stayed Live because a failed
+    # ending Reset check queued no recalculation of the day it ended.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor, player_id = _live_day_with_battle(
+            connection_info, archive_server, monkeypatch, start=start
+        )
+        try:
+            assert _latest_day(database, player_id)[:2] == ("Live", "Live")
+            ending = {}
+            for endpoint, body, observed_at in (
+                ("profile", _profile(6100), profile_at),
+                ("battle_log", _battle_log(empty=True), battle_log_at),
+            ):
+                ending[endpoint] = store_observation(
+                    connection_info, archive_server, occurrence_key=f"end-{endpoint}",
+                    endpoint=endpoint, body=body, observed_at=observed_at,
+                    normalized_tag="#2PP",
+                    parser_version=PROFILE_PARSER_VERSION if endpoint == "profile" else None,
+                )
+            _seed_reset_collection_identity(
+                connection_info, key="end", boundary=DAY_END,
+                profile_observation_id=ending["profile"][0],
+                battle_observation_id=ending["battle_log"][0],
+            )
+            for _, job_id in ending.values():
+                assert processor.process_job(job_id, owner="end").outcome == "processed"
+
+            def reset_jobs() -> list[int]:
+                with database.pool.connection() as connection:
+                    return [
+                        row[0] for row in connection.execute(
+                            "SELECT id FROM python_processing_jobs"
+                            " WHERE deduplication_key LIKE 'reconcile:reset-baseline:%%'"
+                            " AND input_json->>'ranked_day_start' = %s",
+                            (DAY_START.strftime("%Y-%m-%dT%H:%M:%SZ"),),
+                        ).fetchall()
+                    ]
+
+            with database.pool.connection() as connection:
+                evidence = connection.execute(
+                    "SELECT state, failure_reasons FROM reset_baseline_evidence"
+                    " WHERE boundary_at = %s ORDER BY version DESC, id DESC LIMIT 1",
+                    (DAY_END,),
+                ).fetchone()
+            assert text(evidence[0]) == "failed" and reason in evidence[1]
+            # Each new failed reading queues the day once.
+            jobs = reset_jobs()
+            for job in jobs:
+                assert processor.process_job(job, owner="finish").outcome == "processed"
+            finished = _latest_day(database, player_id)
+            assert finished[0] == "Partial"
+            assert finished[1] in {"Partial", "Malformed", "Inconsistent"}
+            # An untrusted reading gives no next start at all.
+            assert "missing_end_baseline" in finished[4]
+            assert finished[5] == 1
+            # A total comes only from a proven start plus the recorded battle,
+            # never from the failed reading's 6,100.
+            assert finished[2:4] == ((6040, 40) if start else (None, None))
+
+            # Handing the same failed evidence over again changes nothing.
+            with database.pool.connection() as connection:
+                with connection.transaction():
+                    queued, _ = reset_baselines._evaluate_reset_baseline(
+                        database, connection,
+                        observation_id=ending["battle_log"][0],
+                        observation_endpoint="battle_log",
+                        parser_version=DEFAULT_PARSER_VERSION,
+                        processing_version=PROCESSING_VERSION,
+                    )
+            assert queued == [] and reset_jobs() == jobs
+            assert _latest_day(database, player_id) == finished
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("anchor_moved_on", [False, True])
+def test_republication_finishes_ended_days_left_live(
+    database_url: str, archive_server, monkeypatch, anchor_moved_on
+) -> None:
+    # Production on 2026-10-03: ended days already calculated under the
+    # current rule while Live were never selected again, including days with
+    # no ending Reset check. After the next Season starts they are in the
+    # previous Season and must still be finished.
+    today = ranked_day_for(datetime.now(UTC))
+    yesterday = ranked_day_for(today.start - timedelta(days=1))
+    season = yesterday.season_start + timedelta(days=28 if anchor_moved_on else 0)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        profile_job = store_observation(
+            connection_info, archive_server, occurrence_key="profile",
+            endpoint="profile", body=_profile(6000), observed_at=DAY_START,
+            normalized_tag="#2PP", parser_version=PROFILE_PARSER_VERSION,
+        )[1]
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(profile_job, owner="p").outcome == "processed"
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                connection.execute(
+                    """
+                    UPDATE legend_season_anchors
+                    SET current_league_season_id = %s, previous_league_season_id = %s,
+                        current_start = %s, previous_start = %s
+                    WHERE state = 'confirmed'
+                    """,
+                    (
+                        str(int(season.timestamp())),
+                        str(int((season - timedelta(days=28)).timestamp())),
+                        season,
+                        season - timedelta(days=28),
+                    ),
+                )
+                # Yesterday was last calculated while it was Live; today is.
+                original = reconciliation_db.reconcile_ranked_day
+                for day, now in (
+                    (yesterday, yesterday.start + timedelta(hours=1)),
+                    (today, None),
+                ):
+                    with monkeypatch.context() as patch:
+                        if now is not None:
+                            patch.setattr(
+                                reconciliation_db,
+                                "reconcile_ranked_day",
+                                lambda data, now=now: original(replace(data, now=now)),
+                            )
+                        reconciliation_db.recalculate_ranked_day(
+                            database, connection, player_id=player_id,
+                            day_start=day.start,
+                            parser_version=DEFAULT_PARSER_VERSION,
+                            processing_version=PROCESSING_VERSION,
+                            domain_rule_version=DOMAIN_RULE_VERSION,
+                            analytics_rule_version=ANALYTICS_RULE_VERSION,
+                        )
+                # An earlier republication request for yesterday finished.
+                day_text = yesterday.start.strftime("%Y-%m-%dT%H:%M:%SZ")
+                finished_id = connection.execute(
+                    "INSERT INTO python_processing_jobs_worker (observation_id,"
+                    " work_type, deduplication_key, input_json, state, due_at,"
+                    " parser_version, processing_version, domain_rule_version,"
+                    " analytics_rule_version) VALUES (NULL, 'reconcile_ranked_day',"
+                    " %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)"
+                    " RETURNING id",
+                    (
+                        (
+                            f"reconcile:current-season:{player_id}:{day_text}:"
+                            f"{reconciliation_db.RECONCILIATION_RULE_VERSION}"
+                        ),
+                        Jsonb({
+                            "player_id": player_id,
+                            "ranked_day_start": day_text,
+                            "official_season_id": yesterday.official_season_id,
+                            "trigger": "current_season_republication",
+                        }),
+                        DEFAULT_PARSER_VERSION,
+                        PROCESSING_VERSION,
+                        DOMAIN_RULE_VERSION,
+                        ANALYTICS_RULE_VERSION,
+                    ),
+                ).fetchone()[0]
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = CASE WHEN id = %s"
+                    " THEN 'complete' ELSE 'cancelled' END"
+                    " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'",
+                    (finished_id,),
+                )
+                connection.commit()
+            assert _latest_day(database, player_id, yesterday.start)[:3] == (
+                "Live", "Live", None
+            )
+            assert _latest_day(database, player_id, today.start)[:2] == ("Live", "Live")
+
+            def repair() -> list[int]:
+                return reconciliation_db.enqueue_current_season_republication(
+                    database, max_jobs=10
+                )["job_ids"]
+
+            [job] = repair()
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT input_json->>'ranked_day_start' FROM python_processing_jobs"
+                    " WHERE id = %s",
+                    (job,),
+                ).fetchone()[0] == day_text
+            # Work already queued for the day is left to finish.
+            assert repair() == []
+            assert processor.process_job(job, owner="repair").outcome == "processed"
+            finished = _latest_day(database, player_id, yesterday.start)
+            assert finished[:2] == ("Partial", "Partial")
+            assert finished[2:4] == (None, None)
+            assert {"missing_start_baseline", "missing_end_baseline"} <= set(finished[4])
+            # Today is rebuilt after yesterday but stays Live, with no total.
+            assert _latest_day(database, player_id, today.start)[:4] == (
+                "Live", "Live", None, None
+            )
+            assert repair() == []
+
+            # A finished day saved with 8 undisputed attacks and 8 undisputed
+            # defenses but no net is rebuilt once too; a disputed one is not.
+            def saved_with(reasons: list[str]) -> None:
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE ranked_day_versions SET attack_count = 8,"
+                        " defense_count = 8, failure_reasons = %s WHERE id = %s",
+                        (Jsonb(reasons), finished[6]),
+                    )
+
+            saved_with([*finished[4], "perspective_disagreement"])
+            assert repair() == []
+            saved_with(finished[4])
+            [job] = repair()
+            assert processor.process_job(job, owner="eight").outcome == "processed"
+            assert repair() == []
+        finally:
+            database.close()
+
+
+def test_failed_season_opening_reset_finishes_only_the_closing_day(
+    database_url: str, archive_server
+) -> None:
+    # As on 2026-10-05: one Reset ends the Season's last day and opens the next.
+    opening = DAY_START + timedelta(days=6)
+    assert ranked_day_for(opening).season_start == opening
+    closing = opening - timedelta(days=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        late = opening + timedelta(days=1, minutes=10)
+        observed = {
+            endpoint: store_observation(
+                connection_info, archive_server, occurrence_key=f"open-{endpoint}",
+                endpoint=endpoint, body=body, observed_at=late, normalized_tag="#2PP",
+                parser_version=PROFILE_PARSER_VERSION if endpoint == "profile" else None,
+            )
+            for endpoint, body in (
+                ("profile", _profile(5000)), ("battle_log", _battle_log(empty=True))
+            )
+        }
+        _seed_reset_collection_identity(
+            connection_info, key="open", boundary=opening,
+            profile_observation_id=observed["profile"][0],
+            battle_observation_id=observed["battle_log"][0],
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for _, job_id in observed.values():
+                assert processor.process_job(job_id, owner="open").outcome == "processed"
+            with database.pool.connection() as connection:
+                jobs = connection.execute(
+                    "SELECT id, input_json->>'ranked_day_start' FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:reset-baseline:%%'"
+                ).fetchall()
+            assert jobs and {row[1] for row in jobs} == {
+                closing.strftime("%Y-%m-%dT%H:%M:%SZ")
+            }
+            for job_id, _ in jobs:
+                assert processor.process_job(job_id, owner="close").outcome == "processed"
+            # The reading names the old Season, so it gives no total either.
+            finished = _latest_day(database, 1, closing)
+            assert finished[:4] == ("Partial", "Partial", None, None)
+            assert "missing_end_baseline" in finished[4]
+            # The repair re-checks this Reset only as day 1's starting
+            # evidence; failed evidence starts nothing.
+            with database.pool.connection() as connection:
+                with connection.transaction():
+                    queued, _ = reset_baselines._evaluate_reset_baseline(
+                        database, connection,
+                        observation_id=observed["battle_log"][0],
+                        observation_endpoint="battle_log",
+                        parser_version=DEFAULT_PARSER_VERSION,
+                        processing_version=PROCESSING_VERSION,
+                        ends_day=False, starts_ended_day=True,
+                    )
+            assert queued == []
+        finally:
+            database.close()
