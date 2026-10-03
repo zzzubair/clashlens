@@ -26,7 +26,7 @@ import {
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
 } from "./auth-cookies.server";
-import { isLoginRevoked, revokeLogin } from "./login-session.server";
+import { isLoginRevoked } from "./login-session.server";
 import { getWebsiteConfig } from "./config.server";
 import type { WebsiteConfig } from "./config.server";
 import { constantTimeEqual, OAuthCallbackError } from "./google-oidc.server";
@@ -238,8 +238,17 @@ export async function completeProviderCallback(
       clearTransactionCookie,
     };
   }
+  // Removing the provider that created this login also ends the login in the
+  // same API transaction, so a copied cookie cannot come back if that
+  // provider is linked again later.
+  const endsLogin = session.provider === provider && rawLoginCookie !== undefined;
   try {
-    await client.unlinkProvider(provider, validated.providerSubject, randomUUID());
+    await client.unlinkProvider(
+      provider,
+      validated.providerSubject,
+      randomUUID(),
+      endsLogin ? createLoginSessionBinding(rawLoginCookie) : undefined,
+    );
   } catch (error) {
     const code = pythonErrorCode(error);
     if (code === "final_provider") {
@@ -274,13 +283,8 @@ export async function completeProviderCallback(
     return unavailable(clearTransactionCookie);
   }
 
-  // If the unlinked provider created the current session, end it and ask for
-  // login through the remaining provider. Ending it on the server keeps a copy
-  // of the cookie from working again if that provider is linked back later.
-  if (session.provider === provider) {
-    if (rawLoginCookie !== undefined) {
-      await revokeLogin(session, rawLoginCookie).catch(() => undefined);
-    }
+  // The login has ended; ask for login through the remaining provider.
+  if (endsLogin) {
     return {
       kind: "redirect",
       location: "/login",

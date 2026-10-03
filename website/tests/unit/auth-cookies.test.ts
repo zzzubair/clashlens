@@ -38,12 +38,21 @@ describe("login cookie values", () => {
       s: "11223344556677889900",
       i: 1_750_000,
       e: 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS,
+      n: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
     });
     const expected = createHmac("sha256", KEY)
       .update(Buffer.from(payloadPart, "base64url"))
       .digest("base64url");
     expect(signaturePart).toBe(expected);
     expect(value.length).toBeLessThan(512);
+  });
+
+  it("gives two logins of the same identity in the same second different cookies", () => {
+    const first = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    const second = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    expect(first).not.toBe(second);
+    expect(parseLoginCookieValue(first, KEY, 1_750_100)).toEqual(IDENTITY);
+    expect(parseLoginCookieValue(second, KEY, 1_750_100)).toEqual(IDENTITY);
   });
 
   it("round-trips a fresh cookie and rejects tampered values", () => {

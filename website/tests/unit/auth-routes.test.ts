@@ -1,17 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  getWebsiteConfig: vi.fn(),
-  createGoogleOidcService: vi.fn(),
-  createPythonClient: vi.fn(),
+const mocks = vi.hoisted(() => {
   // Stands in for the private API's record of logged-out login cookies.
-  loggedOut: new Set<string>(),
-  revokeLogin: vi.fn(),
-}));
+  const loggedOut = new Set<string>();
+  return {
+    getWebsiteConfig: vi.fn(),
+    createGoogleOidcService: vi.fn(),
+    createPythonClient: vi.fn(),
+    loggedOut,
+    isLoginRevoked: vi.fn(async (_identity: unknown, cookie: string) =>
+      loggedOut.has(cookie),
+    ),
+    revokeLogin: vi.fn(),
+  };
+});
 
 vi.mock("../../app/server/login-session.server", () => ({
-  isLoginRevoked: async (_identity: unknown, cookie: string) =>
-    mocks.loggedOut.has(cookie),
+  isLoginRevoked: mocks.isLoginRevoked,
   revokeLogin: mocks.revokeLogin,
 }));
 
@@ -87,6 +92,7 @@ function dataOf<T>(result: unknown): {
 
 beforeEach(() => {
   mocks.loggedOut.clear();
+  mocks.isLoginRevoked.mockClear();
   mocks.revokeLogin.mockReset();
   mocks.revokeLogin.mockImplementation(async (_identity: unknown, cookie: string) => {
     mocks.loggedOut.add(cookie);
@@ -266,6 +272,23 @@ describe("login loader", () => {
       expect((thrown as Response).headers.get("Location")).toBe("/account/groups");
       return true;
     });
+    expect(mocks.isLoginRevoked).toHaveBeenCalledWith(IDENTITY, cookie, 250);
+  });
+
+  it("shows the sign-in page when the short login check fails", async () => {
+    const config = testConfig();
+    const cookie = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      Math.floor(Date.now() / 1000),
+    );
+    mocks.isLoginRevoked.mockRejectedValueOnce(new Error("timed out"));
+    const result = await loginLoader({
+      request: new Request(`${ORIGIN}/login`, {
+        headers: { cookie: `${LOGIN_COOKIE_NAME}=${cookie}` },
+      }),
+    } as never);
+    expect(result).toEqual({ loginAvailable: true, returnPath: "/account" });
   });
 
   it("exports a no-store headers policy", () => {
@@ -705,6 +728,65 @@ describe("auth.google.callback loader", () => {
     expect(data.error?.code).toBe("login_required");
     expect(service.validateCallback).not.toHaveBeenCalled();
     expect(mocks.createPythonClient).not.toHaveBeenCalled();
+  });
+
+  function unlinkGoogleRequest(login: string): Request {
+    const transaction = createOAuthTransaction(
+      "/account/providers",
+      now() - 10,
+      undefined,
+      "unlink",
+      "google",
+      createLoginSessionBinding(login),
+    );
+    const oauthValue = createOAuthTransactionCookieValue(transaction, config.loginSecret);
+    return new Request(
+      `${ORIGIN}/auth/google/callback?code=provider-code&state=${transaction.state}`,
+      {
+        headers: {
+          cookie: `${OAUTH_COOKIE_NAME}=${oauthValue}; ${LOGIN_COOKIE_NAME}=${login}`,
+        },
+      },
+    );
+  }
+
+  it("ends the login in the same API request that removes the provider it used", async () => {
+    const login = createLoginCookieValue(IDENTITY, config.loginSecret, now() - 10);
+    const unlinkProvider = vi.fn(async () => ({ providers: ["discord"] }));
+    mocks.createPythonClient.mockReturnValue({
+      getAccount: vi.fn(async () => ({ providers: ["discord", "google"] })),
+      unlinkProvider,
+    } as never);
+    const response = await callbackLoader({
+      request: unlinkGoogleRequest(login),
+    } as never);
+    expect((response as Response).status).toBe(302);
+    expect((response as Response).headers.get("Location")).toBe("/login");
+    expect((response as Response).headers.getSetCookie()[1]).toContain(
+      `${LOGIN_COOKIE_NAME}=; Max-Age=0`,
+    );
+    expect(unlinkProvider).toHaveBeenCalledWith(
+      "google",
+      IDENTITY.providerSubject,
+      expect.any(String),
+      createLoginSessionBinding(login),
+    );
+    expect(mocks.revokeLogin).not.toHaveBeenCalled();
+  });
+
+  it("reports an unlink failure instead of success and keeps the login", async () => {
+    const login = createLoginCookieValue(IDENTITY, config.loginSecret, now() - 10);
+    mocks.createPythonClient.mockReturnValue({
+      getAccount: vi.fn(async () => ({ providers: ["discord", "google"] })),
+      unlinkProvider: vi.fn(async () => {
+        throw new PythonApiError(503, { error: "unavailable" });
+      }),
+    } as never);
+    const result = await callbackLoader({ request: unlinkGoogleRequest(login) } as never);
+    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    expect(status).toBe(503);
+    expect(data.error?.code).toBe("unavailable");
+    expect(headers["Set-Cookie"]).not.toContain(`${LOGIN_COOKIE_NAME}=`);
   });
 
   it("rejects a validator identity whose provider differs from the route", async () => {

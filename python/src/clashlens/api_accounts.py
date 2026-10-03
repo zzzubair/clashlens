@@ -45,16 +45,20 @@ def login_session_revoked(database, session_hash: str) -> bool:
 def revoke_login_session(database, session_hash: str) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
-            # A login cookie lives 24 hours, so an older logout guards nothing.
-            connection.execute(
-                "DELETE FROM login_session_revocations"
-                " WHERE revoked_at < now() - interval '25 hours'"
-            )
-            connection.execute(
-                "INSERT INTO login_session_revocations (session_hash) VALUES (%s)"
-                " ON CONFLICT (session_hash) DO NOTHING",
-                (session_hash,),
-            )
+            _record_logout(connection, session_hash)
+
+
+def _record_logout(connection: Any, session_hash: str) -> None:
+    # A login cookie lives 24 hours, so an older logout guards nothing.
+    connection.execute(
+        "DELETE FROM login_session_revocations"
+        " WHERE revoked_at < now() - interval '25 hours'"
+    )
+    connection.execute(
+        "INSERT INTO login_session_revocations (session_hash) VALUES (%s)"
+        " ON CONFLICT (session_hash) DO NOTHING",
+        (session_hash,),
+    )
 
 
 def create_account(
@@ -312,11 +316,13 @@ def unlink_provider(
     account_id: int,
     provider: str,
     provider_subject: str,
+    ended_session: str | None = None,
 ) -> OperationResult:
     """Remove one freshly reauthenticated provider identity.
 
     The final linked identity cannot be removed, and unlinking never
-    deletes the account or any private data.
+    deletes the account or any private data. When `ended_session` is given,
+    that login is recorded as logged out in the same transaction.
 
     The account row lock serializes concurrent unlinks: the second unlink
     re-reads the remaining providers only after the first commits, so two
@@ -372,6 +378,8 @@ def unlink_provider(
                 operator_identity=None,
                 reason="unlinked after fresh provider authentication",
             )
+            if ended_session is not None:
+                _record_logout(connection, ended_session)
             providers = _account_providers(connection, account_id)
             result = OperationResult(200, {"providers": providers})
             api_db._complete_request(connection, binding.request_id, result)

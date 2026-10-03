@@ -294,3 +294,68 @@ def test_logout_ends_only_that_login_and_old_logouts_are_dropped(database_url: s
                 assert _session_call(client, "check", other).json() == {"revoked": True}
         finally:
             database.close()
+
+
+def test_unlinking_the_login_provider_ends_that_login_in_the_same_transaction(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                (ROOT / "deploy/migrations/0054_login_session_revocations.sql").read_text()
+            )
+        database = ApiDatabase(connection_info)
+        try:
+            with _app(database) as client:
+                _create_account(
+                    client,
+                    provider="google",
+                    subject="google-subject-1001",
+                    username="googleuser",
+                )
+                session = "c" * 43
+                unlink_target = "/v1/account/providers/google"
+                unlink_body = (
+                    b'{"provider_subject": "google-subject-1001", "session": "%s"}'
+                    % session.encode()
+                )
+
+                def unlink():
+                    return client.request(
+                        "DELETE",
+                        unlink_target,
+                        content=unlink_body,
+                        headers=signed_headers(
+                            unlink_target,
+                            method="DELETE",
+                            body=unlink_body,
+                            provider="google",
+                            subject="google-subject-1001",
+                        ),
+                    )
+
+                # A refused unlink changes nothing, so the login stays valid.
+                assert unlink().json() == {"error": "final_provider"}
+                assert _session_call(client, "check", session).json() == {"revoked": False}
+
+                link_target = "/v1/account/providers/discord"
+                link_body = b'{"provider_subject": "discord-subject-2002"}'
+                linked = client.post(
+                    link_target,
+                    content=link_body,
+                    headers=signed_headers(
+                        link_target,
+                        method="POST",
+                        body=link_body,
+                        provider="google",
+                        subject="google-subject-1001",
+                    ),
+                )
+                assert linked.status_code == 200
+
+                removed = unlink()
+                assert removed.status_code == 200
+                assert removed.json() == {"providers": ["discord"]}
+                assert _session_call(client, "check", session).json() == {"revoked": True}
+        finally:
+            database.close()

@@ -15,6 +15,8 @@ export interface LoginLoaderData {
 export async function loader({ request }: Route.LoaderArgs): Promise<LoginLoaderData> {
   const { getWebsiteConfig } = await import("../server/config.server");
   const { readLoginIdentity } = await import("../server/actions.server");
+  const { NAVIGATION_ACCOUNT_TIMEOUT_MS } =
+    await import("../server/root-navigation.server");
   const { safeReturnPath, DEFAULT_RETURN_PATH } =
     await import("../server/return-path.server");
 
@@ -29,7 +31,11 @@ export async function loader({ request }: Route.LoaderArgs): Promise<LoginLoader
   const returnPath =
     safeReturnPath(rawReturnPath, config.publicOrigin) ?? DEFAULT_RETURN_PATH;
   // A login the API cannot check shows the sign-in page rather than redirecting.
-  const identity = await readLoginIdentity(request, config).catch(() => null);
+  const identity = await readLoginIdentity(
+    request,
+    config,
+    NAVIGATION_ACCOUNT_TIMEOUT_MS,
+  ).catch(() => null);
   if (config.loginEnabled && identity !== null) {
     throw redirect(returnPath);
   }

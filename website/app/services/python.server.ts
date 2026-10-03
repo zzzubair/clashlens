@@ -130,6 +130,7 @@ export interface PythonClient {
     provider: "google" | "discord",
     providerSubject: string,
     idempotencyKey: string,
+    endedLogin?: string,
   ): Promise<{ providers: string[] }>;
   getPublicUser(username: string): Promise<PublicUser>;
   verifyPlayerToken(
@@ -1109,13 +1110,14 @@ function createAccountOperations(
     getAccountSummary: () => getAccountSummary(identity),
     linkProvider: (provider, providerSubject, idempotencyKey) =>
       changeProviderIdentity("link", provider, providerSubject, idempotencyKey, identity),
-    unlinkProvider: (provider, providerSubject, idempotencyKey) =>
+    unlinkProvider: (provider, providerSubject, idempotencyKey, endedLogin) =>
       changeProviderIdentity(
         "unlink",
         provider,
         providerSubject,
         idempotencyKey,
         identity,
+        endedLogin,
       ),
     getPublicUser,
     verifyPlayerToken: (tag, token, idempotencyKey) =>
@@ -1404,6 +1406,7 @@ async function changeProviderIdentity(
   providerSubject: string,
   idempotencyKey: string,
   identity: LoginProviderIdentity | undefined,
+  endedLogin?: string,
 ): Promise<{ providers: string[] }> {
   requireIdentity(identity);
   if (!isCanonicalUuid(idempotencyKey)) {
@@ -1415,7 +1418,10 @@ async function changeProviderIdentity(
   const payload = await requestJson<unknown>(
     `/v1/account/providers/${provider}`,
     action === "link" ? "POST" : "DELETE",
-    jsonBody({ provider_subject: providerSubject }),
+    jsonBody({
+      provider_subject: providerSubject,
+      ...(endedLogin === undefined ? {} : { session: endedLogin }),
+    }),
     undefined,
     idempotencyKey,
     identity,

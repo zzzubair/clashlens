@@ -17,6 +17,7 @@ import { PythonApiError, requestJson } from "../services/python.server";
 export async function isLoginRevoked(
   identity: LoginIdentity,
   loginCookieValue: string,
+  timeoutMs?: number,
 ): Promise<boolean> {
   const payload = await requestJson<{ revoked?: unknown }>(
     "/v1/account/session/check",
@@ -25,6 +26,8 @@ export async function isLoginRevoked(
     undefined,
     undefined,
     identity,
+    undefined,
+    timeoutMs,
   );
   if (typeof payload?.revoked !== "boolean") {
     throw new PythonApiError(502, { error: "malformed" });

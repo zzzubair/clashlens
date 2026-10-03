@@ -118,6 +118,11 @@ class LoginSessionBody(StrictBody):
     session: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
+class ProviderUnlinkBody(ProviderLinkBody):
+    # The login to end in the same transaction, when it used this provider.
+    session: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
+
+
 class ExportBody(StrictBody):
     format: Literal["google_sheets_scaffold", "csv_scaffold"]
 
@@ -857,7 +862,7 @@ def create_app(
 
     @app.delete("/v1/account/providers/{provider}")
     def unlink_provider(
-        provider: str, body: ProviderLinkBody, request: Request
+        provider: str, body: ProviderUnlinkBody, request: Request
     ) -> JSONResponse:
         context = _authorize(request, "providers.unlink", production_database)
         assert production_database is not None and context.account is not None
@@ -868,11 +873,16 @@ def create_app(
                 request,
                 context,
                 "providers.unlink",
-                {"provider": provider, "provider_subject": body.provider_subject},
+                {
+                    "provider": provider,
+                    "provider_subject": body.provider_subject,
+                    "session": body.session,
+                },
             ),
             account_id=context.account.internal_id,
             provider=provider,
             provider_subject=body.provider_subject,
+            ended_session=body.session,
         )
         return _operation_response(result)
 

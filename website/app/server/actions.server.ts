@@ -80,11 +80,12 @@ export function parseCookieHeader(
  * API whether that login has logged out. Returns the provider identity or null
  * when login is disabled, the cookie is missing, or the value is malformed,
  * tampered, expired, or logged out. Throws PythonApiError only when the API
- * cannot answer, never for request input.
+ * cannot answer within `timeoutMs`, never for request input.
  */
 export async function readLoginIdentity(
   request: Request,
   config: WebsiteConfig,
+  timeoutMs?: number,
 ): Promise<LoginIdentity | null> {
   if (!config.loginEnabled || config.loginSecret.length !== 32) return null;
   const cookies = parseCookieHeader(request.headers.get("cookie"));
@@ -96,7 +97,7 @@ export async function readLoginIdentity(
     Math.floor(Date.now() / 1000),
   );
   if (identity === null) return null;
-  return (await isLoginRevoked(identity, value)) ? null : identity;
+  return (await isLoginRevoked(identity, value, timeoutMs)) ? null : identity;
 }
 
 /**
