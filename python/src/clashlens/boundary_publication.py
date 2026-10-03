@@ -933,7 +933,7 @@ def _boundary_army_manifest_needs_correction(
             )
             if str(value).isdigit()
         }
-        moved = battle_day_repair.merged_battles(
+        moved, _ = battle_day_repair.merged_battles(
             connection,
             sorted(expected_battles),
             [

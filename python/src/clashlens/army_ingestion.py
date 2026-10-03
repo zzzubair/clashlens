@@ -988,13 +988,14 @@ def _build_army_fact_batch(
         for event in events:
             selected_battle_ids.add(int(event["battle_id"]))
             perspectives.add("attacker" if event["lens"] == "offense" else "defender")
-    # A frozen report 0057 moved is read, decoded and counted where it is now.
-    moved = (
+    # A frozen report 0057 moved is read, decoded and counted where it is now,
+    # as is the moved report of a side the frozen inputs list none for.
+    moved, moved_reports = (
         battle_day_repair.merged_battles(
             connection, sorted(selected_battle_ids), evidence_ids
         )
         if evidence_ids is not None
-        else {}
+        else ({}, [])
     )
     selected_battle_ids.update(moved.values())
     battle_id_values = sorted(selected_battle_ids)
@@ -1057,7 +1058,11 @@ def _build_army_fact_batch(
               AND perspective = ANY(%s::text[])
               AND id = ANY(%s::bigint[])
             """,
-            (battle_id_values, perspective_values, evidence_ids),
+            (
+                battle_id_values,
+                perspective_values,
+                [*evidence_ids, *moved_reports],
+            ),
         ).fetchall()
     evidence = {
         (

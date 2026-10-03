@@ -32,30 +32,48 @@ from .db import (
 
 def merged_battles(
     connection: Any, battle_ids: list[int], evidence_ids: list[int]
-) -> dict[tuple[int, str], int]:
-    """Map each (battle, lens) whose listed report moved to its new battle.
+) -> tuple[dict[tuple[int, str], int], list[int]]:
+    """Map each listed (battle, lens) that 0057 moved to its new battle.
+
+    A side with a listed report still saved on its listed battle stays there.
 
     A Reset's frozen inputs name the battle a report was saved under then;
     0057 may since have moved that report, its decode and facts to another
-    battle row and deleted the old one.
+    battle row and deleted the old one. A Reset frozen after the move, from a
+    day not yet rebuilt, names the old battle but no report for the moved
+    side, as its row was gone. The second value lists the reports 0057 moved
+    for sides with no listed report, to read in place of the missing ones.
     """
-    if not battle_ids or not evidence_ids:
-        return {}
-    return {
-        (
-            int(from_id),
-            "offense" if _text_value(perspective) == "attacker" else "defense",
-        ): int(to_id)
-        for from_id, perspective, to_id in connection.execute(
-            """
-            SELECT from_battle_id, perspective, to_battle_id
-            FROM battle_day_repairs
-            WHERE from_battle_id = ANY(%s::bigint[])
-              AND evidence_id = ANY(%s::bigint[])
-            """,
-            (battle_ids, evidence_ids),
-        ).fetchall()
-    }
+    if not battle_ids:
+        return {}, []
+    moved: dict[tuple[int, str], int] = {}
+    unlisted: list[int] = []
+    for from_id, perspective, to_id, report, listed in connection.execute(
+        """
+        SELECT repair.from_battle_id, repair.perspective, repair.to_battle_id,
+               repair.evidence_id,
+               EXISTS (
+                   SELECT 1 FROM battle_evidence AS evidence
+                   WHERE evidence.battle_id = repair.to_battle_id
+                     AND evidence.perspective = repair.perspective
+                     AND evidence.id = ANY(%s::bigint[])
+               )
+        FROM battle_day_repairs AS repair
+        WHERE repair.from_battle_id = ANY(%s::bigint[])
+          AND NOT EXISTS (
+              SELECT 1 FROM battle_evidence AS evidence
+              WHERE evidence.battle_id = repair.from_battle_id
+                AND evidence.perspective = repair.perspective
+                AND evidence.id = ANY(%s::bigint[])
+          )
+        """,
+        (evidence_ids, battle_ids, evidence_ids),
+    ).fetchall():
+        lens = "offense" if _text_value(perspective) == "attacker" else "defense"
+        moved[(int(from_id), lens)] = int(to_id)
+        if not listed:
+            unlisted.append(int(report))
+    return moved, unlisted
 
 
 def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
