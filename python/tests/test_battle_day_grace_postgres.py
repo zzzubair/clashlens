@@ -114,6 +114,21 @@ def _battles(connection_info: str) -> list[tuple]:
         ).fetchall()
 
 
+_DELETE_JOBS = "DELETE FROM python_processing_jobs WHERE id = ANY(%s)"
+
+
+def _sql(connection_info: str, statement: str, job_ids: list[int]) -> None:
+    with psycopg.connect(connection_info) as connection:
+        connection.execute(statement, (job_ids,))
+
+
+def _player_id(connection_info: str) -> int:
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+        ).fetchone()[0]
+
+
 def _apply_migration(connection_info: str) -> None:
     with psycopg.connect(connection_info, autocommit=True) as connection:
         connection.execute(MIGRATION.read_text())
@@ -188,10 +203,35 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
                     "SELECT count(*) FROM battle_day_repairs"
                 ).fetchone()[0] == 4
 
+            failed = reconciliation_db.enqueue_current_season_republication(
+                database, max_jobs=10
+            )
+            assert len(failed["job_ids"]) == 1
+            # A failed rebuild is reported, not retried, until it is deleted.
+            _sql(
+                connection_info,
+                "UPDATE python_processing_jobs SET status = 'failed',"
+                " failure_category = 'invalid_work_input',"
+                " attempt_count = max_attempts WHERE id = ANY(%s)",
+                failed["job_ids"],
+            )
+            blocked = reconciliation_db.enqueue_current_season_republication(
+                database, max_jobs=10
+            )
+            assert blocked["failed_blockers"] == [
+                {
+                    "job_id": failed["job_ids"][0],
+                    "player_id": _player_id(connection_info),
+                    "ranked_day_start": "2026-08-04T05:00:00Z",
+                    "failure_category": "invalid_work_input",
+                }
+            ]
+            _sql(connection_info, _DELETE_JOBS, failed["job_ids"])
             report = reconciliation_db.enqueue_current_season_republication(
                 database, max_jobs=10
             )
             assert len(report["job_ids"]) == 1
+            assert report["failed_blockers"] == []
             for job_id in report["job_ids"]:
                 assert processor.process_job(job_id, owner="repair") is not None
             # Eight and eight; the day after keeps its 05:07:20 defense, and
@@ -208,11 +248,17 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
             assert not any(
                 job in report["job_ids"] for job in again["job_ids"]
             )
+            # Finished jobs are deleted after 48 hours; the corrected days,
+            # not the job, show the rebuild is done.
+            _sql(connection_info, _DELETE_JOBS, report["job_ids"])
+            reconciliation_db.enqueue_current_season_republication(
+                database, max_jobs=10
+            )
             with psycopg.connect(connection_info) as connection:
                 assert connection.execute(
                     "SELECT count(*) FROM python_processing_jobs "
                     "WHERE deduplication_key LIKE 'reconcile:battle-day:%%'"
-                ).fetchone()[0] == 1
+                ).fetchone()[0] == 0
         finally:
             database.close()
 
@@ -247,5 +293,59 @@ def test_new_reports_count_on_the_day_before_without_a_repair(
                     WHERE defender.normalized_tag = '#2VV'
                     """
                 ).fetchone()[0] == 1
+        finally:
+            database.close()
+
+
+def test_a_battle_with_reports_from_two_days_stays_where_it_is(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _seed_battle_anchor(connection_info, ANCHOR)
+            # Under the old rule two attacks on one opponent in one day, at
+            # 05:01 and 16:00, share one saved battle.
+            monkeypatch.setattr(battle, "battle_day_for", ranked_day_for)
+            early = NEXT + timedelta(minutes=1)
+            _save(
+                connection_info,
+                archive_server,
+                processor,
+                TAG,
+                [
+                    _row(True, early, "#2VV"),
+                    _row(True, NEXT + timedelta(hours=11), "#2VV"),
+                ],
+            )
+            monkeypatch.undo()
+            with psycopg.connect(connection_info) as connection:
+                # The battle shows the 05:01 report; the 16:00 one is kept.
+                connection.execute(
+                    """
+                    UPDATE battle_perspectives AS p SET evidence_id = e.id
+                    FROM battle_evidence AS e
+                    WHERE e.battle_id = p.battle_id
+                      AND e.perspective = p.perspective
+                      AND e.battle_timestamp = %s
+                    """,
+                    (early,),
+                )
+                assert connection.execute(
+                    "SELECT count(DISTINCT battle_id), count(*) FROM battle_evidence"
+                ).fetchone() == (1, 2)
+            before = _battles(connection_info)
+            assert [row[0] for row in before] == [NEXT]
+
+            _apply_migration(connection_info)
+
+            assert _battles(connection_info) == before
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_day_repairs"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(DISTINCT battle_id), count(*) FROM battle_evidence"
+                ).fetchone() == (1, 2)
         finally:
             database.close()

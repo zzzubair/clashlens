@@ -413,10 +413,18 @@ When none remain, it queues up to `--max-jobs` published current-season
 player-days that lack the current reconciliation rule version.
 
 Before all of that, each run queues up to `--max-jobs` rebuilds of players
-with a battle that migration 0057 moved to the Legend day before, as listed in
-`battle_day_repairs`. Each rebuilds the earlier of the battle's two days that
-the player has published, then every later saved day in that Season. After
-deploying 0057, run the command until it queues nothing.
+whose own battle report migration 0057 moved to the Legend day before, as
+listed in `battle_day_repairs`. Each rebuilds the earlier of the report's two
+days that the player has published, then every later saved day in that
+Season, and the later of the two if it is in the next Season. A player is
+done once the latest published result of each moved report's new day lists
+that report and that of its old day no longer does; finished jobs being
+deleted after 48 hours does not queue them again. A player with a rebuild
+already queued or running for those days waits for a later run. A failed
+rebuild is not retried: it is reported in `failed_blockers` (job, player,
+day, failure reason) until it is investigated, and deleting the failed job
+lets the next run queue it again. After deploying 0057, run the command
+until it queues nothing and the queued jobs have finished.
 
 **Cost:** on 2026-10-02 this re-checks 25,599 pairs for the 2026-10-01 and
 2026-10-02 Resets. Each queues one job, about 25,600 jobs in total. Each job

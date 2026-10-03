@@ -1294,6 +1294,7 @@ def enqueue_current_season_republication(
     repaired = reset_baselines.repair_current_season_reset_baselines(
         database, max_works=max_jobs
     )
+    repaired["failed_blockers"][:0] = moved["failed_blockers"]
     if repaired["evaluated_count"]:
         return repaired
     with database.pool.connection() as connection:

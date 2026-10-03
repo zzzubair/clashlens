@@ -2,10 +2,12 @@
 
 Migration 0057 moved each saved battle reported in the first
 ``domain.BATTLE_DAY_GRACE`` after a Reset to the previous Legend day and
-listed each moved report in ``battle_day_repairs``. Both players of each moved
-battle have their published days rebuilt, from the earlier of the battle's old
-and new day that has a published result, then every later saved day of that
-Season, oldest first.
+listed each moved report in ``battle_day_repairs``. A day counts only its
+player's own reports, so the player who made each moved report has their
+published days rebuilt, from the earlier of the report's old and new day that
+has a published result, then every later saved day of that Season, oldest
+first. A player's rebuild is done once the latest published result of each
+moved report's new day lists it and that of its old day no longer does.
 """
 
 from __future__ import annotations
@@ -26,8 +28,11 @@ from .db import (
 
 
 def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
-    """Queue at most ``max_jobs`` player rebuilds not queued before.
+    """Queue at most ``max_jobs`` rebuilds of players not yet done.
 
+    A player with reconciliation queued or running for one of those days
+    waits for a later run. A player whose rebuild failed is not queued again
+    but listed, at most ``max_jobs`` of them, in ``failed_blockers``.
     Returns the queued job ids in the republish command's report shape.
     """
     from .battle_ingestion import _refresh_battle_disagreements
@@ -35,54 +40,102 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
     with database.pool.connection() as connection, connection.transaction():
         rows = connection.execute(
             """
-            WITH moved AS (
-                SELECT side.player_id, repair.to_battle_id,
-                       repair.from_day, repair.to_day
+            WITH own AS (
+                SELECT CASE repair.perspective
+                           WHEN 'attacker' THEN repair.attacker_player_id
+                           ELSE repair.defender_player_id
+                       END AS player_id,
+                       repair.to_battle_id, repair.from_day, repair.to_day,
+                       jsonb_build_array(jsonb_build_object(
+                           'source_evidence_id', repair.evidence_id
+                       )) AS listed
                 FROM battle_day_repairs AS repair
+            ), pending AS (
+                SELECT own.player_id, own.to_battle_id, day.ranked_day_start
+                FROM own
+                LEFT JOIN LATERAL (
+                    SELECT log.battles FROM api_player_daily_logs AS log
+                    WHERE log.player_id = own.player_id
+                      AND log.ranked_day_start = own.from_day
+                    ORDER BY log.version DESC
+                    LIMIT 1
+                ) AS from_log ON true
+                LEFT JOIN LATERAL (
+                    SELECT log.battles FROM api_player_daily_logs AS log
+                    WHERE log.player_id = own.player_id
+                      AND log.ranked_day_start = own.to_day
+                    ORDER BY log.version DESC
+                    LIMIT 1
+                ) AS to_log ON true
                 CROSS JOIN LATERAL (
-                    VALUES (repair.attacker_player_id),
-                           (repair.defender_player_id)
-                ) AS side(player_id)
-            ), first_day AS (
-                SELECT moved.player_id,
-                       min(log.ranked_day_start) AS ranked_day_start,
-                       array_agg(DISTINCT moved.to_battle_id) AS battle_ids
-                FROM moved
-                JOIN api_player_daily_logs AS log
-                  ON log.player_id = moved.player_id
-                 AND log.ranked_day_start IN (moved.from_day, moved.to_day)
-                GROUP BY moved.player_id
+                    VALUES (own.from_day, from_log.battles),
+                           (own.to_day, to_log.battles)
+                ) AS day(ranked_day_start, battles)
+                WHERE day.battles IS NOT NULL
+                  AND (
+                      (from_log.battles @> own.listed) IS TRUE
+                      OR (to_log.battles @> own.listed) IS FALSE
+                  )
+            ), player AS (
+                SELECT pending.player_id,
+                       min(pending.ranked_day_start) AS first_day,
+                       max(pending.ranked_day_start) AS last_day,
+                       array_agg(DISTINCT pending.to_battle_id) AS battle_ids
+                FROM pending
+                GROUP BY pending.player_id
+            ), candidates AS (
+                SELECT player.*, job.id AS job_id, job.failure_category
+                FROM player
+                LEFT JOIN python_processing_jobs_worker AS job
+                  ON job.deduplication_key = 'reconcile:battle-day:'
+                     || player.player_id::text || ':'
+                     || to_char(player.first_day AT TIME ZONE 'UTC',
+                                'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                WHERE (job.id IS NULL OR job.state = 'failed')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM python_processing_jobs_worker AS active
+                      WHERE active.work_type = 'reconcile_ranked_day'
+                        AND active.state IN (
+                            'pending', 'waiting_retry', 'waiting_dependency',
+                            'leased'
+                        )
+                        AND (active.input_json ->> 'player_id')::bigint
+                            = player.player_id
+                        AND (active.input_json ->> 'ranked_day_start')
+                            ::timestamptz BETWEEN player.first_day
+                                              AND player.last_day
+                  )
             )
-            SELECT first_day.player_id, first_day.ranked_day_start,
+            SELECT player_id, first_day, last_day,
                    (
                        SELECT log.official_season_id
                        FROM api_player_daily_logs AS log
-                       WHERE log.player_id = first_day.player_id
-                         AND log.ranked_day_start = first_day.ranked_day_start
+                       WHERE log.player_id = ranked.player_id
+                         AND log.ranked_day_start = ranked.first_day
                        ORDER BY log.version DESC
                        LIMIT 1
                    ),
-                   first_day.battle_ids
-            FROM first_day
-            WHERE NOT EXISTS (
-                SELECT 1 FROM python_processing_jobs_worker AS job
-                WHERE job.deduplication_key = 'reconcile:battle-day:'
-                    || first_day.player_id::text || ':'
-                    || to_char(first_day.ranked_day_start AT TIME ZONE 'UTC',
-                               'YYYY-MM-DD"T"HH24:MI:SS"Z"')
-            )
-            ORDER BY first_day.player_id
-            LIMIT %s
+                   battle_ids, job_id, failure_category
+            FROM (
+                SELECT candidates.*,
+                       row_number() OVER (
+                           PARTITION BY job_id IS NULL ORDER BY player_id
+                       ) AS position
+                FROM candidates
+            ) AS ranked
+            WHERE position <= %s
+            ORDER BY player_id
             """,
             (max_jobs,),
         ).fetchall()
+        queued = [row for row in rows if row[5] is None]
         # A battle that gained its other side's report now compares the two.
         _refresh_battle_disagreements(
-            connection, sorted({int(i) for row in rows for i in row[3]})
+            connection, sorted({int(i) for row in queued for i in row[4]})
         )
         job_ids: list[int] = []
-        for player_id, day_start, season_id, _battle_ids in rows:
-            day_text = day_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for player_id, first_day, last_day, season_id, *_ in queued:
+            day_text = first_day.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             row = connection.execute(
                 """
                 INSERT INTO python_processing_jobs_worker (
@@ -102,7 +155,9 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                         {
                             "player_id": int(player_id),
                             "ranked_day_start": day_text,
-                            "last_ranked_day_start": day_text,
+                            "last_ranked_day_start": last_day.astimezone(
+                                UTC
+                            ).strftime("%Y-%m-%dT%H:%M:%SZ"),
                             "recalculate_season": _text_value(season_id),
                             "trigger": "battle_day_repair",
                         }
@@ -119,5 +174,18 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
         "job_ids": job_ids,
         "evaluated_count": 0,
         "failure_reasons": {},
-        "failed_blockers": [],
+        "failed_blockers": [
+            {
+                "job_id": int(job_id),
+                "player_id": int(player_id),
+                "ranked_day_start": first_day.astimezone(UTC).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "failure_category": (
+                    _text_value(failure_category) if failure_category else None
+                ),
+            }
+            for player_id, first_day, _, _, _, job_id, failure_category in rows
+            if job_id is not None
+        ],
     }

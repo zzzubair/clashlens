@@ -39,7 +39,10 @@ GRANT SELECT ON battle_day_repairs TO clashlens_python_worker;
 -- missing, and the old row is deleted once nothing refers to it. Usually the
 -- defender's report, stamped before the Reset, is already there. A side the
 -- new day's row already has is left in place and counted as skipped: no
--- battle is dropped or saved twice. Running this again changes nothing.
+-- battle is dropped or saved twice. So is a battle whose kept reports for a
+-- moving side belong to more than one day (none on production on
+-- 2026-10-03): no report moves to the wrong day. Running this again changes
+-- nothing.
 -- Army decodes (1.5 GB on production) have no battle lookup except for active
 -- ones, so they are moved and checked in one pass after the loop.
 CREATE TEMPORARY TABLE battle_day_merges (
@@ -75,6 +78,18 @@ BEGIN
                  b.attacker_player_id, b.defender_player_id
         ORDER BY b.ranked_day_start, p.battle_id
     LOOP
+        IF EXISTS (
+            SELECT 1 FROM battle_evidence
+            WHERE battle_id = battle.battle_id
+              AND perspective = ANY (battle.perspectives)
+              AND date_bin('24 hours', battle_timestamp - interval '5 minutes',
+                           TIMESTAMPTZ '2000-01-01 05:00+00') <> battle.to_day
+        ) THEN
+            RAISE NOTICE 'battle % not moved: its reports are from more than one day',
+                battle.battle_id;
+            skipped := skipped + 1;
+            CONTINUE;
+        END IF;
         lenses := ARRAY(
             SELECT CASE side WHEN 'attacker' THEN 'offense' ELSE 'defense' END
             FROM unnest(battle.perspectives) AS side
