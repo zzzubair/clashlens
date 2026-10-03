@@ -310,7 +310,7 @@ validate_runtime_values() {
   (( WEBSITE_PORT <= 65535 && HEALTH_PORT <= 65535 )) || die "published port is invalid"
   [[ "$WEBSITE_PORT" != "$HEALTH_PORT" ]] || die "website and health ports must differ"
   item=$(setting CLASHLENS_REGULAR_PARALLELISM '')
-  [[ -z "$item" || ( "$item" =~ ^[1-9][0-9]{0,3}$ && "$item" -le 2048 ) ]] || die "CLASHLENS_REGULAR_PARALLELISM must be a whole number from 1 to 2048"
+  [[ -z "$item" || ( "$item" =~ ^[1-9][0-9]{0,2}$ && "$item" -le 384 ) ]] || die "CLASHLENS_REGULAR_PARALLELISM must be a whole number from 1 to 384"
   for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
   for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done
   local memory_mib=${POSTGRES_MEMORY%[bBkKmMgGtT]}

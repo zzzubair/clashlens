@@ -197,7 +197,7 @@ def expire_settlement_checks(
                   AND sweep.boundary_at + %s <= %s
                 ORDER BY unfinished.id
                 LIMIT %s
-                FOR UPDATE OF unfinished
+                FOR NO KEY UPDATE OF unfinished
             )
             """,
             (COLLECTION_WINDOW, now, batch),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import json
 import subprocess
@@ -120,13 +121,60 @@ def test_collector_sizes_checks_in_flight_from_its_keys(
 
 
 @pytest.mark.parametrize(
+    ("setting", "rate", "threads"), [(None, 25, 350), ("300", 25, 300), (None, 29, 384)]
+)
+def test_collector_save_threads_stay_under_the_container_limit(
+    monkeypatch, setting: str | None, rate: int, threads: int
+) -> None:
+    # Seven keys at 29 a second size 406 checks; their saves share 384 threads.
+    monkeypatch.delenv("CLASHLENS_REGULAR_PARALLELISM", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("CLASHLENS_REGULAR_PARALLELISM", setting)
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["collector", "--regular-parallelism", "385"])
+    arguments = build_parser().parse_args(
+        ["collector", "--starts-per-second-per-key", str(rate)]
+    )
+    arguments.regular_api_keys = ",".join(f"regular-{i}=fixture-{i}" for i in range(7))
+    arguments.interactive_api_keys = "interactive-1=fixture-interactive"
+
+    class Started(Exception):
+        pass
+
+    class Collector:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, *_args: object, **_kwargs: object) -> None:
+            executor = asyncio.get_running_loop()._default_executor
+            raise Started(executor._max_workers)
+
+    closed = SimpleNamespace(close=lambda: None)
+    database = SimpleNamespace(
+        register_interactive_key=lambda *_args, **_kwargs: None, close=lambda: None
+    )
+    monkeypatch.setattr("clashlens.cli._database_url", lambda _arguments: "")
+    monkeypatch.setattr("clashlens.cli.CollectorDatabase", lambda _url: database)
+    monkeypatch.setattr(
+        "clashlens.cli._archive",
+        lambda *_args, **_kwargs: SimpleNamespace(spool=closed, archive=None),
+    )
+    monkeypatch.setattr("clashlens.cli.SpoolFirstReader", SimpleNamespace)
+    monkeypatch.setattr("clashlens.cli.Collector", Collector)
+
+    with pytest.raises(Started) as started:
+        _run_collector(arguments)
+    assert started.value.args == (threads,)
+
+
+@pytest.mark.parametrize(
     ("setting", "forwarded"),
     [
         (None, None),
         ("300", "300"),
-        ("2048", "2048"),
+        ("384", "384"),
         ("0", None),
-        ("2049", None),
+        ("385", None),
         ("3x", None),
     ],
 )

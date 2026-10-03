@@ -658,7 +658,7 @@ class CollectorDatabase:
             with connection.transaction():
                 connection.execute(_WORKER_LOCK_WAIT)
                 work = connection.execute(
-                    "SELECT kind, profile_status, battle_log_status, profile_observation_id, battle_log_observation_id, league_history_status, league_history_observation_id FROM collector_work WHERE id = %s AND status IN ('pending', 'waiting_retry') FOR UPDATE",
+                    "SELECT kind, profile_status, battle_log_status, profile_observation_id, battle_log_observation_id, league_history_status, league_history_observation_id FROM collector_work WHERE id = %s AND status IN ('pending', 'waiting_retry') FOR NO KEY UPDATE",
                     (job_id,),
                 ).fetchone()
                 if work is None:

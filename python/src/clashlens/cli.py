@@ -65,6 +65,8 @@ from .worker import (
 )
 
 MAX_REPORTED_RESULTS = 100
+# Save threads stay well under the collector container's 512 processes and threads.
+_SAVE_THREADS = 384
 UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
@@ -136,7 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collector.add_argument(
         "--regular-parallelism",
-        type=_bounded_int("regular parallelism", 1, 2048),
+        type=_bounded_int("regular parallelism", 1, _SAVE_THREADS),
         default=os.environ.get("CLASHLENS_REGULAR_PARALLELISM"),
         help="regular checks in flight (default: two seconds of key starts, at least 256)",
     )
@@ -780,9 +782,10 @@ def _run_collector(arguments: argparse.Namespace) -> int:
     async def serve() -> None:
         stop_requested = asyncio.Event()
         loop = asyncio.get_running_loop()
-        # A save thread for every regular check; intent and upload work share them.
+        # A save thread per regular check, up to the cap; intent and uploads share them.
         loop.set_default_executor(ThreadPoolExecutor(
-            max_workers=max(256, parallelism), thread_name_prefix="collector-io"
+            max_workers=min(_SAVE_THREADS, max(256, parallelism)),
+            thread_name_prefix="collector-io",
         ))
         for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(shutdown_signal, stop_requested.set)

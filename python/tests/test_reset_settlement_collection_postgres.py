@@ -771,3 +771,31 @@ def test_work_with_saves_still_committing_is_not_picked(database_url: str) -> No
             assert [intent.work_id for intent in left] == [due[1].work_id]
         finally:
             database.close()
+
+
+def test_finishing_work_never_waits_on_worker_rows_that_point_at_it(
+    database_url: str,
+) -> None:
+    # Reset evidence a worker inserts key-shares its work row until the worker
+    # commits, which can take minutes behind a Reset publication.
+    with domain_database(database_url) as connection_info:
+        _players(connection_info, TAG)
+        database = CollectorDatabase(connection_info)
+        try:
+            database.begin_reset(WEDNESDAY_RESET)
+            now = WEDNESDAY_RESET + timedelta(minutes=1)
+            work_id = database.pending_intents(limit=1, now=now, interactive=False)[0].work_id
+            with (
+                ThreadPoolExecutor(1) as pool,
+                psycopg.connect(connection_info) as worker,
+            ):
+                worker.execute("SELECT 1 FROM collector_work FOR KEY SHARE")
+                started = time.monotonic()
+                assert pool.submit(database.complete_intent, work_id).result(timeout=10) is False
+                expire = pool.submit(
+                    database.expire_settlement_checks, WEDNESDAY_RESET + timedelta(days=1)
+                )
+                assert expire.result(timeout=10) == 1
+                assert time.monotonic() - started < 2
+        finally:
+            database.close()
