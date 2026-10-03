@@ -237,8 +237,10 @@ export default function AccountProfileRoute() {
               {loaderData.username ? `@${loaderData.username}` : null}
             </dd>
             {usernameError ? (
-              <dd className="field-error" role="alert">
-                {usernameError}
+              <dd>
+                <p className="field-error" role="alert">
+                  {usernameError}
+                </p>
               </dd>
             ) : null}
             <dd className="form-help">
