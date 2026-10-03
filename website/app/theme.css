@@ -1222,6 +1222,7 @@ h3 {
 }
 
 .form-field label,
+.fixed-field dt,
 .form-fieldset legend {
   color: var(--cl-ink);
   font-family: var(--cl-font);

@@ -495,12 +495,11 @@ describe("account routes", () => {
       assertNoProviderData(result);
     });
 
-    it("updates names with stored preferences and redirects", async () => {
+    it("updates the display name, keeping the stored username and preferences", async () => {
       await expect(
         profileAction({
           request: formRequest("/account/profile", {
             idempotencyKey: IDEMPOTENCY_KEY,
-            username: "nova88",
             displayName: "Nova Nova",
           }),
         } as never),
@@ -548,8 +547,7 @@ describe("account routes", () => {
       const badName = await profileAction({
         request: formRequest("/account/profile", {
           idempotencyKey: IDEMPOTENCY_KEY,
-          username: "FuckYou",
-          displayName: "Nova",
+          displayName: "FuckYou",
         }),
       } as never);
       expect(dataOf(badName).status).toBe(400);
