@@ -641,6 +641,26 @@ def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
     assert [screen["battles_complete"] for screen in screens] == [False] * 4
     assert screens[3]["net_trophy_change"] is None
 
+    # All 8 attacks and 8 defenses today: none can be missing, whatever
+    # checks were missed, unless a battle is disputed.
+    all_today = _stored_day(
+        datetime(2026, 10, 3, 5, 0, tzinfo=UTC),
+        [40] * 7 + [20],
+        [-40] * 7 + [-31],
+        ["missing_start_battle_log_baseline", "missing_start_baseline"],
+    )
+    screen = _screen_daily_log_with_events(all_today, "high", now)
+    assert screen["battles_complete"] is True
+    assert screen["attack_gain"] - screen["defense_loss"] == -11
+    disputed = {
+        **all_today,
+        "partial_reasons": [
+            "missing_start_battle_log_baseline",
+            "duplicate_contribution_disagreement",
+        ],
+    }
+    assert not _screen_daily_log_with_events(disputed, "high", now)["battles_complete"]
+
 
 def test_player_screen_ready_limits_season_days_to_current_official_season(
     database_url: str,

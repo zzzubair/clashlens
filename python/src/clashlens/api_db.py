@@ -570,6 +570,9 @@ _BATTLE_SUM_NEUTRAL_REASONS = frozenset(
         "player_not_eligible",
     }
 )
+_DISPUTE_REASONS = frozenset(
+    {"perspective_disagreement", "duplicate_contribution_disagreement"}
+)
 
 
 def _battles_so_far_complete(
@@ -577,9 +580,16 @@ def _battles_so_far_complete(
     offense: list[dict[str, Any]],
     defense: list[dict[str, Any]],
 ) -> bool:
-    """Whether the listed battles are every battle of the day so far."""
+    """Whether the listed battles are every battle of the day so far. The game
+    allows 8 attacks and 8 defenses a day, so 8 of each leave none missing."""
+    reasons = set(screen_day["uncertainty_reasons"])
+    all_battles = (
+        len(offense) == MAX_DAILY_ATTACKS
+        and len(defense) == MAX_DAILY_DEFENSES
+        and not reasons & _DISPUTE_REASONS
+    )
     return (
-        set(screen_day["uncertainty_reasons"]) <= _BATTLE_SUM_NEUTRAL_REASONS
+        (all_battles or reasons <= _BATTLE_SUM_NEUTRAL_REASONS)
         and screen_day["attack_count"] == len(offense) <= MAX_DAILY_ATTACKS
         and screen_day["defense_count"] == len(defense) <= MAX_DAILY_DEFENSES
         and screen_day["attack_gain"] == sum(item["trophy_change"] for item in offense)
