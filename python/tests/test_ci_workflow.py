@@ -58,7 +58,8 @@ def command_workspace(tmp_path):
         "    sys.exit(subprocess.call(['bash', '-e', '-o', 'pipefail', '-c', script]))\n"
         "if command == 'podman' and args[:1] == ['run']:\n"
         "    os.chdir(Path(os.environ['GITHUB_WORKSPACE']) / 'python')\n"
-        "    sys.exit(subprocess.call(args[args.index('uv'):]))\n"
+        "    image = args.index('clashlens-python-check:ci')\n"
+        "    sys.exit(subprocess.call(args[image + 1:]))\n"
     )
     for command in (
         "uv",
@@ -119,13 +120,13 @@ def _calls(command_workspace):
     )
 
 
-@pytest.mark.parametrize("group", ["1", "2"])
+@pytest.mark.parametrize("group", ["1", "2", "3", "4"])
 def test_python_groups_have_independent_postgresql_and_run_development_tests_once(
     command_workspace, group
 ) -> None:
     job = _python_job()
     assert "if" not in job
-    assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2]}}
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     assert job["env"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
     assert job["services"]["postgres"] == {
         "image": "postgres:18",
@@ -145,7 +146,7 @@ def test_python_groups_have_independent_postgresql_and_run_development_tests_onc
             if "if" in step:
                 assert step["name"] == "Development service tests"
                 assert step["if"] == "matrix.group == 1"
-                if group == "2":
+                if group != "1":
                     continue
             result = _run_step(
                 step, command_workspace, {**job["env"], "CLASHLENS_TEST_GROUP": group}
@@ -187,15 +188,32 @@ def test_native_python_failure_stops_before_development_tests(
 
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize(
+    ("required", "groups", "name", "condition"),
+    [
+        (
+            "python",
+            "python-tests",
+            "Python lint, compile, and PostgreSQL tests",
+            "always()",
+        ),
+        (
+            "packaged-python",
+            "packaged-python-tests",
+            "Packaged Python tests",
+            "always() && github.event_name != 'pull_request'",
+        ),
+    ],
+)
 def test_required_python_result_rejects_failed_cancelled_or_skipped_groups(
-    command_workspace, result
+    command_workspace, result, required, groups, name, condition
 ) -> None:
-    job = _workflow()["jobs"]["python"]
-    assert job["name"] == "Python lint, compile, and PostgreSQL tests"
-    assert job["needs"] == "python-tests"
-    assert job["if"] == "always()"
+    job = _workflow()["jobs"][required]
+    assert job["name"] == name
+    assert job["needs"] == groups
+    assert job["if"] == condition
     step = job["steps"][0]
-    assert step["env"]["RESULT"] == "${{ needs.python-tests.result }}"
+    assert step["env"]["RESULT"] == f"${{{{ needs.{groups}.result }}}}"
     step = {**step, "env": {"RESULT": result}}
     completed = _run_step(step, command_workspace)
     assert (completed.returncode == 0) == (result == "success")
@@ -222,19 +240,20 @@ def test_python_groups_collect_every_test_once() -> None:
             if line.startswith("tests/") and "::" in line
         ]
 
-    full, first, second = collect(), collect("1"), collect("2")
-    assert full and first and second
+    full = collect()
+    groups = [collect(group) for group in ("1", "2", "3", "4")]
+    assert full and all(groups)
     assert len(full) == len(set(full))
-    assert len(first + second) == len(set(first + second))
-    assert set(first).isdisjoint(second)
-    assert sorted(first + second) == sorted(full)
+    combined = [node for nodes in groups for node in nodes]
+    assert len(combined) == len(set(combined))
+    assert sorted(combined) == sorted(full)
     durations = json.loads((directory / "tests" / "ci_test_durations.json").read_text())
     totals = [
         sum(
             durations.get(file.removeprefix("tests/"), 1.0)
             for file in {node.split("::", 1)[0] for node in nodes}
         )
-        for nodes in (first, second)
+        for nodes in groups
     ]
     assert max(totals) / min(totals) < 1.10
 
@@ -243,7 +262,7 @@ def test_invalid_python_group_fails_instead_of_silently_omitting_tests() -> None
     completed = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q"],
         cwd=CI_WORKFLOW.parents[2] / "python",
-        env={**os.environ, "CLASHLENS_TEST_GROUP": "3"},
+        env={**os.environ, "CLASHLENS_TEST_GROUP": "5"},
         text=True,
         capture_output=True,
         check=False,
@@ -415,15 +434,132 @@ def test_packaging_test_failure_fails_the_container_step(command_workspace) -> N
     assert [call["command"] for call in _calls(command_workspace)] == ["podman", "uv"]
 
 
-@pytest.mark.parametrize("event", ["pull_request", "push"])
-def test_full_container_runtime_runs_only_on_main_pushes(
+PACKAGED_DATABASE_URL = (
+    "postgresql://clashlens:clashlens-dev@127.0.0.1:5432/clashlens_test?sslmode=disable"
+)
+
+
+@pytest.mark.parametrize("group", ["1", "2", "3", "4"])
+def test_packaged_python_groups_run_the_full_packaged_suite_once(
+    command_workspace, group
+) -> None:
+    job = _workflow()["jobs"]["packaged-python-tests"]
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
+    # The development stack's database image, user and test database.
+    assert job["services"]["postgres"] == {
+        "image": "postgres:18-alpine",
+        "env": {
+            "POSTGRES_DB": "clashlens_test",
+            "POSTGRES_PASSWORD": "clashlens-dev",
+            "POSTGRES_USER": "clashlens",
+        },
+        "ports": ["5432:5432"],
+        "options": (
+            '--health-cmd "pg_isready -U clashlens -d clashlens_test" '
+            "--health-interval 10s --health-timeout 5s --health-retries 5"
+        ),
+    }
+    for step in job["steps"]:
+        if "run" not in step:
+            continue
+        if "if" in step:
+            assert step["if"] == "matrix.group == 1"
+            if group != "1":
+                continue
+        step = {**step, "run": step["run"].replace("${{ matrix.group }}", group)}
+        completed = _run_step(step, command_workspace)
+        assert completed.returncode == 0, completed.stderr
+    operations = [(call["command"], call["args"]) for call in _calls(command_workspace)]
+    image = "clashlens-python-check:ci"
+    assert [args for command, args in operations if command == "podman"] == [
+        [
+            "build",
+            "--file",
+            "development/PythonCheck.Containerfile",
+            "--tag",
+            image,
+            ".",
+        ],
+        *(
+            [
+                [
+                    "run",
+                    "--rm",
+                    "--tmpfs",
+                    "/tmp:rw,mode=1777",
+                    image,
+                    "sh",
+                    "-c",
+                    (
+                        "uv run ruff check . ../development/*.py && uv run python -m "
+                        "compileall -q src ../development && uv run pytest -q "
+                        "../development/test_fixtures.py"
+                    ),
+                ]
+            ]
+            if group == "1"
+            else []
+        ),
+        [
+            "run",
+            "--rm",
+            "--network",
+            "host",
+            "--tmpfs",
+            "/tmp:rw,mode=1777",
+            "--env",
+            f"CLASHLENS_TEST_DATABASE_URL={PACKAGED_DATABASE_URL}",
+            "--env",
+            f"CLASHLENS_TEST_GROUP={group}",
+            image,
+            "uv",
+            "run",
+            "pytest",
+            "-q",
+            "--durations=30",
+        ],
+    ]
+    assert [args for command, args in operations if command == "uv"] == [
+        *(
+            [
+                ["run", "ruff", "check", ".", "../development/test_fixtures.py"],
+                ["run", "python", "-m", "compileall", "-q", "src", "../development"],
+                ["run", "pytest", "-q", "../development/test_fixtures.py"],
+            ]
+            if group == "1"
+            else []
+        ),
+        ["run", "pytest", "-q", "--durations=30"],
+    ]
+    assert ("sudo", ["apt-get", "install", "-y", "podman"]) in operations
+
+
+def test_packaged_python_test_failure_fails_the_group(command_workspace) -> None:
+    step = next(
+        step
+        for step in _workflow()["jobs"]["packaged-python-tests"]["steps"]
+        if step.get("name") == "Packaged tests"
+    )
+    command_workspace[1]["FAIL_COMMAND"] = json.dumps(
+        ["uv", "run", "pytest", "-q", "--durations=30"]
+    )
+    assert _run_step(step, command_workspace).returncode == 23
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+def test_full_container_runtime_runs_only_outside_pull_requests(
     command_workspace, event
 ) -> None:
     workflow = _workflow()
     # PyYAML's YAML 1.1 parser treats the GitHub Actions key "on" as True.
-    assert workflow[True] == {"push": {"branches": ["main"]}, "pull_request": None}
+    assert workflow[True] == {
+        "push": {"branches": ["main"]},
+        "pull_request": None,
+        "workflow_dispatch": None,
+    }
     job = workflow["jobs"]["container-runtime"]
-    assert job["if"] == "github.event_name == 'push'"
+    assert job["if"] == "github.event_name != 'pull_request'"
+    assert workflow["jobs"]["packaged-python-tests"]["if"] == job["if"]
     assert "needs" not in job
     condition = job["if"].replace("github.event_name", '"$GITHUB_EVENT_NAME"')
     selected = (
@@ -434,7 +570,7 @@ def test_full_container_runtime_runs_only_on_main_pushes(
         ).returncode
         == 0
     )
-    assert selected == (event == "push")
+    assert selected == (event != "pull_request")
     if selected:
         for step in job["steps"]:
             if "run" in step:

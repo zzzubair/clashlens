@@ -522,9 +522,10 @@ show_logs() {
   done
 }
 
+# The packaged Python suite runs in CI's packaged Python test groups, each with
+# its own PostgreSQL server, instead of beside this stack's collector load.
 run_checks() {
   local result=0
-  local test_database_url='postgresql://clashlens:clashlens-dev@127.0.0.1:5432/clashlens_test?sslmode=disable'
   PLAYERS=200
   select_project check
   trap 'remove_stack true' EXIT
@@ -532,28 +533,17 @@ run_checks() {
   up_stack true
   trap - ERR
 
-  "$PODMAN_BIN" build --file "$ROOT/development/PythonCheck.Containerfile" \
-    --tag "$IMAGE_PREFIX-python-check" "$ROOT"
   "$PODMAN_BIN" build --target check --file "$ROOT/website/Containerfile" \
     --tag "$IMAGE_PREFIX-website-check" "$ROOT/website"
-
-  "$PODMAN_BIN" exec "$POSTGRES" createdb -U clashlens clashlens_test || result=$?
-  if [[ "$result" == 0 ]]; then
-    "$PODMAN_BIN" run --rm --pod "$POD" --tmpfs /tmp:rw,mode=1777 \
-      --env CLASHLENS_TEST_DATABASE_URL="$test_database_url" \
-      "$IMAGE_PREFIX-python-check" || result=$?
-  fi
-  if [[ "$result" == 0 ]]; then
-    "$PODMAN_BIN" run --rm --pod "$POD" \
-      --volume "$ROOT/testdata:/testdata:ro,Z" \
-      --env CLASHLENS_E2E_EXTERNAL_STACK=1 \
-      "$IMAGE_PREFIX-website-check" || result=$?
-  fi
+  "$PODMAN_BIN" run --rm --pod "$POD" \
+    --volume "$ROOT/testdata:/testdata:ro,Z" \
+    --env CLASHLENS_E2E_EXTERNAL_STACK=1 \
+    "$IMAGE_PREFIX-website-check" || result=$?
   if [[ "$result" != 0 ]]; then
     show_logs
     return "$result"
   fi
-  printf 'All Python, TypeScript, and browser checks passed.\n'
+  printf 'All TypeScript and browser checks passed.\n'
 }
 
 e2e_server() {

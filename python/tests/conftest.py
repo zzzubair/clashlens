@@ -11,14 +11,15 @@ from typing import ClassVar
 import pytest
 
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
+TEST_GROUPS = ("1", "2", "3", "4")
 
 
 def pytest_collection_modifyitems(config, items) -> None:
     group = os.environ.get("CLASHLENS_TEST_GROUP")
     if group is None:
         return
-    if group not in ("1", "2"):
-        raise pytest.UsageError("CLASHLENS_TEST_GROUP must be 1 or 2")
+    if group not in TEST_GROUPS:
+        raise pytest.UsageError("CLASHLENS_TEST_GROUP must be 1, 2, 3 or 4")
 
     # Keep each file together. Assign the longest measured files first to
     # whichever group currently has less work. New files still run once.
@@ -27,10 +28,10 @@ def pytest_collection_modifyitems(config, items) -> None:
         (test_directory / "ci_test_durations.json").read_text(encoding="utf-8")
     )
     files = {item.path.relative_to(test_directory).as_posix() for item in items}
-    totals = [0.0, 0.0]
+    totals = [0.0] * len(TEST_GROUPS)
     assignments = {}
     for file in sorted(files, key=lambda file: (-durations.get(file, 1.0), file)):
-        target = min(range(2), key=lambda index: totals[index])
+        target = min(range(len(TEST_GROUPS)), key=lambda index: totals[index])
         assignments[file] = str(target + 1)
         totals[target] += durations.get(file, 1.0)
     selected, deselected = [], []
@@ -96,7 +97,11 @@ def archive_server():
         {"objects": {key: body}, "get_count": 0},
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # A short poll interval lets shutdown() return in milliseconds instead of
+    # the 0.5-second default; requests still go through this real server.
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     thread.start()
     try:
         yield f"127.0.0.1:{server.server_port}", f"s3://evidence/{key}", digest, handler

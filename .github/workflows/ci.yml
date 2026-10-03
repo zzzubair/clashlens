@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs of a branch include the main-only packaged and stack checks.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -19,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2]
+        group: [1, 2, 3, 4]
     # One locked environment for every uv step in this job: sync, Ruff,
     # compile, and the tests must all resolve the same environment.
     env:
@@ -70,7 +72,7 @@ jobs:
     needs: python-tests
     runs-on: ubuntu-latest
     steps:
-      - name: Require both Python test groups to pass
+      - name: Require all four Python test groups to pass
         env:
           RESULT: ${{ needs.python-tests.result }}
         run: test "$RESULT" = success
@@ -138,9 +140,62 @@ jobs:
           podman run --rm --tmpfs /tmp:rw,mode=1777 clashlens-python-check:ci \
             uv run --locked pytest -q tests/test_ops_backup.py tests/test_support_wrapper.py
 
+  packaged-python-tests:
+    name: Packaged Python tests, group ${{ matrix.group }}
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
+    # Same database image and test database as the development stack, but one
+    # server per group and no collector load beside the tests.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: clashlens_test
+          POSTGRES_PASSWORD: clashlens-dev
+          POSTGRES_USER: clashlens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U clashlens -d clashlens_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rootless Podman
+        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Build Python check container
+        run: podman build --file development/PythonCheck.Containerfile --tag clashlens-python-check:ci .
+      - name: Packaged lint, compile, and development service tests
+        if: matrix.group == 1
+        run: |
+          podman run --rm --tmpfs /tmp:rw,mode=1777 clashlens-python-check:ci sh -c \
+            'uv run ruff check . ../development/*.py && uv run python -m compileall -q src ../development && uv run pytest -q ../development/test_fixtures.py'
+      - name: Packaged tests
+        run: |
+          podman run --rm --network host --tmpfs /tmp:rw,mode=1777 \
+            --env CLASHLENS_TEST_DATABASE_URL='postgresql://clashlens:clashlens-dev@127.0.0.1:5432/clashlens_test?sslmode=disable' \
+            --env CLASHLENS_TEST_GROUP='${{ matrix.group }}' \
+            clashlens-python-check:ci uv run pytest -q --durations=30
+
+  packaged-python:
+    name: Packaged Python tests
+    if: always() && github.event_name != 'pull_request'
+    needs: packaged-python-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all four packaged Python test groups to pass
+        env:
+          RESULT: ${{ needs.packaged-python-tests.result }}
+        run: test "$RESULT" = success
+
   container-runtime:
     name: Full development container checks
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
