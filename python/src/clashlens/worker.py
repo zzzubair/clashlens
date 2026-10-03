@@ -833,9 +833,15 @@ class ObservationProcessor:
             return self._fail(
                 claim, "database_rejected", detail=detail, retryable=True
             )
-        except DATABASE_REJECTIONS:
-            # Recording the failure was refused too. Leave the lease to run
-            # out so queue maintenance retries the job or fails its last try.
+        except (
+            *DATABASE_REJECTIONS,
+            DeadlockDetected,
+            SerializationFailure,
+            QueryCanceled,
+        ):
+            # Recording the failure was refused, conflicted or timed out too.
+            # Leave the lease to run out so queue maintenance retries the job
+            # or fails its last try.
             return ProcessResult(claim.job_id, "retrying", "database_rejected")
 
     def _complete_retired(self, claim: Claim, error: DomainRuleError) -> ProcessResult:

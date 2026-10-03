@@ -311,7 +311,13 @@ def test_final_attempt_failure_write_conflict_recovers_after_expiry(
 
 
 @pytest.mark.parametrize(
-    "rejection", ["job_write", "job_and_failure_write", "connection_lost"]
+    "rejection",
+    [
+        "job_write",
+        "job_and_failure_write",
+        "failure_write_deadlock",
+        "connection_lost",
+    ],
 )
 def test_rejected_job_write_fails_only_that_job(
     database_url: str, archive_server, monkeypatch, rejection
@@ -363,11 +369,13 @@ def test_rejected_job_write_fails_only_that_job(
 
             def refresh_or_reject(database_, connection, claim, **kwargs):
                 if claim.job_id == rejected_job:
+                    if rejection == "failure_write_deadlock":
+                        raise psycopg.errors.DeadlockDetected("deadlock detected")
                     reject()
                 refresh_evidence(database_, connection, claim, **kwargs)
 
             monkeypatch.setattr(ingestion, "complete_profile", complete_or_reject)
-            if rejection == "job_and_failure_write":
+            if rejection in {"job_and_failure_write", "failure_write_deadlock"}:
                 monkeypatch.setattr(
                     reset_baselines,
                     "_refresh_reset_baseline_evidence",
