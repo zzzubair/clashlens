@@ -1,3 +1,5 @@
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -586,36 +588,61 @@ describe("army analytics player groups", () => {
     const actual = await vi.importActual<
       typeof import("../../app/services/python.server")
     >("../../app/services/python.server");
+    let reply: (response: ServerResponse) => void = () => {};
+    const server = createServer((_request, response) => reply(response));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const saved = {
       url: process.env.CLASHLENS_PYTHON_API_URL,
       secret: process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64,
     };
-    process.env.CLASHLENS_PYTHON_API_URL = "http://python-fixture.test/";
+    process.env.CLASHLENS_PYTHON_API_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 =
       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
     mocks.createPythonClient.mockImplementation(actual.createPythonClient);
     const timeout = AbortSignal.timeout.bind(AbortSignal);
-    const limit = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(1));
-    vi.stubGlobal(
-      "fetch",
-      (_url: URL, init: RequestInit) =>
-        new Promise((_resolve, reject) =>
-          init.signal!.addEventListener("abort", () => reject(init.signal!.reason)),
-        ),
-    );
+    const limit = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(100));
+    const tooWide =
+      "This trophy range is too wide to load right now. Try a narrower range.";
+    const json = { "content-type": "application/json" };
     try {
-      const html = await renderArmyRoute("season=current&population=trophies-3800-6100");
+      for (const [when, send, message] of [
+        ["waiting for the reply", () => {}, tooWide],
+        [
+          "reading the reply",
+          (response: ServerResponse) => {
+            response.writeHead(200, json);
+            response.write('{"kind":');
+          },
+          tooWide,
+        ],
+        [
+          "the database cancels",
+          (response: ServerResponse) =>
+            response.writeHead(503, json).end('{"error":"timeout"}'),
+          tooWide,
+        ],
+        [
+          "the service fails another way",
+          (response: ServerResponse) =>
+            response.writeHead(503, json).end('{"error":"service_unavailable"}'),
+          "the live service is unavailable",
+        ],
+      ] as const) {
+        reply = send;
+        const html = await renderArmyRoute(
+          "season=current&population=trophies-3800-6100",
+        );
+        const text = renderedText(html);
+        expect(text, when).toContain(message);
+        expect(text, when).not.toContain("malformed");
+        expect(html).not.toContain("<table");
+        expect(html).toMatch(/<option value="trophies" selected="">/);
+        expect(html).toContain('value="top-10000"');
+        expect(html).toMatch(/name="trophy_min"[^>]*value="3800"/);
+        expect(html).toMatch(/name="trophy_max"[^>]*value="6100"/);
+      }
       expect(limit).toHaveBeenCalledWith(5_000);
-      const text = renderedText(html);
-      expect(text).toContain(
-        "This trophy range is too wide to load right now. Try a narrower range.",
-      );
-      expect(text).not.toContain("live service is unavailable");
-      expect(html).not.toContain("<table");
-      expect(html).toMatch(/<option value="trophies" selected="">/);
-      expect(html).toContain('value="top-10000"');
-      expect(html).toMatch(/name="trophy_min"[^>]*value="3800"/);
-      expect(html).toMatch(/name="trophy_max"[^>]*value="6100"/);
+      reply = () => {};
       const top = renderedText(
         await renderArmyRoute("season=current&population=top-10000"),
       );
@@ -623,7 +650,8 @@ describe("army analytics player groups", () => {
       expect(top).not.toContain("trophy range is too wide");
     } finally {
       limit.mockRestore();
-      vi.unstubAllGlobals();
+      server.closeAllConnections();
+      server.close();
       for (const [name, value] of [
         ["CLASHLENS_PYTHON_API_URL", saved.url],
         ["CLASHLENS_PYTHON_HMAC_SECRET_B64", saved.secret],
