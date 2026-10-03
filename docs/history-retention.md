@@ -282,10 +282,10 @@ production keeps running, follow the
 [restore procedure](deployment.md#restore-into-a-separate-database).
 
 A response therefore stays usable for at least 86 days after its latest
-sighting, less at most 10 minutes. With no unfinished work and cleanup keeping up, its bytes stay about
-95 days, plus the wait for the next cleanup batch. The measured
-21.83 GB/day of new raw responses (October 2) means about 2.07 TB stored,
-roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
+sighting, less at most 10 minutes. With no unfinished work and cleanup keeping
+up, its bytes stay about 95 days, plus the wait for the next cleanup batch. The
+measured 21.83 GB/day of new raw responses (October 2) means about 2.07 TB
+stored, roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
 
 Any unfinished upload of the same bytes and unfinished/failed processing or
 replay keep a response usable. Marking commits before any
