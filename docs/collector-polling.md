@@ -395,9 +395,11 @@ of these hold:
 
 The 15-minute safety fetch of the battle log stops for these players.
 Players in the control group (about 5%, see above) still fetch the battle
-log on every check. An 8-minute wait that would reach 04:55, when regular
-checks stop, is not taken: the player keeps the 90-second cadence until then,
-so their Live Leaderboard entry does not go stale before the Reset. If a
+log on every check. An 8-minute wait that would end at 04:53 or later, two minutes
+before regular checks stop at 04:55, is not taken: the player keeps the
+90-second cadence until 04:55, so a check that starts a minute or two late is
+still admitted and their Live Leaderboard entry does not go stale before the
+Reset. If a
 later profile does change, the usual battle-log fetches and 90-second
 cadence resume. Eight minutes keeps the player page (stale after 15 minutes)
 and the Live Leaderboard (stale after 10 minutes, with an alert on any stale

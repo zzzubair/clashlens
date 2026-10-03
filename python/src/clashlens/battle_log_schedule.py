@@ -56,6 +56,9 @@ FINISHED_SETTLE = timedelta(minutes=15)
 FINISHED_RECHECK = timedelta(minutes=8)
 # Regular checks stop this long before each Reset, at 04:55 UTC.
 ADMISSION_CLOSE = timedelta(minutes=5)
+# A due check can start a minute or two late when the keys set the pace, so a
+# finished Clasher's last 8-minute wait ends this long before 04:55.
+ADMISSION_DELAY = timedelta(minutes=2)
 # Players whose tag's SHA-256 starts with a byte below this (13/256, about 5%)
 # fetch both responses on every check. Comparing them with everyone else
 # measures how much later battle details appear. The same group in SQL:
@@ -201,9 +204,10 @@ class BattleLogSchedule:
     ) -> datetime | None:
         """When a Clasher who finished the Legend day needs the next check.
 
-        That is FINISHED_RECHECK later, unless that reaches the 04:55 close of
-        regular checks before the next Reset, when the last saved battle log shows exactly 8 valid attacks and 8 valid
-        defenses on the Legend day of `now`, with no malformed rows; this
+        That is FINISHED_RECHECK later, unless that is within ADMISSION_DELAY
+        of the 04:55 close of regular checks, when the last saved battle log
+        shows exactly 8 valid attacks and 8 valid defenses on the Legend day
+        of `now`, with no malformed rows; this
         check's profile was usable; no battle-log fetch is owed, so the profile
         did not change since the previous check; and the last battle is at
         least FINISHED_SETTLE old.
@@ -213,7 +217,7 @@ class BattleLogSchedule:
             return None
         reset = _next_reset(player, now)
         until = now + FINISHED_RECHECK
-        if reset is None or until >= reset - ADMISSION_CLOSE:
+        if reset is None or until >= reset - ADMISSION_CLOSE - ADMISSION_DELAY:
             return None
         return until
 
