@@ -70,7 +70,6 @@ export interface GroupComparison {
   days: ComparisonDays;
   dayStarts: string[];
   todayStart: string;
-  retiredDays: number;
   generatedAt: string;
   players: ComparedPlayer[];
 }
@@ -104,8 +103,6 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     !value.day_starts.every(isTimestamp) ||
     value.day_starts.length !== value.days ||
     !isTimestamp(value.today_start) ||
-    !isCount(value.retired_days) ||
-    value.retired_days > value.day_starts.length ||
     !isTimestamp(value.generated_at) ||
     !Array.isArray(value.players)
   )
@@ -122,7 +119,6 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     days: value.days as ComparisonDays,
     dayStarts: value.day_starts as string[],
     todayStart: value.today_start as string,
-    retiredDays: value.retired_days,
     generatedAt: value.generated_at as string,
     players,
   };

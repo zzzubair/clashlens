@@ -111,8 +111,9 @@ def get_group_comparison(
             (ids, day_starts[0], today_start),
         ).fetchall():
             logs[(int(row[0]), row[1].astimezone(UTC))] = row
-        # Completed seasons lose their daily detail after cleanup, so those
-        # days read as history no longer kept rather than nothing recorded.
+        # Completed seasons lose their daily detail after cleanup, in batches,
+        # so a player's day reads as history no longer kept only when its row
+        # is already gone; a row still present is shown as recorded.
         ranges = retired_day_ranges(connection)
         retired = {
             start
@@ -146,7 +147,6 @@ def get_group_comparison(
         "days": days,
         "day_starts": [start.isoformat() for start in day_starts],
         "today_start": today_start.isoformat(),
-        "retired_days": len(retired),
         "generated_at": now.isoformat(),
         "players": results,
     }

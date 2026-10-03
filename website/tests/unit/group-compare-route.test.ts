@@ -70,7 +70,6 @@ function payload(players = [player()]) {
     days: 3,
     day_starts: DAYS,
     today_start: "2026-08-06T05:00:00+00:00",
-    retired_days: 1,
     generated_at: "2026-08-06T12:00:00+00:00",
     players,
   };
@@ -97,14 +96,12 @@ describe("group comparison", () => {
     expect(comparison?.players[0].days.map((day) => day.net)).toEqual([null, 10, 40]);
     expect(comparison?.players[0].days[0].state).toBe("retired");
     expect(comparison?.players[0].vsGroup).toBeNull();
-    expect(comparison?.retiredDays).toBe(1);
   });
 
   it("rejects a response whose days do not match the requested window", () => {
     expect(mapGroupComparison({ ...payload(), days: 7 })).toBeNull();
     expect(mapGroupComparison(payload([player({ day_results: [] })]))).toBeNull();
     expect(mapGroupComparison(payload([player({ status: "inactive" })]))).toBeNull();
-    expect(mapGroupComparison({ ...payload(), retired_days: 4 })).toBeNull();
   });
 
   it("reads the signed-in account's group for a supported window only", async () => {
@@ -124,7 +121,8 @@ describe("group comparison", () => {
       days: 7,
       day_starts: [...DAYS, ...DAYS, DAYS[0]],
     });
-    await load(`/account/groups/${GROUP_ID}?days=999`);
+    const fallback = await load(`/account/groups/${GROUP_ID}?days=999&sort=__proto__`);
+    expect(fallback.data.sort).toBe("trophies");
     expect(mocks.requestJson).toHaveBeenLastCalledWith(
       `/v1/account/groups/${GROUP_ID}/comparison?days=7`,
       "GET",

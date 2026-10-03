@@ -144,6 +144,9 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
             seed_day(database, "#2PP", 2, net=10, state="Partial")
             seed_day(database, "#2PP", 3, net=20)
             seed_day(database, "#8PY", 1, net=-10)
+            # Cleanup runs in batches: this row in the cleaned season is not
+            # deleted yet, so it is still a recorded, counted day.
+            seed_day(database, "#8PY", 6, net=5)
             # Today is still live: no net change is published until it ends.
             seed_day(
                 database,
@@ -181,7 +184,6 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
             # Cleaned-up days read as history no longer kept, missing days stay
             # empty, the last ended day may still change and a partial day is
             # shown but left out of the counted total.
-            assert result["retired_days"] == 2
             assert [(day["state"], day["net"]) for day in leader["day_results"]] == [
                 ("retired", None),
                 ("retired", None),
@@ -223,6 +225,12 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
             # account's own player outside the group is not part of the group.
             assert leader["vs_group"] == 50
             assert players["#8PY"]["vs_group"] == -50
+            assert players["#8PY"]["day_results"][1] == {
+                "start": (TODAY - timedelta(days=6)).isoformat(),
+                "state": "complete",
+                "net": 5,
+            }
+            assert players["#8PY"]["counted_days"] == 2
             own = players["#YQ"]
             assert (own["you"], own["in_group"], own["vs_group"]) == (True, False, 85)
             # No result is not a zero result.

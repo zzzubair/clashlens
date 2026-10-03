@@ -45,7 +45,9 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const requestedDays = Number(url.searchParams.get("days") ?? "7");
   const days = COMPARISON_DAYS.find((value) => value === requestedDays) ?? 7;
   const requestedSort = url.searchParams.get("sort") ?? "trophies";
-  const sort = (requestedSort in SORTS ? requestedSort : "trophies") as SortKey;
+  const sort = (
+    Object.keys(SORTS).includes(requestedSort) ? requestedSort : "trophies"
+  ) as SortKey;
   const empty = {
     comparison: null,
     days,
@@ -124,6 +126,9 @@ export default function GroupCompareRoute() {
   }
   const players = sortPlayers(comparison.players, sort);
   const waiting = comparison.players.filter((player) => player.status !== "tracking");
+  const retiredDays = comparison.dayStarts.filter((_, index) =>
+    comparison.players.some((player) => player.days[index].state === "retired"),
+  ).length;
   const hasYou = comparison.players.some((player) => player.you);
   const scale = Math.max(
     1,
@@ -146,8 +151,8 @@ export default function GroupCompareRoute() {
           {formatDay(comparison.dayStarts[0])} to{" "}
           {formatDay(comparison.dayStarts[comparison.dayStarts.length - 1])}. A Legend day
           runs from 05:00 to 05:00 UTC.
-          {comparison.retiredDays > 0
-            ? ` History for ${comparison.retiredDays} of these days is no longer kept, so results cover at most ${plural(days - comparison.retiredDays, "day")}.`
+          {retiredDays > 0
+            ? ` For ${retiredDays} of these days, history is no longer kept for some players; those days are marked and never counted as zero.`
             : null}
         </p>
         <div className="compare-controls">
@@ -180,9 +185,9 @@ export default function GroupCompareRoute() {
 
       {waiting.length > 0 ? (
         <p className="compare-notice" role="status">
-          {waiting.length === 1 ? "1 player has" : `${waiting.length} players have`} no
-          Legend results yet. Players being looked up show their results once Clash Lens
-          has checked them; nothing before that is filled in.
+          {waiting.length === 1 ? "1 player is" : `${waiting.length} players are`} not
+          being tracked right now; the reason is under each name. Results already recorded
+          for them are still shown, and nothing missing is filled in.
         </p>
       ) : null}
       {!hasYou ? (
@@ -340,6 +345,11 @@ function PlayerRow({
         <span className="compare-sub">
           {player.countedDays} of {days} days counted
         </span>
+        {player.netPerDay !== null ? (
+          <span className="compare-sub">
+            Own average {signed(player.netPerDay, 1)} a day
+          </span>
+        ) : null}
         <Trend days={player.days} scale={scale} />
       </td>
       <td data-label="Won vs lost">
@@ -360,9 +370,6 @@ function PlayerRow({
         ) : (
           <Signed value={player.vsGroup} decimals={1} />
         )}
-        {player.netPerDay !== null ? (
-          <span className="compare-sub">{signed(player.netPerDay, 1)} a day</span>
-        ) : null}
       </td>
       <td data-label="Attack">
         {attack.count === 0 ? (
@@ -376,14 +383,14 @@ function PlayerRow({
               {Math.round(attack.destruction / attack.count)}% ·{" "}
               {Math.round((attack.threeStars / attack.count) * 100)}% triples
             </span>
-            <span className="compare-sub">
-              {plural(attack.count, "attack")}
-              {player.countedDays > 0
-                ? ` · ${(player.countedAttacks / player.countedDays).toFixed(1)} of 8 a day`
-                : ""}
-            </span>
+            <span className="compare-sub">{plural(attack.count, "attack")}</span>
           </>
         )}
+        {player.countedDays > 0 ? (
+          <span className="compare-sub">
+            {(player.countedAttacks / player.countedDays).toFixed(1)} of 8 attacks a day
+          </span>
+        ) : null}
       </td>
       <td data-label="Defense">
         {defense.count === 0 ? (
