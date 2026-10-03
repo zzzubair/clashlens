@@ -11,6 +11,7 @@ from clashlens.worker import (
     ProcessResult,
     lane_owner,
     process_concurrently,
+    process_until_stopped,
 )
 
 
@@ -300,53 +301,125 @@ def test_lane_exception_never_exposes_job_details_or_credentials() -> None:
     assert "archive-secret-material" not in str(excinfo.value)
 
 
-def test_one_slow_job_does_not_leave_other_lanes_idle() -> None:
-    slow_job_running = Event()
-    release_slow_job = Event()
-    other_jobs_done = Event()
-    state_lock = threading.Lock()
-    queued = 20
-    claimed = 0
-    finished_fast = 0
-    captured: list[list[ProcessResult]] = []
-
-    class OneSlowJobProcessor:
-        def process_once(self, **_kwargs: object) -> ProcessResult | None:
-            nonlocal queued, claimed, finished_fast
-            with state_lock:
-                if queued == 0:
-                    return None
-                queued -= 1
-                claimed += 1
-                job_id = claimed
-            if job_id == 1:
-                slow_job_running.set()
-                assert release_slow_job.wait(10), "test release gate was not opened"
-                return ProcessResult(job_id, "processed")
-            with state_lock:
-                finished_fast += 1
-                if finished_fast == 19:
-                    other_jobs_done.set()
-            return ProcessResult(job_id, "processed")
-
+def _run_until_stopped(processor: object, **overrides: object) -> threading.Thread:
+    arguments: dict[str, object] = {
+        "concurrency": 3,
+        "owner": "steady-lane",
+        "lease_seconds": 30,
+        "idle_seconds": 0.01,
+        "claims_ready": lambda: True,
+        "maintain": lambda: None,
+        "on_result": lambda _result: None,
+    }
+    arguments.update(overrides)
     thread = threading.Thread(
-        target=lambda: captured.append(
-            process_concurrently(
-                OneSlowJobProcessor(),
-                concurrency=3,
-                owner="slow-lane",
-                max_jobs=3,
-                fill_idle_lanes=True,
-            )
-        ),
-        daemon=True,
+        target=process_until_stopped, args=(processor,), kwargs=arguments, daemon=True
     )
     thread.start()
+    return thread
 
-    assert slow_job_running.wait(10)
-    assert other_jobs_done.wait(10), "other lanes stopped while one job was slow"
-    assert thread.is_alive(), "the call must still wait for the slow job"
-    release_slow_job.set()
-    thread.join(10)
-    assert not thread.is_alive(), "worker did not finish after the slow job"
-    assert sorted(result.job_id for result in captured[0]) == list(range(1, 21))
+
+def test_back_to_back_long_jobs_never_leave_other_lanes_idle() -> None:
+    release_long_jobs = Event()
+    both_long_jobs_running = Event()
+    fast_jobs_done = Event()
+    stop = Event()
+    lock = threading.Lock()
+    queue = ["long"]
+    running_long = 0
+    reported: list[int] = []
+
+    class LongJobProcessor:
+        def process_once(self, **_kwargs: object) -> ProcessResult | None:
+            nonlocal running_long
+            with lock:
+                if not queue:
+                    return None
+                job = queue.pop(0)
+                if job == "long":
+                    running_long += 1
+                    if running_long == 2:
+                        both_long_jobs_running.set()
+            if job == "long":
+                assert release_long_jobs.wait(10), "test release gate was not opened"
+                return ProcessResult(0, "processed")
+            return ProcessResult(int(job), "processed")
+
+    def on_result(result: ProcessResult) -> None:
+        reported.append(result.job_id)
+        if set(range(1, 11)) <= set(reported):
+            fast_jobs_done.set()
+
+    thread = _run_until_stopped(
+        LongJobProcessor(), stop_requested=stop, on_result=on_result
+    )
+    try:
+        time.sleep(0.1)  # one lane holds the long job; the others find no work
+        with lock:
+            queue.append("long")
+        assert both_long_jobs_running.wait(5)
+        with lock:
+            queue.extend(str(job_id) for job_id in range(1, 11))
+        assert fast_jobs_done.wait(5), "the free lane stopped claiming"
+    finally:
+        release_long_jobs.set()
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert sorted(reported) == [0, 0, *range(1, 11)]
+
+
+def test_maintenance_failure_is_retried_without_stopping_lanes(capsys) -> None:
+    stop = Event()
+    maintained_again = Event()
+    maintenance_calls = 0
+
+    def maintain() -> None:
+        nonlocal maintenance_calls
+        maintenance_calls += 1
+        if maintenance_calls == 1:
+            raise RuntimeError("postgresql://secret@db/clashlens unavailable")
+        maintained_again.set()
+
+    processor = RecordingProcessor(available_jobs=5)
+    thread = _run_until_stopped(processor, stop_requested=stop, maintain=maintain)
+    try:
+        assert maintained_again.wait(5)
+        deadline = time.monotonic() + 5
+        while len(processor.calls) < 5 and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert len(processor.calls) == 5
+    output = capsys.readouterr().out
+    assert '"error": "RuntimeError"' in output
+    assert "secret" not in output
+
+
+def test_lanes_do_not_claim_while_the_spool_is_not_ready() -> None:
+    stop = Event()
+    ready_checks = Event()
+    maintained: list[bool] = []
+
+    def claims_ready() -> bool:
+        ready_checks.set()
+        return False
+
+    processor = RecordingProcessor(available_jobs=5)
+    thread = _run_until_stopped(
+        processor,
+        stop_requested=stop,
+        claims_ready=claims_ready,
+        maintain=lambda: maintained.append(True),
+    )
+    try:
+        assert ready_checks.wait(5)
+        time.sleep(0.1)
+    finally:
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert processor.calls == []
+    assert maintained == []

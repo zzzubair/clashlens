@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
 from argparse import Namespace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -733,6 +735,81 @@ def test_run_forever_rechecks_archive_and_resumes_after_outage(
     assert output[-1]["processed_count"] == 1
 
 
+def test_run_forever_keeps_lanes_claiming_and_maintaining_during_a_long_job(
+    monkeypatch, capsys
+) -> None:
+    # The 2026-10-03 Reset: one lane ran a 40-minute build, the queue was
+    # empty for a moment, and no other lane claimed until that build ended.
+    long_job_running = Event()
+    release_long_job = Event()
+    queued_jobs_done = Event()
+    maintained_during_long_job = Event()
+    queue_lock = threading.Lock()
+    queue = [1]
+    done: list[int] = []
+    stop: list[Event] = []
+
+    class FakeDatabase:
+        def close(self) -> None:
+            return
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            if long_job_running.is_set():
+                maintained_during_long_job.set()
+            return 0
+
+    class FakeArchive:
+        @staticmethod
+        def check_ready() -> bool:
+            return True
+
+    class LongJobProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return
+
+        def process_once(self, **_kwargs: object) -> ProcessResult | None:
+            with queue_lock:
+                if not queue:
+                    return None
+                job_id = queue.pop(0)
+            if job_id == 1:
+                long_job_running.set()
+                assert release_long_job.wait(10)
+            with queue_lock:
+                done.append(job_id)
+                if set(range(2, 12)) <= set(done):
+                    queued_jobs_done.set()
+            return ProcessResult(job_id, "processed")
+
+    clock = iter(range(0, 10**9, 5))
+    monkeypatch.setattr(cli, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(cli, "Database", lambda _url, **_kwargs: FakeDatabase())
+    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "ObservationProcessor", LongJobProcessor)
+    monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
+    worker = threading.Thread(
+        target=cli._run_worker,
+        args=(_worker_namespace(run_forever=True, concurrency=3, max_jobs=3),),
+        daemon=True,
+    )
+    worker.start()
+    try:
+        assert long_job_running.wait(5)
+        time.sleep(0.1)  # the other lanes find the queue empty
+        with queue_lock:
+            queue.extend(range(2, 12))
+        assert queued_jobs_done.wait(5), "lanes stopped claiming during a long job"
+        assert maintained_during_long_job.wait(5), "maintenance waited for the job"
+        assert 1 not in done
+    finally:
+        release_long_job.set()
+        stop[0].set()
+        worker.join(10)
+    assert not worker.is_alive()
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert output[-1]["processed_count"] == 11
+
+
 def _worker_namespace(**overrides: object) -> Namespace:
     values: dict[str, object] = {
         "database_url": "postgresql://prototype@postgres/db",
@@ -1006,7 +1083,6 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         max_jobs: int,
         lease_seconds: int,
         stop_requested: object,
-        fill_idle_lanes: bool,
     ) -> list[ProcessResult]:
         recorded["concurrent_args"] = {
             "concurrency": concurrency,

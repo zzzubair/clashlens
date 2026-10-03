@@ -61,6 +61,7 @@ from .worker import (
     ProcessResult,
     StageMetrics,
     process_concurrently,
+    process_until_stopped,
 )
 
 MAX_REPORTED_RESULTS = 100
@@ -853,8 +854,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             if isinstance(database, _db.Database)
             else None
         )
-        if callable(reevaluate):
-            reevaluate()
+        reevaluate()
         if isinstance(processor, ObservationProcessor):
             processor.stage_metrics = stage_metrics
             database.stage_metrics = stage_metrics
@@ -862,25 +862,27 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         next_publication_reevaluation_at = float("-inf")
         late_battles = late_battle_sweep.LateBattleSweep(database)
 
-        def process_batch() -> list[ProcessResult]:
+        def run_due_maintenance() -> None:
             nonlocal next_queue_maintenance_at, next_publication_reevaluation_at
-            # Local spool and PostgreSQL own claim readiness. Remote marker
-            # health is telemetry; known local duplicates remain processable.
-            if not archive.check_ready():
-                return []
             current_time = monotonic()
             if current_time >= next_publication_reevaluation_at:
-                if callable(reevaluate):
-                    reevaluate()
-                late_battles.run_when_due()
                 next_publication_reevaluation_at = current_time + 10
+                reevaluate()
+                late_battles.run_when_due()
             if current_time >= next_queue_maintenance_at:
+                next_queue_maintenance_at = current_time + 10
                 maintenance_started_at = monotonic()
                 database.maintain_queue(max_jobs=100)
                 stage_metrics.record(
                     "python_queue_maintenance", monotonic() - maintenance_started_at
                 )
-                next_queue_maintenance_at = current_time + 10
+
+        def process_batch() -> list[ProcessResult]:
+            # Local spool and PostgreSQL own claim readiness. Remote marker
+            # health is telemetry; known local duplicates remain processable.
+            if not archive.check_ready():
+                return []
+            run_due_maintenance()
             if concurrency == 1:
                 return processor.process_until_idle(
                     owner=arguments.owner,
@@ -895,7 +897,6 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 max_jobs=arguments.max_jobs,
                 lease_seconds=arguments.lease_seconds,
                 stop_requested=stop_requested,
-                fill_idle_lanes=arguments.run_forever,
             )
 
         if not arguments.run_forever:
@@ -984,17 +985,30 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         heartbeat_thread = Thread(target=heartbeat, daemon=True)
         heartbeat_thread.start()
 
+        def report_result(result: ProcessResult) -> None:
+            nonlocal processed_count
+            processed_count += 1
+            recent_results.append(result)
+            worker_metrics.record_outcome(result.outcome)
+            print(json.dumps({"event": "job_result", **asdict(result)}), flush=True)
+
         try:
+            if concurrency > 1:  # no batches: see process_until_stopped
+                process_until_stopped(
+                    processor,
+                    concurrency=concurrency,
+                    owner=arguments.owner,
+                    lease_seconds=arguments.lease_seconds,
+                    stop_requested=stop_requested,
+                    idle_seconds=arguments.poll_interval_seconds,
+                    claims_ready=archive.check_ready,
+                    maintain=run_due_maintenance,
+                    on_result=report_result,
+                )
             while not stop_requested.is_set():
                 results = process_batch()
-                processed_count += len(results)
-                recent_results.extend(results)
                 for result in results:
-                    worker_metrics.record_outcome(result.outcome)
-                    print(
-                        json.dumps({"event": "job_result", **asdict(result)}),
-                        flush=True,
-                    )
+                    report_result(result)
                 if not results:
                     stop_requested.wait(arguments.poll_interval_seconds)
         finally:
