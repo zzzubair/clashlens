@@ -984,7 +984,10 @@ prepare_secrets() {
 wait_postgres() {
   local attempt
   for attempt in $(seq 1 90); do
-    "$PODMAN_BIN" exec "$PREFIX-postgres" pg_isready -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1 && return
+    if "$PODMAN_BIN" exec "$PREFIX-postgres" pg_isready -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+      [[ "$(psql_exec --tuples-only --no-align --command 'SHOW hba_file')" == /etc/clashlens/pg_hba.conf ]] || die "PostgreSQL is not using deploy/postgres/pg_hba.conf"
+      return
+    fi
     sleep 1
   done
   die "PostgreSQL did not become ready; run ./ops logs postgres"
