@@ -65,6 +65,8 @@ _REGULAR_PARALLELISM = 256
 # A quarter of regular slots keeps overdue revisits moving until discovery drains.
 _REGULAR_REPEAT_MINIMUM = 64
 _ORDINARY_INTENT_PARALLELISM = 32
+# Player work kept for retry when every failure was transient.
+_RETRIED_INTENTS = frozenset({"reset_baseline", "initial_collection", "live_refresh"})
 
 
 class Collector:
@@ -334,14 +336,15 @@ class Collector:
         if "capacity_paused" in outcomes:
             return "capacity_paused"
         if outcomes != ["recorded"] * len(endpoints):
-            await self._database_call(
+            # A provider outage must not become a permanent player failure.
+            status = await self._database_call(
                 self.database.fail_intent,
                 intent.work_id,
                 category="provider_failure",
                 detail="one or more required endpoint requests failed",
-                retryable=False,
+                retryable="failed" not in outcomes and intent.kind in _RETRIED_INTENTS,
             )
-            return "failed"
+            return "retrying" if status == "waiting_retry" else "failed"
         completed = await self._database_call(
             self.database.complete_intent, intent.work_id
         )
@@ -421,7 +424,7 @@ class Collector:
                     key = (endpoint, pool_name, error.category)
                     self.endpoint_outcomes[key] = self.endpoint_outcomes.get(key, 0) + 1
                     if not error.retryable or attempt + 1 == attempts:
-                        return "failed"
+                        return "transient" if error.retryable else "failed"
                     await asyncio.sleep(_retry_delay(attempt))
                     continue
                 if (
@@ -580,7 +583,7 @@ class Collector:
                     if attempt + 1 < attempts:
                         await asyncio.sleep(_retry_delay(attempt))
                         continue
-                    return "failed"
+                    return "failed" if response.http_status in {401, 403} else "transient"
                 return "recorded"
             except (OSError, SpoolError) as error:
                 self._record_spool_failure(error)
@@ -890,6 +893,9 @@ class Collector:
                 assert error is not None
                 raise error
             stop_requested.set()
+            outage = getattr(self.client, "provider_outage", None)
+            if outage is not None:
+                outage.stop()
             await asyncio.gather(*tasks)
             await _drain_to_thread(
                 self.spool.remove_unreferenced,
@@ -1287,6 +1293,12 @@ class Collector:
             ),
             f'clashlens_collector_archive_health{{state="{self.archive_health}"}} 1',
         ]
+        outage = getattr(self.client, "provider_outage", None)
+        if outage is not None:
+            lines += [
+                f"clashlens_collector_provider_outage {int(outage.active)}",
+                f"clashlens_collector_provider_outage_pauses_total {outage.pauses}",
+            ]
         for pool_name, pool in (
             ("regular", self.regular_keys),
             ("interactive", self.interactive_keys),

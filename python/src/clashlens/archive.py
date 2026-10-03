@@ -577,14 +577,17 @@ class SpoolFirstReader:
         self.archive.set_pool_acquire_observer(observer)
 
     def check_ready(self) -> bool:
+        # The worker only reads saved responses, so it stays ready while the
+        # spool is too full to admit another one; draining is what frees it.
         try:
-            return self.spool.readiness()[0]
+            return self.spool.readiness(admission=False)[0]
         except (OSError, ValueError, SpoolError):
             return False
 
     def readiness(self) -> dict[str, Any]:
-        ready, reason = self.spool.readiness()
-        return {"ready": ready, "component": "spool", "reason": reason, "remote_health": self.archive.check_marker_health()}
+        ready, reason = self.spool.readiness(admission=False)
+        admission = self.spool.readiness()[1] if ready else reason
+        return {"ready": ready, "component": "spool", "reason": reason, "admission": admission, "remote_health": self.archive.check_marker_health()}
 
     def check_marker_health(self) -> str:
         return self.archive.check_marker_health()

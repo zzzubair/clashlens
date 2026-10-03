@@ -7,7 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary
+from . import boundary, reset_baselines
 from .analytics import CLASSIFICATION_CONFIDENCE, CLASSIFICATION_VERSION
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
@@ -37,6 +37,7 @@ def reevaluate_boundary_publications(database) -> int:
             is None
         ):
             return 0
+        reset_baselines.settle_failed_reset_work(database)
         with connection.transaction():
             generations = connection.execute(
                 """

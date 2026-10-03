@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import asyncio
+import threading
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
+
+import psycopg
+import pytest
+from domain_test_support import domain_database
+
+from clashlens import boundary_publication
+from clashlens.archive import SpoolFirstReader
+from clashlens.collector import Collector
+from clashlens.collector_db import CollectorDatabase, CollectorWork
+from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderOutage
+from clashlens.db import Database
+from clashlens.spool import Spool
+from clashlens.worker import ObservationProcessor
+
+TAG = "#2PP"
+
+
+class _Provider(BaseHTTPRequestHandler):
+    """A fake official API that drops connections, fails, or answers."""
+
+    protocol_version = "HTTP/1.1"
+    mode = "drop"
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def do_GET(self) -> None:
+        if type(self).mode == "drop":
+            self.close_connection = True
+            self.connection.shutdown(2)
+            return
+        status = 503 if type(self).mode == "unavailable" else 200
+        body = b'{"tag":"#2PP"}' if status == 200 else b"{}"
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@contextmanager
+def _provider():
+    _Provider.mode = "drop"
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Provider)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def _latest_reset(now: datetime) -> datetime:
+    boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
+    return boundary if boundary <= now else boundary - timedelta(days=1)
+
+
+def _collector(origin: str, database: CollectorDatabase, spool: Spool) -> Collector:
+    def keys(label: str) -> KeyPool:
+        return KeyPool([ApiKey(label, "secret")], starts_per_second=25, concurrency_per_key=6)
+
+    return Collector(
+        database=database,
+        spool=spool,
+        archive=None,
+        client=OfficialApiClient(origin, allow_insecure_test_origin=True, max_body_bytes=4096),
+        regular_keys=keys("regular-1"),
+        interactive_keys=keys("interactive-1"),
+        archive_instance_id="fixture",
+        collector_version="reset-outage-test",
+        max_body_bytes=4096,
+    )
+
+
+def _reset_work(
+    connection_info: str, boundary: datetime
+) -> tuple[CollectorDatabase, int]:
+    with psycopg.connect(connection_info) as connection:
+        connection.execute(
+            "INSERT INTO players (normalized_tag, active, next_due_at) VALUES (%s, true, %s)",
+            (TAG, boundary),
+        )
+    database = CollectorDatabase(connection_info)
+    sweep_id = database.begin_reset(boundary)
+    assert sweep_id is not None
+    return database, sweep_id
+
+
+def _collect_reset(collector: Collector, database: CollectorDatabase) -> str:
+    (intent,) = database.pending_intents(
+        limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+    )
+    return asyncio.run(collector.collect_intent(intent))
+
+
+def _work(connection_info: str) -> tuple[str, int | None, int | None]:
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT status, profile_observation_id, battle_log_observation_id"
+            " FROM collector_work WHERE kind = 'reset_baseline'"
+        ).fetchone()
+
+
+def test_reset_outage_stays_retryable_and_collects_once_the_api_returns(
+    database_url: str, tmp_path
+) -> None:
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before the retry could be checked")
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, sweep_id = _reset_work(connection_info, boundary)
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+
+        assert _collect_reset(collector, database) == "retrying"
+        assert _work(connection_info)[0] == "waiting_retry"
+        # Ordinary collection keeps waiting for the Reset, which is not lost.
+        assert database.reset_ready(sweep_id) is False
+
+        _Provider.mode = "answer"
+        assert _collect_reset(collector, database) == "complete"
+        status, profile_id, battle_log_id = _work(connection_info)
+        assert status == "complete" and profile_id and battle_log_id
+
+
+def test_reset_given_up_without_any_response_still_settles_its_publication(
+    database_url: str, tmp_path
+) -> None:
+    # The previous Reset: retrying stopped when its Legend day ended.
+    boundary = _latest_reset(datetime.now(UTC)) - timedelta(days=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, _sweep_id = _reset_work(connection_info, boundary)
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+
+        assert _collect_reset(collector, database) == "failed"
+        assert _work(connection_info) == ("failed", None, None)
+
+        # A worker (re)start revisits the failed work: no processing job
+        # exists, yet the Reset records failed evidence and its publication
+        # stops waiting for this player.
+        worker = Database(connection_info)
+        try:
+            boundary_publication.reevaluate_boundary_publications(worker)
+            boundary_publication.reevaluate_boundary_publications(worker)
+        finally:
+            worker.close()
+        with psycopg.connect(connection_info) as connection:
+            evidence = connection.execute(
+                "SELECT state, failure_reasons FROM reset_baseline_evidence"
+            ).fetchall()
+            members = connection.execute(
+                "SELECT member.snapshot_status, member.army_status"
+                " FROM boundary_publication_generation_members AS member"
+                " JOIN boundary_publication_generations AS generation"
+                "   ON generation.id = member.generation_id"
+                " WHERE generation.boundary_at = %s",
+                (boundary,),
+            ).fetchall()
+        assert evidence == [
+            ("failed", ["missing_profile_observation", "missing_battle_log_observation"])
+        ]
+        assert members == [("unavailable", "unavailable")]
+
+
+def test_reset_server_error_is_not_final_while_the_collector_retries(
+    database_url: str, tmp_path
+) -> None:
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before the retry could be checked")
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, _sweep_id = _reset_work(connection_info, boundary)
+        spool = Spool(tmp_path / "spool", max_body_bytes=4096)
+        collector = _collector(origin, database, spool)
+        _Provider.mode = "unavailable"
+
+        assert _collect_reset(collector, database) == "retrying"
+        worker = Database(connection_info)
+        try:
+            reader = SpoolFirstReader(
+                SimpleNamespace(max_body_bytes=4096),
+                spool_root=str(spool.root),
+                max_body_bytes=4096,
+                validate_database=False,
+            )
+            results = ObservationProcessor(worker, reader).process_until_idle(
+                owner="outage-worker", max_jobs=10
+            )
+        finally:
+            worker.close()
+        assert {result.outcome for result in results} == {"classified"}
+        with psycopg.connect(connection_info) as connection:
+            evidence = connection.execute(
+                "SELECT state, failure_reasons FROM reset_baseline_evidence"
+                " ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            unavailable = connection.execute(
+                "SELECT count(*) FROM boundary_publication_generation_members"
+                " WHERE snapshot_status = 'unavailable'"
+            ).fetchone()[0]
+        assert evidence[0] == "partial"
+        assert "profile_non_success_retrying" in evidence[1]
+        assert unavailable == 0
+
+
+def test_collection_resumes_after_an_outage_with_the_newest_response_first(
+    database_url: str, tmp_path
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "INSERT INTO players (normalized_tag, active, next_due_at)"
+                " VALUES (%s, true, now()) RETURNING id",
+                (TAG,),
+            ).fetchone()[0]
+        database = CollectorDatabase(connection_info)
+        collector = _collector(
+            origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
+        )
+        outage = ProviderOutage(threshold=2, base_delay=0.2, max_delay=0.2)
+        collector.client.provider_outage = outage
+        work = CollectorWork(player_id, TAG, datetime.now(UTC))
+        _Provider.mode = "unavailable"
+
+        async def run() -> list[str]:
+            for _ in range(2):
+                await collector.collect_player(work, lane="ordinary")
+            assert outage.active
+            waiting = asyncio.create_task(collector.collect_player(work, lane="ordinary"))
+            await asyncio.sleep(0.1)
+            assert not waiting.done()
+            _Provider.mode = "answer"
+            return await asyncio.wait_for(waiting, 5)
+
+        assert asyncio.run(run())[0] == "recorded"
+        assert not outage.active
+
+        worker = Database(connection_info)
+        try:
+            first = worker.newest_job_plan(limit=10)[0]
+        finally:
+            worker.close()
+        with psycopg.connect(connection_info) as connection:
+            status = connection.execute(
+                "SELECT observation.http_status FROM python_processing_jobs AS job"
+                " JOIN collector_observations AS observation"
+                "   ON observation.id = job.observation_id WHERE job.id = %s",
+                (first,),
+            ).fetchone()[0]
+        # The worker starts with the response saved after recovery, not with
+        # the server errors saved during the outage.
+        assert status == 200

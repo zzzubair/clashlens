@@ -651,17 +651,17 @@ class CollectorDatabase:
         category: str,
         detail: str | None = None,
         retryable: bool = False,
-    ) -> bool:
+    ) -> str | None:
         if job_id < 1:
             raise ValueError("intent job ID must be positive")
-        target_status = "waiting_retry" if retryable else "failed"
+        # Retry only until the work's Legend day ends; unfinished Reset work blocks the next Reset.
         with self._connection() as connection:
             with connection.transaction():
                 row = connection.execute(
-                    "UPDATE collector_work SET status = %s, due_at = CASE WHEN %s THEN clock_timestamp() + interval '5 seconds' ELSE due_at END, failure_category = left(%s, 128), failure_detail = left(%s, 1024), updated_at = clock_timestamp() WHERE id = %s AND status NOT IN ('complete', 'failed', 'cancelled') RETURNING id",
-                    (target_status, retryable, category, detail or "", job_id),
+                    "UPDATE collector_work AS work SET status = CASE WHEN decision.retry THEN 'waiting_retry' ELSE 'failed' END, due_at = CASE WHEN decision.retry THEN clock_timestamp() + interval '5 seconds' ELSE work.due_at END, failure_category = left(%s, 128), failure_detail = left(%s, 1024), updated_at = clock_timestamp() FROM (SELECT %s AND clock_timestamp() < COALESCE((SELECT sweep.boundary_at FROM collector_reset_sweeps AS sweep WHERE sweep.id = current.sweep_id), current.created_at) + interval '23 hours 55 minutes' AS retry FROM collector_work AS current WHERE current.id = %s) AS decision WHERE work.id = %s AND work.status NOT IN ('complete', 'failed', 'cancelled') RETURNING work.status",
+                    (category, detail or "", retryable, job_id, job_id),
                 ).fetchone()
-        return row is not None
+        return None if row is None else str(row[0])
 
     def begin_reset(
         self,

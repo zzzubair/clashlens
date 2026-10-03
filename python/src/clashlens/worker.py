@@ -44,6 +44,7 @@ from .rankings import (
     parse_global_player_rankings,
 )
 from .source_observation_contract import validate_source_observation_contract
+from .spool import SpoolError
 
 MAX_CONCURRENCY = 32
 DATABASE_CONFLICT_RETRIES = 3
@@ -680,7 +681,14 @@ class ObservationProcessor:
                 "new observation has no local spool reader",
                 retryable=False,
             )
-        body = verify(claim.response_hash)
+        try:
+            body = verify(claim.response_hash)
+        except (OSError, SpoolError) as error:
+            # A failed disk read is not a missing response: wait and retry it
+            # without spending an attempt. Database failures stay separate.
+            raise ArchiveReadError(
+                "spool_io_failed", "local evidence read failed", retryable=True
+            ) from error
         if body is None:
             raise ArchiveReadError(
                 "spool_missing",

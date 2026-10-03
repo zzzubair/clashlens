@@ -345,11 +345,61 @@ def _recover_failed_reset_repairs(
     return job_ids, blockers
 
 
+def settle_failed_reset_work(database: Database, *, max_works: int = 100) -> int:
+    """Record evidence for Reset work the collector gave up on.
+
+    Work that failed before any response arrived has no processing job, and
+    work whose last response was processed while it was still retrying holds
+    only partial evidence. Either would hold its publication forever. This
+    re-checks such work from the newest two Resets, so a worker restart picks
+    it up again. Missing or failed responses make the evidence ``failed``; a
+    response collected later is never used in place of the missed one.
+    """
+
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            work_ids = [
+                int(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT work.id
+                    FROM collector_reset_sweeps AS sweep
+                    JOIN collector_work AS work ON work.sweep_id = sweep.id
+                    WHERE sweep.boundary_at > clock_timestamp() - interval '2 days'
+                      AND work.kind = 'reset_baseline'
+                      AND work.status = 'failed'
+                      AND COALESCE((
+                          SELECT evidence.state
+                          FROM reset_baseline_evidence AS evidence
+                          WHERE evidence.collector_work_id = work.id
+                          ORDER BY evidence.version DESC, evidence.id DESC
+                          LIMIT 1
+                      ), 'partial') = 'partial'
+                    ORDER BY work.id
+                    LIMIT %s
+                    """,
+                    (max_works,),
+                ).fetchall()
+            ]
+        for work_id in work_ids:
+            with connection.transaction():
+                _evaluate_reset_baseline(
+                    database,
+                    connection,
+                    observation_id=None,
+                    observation_endpoint=None,
+                    parser_version=DEFAULT_PARSER_VERSION,
+                    processing_version=PROCESSING_VERSION,
+                    work_id=work_id,
+                )
+    return len(work_ids)
+
+
 def _evaluate_reset_baseline(
     database: Database,
     connection: Any,
     *,
-    observation_id: int,
+    observation_id: int | None,
     observation_endpoint: str | None,
     parser_version: str,
     processing_version: str,
@@ -358,6 +408,7 @@ def _evaluate_reset_baseline(
     ends_day: bool = True,
     starts_ended_day: bool = False,
     recalculate_season: str | None = None,
+    work_id: int | None = None,
 ) -> tuple[list[int], list[str]]:
     """Record Reset pair evidence and return queued job IDs and failure reasons.
 
@@ -365,7 +416,7 @@ def _evaluate_reset_baseline(
     are rebuilt oldest first in one transaction, including later saved days
     in ``recalculate_season``.
     """
-    context = _load_reset_baseline_context(connection, observation_id)
+    context = _load_reset_baseline_context(connection, observation_id, work_id)
     if context is None:
         return [], []
     work_id, player_id, normalized_tag, sweep_id, boundary_at = context
@@ -637,21 +688,23 @@ def _record_boundary_baseline(
 
 def _load_reset_baseline_context(
     connection: Any,
-    observation_id: int,
+    observation_id: int | None,
+    work_id: int | None = None,
 ) -> tuple[Any, ...] | None:
+    match = (
+        "work.id = %s"
+        if work_id is not None
+        else "(work.profile_observation_id = %s OR work.battle_log_observation_id = %s)"
+    )
     row = connection.execute(
-        """
+        f"""
         SELECT work.id, work.player_id, work.normalized_tag,
                work.sweep_id, sweep.boundary_at
         FROM collector_work AS work
         JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
-        WHERE work.kind = 'reset_baseline'
-          AND (
-              work.profile_observation_id = %s
-              OR work.battle_log_observation_id = %s
-          )
+        WHERE work.kind = 'reset_baseline' AND {match}
         """,
-        (observation_id, observation_id),
+        (work_id,) if work_id is not None else (observation_id, observation_id),
     ).fetchone()
     return None if row is None else tuple(row)
 
@@ -770,8 +823,15 @@ def _load_reset_endpoint_evidence(
             else:
                 reasons.append(f"unprocessed_{endpoint}")
         elif processing_outcome == "non_success":
-            reasons.append(f"{endpoint}_non_success")
-            hard_failure = True
+            # A server error or rate limit is final only once the collector
+            # stops retrying; a later response replaces it on the work row.
+            retrying = (row[5] == 429 or row[5] >= 500) and _text_value(
+                row[14]
+            ) in {"pending", "waiting_retry"}
+            reasons.append(
+                f"{endpoint}_non_success{'_retrying' if retrying else ''}"
+            )
+            hard_failure = not retrying
         elif processing_outcome != "processed":
             category = (
                 _text_value(row[8]) if row[8] is not None else processing_outcome

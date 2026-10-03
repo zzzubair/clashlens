@@ -307,9 +307,33 @@ saving time, key limits, Refresh or Reset, and it assumes the defender's
 profile shows a battle as soon as it ends.
 
 Ordinary transport failures wait for the next pass. Interactive, Reset and
-ranking work gets bounded retries. Raw responses that will be kept are published
+ranking work gets bounded retries. When every failure of a Reset, Refresh or
+first-time collection was a timeout, dropped connection, HTTP 429 or HTTP 5xx,
+the work waits five seconds and runs again instead of failing, until 04:55 UTC
+ends the Legend day it belongs to. Only then does it fail. HTTP 401 or 403
+still fails it at once. Raw responses that will be kept are published
 to the local spool before their compact database handoff; restart recovery
 finishes either half without creating another observation or processing job.
+
+Ten timeouts, dropped connections or HTTP 5xx answers in a row, with no other
+answer between them, start a provider-outage pause for every key. Requests
+wait instead of starting. After 5 seconds one request goes out as a recovery
+probe. Each failed probe doubles the wait, up to 60 seconds; any other answer
+ends the pause and the waiting requests start under the normal key limits.
+HTTP 429 and 401/403 keep their per-key handling and never start the pause, so
+an outage neither pauses nor disables a key. Shutdown releases waiting requests
+as retryable failures. `/metrics` reports `clashlens_collector_provider_outage`
+(1 while paused) and `clashlens_collector_provider_outage_pauses_total`.
+
+Reset work that fails with no response has no processing job. The worker
+checks every 10 seconds, and at start, for failed Reset work from the last two
+days without final evidence. It records the missing or failed responses as
+`failed` evidence, and that player's Reset publication becomes unavailable
+instead of waiting forever. A Reset HTTP 429 or 5xx response counts as failed
+only after its work fails; while the work is retrying it stays `partial`. A
+retried profile proves the Reset only if it was collected before the player's
+first battle of the new Legend day, so a later profile is never used as the
+exact Reset value.
 
 Refresh and initial collection use the separate interactive key. Refreshes
 coalesce while active, have a 30-second cooldown, and never change the regular
@@ -320,13 +344,18 @@ At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
 profile/battle work row per member. Regular work stays blocked until all Reset
 work is terminal; unfinished older Reset work also blocks the next boundary.
+A Reset outage therefore holds ordinary collection until its Reset work is
+collected or fails at 04:55 UTC.
 
 ## Spool, archive and rate enforcement
 
 Before each request the collector reserves its possible 4 MiB body and one spool
 object. It writes private temporary bytes, hashes and syncs them, then atomically
 publishes the hash-named file. Collection pauses when the spool cannot reserve
-capacity and resumes when cleanup frees it.
+capacity and resumes when cleanup frees it. The worker's readiness only needs
+the spool to be readable, so it keeps processing saved responses while the
+spool is full; that processing is what lets cleanup free space. A failed disk
+read makes the job wait and retry without spending an attempt.
 
 The background uploader creates immutable archive objects with up to 32 uploads
 at once. Those uploads share a limit of four database calls at once for claiming,

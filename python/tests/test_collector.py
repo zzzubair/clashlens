@@ -389,7 +389,7 @@ def test_regular_collection_fetches_profile_when_first_battle_fails() -> None:
 
     outcomes = asyncio.run(collector.collect_player(work, lane="ordinary"))
 
-    assert outcomes == ["recorded", "failed"]
+    assert outcomes == ["recorded", "transient"]
     assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
 
 

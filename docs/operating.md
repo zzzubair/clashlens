@@ -214,6 +214,9 @@ for the Reset pause and a tracker that has never fetched successfully.
 **First checks:** `./ops logs collector --since '15 minutes ago' --no-pager`,
 then the daily status, fetch-age and queue checks. Look for stopped services,
 connection or authentication failures, or a full spool.
+`clashlens_collector_provider_outage 1` in the collector's `/metrics` means
+the official API keeps failing and the collector is pausing; see
+[provider outages](collector-polling.md).
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Check database and worker logs if their failures block collection. Escalate a
