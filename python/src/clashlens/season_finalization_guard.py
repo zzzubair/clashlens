@@ -129,13 +129,17 @@ _CHECKS = {
         ORDER BY correction.id LIMIT %(limit)s
     """,
     # A Reset's settlement check reads the two days before it, so it holds
-    # their detail until it finishes and its responses are processed.
+    # their detail until it finishes, its responses are processed and it is
+    # judged.
     "reset_settlement_checks": """
         SELECT settlement.id FROM reset_boundary_settlements AS settlement
         JOIN collector_work AS work ON work.id = settlement.delayed_work_id
         WHERE settlement.boundary_at > %(season_start)s
           AND settlement.boundary_at - interval '2 days' < %(season_end)s
           AND (work.status NOT IN ('complete', 'failed', 'cancelled')
+               OR (settlement.state = 'provisional'
+                   AND (settlement.reasons = '[]'::jsonb
+                        OR settlement.reasons ? 'settlement_check_pending'))
                OR EXISTS (
                    SELECT 1 FROM collector_observations AS observed
                    WHERE observed.id IN (work.profile_observation_id,

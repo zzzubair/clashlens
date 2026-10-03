@@ -473,24 +473,26 @@ def load_reading(
 
 def load_profile_trophies(
     database: Database, connection: Any, player_id: int, after: datetime, until: datetime
-) -> tuple[tuple[datetime, int], ...]:
-    """The trophies of each processed profile read in ``(after, until)``."""
+) -> tuple[tuple[datetime, int | None], ...]:
+    """The trophies of each profile read in ``(after, until)``, or ``None``
+    for one with no processed profile."""
     rows = connection.execute(
         f"""
-        SELECT observed.response_completed_at, profile.trophies
+        SELECT observed.response_completed_at,
+               CASE WHEN outcome.outcome = 'processed' THEN profile.trophies END
         FROM collector_observations AS observed
         {_OUTCOME}
         {_profile_join(database)}
         WHERE observed.player_id = %(player)s AND observed.endpoint = 'profile'
           AND observed.response_completed_at > %(after)s
           AND observed.response_completed_at < %(until)s
-          AND outcome.outcome = 'processed' AND profile.trophies IS NOT NULL
+          AND observed.http_status BETWEEN 200 AND 299
         ORDER BY observed.response_completed_at
         """,
         {"processing": PROCESSING_VERSION, "player": player_id,
          "after": after, "until": until},
     ).fetchall()
-    return tuple((at, int(trophies)) for at, trophies in rows)
+    return tuple((at, None if trophies is None else int(trophies)) for at, trophies in rows)
 
 
 def load_first_reports(

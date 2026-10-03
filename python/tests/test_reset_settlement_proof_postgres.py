@@ -19,6 +19,7 @@ from test_domain_processing_postgres import _role_connection
 from test_reconciliation_postgres import BATTLE_FIXTURE, DAY_END, _processor, _profile
 
 from clashlens import reset_settlement
+from clashlens.boundary import lock_boundary_publication
 from clashlens.collector_db import BATTLE_PARSER_VERSION, PROFILE_PARSER_VERSION
 from clashlens.domain import allocate_trophies, ranked_day_for
 from clashlens.season_finalization_guard import close_blockers
@@ -328,6 +329,11 @@ def test_terminal_work_refresh_and_fence_use_dependency_days(
                 assert len(blocking.get("reset_settlement_checks", [])) == 2
                 assert "reset_settlement_checks" not in close_blockers(
                     connection, "season", recent + DAY, recent + 2 * DAY)
+                # A finished check with nothing saved still holds its days
+                # until it is judged.
+                assert len(close_blockers(
+                    connection, "season", RESET - 2 * DAY, RESET - DAY + timedelta(seconds=1)
+                ).get("reset_settlement_checks", [])) == 1
 
             # Finalizing the ended day's Season freezes the verdict.
             with psycopg.connect(connection_info) as connection:
@@ -390,8 +396,7 @@ def test_reset_profile_waits_for_the_publication_lock_before_its_reset_lock(
         try:
             with psycopg.connect(connection_info) as late_log, ThreadPoolExecutor(1) as pool:
                 # A late battle log's army refresh holds the Reset's publication lock.
-                late_log.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                                 (f"boundary-publication:{RESET.isoformat()}",))
+                lock_boundary_publication(late_log, RESET)
                 profile = pool.submit(_process, connection_info, archive_server,
                                       [scenario["early_profile"]])
                 deadline = time.monotonic() + 30

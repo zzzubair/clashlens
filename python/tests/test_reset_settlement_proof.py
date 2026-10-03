@@ -104,6 +104,10 @@ def test_4837_to_4804_requires_adjustment_and_independent_catchup() -> None:
     assert judged(replace(
         passing, profile=None, later_profiles=((RESET + 24 * MINUTE, 4804),),
     )) == ("unresolved", ("settlement_profile_missing",), None)
+    # A quiet-window profile left unprocessed could have contradicted the pin.
+    assert judged(replace(
+        passing, later_profiles=((RESET + 24 * MINUTE, 4804), (RESET + 27 * MINUTE, None)),
+    )) == ("unresolved", ("later_profile_unprocessed",), None)
 
 
 def test_40_trophy_lag_rejects_stale_target_and_fixed_quiet_margin() -> None:

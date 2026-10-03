@@ -128,8 +128,8 @@ class ProofInputs:
     # Earliest report time, from either player, at or after the early reading.
     first_report_after_early: datetime | None = None
     first_new_day_report: datetime | None = None
-    # Trophies of profiles read after the named one and before any new-day battle.
-    later_profiles: tuple[tuple[datetime, int], ...] = ()
+    # Trophies of later profiles before any new-day battle; None if unprocessed.
+    later_profiles: tuple[tuple[datetime, int | None], ...] = ()
     root: Root | None = None
 
 
@@ -245,10 +245,8 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     # 4. No battle between the readings, nor a new-day battle before the
     # named profile, by either player's report; no later quiet profile
     # disagrees with it.
-    proof["ordering"] = {
-        "first_report_after_early": _iso(inputs.first_report_after_early),
-        "first_new_day_report": _iso(inputs.first_new_day_report),
-    }
+    proof["ordering"] = {"first_report_after_early": _iso(inputs.first_report_after_early),
+                         "first_new_day_report": _iso(inputs.first_new_day_report)}
     for first, reason in (
         (inputs.first_new_day_report, "new_day_battle_before_profile"),
         (inputs.first_report_after_early, "battle_between_readings"),
@@ -257,7 +255,9 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
             reasons.append(reason)
     if early.response_completed_at >= profile.request_started_at:
         reasons.append("early_reading_after_profile")
-    if any(trophies != profile.trophies for _, trophies in inputs.later_profiles):
+    if any(trophies is None for _, trophies in inputs.later_profiles):
+        reasons.append("later_profile_unprocessed")
+    if any(t not in (None, profile.trophies) for _, t in inputs.later_profiles):
         reasons.append("later_profile_contradicts")
     if reasons:
         return verdict(UNRESOLVED, reasons)
@@ -291,9 +291,7 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     proof["catchup"] = {
         "root": {"boundary_at": root.boundary_at.isoformat(), "trophies": root.trophies,
                  "fingerprint": root.fingerprint, "change_number": root.change_number},
-        "attack_gain": sum(attacks),
-        "defense_loss": sum(defenses),
-        "target": target,
+        "attack_gain": sum(attacks), "defense_loss": sum(defenses), "target": target,
     }
     if early.trophies != target + automatic:
         reasons.append("early_reading_mismatch")
@@ -507,7 +505,8 @@ def refresh_for_observation(
     A named check's own responses always count. Any other response of the
     player, or of an opponent in its battles, from up to three days after a
     Reset, re-judges only a Reset whose check finished and that is settled,
-    passed every guard, or was contradicted by a profile: later evidence can
+    passed every guard, or met a later profile that disagreed or was not
+    processed: later evidence can
     only take proof away from the rest, and they are re-judged in full when
     the previous Reset's verdict changes.
     """
@@ -549,7 +548,7 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
            OR (work.status IN ('complete', 'failed', 'cancelled') AND (
                   settlement.state = 'settled'
                   OR settlement.reasons <@ '["new_reset_proofs_disabled"]'::jsonb
-                  OR settlement.reasons ? 'later_profile_contradicts'))
+                  OR settlement.reasons ?| array['later_profile_contradicts', 'later_profile_unprocessed']))
         ORDER BY settlement.boundary_at, settlement.player_id
         """,
         (observation_id,),
