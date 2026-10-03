@@ -431,6 +431,24 @@ def test_spool_first_lease_loss_discards_the_fallback_result(tmp_path: Path) -> 
     assert Spool(str(tmp_path / "spool"), max_body_bytes=1024).verify(digest) is None
 
 
+def test_spool_first_disk_read_failure_is_a_retryable_read_error(tmp_path: Path) -> None:
+    body = b"unreadable disk"
+    digest = hashlib.sha256(body).hexdigest()
+    reference = f"s3://bucket/sha256/{digest[:2]}/{digest}"
+    reader = SpoolFirstReader(_FlakyArchive(body, transient_failures=0), spool_root=str(tmp_path / "spool"))
+
+    def failing_verify(_digest: str) -> bytes | None:
+        raise OSError("disk read failed")
+
+    reader.spool.verify = failing_verify  # type: ignore[method-assign]
+
+    # A replayed job waits and retries instead of stopping the worker.
+    with pytest.raises(ArchiveReadError) as error:
+        reader.read_verified(reference, digest)
+    assert error.value.category == "spool_io_failed"
+    assert error.value.retryable
+
+
 def test_s3_archive_reader_counts_remote_attempts(archive_server) -> None:
     endpoint, reference, digest, _handler = archive_server
     reader = S3ArchiveReader(

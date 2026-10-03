@@ -970,11 +970,18 @@ class Spool:
             )
             return counts.copy()
 
-    def readiness(self) -> tuple[bool, str]:
+    def readiness(self, *, admission: bool = True) -> tuple[bool, str]:
+        """Report whether the spool can admit a new response.
+
+        With ``admission=False`` report only whether saved responses can still
+        be read: a full spool must not stop the worker that drains it.
+        """
         try:
             stats = self.stats()
         except (OSError, ValueError, SpoolError) as error:
             return False, f"storage_error:{type(error).__name__}"
+        if not admission:
+            return True, "ready"
         logical = (
             stats["final_bytes"] + stats["temporary_bytes"] + stats["reserved_bytes"]
         )

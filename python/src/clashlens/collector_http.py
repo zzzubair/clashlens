@@ -341,6 +341,95 @@ class _DeadlineProxyManager(urllib3.ProxyManager):
         }
 
 
+class ProviderOutage:
+    """One pause for every key after the provider stops answering.
+
+    ``threshold`` transport failures or server errors in a row, with no other
+    answer between them, start a pause. Requests wait instead of going out.
+    When the pause ends one request goes out as a recovery probe: a server
+    error or transport failure doubles the pause up to ``max_delay``; any other
+    answer, including a rate limit or a rejected key, ends the outage. Key
+    health is untouched, so an outage never disables or pauses a key.
+    """
+
+    def __init__(
+        self,
+        *,
+        threshold: int = 10,
+        base_delay: float = 5.0,
+        max_delay: float = 60.0,
+    ) -> None:
+        self.threshold = threshold
+        self.base_delay = base_delay
+        self.max_delay = max_delay
+        self.failures = 0
+        self.delay = 0.0
+        self.paused_until = 0.0
+        self._probing = False
+        self._stopped = False
+        self._changed = asyncio.Event()
+
+    @property
+    def active(self) -> bool:
+        return self.delay > 0
+
+    @property
+    def paused(self) -> bool:
+        """Whether requests now wait; false once a recovery probe is due."""
+        return self.delay > 0 and monotonic() < self.paused_until
+
+    async def admit(self) -> bool:
+        """Wait out a pause; return whether this request is the recovery probe."""
+        while self.delay:
+            if self._stopped:
+                raise ProviderFailure("provider_outage", retryable=True)
+            remaining = self.paused_until - monotonic()
+            if remaining <= 0 and not self._probing:
+                self._probing = True
+                return True
+            changed = self._changed
+            try:
+                await asyncio.wait_for(
+                    changed.wait(), remaining if remaining > 0 else None
+                )
+            except TimeoutError:
+                pass
+        return False
+
+    def record(self, *, failed: bool | None, probe: bool) -> None:
+        """Record one answer: failed, answered (False), or neither (None)."""
+        if probe:
+            self._probing = False
+        if failed is None:
+            if probe:
+                self._notify()
+            return
+        if not failed:
+            self.failures = 0
+            if self.delay:
+                self.delay = 0.0
+                self._notify()
+            return
+        self.failures += 1
+        if probe and self.delay:
+            self.delay = min(self.max_delay, self.delay * 2)
+        elif not self.delay and self.failures >= self.threshold:
+            self.delay = self.base_delay
+        else:
+            return
+        self.paused_until = monotonic() + self.delay
+        self._notify()
+
+    def stop(self) -> None:
+        """Release waiting requests as retryable failures during shutdown."""
+        self._stopped = True
+        self._notify()
+
+    def _notify(self) -> None:
+        self._changed.set()
+        self._changed = asyncio.Event()
+
+
 class KeyPool:
     """Fair key rotation with independent start rates and concurrency caps."""
 
@@ -545,6 +634,7 @@ class OfficialApiClient:
             max_workers=max_connections, thread_name_prefix="official-api"
         )
         self._executor_slots = asyncio.Semaphore(max_connections)
+        self.provider_outage = ProviderOutage()
         pool_options = {
             "maxsize": max_connections,
             "block": True,
@@ -584,12 +674,37 @@ class OfficialApiClient:
         )
 
     async def _fetch(self, pool: KeyPool, endpoint: str, url: str) -> FetchedResponse:
+        outage = self.provider_outage
+        probe = False
+        # A request that cannot start within the request timeout, waiting for
+        # a key, a connection or an outage pause, gives up so its work drains.
+        waiting = asyncio.timeout(self._total_timeout_seconds)
+
+        async def start_when_provider_answers(start_request: StartRequest) -> None:
+            # Check again after waiting for a start slot: the outage may have
+            # begun meanwhile, and a request must not go out during the pause.
+            # The recovery probe's own redirect hops follow it without waiting.
+            nonlocal probe
+            if probe:
+                await start_request()
+                return
+            while True:
+                probe = await outage.admit()
+                await start_request()
+                if probe or not outage.active:
+                    waiting.reschedule(None)
+                    return
+
         async def request(key: ApiKey, start_request: StartRequest) -> FetchedResponse:
             await self._executor_slots.acquire()
             release_immediately = True
             try:
                 return await self._fetch_with_key(
-                    pool, endpoint, url, key, start_request
+                    pool,
+                    endpoint,
+                    url,
+                    key,
+                    lambda: start_when_provider_answers(start_request),
                 )
             except (_DetachedTimeout, _DetachedCancellation) as error:
                 release_immediately = False
@@ -601,7 +716,22 @@ class OfficialApiClient:
                 if release_immediately:
                     self._executor_slots.release()
 
-        return await pool.run(request)
+        try:
+            async with waiting:
+                response = await pool.run(request)
+        except ProviderFailure as error:
+            outage.record(failed=True if error.retryable else None, probe=probe)
+            raise
+        except TimeoutError as error:
+            outage.record(failed=None, probe=probe)
+            if not waiting.expired():
+                raise
+            raise ProviderFailure("timeout", retryable=True) from error
+        except BaseException:
+            outage.record(failed=None, probe=probe)
+            raise
+        outage.record(failed=response.http_status >= 500, probe=probe)
+        return response
 
     async def _fetch_with_key(
         self,

@@ -529,7 +529,7 @@ def test_post_publish_failure_fences_a_waiting_successor() -> None:
     asyncio.run(scenario())
 
 
-def test_reset_failure_drains_sibling_publication_before_reservation_close() -> None:
+def test_pair_failure_drains_sibling_publication_before_reservation_close() -> None:
     class TrackedReservation(_Reservation):
         closed = False
 
@@ -566,7 +566,7 @@ def test_reset_failure_drains_sibling_publication_before_reservation_close() -> 
         collector = _collector(spool, FailedStore(spool), _Client(spool))
         task = asyncio.create_task(
             collector.collect_player(
-                CollectorWork(1, "#2PP", datetime.now(UTC)), lane="reset"
+                CollectorWork(1, "#2PP", datetime.now(UTC)), lane="interactive"
             )
         )
         assert await asyncio.to_thread(spool.entered.wait, 1)

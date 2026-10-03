@@ -17,6 +17,8 @@ from test_reconciliation_postgres import (
     DAY_START,
     _battle_log,
     _processor,
+    _profile,
+    _seed_reset_collection_identity,
     _store_baseline_pair,
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
@@ -639,3 +641,71 @@ def test_republication_retries_failed_reset_repair_left_live(
             assert repair() == idle
         finally:
             database.close()
+
+
+@pytest.mark.parametrize(
+    ("profile_at", "battle_log_at", "state", "reasons"),
+    [
+        (DAY_START + timedelta(minutes=10), DAY_START + timedelta(minutes=10), "complete", set()),
+        (DAY_START, DAY_START + timedelta(minutes=10), "complete", set()),
+        # After the next Reset: no battles recorded for the day it belongs to
+        # cannot show this profile came before the first one.
+        (
+            DAY_END + timedelta(minutes=10),
+            DAY_END + timedelta(minutes=10),
+            "failed",
+            {"profile_late", "battle_log_late"},
+        ),
+        # An empty battle log from 05:00 cannot show a battle at 05:05, so a
+        # profile retried at 05:10 is not the Reset trophy count.
+        (
+            DAY_START + timedelta(minutes=10),
+            DAY_START,
+            "failed",
+            {"battle_log_before_profile"},
+        ),
+    ],
+)
+def test_reset_pair_proves_the_reset_only_when_collected_in_time_and_order(
+    database_url: str, archive_server, profile_at, battle_log_at, state, reasons
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        profile_id, profile_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="order-profile",
+            endpoint="profile",
+            body=_profile(6040),
+            observed_at=profile_at,
+            normalized_tag="#2PP",
+            parser_version=PROFILE_PARSER_VERSION,
+        )
+        battle_log_id, battle_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="order-battle",
+            endpoint="battle_log",
+            body=_battle_log(empty=True),
+            observed_at=battle_log_at,
+            normalized_tag="#2PP",
+        )
+        _seed_reset_collection_identity(
+            connection_info,
+            key="order",
+            boundary=DAY_START,
+            profile_observation_id=profile_id,
+            battle_observation_id=battle_log_id,
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for job_id in (profile_job, battle_job):
+                assert processor.process_job(job_id, owner=f"order-{job_id}") is not None
+        finally:
+            database.close()
+        with psycopg.connect(connection_info) as connection:
+            evidence = connection.execute(
+                "SELECT state, failure_reasons FROM reset_baseline_evidence"
+                " ORDER BY version DESC, id DESC LIMIT 1"
+            ).fetchone()
+    assert evidence[0] == state
+    assert reasons <= set(evidence[1])

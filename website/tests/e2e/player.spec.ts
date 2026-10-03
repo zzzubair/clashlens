@@ -426,6 +426,9 @@ test("not-found and uncertain eligibility are different outcomes", async ({ page
 test("first lookup works without JavaScript and exposes a temporary failure with retry", async ({
   browser,
 }) => {
+  // A lookup failing only with server errors runs three more times, five
+  // seconds apart, before it fails; each run waits on the fixture's slow 503s.
+  test.setTimeout(120_000);
   const context = await browser.newContext({ javaScriptEnabled: false });
   try {
     const page = await context.newPage();
@@ -438,7 +441,7 @@ test("first lookup works without JavaScript and exposes a temporary failure with
       await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
         "could not finish checking",
       );
-    }).toPass({ timeout: 30_000, intervals: [1000] });
+    }).toPass({ timeout: 100_000, intervals: [1000] });
     await expect(
       page.getByRole("link", { name: "Try again", exact: true }),
     ).toBeVisible();

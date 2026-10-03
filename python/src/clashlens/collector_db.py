@@ -60,6 +60,7 @@ class CollectorIntent:
     league_history_required: bool = False
     eligibility_recheck: bool = False
     profile_required: bool = True
+    battle_log_required: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,6 +501,10 @@ class CollectorDatabase:
             for row in rows
         ]
 
+    def regular_admission_open(self, now: datetime) -> bool:
+        with self._connection() as connection:
+            return self._regular_admission_open(connection, now)
+
     @staticmethod
     def _regular_admission_open(connection: Any, now: datetime) -> bool:
         utc_now = now.astimezone(UTC)
@@ -550,9 +555,15 @@ class CollectorDatabase:
             with connection.transaction():
                 connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (intent_time,))
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, work.kind <> 'discovery_profile' OR NOT EXISTS (SELECT 1 FROM collector_observations AS observation WHERE observation.id = work.profile_observation_id AND (observation.http_status BETWEEN 200 AND 299 OR observation.http_status = 404)) FROM collector_work AS work WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, battle_log.response_completed_at < profile.response_completed_at FROM collector_work AS work LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
                     (intent_time, interactive, interactive, interactive, limit),
                 ).fetchall()
+
+                # A Reset retry fetches again only what has no usable answer yet,
+                # and a battle log older than the profile it must cover.
+                def unanswered(status: int | None) -> bool:
+                    return status is None or not (200 <= status < 300 or status == 404)
+
                 intents = [
                     CollectorIntent(
                         str(row[1]),
@@ -563,8 +574,9 @@ class CollectorDatabase:
                         due_at=row[2],
                         status=str(row[6]),
                         sweep_id=None if row[5] is None else int(row[5]),
-                        league_history_required=str(row[7]) == "pending",
-                        profile_required=bool(row[8]),
+                        league_history_required=(str(row[7]) != "not_applicable" and unanswered(row[10])) if row[1] == "reset_baseline" else str(row[7]) == "pending",
+                        profile_required=row[1] not in {"reset_baseline", "discovery_profile"} or unanswered(row[8]),
+                        battle_log_required=row[1] != "reset_baseline" or unanswered(row[8]) or unanswered(row[9]) or bool(row[11]),
                     )
                     for row in rows
                 ]
@@ -651,17 +663,17 @@ class CollectorDatabase:
         category: str,
         detail: str | None = None,
         retryable: bool = False,
-    ) -> bool:
+    ) -> str | None:
         if job_id < 1:
             raise ValueError("intent job ID must be positive")
-        target_status = "waiting_retry" if retryable else "failed"
+        # Retry until 23h55m after the Reset, or after creation for other work; unfinished Reset work blocks the next Reset.
         with self._connection() as connection:
             with connection.transaction():
                 row = connection.execute(
-                    "UPDATE collector_work SET status = %s, due_at = CASE WHEN %s THEN clock_timestamp() + interval '5 seconds' ELSE due_at END, failure_category = left(%s, 128), failure_detail = left(%s, 1024), updated_at = clock_timestamp() WHERE id = %s AND status NOT IN ('complete', 'failed', 'cancelled') RETURNING id",
-                    (target_status, retryable, category, detail or "", job_id),
+                    "UPDATE collector_work AS work SET status = CASE WHEN decision.retry THEN 'waiting_retry' ELSE 'failed' END, due_at = CASE WHEN decision.retry THEN clock_timestamp() + interval '5 seconds' ELSE work.due_at END, failure_category = left(%s, 128), failure_detail = left(%s, 1024), updated_at = clock_timestamp() FROM (SELECT %s AND clock_timestamp() < COALESCE((SELECT sweep.boundary_at FROM collector_reset_sweeps AS sweep WHERE sweep.id = current.sweep_id), current.created_at) + interval '23 hours 55 minutes' AS retry FROM collector_work AS current WHERE current.id = %s) AS decision WHERE work.id = %s AND work.status NOT IN ('complete', 'failed', 'cancelled') RETURNING work.status",
+                    (category, detail or "", retryable, job_id, job_id),
                 ).fetchone()
-        return row is not None
+        return None if row is None else str(row[0])
 
     def begin_reset(
         self,

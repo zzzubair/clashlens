@@ -65,6 +65,11 @@ _REGULAR_PARALLELISM = 256
 # A quarter of regular slots keeps overdue revisits moving until discovery drains.
 _REGULAR_REPEAT_MINIMUM = 64
 _ORDINARY_INTENT_PARALLELISM = 32
+# Player work kept for retry when every failure was transient.
+_RETRIED_INTENTS = frozenset({"reset_baseline", "initial_collection", "live_refresh"})
+# Failed runs allowed outside a provider-outage pause before such work settles
+# as missing, so a few failing players cannot hold ordinary collection.
+_RETRIES_WHILE_ANSWERING = 3
 
 
 class Collector:
@@ -101,6 +106,7 @@ class Collector:
         self.refresh_latency_seconds = 0.0
         self.refresh_count = 0
         self.regular_inflight = 0
+        self._retries_while_answering: dict[int, int] = {}
         self._regular_admission_lock = asyncio.Lock()
         self.archive_health = "unconfigured" if archive is None else "unknown"
         self._archive_terminal = False
@@ -151,7 +157,9 @@ class Collector:
         lane: str,
         endpoints: tuple[str, ...] = ("profile", "battle_log"),
     ) -> list[str]:
-        if not await self._spool_available():
+        outage = getattr(self.client, "provider_outage", None)
+        # Regular checks wait out an outage pause as paused work, not in flight.
+        if not await self._spool_available() or (lane == "ordinary" and outage is not None and outage.paused):
             return ["capacity_paused"] * len(endpoints)
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
         regular_check = lane == "ordinary" and endpoints == ("profile", "battle_log")
@@ -177,6 +185,9 @@ class Collector:
             if reuse_fresh_profile:
                 selected_endpoints = ("battle_log",)
                 selected_reservations = (reservations[1],)
+            # Reset responses go out one after another, so each battle log is
+            # collected after the profile it must cover.
+            in_order = lane == "reset"
             tasks = [
                 asyncio.create_task(
                     self._collect_endpoint(
@@ -190,9 +201,12 @@ class Collector:
                 for endpoint, reservation in zip(
                     selected_endpoints, selected_reservations, strict=True
                 )
+                if not in_order
             ]
             try:
                 outcomes = list(await asyncio.gather(*tasks))
+                for endpoint, reservation in zip(selected_endpoints if in_order else (), selected_reservations):
+                    outcomes.append(await self._collect_endpoint(work, endpoint, lane, pool, reservation=reservation))
                 if (
                     reuse_fresh_profile
                     and work.profile_fresh_until is not None
@@ -313,14 +327,15 @@ class Collector:
                 collector_work_id=intent.work_id,
                 eligibility_recheck=intent.eligibility_recheck,
             )
-            endpoints = (
-                (["profile"] if intent.profile_required else [])
-                if intent.kind == "discovery_profile"
-                else ["profile", "battle_log"]
+            endpoints = tuple(
+                endpoint
+                for endpoint, required in (
+                    ("profile", intent.profile_required),
+                    ("battle_log", intent.battle_log_required and intent.kind != "discovery_profile"),
+                    ("league_history", intent.league_history_required),
+                )
+                if required
             )
-            if intent.league_history_required:
-                endpoints.append("league_history")
-            endpoints = tuple(endpoints)
             lane = (
                 "reset"
                 if intent.kind == "reset_baseline"
@@ -334,14 +349,26 @@ class Collector:
         if "capacity_paused" in outcomes:
             return "capacity_paused"
         if outcomes != ["recorded"] * len(endpoints):
-            await self._database_call(
+            # A provider outage must not become a permanent player failure,
+            # but once the API answers again a few retries are enough.
+            retryable = "failed" not in outcomes and intent.kind in _RETRIED_INTENTS
+            outage = getattr(self.client, "provider_outage", None)
+            if retryable and not getattr(outage, "active", False):
+                used = self._retries_while_answering.get(intent.work_id, 0) + 1
+                self._retries_while_answering[intent.work_id] = used
+                retryable = used <= _RETRIES_WHILE_ANSWERING
+            status = await self._database_call(
                 self.database.fail_intent,
                 intent.work_id,
                 category="provider_failure",
                 detail="one or more required endpoint requests failed",
-                retryable=False,
+                retryable=retryable,
             )
-            return "failed"
+            if status != "waiting_retry":
+                self._retries_while_answering.pop(intent.work_id, None)
+                return "failed"
+            return "retrying"
+        self._retries_while_answering.pop(intent.work_id, None)
         completed = await self._database_call(
             self.database.complete_intent, intent.work_id
         )
@@ -384,12 +411,19 @@ class Collector:
                     current_reservation.__enter__()
                 started_at = datetime.now(UTC)
                 try:
-                    if endpoint == "global_player_rankings":
-                        response = await self.client.fetch_rankings(pool)
-                    else:
-                        response = await self.client.fetch_player(
-                            pool, work.normalized_tag, endpoint
-                        )
+                    try:
+                        if endpoint == "global_player_rankings":
+                            response = await self.client.fetch_rankings(pool)
+                        else:
+                            response = await self.client.fetch_player(
+                                pool, work.normalized_tag, endpoint
+                            )
+                    except asyncio.CancelledError as cancelled:
+                        # Only cancelling this task stops it; a request's own
+                        # cancellation is a retryable failure.
+                        if asyncio.current_task().cancelling():
+                            raise
+                        raise ProviderFailure("request_cancelled", retryable=True) from cancelled
                 except ProviderFailure as error:
                     await self._database_call(
                         self.database.record_transport_failure,
@@ -421,7 +455,7 @@ class Collector:
                     key = (endpoint, pool_name, error.category)
                     self.endpoint_outcomes[key] = self.endpoint_outcomes.get(key, 0) + 1
                     if not error.retryable or attempt + 1 == attempts:
-                        return "failed"
+                        return "transient" if error.retryable else "failed"
                     await asyncio.sleep(_retry_delay(attempt))
                     continue
                 if (
@@ -580,7 +614,7 @@ class Collector:
                     if attempt + 1 < attempts:
                         await asyncio.sleep(_retry_delay(attempt))
                         continue
-                    return "failed"
+                    return "failed" if response.http_status in {401, 403} else "transient"
                 return "recorded"
             except (OSError, SpoolError) as error:
                 self._record_spool_failure(error)
@@ -890,6 +924,9 @@ class Collector:
                 assert error is not None
                 raise error
             stop_requested.set()
+            outage = getattr(self.client, "provider_outage", None)
+            if outage is not None:
+                outage.stop()
             await asyncio.gather(*tasks)
             await _drain_to_thread(
                 self.spool.remove_unreferenced,
@@ -921,20 +958,26 @@ class Collector:
                 for task in [task for task in pending if task.done()]:
                     item = pending.pop(task)
                     paused_tasks.discard(task)
+                    self.regular_inflight -= 1
                     if "capacity_paused" in task.result():
                         retry_work.append(item)
-                    else:
-                        self.regular_inflight -= 1
                 if retry_work:
                     await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
                     if stop_requested.is_set():
                         break
-                    for item in retry_work:
-                        task = asyncio.create_task(
-                            self.collect_player(item, lane="ordinary")
-                        )
-                        pending[task] = item
-                        paused_tasks.add(task)
+                    # Paused work is not in flight, so a Reset can start
+                    # meanwhile; it waits for the next pass once admission closes.
+                    async with self._regular_admission_lock:
+                        if await self._database_call(
+                            self.database.regular_admission_open, datetime.now(UTC)
+                        ):
+                            for item in retry_work:
+                                task = asyncio.create_task(
+                                    self.collect_player(item, lane="ordinary")
+                                )
+                                pending[task] = item
+                                paused_tasks.add(task)
+                            self.regular_inflight += len(retry_work)
                     retry_work.clear()
                     continue
                 if paused_tasks:
@@ -1007,10 +1050,7 @@ class Collector:
                 asyncio.gather(stop_wait, *pending, return_exceptions=True)
             )
             pending_results = results[1:]
-            self.regular_inflight -= sum(
-                isinstance(outcomes, list) and "capacity_paused" not in outcomes
-                for outcomes in pending_results
-            )
+            self.regular_inflight -= len(pending_results)
             if graceful:
                 failure = next(
                     (
