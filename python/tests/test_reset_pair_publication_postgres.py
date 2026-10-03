@@ -980,6 +980,9 @@ def test_republication_finishes_ended_days_left_live(
     # previous Season and must still be finished.
     today = ranked_day_for(datetime.now(UTC))
     yesterday = ranked_day_for(today.start - timedelta(days=1))
+    if yesterday.start == yesterday.season_start:
+        yesterday = ranked_day_for(yesterday.start - timedelta(days=1))
+    earlier = ranked_day_for(yesterday.start - timedelta(days=1))
     season = yesterday.season_start + timedelta(days=28 if anchor_moved_on else 0)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         profile_job = store_observation(
@@ -1008,9 +1011,10 @@ def test_republication_finishes_ended_days_left_live(
                         season - timedelta(days=28),
                     ),
                 )
-                # Yesterday was last calculated while it was Live; today is.
+                # Two ended days were last calculated while Live; today is.
                 original = reconciliation_db.reconcile_ranked_day
                 for day, now in (
+                    (earlier, earlier.start + timedelta(hours=1)),
                     (yesterday, yesterday.start + timedelta(hours=1)),
                     (today, None),
                 ):
@@ -1067,20 +1071,44 @@ def test_republication_finishes_ended_days_left_live(
             )
             assert _latest_day(database, player_id, today.start)[:2] == ("Live", "Live")
 
-            def repair() -> list[int]:
-                return reconciliation_db.enqueue_current_season_republication(
+            def repair() -> tuple[list[int], list[dict]]:
+                report = reconciliation_db.enqueue_current_season_republication(
                     database, max_jobs=10
-                )["job_ids"]
+                )
+                return report["job_ids"], report["failed_blockers"]
 
-            [job] = repair()
+            def queued_day(job: int) -> str:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        "SELECT input_json->>'ranked_day_start'"
+                        " FROM python_processing_jobs WHERE id = %s",
+                        (job,),
+                    ).fetchone()[0]
+
+            # The oldest day comes first; work queued for its Season is left
+            # to finish.
+            earlier_text = earlier.start.strftime("%Y-%m-%dT%H:%M:%SZ")
+            [first], [] = repair()
+            assert queued_day(first) == earlier_text
+            assert repair() == ([], [])
+            # A failed request is reported, not repeated, and does not hold
+            # back the player's later ended days.
             with database.pool.connection() as connection:
-                assert connection.execute(
-                    "SELECT input_json->>'ranked_day_start' FROM python_processing_jobs"
-                    " WHERE id = %s",
-                    (job,),
-                ).fetchone()[0] == day_text
-            # Work already queued for the day is left to finish.
-            assert repair() == []
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'failed',"
+                    " failure_category = 'lease_expired_max_attempts',"
+                    " attempt_count = max_attempts WHERE id = %s",
+                    (first,),
+                )
+            blocked = [{
+                "job_id": first,
+                "player_id": player_id,
+                "ranked_day_start": earlier_text,
+                "failure_category": "lease_expired_max_attempts",
+            }]
+            [job], reported = repair()
+            assert reported == blocked and queued_day(job) == day_text
+            assert repair() == ([], blocked)
             assert processor.process_job(job, owner="repair").outcome == "processed"
             finished = _latest_day(database, player_id, yesterday.start)
             assert finished[:2] == ("Partial", "Partial")
@@ -1090,24 +1118,32 @@ def test_republication_finishes_ended_days_left_live(
             assert _latest_day(database, player_id, today.start)[:4] == (
                 "Live", "Live", None, None
             )
-            assert repair() == []
+            assert repair() == ([], blocked)
 
             # A finished day saved with 8 undisputed attacks and 8 undisputed
-            # defenses but no net is rebuilt once too; a disputed one is not.
-            def saved_with(reasons: list[str]) -> None:
+            # defenses but no published net is rebuilt once too; a disputed
+            # one, or one whose published net is known, is not.
+            def saved_with(reasons: list[str], published_net=None) -> None:
                 with database.pool.connection() as connection:
                     connection.execute(
                         "UPDATE ranked_day_versions SET attack_count = 8,"
                         " defense_count = 8, failure_reasons = %s WHERE id = %s",
                         (Jsonb(reasons), finished[6]),
                     )
+                    connection.execute(
+                        "UPDATE api_player_daily_logs SET net_trophy_change = %s"
+                        " WHERE ranked_day_version_id = %s",
+                        (published_net, finished[6]),
+                    )
 
             saved_with([*finished[4], "perspective_disagreement"])
-            assert repair() == []
+            assert repair() == ([], blocked)
+            saved_with(finished[4], published_net=40)
+            assert finished[3] is None and repair() == ([], blocked)
             saved_with(finished[4])
-            [job] = repair()
+            [job], _ = repair()
             assert processor.process_job(job, owner="eight").outcome == "processed"
-            assert repair() == []
+            assert repair() == ([], blocked)
         finally:
             database.close()
 
