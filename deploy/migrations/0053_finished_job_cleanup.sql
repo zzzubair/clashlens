@@ -38,16 +38,18 @@ SECURITY DEFINER
 AS $$
 DECLARE
     batch bigint[];
+    cutoff timestamptz;
 BEGIN
     IF retention_hours IS NULL OR retention_hours NOT BETWEEN 48 AND 672
        OR max_jobs IS NULL OR max_jobs NOT BETWEEN 1 AND 1000 THEN
         RAISE EXCEPTION 'finished-job cleanup needs 48-672 hours and 1-1000 jobs';
     END IF;
+    cutoff := clock_timestamp() - make_interval(hours => retention_hours);
     SELECT array_agg(due.id) INTO batch FROM (
         SELECT target.id FROM python_processing_jobs AS target
         WHERE target.status = 'complete'
           AND target.work_type <> 'build_export'
-          AND target.updated_at < clock_timestamp() - make_interval(hours => retention_hours)
+          AND target.updated_at < cutoff
           AND NOT EXISTS (SELECT 1 FROM boundary_publication_legacy_job_migrations
                           WHERE job_id = target.id)
         ORDER BY target.updated_at, target.id
