@@ -349,7 +349,9 @@ class ProviderOutage:
     When the pause ends one request goes out as a recovery probe: a server
     error or transport failure doubles the pause up to ``max_delay``; any other
     answer, including a rate limit or a rejected key, ends the outage. Key
-    health is untouched, so an outage never disables or pauses a key.
+    health is untouched, so an outage never disables or pauses a key. A
+    request waits at most ``max_wait`` seconds, then fails as retryable, so
+    waiting work drains instead of holding a Reset.
     """
 
     def __init__(
@@ -358,8 +360,10 @@ class ProviderOutage:
         threshold: int = 10,
         base_delay: float = 5.0,
         max_delay: float = 60.0,
+        max_wait: float = 60.0,
     ) -> None:
         self.threshold = threshold
+        self.max_wait = max_wait
         self.base_delay = base_delay
         self.max_delay = max_delay
         self.failures = 0
@@ -375,17 +379,20 @@ class ProviderOutage:
 
     async def admit(self) -> bool:
         """Wait out a pause; return whether this request is the recovery probe."""
+        give_up_at = monotonic() + self.max_wait
         while self.delay:
-            if self._stopped:
+            now = monotonic()
+            if self._stopped or now >= give_up_at:
                 raise ProviderFailure("provider_outage", retryable=True)
-            remaining = self.paused_until - monotonic()
+            remaining = self.paused_until - now
             if remaining <= 0 and not self._probing:
                 self._probing = True
                 return True
             changed = self._changed
             try:
                 await asyncio.wait_for(
-                    changed.wait(), remaining if remaining > 0 else None
+                    changed.wait(),
+                    min(remaining, give_up_at - now) if remaining > 0 else give_up_at - now,
                 )
             except TimeoutError:
                 pass

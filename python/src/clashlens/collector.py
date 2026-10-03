@@ -204,9 +204,7 @@ class Collector:
             try:
                 outcomes = list(await asyncio.gather(*tasks))
                 for endpoint, reservation in zip(selected_endpoints if in_order else (), selected_reservations):
-                    outcomes.append(outcomes[-1] if set(outcomes) - {"recorded"} else await self._collect_endpoint(
-                        work, endpoint, lane, pool, reservation=reservation
-                    ))
+                    outcomes.append(await self._collect_endpoint(work, endpoint, lane, pool, reservation=reservation))
                 if (
                     reuse_fresh_profile
                     and work.profile_fresh_until is not None
@@ -326,7 +324,6 @@ class Collector:
                 intent.due_at or intent.cycle_at,
                 collector_work_id=intent.work_id,
                 eligibility_recheck=intent.eligibility_recheck,
-                expires_at=intent.expires_at,
             )
             endpoints = tuple(
                 endpoint
@@ -346,15 +343,10 @@ class Collector:
                     else "ordinary"
                 )
             )
-        def expired() -> bool:
-            return work.expires_at is not None and datetime.now(UTC) >= work.expires_at
-
-        outcomes = ["failed"] if expired() else (
-            await self.collect_player(work, lane=lane, endpoints=endpoints)
-        )
+        outcomes = await self.collect_player(work, lane=lane, endpoints=endpoints)
         if "capacity_paused" in outcomes:
             return "capacity_paused"
-        if outcomes != ["recorded"] * len(endpoints) or expired():
+        if outcomes != ["recorded"] * len(endpoints):
             # A provider outage must not become a permanent player failure,
             # but once the API answers again a few retries are enough.
             retryable = "failed" not in outcomes and intent.kind in _RETRIED_INTENTS
@@ -416,23 +408,20 @@ class Collector:
                 if owned_reservation:
                     current_reservation.__enter__()
                 started_at = datetime.now(UTC)
-                remaining = work.expires_at and (work.expires_at - started_at).total_seconds()
-                expiry = asyncio.timeout(remaining)
                 try:
                     try:
-                        if remaining is not None and remaining <= 0:
-                            raise ProviderFailure("work_expired", retryable=False)
-                        async with expiry:
-                            if endpoint == "global_player_rankings":
-                                response = await self.client.fetch_rankings(pool)
-                            else:
-                                response = await self.client.fetch_player(
-                                    pool, work.normalized_tag, endpoint
-                                )
-                    except (TimeoutError, asyncio.CancelledError) as timeout:
-                        if not expiry.expired() or asyncio.current_task().cancelling():
+                        if endpoint == "global_player_rankings":
+                            response = await self.client.fetch_rankings(pool)
+                        else:
+                            response = await self.client.fetch_player(
+                                pool, work.normalized_tag, endpoint
+                            )
+                    except asyncio.CancelledError as cancelled:
+                        # Only cancelling this task stops it; a request's own
+                        # cancellation is a retryable failure.
+                        if asyncio.current_task().cancelling():
                             raise
-                        raise ProviderFailure("work_expired", retryable=False) from timeout
+                        raise ProviderFailure("request_cancelled", retryable=True) from cancelled
                 except ProviderFailure as error:
                     await self._database_call(
                         self.database.record_transport_failure,
@@ -967,20 +956,26 @@ class Collector:
                 for task in [task for task in pending if task.done()]:
                     item = pending.pop(task)
                     paused_tasks.discard(task)
+                    self.regular_inflight -= 1
                     if "capacity_paused" in task.result():
                         retry_work.append(item)
-                    else:
-                        self.regular_inflight -= 1
                 if retry_work:
                     await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
                     if stop_requested.is_set():
                         break
-                    for item in retry_work:
-                        task = asyncio.create_task(
-                            self.collect_player(item, lane="ordinary")
-                        )
-                        pending[task] = item
-                        paused_tasks.add(task)
+                    # Paused work is not in flight, so a Reset can start
+                    # meanwhile; it waits for the next pass once admission closes.
+                    async with self._regular_admission_lock:
+                        if await self._database_call(
+                            self.database.regular_admission_open, datetime.now(UTC)
+                        ):
+                            for item in retry_work:
+                                task = asyncio.create_task(
+                                    self.collect_player(item, lane="ordinary")
+                                )
+                                pending[task] = item
+                                paused_tasks.add(task)
+                            self.regular_inflight += len(retry_work)
                     retry_work.clear()
                     continue
                 if paused_tasks:
@@ -1053,10 +1048,7 @@ class Collector:
                 asyncio.gather(stop_wait, *pending, return_exceptions=True)
             )
             pending_results = results[1:]
-            self.regular_inflight -= sum(
-                isinstance(outcomes, list) and "capacity_paused" not in outcomes
-                for outcomes in pending_results
-            )
+            self.regular_inflight -= len(pending_results)
             if graceful:
                 failure = next(
                     (

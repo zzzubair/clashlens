@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from test_collector import _Client, _collector, _Spool, _Store
 
+from clashlens.collector_db import CollectorWork
 from clashlens.collector_http import (
     ApiKey,
     KeyPool,
@@ -190,3 +193,77 @@ def test_network_failures_pause_and_shutdown_releases_waiting_requests() -> None
     asyncio.run(run())
 
     assert pool.health() == {"configured": 1, "healthy": 1, "paused": 0}
+
+
+def test_a_request_waits_out_an_outage_for_a_bounded_time() -> None:
+    # Nothing listens on this port, so every request fails to connect.
+    client = OfficialApiClient("http://127.0.0.1:9", allow_insecure_test_origin=True)
+    client.provider_outage = ProviderOutage(threshold=1, base_delay=30, max_wait=0.2)
+    pool = _pool()
+
+    async def run() -> None:
+        with pytest.raises(ProviderFailure):
+            await client.fetch_player(pool, "#2PP", "profile")
+        assert client.provider_outage.active
+        # The pause lasts 30 seconds; the waiting request gives up first, so
+        # regular checks drain before a Reset instead of holding it.
+        with pytest.raises(ProviderFailure) as failure:
+            await asyncio.wait_for(client.fetch_player(pool, "#2PP", "profile"), 2)
+        assert failure.value.category == "provider_outage"
+        assert failure.value.retryable
+
+    asyncio.run(run())
+
+
+def test_a_cancelled_request_is_a_retryable_failure_not_a_collector_stop() -> None:
+    spool = _Spool()
+    store = _Store(spool)
+
+    class CancelledClient(_Client):
+        async def fetch_player(self, _pool, _tag, _endpoint):
+            # What a request cancelled underneath the collector raises.
+            raise asyncio.CancelledError
+
+    collector = _collector(spool, store, CancelledClient(spool))
+
+    outcomes = asyncio.run(
+        collector.collect_player(
+            CollectorWork(1, "#2PP", datetime.now(UTC)),
+            lane="ordinary",
+            endpoints=("profile",),
+        )
+    )
+
+    assert outcomes == ["transient"]
+    assert [failure.failure_category for failure in store.failures] == ["request_cancelled"]
+
+
+def test_paused_regular_work_does_not_hold_a_reset_or_run_once_admission_closes() -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    work = CollectorWork(1, "#2PP", datetime.now(UTC))
+    claims = [[work]]
+    store.claim_due_players = lambda **_kwargs: claims.pop() if claims else []  # type: ignore[attr-defined]
+    # The Reset closed regular admission while the work was paused.
+    store.regular_admission_open = lambda _now: False  # type: ignore[attr-defined]
+    started: list[CollectorWork] = []
+
+    async def collect_player(item: CollectorWork, **_kwargs: object) -> list[str]:
+        started.append(item)
+        return ["capacity_paused"]
+
+    collector.collect_player = collect_player  # type: ignore[method-assign]
+
+    async def run() -> int:
+        stop = asyncio.Event()
+        loop = asyncio.create_task(collector._regular_loop(stop, 0.001))
+        await asyncio.sleep(1.5)
+        in_flight = collector.regular_inflight
+        stop.set()
+        await asyncio.wait_for(loop, 2)
+        return in_flight
+
+    assert asyncio.run(run()) == 0
+    # The paused check waits for its next pass instead of running mid-Reset.
+    assert started == [work]

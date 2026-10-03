@@ -45,7 +45,6 @@ class CollectorWork:
     profile_fresh_until: datetime | None = None
     first_battle_pending: bool = False
     eligibility_recheck: bool = False
-    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,8 +61,6 @@ class CollectorIntent:
     eligibility_recheck: bool = False
     profile_required: bool = True
     battle_log_required: bool = True
-    # Reset requests stop when its Legend day ends; later answers prove nothing.
-    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -493,10 +490,6 @@ class CollectorDatabase:
                     ),
                     prepare=False,
                 ).fetchall()
-        # Regular requests, even ones waiting out an outage, give up at the
-        # next Reset so it can start on time.
-        reset_at = claim_time.astimezone(UTC).replace(hour=5, minute=0, second=0, microsecond=0)
-        reset_at += timedelta(days=int(reset_at <= claim_time))
         return [
             CollectorWork(
                 int(row[0]),
@@ -504,10 +497,13 @@ class CollectorDatabase:
                 row[2],
                 profile_fresh_until=row[3],
                 first_battle_pending=bool(row[4]),
-                expires_at=reset_at,
             )
             for row in rows
         ]
+
+    def regular_admission_open(self, now: datetime) -> bool:
+        with self._connection() as connection:
+            return self._regular_admission_open(connection, now)
 
     @staticmethod
     def _regular_admission_open(connection: Any, now: datetime) -> bool:
@@ -559,7 +555,7 @@ class CollectorDatabase:
             with connection.transaction():
                 connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (intent_time,))
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, sweep.boundary_at + interval '23 hours 55 minutes' FROM collector_work AS work LEFT JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status FROM collector_work AS work LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
                     (intent_time, interactive, interactive, interactive, limit),
                 ).fetchall()
 
@@ -580,7 +576,6 @@ class CollectorDatabase:
                         league_history_required=str(row[7]) != "not_applicable" and unanswered(row[10]),
                         profile_required=unanswered(row[8]),
                         battle_log_required=unanswered(row[8]) or unanswered(row[9]),
-                        expires_at=row[11],
                     )
                     for row in rows
                 ]
