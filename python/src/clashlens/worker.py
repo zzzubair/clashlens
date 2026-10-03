@@ -317,7 +317,8 @@ def process_concurrently(
     and the archive pool. The database claim transaction (``FOR UPDATE SKIP
     LOCKED`` plus lease owner/token fencing) and the archive pool bound the
     work: at most ``concurrency`` jobs run at once and at most ``max_jobs``
-    jobs are claimed per call. A lane stops at the first empty claim. When
+    jobs are claimed per call. A lane stops at the first empty claim, or when
+    no database connection comes free for its claim. When
     ``stop_requested`` is set, lanes finish their current job and do not
     claim another; the call then waits for the bounded in-flight set and
     returns its results. Lane failures are isolated as in ``_run_lanes``.
@@ -378,11 +379,11 @@ def process_until_stopped(
     again, so one long job never leaves the other lanes idle. Queue
     maintenance runs on its own timer thread, calling ``maintain`` every
     ``idle_seconds`` while ``claims_ready`` holds, so it never waits for a
-    lane and no lane waits for it. A maintenance failure is reported by type only, never its message,
-    and a later tick tries again. Each result goes to ``on_result`` as its
-    job finishes, one at a time. Lane failures are isolated as in
-    ``_run_lanes``, and the call returns once every lane and the timer have
-    stopped.
+    lane and no lane waits for it. A maintenance failure is reported by type
+    only, never its message, and a later tick tries again. Each result goes to
+    ``on_result`` as its job finishes, one at a time. Lane failures are
+    isolated as in ``_run_lanes``, and the call returns once every lane and
+    the timer have stopped.
 
     With two or more lanes, ``lane_work_types`` reserves lanes for responses
     so long derived work can never hold them all. Each derived lane takes a
