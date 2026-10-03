@@ -24,7 +24,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_collector_db_postgres import _handoff, _hash
 from test_reconciliation_postgres import DAY_END, _battle_log, _processor, _profile
 
-from clashlens import collector_reset, late_battle_sweep
+from clashlens import collector_http, collector_reset, late_battle_sweep
 from clashlens.collector import Collector
 from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderOutage
@@ -156,9 +156,21 @@ def _work(connection_info: str) -> tuple:
 def _finish_reset_pairs(connection_info: str) -> None:
     with psycopg.connect(connection_info) as connection:
         connection.execute(
-            "UPDATE collector_work SET status = 'failed'"
+            "UPDATE collector_work SET status = 'failed', updated_at = clock_timestamp()"
             " WHERE kind = 'reset_baseline'"
         )
+
+
+def _clock_from(monkeypatch, at: datetime) -> None:
+    """Run the API client's clock from ``at``, so a past Reset's check runs."""
+    offset = datetime.now(UTC) - at
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - offset
+
+    monkeypatch.setattr(collector_http, "datetime", Clock)
 
 
 def _current_reset(now: datetime) -> datetime:
@@ -572,6 +584,10 @@ def test_pending_settlement_does_not_block_regular_or_next_reset(
                 WHERE work.id = state.id
                 """
             )
+            work_id, player_id, tag = connection.execute(
+                "SELECT id, player_id, normalized_tag FROM collector_work"
+                " WHERE kind = 'reset_settlement' AND status = 'pending'"
+            ).fetchone()
 
         def open_and_ready() -> tuple[bool, bool, bool]:
             with psycopg.connect(connection_info) as connection:
@@ -581,6 +597,16 @@ def test_pending_settlement_does_not_block_regular_or_next_reset(
                 database.reset_ready(sweep_id),
                 finished,
             )
+
+        # Its saved profile waits for processing; the late-battle check does not.
+        database.record_response(
+            _handoff(
+                occurrence_key="queued-settlement", response_hash=_hash("queued-settlement"),
+                player_id=player_id, tag=tag,
+                completed_at=WEDNESDAY_RESET + timedelta(minutes=21),
+                collector_work_id=work_id,
+            )
+        )
 
         # Unfinished Reset pairs still hold everything, as before.
         assert open_and_ready() == (False, False, False)
@@ -628,7 +654,7 @@ def test_transport_retry_keeps_pinned_profile_and_stays_bounded(
 
 
 def test_missing_player_profile_still_brings_its_battle_log(
-    database_url: str, tmp_path
+    database_url: str, tmp_path, monkeypatch
 ) -> None:
     with (
         domain_database(database_url, include_coordinator=True) as connection_info,
@@ -639,6 +665,7 @@ def test_missing_player_profile_still_brings_its_battle_log(
         database.begin_reset(WEDNESDAY_RESET)
         _Provider.status["profile"] = 404
         (intent,) = _settlement_intents(database, WEDNESDAY_RESET + timedelta(minutes=20))
+        _clock_from(monkeypatch, intent.due_at)
         assert asyncio.run(_collector(origin, database, tmp_path).collect_intent(intent)) == "complete"
         assert [endpoint for endpoint, _at in _Provider.requests] == ["profile", "battlelog"]
         assert _work(connection_info)[3] == 404
@@ -646,7 +673,7 @@ def test_missing_player_profile_still_brings_its_battle_log(
 
 @pytest.mark.parametrize("boundary", [MONDAY_RESET, SEASON_RESET], ids=["monday", "season"])
 def test_monday_and_season_checks_have_two_endpoints_and_no_acceptance(
-    database_url: str, tmp_path, boundary
+    database_url: str, tmp_path, monkeypatch, boundary
 ) -> None:
     with (
         domain_database(database_url, include_coordinator=True) as connection_info,
@@ -657,6 +684,7 @@ def test_monday_and_season_checks_have_two_endpoints_and_no_acceptance(
         database.begin_reset(boundary)
         (intent,) = _settlement_intents(database, boundary + timedelta(minutes=20))
         assert not intent.league_history_required
+        _clock_from(monkeypatch, intent.due_at)
         assert asyncio.run(_collector(origin, database, tmp_path).collect_intent(intent)) == "complete"
         assert [endpoint for endpoint, _at in _Provider.requests] == ["profile", "battlelog"]
         with psycopg.connect(connection_info) as connection:

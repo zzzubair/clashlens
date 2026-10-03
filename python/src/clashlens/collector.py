@@ -1021,7 +1021,7 @@ class Collector:
                     expired = await self._database_call(
                         self.database.expire_settlement_checks, now
                     )
-                    if expired < collector_reset.EXPIRY_BATCH:
+                    if expired == 0:
                         closes = boundary - timedelta(days=1) + collector_reset.COLLECTION_WINDOW
                         next_expiry_at = closes if closes > now else closes + timedelta(days=1)
                 if now >= boundary and boundary != scheduled_boundary:

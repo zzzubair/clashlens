@@ -17,7 +17,6 @@ from .domain import is_season_boundary
 
 SETTLEMENT_DELAY = timedelta(minutes=20)
 COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
-EXPIRY_BATCH = 1000
 
 
 def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
@@ -170,13 +169,13 @@ def reset_ready(connection: Any, sweep_id: int) -> bool:
 
 
 def expire_settlement_checks(
-    connection: Any, now: datetime, *, batch: int = EXPIRY_BATCH
+    connection: Any, now: datetime, *, batch: int = 1000
 ) -> int:
     """Fail up to ``batch`` unfinished checks whose window closed by ``now``.
 
-    The collector's scheduling loop calls this from 04:55 until fewer than
-    ``batch`` rows expire, so each Reset's checks expire before the next
-    Reset without a request. Responses already saved keep their work
+    The collector's scheduling loop calls this from 04:55 until none
+    expire, so each Reset's checks expire before the next Reset without a
+    request. Responses already saved keep their work
     reference and are still processed.
     """
     with connection.transaction():
@@ -197,7 +196,7 @@ def expire_settlement_checks(
                   AND sweep.boundary_at + %s <= %s
                 ORDER BY unfinished.id
                 LIMIT %s
-                FOR UPDATE OF unfinished SKIP LOCKED
+                FOR UPDATE OF unfinished
             )
             """,
             (COLLECTION_WINDOW, now, batch),

@@ -701,15 +701,15 @@ class OfficialApiClient:
             nonlocal probe
             if probe:
                 await start_request()
-                return
-            while True:
-                probe = await outage.admit()
-                await start_request()
-                if probe or not outage.active:
-                    if start_before is not None and datetime.now(UTC) >= start_before:
-                        raise CollectionWindowClosed
-                    waiting.reschedule(None)
-                    return
+            else:
+                while True:
+                    probe = await outage.admit()
+                    await start_request()
+                    if probe or not outage.active:
+                        waiting.reschedule(None)
+                        break
+            if start_before is not None and datetime.now(UTC) >= start_before:
+                raise CollectionWindowClosed
 
         async def request(key: ApiKey, start_request: StartRequest) -> FetchedResponse:
             await self._executor_slots.acquire()
