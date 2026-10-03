@@ -79,7 +79,8 @@ def get_lookup(database: ApiDatabase, tag: str) -> dict[str, Any]:
 
 def lock_tag(connection: Any, normalized_tag: str) -> None:
     """Take the per-tag lock the existing enqueue function also takes."""
-    connection.execute(
+    api_db._execute_without_waiting(
+        connection,
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
         (normalized_tag,),
     )

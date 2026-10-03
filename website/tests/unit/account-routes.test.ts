@@ -954,7 +954,7 @@ describe("account routes", () => {
       expect(status).toBe(422);
       expect(data.generalError.error.code).toBe("unavailable");
       expect(data.generalError.error.message).toBe(
-        "Could not create the group. Try again.",
+        "Could not confirm the group was created. Refresh the page before trying again.",
       );
       assertNoStoreHeaders(headers);
       assertNoProviderData(data);

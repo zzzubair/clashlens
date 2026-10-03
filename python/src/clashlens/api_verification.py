@@ -174,7 +174,8 @@ def complete_verification(
             api_db._assert_request_binding(connection, binding)
             player = connection.execute(
                 """
-                SELECT id FROM players WHERE normalized_tag = %s FOR NO KEY UPDATE
+                SELECT id FROM players WHERE normalized_tag = %s
+                FOR NO KEY UPDATE NOWAIT
                 """,
                 (normalized_tag,),
             ).fetchone()

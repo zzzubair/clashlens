@@ -24,9 +24,9 @@ ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS = 5.0
 ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS = 0.1
 ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 0.1
 ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
-# A request that waits this long for a row or advisory lock fails with a
-# retryable 503 instead of holding a pool connection behind a long worker
-# transaction until every other page times out too.
+# Player writes that a worker may also lock fail at once with a retryable 503.
+# Any other lock wait gives up after this long instead of holding a pool
+# connection behind a long worker transaction until every page times out.
 API_LOCK_TIMEOUT = "2s"
 
 
@@ -394,7 +394,8 @@ def _ensure_player(connection: Any, normalized_tag: str) -> int:
     query = "SELECT id FROM players WHERE normalized_tag = %s"
     row = connection.execute(query, (normalized_tag,)).fetchone()
     if row is None:
-        connection.execute(
+        _execute_without_waiting(
+            connection,
             """
             INSERT INTO players (normalized_tag, active)
             VALUES (%s, false)
@@ -405,6 +406,14 @@ def _ensure_player(connection: Any, normalized_tag: str) -> int:
         row = connection.execute(query, (normalized_tag,)).fetchone()
     assert row is not None
     return int(row[0])
+
+
+def _execute_without_waiting(connection: Any, query: str, params: Any) -> Any:
+    """Run one statement in a transaction, failing instead of waiting for a lock."""
+    connection.execute("SET LOCAL lock_timeout = '1ms'")
+    cursor = connection.execute(query, params)
+    connection.execute(f"SET LOCAL lock_timeout = '{API_LOCK_TIMEOUT}'")
+    return cursor
 
 
 def _account_context(row: Any) -> AccountContext:

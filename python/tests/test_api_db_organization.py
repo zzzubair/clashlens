@@ -6,10 +6,12 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from test_api_db_verification import NOW, verification_binding
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts, job_outcomes
+from clashlens import api_accounts, api_verification, job_outcomes
 from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.verification import VerificationOutcome
 
 
 def account_binding(
@@ -255,13 +257,21 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
     with migrated_production_database(
         database_url, include_compact_collector=True
     ) as connection_info:
-        database = ApiDatabase(connection_info)
+        database = ApiDatabase(connection_info, min_size=8, max_size=8)
         worker = psycopg.connect(connection_info)
         try:
             owner_id = create_owner(database)
             job_outcomes._upsert_player(worker, "#2PP", active=True)
             job_outcomes._upsert_player(worker, "#8PY", active=False)
             worker.commit()
+            verifications = [
+                verification_binding(owner_id, "group-owner-subject", "#2PP")
+                for _ in range(2)
+            ]
+            for binding in verifications:
+                assert api_verification.reserve_verification(
+                    database, binding, normalized_tag="#2PP"
+                ).fresh
             # The worker updates one player and saves a row referencing the
             # other, which locks it the way a foreign key check does.
             job_outcomes._upsert_player(worker, "#2PP", active=True)
@@ -269,48 +279,71 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
                 "SELECT 1 FROM players WHERE normalized_tag = '#8PY' FOR KEY SHARE"
             )
 
-            def create(name: str, binding: RequestBinding | None = None):
+            def create(name: str, tags: list[str], binding: RequestBinding | None = None):
                 binding = binding or account_binding(
                     owner_id,
                     "groups.create",
                     "/v1/account/groups",
-                    {"name": name, "tags": ["#2PP", "#8PY"]},
+                    {"name": name, "tags": tags},
                 )
-                return binding, api_accounts.create_group(database,
+                return api_accounts.create_group(database,
                     binding,
                     name=name,
                     normalized_name=name.lower(),
-                    normalized_tags=["#2PP", "#8PY"],
+                    normalized_tags=tags,
+                )
+
+            def verify(binding: RequestBinding):
+                return api_verification.complete_verification(database,
+                    binding,
+                    normalized_tag="#2PP",
+                    outcome=VerificationOutcome.VERIFIED,
+                    account_id=owner_id,
+                    completed_at=NOW,
                 )
 
             # A wait here would block forever, so give up after 10 seconds.
-            executor = ThreadPoolExecutor(max_workers=1)
+            executor = ThreadPoolExecutor(max_workers=9)
             try:
-                _, created = executor.submit(create, "Main").result(timeout=10)
+                created = executor.submit(create, "Main", ["#2PP", "#8PY"])
+                assert created.result(timeout=10).status_code == 201
+
+                # The worker also holds the per-tag check lock and has saved a
+                # new player it has not committed yet. Eight site requests
+                # that need those fill every API connection, and each must
+                # fail at once so a page read still answers.
+                job_outcomes._upsert_player(worker, "#9QQ", active=True)
+                worker.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended('#2PP', 0))"
+                )
+                blocked = [
+                    *(executor.submit(create, f"Tag {n}", ["#2PP"]) for n in range(3)),
+                    *(executor.submit(create, f"New {n}", ["#9QQ"]) for n in range(3)),
+                    *(executor.submit(verify, binding) for binding in verifications),
+                ]
+                started = time.monotonic()
+                groups = executor.submit(api_accounts.list_groups, database, owner_id)
+                assert [group["name"] for group in groups.result(timeout=10)] == [
+                    "Main"
+                ]
+                assert time.monotonic() - started < 1
+                for request in blocked:
+                    with pytest.raises(psycopg.errors.LockNotAvailable):
+                        request.result(timeout=10)
+                assert time.monotonic() - started < 1
             finally:
                 executor.shutdown(wait=False)
-            assert created.status_code == 201
 
-            # A lock the API really must wait for, such as the per-tag check
-            # lock, fails the request quickly instead of holding a connection.
-            worker.execute("SELECT pg_advisory_xact_lock(hashtextextended('#2PP', 0))")
             binding = account_binding(
                 owner_id,
                 "groups.create",
                 "/v1/account/groups",
-                {"name": "Alts", "tags": ["#2PP", "#8PY"]},
+                {"name": "Alts", "tags": ["#2PP", "#9QQ"]},
             )
-            started = time.monotonic()
             with pytest.raises(psycopg.errors.LockNotAvailable):
-                create("Alts", binding)
-            assert time.monotonic() - started < 4
-            assert [group["name"] for group in api_accounts.list_groups(
-                database, owner_id
-            )] == ["Main"]
-
+                create("Alts", ["#2PP", "#9QQ"], binding)
             worker.commit()
-            _, retried = create("Alts", binding)
-            assert retried.status_code == 201
+            assert create("Alts", ["#2PP", "#9QQ"], binding).status_code == 201
             assert sorted(group["name"] for group in api_accounts.list_groups(
                 database, owner_id
             )) == ["Alts", "Main"]

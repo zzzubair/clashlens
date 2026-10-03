@@ -242,7 +242,7 @@ export async function action({ request }: Route.ActionArgs) {
           ? {
               error: {
                 code: "unavailable",
-                message: "Could not create the group. Try again.",
+                message: "Could not confirm the group was created. Refresh the page before trying again.",
               },
             }
           : safeError;
@@ -314,7 +314,7 @@ export default function GroupsRoute() {
   const actionData = useActionData<GroupsActionData>();
   const navigation = useNavigation();
   const creating =
-    navigation.state === "submitting" && navigation.formData?.get("action") === "create";
+    navigation.state !== "idle" && navigation.formData?.get("action") === "create";
 
   const createKey =
     actionData && actionData.action === "create"
