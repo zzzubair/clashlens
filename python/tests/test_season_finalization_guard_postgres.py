@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from domain_test_support import domain_database
 from test_season_detail_retirement_postgres import (
@@ -103,29 +103,43 @@ def test_early_finalized_record_cannot_retire_or_hide_the_wait(database_url: str
                 late = ELIGIBLE + timedelta(days=1)
                 for start, end, reason in (
                     (DAY0 + timedelta(days=1), SEASON_END + timedelta(days=1), "conflicting_season_boundary"),
+                    (DAY0, SEASON_END - timedelta(days=1), "conflicting_season_boundary"),
                     (None, None, "unknown_season_boundary"),
                 ):
                     connection.execute(
                         "UPDATE season_detail_retirements SET season_start = %s, season_end = %s",
                         (start, end),
                     )
-                    assert retire_season_detail(connection, SEASON, apply=True, now=late)["reason"] == reason
-                    assert finalize_season_detail(connection, SEASON, late, apply=True)["reason"] == reason
+                    for report in (
+                        retire_season_detail(connection, SEASON, apply=True, now=late),
+                        finalize_season_detail(connection, SEASON, late, apply=True),
+                    ):
+                        assert (report["reason"], report["eligible_at"]) == (reason, ELIGIBLE.isoformat())
                     connection.rollback()
-                future = datetime(2099, 1, 5, 5, tzinfo=UTC)
-                for season_id, end, reason in (
-                    ("short-window", DAY0 + timedelta(days=27), "invalid_season_boundary"),
-                    ("future-season", future + timedelta(days=28), "season_close_wait"),
+                # Two Seasons back, past the confirmed timing, on the 28-day calendar.
+                older = DAY0 - timedelta(days=56)
+                older_eligible = (older + timedelta(days=35)).isoformat()
+                later = DAY0 + timedelta(days=56)
+                for season_id, start, reason, eligible_at in (
+                    (str(int(older.timestamp())), older + timedelta(days=1), "conflicting_season_boundary", older_eligible),
+                    (str(int(older.timestamp())), older, "player_summaries_missing", older_eligible),
+                    (str(int(later.timestamp())), later, "unknown_season_boundary", None),
+                    ("short-window", DAY0, "unknown_season_boundary", None),
                 ):
-                    start = DAY0 if season_id == "short-window" else future
                     connection.execute(
                         """
                         INSERT INTO season_detail_retirements (official_season_id, season_start, season_end)
                         VALUES (%s, %s, %s)
                         """,
-                        (season_id, start, end),
+                        (season_id, start, start + timedelta(days=28)),
                     )
-                    assert retire_season_detail(connection, season_id, apply=True)["reason"] == reason
+                    reports = [retire_season_detail(connection, season_id, apply=True)]
+                    if reason != "player_summaries_missing":
+                        reports.append(finalize_season_detail(connection, season_id, late, apply=True))
+                    for report in reports:
+                        assert (report["reason"], report.get("eligible_at"), report["applied"]) == (
+                            reason, eligible_at, False,
+                        )
                     connection.rollback()
                 assert _counts(connection) == before
         finally:

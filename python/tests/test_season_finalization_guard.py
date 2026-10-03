@@ -19,6 +19,10 @@ def test_september_season_id_is_its_start() -> None:
     assert START + timedelta(days=28) == END
 
 
+WINDOW = (START, END)
+KNOWN = {"eligible_at": ELIGIBLE.isoformat()}
+
+
 @pytest.mark.parametrize(
     ("now", "closable"),
     [
@@ -29,27 +33,30 @@ def test_september_season_id_is_its_start() -> None:
     ],
 )
 def test_season_close_waits_until_exact_seven_day_instant(now, closable) -> None:
-    block = season_close_block(START, END, now)
-    if closable:
-        assert block is None
-    else:
-        assert block == {"reason": "season_close_wait", "eligible_at": ELIGIBLE.isoformat()}
+    reason = None if closable else "season_close_wait"
+    assert season_close_block(WINDOW, WINDOW, now) == (KNOWN, reason)
 
 
 def test_wait_uses_utc_instants_and_twenty_eight_day_bounds() -> None:
     plus_two = timezone(timedelta(hours=2))
-    assert season_close_block(START.astimezone(plus_two), END.astimezone(plus_two), ELIGIBLE) is None
+    shifted = (START.astimezone(plus_two), END.astimezone(plus_two))
+    assert season_close_block(shifted, WINDOW, ELIGIBLE) == (KNOWN, None)
     early = (ELIGIBLE - timedelta(seconds=1)).astimezone(plus_two)
-    assert season_close_block(START, END, early)["eligible_at"] == "2026-10-12T05:00:00+00:00"
+    assert season_close_block(WINDOW, shifted, early) == (KNOWN, "season_close_wait")
     with pytest.raises(ValueError, match="timezone-aware"):
-        season_close_block(START, END, ELIGIBLE.replace(tzinfo=None))
+        season_close_block(WINDOW, WINDOW, ELIGIBLE.replace(tzinfo=None))
+
+
+def test_unknown_or_disagreeing_windows_never_close() -> None:
     late = ELIGIBLE + timedelta(days=30)
-    for start, end in ((None, END), (START, None), (START.replace(tzinfo=None), END)):
-        assert season_close_block(start, end, late) == {"reason": "unknown_season_boundary"}
-    for start, end in (
+    assert season_close_block(None, WINDOW, late) == ({}, "unknown_season_boundary")
+    for stored in ((None, END), (START, None), (None, None)):
+        assert season_close_block(WINDOW, stored, late) == (KNOWN, "unknown_season_boundary")
+    for stored in (
         (END, START),
         (START, END - timedelta(days=1)),
-        (START, END + timedelta(days=1)),
+        (START + timedelta(days=1), END + timedelta(days=1)),
         (START + timedelta(hours=1), END + timedelta(hours=1)),
+        (START.replace(tzinfo=None), END),
     ):
-        assert season_close_block(start, end, late) == {"reason": "invalid_season_boundary"}
+        assert season_close_block(WINDOW, stored, late) == (KNOWN, "conflicting_season_boundary")

@@ -69,8 +69,11 @@ from October 12 at 05:00 UTC. The refusal reports `status: blocked`,
 writes nothing. Apply reruns every check rather than trusting a preview.
 Retirement rechecks the stored window and the wait on every run, using
 the database clock, so a `finalized` record written early by older code
-cannot start deletion. A stored window that is not 28 days from 05:00
-UTC, or that disagrees with the confirmed Season timing, blocks. Player
+cannot start deletion. The exact window comes from the confirmed current
+and previous Season, and for older Seasons from the same 28-day calendar
+counted back from them. A Season whose window cannot be established, or
+a stored window that is missing or disagrees with it, blocks; every
+blocked result carries `eligible_at` whenever the window is known. Player
 and army summaries still build and refresh as soon as the Season ends;
 only closing waits. The wait is a clock check only: it does not yet
 prove that every late battle, replay or correction has been processed.
