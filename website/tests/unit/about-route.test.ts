@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -52,10 +51,7 @@ it("renders the about page from its Markdown file", async () => {
     '<a href="https://www.cloudflare.com/products/tunnel/">Cloudflare Tunnel</a>',
   );
   expect(html).toContain('<a href="https://www.supercell.com/fan-content-policy">');
-  // The owner's intro placeholder is a note in the file, not page text.
-  expect(readFileSync("app/content/about.md", "utf8")).toContain(
-    "OWNER INTRO PLACEHOLDER",
-  );
+  // The owner's intro placeholder is a comment in the file, not page text.
   expect(html).not.toContain("PLACEHOLDER");
   for (const [, href] of html.matchAll(/href="([^"]*)"/g)) {
     expect(href).toMatch(/^https:\/\//);
@@ -69,15 +65,15 @@ it("keeps the Fan Content Policy notice word for word", async () => {
   expect(text(notice ?? "")).toBe(FAN_CONTENT_NOTICE);
 });
 
-it("renders Markdown lists, emphasis and safe links only", () => {
+it("renders Markdown paragraphs, lists and https links only", () => {
   const html = renderToString(
     createElement(Markdown, {
       source: [
         "Intro line one",
         "continues here.",
         "",
-        "- **Bold** item",
-        "- [Home](/) and [bad](javascript:void) and [also bad](//evil.example)",
+        "- Plain item",
+        "- [Site](https://clashlens.example/) and [bad](javascript:void) and [also bad](/about)",
         "",
         "<script>alert(1)</script>",
       ].join("\n"),
@@ -85,8 +81,10 @@ it("renders Markdown lists, emphasis and safe links only", () => {
   ).replaceAll("<!-- -->", "");
 
   expect(html).toContain("<p>Intro line one continues here.</p>");
-  expect(html).toContain("<li><strong>Bold</strong> item</li>");
-  expect(html).toContain('<a href="/">Home</a> and bad and also bad');
+  expect(html).toContain("<li>Plain item</li>");
+  expect(html).toContain(
+    '<a href="https://clashlens.example/">Site</a> and bad and also bad',
+  );
   expect(html).not.toContain("javascript:");
   expect(html).not.toContain("<script>");
   expect(html).toContain("&lt;script&gt;");

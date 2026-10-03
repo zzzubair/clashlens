@@ -2,10 +2,9 @@ import type { ReactNode } from "react";
 
 /**
  * Renders the small Markdown subset the site's own content files use:
- * `#`–`###` headings, paragraphs, `- ` lists, `[text](url)` links and
- * `**bold**`. HTML comments are notes for the editor and are dropped. Raw HTML
- * is shown as text, and links other than https:// or same-site paths keep
- * only their text.
+ * `#`–`###` headings, paragraphs, `- ` lists and `[text](url)` links. HTML
+ * comments are notes for the editor and are dropped. Raw HTML is shown as
+ * text, and links other than https:// keep only their text.
  */
 export function Markdown({ source }: { source: string }) {
   const blocks: ReactNode[] = [];
@@ -50,22 +49,19 @@ export function Markdown({ source }: { source: string }) {
 
 function inline(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
-  const pattern = /\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*/g;
   let last = 0;
-  for (const match of text.matchAll(pattern)) {
+  for (const match of text.matchAll(/\[([^\]]+)\]\(([^)\s]+)\)/g)) {
     parts.push(text.slice(last, match.index));
-    const [, label, href, bold] = match;
-    if (bold !== undefined) {
-      parts.push(<strong key={match.index}>{bold}</strong>);
-    } else if (/^(https:\/\/|\/(?!\/))/.test(href)) {
-      parts.push(
+    const [, label, href] = match;
+    parts.push(
+      href.startsWith("https://") ? (
         <a key={match.index} href={href}>
           {label}
-        </a>,
-      );
-    } else {
-      parts.push(label);
-    }
+        </a>
+      ) : (
+        label
+      ),
+    );
     last = match.index + match[0].length;
   }
   parts.push(text.slice(last));
