@@ -7,7 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, reset_baselines
+from . import battle_day_repair, boundary, reset_baselines
 from .analytics import CLASSIFICATION_CONFIDENCE, CLASSIFICATION_VERSION
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
@@ -899,16 +899,24 @@ def complete_analytics(database: Database, claim: Claim) -> None:
 
 
 def _boundary_army_manifest_needs_correction(
-    database, connection: Any, *, manifest_id: int
+    database, connection: Any, *, manifest_id: int, player_ids: list[int] | None
 ) -> bool:
+    """Whether the changed players' frozen army inputs differ from now.
+
+    Only ``player_ids`` (the players in the battles whose decodes changed) are
+    read: a Reset's manifest is about 13,000 rows and 110 MB, and reading it
+    whole on every battle log, under the Reset lock, ran the worker out of
+    memory and made its lanes take turns.
+    """
     rows = connection.execute(
         """
         SELECT player_id, ranked_day_version_id, input_identity
         FROM boundary_publication_manifest_rows
         WHERE manifest_id = %s
+          AND (%s::bigint[] IS NULL OR player_id = ANY(%s::bigint[]))
         ORDER BY ordinal
         """,
-        (manifest_id,),
+        (manifest_id, player_ids, player_ids),
     ).fetchall()
     for player_id, version_id, identity in rows:
         expected = {
@@ -925,6 +933,19 @@ def _boundary_army_manifest_needs_correction(
             )
             if str(value).isdigit()
         }
+        moved = battle_day_repair.merged_battles(
+            connection,
+            sorted(expected_battles),
+            [
+                int(value)
+                for value in (
+                    identity.get("evidence_ids", [])
+                    if isinstance(identity, dict)
+                    else []
+                )
+                if str(value).isdigit()
+            ],
+        )
         actual: set[int] = set()
         if version_id is not None:
             daily = connection.execute(
@@ -955,7 +976,12 @@ def _boundary_army_manifest_needs_correction(
                     WHERE battle_id = %s AND perspective = %s
                       AND is_active AND decoder_version = %s AND catalog_version = %s
                     """,
-                    (int(battle_id), perspective, DECODER_VERSION, CATALOG_VERSION),
+                    (
+                        moved.get((int(battle_id), lens), int(battle_id)),
+                        perspective,
+                        DECODER_VERSION,
+                        CATALOG_VERSION,
+                    ),
                 ).fetchone()
                 if decode is not None:
                     actual.add(int(decode[0]))
@@ -995,9 +1021,15 @@ def _queue_boundary_army_correction(
             """,
             (affected, queued[0]),
         )
+        # One army-only marker is enough; each battle log adding its own grew
+        # the row by one entry per job.
         connection.execute(
-            "UPDATE boundary_publication_corrections SET pending_inputs = pending_inputs || %s::jsonb WHERE id = %s",
-            (Jsonb([{"kind": "decode"}]), queued[0]),
+            """
+            UPDATE boundary_publication_corrections
+            SET pending_inputs = pending_inputs || %s::jsonb
+            WHERE id = %s AND NOT pending_inputs @> %s::jsonb
+            """,
+            (Jsonb([{"kind": "decode"}]), queued[0], Jsonb([{"kind": "decode"}])),
         )
         return
     current = connection.execute(
@@ -1183,7 +1215,10 @@ def _enqueue_army_analytics(
             and _text_value(coordinator[3]) in {"ready", "building", "published"}
             and coordinator[4] is not None
             and _boundary_army_manifest_needs_correction(
-                database, connection, manifest_id=int(coordinator[4])
+                database,
+                connection,
+                manifest_id=int(coordinator[4]),
+                player_ids=player_ids,
             )
         ):
             _queue_boundary_army_correction(

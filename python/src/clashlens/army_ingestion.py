@@ -8,7 +8,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, boundary_publication
+from . import battle_day_repair, boundary, boundary_publication
 from .army_decoder import (
     DECODER_VERSION,
     DecodedArmy,
@@ -978,6 +978,15 @@ def _build_army_fact_batch(
         for event in events:
             selected_battle_ids.add(int(event["battle_id"]))
             perspectives.add("attacker" if event["lens"] == "offense" else "defender")
+    # A frozen report 0057 moved is read, decoded and counted where it is now.
+    moved = (
+        battle_day_repair.merged_battles(
+            connection, sorted(selected_battle_ids), evidence_ids
+        )
+        if evidence_ids is not None
+        else {}
+    )
+    selected_battle_ids.update(moved.values())
     battle_id_values = sorted(selected_battle_ids)
     perspective_values = sorted(perspectives)
     lens_values = [
@@ -1082,8 +1091,10 @@ def _build_army_fact_batch(
     for version_id, player_id, season_id, day_number, start_trophies, events in streams:
         trophies = int(start_trophies) if start_trophies is not None else None
         for event in events:
-            battle_id = int(event["battle_id"])
             lens = str(event["lens"])
+            battle_id = moved.get(
+                (int(event["battle_id"]), lens), int(event["battle_id"])
+            )
             key = (battle_id, lens)
             evidence_row = evidence.get(key)
             if evidence_row is None:

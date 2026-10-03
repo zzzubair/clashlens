@@ -16,7 +16,7 @@ from test_reconciliation_postgres import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import army_ingestion, boundary
+from clashlens import army_ingestion, boundary, boundary_publication
 from clashlens.db import Database
 
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
@@ -269,70 +269,98 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
             database.close()
 
 
+def _freeze_army_inputs(connection_info: str, archive_server, processor):
+    """Process one Legend day up to its Reset's frozen, unbuilt army build.
+
+    Returns a pending-jobs lookup for that Reset and the army job and input.
+    """
+    pairs = [
+        _store_baseline_pair(
+            connection_info,
+            archive_server,
+            key=key,
+            boundary=day,
+            trophies=trophies,
+            empty_battle_log=empty,
+        )
+        for key, day, trophies, empty in (
+            ("start", DAY_START, 6000, True),
+            ("end", DAY_END, 6040, False),
+        )
+    ]
+    middle = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key="middle",
+        endpoint="battle_log",
+        body=_battle_log(),
+        observed_at=DAY_START + timedelta(hours=7),
+        normalized_tag="#2PP",
+    )[1]
+    boundary_at = DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ")
+    for job_id in (*pairs[0][2:], middle, *pairs[1][2:]):
+        assert processor.process_job(job_id, owner="source").outcome == "processed"
+
+    def jobs(work_type: str) -> list[tuple]:
+        with processor.database.pool.connection() as connection:
+            return connection.execute(
+                "SELECT id, input_json FROM python_processing_jobs"
+                " WHERE work_type = %s AND status = 'pending'"
+                " AND coalesce(input_json->>'boundary_at', %s) = %s"
+                " ORDER BY id",
+                (work_type, boundary_at, boundary_at),
+            ).fetchall()
+
+    for job_id, _input in jobs("reconcile_ranked_day"):
+        assert processor.process_job(job_id, owner="day").outcome == "processed"
+    [(army_job, army_input)] = jobs("build_army_analytics")
+    [(snapshot_job, _input)] = jobs("build_snapshot")
+    _process_snapshot_and_analytics(
+        connection_info,
+        processor.database,
+        processor,
+        snapshot_job,
+        owner_prefix="snapshot",
+    )
+    return jobs, army_job, army_input
+
+
+def _process_changed_army(
+    connection_info: str, archive_server, processor, *, key: str, code: str
+) -> None:
+    """Save and process a battle log giving the frozen battle a new army."""
+    body = json.loads(_battle_log())
+    body["items"][0]["armyShareCode"] = code
+    changed = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key=key,
+        endpoint="battle_log",
+        body=json.dumps(body).encode(),
+        observed_at=DAY_END + timedelta(minutes=10),
+        normalized_tag="#2PP",
+    )[1]
+    assert processor.process_job(changed, owner=key).outcome == "processed"
+
+
 def test_army_correction_during_publication_keeps_each_frozen_battle(
     database_url: str, archive_server
 ) -> None:
     # A changed army code for an already-known battle arrives after the
     # army inputs are frozen and before the army build finishes.
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        pairs = [
-            _store_baseline_pair(
-                connection_info,
-                archive_server,
-                key=key,
-                boundary=day,
-                trophies=trophies,
-                empty_battle_log=empty,
-            )
-            for key, day, trophies, empty in (
-                ("start", DAY_START, 6000, True),
-                ("end", DAY_END, 6040, False),
-            )
-        ]
-        middle = store_observation(
-            connection_info,
-            archive_server,
-            occurrence_key="middle",
-            endpoint="battle_log",
-            body=_battle_log(),
-            observed_at=DAY_START + timedelta(hours=7),
-            normalized_tag="#2PP",
-        )[1]
         database, processor = _processor(connection_info, archive_server)
-        boundary_at = DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
-            for job_id in (*pairs[0][2:], middle, *pairs[1][2:]):
-                assert processor.process_job(job_id, owner="source").outcome == "processed"
-
-            def jobs(work_type: str) -> list[tuple]:
-                with database.pool.connection() as connection:
-                    return connection.execute(
-                        "SELECT id, input_json FROM python_processing_jobs"
-                        " WHERE work_type = %s AND status = 'pending'"
-                        " AND coalesce(input_json->>'boundary_at', %s) = %s"
-                        " ORDER BY id",
-                        (work_type, boundary_at, boundary_at),
-                    ).fetchall()
-
-            for job_id, _input in jobs("reconcile_ranked_day"):
-                assert processor.process_job(job_id, owner="day").outcome == "processed"
-            [(army_job, army_input)] = jobs("build_army_analytics")
-            [(snapshot_job, _input)] = jobs("build_snapshot")
-            _process_snapshot_and_analytics(
-                connection_info, database, processor, snapshot_job, owner_prefix="snapshot"
+            jobs, army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
             )
-            body = json.loads(_battle_log())
-            body["items"][0]["armyShareCode"] = "u3x0-2x1"
-            changed = store_observation(
+            _process_changed_army(
                 connection_info,
                 archive_server,
-                occurrence_key="changed-after-freeze",
-                endpoint="battle_log",
-                body=json.dumps(body).encode(),
-                observed_at=DAY_END + timedelta(minutes=10),
-                normalized_tag="#2PP",
-            )[1]
-            assert processor.process_job(changed, owner="changed").outcome == "processed"
+                processor,
+                key="changed-after-freeze",
+                code="u3x0-2x1",
+            )
 
             def current_fact() -> tuple:
                 with database.pool.connection() as connection:
@@ -505,5 +533,148 @@ def test_army_build_leaves_the_generation_unlocked_until_it_publishes(
                         (read[0],),
                     ).fetchone()
                 )
+        finally:
+            database.close()
+
+
+def test_changed_armies_check_only_their_players_frozen_army_inputs(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every battle log that re-decodes a frozen Reset's battle checks, under
+    # that Reset's lock, whether its army build needs a correction. Reading
+    # the whole frozen list (13,000 players, 110 MB on production) per job
+    # ran the worker out of memory and made all its lanes take turns.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, _army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            check = boundary_publication._boundary_army_manifest_needs_correction
+            checked: list[list[int] | None] = []
+
+            def spy(database, connection, *, manifest_id, player_ids):
+                checked.append(player_ids)
+                return check(
+                    database,
+                    connection,
+                    manifest_id=manifest_id,
+                    player_ids=player_ids,
+                )
+
+            monkeypatch.setattr(
+                boundary_publication, "_boundary_army_manifest_needs_correction", spy
+            )
+            for key, code in (("first", "u3x0-2x1"), ("second", "u4x0-1x1")):
+                _process_changed_army(
+                    connection_info, archive_server, processor, key=key, code=code
+                )
+            with database.pool.connection() as connection:
+                battle_players = sorted(
+                    int(value)
+                    for value in connection.execute(
+                        "SELECT attacker_player_id, defender_player_id"
+                        " FROM legend_battles"
+                    ).fetchone()
+                )
+                # Each job read only its battle's two players.
+                assert checked == [battle_players, battle_players]
+                # One correction carries one army marker, however many jobs
+                # found the change.
+                assert connection.execute(
+                    "SELECT pending_inputs FROM boundary_publication_corrections"
+                    " WHERE state IN ('queued', 'pending_inputs')"
+                ).fetchall() == [([{"kind": "decode"}],)]
+                # A player outside the changed battle reads nothing, though
+                # the Reset's frozen army is now out of date.
+                assert check(
+                    database,
+                    connection,
+                    manifest_id=army_input["manifest_id"],
+                    player_ids=battle_players,
+                )
+                assert not check(
+                    database,
+                    connection,
+                    manifest_id=army_input["manifest_id"],
+                    player_ids=[max(battle_players) + 1000],
+                )
+        finally:
+            database.close()
+
+
+def test_frozen_army_build_follows_a_battle_merged_after_the_freeze(
+    database_url: str, archive_server
+) -> None:
+    # Migration 0057 moved a frozen report into the day before's battle row
+    # and deleted the old row; the Reset's army build then failed with
+    # "frozen army evidence missing" on every retry.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                [(frozen,)] = connection.execute(
+                    "SELECT input_identity FROM boundary_publication_manifest_rows"
+                    " WHERE manifest_id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
+                [old] = frozen["battle_ids"]
+                # What 0057 did to a merged battle.
+                target = connection.execute(
+                    """
+                    INSERT INTO legend_battles
+                        (ranked_day_start, attacker_player_id, defender_player_id)
+                    SELECT ranked_day_start - interval '1 day',
+                           attacker_player_id, defender_player_id
+                    FROM legend_battles WHERE id = %s
+                    RETURNING id
+                    """,
+                    (old,),
+                ).fetchone()[0]
+                connection.execute(
+                    """
+                    INSERT INTO battle_day_repairs (
+                        from_battle_id, to_battle_id, perspective, evidence_id,
+                        attacker_player_id, defender_player_id, from_day, to_day
+                    )
+                    SELECT battle.id, %s, side.perspective, side.evidence_id,
+                           battle.attacker_player_id, battle.defender_player_id,
+                           battle.ranked_day_start,
+                           battle.ranked_day_start - interval '1 day'
+                    FROM legend_battles AS battle
+                    JOIN battle_perspectives AS side ON side.battle_id = battle.id
+                    WHERE battle.id = %s
+                    """,
+                    (target, old),
+                )
+                for table in (
+                    "battle_evidence",
+                    "battle_perspectives",
+                    "battle_army_decodes",
+                    "army_analytics_battle_facts",
+                ):
+                    connection.execute(
+                        f"UPDATE {table} SET battle_id = %s WHERE battle_id = %s",
+                        (target, old),
+                    )
+                connection.execute("DELETE FROM legend_battles WHERE id = %s", (old,))
+                # The moved decode is still the frozen one: no correction.
+                assert not boundary_publication._boundary_army_manifest_needs_correction(
+                    database,
+                    connection,
+                    manifest_id=army_input["manifest_id"],
+                    player_ids=[frozen["player_id"]],
+                )
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT battle_id, evidence_id, decode_id"
+                    " FROM army_analytics_battle_facts WHERE is_current"
+                ).fetchall() == [
+                    (target, frozen["evidence_ids"][0], frozen["decode_ids"][0])
+                ]
         finally:
             database.close()

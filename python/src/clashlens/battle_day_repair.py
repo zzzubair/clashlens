@@ -30,6 +30,34 @@ from .db import (
 )
 
 
+def merged_battles(
+    connection: Any, battle_ids: list[int], evidence_ids: list[int]
+) -> dict[tuple[int, str], int]:
+    """Map each (battle, lens) whose listed report moved to its new battle.
+
+    A Reset's frozen inputs name the battle a report was saved under then;
+    0057 may since have moved that report, its decode and facts to another
+    battle row and deleted the old one.
+    """
+    if not battle_ids or not evidence_ids:
+        return {}
+    return {
+        (
+            int(from_id),
+            "offense" if _text_value(perspective) == "attacker" else "defense",
+        ): int(to_id)
+        for from_id, perspective, to_id in connection.execute(
+            """
+            SELECT from_battle_id, perspective, to_battle_id
+            FROM battle_day_repairs
+            WHERE from_battle_id = ANY(%s::bigint[])
+              AND evidence_id = ANY(%s::bigint[])
+            """,
+            (battle_ids, evidence_ids),
+        ).fetchall()
+    }
+
+
 def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
     """Queue at most ``max_jobs`` rebuilds of players not yet done.
 
