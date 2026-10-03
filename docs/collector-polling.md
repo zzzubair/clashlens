@@ -241,8 +241,11 @@ under 10% on an untracked player, waits for the attacker's profile or the
 safety fetch: at most about 15–17 minutes plus any queue delay. Leaderboard
 trophies come from the profile, which every check still fetches, so they are
 unaffected. However late a log is fetched, the worker stores each battle under
-its own `battleTimestamp`, so it lands in its real Legend day and order, and a
-battle reported by both players is stored once. A daily result already
+the Legend day of its own `battleTimestamp` less 5 minutes, and a battle
+reported by both players is stored once. The timestamp alone is not enough: an
+attacker's report is stamped when the attack ends, so one stamped in the first
+5 minutes after the Reset finished an attack of the day before
+([domain rules](domain.md#1-time-and-season-contract)). A daily result already
 published for one of the previous 7 Legend days is recalculated by the
 [once-per-Reset late-battle check](domain.md#6-ranked-day-and-leaderboard-snapshots),
 not when the late battle arrives.

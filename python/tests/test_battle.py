@@ -345,3 +345,50 @@ def test_battle_log_parser_distinguishes_malformed_json_from_unsupported_schema(
             observed_at=datetime.now(UTC),
             parser_version=SOURCE_PARSER_VERSION,
         )
+
+
+@pytest.mark.parametrize(
+    ("attack", "battle_timestamp", "battle_time", "day"),
+    [
+        # Production reports from 2026-09-30 and 2026-10-01. A report stamped
+        # in the first 5 minutes after Reset belongs to the day before.
+        (True, "20260930T050029.000Z", 135, "2026-09-29"),
+        (False, "20260930T045753.000Z", 135, "2026-09-29"),
+        # Stamp less length is 05:00:02, after Reset; the defender's copy is
+        # 04:59:49, so subtracting the length is not the rule.
+        (True, "20260930T050131.000Z", 89, "2026-09-29"),
+        # Both reports of each boundary battle are at or after Reset.
+        (False, "20260930T050000.000Z", 170, "2026-09-29"),
+        (True, "20260930T050301.000Z", 170, "2026-09-29"),
+        (False, "20261001T050001.000Z", 167, "2026-09-30"),
+        (True, "20261001T050202.000Z", 167, "2026-09-30"),
+        # A battle first reported at 05:07:20 started after Reset.
+        (False, "20260930T050720.000Z", 160, "2026-09-30"),
+    ],
+)
+def test_battle_reported_just_after_reset_belongs_to_the_day_before(
+    attack: bool, battle_timestamp: str, battle_time: int, day: str
+) -> None:
+    row = {
+        "attack": attack,
+        "battleTimestamp": battle_timestamp,
+        "battleTime": battle_time,
+        "stars": 2,
+        "destructionPercentage": 89,
+        "armyShareCode": "u1x0-2x1",
+        "opponentPlayerTag": "#8PP",
+        "opponentName": "Synthetic Opponent",
+        "battleType": "legend",
+    }
+
+    parsed = parse_battle_log(
+        json.dumps({"items": [row]}).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 10, 1, 6, tzinfo=UTC),
+        parser_version=SOURCE_PARSER_VERSION,
+    )
+
+    battle = parsed.rows[0].battle
+    assert battle is not None
+    assert battle.ranked_day_start == datetime.fromisoformat(f"{day}T05:00:00+00:00")
+    assert battle.battle_timestamp.strftime("%Y%m%dT%H%M%S.000Z") == battle_timestamp

@@ -44,8 +44,9 @@ WINDOW = timedelta(days=7)
 # result: their own report and the battle's current agreement flag must both
 # be listed. A report saved that close before its day ended may have missed
 # the live recalculation queued with it. A battle's Legend day is the day of
-# its timestamp, so the late reports are read from their own index, whose
-# condition this repeats. The database cannot tell how few reports are late,
+# its timestamp less domain.BATTLE_DAY_GRACE, 5 minutes, so its days are
+# binned and windowed from 05:05 UTC. The late reports are read from their own
+# index, whose condition this repeats. The database cannot tell how few reports are late,
 # so OFFSET 0 keeps it looking up each late report's battle, reports and
 # saved result one at a time instead of reading every battle and result. Days of a retired season cannot
 # be recalculated and are skipped.
@@ -74,9 +75,9 @@ WITH late_battle AS (
     WHERE date_bin('24 hours', evidence.created_at,
                    TIMESTAMPTZ '2000-01-01 04:55+00')
           > date_bin('24 hours', evidence.battle_timestamp,
-                     TIMESTAMPTZ '2000-01-01 05:00+00')
-      AND evidence.battle_timestamp >= %(window_start)s
-      AND evidence.battle_timestamp < %(boundary)s
+                     TIMESTAMPTZ '2000-01-01 05:05+00')
+      AND evidence.battle_timestamp >= %(window_start)s + interval '5 minutes'
+      AND evidence.battle_timestamp < %(boundary)s + interval '5 minutes'
 ), pair AS (
     SELECT CASE perspective.perspective
                WHEN 'attacker' THEN battle.attacker_player_id

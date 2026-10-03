@@ -446,6 +446,10 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
   return player;
 }
 
+// A battle reported in the first 5 minutes after a Reset belongs to the day
+// before it, as BATTLE_DAY_GRACE in python/src/clashlens/domain.py.
+const BATTLE_DAY_GRACE_MS = 5 * 60 * 1000;
+
 function calculateStartingTrophies(
   days: RankedDaySummary[],
   profile: PlayerPage["profile"],
@@ -475,8 +479,8 @@ function calculateStartingTrophies(
       events.some(
         (event) =>
           event.perspectiveDisagreement ||
-          Date.parse(event.battleTimestamp) < start ||
-          Date.parse(event.battleTimestamp) >= end,
+          Date.parse(event.battleTimestamp) < start + BATTLE_DAY_GRACE_MS ||
+          Date.parse(event.battleTimestamp) >= end + BATTLE_DAY_GRACE_MS,
       )
     )
       continue;

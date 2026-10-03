@@ -37,6 +37,14 @@ A domain change is complete only when every affected source observation, derived
   days; do not require or trust a previous-season field in the profile. If accepted profiles disagree, retain the last confirmed
   anchor and mark the new source contract as conflicting.
 - A player can have up to 8 attacks and 8 defenses in one ranked day.
+- A battle belongs to the ranked day of its report's `battleTimestamp` less
+  5 minutes. No new-day attack can start in the first 5 minutes after the
+  Reset, so a report stamped 05:00:00 to 05:04:59 UTC finished an attack of
+  the day before. The attacker's report is stamped when the attack ends, often
+  1 to 4 minutes after the defender's, so the two reports of one battle can
+  straddle the Reset; from 2026-09-29 to 2026-10-02, 90 battles did. Apply
+  this to attacks and defenses alike, and keep the original timestamp. The
+  Reset stays at 05:00 UTC, and Mondays use the same 5 minutes.
 - Store and calculate time in Coordinated Universal Time (UTC).
 - The ranked-day boundary remains 05:00 UTC even when reset processing and snapshot publication finish later.
 
@@ -202,7 +210,7 @@ A domain change is complete only when every affected source observation, derived
   - The player remained eligible for active Legend I tracking.
   - The ranked day has complete evidence coverage.
   - The player's trophies did not change across the ranked day.
-  - The battle log contains no Legend I attack or defense event timestamped within the ranked day.
+  - The battle log contains no Legend I attack or defense event belonging to the ranked day.
   - No automatic defense adjustment applies.
 - A zero-trophy battle is still a Legend I event and prevents the day from being classified as shielded.
 - Preserve an inferred shielded day as an explicit ranked-day row with zero attacks, zero defenses, and zero trophy change. Do not omit it or classify it as missing.
@@ -238,7 +246,7 @@ A domain change is complete only when every affected source observation, derived
 
 ## 6. Ranked-day and leaderboard snapshots
 
-- At 05:00 UTC, event ownership moves to the new ranked day. A battle first observed later is still added to the ended day when its timestamp falls before the boundary.
+- At 05:00 UTC, event ownership moves to the new ranked day, except for reports stamped in the next 5 minutes, which still belong to the ended day (section 1). A battle first observed later is still added to the ended day when it belongs there.
 - A battle saved after its ended day's result was published is added to that
   day by a once-per-Reset check. From 05:30 UTC, every 10 minutes until it
   runs, the worker waits for the Reset sweep to finish and for every response
