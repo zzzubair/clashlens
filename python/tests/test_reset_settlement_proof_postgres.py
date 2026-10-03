@@ -9,6 +9,8 @@ behavior, not production coverage. Public day results never read the verdict.
 from __future__ import annotations
 
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -375,3 +377,34 @@ def test_invalidated_root_rejudges_the_next_reset(
         finally:
             database.close()
 
+
+
+def test_reset_profile_waits_for_the_publication_lock_before_its_reset_lock(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server, [scenario["early_log"]])
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            with psycopg.connect(connection_info) as late_log, ThreadPoolExecutor(1) as pool:
+                # A late battle log's army refresh holds the Reset's publication lock.
+                late_log.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                                 (f"boundary-publication:{RESET.isoformat()}",))
+                profile = pool.submit(_process, connection_info, archive_server,
+                                      [scenario["early_profile"]])
+                deadline = time.monotonic() + 30
+                while not late_log.execute(
+                    "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+                ).fetchone()[0]:
+                    assert time.monotonic() < deadline and not profile.done()
+                    time.sleep(0.05)
+                # The waiting Reset profile holds no Reset lock, so the late
+                # log can still re-judge the Reset instead of deadlocking.
+                late_log.execute("SET LOCAL lock_timeout = '5s'")
+                reset_settlement.refresh_boundary(database, late_log, scenario["player"], RESET)
+                late_log.commit()
+                profile.result(timeout=60)
+        finally:
+            database.close()

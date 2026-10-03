@@ -17,7 +17,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -52,6 +52,7 @@ def record_provisional_boundary(
     early_baseline_id: int,
     early_state: str,
     reasons: list[str],
+    observation_id: int | None,
 ) -> None:
     """Record the Reset pair evidence of a still-provisional boundary.
 
@@ -59,10 +60,12 @@ def record_provisional_boundary(
     pair proves the responses were processed, not that trophies settled. A
     repeat with the same evidence changes nothing, and a boundary already
     settled or unresolved keeps that verdict. A boundary with a settlement
-    check keeps the check's reasons; the pair's own are in its proof.
+    check keeps the check's reasons; the pair's own are in its proof. It
+    first locks this Reset and every one ``observation_id`` can re-judge.
     """
     early = {"baseline_id": early_baseline_id, "state": early_state, "reasons": reasons}
-    _lock_player(connection, player_id, boundary_at)
+    _lock_resets(connection, [(player_id, boundary_at),
+                              *_observation_resets(connection, observation_id)])
     connection.execute(
         """
         INSERT INTO reset_boundary_settlements (
@@ -202,14 +205,9 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     ended_from, ended_until = battle_window(boundary - DAY)
     prior_from = battle_window(boundary - 2 * DAY)[0]
     coverage = inputs.log_coverage
-    if (
-        coverage is None
-        or not coverage.valid
-        or coverage.has_row_gap
-        or coverage.malformed_row_count
-        or coverage.unclassified_row_count
-        or len(set(coverage.battle_identities)) != len(coverage.battle_identities)
-    ):
+    if (coverage is None or not coverage.valid or coverage.has_row_gap
+            or coverage.malformed_row_count or coverage.unclassified_row_count
+            or len(set(coverage.battle_identities)) != len(coverage.battle_identities)):
         reasons.append("battle_log_unreadable")
     if not inputs.log_reports or min(r[2] for r in inputs.log_reports) >= prior_from:
         reasons.append("battle_log_too_short")
@@ -363,17 +361,10 @@ def load_proof_inputs(
     if not (early and profile and log and early.usable and profile.usable and log.usable):
         return inputs
     assert log.parser_version is not None
-    coverage = next(
-        (
-            item
-            for item in ranked_day_inputs.load_coverage(
-                database, connection, player_id, ranked_day_for(boundary_at),
-                log.observation_id, log.observation_id,
-            )
-            if item.observation_id == log.observation_id
-        ),
-        None,
-    )
+    coverage = next((item for item in ranked_day_inputs.load_coverage(
+        database, connection, player_id, ranked_day_for(boundary_at),
+        log.observation_id, log.observation_id,
+    ) if item.observation_id == log.observation_id), None)
     log_observed_at = coverage.observed_at if coverage else log.response_completed_at
     reports = ranked_day_inputs.load_first_reports(
         connection, player_id, early.response_completed_at,
@@ -426,15 +417,15 @@ def refresh_boundary(
 ) -> None:
     """Re-judge one Reset and record a changed verdict (guard 7).
 
-    Runs in the caller's transaction, under the player's settlement lock, so
-    the inputs are re-read after any concurrent writer finished. A finalized
+    Runs in the caller's transaction, under the Reset's own lock, so the
+    inputs are re-read after any concurrent writer finished. A finalized
     Season keeps its verdict. Admitting a new ``settled`` verdict needs the
     switch; losing one never does. A change to a settled verdict re-judges
     the next Reset, whose target it roots.
     """
     from .season_retirement import is_season_detail_retired
 
-    season_id = _lock_player(connection, player_id, boundary_at)
+    season_id = _lock_reset(connection, player_id, boundary_at)
     if is_season_detail_retired(connection, season_id):
         return
     inputs = load_proof_inputs(database, connection, player_id, boundary_at)
@@ -479,16 +470,22 @@ def refresh_boundary(
         refresh_boundary(database, connection, player_id, boundary_at + DAY, depth=depth + 1)
 
 
-def _lock_player(connection: Any, player_id: int, boundary_at: datetime) -> str:
-    """Hold the Reset's Season and one lock over all the player's Resets, so
-    two jobs never take a player's Resets in opposite orders."""
+def _lock_reset(connection: Any, player_id: int, boundary_at: datetime) -> str:
+    """Hold the Reset's Season and the Reset's own lock; returns the Season."""
     from .season_retirement import acquire_season_lock_shared
 
     season_id = ranked_day_for(boundary_at - DAY).official_season_id
     acquire_season_lock_shared(connection, season_id)
     connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                       (f"reset-settlement:{player_id}",))
+                       (f"reset-settlement:{player_id}:{boundary_at.astimezone(UTC).isoformat()}",))
     return season_id
+
+
+def _lock_resets(connection: Any, resets: list[tuple[int, datetime]]) -> None:
+    """Lock Resets oldest first, after any publication lock, so jobs never
+    wait on each other's Resets in opposite orders."""
+    for player_id, boundary_at in sorted(set(resets), key=lambda r: (r[1], r[0])):
+        _lock_reset(connection, player_id, boundary_at)
 
 
 def _has_settlements(database: Database, connection: Any) -> bool:
@@ -516,6 +513,15 @@ def refresh_for_observation(
     """
     if not _has_settlements(database, connection):
         return
+    rows = _observation_resets(connection, observation_id)
+    _lock_resets(connection, rows)
+    for player_id, boundary_at in rows:
+        refresh_boundary(database, connection, player_id, boundary_at)
+
+
+def _observation_resets(connection: Any, observation_id: int | None) -> list[tuple[int, datetime]]:
+    if observation_id is None:
+        return []
     rows = connection.execute(
         """
         WITH observed AS (
@@ -548,8 +554,7 @@ def refresh_for_observation(
         """,
         (observation_id,),
     ).fetchall()
-    for player_id, boundary_at in rows:
-        refresh_boundary(database, connection, int(player_id), boundary_at)
+    return [(int(player_id), boundary_at) for player_id, boundary_at in rows]
 
 
 def refresh_terminal_work(database: Database, *, batch: int = 100) -> int:
