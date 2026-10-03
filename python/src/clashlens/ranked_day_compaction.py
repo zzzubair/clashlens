@@ -66,7 +66,7 @@ def compact(
                     (through, players_per_batch),
                 ).fetchone()
         except psycopg.errors.LockNotAvailable:
-            # A live recalculation held a copy; the next run retries the batch.
+            # A live recalculation held a player-day; the next run retries the batch.
             return {**totals, "finished_days": finished_days, "status": "busy"}
         if row is None:
             return {**totals, "finished_days": finished_days, "status": "idle"}

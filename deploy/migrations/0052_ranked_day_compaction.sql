@@ -65,7 +65,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
--- A live recalculation locks its day's newest copy, which a batch locks too.
+-- A batch takes the lock a recalculation takes for each of its player-days.
 -- Give up quickly instead of holding the worker; the next batch retries.
 SET lock_timeout = '2s'
 AS $$
@@ -75,6 +75,7 @@ DECLARE
     progress ranked_day_compactions%ROWTYPE;
     batch_players bigint[];
     doomed bigint[];
+    lock_key text;
 BEGIN
     IF player_limit IS NULL OR player_limit NOT BETWEEN 1 AND 1000 THEN
         RAISE EXCEPTION 'player_limit must be between 1 and 1000' USING ERRCODE = '22023';
@@ -89,16 +90,20 @@ BEGIN
         RETURN;
     END IF;
 
+    -- A day ends 24 hours after it starts; ranked_day_versions_daily_selector
+    -- (ranked_day_end, id DESC) answers each lookup from the index.
     SELECT candidate.start, candidate.newest_id INTO target_day, newest_id
     FROM generate_series(
-        (SELECT min(version.ranked_day_start) FROM ranked_day_versions AS version),
+        (SELECT min(version.ranked_day_end) FROM ranked_day_versions AS version)
+            - interval '24 hours',
         ready_through - interval '24 hours',
         interval '24 hours'
     ) AS series(start)
     CROSS JOIN LATERAL (
         SELECT series.start,
                (SELECT max(version.id) FROM ranked_day_versions AS version
-                WHERE version.ranked_day_start = series.start) AS newest_id
+                WHERE version.ranked_day_end = series.start + interval '24 hours')
+                   AS newest_id
     ) AS candidate
     LEFT JOIN ranked_day_compactions AS done ON done.ranked_day_start = candidate.start
     WHERE candidate.newest_id > coalesce(done.compacted_through_id, 0)
@@ -125,21 +130,21 @@ BEGIN
         LIMIT player_limit
     ) AS player;
 
-    -- Wait for any recalculation of these player-days to finish, so the
-    -- choice below sees a copy it saved; oldest day first, as a recalculation
-    -- locks them.
-    PERFORM 1 FROM ranked_day_versions AS version
-    WHERE version.id IN (
-        SELECT DISTINCT ON (newest.player_id, newest.ranked_day_start,
-                            newest.reconciliation_rule_version) newest.id
-        FROM ranked_day_versions AS newest
-        WHERE newest.player_id = ANY(batch_players)
-          AND newest.ranked_day_start IN (target_day - interval '24 hours', target_day)
-        ORDER BY newest.player_id, newest.ranked_day_start,
-                 newest.reconciliation_rule_version, newest.version DESC
-    )
-    ORDER BY version.ranked_day_start, version.player_id
-    FOR UPDATE OF version;
+    -- Wait for any recalculation of these player-days and keep new ones out
+    -- until this batch commits, so the choice below sees every copy saved.
+    -- The key is the one reconciliation_db builds, with the day start in
+    -- Python's isoformat; taken in the late-battle sweep's order.
+    FOR lock_key IN
+        SELECT 'ranked-day:' || batch.player_id || ':'
+               || to_char(batch_day.start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS')
+               || '+00:00'
+        FROM unnest(batch_players) AS batch(player_id)
+        CROSS JOIN (VALUES (target_day - interval '24 hours'), (target_day))
+            AS batch_day(start)
+        ORDER BY batch.player_id, batch_day.start
+    LOOP
+        PERFORM pg_advisory_xact_lock(hashtextextended(lock_key, 0));
+    END LOOP;
 
     WITH saved AS (
         SELECT version.id, version.player_id, version.ranked_day_start,

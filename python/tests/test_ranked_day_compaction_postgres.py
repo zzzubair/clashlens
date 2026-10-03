@@ -45,6 +45,7 @@ from test_reconciliation_postgres import (
 
 from clashlens import reconciliation_db
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import ranked_day_for
 from clashlens.late_battle_sweep import sweep_late_battles
 from clashlens.ranked_day_compaction import compact
 
@@ -206,6 +207,34 @@ def test_extra_copies_go_once_the_reset_is_done_and_what_players_see_stays(
         finally:
             worker.close()
             api.close()
+            database.close()
+
+
+def test_a_running_recalculation_holds_off_the_cleanup_of_its_player_day(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _ended_day_with_copies(connection_info, archive_server, database, processor)
+            after_reset = DAY_END + timedelta(minutes=40)
+            with psycopg.connect(connection_info) as recalculation:
+                player_id = recalculation.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                copies = _copies(recalculation, "#2PP", DAY_START)
+                # The lock reconciliation holds while it saves a copy of the day.
+                recalculation.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"ranked-day:{player_id}:{ranked_day_for(DAY_START).start.isoformat()}",),
+                )
+                assert _compact(connection_info, after_reset)["status"] == "busy"
+                assert _copies(recalculation, "#2PP", DAY_START) == copies
+                recalculation.rollback()
+            assert _compact(connection_info, after_reset)["status"] == "idle"
+            with database.pool.connection() as connection:
+                assert len(_copies(connection, "#2PP", DAY_START)) < len(copies)
+        finally:
             database.close()
 
 
