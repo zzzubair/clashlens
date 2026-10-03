@@ -173,9 +173,9 @@ existing eligibility processing locally; live import and capacity are pending.
   that restores fit the [raw-expiry allowance](history-retention.md#implemented-raw-expiry-and-required-recovery-protection),
   and the revised six-month projection.
 - Discord server/invite/channel identifiers, ticket provider/plan, permissions,
-  transcript retention and support staffing. Overdue-check and Live Leaderboard
-  thresholds are defined in [alert conditions](deployment.md#alert-conditions);
-  job/upload stalls and missed Reset publication remain deferred under #140.
+  transcript retention and support staffing. Alert thresholds, including
+  job/upload stalls and missed Reset publication, are defined in
+  [alert conditions](deployment.md#alert-conditions).
 - [#61](https://github.com/zzzubair/clashlens/issues/61) stays post-launch. Its
   14-day cross-season comparison needs a retention review: compact history does
   not retain all requested daily destruction/star data, and seven-day detail
