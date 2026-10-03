@@ -32,9 +32,13 @@ def seed_day(
     tag: str,
     days_ago: int,
     *,
-    net: int,
+    net: int | None,
     state: str = "Complete",
     battles: list[dict] | None = None,
+    gained: int | None = None,
+    lost: int | None = None,
+    attacks: int | None = None,
+    defenses: int | None = None,
 ) -> None:
     start = TODAY - timedelta(days=days_ago)
     with database.pool.connection() as connection:
@@ -42,10 +46,11 @@ def seed_day(
             """
             INSERT INTO api_player_daily_logs (
                 player_id, ranked_day_start, ranked_day_end, version, state,
-                coverage, battles, partial_reasons, confidence, net_trophy_change
+                coverage, battles, partial_reasons, confidence, net_trophy_change,
+                attack_gain, defense_loss, attack_count, defense_count
             ) VALUES (
                 (SELECT id FROM players WHERE normalized_tag = %s), %s, %s, 1, %s,
-                %s, %s, %s, 'exact', %s
+                %s, %s, %s, 'exact', %s, %s, %s, %s, %s
             )
             """,
             (
@@ -57,7 +62,37 @@ def seed_day(
                 Jsonb(battles or []),
                 Jsonb([] if state == "Complete" else ["missing_battle_log"]),
                 net,
+                gained,
+                lost,
+                attacks,
+                defenses,
             ),
+        )
+
+
+def link_player(database: ApiDatabase, account_id: int, tag: str) -> None:
+    request_id = str(uuid4())
+    with database.pool.connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO private_api_requests (
+                request_id, caller, provider, provider_subject, account_id,
+                operation, method, request_target, identity_json, state,
+                response_status, response_json, completed_at
+            ) VALUES (
+                %s, 'typescript-website', 'google', 'group-owner-subject', %s,
+                'player_links.verify', 'POST', '/v1/players/verifytoken',
+                '{}'::jsonb, 'complete', 200, '{}'::jsonb, clock_timestamp()
+            )
+            """,
+            (request_id, account_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO verified_player_links (player_id, account_id, verification_request_id)
+            VALUES ((SELECT id FROM players WHERE normalized_tag = %s), %s, %s)
+            """,
+            (tag, account_id, request_id),
         )
 
 
@@ -109,7 +144,33 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
             seed_day(database, "#2PP", 2, net=10, state="Partial")
             seed_day(database, "#2PP", 3, net=20)
             seed_day(database, "#8PY", 1, net=-10)
+            # Today is still live: no net change is published until it ends.
+            seed_day(
+                database,
+                "#2PP",
+                0,
+                net=None,
+                state="Live",
+                gained=80,
+                lost=16,
+                attacks=2,
+                defenses=1,
+            )
+            # The account's own player, outside the group, with a big day.
+            seed_profile(database, "#YQ", 5400)
+            seed_day(database, "#YQ", 1, net=100)
+            # The season holding the two oldest days had its detail cleaned up.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO season_detail_retirements (
+                        official_season_id, status, season_start, season_end
+                    ) VALUES ('old-season', 'finalized', %s, %s)
+                    """,
+                    (TODAY - timedelta(days=9), TODAY - timedelta(days=5)),
+                )
             account_id = create_owner(database)
+            link_player(database, account_id, "#YQ")
             group = create_group(database, account_id, ["#2PP", "#8PY", "#9PY", "#QQQ"])
             assert group.status_code == 201
 
@@ -117,22 +178,32 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
             assert result is not None
             players = {player["tag"]: player for player in result["players"]}
             leader = players["#2PP"]
-            # Missing days stay empty, the last ended day may still change and
-            # a partial day is shown but left out of the counted total.
+            # Cleaned-up days read as history no longer kept, missing days stay
+            # empty, the last ended day may still change and a partial day is
+            # shown but left out of the counted total.
+            assert result["retired_days"] == 2
             assert [(day["state"], day["net"]) for day in leader["day_results"]] == [
-                ("missing", None),
-                ("missing", None),
+                ("retired", None),
+                ("retired", None),
                 ("missing", None),
                 ("missing", None),
                 ("complete", 20),
                 ("partial", 10),
                 ("correcting", 40),
             ]
-            assert (leader["counted_days"], leader["net"], leader["net_per_day"]) == (
-                2,
-                60,
-                30,
-            )
+            assert (
+                leader["counted_days"],
+                leader["counted_attacks"],
+                leader["net"],
+                leader["net_per_day"],
+            ) == (2, 2, 60, 30)
+            assert leader["today"] == {
+                "net": 64,
+                "gained": 80,
+                "lost": 16,
+                "attacks": 2,
+                "defenses": 1,
+            }
             assert leader["attack"] == {
                 "count": 2,
                 "stars": 5,
@@ -148,16 +219,22 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 "star_counts": {"0": 0, "1": 1, "2": 0, "3": 0},
             }
             assert leader["trophies"] == 5300 and leader["freshness"] == "fresh"
-            assert leader["vs_group_per_day"] == 40
-            assert players["#8PY"]["vs_group_per_day"] == -40
+            # Each pair is compared only on days both have counted, and the
+            # account's own player outside the group is not part of the group.
+            assert leader["vs_group"] == 50
+            assert players["#8PY"]["vs_group"] == -50
+            own = players["#YQ"]
+            assert (own["you"], own["in_group"], own["vs_group"]) == (True, False, 85)
             # No result is not a zero result.
             assert players["#9PY"]["net"] is None
-            assert players["#9PY"]["vs_group_per_day"] is None
+            assert players["#9PY"]["vs_group"] is None
             assert players["#9PY"]["attack"]["count"] == 0
             # An unknown tag started the same check a player page starts.
             assert players["#QQQ"]["status"] == "checking"
             assert players["#QQQ"]["trophies"] is None
-            assert all(not player["you"] for player in result["players"])
+            assert [player["tag"] for player in result["players"] if player["you"]] == [
+                "#YQ"
+            ]
 
             three = compare(database, account_id, group.payload["group_id"], 3)
             assert three is not None and len(three["day_starts"]) == 3

@@ -168,9 +168,17 @@
   top: 50%;
 }
 
-.trend-day .day-missing {
+.trend-flat .day-bar {
+  top: calc(50% - 1px);
+  height: 2px;
+  background: var(--cl-muted);
+}
+
+.trend-day .day-missing,
+.trend-day .day-retired {
   top: calc(50% - 3px);
   height: 6px;
+  background: transparent;
 }
 
 .day-bar {
@@ -214,6 +222,11 @@
 
 .day-missing {
   border: 1px dotted var(--cl-muted);
+  background: transparent;
+}
+
+.day-retired {
+  border: 1px solid var(--cl-muted);
   background: transparent;
 }
 

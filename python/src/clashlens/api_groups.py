@@ -15,12 +15,11 @@ from typing import Any
 from . import api_player_lookup
 from .api_db import ApiDatabase, _screen_daily_log, _screen_events, _text
 from .domain import ranked_day_for
+from .season_retirement import retired_day_ranges
 
 # A comparison is for a group of 10-20 players. Larger groups stay valid lists
 # but are refused here, so one request reads a bounded number of players.
 MAX_COMPARED_MEMBERS = 20
-# The account's own verified players shown alongside the group.
-MAX_OWN_PLAYERS = 5
 COMPARISON_DAYS = (3, 7, 14)
 
 
@@ -72,9 +71,8 @@ def get_group_comparison(
             JOIN players AS player ON player.id = link.player_id
             WHERE link.account_id = %s
             ORDER BY player.normalized_tag
-            LIMIT %s
             """,
-            (account_id, MAX_OWN_PLAYERS),
+            (account_id,),
         ).fetchall()
         own_ids = {int(row[0]) for row in own}
         players: dict[int, dict[str, Any]] = {}
@@ -104,7 +102,7 @@ def get_group_comparison(
             SELECT DISTINCT ON (player_id, ranked_day_start)
                    player_id, ranked_day_start, state, coverage, confidence,
                    partial_reasons, net_trophy_change, attack_count,
-                   defense_count, battles
+                   defense_count, battles, attack_gain, defense_loss
             FROM api_player_daily_logs
             WHERE player_id = ANY(%s)
               AND ranked_day_start >= %s AND ranked_day_start <= %s
@@ -113,6 +111,14 @@ def get_group_comparison(
             (ids, day_starts[0], today_start),
         ).fetchall():
             logs[(int(row[0]), row[1].astimezone(UTC))] = row
+        # Completed seasons lose their daily detail after cleanup, so those
+        # days read as history no longer kept rather than nothing recorded.
+        ranges = retired_day_ranges(connection)
+        retired = {
+            start
+            for start in day_starts
+            if any(low <= start < high for low, high in ranges)
+        }
         results = []
         for player_id, player in players.items():
             profile = profiles.get(player_id)
@@ -129,7 +135,7 @@ def get_group_comparison(
                     "in_group": player["in_group"],
                     "status": status,
                     **_current(profile, now, freshness_seconds),
-                    **_window(player_id, logs, day_starts, today_start),
+                    **_window(player_id, logs, day_starts, today_start, retired),
                 }
             )
     _add_group_difference(results)
@@ -140,6 +146,7 @@ def get_group_comparison(
         "days": days,
         "day_starts": [start.isoformat() for start in day_starts],
         "today_start": today_start.isoformat(),
+        "retired_days": len(retired),
         "generated_at": now.isoformat(),
         "players": results,
     }
@@ -170,6 +177,7 @@ def _window(
     logs: dict[tuple[int, datetime], Any],
     day_starts: list[datetime],
     today_start: datetime,
+    retired: set[datetime],
 ) -> dict[str, Any]:
     attack = {"count": 0, "stars": 0, "destruction": 0, "three_stars": 0, "trophies": 0}
     defense = {
@@ -182,10 +190,12 @@ def _window(
     days = []
     net = 0
     counted_days = 0
+    counted_attacks = 0
     for start in day_starts:
         row = logs.get((player_id, start))
         if row is None:
-            days.append({"start": start.isoformat(), "state": "missing", "net": None})
+            state = "retired" if start in retired else "missing"
+            days.append({"start": start.isoformat(), "state": state, "net": None})
             continue
         state = _screen_daily_log(
             {
@@ -202,10 +212,11 @@ def _window(
             state = "correcting"
         day_net = None if row[6] is None else int(row[6])
         days.append({"start": start.isoformat(), "state": state, "net": day_net})
+        offense_events, defense_events = _screen_events(row[9])
         if state in {"complete", "correcting"} and day_net is not None:
             net += day_net
             counted_days += 1
-        offense_events, defense_events = _screen_events(row[9])
+            counted_attacks += len(offense_events)
         for event in offense_events:
             attack["count"] += 1
             attack["stars"] += event["stars"]
@@ -220,15 +231,10 @@ def _window(
             defense["star_counts"][str(event["stars"])] += 1
     today = logs.get((player_id, today_start))
     return {
-        "today": None
-        if today is None
-        else {
-            "net": None if today[6] is None else int(today[6]),
-            "attacks": None if today[7] is None else int(today[7]),
-            "defenses": None if today[8] is None else int(today[8]),
-        },
+        "today": None if today is None else _today(today),
         "day_results": days,
         "counted_days": counted_days,
+        "counted_attacks": counted_attacks,
         "net": net if counted_days else None,
         "net_per_day": round(net / counted_days, 2) if counted_days else None,
         "attack": attack,
@@ -236,16 +242,39 @@ def _window(
     }
 
 
+def _today(row: Any) -> dict[str, Any]:
+    # The live day publishes no net change until it ends, so today's result
+    # is the trophies won attacking minus the trophies lost defending.
+    gained = None if row[10] is None else int(row[10])
+    lost = None if row[11] is None else int(row[11])
+    return {
+        "net": None if gained is None or lost is None else gained - lost,
+        "gained": gained,
+        "lost": lost,
+        "attacks": None if row[7] is None else int(row[7]),
+        "defenses": None if row[8] is None else int(row[8]),
+    }
+
+
 def _add_group_difference(players: list[dict[str, Any]]) -> None:
-    """Compare each player's trophies per counted day with everyone else's."""
-    for player in players:
-        others = [
-            other["net_per_day"]
-            for other in players
-            if other is not player and other["net_per_day"] is not None
+    """Trophies each player gained on every other group member.
+
+    Each pair is compared only on the days both have counted results, then
+    averaged across the group members that share at least one such day. The
+    account's own players outside the group are never part of the reference.
+    """
+    counted = [
+        {
+            day["start"]: day["net"]
+            for day in player["day_results"]
+            if day["state"] in {"complete", "correcting"} and day["net"] is not None
+        }
+        for player in players
+    ]
+    for player, mine in zip(players, counted, strict=True):
+        gaps = [
+            sum(mine[start] - theirs[start] for start in mine.keys() & theirs.keys())
+            for other, theirs in zip(players, counted, strict=True)
+            if other is not player and other["in_group"] and mine.keys() & theirs.keys()
         ]
-        player["vs_group_per_day"] = (
-            None
-            if player["net_per_day"] is None or not others
-            else round(player["net_per_day"] - sum(others) / len(others), 2)
-        )
+        player["vs_group"] = round(sum(gaps) / len(gaps), 1) if gaps else None

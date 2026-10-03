@@ -77,14 +77,19 @@ def get_lookup(database: ApiDatabase, tag: str) -> dict[str, Any]:
         return _lookup(connection, tag)
 
 
-def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
-    """Start a profile check for a tag Clash Lens has no answer for yet."""
-    # The existing enqueue function takes this same tag lock. Serialize
-    # the evidence read with admission so simultaneous visits reuse work.
+def lock_tag(connection: Any, normalized_tag: str) -> None:
+    """Take the per-tag lock the existing enqueue function also takes."""
     connection.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
         (normalized_tag,),
     )
+
+
+def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
+    """Start a profile check for a tag Clash Lens has no answer for yet."""
+    # Serialize the evidence read with admission so simultaneous visits
+    # reuse work.
+    lock_tag(connection, normalized_tag)
     lookup = _lookup(connection, normalized_tag)
     if lookup["state"] in {"unknown", "failed", "not_found"}:
         # Failed and negative checks have the same minimum retry interval

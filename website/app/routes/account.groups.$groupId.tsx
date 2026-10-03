@@ -146,6 +146,9 @@ export default function GroupCompareRoute() {
           {formatDay(comparison.dayStarts[0])} to{" "}
           {formatDay(comparison.dayStarts[comparison.dayStarts.length - 1])}. A Legend day
           runs from 05:00 to 05:00 UTC.
+          {comparison.retiredDays > 0
+            ? ` History for ${comparison.retiredDays} of these days is no longer kept, so results cover at most ${plural(days - comparison.retiredDays, "day")}.`
+            : null}
         </p>
         <div className="compare-controls">
           <nav aria-label="Days compared" className="leaderboard-view-switch">
@@ -200,7 +203,8 @@ export default function GroupCompareRoute() {
               <th scope="col">Trophies now</th>
               <th scope="col">Today so far</th>
               <th scope="col">Last {days} days</th>
-              <th scope="col">Trophies a day vs others</th>
+              <th scope="col">Won vs lost</th>
+              <th scope="col">Vs the group</th>
               <th scope="col">Attack</th>
               <th scope="col">Defense</th>
             </tr>
@@ -242,11 +246,24 @@ export default function GroupCompareRoute() {
           </dt>
           <dd>Nothing recorded. Never counted as zero.</dd>
         </div>
+        <div>
+          <dt>
+            <span className="day-bar day-retired" aria-hidden="true" /> History no longer
+            kept
+          </dt>
+          <dd>
+            The day belongs to a finished season whose daily detail has been cleaned up.
+            Never counted as zero.
+          </dd>
+        </div>
       </dl>
       <p className="section-note">
-        Attack and defense use every battle recorded in these days; the number after each
-        average is how many battles it comes from. Trophies a day vs others compares each
-        player&rsquo;s trophies per counted day with the average of everyone else shown.
+        Won vs lost, attack and defense use every battle recorded in these days; the
+        number of battles is shown with each. Attack success is the average stars and
+        average destruction per attack. Attacks a day count only counted days, out of the
+        8 attacks a Legend day allows. Vs the group compares a player with each other
+        group member on the days both have counted results, then averages across those
+        members; your own players outside the group are never part of it.
       </p>
     </main>
   );
@@ -299,15 +316,22 @@ function PlayerRow({
         )}
       </td>
       <td data-label="Today so far">
-        {player.today === null || player.today.net === null ? (
+        {player.today === null ? (
           <Empty />
         ) : (
           <>
-            <Signed value={player.today.net} />
-            <span className="compare-sub">
-              {plural(player.today.attacks ?? 0, "attack")},{" "}
-              {plural(player.today.defenses ?? 0, "defense")}
-            </span>
+            {player.today.net === null ? <Empty /> : <Signed value={player.today.net} />}
+            {player.today.gained !== null && player.today.lost !== null ? (
+              <span className="compare-sub">
+                +{player.today.gained} won · −{player.today.lost} lost
+              </span>
+            ) : null}
+            {player.today.attacks !== null && player.today.defenses !== null ? (
+              <span className="compare-sub">
+                {plural(player.today.attacks, "attack")},{" "}
+                {plural(player.today.defenses, "defense")}
+              </span>
+            ) : null}
           </>
         )}
       </td>
@@ -318,11 +342,23 @@ function PlayerRow({
         </span>
         <Trend days={player.days} scale={scale} />
       </td>
-      <td data-label="Trophies a day vs others">
-        {player.vsGroupPerDay === null ? (
+      <td data-label="Won vs lost">
+        {attack.count + defense.count === 0 ? (
+          <Empty label="No battles recorded" />
+        ) : (
+          <>
+            <Signed value={attack.trophies - defense.trophies} />
+            <span className="compare-sub">
+              +{attack.trophies} won · −{defense.trophies} lost
+            </span>
+          </>
+        )}
+      </td>
+      <td data-label="Vs the group">
+        {player.vsGroup === null ? (
           <Empty />
         ) : (
-          <Signed value={player.vsGroupPerDay} decimals={1} />
+          <Signed value={player.vsGroup} decimals={1} />
         )}
         {player.netPerDay !== null ? (
           <span className="compare-sub">{signed(player.netPerDay, 1)} a day</span>
@@ -341,8 +377,10 @@ function PlayerRow({
               {Math.round((attack.threeStars / attack.count) * 100)}% triples
             </span>
             <span className="compare-sub">
-              {plural(attack.count, "attack")}, +
-              {(attack.trophies / attack.count).toFixed(1)} each
+              {plural(attack.count, "attack")}
+              {player.countedDays > 0
+                ? ` · ${(player.countedAttacks / player.countedDays).toFixed(1)} of 8 a day`
+                : ""}
             </span>
           </>
         )}
@@ -387,17 +425,25 @@ function Trend({ days, scale }: { days: DayResult[]; scale: number }) {
   return (
     <span className="trend" role="img" aria-label={`Daily results: ${summary}`}>
       {days.map((day) => {
+        const direction =
+          day.net === null || day.net === 0
+            ? "trend-flat"
+            : day.net > 0
+              ? "trend-up"
+              : "trend-down";
         const height =
-          day.net === null ? 0 : Math.max(8, (Math.abs(day.net) / scale) * 50);
+          day.net === null || day.net === 0
+            ? undefined
+            : { height: `${Math.max(8, (Math.abs(day.net) / scale) * 50)}%` };
         return (
           <span
             key={day.start}
-            className={`trend-day ${day.net !== null && day.net < 0 ? "trend-down" : "trend-up"}`}
+            className={`trend-day ${direction}`}
             title={`${formatDay(day.start)}: ${DAY_LABELS[day.state]}${day.net === null ? "" : `, ${signed(day.net)}`}`}
           >
             <span
               className={`day-bar day-${day.state === "uncertain" ? "partial" : day.state}`}
-              style={day.state === "missing" ? undefined : { height: `${height}%` }}
+              style={height}
             />
           </span>
         );
@@ -431,6 +477,7 @@ const DAY_LABELS: Record<DayResult["state"], string> = {
   partial: "incomplete",
   uncertain: "incomplete",
   missing: "no result",
+  retired: "history no longer kept",
 };
 
 function sortPlayers(players: ComparedPlayer[], sort: SortKey): ComparedPlayer[] {

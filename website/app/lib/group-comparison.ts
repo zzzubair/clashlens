@@ -16,7 +16,8 @@ export type MemberStatus =
   | "failed"
   | "unknown";
 
-export type DayState = "complete" | "correcting" | "partial" | "uncertain" | "missing";
+export type DayState =
+  "complete" | "correcting" | "partial" | "uncertain" | "missing" | "retired";
 
 export interface DayResult {
   start: string;
@@ -34,12 +35,19 @@ export interface ComparedPlayer {
   observedAt: string | null;
   ageSeconds: number | null;
   freshness: "fresh" | "stale" | null;
-  today: { net: number | null; attacks: number | null; defenses: number | null } | null;
+  today: {
+    net: number | null;
+    gained: number | null;
+    lost: number | null;
+    attacks: number | null;
+    defenses: number | null;
+  } | null;
   days: DayResult[];
   countedDays: number;
+  countedAttacks: number;
   net: number | null;
   netPerDay: number | null;
-  vsGroupPerDay: number | null;
+  vsGroup: number | null;
   attack: {
     count: number;
     stars: number;
@@ -62,6 +70,7 @@ export interface GroupComparison {
   days: ComparisonDays;
   dayStarts: string[];
   todayStart: string;
+  retiredDays: number;
   generatedAt: string;
   players: ComparedPlayer[];
 }
@@ -81,6 +90,7 @@ const DAY_STATES: readonly DayState[] = [
   "partial",
   "uncertain",
   "missing",
+  "retired",
 ];
 
 export function mapGroupComparison(value: unknown): GroupComparison | null {
@@ -94,6 +104,8 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     !value.day_starts.every(isTimestamp) ||
     value.day_starts.length !== value.days ||
     !isTimestamp(value.today_start) ||
+    !isCount(value.retired_days) ||
+    value.retired_days > value.day_starts.length ||
     !isTimestamp(value.generated_at) ||
     !Array.isArray(value.players)
   )
@@ -110,6 +122,7 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     days: value.days as ComparisonDays,
     dayStarts: value.day_starts as string[],
     todayStart: value.today_start as string,
+    retiredDays: value.retired_days,
     generatedAt: value.generated_at as string,
     players,
   };
@@ -134,9 +147,10 @@ function mapPlayer(value: unknown, dayCount: number): ComparedPlayer | null {
     !Array.isArray(value.day_results) ||
     value.day_results.length !== dayCount ||
     !isCount(value.counted_days) ||
+    !isCount(value.counted_attacks) ||
     !isNullableInteger(value.net) ||
     !isNullableNumber(value.net_per_day) ||
-    !isNullableNumber(value.vs_group_per_day) ||
+    !isNullableNumber(value.vs_group) ||
     !isRecord(value.attack) ||
     !isRecord(value.defense) ||
     !isRecord(value.defense.star_counts)
@@ -158,12 +172,16 @@ function mapPlayer(value: unknown, dayCount: number): ComparedPlayer | null {
     if (
       !isRecord(value.today) ||
       !isNullableInteger(value.today.net) ||
+      !isNullableCount(value.today.gained) ||
+      !isNullableCount(value.today.lost) ||
       !isNullableCount(value.today.attacks) ||
       !isNullableCount(value.today.defenses)
     )
       return null;
     today = {
       net: value.today.net,
+      gained: value.today.gained,
+      lost: value.today.lost,
       attacks: value.today.attacks,
       defenses: value.today.defenses,
     };
@@ -194,9 +212,10 @@ function mapPlayer(value: unknown, dayCount: number): ComparedPlayer | null {
     today,
     days,
     countedDays: value.counted_days,
+    countedAttacks: value.counted_attacks,
     net: value.net,
     netPerDay: value.net_per_day,
-    vsGroupPerDay: value.vs_group_per_day,
+    vsGroup: value.vs_group,
     attack: {
       count: attack.count as number,
       stars: attack.stars as number,

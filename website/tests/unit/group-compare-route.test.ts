@@ -39,16 +39,17 @@ function player(overrides: Record<string, unknown> = {}) {
     observed_at: "2026-08-06T12:00:00+00:00",
     age_seconds: 60,
     freshness: "fresh",
-    today: { net: 12, attacks: 2, defenses: 1 },
+    today: { net: 64, gained: 80, lost: 16, attacks: 2, defenses: 1 },
     day_results: [
-      { start: DAYS[0], state: "missing", net: null },
+      { start: DAYS[0], state: "retired", net: null },
       { start: DAYS[1], state: "partial", net: 10 },
       { start: DAYS[2], state: "correcting", net: 40 },
     ],
     counted_days: 1,
+    counted_attacks: 2,
     net: 40,
     net_per_day: 40.0,
-    vs_group_per_day: null,
+    vs_group: null,
     attack: { count: 2, stars: 5, destruction: 180, three_stars: 1, trophies: 56 },
     defense: {
       count: 1,
@@ -69,6 +70,7 @@ function payload(players = [player()]) {
     days: 3,
     day_starts: DAYS,
     today_start: "2026-08-06T05:00:00+00:00",
+    retired_days: 1,
     generated_at: "2026-08-06T12:00:00+00:00",
     players,
   };
@@ -93,13 +95,16 @@ describe("group comparison", () => {
   it("keeps missing results empty instead of zero", () => {
     const comparison = mapGroupComparison(payload());
     expect(comparison?.players[0].days.map((day) => day.net)).toEqual([null, 10, 40]);
-    expect(comparison?.players[0].vsGroupPerDay).toBeNull();
+    expect(comparison?.players[0].days[0].state).toBe("retired");
+    expect(comparison?.players[0].vsGroup).toBeNull();
+    expect(comparison?.retiredDays).toBe(1);
   });
 
   it("rejects a response whose days do not match the requested window", () => {
     expect(mapGroupComparison({ ...payload(), days: 7 })).toBeNull();
     expect(mapGroupComparison(payload([player({ day_results: [] })]))).toBeNull();
     expect(mapGroupComparison(payload([player({ status: "inactive" })]))).toBeNull();
+    expect(mapGroupComparison({ ...payload(), retired_days: 4 })).toBeNull();
   });
 
   it("reads the signed-in account's group for a supported window only", async () => {

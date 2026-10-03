@@ -1027,11 +1027,16 @@ def _replace_group_players(
     group_id: int,
     normalized_tags: list[str],
 ) -> None:
+    tags = sorted(set(normalized_tags))
+    # A player lookup takes the tag lock before touching the player row, so
+    # take every tag lock first, in one order, before inserting players.
+    for normalized_tag in tags:
+        api_player_lookup.lock_tag(connection, normalized_tag)
     connection.execute(
         "DELETE FROM account_group_players WHERE group_id = %s",
         (group_id,),
     )
-    for normalized_tag in sorted(set(normalized_tags)):
+    for normalized_tag in tags:
         player_id = api_db._ensure_player(connection, normalized_tag)
         connection.execute(
             """
