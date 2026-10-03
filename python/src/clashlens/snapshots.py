@@ -374,7 +374,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     SELECT DISTINCT ON (o.player_id)
                            o.player_id, j.failure_category, j.outcome
                     FROM collector_observations AS o
-                    JOIN python_processing_jobs_worker AS j
+                    LEFT JOIN python_processing_jobs_worker AS j
                       ON j.observation_id = o.id
                     WHERE o.endpoint = 'profile'
                       AND o.player_id IS NOT NULL

@@ -1,0 +1,11 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens finished-job cleanup batch
+PartOf=clashlens.target
+# After, not Requires: a batch never starts or restarts with the database.
+After=clashlens-postgres.service
+
+[Service]
+Type=oneshot
+ExecStart=@@ROOT@@/ops history-prune
+TimeoutStartSec=10min

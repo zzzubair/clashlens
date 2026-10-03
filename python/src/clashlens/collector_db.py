@@ -951,7 +951,7 @@ class CollectorDatabase:
         return int(existing[0])
 
     @staticmethod
-    def _recovered_observation(
+    def _recorded_observation(
         connection: Any,
         handoff: ResponseHandoff,
         parser_version: str,
@@ -980,12 +980,10 @@ class CollectorDatabase:
         )
         if existing[1:6] != expected:
             raise ValueError("response occurrence key conflicts with observation")
-        if existing[6] is None:
-            raise RuntimeError("response occurrence is missing its processing job")
         return ResponseResult(
             True,
             int(existing[0]),
-            int(existing[6]),
+            existing[6],
             handoff.response_hash,
             parser_version,
         )
@@ -1198,7 +1196,7 @@ class CollectorDatabase:
         with self._connection() as connection:
             with connection.transaction():
                 if recovering:
-                    recorded = self._recovered_observation(
+                    recorded = self._recorded_observation(
                         connection, handoff, parser_version
                     )
                     if recorded is not None:
@@ -1206,32 +1204,14 @@ class CollectorDatabase:
                 work_kind = self._validate_work_identity(connection, handoff)
                 state = self._lock_response_state(connection, handoff)
                 if state is not None and state[5] == handoff.occurrence_key:
-                    recorded = connection.execute(
-                        """
-                        SELECT observation.id, job.id
-                        FROM collector_observations AS observation
-                        LEFT JOIN python_processing_jobs AS job
-                          ON job.observation_id = observation.id
-                         AND job.work_type = 'process_observation'
-                        WHERE observation.occurrence_key = %s
-                        """,
-                        (handoff.occurrence_key,),
-                    ).fetchone()
+                    recorded = self._recorded_observation(
+                        connection, handoff, parser_version
+                    )
                     if recorded is None:
                         return ResponseResult(
                             False, None, None, handoff.response_hash, parser_version
                         )
-                    if recorded[1] is None:
-                        raise RuntimeError(
-                            "response occurrence is missing its processing job"
-                        )
-                    return ResponseResult(
-                        True,
-                        int(recorded[0]),
-                        int(recorded[1]),
-                        handoff.response_hash,
-                        parser_version,
-                    )
+                    return recorded
                 if recovering and not serialized and state is not None:
                     raise RuntimeError(
                         "legacy response handoff has no durable commit identity"

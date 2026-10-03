@@ -824,13 +824,8 @@ def test_raw_cleanup_timer_is_installed_only_when_deletion_is_on(tmp_path, mode_
         assert service["Service"]["ExecStart"] == [str(OPS), "archive-prune", "--scheduled"]
 
 
-@pytest.mark.parametrize("setting", ["preview", "apply"])
-def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
-    runtime, mode_config, tmp_path, setting
-):
-    env, _ = runtime
-    _raw_cleanup_config(mode_config, tmp_path, setting)
-    deletes = setting == "apply"
+def _recording_podman(env, mode_config, tmp_path):
+    """Record each `podman run` cleanup container instead of starting it."""
     runs = tmp_path / "runs"
     podman = tmp_path / "recording-podman"
     podman.write_text(
@@ -843,6 +838,17 @@ def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
     )
     podman.chmod(0o700)
     env = dict(mode_config, **{k: env[k] for k in ("SYSTEMCTL_BIN", "PATH")}, PODMAN_BIN=str(podman))
+    return env, runs
+
+
+@pytest.mark.parametrize("setting", ["preview", "apply"])
+def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
+    runtime, mode_config, tmp_path, setting
+):
+    env, _ = runtime
+    _raw_cleanup_config(mode_config, tmp_path, setting)
+    deletes = setting == "apply"
+    env, runs = _recording_podman(env, mode_config, tmp_path)
     lock_path = tmp_path / "state" / "clashlens" / "ops.lock"
     with lock_path.open("w") as lock:
         # A deployment or backup holding the operation lock does not delay cleanup.
@@ -870,3 +876,80 @@ def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
         env=env, capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
     )
     assert (manual.returncode == 0) is deletes, manual.stderr
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+def test_finished_job_cleanup_timer_runs_only_in_production(tmp_path, mode_config, mode):
+    units = render_units(tmp_path, mode_config, mode) / "systemd" / "user"
+    production = mode == "production"
+    target = _systemd_unit(units / "clashlens.target")
+    assert ("clashlens-history-retention.timer" in target["Unit"].get("Wants", [])) is production
+    assert (units / "clashlens-history-retention.timer").exists() is production
+    if production:
+        service = _systemd_unit(units / "clashlens-history-retention.service")
+        assert service["Service"]["ExecStart"] == [str(OPS), "history-prune"]
+        # Starting, stopping or restarting the database never runs a batch.
+        assert "Requires" not in service["Unit"]
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+def test_finished_job_cleanup_role_gets_a_fresh_login_only_in_production(tmp_path, mode_config, mode):
+    store = tmp_path / "podman-secrets"
+    store.mkdir()
+    statements = tmp_path / "statements.sql"
+    podman = tmp_path / "podman"
+    podman.write_text(
+        f"#!{sys.executable}\n"
+        "import os, shutil, sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['secret', 'create']:\n"
+        "    open(os.path.join(os.environ['SECRET_STORE'], args[-2]), 'w').write(sys.stdin.read())\n"
+        "elif args[0] == 'exec':\n"
+        f"    open({str(statements)!r}, 'a').write(sys.stdin.read())\n"
+        "    print(1)\n"
+        "else:\n"
+        "    sys.exit(1)\n"
+    )
+    podman.chmod(0o700)
+    passwords = []
+    for _ in range(2):
+        result = subprocess.run(
+            ["bash", "-c", MODE_CONFIG + "prepare_secrets\nconfigure_database\n", "role-test", str(OPS)],
+            env=dict(mode_config, TEST_MODE=mode, PODMAN_BIN=str(podman), SECRET_STORE=str(store)),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        secret = store / "clashlens-history-operator-database-url"
+        if mode == "fixture":
+            assert not secret.exists()
+            assert "clashlens_history_retention" not in statements.read_text()
+            return
+        password = re.fullmatch(
+            r"postgresql://clashlens_history_retention:([0-9a-f]{64})@127\.0\.0\.1:5432/clashlens\?sslmode=disable",
+            secret.read_text(),
+        ).group(1)
+        assert f"ALTER ROLE clashlens_history_retention WITH LOGIN PASSWORD '{password}';" in statements.read_text()
+        passwords.append(password)
+    assert passwords[0] != passwords[1]
+
+
+def test_finished_job_cleanup_runs_one_batch_as_its_own_role_without_waiting(runtime, mode_config, tmp_path):
+    env, runs = _recording_podman(runtime[0], mode_config, tmp_path)
+    with (tmp_path / "state" / "clashlens" / "ops.lock").open("w") as lock:
+        # A deployment or backup holding the operation lock does not delay cleanup.
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        result = subprocess.run(
+            ["bash", str(OPS), "history-prune"],
+            env=env, capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
+        )
+    assert result.returncode == 0, result.stderr
+    command = runs.read_text()
+    assert command.count("\n") == 1
+    assert "--secret clashlens-history-operator-database-url,type=mount,target=/run/secrets/database-url" in command
+    assert command.rstrip().endswith("prune-history --jobs-only --retention-hours 48 --max-jobs 1000 --apply")
+    # No spool, archive keys or other database credentials reach the cleanup container.
+    assert "--volume" not in command and "archive-operator" not in command
+

@@ -246,8 +246,14 @@ python -m clashlens prune-history --retention-hours 48 --max-jobs 1000 --apply
 
 Use the normal `CLASHLENS_DATABASE_URL_FILE` secret-file setting. The default is
 preview only. Retention accepts 48–672 hours; each table is limited to 1–1000
-candidates per invocation. Schedule bounded runs only after validating their
-reports and queue impact. No automatic schedule is installed.
+candidates per invocation. Only the finished-job part runs on a schedule: in
+production a timer runs `prune-history --jobs-only --apply` every 30 seconds
+after the last batch ends, as the `clashlens_history_retention` role from
+migration 0053, which can do nothing else. Its operation and failure checks
+are in [finished-job cleanup failed](operating.md#finished-job-cleanup-failed).
+The other parts still run only by hand. Deleting a job also deletes its
+attempts, events and replay-request record; processing outcomes and profile
+effects stay, with their link to the deleted attempt cleared.
 
 The collector cleanup removes eligible completed explicit collection work, preserving
 both ends and transitions of unchanged log runs, semantic profile anchors,

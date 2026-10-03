@@ -361,7 +361,7 @@ def _freeze_boundary_manifest(
                     ), (
                         SELECT job.failure_category
                         FROM collector_observations AS observation
-                        JOIN python_processing_jobs_worker AS job
+                        LEFT JOIN python_processing_jobs_worker AS job
                           ON job.observation_id = observation.id
                         WHERE observation.player_id = %s
                           AND observation.endpoint = 'profile'
