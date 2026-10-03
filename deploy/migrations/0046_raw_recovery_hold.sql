@@ -68,7 +68,8 @@ WHERE availability = 'retiring';
 -- Avoid sorting all due responses before selecting a bounded batch.
 DROP INDEX IF EXISTS archive_catalogue_retention;
 CREATE INDEX archive_catalogue_retention
-    ON archive_catalogue (availability, retire_after, archive_reference);
+    ON archive_catalogue (retire_after, archive_reference)
+    WHERE availability = 'verified';
 CREATE INDEX archive_catalogue_retiring
     ON archive_catalogue (retiring_since, archive_reference)
     WHERE availability = 'retiring';
