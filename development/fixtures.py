@@ -26,7 +26,7 @@ ARCHIVE_BUCKET = "evidence"
 ARCHIVE_MARKER_KEY = "clashlens/archive-instance.json"
 ARCHIVE_MARKER_BODY = b'{"fixture":"clashlens-dev-archive-v1"}\n'
 VERIFY_TOKEN_PREFIX = "VERIFY-"
-LOOKUP_TAGS = {"#LQQP": "eligible", "#LQQY": "ineligible", "#LQQG": "uncertain", "#LQQJ": "failed"}
+LOOKUP_TAGS = {"#LQQP": "eligible", "#LQQY": "ineligible", "#LQQG": "uncertain", "#LQQJ": "failed", "#LQQC": "season_zero"}
 
 
 def tag_for(index: int) -> str:
@@ -385,6 +385,13 @@ class ClashHandler(QuietHandler):
                         payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
                     elif lookup == "uncertain":
                         payload.pop("leagueTier")
+                    elif lookup == "season_zero":
+                        # Legend I but no Season, as 1,357 players were on 2026-10-03.
+                        payload.update(
+                            name="Lookup Season 0 Clasher",
+                            trophies=5_000,
+                            currentLeagueSeasonId=0,
+                        )
                     self.send_json(200, payload)
             return
         if index is None:

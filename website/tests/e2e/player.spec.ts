@@ -449,3 +449,61 @@ test("first lookup works without JavaScript and exposes a temporary failure with
     await context.close();
   }
 });
+
+test("a Legend I player without a Season is explained, not prepared forever", async ({
+  page,
+}) => {
+  // Earlier tests spend all six lookup starts one address gets per minute, so
+  // this last one waits for the next minute's allowance.
+  test.setTimeout(150_000);
+  const lookup = page.getByRole("region", { name: "Player lookup" });
+  const headline =
+    "Lookup Season 0 Clasher is in Legend League but hasn't played a Legend League battle this Season.";
+  await expect(async () => {
+    await page.goto("/players/%23LQQC");
+    await expect(lookup).not.toContainText("Waiting to check");
+  }).toPass({ timeout: 70_000, intervals: [5_000] });
+  await expect(lookup).toContainText(headline, { timeout: 30_000 });
+
+  // A later visit shows it at once, never reads saved data every second or
+  // calls the check slow, but rereads it about once a minute.
+  const reloads: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/players/%23LQQC.data")) reloads.push(request.url());
+  });
+  await page.clock.install();
+  await page.goto("/players/%23LQQC");
+  await expect(lookup).toContainText(headline);
+  await expect(lookup).toContainText("Taking part in Legend League battles is optional.");
+  await page.clock.runFor(10_000);
+  expect(reloads).toEqual([]);
+  await page.clock.runFor(51_000);
+  await expect.poll(() => reloads.length).toBe(1);
+  await expect(lookup).toContainText(headline);
+  await page.clock.runFor(61_000);
+  await expect.poll(() => reloads.length).toBe(2);
+  await expect(lookup).not.toContainText("taking longer");
+
+  // A hidden tab pauses the rereads.
+  await page.evaluate(() =>
+    Object.defineProperty(document, "hidden", { configurable: true, value: true }),
+  );
+  await page.clock.runFor(125_000);
+  expect(reloads).toHaveLength(2);
+  await page.evaluate(() =>
+    Object.defineProperty(document, "hidden", { configurable: true, value: false }),
+  );
+  await page.clock.runFor(61_000);
+  await expect.poll(() => reloads.length).toBe(3);
+  await expect(
+    page.getByRole("heading", { name: "Lookup Season 0 Clasher" }),
+  ).toBeVisible();
+  await expect(page.locator(".player-identity")).toHaveText("#LQQCSynthetic Clan");
+  await expect(page.locator(".player-trophy-count")).toHaveText("5,000");
+  await expect(page.getByText("Current trophies", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Daily Legend log" })).toHaveCount(0);
+
+  // Its unconfirmed trophies stay out of name search.
+  await page.goto("/?q=Lookup%20Season%200%20Clasher");
+  await expect(page.locator(".search-results")).not.toContainText("#LQQC");
+});

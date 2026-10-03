@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from . import api_db
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
+from .domain import ranked_day_for
 
 
 def _lookup(connection: Any, tag: str) -> dict[str, Any]:
@@ -11,7 +13,8 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
         """
         SELECT player.id, player.active, player.eligibility_state,
                EXISTS (SELECT 1 FROM player_profile_versions AS profile
-                       WHERE profile.player_id = player.id)
+                       WHERE profile.player_id = player.id),
+               player.current_profile_version_id IS NULL
         FROM players AS player
         WHERE player.normalized_tag = %s
         """,
@@ -19,8 +22,12 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
     ).fetchone()
     state = "unknown"
     if row is not None:
-        player_id, active, eligibility, confirmed = row
+        player_id, active, eligibility, confirmed, no_current_profile = row
         if active:
+            why = _why_no_results(connection, player_id)
+            # A newest rejected profile is explained even after accepted ones.
+            if no_current_profile or why["reason"] != "pending":
+                return {"tag": tag, "state": "tracking", **why}
             state = "tracking"
         elif confirmed:
             state = (
@@ -70,6 +77,60 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
                 elif work == "complete":
                     state = "checking"
     return {"tag": tag, "state": state}
+
+
+def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
+    """Explain why a tracked player's newest processed profile gives no
+    current results.
+
+    Reads that profile without accepting it. Only a Legend I profile whose
+    Season ID is 0 shows its name, clan and trophies, and only on the
+    player's own page.
+    """
+    row = connection.execute(
+        """
+        SELECT profile.current_league_season_id, profile.eligibility_reason,
+               profile.eligibility_state, profile.source_contract_state,
+               profile.name, profile.profile_json->'clan'->>'name', profile.trophies,
+               EXISTS (SELECT 1 FROM api_player_daily_logs AS day
+                       WHERE day.player_id = profile.player_id
+                         AND day.ranked_day_start >= %s
+                         AND jsonb_array_length(day.battles) > 0
+                         AND NOT EXISTS (
+                             SELECT 1 FROM api_player_daily_logs AS newer
+                             WHERE newer.player_id = day.player_id
+                               AND newer.ranked_day_start = day.ranked_day_start
+                               AND newer.version > day.version))
+        FROM player_profile_versions AS profile
+        CROSS JOIN LATERAL (
+            SELECT max(observed_at) AS observed_at FROM player_profile_effects
+            WHERE profile_version_id = profile.id
+        ) AS effect
+        WHERE profile.player_id = %s
+        ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC, profile.id DESC
+        LIMIT 1
+        """,
+        (ranked_day_for(datetime.now(UTC)).season_start, player_id),
+    ).fetchone()
+    if row is None:
+        return {"reason": "pending"}
+    season, reason, eligibility, contract, name, clan, trophies, battles = row
+    if (
+        _text(season) == "0"
+        and _text(reason) == "confirmed_legend_i"
+        and _text(contract) == "conflict"
+    ):
+        return {
+            # Every such player checked on 2026-10-03 had no Legend battle
+            # this Season, so a recorded battle means something else is wrong.
+            "reason": "season_unconfirmed" if battles else "no_legend_battles",
+            "profile": {"name": _text(name), "clan": _text(clan), "trophies": trophies},
+        }
+    if _text(eligibility) == "uncertain":
+        return {"reason": "unknown_tier"}
+    if _text(contract) == "conflict":
+        return {"reason": "profile_rejected"}
+    return {"reason": "pending"}
 
 
 def get_lookup(database: ApiDatabase, tag: str) -> dict[str, Any]:

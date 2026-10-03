@@ -38,13 +38,17 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import type {
   HistoricalSeasonSummary,
+  PlayerLookup,
   PlayerPage,
   RankedDaySummary,
   RefreshStatus,
   SummarizedSeasonRef,
 } from "../../app/lib/contracts";
 import { PythonApiError } from "../../app/services/python.server";
-import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
+import PlayerRoute, {
+  loader as playerLoader,
+  playerLookupView,
+} from "../../app/routes/player";
 import { isRefreshStatusPayload } from "../../app/lib/validation";
 import { createClientAddressContext } from "../../app/server/client-address.server";
 
@@ -558,7 +562,7 @@ describe("automatic tag lookup", () => {
   );
 
   it.each(["profile", "refresh"])(
-    "uses the %s response when an older lookup still says tracking",
+    "lets a tracking lookup decide over a departed %s response",
     async (source) => {
       const departed = {
         ...PLAYER,
@@ -581,8 +585,10 @@ describe("automatic tag lookup", () => {
         params: { tag: TAG },
       } as never);
       const html = await renderRoute(result);
-      expect(html).toContain("not in Legend I");
-      expect(html).not.toContain("Now tracking");
+      expect(html).toContain(
+        "Now tracking in Legend I. The first results are being prepared.",
+      );
+      expect(html).not.toContain("not in Legend I");
       expect(html).not.toContain("Current trophies");
       expect(html).not.toContain("player-refresh-form");
     },
@@ -877,6 +883,185 @@ describe("automatic tag lookup", () => {
     if (state !== "checking" && state !== "tracking") {
       expect(html).not.toContain("It may still be running");
     }
+  });
+
+  it("explains a tracked player without a Season instead of preparing results", async () => {
+    // Even if a minute had passed, it is not a slow check.
+    mocks.lookupTimedOut = true;
+    mocks.getPlayerLookup.mockResolvedValue({
+      tag: TAG,
+      state: "tracking",
+      reason: "no_legend_battles",
+      profile: { name: "Season Clasher", clan: "Synthetic Clan", trophies: 5000 },
+    });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain(
+      "Season Clasher is in Legend League but hasn&#x27;t played a Legend League battle this Season.",
+    );
+    expect(html).toContain("This page updates as soon as they play.");
+    expect(html).toContain("Synthetic Clan");
+    expect(html).toContain("5,000");
+    expect(html).not.toContain("Current trophies");
+    expect(html).not.toContain("being prepared");
+    expect(html).not.toContain("It may still be running");
+    expect(html).not.toContain("Daily Legend log");
+    expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
+  });
+
+  it("explains a newest Season 0 profile over saved results and keeps saved history", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockResolvedValue({ ...PLAYER, seasonDays: [SAVED_DAY] }),
+      getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+      getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+    });
+    mocks.getPlayerLookup.mockResolvedValue({
+      tag: TAG,
+      state: "tracking",
+      reason: "no_legend_battles",
+      profile: { name: "Nova", clan: "Example", trophies: 5000 },
+    });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result, "");
+    expect(html).toContain(
+      "Nova is in Legend League but hasn&#x27;t played a Legend League battle this Season.",
+    );
+    expect(html).toContain("5,000");
+    expect(html).not.toContain("Current trophies");
+    expect(html).not.toContain('class="player-refresh-form"');
+    expect(html).toContain("Saved Legend history");
+    expect(html).toContain("Saved opponent");
+  });
+
+  it.each([
+    "no_legend_battles",
+    "season_unconfirmed",
+    "unknown_tier",
+    "profile_rejected",
+  ])("rereads an explained %s page once a minute, never once a second", (reason) => {
+    const view = playerLookupView(
+      PLAYER,
+      { tag: TAG, state: "tracking", reason } as PlayerLookup,
+      true,
+    );
+    expect(view).toMatchObject({
+      trackedPlayer: null,
+      minuteChecks: true,
+      isChecking: false,
+    });
+  });
+
+  it("keeps rereading once a minute after a failed lookup, without showing older results", () => {
+    expect(playerLookupView(PLAYER, null, true)).toMatchObject({
+      trackedPlayer: null,
+      lookup: null,
+      minuteChecks: true,
+      isChecking: false,
+    });
+    // Before any explanation a failed lookup still shows the saved page.
+    expect(playerLookupView(PLAYER, null, false).trackedPlayer).toBe(PLAYER);
+  });
+
+  it("keeps rereading once a minute when the profile is accepted between the two reads", () => {
+    expect(playerLookupView(null, { tag: TAG, state: "tracking" }, true)).toMatchObject({
+      minuteChecks: true,
+      isChecking: false,
+    });
+  });
+
+  it.each([
+    [PLAYER, { tag: TAG, state: "tracking" }],
+    [null, { tag: TAG, state: "not_in_legend" }],
+  ] as const)(
+    "stops rereading after a successful lookup gives an answer",
+    (player, lookup) => {
+      expect(playerLookupView(player, lookup, true).minuteChecks).toBe(false);
+    },
+  );
+
+  it("lets a final lookup outrank an older saved page after an explanation", () => {
+    expect(
+      playerLookupView(PLAYER, { tag: TAG, state: "not_in_legend" }, true),
+    ).toMatchObject({
+      trackedPlayer: null,
+      lookup: { state: "not_in_legend" },
+      minuteChecks: false,
+    });
+  });
+
+  it("lets a final lookup outrank an older tracked page on a fresh visit", () => {
+    expect(
+      playerLookupView(PLAYER, { tag: TAG, state: "not_in_legend" }, false),
+    ).toMatchObject({
+      trackedPlayer: null,
+      lookup: { state: "not_in_legend" },
+      minuteChecks: false,
+      isChecking: false,
+    });
+  });
+
+  it("keeps rereading once a minute when a tracking lookup meets an older inactive page", () => {
+    const older = { ...PLAYER, trackingState: "not_in_legend" } as PlayerPage;
+    expect(playerLookupView(older, { tag: TAG, state: "tracking" }, true)).toMatchObject({
+      trackedPlayer: null,
+      lookup: { state: "tracking" },
+      minuteChecks: true,
+      isChecking: false,
+    });
+  });
+
+  it("lets a tracking lookup outrank an older inactive page on a fresh visit", () => {
+    const older = { ...PLAYER, trackingState: "not_in_legend" } as PlayerPage;
+    expect(playerLookupView(older, { tag: TAG, state: "tracking" }, false)).toMatchObject(
+      {
+        trackedPlayer: null,
+        lookup: { state: "tracking" },
+        isChecking: true,
+      },
+    );
+  });
+
+  it("lets an explanation outrank an accepted saved page ", () => {
+    const lookup = {
+      tag: TAG,
+      state: "tracking",
+      reason: "no_legend_battles",
+    } as PlayerLookup;
+    expect(playerLookupView(PLAYER, lookup, true)).toMatchObject({
+      trackedPlayer: null,
+      lookup,
+      minuteChecks: true,
+      isChecking: false,
+    });
+  });
+
+  it("keeps the one-second check for a first-time lookup", () => {
+    expect(playerLookupView(null, { tag: TAG, state: "tracking" }, false)).toMatchObject({
+      minuteChecks: false,
+      isChecking: true,
+    });
+  });
+
+  it.each([
+    ["season_unconfirmed", "has not confirmed this player&#x27;s Season yet"],
+    ["unknown_tier", "a league we do not recognize"],
+    ["profile_rejected", "player details we could not use"],
+    ["pending", "The first results are being prepared."],
+  ])("explains a tracked player with reason %s", async (reason, message) => {
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking", reason });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain(message);
+    expect(html).not.toContain("5,000");
   });
 
   it("shows a limit refusal without claiming the check started", async () => {

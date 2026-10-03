@@ -37,7 +37,13 @@ def lookup_database(*rows):
 def test_confirmed_player_lookup_needs_no_collection_history(
     active, eligibility, confirmed, state
 ):
-    database = lookup_database((1, active, eligibility, confirmed))
+    rows = [(1, active, eligibility, confirmed, False)]
+    if active:
+        # Its newest profile is the accepted current one.
+        rows.append(
+            ("1783918800", "confirmed_legend_i", "eligible", "accepted", "Clasher", None, 6000, False)
+        )
+    database = lookup_database(*rows)
     assert api_player_lookup.get_lookup(database, "#2PP") == {
         "tag": "#2PP",
         "state": state,
@@ -52,7 +58,7 @@ def test_profile_processing_keeps_lookup_checking_after_collection_failure(
     work, processing
 ):
     database = lookup_database(
-        (1, False, "uncertain", False), (work, "provider_failure", processing)
+        (1, False, "uncertain", False, False), (work, "provider_failure", processing)
     )
     assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "checking"
 
@@ -64,7 +70,7 @@ def test_explicit_not_found_remains_terminal_while_profile_processing_is_outstan
     processing,
 ):
     database = lookup_database(
-        (1, False, "uncertain", False), ("failed", "player_not_found", processing)
+        (1, False, "uncertain", False, False), ("failed", "player_not_found", processing)
     )
     assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "not_found"
 

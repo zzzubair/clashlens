@@ -6,6 +6,12 @@ opponent's battle log, so ordinary checks fetch the profile first and the
 battle log only when it can have changed. See
 docs/collector-polling.md#battle-log-only-when-it-can-have-changed.
 
+A player whose last profile reported Legend I with Season ID 0 and unchanged
+counts, seen by this collector before the last Reset and with no valid Season
+or changed counts since, needs the profile only every 15 minutes; its battle log keeps the rules above, seeing
+profile changes only then. See
+docs/collector-polling.md#season-0-profiles.
+
 This state lives only in collector memory, one small entry per player checked
 since the collector started. A restart forgets it, which makes every player's
 next checks fetch both responses again, so forgetting costs requests, never
@@ -22,6 +28,7 @@ from datetime import datetime, timedelta
 
 from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row
 from .domain import RANKED_DAY_DURATION, battle_day_for, ranked_day_for
+from .profile import PROFILE_PARSER_VERSION, ProfileParseError, parse_profile
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 # Read from each valid profile. A defender's profile shows a battle at once;
@@ -33,6 +40,9 @@ PROFILE_SIGNALS = ("trophies", "attackWins", "defenseWins")
 DEFENSES_WON = "Unbreakable"
 # Battles that change nothing the other rules see are found by this fetch.
 SAFETY_INTERVAL = timedelta(minutes=15)
+# On 2026-10-03, 1,357 players' profiles had said Season 0 for 63-65 hours,
+# none with a Legend battle this Season. Each profile cost 561 requests a day.
+SEASON_ZERO_RECHECK = timedelta(minutes=15)
 # The official API caches each endpoint for up to 60 seconds, so a profile or
 # another player's log can show a battle before this player's log does. An owed
 # fetch only counts when it starts at least this long after that evidence.
@@ -97,6 +107,12 @@ class _Player:
     # The Legend day on which the last log showed exactly 8 valid attacks and
     # 8 valid defenses, with no malformed rows.
     finished_day: datetime | None = None
+    # When the newest profile reported Legend I with Season ID 0 and the
+    # same counts as the one before.
+    season_zero_at: datetime | None = None
+    # After a valid Season or changed counts, ordinary checks last until the
+    # next Reset.
+    ordinary_until: datetime | None = None
 
 
 class BattleLogSchedule:
@@ -118,6 +134,18 @@ class BattleLogSchedule:
             if signals is None:
                 return False
             player = self._players.setdefault(normalized_tag, _Player())
+            if player.profile_at is None or completed_at >= player.profile_at:
+                if not _season_zero(body, normalized_tag, completed_at):
+                    if player.season_zero_at is not None:
+                        # A valid Season counts as a change, so the log is fetched.
+                        player.signals = None
+                    _check_until_reset(player, completed_at)
+                elif player.signals != signals:
+                    # Changed counts mean battles; a restarted collector
+                    # cannot tell, so it assumes they did.
+                    _check_until_reset(player, completed_at)
+                elif player.ordinary_until is None or completed_at >= player.ordinary_until:
+                    player.season_zero_at = completed_at
             _note_profile(player, signals, completed_at)
             return True
         if endpoint == "battle_log":
@@ -172,6 +200,17 @@ class BattleLogSchedule:
             ):
                 opponent.owed = max(opponent.owed, 1)
                 _start_no_earlier_than(opponent, completed_at + FOLLOW_UP_GAP)
+
+    def profile_due(self, normalized_tag: str, *, now: datetime) -> bool:
+        """Whether an ordinary check fetches the profile. An unchanged Season 0
+        one waits 15 minutes; any valid or changed profile, Refresh or Reset
+        included, ends the wait until the next Reset."""
+        player = self._players.get(normalized_tag)
+        return (
+            player is None
+            or player.season_zero_at is None
+            or now - player.season_zero_at >= SEASON_ZERO_RECHECK
+        )
 
     def due(
         self,
@@ -309,6 +348,12 @@ def _note_profile(
     player.profile_at = completed_at
 
 
+def _check_until_reset(player: _Player, at: datetime) -> None:
+    player.season_zero_at = None
+    if player.ordinary_until is None or player.ordinary_until <= at:
+        player.ordinary_until = ranked_day_for(at).end
+
+
 def _start_no_earlier_than(player: _Player, at: datetime) -> None:
     if player.follow_up_after is None or player.follow_up_after < at:
         player.follow_up_after = at
@@ -338,6 +383,30 @@ def _profile_signals(body: bytes) -> tuple[int | None, ...] | None:
         None,
     )
     return (*signals, defenses_won)
+
+
+def _season_zero(body: bytes, normalized_tag: str, observed_at: datetime) -> bool:
+    """Whether the worker rejects this profile as Legend I with Season ID 0."""
+    try:
+        season = json.loads(body).get("currentLeagueSeasonId")
+    except (ValueError, AttributeError):
+        return False
+    if season not in (0, "0") or isinstance(season, bool):
+        return False
+    try:
+        profile = parse_profile(
+            body,
+            expected_tag=normalized_tag,
+            observed_at=observed_at,
+            endpoint_version="collector-schedule",
+            parser_version=PROFILE_PARSER_VERSION,
+        )
+    except ProfileParseError:
+        return False
+    return (
+        profile.eligibility_reason == "confirmed_legend_i"
+        and profile.source_contract_state == "conflict"
+    )
 
 
 def _count(value: object) -> bool:

@@ -209,10 +209,31 @@ it("does not start a lookup when the server cannot establish a visitor address",
 it.each([
   { tag: "#2PP", state: "tracking" },
   { tag: "#LQQP", state: "invented" },
+  { tag: "#LQQP", state: "tracking", reason: "invented" },
+  {
+    tag: "#LQQP",
+    state: "tracking",
+    reason: "no_legend_battles",
+    profile: { name: "Clasher", clan: null, trophies: "5000" },
+  },
 ])("rejects a mismatched or malformed lookup response", async (payload) => {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))),
   );
   await expect(getPlayerLookup("#LQQP")).rejects.toMatchObject({ status: 502 });
+});
+
+it("accepts the newest profile of a tracked player without a Season", async () => {
+  const payload = {
+    tag: "#LQQP",
+    state: "tracking",
+    reason: "no_legend_battles",
+    profile: { name: "Clasher", clan: null, trophies: 5000 },
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))),
+  );
+  await expect(getPlayerLookup("#LQQP")).resolves.toEqual(payload);
 });

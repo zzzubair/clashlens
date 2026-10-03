@@ -27,7 +27,16 @@ interval. Starting a check shares Refresh's six-per-minute allowance and unchang
 address handling. With JavaScript enabled, the page checks progress once a second
 for up to 60 seconds, then explains that the check may still be running. A result
 that arrives after that limit still replaces the waiting message. The Check
-progress link also works without JavaScript.
+progress link also works without JavaScript. A tracked player whose newest
+profile was rejected is not waiting, so the page explains why there are no
+current results and rereads saved data once a minute while visible instead of
+once a second. For a Legend I profile with Season ID 0 and no Legend battle
+this Season it shows that profile's name, tag, clan and trophies, says the
+player hasn't played a Legend League battle this Season, and shows no daily
+log. A rejected newest profile is explained even when older results were
+accepted; those stay as saved history, never as current trophies, until a
+lookup shows an accepted profile again. Season 0
+trophies stay out of search, the Live board and groups.
 
 Name results include active players or players with recorded history. Empty
 day records marked `player_not_eligible` do not count as history unless they

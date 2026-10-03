@@ -286,6 +286,15 @@ export interface PlayerLookup {
     | "not_in_legend"
     | "uncertain"
     | "failed";
+  // Why a tracked player has no current results yet.
+  reason?:
+    | "pending"
+    | "no_legend_battles"
+    | "season_unconfirmed"
+    | "unknown_tier"
+    | "profile_rejected";
+  // The newest profile, shown only on this page because its Season is 0.
+  profile?: { name: string; clan: string | null; trophies: number };
 }
 
 export interface PlayerPage {
