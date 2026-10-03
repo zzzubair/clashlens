@@ -461,7 +461,9 @@ for Top 100 and 0.93 s for all tracked players.
 Check the Armies page against the
 [current-season coverage and population rules](domain.md#population-filters-and-lenses).
 
-**Repair campaign:** `--campaign preview --season <Season ID>` lists, without
+**Repair campaign:** one saved list, per Season, of every result four past
+fixes change, held back from republishing until a single coordinated rebuild
+finishes. `--campaign preview --season <Season ID>` lists, without
 writing anything, every report, decode, player day and Reset publication of
 that Season that the 2-star/55% payout, five-minute day move, catalogue v2
 decodes and accepted Reset settlements change, plus each affected player's
