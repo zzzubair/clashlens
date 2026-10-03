@@ -311,6 +311,7 @@ A domain change is complete only when every affected source observation, derived
 - Retain each entry's observation time, measured coverage, freshness, confidence, and applicable official rank provenance.
 - Publishing at the target time means accepting the best official observations available under those rules; it does not claim that every API response was generated simultaneously or that every entry has equal freshness.
 - If later evidence proves a frozen snapshot inconsistent, retain the prior version and publish a corrected version rather than silently rewriting it.
+- A frozen snapshot's observed time is its newest saved player update. The Daily view calls the snapshot incomplete when that time is more than 30 minutes before its Reset: it shows a notice with the gap and the newest update, and marks each row saved more than 30 minutes before Reset with its age at Reset. Collection pauses at 04:55, so normal snapshots end about 5 minutes before Reset; on 2026-10-03 no update was saved after 00:00. The notice names no cause, because the snapshot does not record one. Older saved times on a complete snapshot are not marked: an unchanged player is confirmed without saving a new update. See [`tracked-leaderboard.tsx`](../website/app/routes/tracked-leaderboard.tsx).
 
 ## 7. Legend I meta analytics
 

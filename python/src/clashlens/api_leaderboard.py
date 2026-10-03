@@ -380,7 +380,10 @@ def get_frozen_leaderboard(
                            snapshot.excluded_malformed_count,
                            snapshot.excluded_conflicting_count,
                            COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
-                           COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number
+                           COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number,
+                           (SELECT max(entry.profile_observed_at)
+                            FROM leaderboard_snapshot_entries AS entry
+                            WHERE entry.snapshot_id = snapshot.id)
                     FROM leaderboard_snapshots AS snapshot
                     LEFT JOIN ranked_day_versions AS source_day
                       ON source_day.id = snapshot.source_ranked_day_version_id
@@ -412,7 +415,10 @@ def get_frozen_leaderboard(
                            snapshot.excluded_malformed_count,
                            snapshot.excluded_conflicting_count,
                            source_day.official_season_id,
-                           source_day.season_day_number
+                           source_day.season_day_number,
+                           (SELECT max(entry.profile_observed_at)
+                            FROM leaderboard_snapshot_entries AS entry
+                            WHERE entry.snapshot_id = snapshot.id)
                     FROM leaderboard_snapshots AS snapshot
                     LEFT JOIN ranked_day_versions AS source_day
                       ON source_day.id = snapshot.source_ranked_day_version_id
@@ -432,7 +438,9 @@ def get_frozen_leaderboard(
                         WHERE e.leaderboard_id = leaderboard.id),
                        (SELECT count(*) FROM api_frozen_leaderboard_entries e
                         WHERE e.leaderboard_id = leaderboard.id
-                          AND e.freshness = 'stale')
+                          AND e.freshness = 'stale'),
+                       (SELECT max(e.observed_at) FROM api_frozen_leaderboard_entries e
+                        WHERE e.leaderboard_id = leaderboard.id)
                 FROM api_frozen_leaderboards AS leaderboard
                 JOIN LATERAL (
                     SELECT day.official_season_id, day.season_day_number
@@ -465,6 +473,7 @@ def get_frozen_leaderboard(
                 (legacy[0], limit, offset),
             ).fetchall()
             boundary_at = legacy[2].astimezone(UTC)
+            newest_input_at = (legacy[12] or boundary_at).astimezone(UTC)
             season_start = boundary_at - timedelta(days=int(legacy[7]))
             season_end = season_start + timedelta(days=28)
             coverage = dict(legacy[5])
@@ -503,7 +512,7 @@ def get_frozen_leaderboard(
                 },
                 "provenance": {
                     "source": "published frozen leaderboard snapshot",
-                    "observed_at": boundary_at.isoformat(),
+                    "observed_at": newest_input_at.isoformat(),
                     "freshness": "stale" if int(legacy[11]) else "fresh",
                     "confidence": "partial",
                     "coverage": "partial",
@@ -569,6 +578,7 @@ def get_frozen_leaderboard(
             (snapshot[0], limit, offset),
         ).fetchall()
         boundary_at = snapshot[1].astimezone(UTC)
+        newest_input_at = (snapshot[16] or boundary_at).astimezone(UTC)
         season_start = boundary_at - timedelta(days=int(snapshot[15]))
         season_end = season_start + timedelta(days=28)
         measured = float(snapshot[5])
@@ -583,8 +593,8 @@ def get_frozen_leaderboard(
             "season_day_number": int(snapshot[15]),
             "season_start_at": season_start.isoformat(),
             "season_end_at": season_end.isoformat(),
-            "previous_snapshot": snapshot[16],
-            "next_snapshot": snapshot[17],
+            "previous_snapshot": snapshot[17],
+            "next_snapshot": snapshot[18],
             "generated_at": boundary_at.isoformat(),
             "version": int(snapshot[2]),
             "ordering_rule_version": _text(snapshot[3]),
@@ -603,7 +613,7 @@ def get_frozen_leaderboard(
             },
             "provenance": {
                 "source": "published frozen leaderboard snapshot",
-                "observed_at": boundary_at.isoformat(),
+                "observed_at": newest_input_at.isoformat(),
                 "freshness": "stale" if int(snapshot[8]) else "fresh",
                 "confidence": "partial",
                 "coverage": "partial",

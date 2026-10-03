@@ -184,7 +184,7 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 },
                 "provenance": {
                     "source": "published frozen leaderboard snapshot",
-                    "observed_at": "2026-08-06T05:00:00+00:00",
+                    "observed_at": NOW.isoformat(),
                     "freshness": "fresh",
                     "confidence": "partial",
                     "coverage": "partial",
