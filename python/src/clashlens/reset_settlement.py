@@ -366,12 +366,10 @@ def load_proof_inputs(
     log_observed_at = coverage.observed_at if coverage else log.response_completed_at
     reports = ranked_day_inputs.load_first_reports(
         connection, player_id, early.response_completed_at,
-        battle_window(boundary_at)[0], boundary_at + DAY,
-    )
+        battle_window(boundary_at)[0], boundary_at + DAY)
     quiet_until = min(reports[1] or boundary_at + DAY, boundary_at + DAY)
     later_profiles = ranked_day_inputs.load_profile_trophies(
-        database, connection, player_id, profile.response_completed_at, quiet_until
-    )
+        database, connection, player_id, profile.response_completed_at, quiet_until)
     root = connection.execute(
         """
         SELECT boundary_at, selected_trophies, proof_fingerprint, change_number,
@@ -385,15 +383,10 @@ def load_proof_inputs(
         inputs,
         log_coverage=coverage,
         log_reports=ranked_day_inputs.load_log_reports(
-            database, connection, log.observation_id, log.parser_version
-        ),
-        battles=tuple(
-            battle
-            for day in (boundary_at - 2 * DAY, boundary_at - DAY)
-            for battle in ranked_day_inputs.load_contributions(
-                connection, player_id, ranked_day_for(day)
-            )
-        ),
+            database, connection, log.observation_id, log.parser_version),
+        battles=tuple(battle for day in (boundary_at - 2 * DAY, boundary_at - DAY)
+                      for battle in ranked_day_inputs.load_contributions(
+                          connection, player_id, ranked_day_for(day))),
         late_unreadable=tuple(ranked_day_inputs.load_unreadable_report_times(
             database, connection, player_id, log_observed_at, boundary_at + DAY
         )),
@@ -406,12 +399,7 @@ def load_proof_inputs(
 
 
 def refresh_boundary(
-    database: Database,
-    connection: Any,
-    player_id: int,
-    boundary_at: datetime,
-    *,
-    depth: int = 0,
+    database: Database, connection: Any, player_id: int, boundary_at: datetime, *, depth: int = 0
 ) -> None:
     """Re-judge one Reset and record a changed verdict (guard 7).
 
@@ -505,8 +493,9 @@ def refresh_for_observation(
     A named check's own responses always count. Any other response of the
     player, or of an opponent in its battles, from up to three days after a
     Reset, re-judges only a finished check that is settled, passed every
-    guard, or met a later profile that disagreed or was not processed; a
-    battle log also re-judges one with an unusable report. Later evidence can only
+    guard, or met a later profile that disagreed or was not processed. A
+    battle log also re-judges a finished check with an unusable report at
+    either Reset that reads one of its battles' days. Later evidence can only
     take proof away from the rest; they are re-judged in full when the
     previous Reset's verdict changes.
     """
@@ -526,15 +515,16 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
         WITH observed AS (
             SELECT id, player_id, endpoint, response_completed_at AS at
             FROM collector_observations WHERE id = %s
-        ), affected AS (
-            SELECT player_id FROM observed WHERE player_id IS NOT NULL
-            UNION
-            SELECT CASE WHEN battle.attacker_player_id = observed.player_id
-                        THEN battle.defender_player_id
-                        ELSE battle.attacker_player_id END
+        ), touched AS (
+            SELECT battle.attacker_player_id AS attacker,
+                   battle.defender_player_id AS defender, battle.ranked_day_start AS day
             FROM observed
             JOIN battle_evidence AS evidence ON evidence.observation_id = observed.id
             JOIN legend_battles AS battle ON battle.id = evidence.battle_id
+            WHERE observed.endpoint = 'battle_log'
+        ), affected AS (
+            SELECT player_id FROM observed WHERE player_id IS NOT NULL
+            UNION SELECT attacker FROM touched UNION SELECT defender FROM touched
         )
         SELECT settlement.player_id, settlement.boundary_at
         FROM observed
@@ -548,10 +538,17 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
            OR (work.status IN ('complete', 'failed', 'cancelled') AND (
                   settlement.state = 'settled'
                   OR settlement.reasons <@ '["new_reset_proofs_disabled"]'::jsonb
-                  OR settlement.reasons ?| array['later_profile_contradicts', 'later_profile_unprocessed']
-                  OR (settlement.reasons ? 'battle_report_unusable'
-                      AND observed.endpoint = 'battle_log')))
-        ORDER BY settlement.boundary_at, settlement.player_id
+                  OR settlement.reasons ?| array['later_profile_contradicts', 'later_profile_unprocessed']))
+        UNION
+        SELECT settlement.player_id, settlement.boundary_at
+        FROM touched
+        JOIN reset_boundary_settlements AS settlement
+          ON settlement.player_id IN (touched.attacker, touched.defender)
+         AND settlement.boundary_at IN (touched.day + interval '1 day', touched.day + interval '2 days')
+        JOIN collector_work AS work ON work.id = settlement.delayed_work_id
+        WHERE work.status IN ('complete', 'failed', 'cancelled')
+          AND settlement.reasons ? 'battle_report_unusable'
+        ORDER BY 2, 1
         """,
         (observation_id,),
     ).fetchall()

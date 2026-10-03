@@ -208,17 +208,23 @@ def test_a_battle_log_rechecks_an_unusable_battle_report(
                     " reasons = '[\"battle_report_unusable\"]' WHERE boundary_at = %s",
                     (RESET,),
                 )
-                newer = dict(connection.execute(
+                saved = dict(connection.execute(
                     "SELECT endpoint, id FROM collector_observations"
                     " WHERE response_completed_at IN (%s, %s)",
-                    (RESET + 36 * MINUTE, RESET + 40 * MINUTE),
+                    (RESET + timedelta(seconds=33), RESET + 40 * MINUTE),
                 ).fetchall())
-                # A profile cannot change a battle report; a battle log can.
-                reset_settlement.refresh_for_observation(database, connection, newer["profile"])
+                # A profile cannot change a battle report.
+                reset_settlement.refresh_for_observation(database, connection, saved["profile"])
                 assert connection.execute(VERDICT, (RESET,)).fetchone()[2] == [
                     "battle_report_unusable"]
+                # A battle log saved four days later that reports the ended
+                # days' battles can, however long after the Reset it arrives.
+                connection.execute(
+                    "UPDATE collector_observations SET response_completed_at = %s WHERE id = %s",
+                    (RESET + 4 * DAY, saved["battle_log"]),
+                )
                 reset_settlement.refresh_for_observation(
-                    database, connection, newer["battle_log"])
+                    database, connection, saved["battle_log"])
                 assert connection.execute(VERDICT, (RESET,)).fetchone()[:3] == (
                     "settled", scenario["target"], [])
         finally:
