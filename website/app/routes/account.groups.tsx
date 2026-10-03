@@ -239,11 +239,13 @@ export async function action({ request }: Route.ActionArgs) {
             },
           }
         : actionMode === "create" &&
-            (safeError.error.code === "unavailable" || safeError.error.code === "malformed")
+            (safeError.error.code === "unavailable" ||
+              safeError.error.code === "malformed")
           ? {
               error: {
                 code: safeError.error.code,
-                message: "Could not confirm the group was created. Refresh the page before trying again.",
+                message:
+                  "Could not confirm the group was created. Refresh the page before trying again.",
               },
             }
           : safeError;
