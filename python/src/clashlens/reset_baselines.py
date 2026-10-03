@@ -575,14 +575,9 @@ def _evaluate_reset_baseline(
         assert inserted is not None
         evidence_id = int(inserted[0])
 
-    if state in {"complete", "failed"} and ends_day:
-        _record_boundary_baseline(database, 
-            connection,
-            boundary_at=boundary_at,
-            reset_sweep_id=int(sweep_id),
-            player_id=int(player_id),
-            state=state,
-        )
+    publishes = state in {"complete", "failed"} and ends_day
+    if publishes:
+        boundary.lock_boundary_publication(connection, boundary_at)
     reset_settlement.record_provisional_boundary(
         connection,
         player_id=int(player_id),
@@ -593,6 +588,14 @@ def _evaluate_reset_baseline(
         reasons=reasons,
         observation_id=observation_id,
     )
+    if publishes:
+        _record_boundary_baseline(database,
+            connection,
+            boundary_at=boundary_at,
+            reset_sweep_id=int(sweep_id),
+            player_id=int(player_id),
+            state=state,
+        )
     reset_settlement.refresh_boundary(database, connection, int(player_id), boundary_at)
     if state != "complete":
         return [], reasons

@@ -62,11 +62,11 @@ def record_provisional_boundary(
     repeat with the same evidence changes nothing, and a boundary already
     settled or unresolved keeps that verdict. A boundary with a settlement
     check keeps the check's reasons; the pair's own are in its proof. It
-    first locks this Reset and every one ``observation_id`` can re-judge.
+    first locks this Reset and every one ``observation_id`` may re-judge.
     """
     early = {"baseline_id": early_baseline_id, "state": early_state, "reasons": reasons}
     _lock_resets(connection, [(player_id, boundary_at),
-                              *_observation_resets(connection, observation_id)])
+                              *_observation_resets(connection, observation_id, every=True)])
     connection.execute(
         """
         INSERT INTO reset_boundary_settlements (
@@ -486,9 +486,7 @@ def _has_settlements(database: Database, connection: Any) -> bool:
     return bool(known)
 
 
-def refresh_for_observation(
-    database: Database, connection: Any, observation_id: int
-) -> None:
+def refresh_for_observation(database: Database, connection: Any, observation_id: int) -> None:
     """Re-judge the Resets a newly processed response can change.
 
     A named check's own responses always count. Any other response of the
@@ -498,24 +496,25 @@ def refresh_for_observation(
     battle log also re-judges a finished check with an unusable report at
     any Reset that can read one of its battles. Later evidence can only
     take proof away from the rest; they are re-judged in full when the
-    previous Reset's verdict changes.
+    previous Reset's verdict changes. Every Reset it may re-judge is locked
+    before choosing, so a concurrent judgment is chosen from once committed.
     """
     if not _has_settlements(database, connection):
         return
-    rows = _observation_resets(connection, observation_id)
-    _lock_resets(connection, rows)
-    for player_id, boundary_at in rows:
+    _lock_resets(connection, _observation_resets(connection, observation_id, every=True))
+    for player_id, boundary_at in _observation_resets(connection, observation_id):
         refresh_boundary(database, connection, player_id, boundary_at)
 
 
-def _observation_resets(connection: Any, observation_id: int | None) -> list[tuple[int, datetime]]:
+def _observation_resets(connection: Any, observation_id: int | None, *,
+                        every: bool = False) -> list[tuple[int, datetime]]:
     if observation_id is None:
         return []
     rows = connection.execute(
         """
         WITH observed AS (
             SELECT id, player_id, endpoint, response_completed_at AS at
-            FROM collector_observations WHERE id = %s
+            FROM collector_observations WHERE id = %(id)s
         ), touched AS (
             SELECT battle.attacker_player_id AS attacker, battle.defender_player_id AS defender,
                    (SELECT min(report.battle_timestamp) FROM battle_evidence AS report
@@ -536,7 +535,7 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
          AND settlement.boundary_at <= observed.at
          AND settlement.boundary_at > observed.at - interval '3 days'
         JOIN collector_work AS work ON work.id = settlement.delayed_work_id
-        WHERE observed.id IN (work.profile_observation_id, work.battle_log_observation_id)
+        WHERE %(every)s OR observed.id IN (work.profile_observation_id, work.battle_log_observation_id)
            OR (work.status IN ('complete', 'failed', 'cancelled') AND (
                   settlement.state = 'settled'
                   OR settlement.reasons <@ '["new_reset_proofs_disabled"]'::jsonb
@@ -546,14 +545,14 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
         FROM touched
         JOIN reset_boundary_settlements AS settlement
           ON settlement.player_id IN (touched.attacker, touched.defender)
-         AND settlement.boundary_at > touched.reported_at - %s
+         AND settlement.boundary_at > touched.reported_at - %(grace)s
          AND settlement.boundary_at <= touched.reported_at + interval '2 days'
         JOIN collector_work AS work ON work.id = settlement.delayed_work_id
-        WHERE work.status IN ('complete', 'failed', 'cancelled')
-          AND settlement.reasons ? 'battle_report_unusable'
+        WHERE %(every)s OR (work.status IN ('complete', 'failed', 'cancelled')
+          AND settlement.reasons ? 'battle_report_unusable')
         ORDER BY 2, 1
         """,
-        (observation_id, BATTLE_DAY_GRACE),
+        {"id": observation_id, "grace": BATTLE_DAY_GRACE, "every": every},
     ).fetchall()
     return [(int(player_id), boundary_at) for player_id, boundary_at in rows]
 

@@ -508,3 +508,103 @@ def test_reset_profile_waits_for_the_publication_lock_before_its_reset_lock(
                 assert profile.result(timeout=60) == "processed"
         finally:
             database.close()
+
+
+def _wait_for_advisory_wait(connection, future) -> int:
+    """Wait until another session waits for an advisory lock; return its pid."""
+    deadline = time.monotonic() + 30
+    while (row := connection.execute(
+        "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+    ).fetchone()) is None:
+        assert time.monotonic() < deadline and not future.done()
+        time.sleep(0.05)
+    return row[0]
+
+
+def test_reset_pair_takes_its_reset_lock_before_any_generation_row(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        database, processor = _processor(connection_info, archive_server)
+
+        def outcome(job: str) -> str:
+            result = processor.process_job(scenario[job], owner=job)
+            return result.outcome if result is not None else "unclaimed"
+
+        try:
+            assert outcome("early_log") == "processed"
+            with psycopg.connect(connection_info) as holder, ThreadPoolExecutor(1) as pool:
+                holder.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                               (f"reset-settlement:{scenario['player']}:{RESET.isoformat()}",))
+                profile = pool.submit(outcome, "early_profile")
+                waiting = _wait_for_advisory_wait(holder, profile)
+                # The pair holds the publication lock but has locked or
+                # written no generation row while it waits for the Reset.
+                assert not holder.execute(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"boundary-publication:{RESET.isoformat()}",),
+                ).fetchone()[0]
+                assert holder.execute(
+                    """
+                    SELECT count(*) FROM pg_locks
+                    WHERE pid = %s AND relation = 'boundary_publication_generations'::regclass
+                      AND mode IN ('RowShareLock', 'RowExclusiveLock')
+                    """,
+                    (waiting,),
+                ).fetchone()[0] == 0
+                holder.commit()
+                assert profile.result(timeout=60) == "processed"
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM boundary_publication_generations WHERE boundary_at = %s",
+                    (RESET,),
+                ).fetchone()[0] == 1
+        finally:
+            database.close()
+
+
+def test_a_response_rechecks_a_reset_judged_while_it_waited(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE reset_boundary_settlements SET state = 'provisional',"
+                    " selected_trophies = NULL, proof_kind = NULL,"
+                    " reasons = '[\"settlement_processing_pending\"]' WHERE boundary_at = %s",
+                    (RESET,),
+                )
+                later_profile = connection.execute(
+                    "SELECT id FROM collector_observations WHERE response_completed_at = %s",
+                    (RESET + 40 * MINUTE,),
+                ).fetchone()[0]
+
+            def refresh() -> None:
+                with psycopg.connect(connection_info) as connection:
+                    reset_settlement.refresh_for_observation(database, connection, later_profile)
+
+            with psycopg.connect(connection_info) as named, ThreadPoolExecutor(1) as pool:
+                # A named-check job judges the pending Reset from evidence
+                # read before the later profile's job saved its own.
+                named.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                              (f"reset-settlement:{scenario['player']}:{RESET.isoformat()}",))
+                named.execute(
+                    "UPDATE reset_boundary_settlements SET state = 'settled',"
+                    " selected_trophies = 1, reasons = '[]' WHERE boundary_at = %s",
+                    (RESET,),
+                )
+                later = pool.submit(refresh)
+                _wait_for_advisory_wait(named, later)
+                named.commit()
+                later.result(timeout=60)
+            assert _verdict(connection_info)[:3] == ("settled", scenario["target"], [])
+        finally:
+            database.close()
