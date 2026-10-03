@@ -911,18 +911,31 @@ def _build_army_fact_batch(
         ): row
         for row in decode_rows
     }
-    evidence_rows = connection.execute(
-        """
-        SELECT p.battle_id, p.perspective, p.evidence_id,
-               b.disagreement_state
-        FROM legend_battles AS b
-        JOIN battle_perspectives AS p ON p.battle_id = b.id
-        WHERE b.id = ANY(%s::bigint[])
-          AND p.perspective = ANY(%s::text[])
-          AND (%s::bigint[] IS NULL OR p.evidence_id = ANY(%s::bigint[]))
-        """,
-        (battle_id_values, perspective_values, evidence_ids, evidence_ids),
-    ).fetchall()
+    if evidence_ids is None:
+        evidence_rows = connection.execute(
+            """
+            SELECT p.battle_id, p.perspective, p.evidence_id,
+                   b.disagreement_state
+            FROM legend_battles AS b
+            JOIN battle_perspectives AS p ON p.battle_id = b.id
+            WHERE b.id = ANY(%s::bigint[])
+              AND p.perspective = ANY(%s::text[])
+            """,
+            (battle_id_values, perspective_values),
+        ).fetchall()
+    else:
+        # A frozen manifest names the evidence it promised to use. Read those
+        # saved records, not the current pointer a later report may have moved.
+        evidence_rows = connection.execute(
+            """
+            SELECT battle_id, perspective, id, NULL
+            FROM battle_evidence
+            WHERE id = ANY(%s::bigint[])
+              AND battle_id = ANY(%s::bigint[])
+              AND perspective = ANY(%s::text[])
+            """,
+            (evidence_ids, battle_id_values, perspective_values),
+        ).fetchall()
     evidence = {
         (
             int(row[0]),
@@ -970,6 +983,10 @@ def _build_army_fact_batch(
             key = (battle_id, lens)
             evidence_row = evidence.get(key)
             if evidence_row is None:
+                if evidence_ids is not None:
+                    raise ValueError(
+                        f"frozen army evidence missing for battle {battle_id} {lens}"
+                    )
                 continue
             decode = decodes.get(key)
             state = (
@@ -979,7 +996,11 @@ def _build_army_fact_batch(
                 if decode
                 else "decode_missing"
             )
-            disagreement = _text_value(evidence_row[3]) == "disagreement"
+            disagreement = (
+                event.get("disagreement") is True
+                if evidence_ids is not None
+                else _text_value(evidence_row[3]) == "disagreement"
+            )
             payload = {
                 "source_ranked_day_version_id": int(version_id),
                 "battle_id": battle_id,

@@ -366,7 +366,10 @@ processed under different parser versions, and each Reset check looked for
 both results under one of them.
 
 **Backfill:** run outside 04:45–05:15 UTC and repeat until `evaluated_count`
-and `enqueued_count` are both zero:
+and `enqueued_count` are both zero, then wait for the queued jobs and run
+once more. Zero counts mean nothing is left to queue, not that every repair
+finished: a non-empty `failed_blockers` lists failed repairs still holding an
+ended day `Live`.
 
 ```sh
 podman exec clashlens-python-worker \
@@ -386,6 +389,13 @@ finished without its starting pair is corrected. One job rebuilds those days
 and every later saved day in that Season, oldest first in one transaction,
 so automatic defense loss and shield duration use the corrected earlier day.
 The worker then publishes the days on its own.
+A repair job of a complete pair that failed by running out of lease time or
+retries while its ended day is still `Live` is queued once more, with the
+same inputs, under the key `reconcile:reset-recovery:<failed job id>`, and
+counted in `evaluated_count`. The failed job is kept as it was. Days another
+rebuild is already working on are skipped. Any other such failure, or a
+retry that fails too, is reported in `failed_blockers` (job, player, day,
+failure reason) and needs investigating before it is retried by hand.
 Only days whose Reset evidence is still in the database can be rebuilt;
 older days need the archived raw responses replayed, which this does not do.
 Once no partial pairs remain to check, the same command queues up to

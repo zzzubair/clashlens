@@ -271,8 +271,16 @@ def _maybe_emit_boundary_signal(
                 """,
                 (new_id, generation_id),
             )
-            for pending in queued[2] if isinstance(queued[2], list) else []:
-                pending_version = pending.get("ranked_day_version_id")
+            for pending in pending_inputs:
+                pending_version = (
+                    pending.get("ranked_day_version_id")
+                    if isinstance(pending, dict)
+                    else None
+                )
+                # An army-only marker ({"kind": "decode"}) changes no member;
+                # the replacement army manifest picks up the new decode.
+                if pending_version is None:
+                    continue
                 pending_snapshot_status = boundary._boundary_snapshot_status(
                     connection,
                     player_id=int(pending["player_id"]),
