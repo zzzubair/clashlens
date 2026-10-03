@@ -1,0 +1,9 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens cleanup of extra saved Legend day copies
+PartOf=clashlens.target
+
+[Service]
+Type=oneshot
+ExecStart=@@ROOT@@/ops ranked-day-compaction
+TimeoutStartSec=10min
