@@ -441,10 +441,10 @@ is about 38,400 day calculations if the pairs split evenly between the two
 Resets, about 12% of a day's normal reconciliation work (about 332,000 jobs
 a day in early October 2026). Later saved days add calculations; the Season
 limit bounds this batch at 716,772 day calculations. One army day is about
-183,000 facts. Measured with synthetic
-facts built from production armies: 1,787 bytes per fact with its indexes,
-so about 330 MB per day and 9.2 GB per 28-day season until the season is
-retired. Building a day in 500-player batches adds about 76 MB to the worker,
+183,000 facts. Since migration 0058 facts no longer copy their armies: a
+copy of the 2026-10-02 day's 177,800 facts took 68.6 MB instead of
+319.3 MB, so about 1.9 GB per 28-day season until the season is retired.
+Building a day in 500-player batches adds about 76 MB to the worker,
 against about 2 GB for a whole day at once. Reading two days took 0.03 s
 for Top 100 and 0.93 s for all tracked players.
 
