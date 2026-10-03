@@ -48,13 +48,17 @@ def seed_day(
                 player_id, ranked_day_start, ranked_day_end, version, state,
                 coverage, battles, partial_reasons, confidence, net_trophy_change,
                 attack_gain, defense_loss, attack_count, defense_count
-            ) VALUES (
-                (SELECT id FROM players WHERE normalized_tag = %s), %s, %s, 1, %s,
-                %s, %s, %s, 'exact', %s, %s, %s, %s, %s
             )
+            SELECT player.id, %s, %s, COALESCE(MAX(log.version), 0) + 1, %s,
+                   %s, %s, %s, 'exact', %s, %s, %s, %s, %s
+            FROM players AS player
+            -- seed_profile already publishes a live row for today.
+            LEFT JOIN api_player_daily_logs AS log
+                ON log.player_id = player.id AND log.ranked_day_start = %s
+            WHERE player.normalized_tag = %s
+            GROUP BY player.id
             """,
             (
-                tag,
                 start,
                 start + timedelta(days=1),
                 state,
@@ -66,6 +70,8 @@ def seed_day(
                 lost,
                 attacks,
                 defenses,
+                start,
+                tag,
             ),
         )
 
