@@ -878,6 +878,10 @@ def _finish_army_fact_day(
             "DELETE FROM army_analytics_day_totals WHERE ranked_day_start = %s",
             (ranked_day_start,),
         )
+        connection.execute(
+            "DELETE FROM army_analytics_rank_band_totals WHERE ranked_day_start = %s",
+            (ranked_day_start,),
+        )
     else:
         marker = connection.execute(
             """
@@ -1180,12 +1184,15 @@ def _build_army_fact_batch(
                 UPDATE army_analytics_battle_facts SET is_current = false
                 WHERE id = ANY(%s::bigint[])
                 RETURNING ranked_day_start
-            )
-            DELETE FROM army_analytics_day_totals
-            WHERE ranked_day_start IN (
+            ), other_days AS (
                 SELECT ranked_day_start FROM superseded
                 WHERE ranked_day_start <> %s
+            ), day_totals AS (
+                DELETE FROM army_analytics_day_totals
+                WHERE ranked_day_start IN (SELECT ranked_day_start FROM other_days)
             )
+            DELETE FROM army_analytics_rank_band_totals
+            WHERE ranked_day_start IN (SELECT ranked_day_start FROM other_days)
             """,
             (superseded_ids, ranked_day_start),
         )

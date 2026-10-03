@@ -48,15 +48,7 @@ def _results(api: ApiDatabase) -> dict[tuple[str, str, str, int], dict]:
     return results
 
 
-def _numbers(result: dict) -> dict:
-    """Everything the page shows; the evidence hash is derived differently."""
-    numbers = json.loads(json.dumps(result))
-    del numbers["reproducibility"]["source_evidence_hash"]
-    del numbers["publication_identity"]
-    return numbers
-
-
-def test_saved_rank_band_totals_serve_the_same_numbers_without_reading_facts(
+def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     with domain_database(database_url) as ci:
@@ -157,9 +149,7 @@ def test_saved_rank_band_totals_serve_the_same_numbers_without_reading_facts(
             army_rank_bands.refresh_rank_band_totals(database)
             from_totals = _results(api)
             assert fact_queries == []
-            assert {key: _numbers(value) for key, value in from_totals.items()} == {
-                key: _numbers(value) for key, value in from_facts.items()
-            }
+            assert from_totals == from_facts
 
             # Rebuilding day 23 without its partial attack: until the totals are
             # counted again the page reads facts, then the totals take over.
@@ -174,15 +164,35 @@ def test_saved_rank_band_totals_serve_the_same_numbers_without_reading_facts(
             army_rank_bands.refresh_rank_band_totals(database)
             corrected_from_totals = _results(api)
             assert fact_queries == []
-            assert {
-                key: _numbers(value) for key, value in corrected_from_totals.items()
-            } == {key: _numbers(value) for key, value in corrected_from_facts.items()}
+            assert corrected_from_totals == corrected_from_facts
             # A Top N view's evidence hash changes with its own facts.
             key = ("offense", "troops", "top-5", 23)
             assert (
                 corrected_from_totals[key]["publication_identity"]
                 != from_totals[key]["publication_identity"]
             )
+
+            # A correction moves day 24's attack to day 23. Day 24's marker
+            # stays the same, so its saved totals must go with the moved fact:
+            # the page reads facts until the totals are counted again.
+            _publish_day_correction(
+                database,
+                "#2PP",
+                [day_one[0], _event(third, "offense", ts3, 2, 60, 20)],
+                version=3,
+            )
+            assert processor.process_job(_army_job(database), owner="army-4").outcome == "processed"
+            moved_from_facts = _results(api)
+            assert moved_from_facts[("offense", "troops", "top-5", 24)][
+                "total_attacks"
+            ] == 0
+            assert moved_from_facts[("offense", "troops", "top-5", 23)][
+                "total_attacks"
+            ] == 2
+            fact_queries.clear()
+            army_rank_bands.refresh_rank_band_totals(database)
+            assert _results(api) == moved_from_facts
+            assert fact_queries == []
         finally:
             api.close()
             database.close()

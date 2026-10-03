@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Mapping
 from time import monotonic
 from typing import Any
 
@@ -139,17 +140,16 @@ def _count(
     season_id: str,
     days: dict[int, tuple[Any, str]],
 ) -> None:
-    band_by_player: dict[int, int] = {}
-    for player_id, position in connection.execute(
-        """
-        SELECT player_id, position FROM leaderboard_snapshot_entries
-        WHERE snapshot_id = %s AND position <= %s
-        """,
-        (snapshot_id, _LAST_POSITION),
-    ).fetchall():
-        band_by_player[int(player_id)] = next(
-            first for first, last in BANDS if first <= int(position) <= last
-        )
+    band_by_player = {
+        int(player_id): band_of(int(position))
+        for player_id, position in connection.execute(
+            """
+            SELECT player_id, position FROM leaderboard_snapshot_entries
+            WHERE snapshot_id = %s AND position <= %s
+            """,
+            (snapshot_id, _LAST_POSITION),
+        ).fetchall()
+    }
     players = sorted(band_by_player)
     fact_filter = """
         fact.is_current AND fact.official_season_id = %s
@@ -157,27 +157,7 @@ def _count(
           AND fact.population_player_id = ANY(%s::bigint[])
     """
     fact_params = (season_id, sorted(days), players)
-    # The ordered fact list each band was counted from, as the page's
-    # evidence hash: it changes only when that band's own facts change.
-    digests = {
-        (int(row[0]), _text(row[1]), int(row[2])): _text(row[3])
-        for row in connection.execute(
-            f"""
-            SELECT fact.season_day_number, fact.lens, band.first_position,
-                   encode(sha256(convert_to(string_agg(
-                       fact.id::text || ':' || fact.input_hash,
-                       ',' ORDER BY fact.battle_id
-                   ), 'UTF8')), 'hex')
-            FROM army_analytics_battle_facts AS fact
-            JOIN unnest(%s::bigint[], %s::integer[])
-                AS band(player_id, first_position)
-              ON band.player_id = fact.population_player_id
-            WHERE {fact_filter}
-            GROUP BY 1, 2, 3
-            """,
-            (players, [band_by_player[player] for player in players], *fact_params),
-        ).fetchall()
-    }
+    digests = _fact_digests(connection, season_id, days, band_by_player, LENSES)
     totals = {
         (day, lens, first, category): new_army_totals()
         for day in days
@@ -257,20 +237,13 @@ def read_rank_band_totals(
 ) -> tuple[dict[str, Any], str] | None:
     """Add up saved totals for a Top N or rank-band view, if all are current.
 
-    Returns the totals and a digest of the fact lists they were counted
-    from, or None when any selected day's totals are missing or were counted
-    from an older build of that day.
+    Returns the totals and their ``rank_band_digest``, or None when any
+    selected day's totals are missing or were counted from an older build of
+    that day.
     """
-    if population.startswith("top-"):
-        low, high = 1, int(population.removeprefix("top-"))
-    elif population.startswith("band-"):
-        low, high = map(int, population.removeprefix("band-").split("-"))
-    else:
+    bands = _bands(population)
+    if bands is None:
         return None
-    covered = [(first, last) for first, last in BANDS if low <= first and last <= high]
-    if sum(last - first + 1 for first, last in covered) != high - low + 1:
-        return None
-    bands = [first for first, _last in covered]
     rows = connection.execute(
         """
         SELECT season_day_number, first_position, fact_input_hash,
@@ -290,10 +263,107 @@ def read_rank_band_totals(
     totals = new_army_totals()
     for row in rows:
         merge_army_totals(totals, row[4])
-    digest = hashlib.sha256(
+    digests = {(int(row[0]), int(row[1])): row[3] for row in rows}
+    return totals, rank_band_digest(population, day_markers, digests)
+
+
+def band_of(position: int) -> int:
+    """The first position of the rank band holding ``position``."""
+    return next(first for first, last in BANDS if first <= position <= last)
+
+
+def _bands(population: str) -> list[int] | None:
+    if population.startswith("top-"):
+        low, high = 1, int(population.removeprefix("top-"))
+    elif population.startswith("band-"):
+        low, high = map(int, population.removeprefix("band-").split("-"))
+    else:
+        return None
+    covered = [(first, last) for first, last in BANDS if low <= first and last <= high]
+    if sum(last - first + 1 for first, last in covered) != high - low + 1:
+        return None
+    return [first for first, _last in covered]
+
+
+def rank_band_digest(
+    population: str,
+    days: Iterable[int],
+    digests: Mapping[tuple[int, int], str | None],
+) -> str:
+    """Digest of a Top N or rank-band view's fact lists, one per day and band.
+
+    ``digests`` holds the SHA-256 of each (day, band first position)'s
+    ``id:input_hash`` facts in battle order, joined by commas. Saved totals
+    and fact reads build the same digest for the same facts.
+    """
+    bands = _bands(population)
+    assert bands is not None
+    return hashlib.sha256(
         json.dumps(
-            [[int(row[0]), int(row[1]), row[3]] for row in rows],
+            [
+                [day, first, digests.get((day, first))]
+                for day in sorted(days)
+                for first in bands
+            ],
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
-    return totals, digest
+
+
+def fact_rank_band_digest(
+    connection: Any,
+    *,
+    season_id: str,
+    lens: str,
+    population: str,
+    days: Iterable[int],
+    band_by_player: dict[int, int],
+) -> str:
+    """``rank_band_digest`` counted from the current facts."""
+    digests = _fact_digests(connection, season_id, days, band_by_player, (lens,))
+    return rank_band_digest(
+        population,
+        days,
+        {(day, first): digest for (day, _lens, first), digest in digests.items()},
+    )
+
+
+def _fact_digests(
+    connection: Any,
+    season_id: str,
+    days: Iterable[int],
+    band_by_player: dict[int, int],
+    lenses: Iterable[str],
+) -> dict[tuple[int, str, int], str]:
+    # The ordered fact list of each day, lens and band: it changes only when
+    # that band's own facts change.
+    players = sorted(band_by_player)
+    return {
+        (int(row[0]), _text(row[1]), int(row[2])): _text(row[3])
+        for row in connection.execute(
+            """
+            SELECT fact.season_day_number, fact.lens, band.first_position,
+                   encode(sha256(convert_to(string_agg(
+                       fact.id::text || ':' || fact.input_hash,
+                       ',' ORDER BY fact.battle_id
+                   ), 'UTF8')), 'hex')
+            FROM army_analytics_battle_facts AS fact
+            JOIN unnest(%s::bigint[], %s::integer[])
+                AS band(player_id, first_position)
+              ON band.player_id = fact.population_player_id
+            WHERE fact.is_current AND fact.official_season_id = %s
+              AND fact.season_day_number = ANY(%s::integer[])
+              AND fact.lens = ANY(%s::text[])
+              AND fact.population_player_id = ANY(%s::bigint[])
+            GROUP BY 1, 2, 3
+            """,
+            (
+                players,
+                [band_by_player[player] for player in players],
+                season_id,
+                sorted(days),
+                list(lenses),
+                players,
+            ),
+        ).fetchall()
+    }
