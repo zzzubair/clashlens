@@ -564,6 +564,11 @@ h3 {
   margin: 0;
 }
 
+.page-footer nav {
+  display: flex;
+  gap: 0.8rem;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
