@@ -331,6 +331,11 @@
   text-decoration: underline;
   text-underline-offset: 0.18em;
 }
+.player-page .legend-day > .section-note {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid var(--cl-border);
+}
 .player-page .battle-disagreement {
   grid-column: 2 / -1;
   grid-row: 3;

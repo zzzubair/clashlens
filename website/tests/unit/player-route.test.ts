@@ -384,6 +384,46 @@ describe("player route historical independence", () => {
     expect(html).toContain("4 Oct 2026");
   });
 
+  it("shows all nine attacks the game returned and why the day is partial", async () => {
+    // Audit example #J9Y9J80L: nine real attacks on one Legend day.
+    const attack = SAVED_DAY.offenseEvents[0];
+    const day: RankedDaySummary = {
+      ...SAVED_DAY,
+      state: "Partial",
+      offense: { attacks: 9, threeStars: 9, trophyGain: 360 },
+      offenseEvents: Array.from({ length: 9 }, (_, index) => ({
+        ...attack,
+        battleId: `attack-${index + 1}`,
+        opponent: { ...attack.opponent, name: `Opponent ${index + 1}` },
+      })),
+      completeness: { state: "partial", reason: "attack_count_exceeds_eight" },
+      uncertainty: ["attack_count_exceeds_eight"],
+    };
+    const html = await renderRoute(
+      {
+        requestedTag: TAG,
+        player: { ...PLAYER, recentDays: [day], seasonDays: [day] },
+        error: null,
+        refreshStatus: null,
+        refreshError: null,
+        noJsIdempotencyKey: "test-idempotency-key",
+        lookup: { tag: TAG, state: "tracking" },
+        lookupError: null,
+        seasons: [],
+        selectedSeason: null,
+        historical: null,
+        historicalError: null,
+      },
+      "",
+    );
+    expect(html.match(/class="battle-profile-link"/g)).toHaveLength(9);
+    expect(html).toContain("Opponent 9");
+    expect(html).not.toContain("Empty attack slot 9");
+    expect(html).toContain(
+      "Clash of Clans returned 9 attacks for this day, more than the usual 8, so this day is marked partial.",
+    );
+  });
+
   it.each(["", ".data"])(
     "reads the canonical page without a redirect loop (suffix %s)",
     async (suffix) => {

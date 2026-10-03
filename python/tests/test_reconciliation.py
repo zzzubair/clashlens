@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from clashlens.api_db import _screen_events
 from clashlens.domain import ranked_day_for
 from clashlens.reconciliation import (
     BATTLE_EVENT_SERIALIZATION_VERSION,
@@ -294,6 +295,26 @@ def test_shield_requires_observation_coverage() -> None:
     assert result.automatic_defense_evidence_state == "not_applicable"
 
 
+def test_shield_is_not_inferred_when_observed_trophies_changed_without_events() -> None:
+    # Audit examples #22VRLQ29V (4,885 -> 4,886) and #2QP9LCLU (5,029 -> 5,004).
+    for start, next_start in ((4885, 4886), (5029, 5004)):
+        result = reconcile_ranked_day(
+            _input(
+                start_trophies=start,
+                next_start_trophies=next_start,
+                contributions=(),
+                previous_day=PreviousRankedDay(True, 8, 100, 0),
+            )
+        )
+
+        assert result.final_trophies_before_reset == start
+        assert result.unexplained_residual == next_start - start
+        assert result.state == "Inconsistent"
+        assert result.confidence == "uncertain"
+        assert result.shield_state == "unknown"
+        assert result.shield_duration_days is None
+
+
 def test_repeated_and_two_sided_contributions_count_once_per_own_perspective() -> None:
     result = reconcile_ranked_day(
         _input(
@@ -460,9 +481,7 @@ def test_ranked_day_battle_events_are_canonical_signed_and_ordered() -> None:
     ]
 
 
-def test_ranked_day_battle_events_exclude_invalid_unselected_and_disagreement_rows() -> (
-    None
-):
+def test_ranked_day_battle_events_exclude_invalid_and_unselected_rows() -> None:
     valid = BattleContribution(
         "accepted",
         "offense",
@@ -508,6 +527,8 @@ def test_ranked_day_battle_events_exclude_invalid_unselected_and_disagreement_ro
         )
     )
 
+    # A battle the two sides report differently is counted, so it stays shown
+    # and flagged for the website's "Result awaiting confirmation" note.
     assert events == [
         {
             "battle_id": "accepted",
@@ -516,7 +537,25 @@ def test_ranked_day_battle_events_exclude_invalid_unselected_and_disagreement_ro
             "destruction_percentage": 0,
             "stars": 0,
             "trophy_change": 0,
-        }
+        },
+        {
+            "battle_id": "disagreement",
+            "battle_timestamp": "2026-08-04T10:00:00Z",
+            "opponent": {"tag": "#9PP", "name": None},
+            "destruction_percentage": 50,
+            "stars": 2,
+            "trophy_change": -20,
+            "disagreement": True,
+        },
+    ]
+    # Publication rows carry each contribution's lens beside its event.
+    lenses = {"accepted": "offense", "disagreement": "defense"}
+    offense, defense = _screen_events(
+        [{"lens": lenses[event["battle_id"]], **event} for event in events]
+    )
+    assert [event["perspective_disagreement"] for event in offense + defense] == [
+        False,
+        True,
     ]
 
 

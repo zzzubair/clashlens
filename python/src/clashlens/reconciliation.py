@@ -287,6 +287,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             defense_count=defense_count,
             coverage_complete=coverage_complete,
             final_trophies=final_trophies,
+            residual=residual,
             automatic_state=automatic_state,
             start_available=start_available,
             end_available=end_available,
@@ -338,6 +339,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         defense_count=defense_count,
         coverage_complete=coverage_complete,
         final_trophies=final_trophies,
+        residual=residual,
         automatic_state=automatic_state,
         start_available=start_available,
         end_available=end_available,
@@ -561,17 +563,19 @@ def serialize_ranked_day_battles(
     ``contributions`` is normally the frozen ``input_evidence.contributions``
     list from a ranked-day version.  Accepting ``BattleContribution`` values as
     well keeps the projection useful at the reconciliation seam and makes its
-    selection rules explicit.  Invalid, excluded, duplicate, and disagreement
-    evidence is deliberately omitted; the full evidence decision remains in
-    ``input_evidence``.
+    selection rules explicit.  Invalid, excluded and duplicate evidence is
+    deliberately omitted; the full evidence decision remains in
+    ``input_evidence``.  A valid own report the other side disagrees with is
+    kept and flagged, because reconciliation still counts it.
     """
 
     selected: set[str] = set()
     events: list[tuple[datetime, str, dict[str, Any]]] = []
     for contribution in contributions:
         if isinstance(contribution, BattleContribution):
-            if not contribution.valid or contribution.disagreement:
+            if not contribution.valid:
                 continue
+            disagreement = contribution.disagreement
             battle_id_value: Any = contribution.battle_identity
             lens = contribution.lens
             amount = contribution.amount
@@ -586,9 +590,9 @@ def serialize_ranked_day_battles(
             if (
                 contribution.get("included") is not True
                 or contribution.get("valid") is not True
-                or contribution.get("disagreement") is True
             ):
                 continue
+            disagreement = contribution.get("disagreement") is True
             battle_id_value = contribution.get(
                 "battle_identity", contribution.get("battle_id")
             )
@@ -654,6 +658,8 @@ def serialize_ranked_day_battles(
             "stars": stars,
             "trophy_change": amount if lens == "offense" else -amount,
         }
+        if disagreement:
+            event["disagreement"] = True
         events.append((timestamp, battle_id, event))
 
     events.sort(
@@ -824,6 +830,7 @@ def _shield_state(
     defense_count: int,
     coverage_complete: bool,
     final_trophies: int | None,
+    residual: int | None,
     automatic_state: str,
     start_available: bool,
     end_available: bool,
@@ -856,6 +863,10 @@ def _shield_state(
     if attack_count or defense_count:
         return "not_inferred", None, evidence
     if automatic_state != "not_applicable":
+        return "unknown", None, evidence
+    # With no events the calculated trophies cannot change, so only the
+    # observed next-Reset trophies can show that the day did not stand still.
+    if residual is None or abs(residual) > TROPHY_RECONCILIATION_TOLERANCE:
         return "unknown", None, evidence
     if not evidence["trophies_unchanged"]:
         return "not_inferred", None, evidence
