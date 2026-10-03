@@ -599,7 +599,8 @@ def test_a_response_rechecks_a_reset_judged_while_it_waited(
                               (f"reset-settlement:{scenario['player']}:{RESET.isoformat()}",))
                 named.execute(
                     "UPDATE reset_boundary_settlements SET state = 'settled',"
-                    " selected_trophies = 1, reasons = '[]' WHERE boundary_at = %s",
+                    " selected_trophies = 1, proof_kind = 'observed_adjustment',"
+                    " reasons = '[]' WHERE boundary_at = %s",
                     (RESET,),
                 )
                 later = pool.submit(refresh)
@@ -627,6 +628,11 @@ def test_battle_log_takes_its_reset_locks_before_any_army_or_generation_row(
         database, processor = _processor(connection_info, archive_server)
         # The older battle-log path, still used before parsed-content dedup.
         database._supports_content_dedup = path == "current"
+        if path == "before_content_dedup":
+            # That path relies on the one-report-per-row rule 0012 dropped.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("ALTER TABLE battle_evidence"
+                                   " ADD UNIQUE (source_row_id)")
         try:
             with psycopg.connect(connection_info) as holder, ThreadPoolExecutor(1) as pool:
                 # The completed Reset pair created the Reset's publication record.
