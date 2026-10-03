@@ -182,8 +182,10 @@ def test_reset_given_up_without_any_response_still_settles_its_publication(
 def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
     database_url: str, tmp_path
 ) -> None:
-    # The previous Reset, so failed work is final.
-    boundary = _latest_reset(datetime.now(UTC)) - timedelta(days=1)
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before its responses could be collected")
     with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
         with psycopg.connect(connection_info) as connection:
             for tag in (TAG, "#8QV"):
@@ -200,13 +202,15 @@ def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
             ),
             key=lambda intent: intent.work_id,
         )
-        # The first work saved responses whose processing has not finished,
-        # for example because their file cannot be read yet; the later work
-        # got no response at all.
+        # The first work saved responses inside the Reset window whose
+        # processing has not finished, for example because their file cannot
+        # be read yet; the later work got no response at all. Both then fail.
         _Provider.mode = "battle_log_unavailable"
-        assert asyncio.run(collector.collect_intent(first)) == "failed"
+        assert asyncio.run(collector.collect_intent(first)) == "retrying"
         _Provider.mode = "drop"
-        assert asyncio.run(collector.collect_intent(later)) == "failed"
+        assert asyncio.run(collector.collect_intent(later)) == "retrying"
+        for intent in (first, later):
+            assert database.fail_intent(intent.work_id, category="provider_failure") == "failed"
 
         worker = Database(connection_info)
         try:
