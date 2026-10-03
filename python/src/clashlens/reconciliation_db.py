@@ -625,7 +625,7 @@ def recalculate_ranked_day(
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
         ORDER BY version DESC LIMIT 1
-        FOR UPDATE
+        FOR NO KEY UPDATE
         """,
         (player_id, ranked_day.start, RECONCILIATION_RULE_VERSION),
     ).fetchone()
