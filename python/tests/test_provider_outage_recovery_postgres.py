@@ -261,3 +261,50 @@ def test_collection_resumes_after_an_outage_with_the_newest_response_first(
         # The worker starts with the response saved after recovery, not with
         # the server errors saved during the outage.
         assert status == 200
+
+
+def test_reset_failing_while_the_api_answers_settles_after_three_retries(
+    database_url: str, tmp_path
+) -> None:
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before the retry could be checked")
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, _sweep_id = _reset_work(connection_info, boundary)
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+
+        async def collect() -> str:
+            (intent,) = database.pending_intents(
+                limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+            )
+            return await collector.collect_intent(intent)
+
+        async def run() -> None:
+            # During a provider-outage pause, retries are not counted.
+            collector.client.provider_outage = ProviderOutage(
+                threshold=1, base_delay=0.01, max_delay=0.01
+            )
+            for _ in range(5):
+                assert await collect() == "retrying"
+            # Only this player keeps failing; the API answers for others.
+            collector.client.provider_outage = ProviderOutage(threshold=10**6)
+            for _ in range(3):
+                assert await collect() == "retrying"
+                assert database.claim_due_players(limit=10) == []
+            assert await collect() == "failed"
+
+        asyncio.run(run())
+
+        # The day can publish without this player, and ordinary collection
+        # resumes instead of waiting for the Legend day to end.
+        worker = Database(connection_info)
+        try:
+            boundary_publication.reevaluate_boundary_publications(worker)
+        finally:
+            worker.close()
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                "SELECT state FROM reset_baseline_evidence"
+            ).fetchall() == [("failed",)]
+        assert [work.normalized_tag for work in database.claim_due_players(limit=10)] == [TAG]

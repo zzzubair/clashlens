@@ -67,6 +67,9 @@ _REGULAR_REPEAT_MINIMUM = 64
 _ORDINARY_INTENT_PARALLELISM = 32
 # Player work kept for retry when every failure was transient.
 _RETRIED_INTENTS = frozenset({"reset_baseline", "initial_collection", "live_refresh"})
+# Failed runs allowed outside a provider-outage pause before such work settles
+# as missing, so a few failing players cannot hold ordinary collection.
+_RETRIES_WHILE_ANSWERING = 3
 
 
 class Collector:
@@ -103,6 +106,7 @@ class Collector:
         self.refresh_latency_seconds = 0.0
         self.refresh_count = 0
         self.regular_inflight = 0
+        self._retries_while_answering: dict[int, int] = {}
         self._regular_admission_lock = asyncio.Lock()
         self.archive_health = "unconfigured" if archive is None else "unknown"
         self._archive_terminal = False
@@ -336,15 +340,26 @@ class Collector:
         if "capacity_paused" in outcomes:
             return "capacity_paused"
         if outcomes != ["recorded"] * len(endpoints):
-            # A provider outage must not become a permanent player failure.
+            # A provider outage must not become a permanent player failure,
+            # but once the API answers again a few retries are enough.
+            retryable = "failed" not in outcomes and intent.kind in _RETRIED_INTENTS
+            outage = getattr(self.client, "provider_outage", None)
+            if retryable and not getattr(outage, "active", False):
+                used = self._retries_while_answering.get(intent.work_id, 0) + 1
+                self._retries_while_answering[intent.work_id] = used
+                retryable = used <= _RETRIES_WHILE_ANSWERING
             status = await self._database_call(
                 self.database.fail_intent,
                 intent.work_id,
                 category="provider_failure",
                 detail="one or more required endpoint requests failed",
-                retryable="failed" not in outcomes and intent.kind in _RETRIED_INTENTS,
+                retryable=retryable,
             )
-            return "retrying" if status == "waiting_retry" else "failed"
+            if status != "waiting_retry":
+                self._retries_while_answering.pop(intent.work_id, None)
+                return "failed"
+            return "retrying"
+        self._retries_while_answering.pop(intent.work_id, None)
         completed = await self._database_call(
             self.database.complete_intent, intent.work_id
         )

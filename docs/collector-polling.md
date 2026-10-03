@@ -309,9 +309,13 @@ profile shows a battle as soon as it ends.
 Ordinary transport failures wait for the next pass. Interactive, Reset and
 ranking work gets bounded retries. When every failure of a Reset, Refresh or
 first-time collection was a timeout, dropped connection, HTTP 429 or HTTP 5xx,
-the work waits five seconds and runs again instead of failing, until 04:55 UTC
-ends the Legend day it belongs to. Only then does it fail. HTTP 401 or 403
-still fails it at once. Raw responses that will be kept are published
+the work waits five seconds and runs again instead of failing. Runs that fail
+during a provider-outage pause (below) are not counted. Once the API is
+answering again, the work gets three more failed runs, then fails and settles
+as missing, so a few failing players cannot hold ordinary collection. The
+count is kept in collector memory, so a restart allows three more. Nothing
+retries past 04:55 UTC, when the Legend day it belongs to ends. HTTP 401 or
+403 still fails it at once. Raw responses that will be kept are published
 to the local spool before their compact database handoff; restart recovery
 finishes either half without creating another observation or processing job.
 
@@ -344,8 +348,8 @@ At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
 profile/battle work row per member. Regular work stays blocked until all Reset
 work is terminal; unfinished older Reset work also blocks the next boundary.
-A Reset outage therefore holds ordinary collection until its Reset work is
-collected or fails at 04:55 UTC.
+A Reset outage therefore holds ordinary collection while the provider-outage
+pause lasts, plus at most three more failed runs of each Reset work row.
 
 ## Spool, archive and rate enforcement
 
