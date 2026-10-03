@@ -455,7 +455,9 @@ class CollectorDatabase:
                           AND next_due_at <= %s
                           {priority_filter}
                         ORDER BY {priority_order}
-                        FOR UPDATE SKIP LOCKED
+                        -- Only next_due_at changes. FOR UPDATE would also skip
+                        -- players a worker transaction merely references.
+                        FOR NO KEY UPDATE SKIP LOCKED
                         LIMIT %s
                     ), claimed AS (
                         UPDATE players AS player
