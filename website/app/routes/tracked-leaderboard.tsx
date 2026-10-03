@@ -222,7 +222,9 @@ export default function TrackedLeaderboardRoute() {
           <p className="rankings-context">
             Legend season {formatDate(daily.seasonStartAt)} –{" "}
             {formatDate(daily.seasonEndAt)} · Day reset{" "}
-            <LocalTimestamp value={daily.resetAt} />
+            <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s last
+            value saved before this Reset, so they may not include every change the game
+            made at the end of the day.
           </p>
         ) : newestObservedAt ? (
           <p className="rankings-context">
@@ -233,6 +235,14 @@ export default function TrackedLeaderboardRoute() {
               </>
             ) : null}
             . Across the whole leaderboard.
+          </p>
+        ) : null}
+        {!daily && leaderboard?.seasonResetPending ? (
+          <p className="rankings-context" role="status">
+            {leaderboard.seasonResetPending.toLocaleString()} tracked{" "}
+            {leaderboard.seasonResetPending === 1 ? "player is" : "players are"} waiting
+            for their Season reset and will be ranked once their profile shows the new
+            Season.
           </p>
         ) : null}
         {incomplete && newestInput ? (

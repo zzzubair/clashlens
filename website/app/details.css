@@ -73,6 +73,10 @@
   font-size: clamp(1.85rem, 4vw, 2.5rem);
   line-height: 1;
 }
+.player-page .player-trophy-count.player-reset-pending {
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
 .player-page .trophy-mark {
   width: 0.8rem;
   height: 0.8rem;

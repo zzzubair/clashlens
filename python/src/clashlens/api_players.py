@@ -17,7 +17,12 @@ from .api_db import (
 )
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
-from .domain import SEASON_DURATION, DomainRuleError, validate_legend_season_start
+from .domain import (
+    SEASON_DURATION,
+    DomainRuleError,
+    ranked_day_for,
+    validate_legend_season_start,
+)
 
 _LEGEND_I_TIER_ID = 105000036
 
@@ -126,7 +131,8 @@ def get_player_page(
                    player.current_observed_at,
                    {metadata_columns},
                    profile.profile_json -> 'clan' ->> 'name',
-                   player.current_profile_confirmed_at
+                   player.current_profile_confirmed_at,
+                   profile.current_league_season_id
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -139,6 +145,11 @@ def get_player_page(
         if row is None:
             return None
         observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
+        # A profile naming an earlier Season shows trophies from before this
+        # player's Season reset, not their total in the current Season.
+        season_reset_pending = (
+            _text(row[12]) != ranked_day_for(now).official_season_id
+        )
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
         daily_rows = connection.execute(
             """
@@ -340,6 +351,14 @@ def get_player_page(
                     "detail": current_day["completeness"]["reason"],
                 }
             )
+        if season_reset_pending:
+            data_quality.append(
+                {
+                    "code": "uncertain",
+                    "label": "Waiting for this player's Season reset",
+                    "detail": "The latest profile still shows trophies from the previous Season. The new total appears once the game reports this player's Season reset.",
+                }
+            )
         if season_anchor_conflict:
             data_quality.append(
                 {
@@ -352,6 +371,7 @@ def get_player_page(
             "tag": _text(row[0]),
             "name": _text(row[3]),
             "trophies": int(row[4]),
+            "season_reset_pending": season_reset_pending,
             "eligibility": _text(row[2]),
             "active": bool(row[1]),
             "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",

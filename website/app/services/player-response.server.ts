@@ -413,6 +413,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       name: payload.name,
       clan: isString(payload.clan) ? payload.clan : "Unknown",
       trophies: payload.trophies,
+      seasonResetPending: payload.season_reset_pending === true,
       freshness: {
         state:
           payload.freshness === "fresh" || payload.freshness === "stale"
@@ -489,7 +490,9 @@ function calculateStartingTrophies(
       continue;
     const netChange = day.trophyChange ?? day.offense.trophyGain - day.defense.trophyLoss;
     let trophies: number | undefined;
+    // A profile from before this player's Season reset is not a day total.
     if (
+      !profile.seasonResetPending &&
       observedAt >= start &&
       observedAt < end &&
       (day.completeness.state === "complete" ||

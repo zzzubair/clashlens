@@ -9,6 +9,7 @@ from .api_db import (
     _public_snapshot_confidence,
     _text,
 )
+from .domain import ranked_day_for
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
@@ -16,16 +17,21 @@ _FOCUS_NEIGHBORS = 5
 
 
 # Shared membership and confirmation rule for the page and operator measurements.
-_LIVE_PLAYERS_SQL = """
+# A profile still naming an earlier Season than the calendar shows trophies from
+# before that player's Season reset, so it waits off the board until it updates.
+_LIVE_CANDIDATES_SQL = """
 SELECT player.normalized_tag, profile.name, profile.trophies,
        greatest(
            player.current_observed_at, player.current_profile_confirmed_at
        ) AS observed_at,
        player.eligibility_state,
-       profile.profile_json -> 'clan' ->> 'name' AS clan
+       profile.profile_json -> 'clan' ->> 'name' AS clan,
+       COALESCE(profile.current_league_season_id = %(season_id)s, false)
+           AS season_current
 FROM players AS player
 JOIN LATERAL (
-    SELECT name, trophies, profile_json, source_contract_state
+    SELECT name, trophies, profile_json, source_contract_state,
+           current_league_season_id
     FROM player_profile_versions
     WHERE id = player.current_profile_version_id
     -- Keep one indexed current-profile lookup per player as history grows.
@@ -43,6 +49,9 @@ WHERE player.active = true
              OR checked.last_not_found_at > checked.last_success_at)
   )
 """
+_LIVE_PLAYERS_SQL = f"""
+SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
+"""
 
 _LIVE_ORDER_SQL = "trophies DESC, md5(normalized_tag), normalized_tag"
 _LIVE_RANKED_SQL = f"""
@@ -51,7 +60,13 @@ FROM ({_LIVE_PLAYERS_SQL}) AS live
 """
 
 
-def search_live_leaderboard(database: ApiDatabase, query: str) -> dict[str, Any]:
+def _season_id(now: datetime) -> str:
+    return ranked_day_for(now).official_season_id
+
+
+def search_live_leaderboard(
+    database: ApiDatabase, query: str, *, now: datetime
+) -> dict[str, Any]:
     """Filter after ranking the board, using only indexed current-profile reads."""
     query = query.strip()
     if not query or len(query) > 80:
@@ -73,7 +88,12 @@ def search_live_leaderboard(database: ApiDatabase, query: str) -> dict[str, Any]
                    AND strpos(lower(name), lower(%(query)s)) > 0)
             ORDER BY position LIMIT 21
             """,
-            {"tag": tag, "explicit_tag": explicit_tag, "query": query},
+            {
+                "tag": tag,
+                "explicit_tag": explicit_tag,
+                "query": query,
+                "season_id": _season_id(now),
+            },
         ).fetchall()
     return {
         "exact_tag": tag if rows and rows[0][4] else None,
@@ -97,17 +117,21 @@ def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str,
             f"""
             WITH selected AS ({_LIVE_PLAYERS_SQL}), ages AS (
                 SELECT CASE WHEN observed_at IS NOT NULL
-                            THEN greatest(0, extract(epoch FROM %s - observed_at))
+                            THEN greatest(0, extract(epoch FROM %(now)s - observed_at))
                        END AS age
                 FROM selected
             )
             SELECT count(*), count(*) - count(age),
                    percentile_disc(0.5) WITHIN GROUP (ORDER BY age),
                    percentile_disc(0.95) WITHIN GROUP (ORDER BY age), max(age),
-                   count(*) FILTER (WHERE age > %s)
+                   count(*) FILTER (WHERE age > %(fresh)s)
             FROM ages
             """,
-            (now, _LIVE_FRESHNESS_SECONDS),
+            {
+                "now": now,
+                "fresh": _LIVE_FRESHNESS_SECONDS,
+                "season_id": _season_id(now),
+            },
         ).fetchone()
     return {
         "sample_timestamp_seconds": now.timestamp(),
@@ -133,8 +157,11 @@ def get_live_leaderboard(
     with database.pool.connection() as connection:
         rows = connection.execute(
             f"""
-            WITH selected AS MATERIALIZED (
-                {_LIVE_RANKED_SQL}
+            WITH candidates AS MATERIALIZED (
+                {_LIVE_CANDIDATES_SQL}
+            ), selected AS MATERIALIZED (
+                SELECT *, row_number() OVER (ORDER BY {_LIVE_ORDER_SQL}) AS position
+                FROM candidates WHERE season_current
             ), location AS (
                 SELECT CASE WHEN %(focus_tag)s::text IS NULL THEN %(offset)s::bigint
                             ELSE ((position - 1) / %(limit)s) * %(limit)s
@@ -156,14 +183,18 @@ def get_live_leaderboard(
                     least(page_offset + 1, focus_position - %(neighbors)s)
                     AND greatest(page_offset + %(limit)s, focus_position + %(neighbors)s)
             ), totals AS (
-                SELECT count(*)::bigint AS tracked_population FROM players WHERE active
+                SELECT count(*)::bigint AS tracked_population,
+                       (SELECT count(*) FROM candidates WHERE NOT season_current)
+                           AS season_reset_pending
+                FROM players WHERE active
             )
             SELECT page.normalized_tag, page.name, page.trophies,
                    page.observed_at, page.eligibility_state, page.clan,
                    page.position,
                    stats.total_entries, stats.stale_count,
                    stats.oldest_observed_at, stats.newest_observed_at,
-                   totals.tracked_population, location.page_offset
+                   totals.tracked_population, location.page_offset,
+                   totals.season_reset_pending
             FROM stats CROSS JOIN totals CROSS JOIN location
             LEFT JOIN page ON true
             ORDER BY position NULLS LAST
@@ -175,6 +206,7 @@ def get_live_leaderboard(
                 "now": now,
                 "fresh": _LIVE_FRESHNESS_SECONDS,
                 "neighbors": _FOCUS_NEIGHBORS,
+                "season_id": _season_id(now),
             },
         ).fetchall()
         if rows[0][12] is None:
@@ -184,6 +216,7 @@ def get_live_leaderboard(
         if offset and offset >= total_entries:
             return None
         tracked_population = int(rows[0][11])
+        season_reset_pending = int(rows[0][13])
         stale_count = int(rows[0][8])
         oldest_observed_at = rows[0][9]
         newest_observed_at = rows[0][10]
@@ -218,6 +251,8 @@ def get_live_leaderboard(
             "generated_at": now.astimezone(UTC).isoformat(),
             "tracked_population": tracked_population,
             "total_entries": total_entries,
+            # Tracked players left off until a profile names this Season.
+            "season_reset_pending": season_reset_pending,
             "page": page,
             "page_size": limit,
             "page_count": page_count,

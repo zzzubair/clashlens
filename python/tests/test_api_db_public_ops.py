@@ -9,6 +9,7 @@ from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_analytics, api_leaderboard, api_players
 from clashlens.api_db import ApiDatabase, RequestBinding, _public_army, _screen_events
+from clashlens.domain import ranked_day_for
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 
@@ -93,14 +94,22 @@ def seed_profile(
                 player_id, observation_id, normalized_tag, endpoint_version,
                 schema_version, parser_version, observed_at, source_http_status,
                 name, trophies, league_tier_id, league_tier_name,
-                eligibility_state, profile_json
+                eligibility_state, current_league_season_id, profile_json
             ) VALUES (
                 %s, %s, %s, 'profile-v1', 'profile-schema-v1',
                 'profile-parser-v1', %s, 200, %s, %s, 105000036,
-                'Legend I', 'eligible', '{}'::jsonb
+                'Legend I', 'eligible', %s, '{}'::jsonb
             ) RETURNING id
             """,
-            (player_id, observation_id, tag, observed_at, f"Player {tag}", trophies),
+            (
+                player_id,
+                observation_id,
+                tag,
+                observed_at,
+                f"Player {tag}",
+                trophies,
+                ranked_day_for(observed_at).official_season_id,
+            ),
         ).fetchone()[0]
         connection.execute(
             """

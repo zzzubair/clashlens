@@ -23,7 +23,7 @@ from test_reconciliation_postgres import (
     _profile,
 )
 
-from clashlens import reset_baselines, reset_settlement
+from clashlens import reconciliation_db, reset_baselines, reset_settlement
 
 TAG = "#2PP"
 # The fixture profiles report the Season that ends at the August 10 Reset.
@@ -282,3 +282,67 @@ def test_concurrent_provisional_recording_and_replay_preserve_verdict(
             )
         record(9)
         assert _rows(connection_info, state) == [("settled", 3, 8)]
+
+
+def _season_profile(trophies: int, season_id: int) -> bytes:
+    payload = json.loads(_profile(trophies))
+    payload["currentLeagueSeasonId"] = season_id
+    payload["previousLeagueSeasonId"] = season_id - 28 * 24 * 60 * 60
+    return json.dumps(payload).encode()
+
+
+OLD_SEASON, NEW_SEASON = 1783918800, 1786338000  # Seasons around August 10.
+
+
+@pytest.mark.parametrize("kind,season_id,accepted", [
+    ("season", OLD_SEASON, False),
+    ("season", NEW_SEASON, True),
+    ("monday", OLD_SEASON, True),
+])
+def test_season_opening_start_needs_a_profile_naming_the_new_season(
+    database_url: str, archive_server, kind: str, season_id: int, accepted: bool
+) -> None:
+    boundary = BOUNDARIES[kind]
+    trophies = 5000 if season_id == NEW_SEASON else 6400
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           boundary - timedelta(days=1), profile=_profile(6400),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_season_profile(trophies, season_id),
+                            log=_battle_log(empty=True))
+        _process(connection_info, archive_server, jobs)
+        # The opening day is otherwise reconciled when its battles arrive.
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=boundary, now=boundary,
+                request_key="opening",
+            )
+            assert processor.process_job(job, owner="opening") is not None
+        finally:
+            database.close()
+        days = _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   official_season_id, season_day_number, start_trophies,
+                   next_start_trophies
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")
+        evidence = _rows(connection_info, """
+            SELECT DISTINCT ON (boundary_at) state,
+                   profile_observation_id IS NOT NULL
+            FROM reset_baseline_evidence
+            WHERE boundary_at = (SELECT max(boundary_at) FROM reset_baseline_evidence)
+            ORDER BY boundary_at, version DESC""")
+        settlements = {row[1:3] for row in _rows(connection_info, BOUNDARY_ROWS)}
+    start = trophies if accepted else None
+    previous_day = boundary - timedelta(days=1)
+    by_start = {row[0]: row[1:] for row in days}
+    assert by_start[previous_day][3] == start
+    assert by_start[boundary][2] == start
+    if kind == "season":
+        # The calendar names both days even while the profile is old.
+        assert by_start[previous_day][:2] == (str(OLD_SEASON), 28)
+        assert by_start[boundary][:2] == (str(NEW_SEASON), 1)
+    # The raw reading is kept, and no Reset is settled from it.
+    assert evidence == [("complete", True)]
+    assert settlements == {("provisional", None)}
