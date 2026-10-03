@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
+import psycopg
 import pytest
 from test_collector import _Client, _collector, _Spool, _Store
 
@@ -188,10 +189,16 @@ def test_spool_failure_keeps_database_slots_until_cancelled_renewals_finish(
     assert peak == 4
 
 
-def test_regular_checks_in_flight_follow_the_configured_parallelism() -> None:
+@pytest.mark.parametrize(
+    ("parallelism", "first_claims"),
+    [(12, [(3, False), (9, None)]), (2, [(1, False), (1, None)]), (1, [(1, False)])],
+)
+def test_regular_checks_in_flight_follow_the_configured_parallelism(
+    parallelism: int, first_claims: list[tuple[int, bool | None]]
+) -> None:
     spool = _Spool()
     collector = _collector(spool, _Store(spool), _Client(spool))
-    collector.regular_parallelism = 12
+    collector.regular_parallelism = parallelism
     claims: list[tuple[int, bool | None]] = []
     in_flight = 0
     peak = 0
@@ -207,7 +214,7 @@ def test_regular_checks_in_flight_follow_the_configured_parallelism() -> None:
         nonlocal in_flight, peak
         in_flight += 1
         peak = max(peak, in_flight)
-        if peak == 12:
+        if peak == parallelism:
             stop.set()
         await stop.wait()
         in_flight -= 1
@@ -219,6 +226,40 @@ def test_regular_checks_in_flight_follow_the_configured_parallelism() -> None:
 
     asyncio.run(collector._regular_loop(stop, 0.01))
 
-    assert peak == 12
-    # A quarter of the slots go to overdue revisits first.
-    assert claims[:2] == [(3, False), (9, None)]
+    assert peak == parallelism
+    # A quarter of the slots, and always at least one, go to overdue revisits first.
+    assert claims[: len(first_claims)] == first_claims
+
+
+def test_saves_a_held_lock_blocks_land_later_in_order_without_holding_checks() -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    held = threading.Event()
+    held.set()
+    record = store.record_response
+
+    def locked(handoff: object) -> object:
+        if held.is_set():
+            raise psycopg.errors.LockNotAvailable("the worker holds the player")
+        return record(handoff)
+
+    store.record_response = locked  # type: ignore[method-assign]
+    work = CollectorWork(1, "#2PP", datetime.now(UTC))
+
+    async def scenario() -> None:
+        for _ in range(2):
+            checked = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+            assert await asyncio.wait_for(checked, 1) == ["recorded"]
+        saved = list(spool.handoffs)
+        assert len(saved) == 2
+        assert store.handoffs == []
+        held.clear()
+        await asyncio.wait_for(asyncio.gather(*collector._later_commits), 5)
+        assert [handoff.occurrence_key for handoff in store.handoffs] == saved
+
+    asyncio.run(scenario())
+
+    assert spool.handoffs == {}
+    assert collector.outcomes["commit_deferred"] == 2
+    assert not collector._handoff_recovery_required

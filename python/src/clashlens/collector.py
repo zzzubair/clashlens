@@ -7,7 +7,7 @@ import json
 import math
 import random
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -117,8 +117,10 @@ class Collector:
         )
         self._handoff_recovery_required = False
         # Each stripe's newest saved response; it resolves once that response
-        # has committed or failed, so the next one commits after it.
-        self._handoff_turns: dict[asyncio.Lock, asyncio.Future[None]] = {}
+        # has committed or failed, so the next one commits after it, or to the
+        # task committing it later when a worker's lock held it up.
+        self._handoff_turns: dict[asyncio.Lock, asyncio.Future[asyncio.Task[None] | None]] = {}
+        self._later_commits: set[asyncio.Task[None]] = set()
         # Newest committed (seen time, field fingerprint) per scope, identity
         # and endpoint, from this process only; empty after a restart.
         self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
@@ -130,6 +132,8 @@ class Collector:
         for attempt in range(3):
             try:
                 return await asyncio.to_thread(operation, *args, **kwargs)
+            except psycopg.errors.LockNotAvailable:
+                raise
             except (psycopg.Error, PoolTimeout):
                 self._count("database_failure")
                 if attempt == 2:
@@ -452,7 +456,7 @@ class Collector:
                     and committed is not None
                     and committed[1] == handoff.content_fingerprint
                     and not lock.locked()
-                    and (pending is None or pending.done())
+                    and _settled(pending)
                     and not self._handoff_recovery_required
                 ):
                     check = asyncio.ensure_future(
@@ -478,6 +482,7 @@ class Collector:
                     )
                 else:
                     published = False
+                    later: asyncio.Task[None] | None = None
                     turn = asyncio.get_running_loop().create_future()
                     try:
                         async with lock:
@@ -503,19 +508,23 @@ class Collector:
                         # Saved responses commit in publish order, but no
                         # database wait holds the lock, so a later response
                         # always reaches the spool first.
-                        if previous is not None:
-                            await asyncio.shield(previous)
+                        behind = None if previous is None else await asyncio.shield(previous)
                         if self._handoff_recovery_required:
                             if cancelled:
                                 raise asyncio.CancelledError
                             return "capacity_paused"
-                        await _drain_awaitable(
-                            self._database_call(self.database.record_response, handoff)
-                        )
-                        self._committed[identity] = max(
-                            seen, self._committed.get(identity) or seen
-                        )
-                        await _drain_to_thread(self.spool.remove_handoff, name)
+                        committed_now = False
+                        if behind is None or behind.done():
+                            with suppress(psycopg.errors.LockNotAvailable):
+                                await self._commit_saved(handoff, name, seen)
+                                committed_now = True
+                        if not committed_now:
+                            self._count("commit_deferred")
+                            later = asyncio.create_task(
+                                self._commit_later(behind, handoff, name, seen)
+                            )
+                            self._later_commits.add(later)
+                            later.add_done_callback(self._later_commits.discard)
                     except BaseException as error:
                         if published or self._sidecar_exists(name):
                             self._handoff_recovery_required = True
@@ -525,7 +534,7 @@ class Collector:
                                 ) from error
                         raise
                     finally:
-                        turn.set_result(None)
+                        turn.set_result(later)
                 if cancelled:
                     raise asyncio.CancelledError
                 self._count("recorded")
@@ -583,6 +592,33 @@ class Collector:
                     except (OSError, SpoolError) as error:
                         self._record_spool_failure(error)
         raise AssertionError("unreachable collector retry loop")
+
+    async def _commit_saved(
+        self, handoff: ResponseHandoff, name: str, seen: tuple[datetime, str]
+    ) -> None:
+        await _drain_awaitable(self._database_call(self.database.record_response, handoff))
+        identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
+        self._committed[identity] = max(seen, self._committed.get(identity) or seen)
+        await _drain_to_thread(self.spool.remove_handoff, name)
+
+    async def _commit_later(
+        self, behind: asyncio.Task[None] | None, handoff: ResponseHandoff,
+        name: str, seen: tuple[datetime, str],
+    ) -> None:
+        """Retry a saved response a lock held up, after its stripe's earlier ones."""
+        if behind is not None:
+            await asyncio.wait({behind})
+        attempt = 0
+        while not self._handoff_recovery_required:
+            try:
+                await self._commit_saved(handoff, name, seen)
+                return
+            except psycopg.errors.LockNotAvailable:
+                await asyncio.sleep(_retry_delay(attempt))
+                attempt += 1
+            except BaseException:
+                self._handoff_recovery_required = True
+                raise
 
     def _make_handoff(
         self,
@@ -969,7 +1005,7 @@ class Collector:
                     # revisits moving until discovery drains.
                     repeat_limit = min(
                         available,
-                        max(0, self.regular_parallelism // 4 - repeat_inflight),
+                        max(1, self.regular_parallelism // 4) - repeat_inflight,
                     )
                     if repeat_limit > 0:
                         admit(
@@ -1409,6 +1445,10 @@ class Collector:
 
 def _retry_delay(attempt: int) -> float:
     return min(5.0, 0.25 * 2**attempt) + random.uniform(0.0, 0.1)
+
+
+def _settled(turn: asyncio.Future[asyncio.Task[None] | None] | None) -> bool:
+    return turn is None or (turn.done() and (turn.result() is None or turn.result().done()))
 
 
 async def _drain_to_thread(operation: Any, *args: Any, **kwargs: Any) -> Any:

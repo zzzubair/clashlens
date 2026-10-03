@@ -523,7 +523,11 @@ so the check does not wait while another response updates that body's records,
 or while the worker holds that player; it saves the response instead. Rows the
 worker adds that point at the last saved response never make a check wait:
 on 2026-10-03 one worker transaction kept such rows for 14 minutes while it
-built a Reset publication, and saving waited behind it for 4 minutes. A shared body already sighted within the last 10 minutes
+built a Reset publication, and saving waited behind it for 4 minutes. A saved
+response's database update waits at most 3 seconds for a lock the worker holds,
+such as its player. It then stays saved on disk and the collector moves on,
+retrying the update in the background after any earlier saved response in its
+group, until it lands or the collector restarts and replays it. A shared body already sighted within the last 10 minutes
 keeps its earlier latest sighting time, which only orders spool cleanup and
 starts the archive retention clock, so its deletion can come up to 10 minutes
 early. A body already marked for deletion is never recorded this way; it is

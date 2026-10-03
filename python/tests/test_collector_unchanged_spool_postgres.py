@@ -187,7 +187,7 @@ def test_saving_never_waits_on_worker_rows_that_point_at_the_observation(
             database.close()
 
 
-def test_unchanged_check_saves_at_once_when_the_worker_holds_its_player(
+def test_collection_moves_on_while_the_worker_holds_its_player(
     database_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The worker locks the player it ingests, as the 0040 trigger would.
@@ -221,16 +221,22 @@ def test_unchanged_check_saves_at_once_when_the_worker_holds_its_player(
             assert await poll() == ["recorded"]
             with psycopg.connect(connection_info) as holder:
                 holder.execute(hold)
-                second = poll()
-                while not checks:
-                    await asyncio.sleep(0.05)
-            assert await second == ["recorded"]
+                started = time.monotonic()
+                # The saved response's database update gives up on the lock
+                # after 3 seconds, so the check returns while it is held.
+                assert await asyncio.wait_for(poll(), 10) == ["recorded"]
+                assert time.monotonic() - started < 5
+                assert len(spool.iter_handoffs()) == 1
+                assert _sightings(connection_info)[0] == 1
+            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 15)
 
         try:
             asyncio.run(scenario())
             assert len(checks) == 1
             assert checks[0][0] is False
             assert checks[0][1] < 1
+            assert collector.outcomes["commit_deferred"] == 1
+            assert not collector._handoff_recovery_required
             polls, _, observations = _sightings(connection_info)
             assert (polls, observations) == (2, 1)
             assert hashlib.sha256(ignored).hexdigest() in spool.final_hashes()

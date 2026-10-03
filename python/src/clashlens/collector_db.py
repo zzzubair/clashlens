@@ -1148,6 +1148,8 @@ class CollectorDatabase:
                     )
                     if recorded is not None:
                         return recorded
+                else:
+                    connection.execute("SET LOCAL lock_timeout = '3s'")
                 work_kind = self._validate_work_identity(connection, handoff)
                 state = self._lock_response_state(connection, handoff)
                 if state is not None and state[5] == handoff.occurrence_key:
