@@ -1446,6 +1446,12 @@ def _enqueue_false_shield_rebuilds(connection: Any, max_jobs: int) -> list[int]:
           ON version.id = latest.ranked_day_version_id
         WHERE version.shield_state = 'inferred_shielded'
           AND version.unexplained_residual IS DISTINCT FROM 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM python_processing_jobs_worker AS job
+              WHERE job.deduplication_key =
+                  'reconcile:false-shield:' || version.id::text
+          )
         ORDER BY latest.player_id, latest.ranked_day_start
         LIMIT %s
         """,
