@@ -12,12 +12,13 @@ from test_claim_jobs_postgres import (
 import clashlens.db as db_module
 from clashlens.db import (
     _CLAIM_CANDIDATE_LIMIT,
+    POPULATION_BUILD_WORK_TYPES,
     RESPONSE_WORK_TYPES,
     Database,
     _claim_select_statement,
     _supported_job_filter,
 )
-from clashlens.worker import DERIVED, DERIVED_WITHOUT_BUILDS, MAX_CONCURRENCY
+from clashlens.worker import DERIVED_WITHOUT_BUILDS, MAX_CONCURRENCY
 
 EXECUTION_TIME_PATTERN = re.compile(r"Execution Time: ([0-9.]+) ms")
 
@@ -343,7 +344,7 @@ def test_limited_claims_find_their_work_behind_the_other_kind(
         with psycopg.connect(connection_info, autocommit=True) as connection:
             _seed_production_depth(connection)
             _insert_daily_jobs(connection, 8, "0 minutes")
-            for work_types in (DERIVED, DERIVED_WITHOUT_BUILDS):
+            for work_types in (POPULATION_BUILD_WORK_TYPES, DERIVED_WITHOUT_BUILDS):
                 plan_text, millis = _explain_claim(connection, work_types)
                 assert "Seq Scan on python_processing_jobs" not in plan_text
                 assert millis < 100, (

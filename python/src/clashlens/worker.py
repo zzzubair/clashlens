@@ -73,17 +73,11 @@ OLDEST_FIRST_CLAIM_EVERY = 4
 # (8 of 12) for responses. The rest run derived work: daily results, builds
 # and redecodes. Only one of them may run a population build, and the timer's
 # Reset publication checks and correction sweep take one of their turns.
-DERIVED = tuple(
+DERIVED_WITHOUT_BUILDS = tuple(
     work_type
     for work_type in SUPPORTED_WORK_TYPES
-    if work_type not in RESPONSE_WORK_TYPES
+    if work_type not in RESPONSE_WORK_TYPES + POPULATION_BUILD_WORK_TYPES
 )
-DERIVED_WITHOUT_BUILDS = tuple(
-    work_type for work_type in DERIVED if work_type not in POPULATION_BUILD_WORK_TYPES
-)
-# How long the timer waits for a derived turn before leaving that heavy work
-# due for its next tick.
-HEAVY_MAINTENANCE_WAIT_SECONDS = 1.0
 STAGE_DURATION_BUCKETS_SECONDS = (
     0.0001,
     0.00025,
@@ -201,14 +195,34 @@ def response_lane_count(concurrency: int) -> int:
     return max(1, min(concurrency - 1, round(concurrency * 2 / 3)))
 
 
-def lane_work_types(lane_index: int, concurrency: int) -> tuple[str, ...] | None:
-    """The work one continuous lane may claim; None means any work."""
+def lane_work_types(
+    lane_index: int, concurrency: int
+) -> tuple[tuple[str, ...], ...] | None:
+    """The work one continuous lane claims, tried in order; None means any."""
     responses = response_lane_count(concurrency)
     if responses == 0:
         return None
     if lane_index <= responses:
-        return RESPONSE_WORK_TYPES
-    return DERIVED if lane_index == responses + 1 else DERIVED_WITHOUT_BUILDS
+        return (RESPONSE_WORK_TYPES,)
+    if lane_index == responses + 1:
+        return (POPULATION_BUILD_WORK_TYPES, DERIVED_WITHOUT_BUILDS)
+    return (DERIVED_WITHOUT_BUILDS,)
+
+
+def database_pool_sizes(pool_size: int, concurrency: int) -> tuple[int, int, int]:
+    """Response, derived and maintenance connections for ``concurrency`` lanes.
+
+    With two or more continuous lanes, response lanes get about two thirds of
+    ``pool_size`` and derived lanes the rest, so derived work can never hold
+    every connection, and maintenance gets its own. Otherwise every lane and
+    maintenance share ``pool_size``.
+    """
+    if concurrency < 2:
+        return pool_size, 0, 0
+    responses = response_lane_count(pool_size)
+    if responses == 0:
+        raise ValueError("database pool size must be at least 2 with concurrency")
+    return responses, pool_size - responses, MAINTENANCE_POOL_SIZE
 
 
 class TimedMaintenance:
@@ -233,8 +247,7 @@ class TimedMaintenance:
     def run_due(self, derived_turns: Semaphore | None = None) -> None:
         current_time = monotonic()
         if current_time >= self.next_reevaluation_at and (
-            derived_turns is None
-            or derived_turns.acquire(timeout=HEAVY_MAINTENANCE_WAIT_SECONDS)
+            derived_turns is None or derived_turns.acquire(blocking=False)
         ):
             try:
                 self.next_reevaluation_at = current_time + 10
@@ -363,6 +376,7 @@ def process_until_stopped(
     claims_ready: Callable[[], bool],
     maintain: Callable[[Semaphore], None],
     on_result: Callable[[ProcessResult], None],
+    derived_processor: ObservationProcessor | None = None,
 ) -> None:
     """Keep ``concurrency`` lanes claiming until ``stop_requested`` is set.
 
@@ -380,11 +394,13 @@ def process_until_stopped(
     With two or more lanes, ``lane_work_types`` reserves lanes for responses
     so long derived work can never hold them all. Each derived lane takes a
     turn from a shared semaphore, one per derived lane, before it claims, and
-    ``maintain`` receives the same semaphore for its heavy work.
+    ``maintain`` receives the same semaphore for its heavy work. Derived lanes
+    use ``derived_processor``, when given, so they hold their own connections.
     """
     _validate_lanes(concurrency, owner, lease_seconds)
     report_lock = threading.Lock()
     derived_turns = Semaphore(max(1, concurrency - response_lane_count(concurrency)))
+    derived = processor if derived_processor is None else derived_processor
 
     def maintenance_timer() -> None:
         while not stop_requested.is_set():
@@ -408,9 +424,10 @@ def process_until_stopped(
         def stopped() -> bool:
             return stop_claiming.is_set() or stop_requested.is_set()
 
-        work_types = lane_work_types(lane_index, concurrency)
-        takes_turns = work_types is not None and work_types != RESPONSE_WORK_TYPES
-        limit = {} if work_types is None else {"work_types": work_types}
+        work_type_order = lane_work_types(lane_index, concurrency)
+        limits = [{"work_types": kinds} for kinds in work_type_order or ()] or [{}]
+        takes_turns = work_type_order not in (None, (RESPONSE_WORK_TYPES,))
+        lane_processor = derived if takes_turns else processor
         while not stopped():
             if takes_turns and not derived_turns.acquire(timeout=idle_seconds):
                 continue
@@ -418,15 +435,15 @@ def process_until_stopped(
                 ready = claims_ready()
                 if stopped():
                     return
-                result = (
-                    processor.process_once(
+                result = None
+                for limit in limits if ready else ():
+                    result = lane_processor.process_once(
                         owner=lane_owner(owner, lane_index),
                         lease_seconds=lease_seconds,
                         **limit,
                     )
-                    if ready
-                    else None
-                )
+                    if result is not None:
+                        break
             finally:
                 if takes_turns:
                     derived_turns.release()

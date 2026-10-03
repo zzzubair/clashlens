@@ -5,8 +5,10 @@ import time
 from threading import Event, Semaphore
 
 import pytest
+from test_worker_lifecycle import _worker_namespace
 
 import clashlens.worker as worker_module
+from clashlens import cli
 from clashlens.worker import (
     ProcessResult,
     TimedMaintenance,
@@ -20,7 +22,8 @@ BUILD = "build_army_analytics"
 
 
 class HeldQueue:
-    """In-memory queue whose builds run until ``release_builds`` is set.
+    """In-memory queue whose builds run until ``release_builds`` is set, and
+    daily jobs until ``release_daily`` is set.
 
     Each lane takes the oldest job of a kind it may claim, as the database
     claim does. It records how many builds and derived jobs run at once.
@@ -31,6 +34,8 @@ class HeldQueue:
         self.jobs: list[tuple[int, str]] = []
         self.next_id = 1
         self.release_builds = Event()
+        self.release_daily = Event()
+        self.release_daily.set()
         self.builds_running = 0
         self.most_builds = 0
         self.derived_running = 0
@@ -67,6 +72,8 @@ class HeldQueue:
                 self.most_builds = max(self.most_builds, self.builds_running)
         if work_type == BUILD:
             assert self.release_builds.wait(10), "test release gate was not opened"
+        if work_type == DAILY:
+            assert self.release_daily.wait(10), "test release gate was not opened"
         with self.lock:
             self.done[work_type] += 1
             if work_type != RESPONSE:
@@ -185,8 +192,29 @@ def test_daily_results_keep_moving_while_a_build_runs() -> None:
     assert not thread.is_alive()
 
 
-def test_heavy_maintenance_waits_for_a_derived_turn(monkeypatch) -> None:
-    monkeypatch.setattr(worker_module, "HEAVY_MAINTENANCE_WAIT_SECONDS", 0.01)
+def test_the_build_slot_takes_a_build_before_older_daily_jobs() -> None:
+    queue = HeldQueue()
+    maintenance, sweep, _database = _held_maintenance()
+    sweep.release.set()
+    queue.release_daily.clear()
+    stop = Event()
+    queue.add(DAILY, 10)
+    queue.add(BUILD, 1)
+    thread = _start(queue, maintenance, stop)
+    try:
+        assert _wait_for(lambda: queue.builds_running == 1), (
+            f"{queue.derived_running} daily jobs held every derived slot"
+        )
+        assert queue.done[DAILY] == 0
+    finally:
+        queue.release_builds.set()
+        queue.release_daily.set()
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()
+
+
+def test_heavy_maintenance_skips_its_tick_without_a_derived_turn() -> None:
     maintenance, sweep, database = _held_maintenance()
     sweep.release.set()
     turns = Semaphore(0)  # every derived turn is taken
@@ -211,13 +239,109 @@ def test_heavy_maintenance_waits_for_a_derived_turn(monkeypatch) -> None:
 def test_continuous_lanes_reserve_two_thirds_for_responses(
     concurrency: int, responses: int, derived: int
 ) -> None:
-    kinds = [lane_work_types(lane, concurrency) for lane in range(1, concurrency + 1)]
+    orders = [lane_work_types(lane, concurrency) for lane in range(1, concurrency + 1)]
     response_lanes = [
-        kind for kind in kinds if kind == (RESPONSE, "replay_observation")
+        order for order in orders if order == ((RESPONSE, "replay_observation"),)
     ]
-    build_lanes = [kind for kind in kinds if kind is not None and BUILD in kind]
+    build_lanes = [
+        order
+        for order in orders
+        if order is not None and any(BUILD in kinds for kinds in order)
+    ]
 
     assert len(response_lanes) == responses
-    assert len(kinds) - len(response_lanes) == derived
+    assert len(orders) - len(response_lanes) == derived
     assert len(build_lanes) == 1
+    assert BUILD in build_lanes[0][0] and DAILY not in build_lanes[0][0]
+    assert DAILY in build_lanes[0][1]
     assert lane_work_types(1, 1) is None
+
+
+def test_derived_work_cannot_hold_every_database_connection(monkeypatch) -> None:
+    # Twelve slots on four connections: four long derived jobs could once take
+    # all four, leaving every response slot without a connection.
+    release_derived = Event()
+    derived_holding = Event()
+    responses_done = Event()
+    lock = threading.Lock()
+    responses = 0
+    pools: list[int] = []
+    stop: list[Event] = []
+
+    class ConnectionPoolDatabase:
+        def __init__(self, _url: str, *, max_size: int, **_kwargs: object) -> None:
+            self.connections = threading.BoundedSemaphore(max_size)
+            pools.append(max_size)
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            return 0
+
+        def close(self) -> None:
+            return
+
+    class FakeArchive:
+        @staticmethod
+        def check_ready() -> bool:
+            return True
+
+    class ConnectionHoldingProcessor:
+        def __init__(self, database: ConnectionPoolDatabase, *_: object) -> None:
+            self.database = database
+
+        def process_once(
+            self, *, owner: str, lease_seconds: int, work_types: tuple[str, ...]
+        ) -> ProcessResult | None:
+            nonlocal responses
+            if RESPONSE not in work_types:
+                with self.database.connections:
+                    derived_holding.set()
+                    assert release_derived.wait(10), "test gate was not opened"
+                return None
+            if not self.database.connections.acquire(timeout=2):
+                raise TimeoutError("no free connection")
+            try:
+                with lock:
+                    responses += 1
+                    if responses == 100:
+                        responses_done.set()
+                    return ProcessResult(responses, "processed")
+            finally:
+                self.database.connections.release()
+
+    monkeypatch.setattr(cli, "Database", ConnectionPoolDatabase)
+    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "ObservationProcessor", ConnectionHoldingProcessor)
+    monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
+    arguments = _worker_namespace(
+        run_forever=True, concurrency=12, database_pool_size=4
+    )
+    worker_thread = threading.Thread(
+        target=cli._run_worker, args=(arguments,), daemon=True
+    )
+    worker_thread.start()
+    try:
+        assert derived_holding.wait(5)
+        time.sleep(0.1)  # every derived slot has asked for a connection
+        assert responses_done.wait(5), f"only {responses} responses finished"
+        assert not release_derived.is_set()
+    finally:
+        release_derived.set()
+        stop[0].set()
+        worker_thread.join(10)
+    assert not worker_thread.is_alive()
+    assert pools == [3, 2, 1]
+
+
+
+def test_continuous_workers_refuse_a_pool_without_a_response_connection(
+    monkeypatch,
+) -> None:
+    opened: list[object] = []
+    monkeypatch.setattr(cli, "Database", lambda *args, **kwargs: opened.append(args))
+    arguments = _worker_namespace(
+        run_forever=True, concurrency=12, database_pool_size=1
+    )
+
+    with pytest.raises(ValueError, match="at least 2"):
+        cli._run_worker(arguments)
+    assert opened == []

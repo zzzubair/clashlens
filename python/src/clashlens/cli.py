@@ -54,12 +54,12 @@ from .verification import (
     load_official_api_key_file,
 )
 from .worker import (
-    MAINTENANCE_POOL_SIZE,
     MAX_CONCURRENCY,
     ObservationProcessor,
     ProcessResult,
     StageMetrics,
     TimedMaintenance,
+    database_pool_sizes,
     process_concurrently,
     process_until_stopped,
 )
@@ -806,10 +806,9 @@ def _run_collector(arguments: argparse.Namespace) -> int:
 
 def _run_worker(arguments: argparse.Namespace) -> int:
     concurrency = arguments.concurrency
-    database_pool_size = (
-        arguments.database_pool_size
-        if arguments.database_pool_size is not None
-        else (8 if concurrency > 1 else 4)
+    pool_size, derived_pool_size, maintenance_pool_size = database_pool_sizes(
+        arguments.database_pool_size or (8 if concurrency > 1 else 4),
+        concurrency if arguments.run_forever else 1,
     )
     archive_pool_size = (
         arguments.archive_pool_size
@@ -828,7 +827,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             statement_timeout_seconds=_db.WORKER_STATEMENT_TIMEOUT_SECONDS,
         )
 
-    database = maintenance_database = open_database(database_pool_size)
+    database = maintenance_database = derived_database = open_database(pool_size)
     assert_contract_version = getattr(database, "assert_contract_version", None)
     if callable(assert_contract_version):
         assert_contract_version(CONTRACT_VERSION)
@@ -852,14 +851,14 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     "python_archive_pool_acquire", duration
                 )
             )
-        processor = ObservationProcessor(database, archive)
-        if arguments.run_forever and concurrency > 1:
-            maintenance_database = open_database(MAINTENANCE_POOL_SIZE)
+        processor = ObservationProcessor(database, archive, stage_metrics)
+        if derived_pool_size:
+            maintenance_database = open_database(maintenance_pool_size)
+            derived_database = open_database(derived_pool_size)
+        derived = ObservationProcessor(derived_database, archive, stage_metrics)
         maintenance = TimedMaintenance(maintenance_database, stage_metrics)
         if maintenance_database is database:  # else the timer's first tick does
             maintenance.reevaluate()
-        if isinstance(processor, ObservationProcessor):
-            processor.stage_metrics = database.stage_metrics = stage_metrics
 
         def process_batch() -> list[ProcessResult]:
             # Local spool and PostgreSQL own claim readiness. Remote marker
@@ -988,6 +987,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     claims_ready=archive.check_ready,
                     maintain=maintenance.run_due,
                     on_result=report_result,
+                    derived_processor=derived,
                 )
             while not stop_requested.is_set():
                 results = process_batch()
@@ -1051,8 +1051,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         return 0
     finally:
         database.close()
-        if maintenance_database is not database:
-            maintenance_database.close()
+        for extra_database in {maintenance_database, derived_database} - {database}:
+            extra_database.close()
 
 
 def _run_ready(arguments: argparse.Namespace) -> int:

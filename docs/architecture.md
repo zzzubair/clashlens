@@ -165,12 +165,18 @@ Those threads are split by kind of work so long jobs cannot hold them all.
 About two thirds, 8 of the production worker's 12, claim only responses; they
 alone use the newest-job plan. The rest claim derived work: daily results,
 builds and army redecodes. Only one derived thread may claim a snapshot,
-analytics or army build, so one build runs at a time and the other derived
-threads keep daily results moving. The Reset publication checks and the
-correction sweep take a derived thread's turn before they start, waiting up to
-a second, and otherwise stay due for the next tick. Queue maintenance does not
-wait for a turn. This worker checks Reset publications on its timer's first
-tick rather than before its threads start.
+analytics or army build. It looks for a build first and takes other derived
+work only when none is ready, so one build runs at a time and the other
+derived threads keep daily results moving. The Reset publication checks and
+the correction sweep take a derived thread's turn before they start, and skip
+that tick, staying due, when no turn is free. Queue maintenance does not wait
+for a turn. This worker checks Reset publications on its timer's first tick
+rather than before its threads start.
+
+`--database-pool-size` is split the same way: response threads get about two
+thirds of its connections, 8 of production's 12, and derived threads the
+rest, so derived work never holds a connection a response needs. Maintenance
+keeps its own two. The worker refuses a size below 2 with two or more threads.
 
 A job holds a lock on its queue row from the start of its work until it
 commits. Claims and maintenance skip locked rows, so the

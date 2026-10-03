@@ -14,9 +14,13 @@ from psycopg.conninfo import make_conninfo
 
 from clashlens import ingestion, reconciliation_db, reset_baselines
 from clashlens.archive import S3ArchiveReader
-from clashlens.db import RESPONSE_WORK_TYPES, Database, LeaseLost
+from clashlens.db import (
+    POPULATION_BUILD_WORK_TYPES,
+    RESPONSE_WORK_TYPES,
+    Database,
+    LeaseLost,
+)
 from clashlens.worker import (
-    DERIVED,
     DERIVED_WITHOUT_BUILDS,
     ObservationProcessor,
     ProcessResult,
@@ -1413,12 +1417,17 @@ def test_limited_claims_never_take_or_skip_past_other_work(database_url: str) ->
                 owner="derived-lane", work_types=DERIVED_WITHOUT_BUILDS
             )
             assert derived is not None and derived.job_id == daily_id
-            assert database.claim_job(owner="derived-lane", work_types=DERIVED) is None
             assert (
                 database.claim_job(
-                    owner="derived-lane",
+                    owner="build-lane", work_types=POPULATION_BUILD_WORK_TYPES
+                )
+                is None
+            )
+            assert (
+                database.claim_job(
+                    owner="build-lane",
                     job_id=response_ids[0],
-                    work_types=DERIVED,
+                    work_types=POPULATION_BUILD_WORK_TYPES,
                 )
                 is None
             )

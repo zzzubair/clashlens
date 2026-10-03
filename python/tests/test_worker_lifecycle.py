@@ -552,7 +552,9 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
             return True
 
     class FakeProcessor:
-        def __init__(self, _database: FakeDatabase, _archive: object) -> None:
+        def __init__(
+            self, _database: FakeDatabase, _archive: object, *_: object
+        ) -> None:
             return
 
         def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
@@ -645,7 +647,9 @@ def test_worker_does_not_claim_or_maintain_when_archive_is_unavailable(
     claim_attempts = 0
 
     class NoClaimProcessor:
-        def __init__(self, _database: FakeDatabase, _archive: object) -> None:
+        def __init__(
+            self, _database: FakeDatabase, _archive: object, *_: object
+        ) -> None:
             del _database, _archive
 
         def process_until_idle(self, **_kwargs: object) -> list[ProcessResult]:
@@ -707,7 +711,9 @@ def test_run_forever_rechecks_archive_and_resumes_after_outage(
     claim_attempts = 0
 
     class ResumingProcessor:
-        def __init__(self, _database: FakeDatabase, _archive: object) -> None:
+        def __init__(
+            self, _database: FakeDatabase, _archive: object, *_: object
+        ) -> None:
             del _database, _archive
 
         def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
@@ -764,7 +770,7 @@ def test_run_forever_keeps_lanes_claiming_and_maintaining_during_a_long_job(
             return True
 
     class LongJobProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return
 
         def process_once(self, **_kwargs: object) -> ProcessResult | None:
@@ -851,7 +857,9 @@ def test_maintenance_runs_while_every_lane_holds_a_connection(
             return True
 
     class ConnectionHoldingProcessor:
-        def __init__(self, database: PoolModelDatabase, _archive: object) -> None:
+        def __init__(
+            self, database: PoolModelDatabase, _archive: object, *_: object
+        ) -> None:
             self.database = database
 
         def process_once(self, **_kwargs: object) -> ProcessResult | None:
@@ -888,7 +896,7 @@ def test_maintenance_runs_while_every_lane_holds_a_connection(
         stop[0].set()
         worker_thread.join(10)
     assert not worker_thread.is_alive()
-    assert [pool.max_size for pool in pools] == [3, 2]
+    assert [pool.max_size for pool in pools] == [2, 2, 1]
     assert "worker_maintenance" not in capsys.readouterr().out
 
 
@@ -936,7 +944,7 @@ def test_operating_snapshot_refreshes_while_a_batch_is_blocked(
     snapshots: list[dict[str, object]] = []
 
     class BlockingProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return
 
         def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
@@ -988,7 +996,7 @@ def test_initial_operating_snapshot_failure_does_not_stop_work(
             return True
 
     class OneBatchProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return
 
         def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
@@ -1050,7 +1058,7 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
     recorded: dict[str, object] = {}
 
     class FakeProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return
 
         def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
@@ -1102,7 +1110,7 @@ def test_run_worker_disables_player_discovery_when_flagged(monkeypatch) -> None:
     recorded: dict[str, object] = {}
 
     class FakeProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return
 
         def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
@@ -1136,7 +1144,7 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
     recorded: dict[str, object] = {}
 
     class FakeProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return
 
     def fake_database(
@@ -1199,7 +1207,7 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
     recorded: dict[str, object] = {}
 
     class FakeProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return
 
     def fake_database(
@@ -1284,7 +1292,7 @@ def test_worker_writes_terminal_snapshot_after_quiescence(
             return True
 
     class FakeProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return None
 
         def process_until_idle(self, **kwargs: object) -> list:
@@ -1338,7 +1346,7 @@ def test_worker_terminal_write_failure_stays_incomplete(
             return True
 
     class FakeProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return None
 
         def process_until_idle(self, **kwargs: object) -> list:
@@ -1400,7 +1408,7 @@ def test_worker_terminal_refused_when_heartbeat_stuck(
             return {}
 
     class FakeProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
+        def __init__(self, _database: object, _archive: object, *_: object) -> None:
             return None
 
         def process_until_idle(self, **kwargs: object) -> list:
