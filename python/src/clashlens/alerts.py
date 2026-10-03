@@ -47,7 +47,10 @@ CONDITIONS = {
         "./ops logs collector",
     ),
     "leaderboard": (
-        "A Live Leaderboard player was last updated over ten minutes ago",
+        (
+            "For five minutes, over 5% of Live Leaderboard players were last updated"
+            " over ten minutes ago, or one player over 20 minutes ago"
+        ),
         "./ops queue-status",
     ),
     "failures": (
@@ -75,6 +78,16 @@ CONDITIONS = {
         "ssh fedora, then ./ops status",
     ),
 }
+
+
+# A recovery is sent only after this long without the problem, so a problem
+# that comes back sooner continues the same incident.
+RECOVERY_HOLD = 900
+# The Live Leaderboard alerts only when staleness is widespread or one player
+# is badly behind, and stays so for LEADERBOARD_HOLD seconds of checks.
+LEADERBOARD_STALE_SHARE = 0.05
+LEADERBOARD_OLDEST = 1200
+LEADERBOARD_HOLD = 300
 
 
 class CheckError(Exception):
@@ -177,20 +190,22 @@ def private_read_probe(origin: str = "http://127.0.0.1:8000") -> None:
 
 
 def leaderboard_freshness_probe(now: datetime | None = None) -> None:
-    """Run inside the API container; prints only two counts."""
+    """Run inside the API container; prints two counts and the oldest age."""
     from clashlens import api_leaderboard
     from clashlens.api_db import ApiDatabase
 
+    now = now or datetime.now(UTC)
     url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
     database = ApiDatabase(url, max_size=1)
     try:
         # The same query and Last updated rule the Live Leaderboard uses.
-        board = api_leaderboard.get_live_leaderboard(
-            database, limit=1, now=now or datetime.now(UTC)
-        )
+        board = api_leaderboard.get_live_leaderboard(database, limit=1, now=now)
     finally:
         database.close()
-    print(board["source_observations"]["stale_count"], board["total_entries"])
+    sources = board["source_observations"]
+    oldest = sources["oldest_observed_at"]
+    age = 0 if oldest is None else (now - datetime.fromisoformat(oldest)).total_seconds()
+    print(sources["stale_count"], board["total_entries"], max(0, int(age)))
 
 
 def publication_probe() -> None:
@@ -284,6 +299,23 @@ def save_state(path: Path, state: dict) -> None:
             os.unlink(temporary)
 
 
+def hold_recoveries(state: dict, findings: dict[str, bool | None], now: float) -> None:
+    """Keep an alerted incident open until RECOVERY_HOLD seconds of clear checks
+    after its alert was delivered."""
+    for name, active in findings.items():
+        incident = state.setdefault("incidents", {}).setdefault(name, {"active": False})
+        if incident.get("clear_since", now) < state.get("resumed_at", 0):
+            del incident["clear_since"]  # Stopped time is not clear time.
+        if active is False and incident.get("pending", incident)["active"]:
+            start = max(
+                incident.setdefault("clear_since", now), incident.get("alerted_at", 0)
+            )
+            if incident.get("pending") or now - start < RECOVERY_HOLD:
+                findings[name] = None
+        else:
+            incident.pop("clear_since", None)
+
+
 def deliver(
     state: dict, findings: dict[str, bool | None], now: float, path: Path, webhook: str
 ) -> bool:
@@ -304,7 +336,9 @@ def deliver(
                         if name == "backup"
                         else now
                     )
-                incident["pending"] = {"active": active, "at": now}
+                # A recovery reports when the problem first cleared.
+                at = now if active else incident.pop("clear_since", now)
+                incident["pending"] = {"active": active, "at": at}
                 save_state(path, state)
             pending = incident["pending"]
             since = datetime.fromtimestamp(incident["since"], UTC).isoformat()
@@ -328,6 +362,8 @@ def deliver(
                 failed = True
                 break
             incident["active"] = pending["active"]
+            if pending["active"]:
+                incident["alerted_at"] = time.time()
             del incident["pending"]
             save_state(path, state)
     return not failed
@@ -369,6 +405,11 @@ def observe(
     reset_terminal = metrics.get("clashlens_collector_reset_terminal")
     if overdue is not None and reset_total is not None and reset_terminal == reset_total:
         findings["collection"] = overdue >= 600
+    # The Reset pause and sweep leave most players stale for a while.
+    clock = datetime.fromtimestamp(now, UTC).strftime("%H:%M")
+    resetting = (
+        "04:55" <= clock < "05:00" or reset_total is None or reset_terminal != reset_total
+    )
     if metrics_read:
         prefix = "clashlens_collector_"
         recent = []
@@ -483,7 +524,7 @@ def observe(
     except (OSError, subprocess.SubprocessError):
         findings["reads"] = True
     for name, flag, count, unavailable in (
-        ("leaderboard", "--leaderboard", 2, "Live Leaderboard freshness"),
+        ("leaderboard", "--leaderboard", 3, "Live Leaderboard freshness"),
         ("publication", "--publication", 1, "Reset publication status"),
     ):
         try:
@@ -491,9 +532,23 @@ def observe(
             values = [int(value) for value in result.stdout.split()]
             if result.returncode or len(values) != count:
                 raise ValueError
-            findings[name] = values[0] > 0
         except (OSError, ValueError, subprocess.SubprocessError):
             errors.append(f"{unavailable} unavailable; run ./ops logs api")
+            values = None
+        if name == "publication":
+            if values is not None:
+                findings[name] = values[0] > 0
+        elif values is None or resetting:
+            state.pop("leaderboard_stale_since", None)
+        elif values[2] > LEADERBOARD_OLDEST or values[0] > LEADERBOARD_STALE_SHARE * values[1]:
+            since = max(
+                state.setdefault("leaderboard_stale_since", now),
+                state.get("resumed_at", 0),
+            )
+            findings[name] = True if now - since >= LEADERBOARD_HOLD else None
+        else:
+            state.pop("leaderboard_stale_since", None)
+            findings[name] = False
     findings.pop("site")
     return findings, errors
 
@@ -538,6 +593,7 @@ def run(config: dict, state_dir: Path, root: Path | None, check=observe) -> int:
         if intent.exists():
             state["resumed_at"] = intent.stat().st_mtime
         findings, errors = check(config, state, now, root)
+        hold_recoveries(state, findings, now)
         save_state(path, state)
         delivered = deliver(state, findings, now, path, webhook)
         for error in errors:
