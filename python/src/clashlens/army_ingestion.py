@@ -483,14 +483,15 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
             ranked_day_start = datetime.fromisoformat(str(ranked_day_str)).astimezone(
                 UTC
             )
-            # Two builds for one ranked day must not interleave: fact
+            # No two army day builds interleave, for any days: fact
             # versions are computed as latest+1 and the day sweep marks
-            # is_current, so a collision would surface as a unique
-            # violation instead of a clean retry. Different days build
-            # concurrently.
+            # is_current, and a battle moved across a Reset replaces
+            # another day's current fact and saved totals while that
+            # day's build may be counting and saving them. One shared
+            # lock cannot deadlock; a day build takes about 80 seconds.
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"army-facts:{ranked_day_start.isoformat()}",),
+                ("army-facts",),
             )
             # A build of this generation that held the lock may have
             # published it meanwhile.
