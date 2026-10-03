@@ -37,7 +37,23 @@ async function lookupRequest(tag: string, method: "GET" | "POST"): Promise<Playe
       "not_in_legend",
       "uncertain",
       "failed",
-    ].includes(payload.state)
+    ].includes(payload.state) ||
+    !(
+      payload.reason === undefined ||
+      [
+        "pending",
+        "no_legend_battles",
+        "season_unconfirmed",
+        "unknown_tier",
+        "profile_rejected",
+      ].includes(payload.reason)
+    ) ||
+    !(
+      payload.profile === undefined ||
+      (typeof payload.profile?.name === "string" &&
+        (payload.profile.clan === null || typeof payload.profile.clan === "string") &&
+        Number.isInteger(payload.profile.trophies))
+    )
   ) {
     throw new PythonApiError(502, { error: "malformed" });
   }

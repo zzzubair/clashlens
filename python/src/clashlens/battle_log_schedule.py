@@ -6,6 +6,10 @@ opponent's battle log, so ordinary checks fetch the profile first and the
 battle log only when it can have changed. See
 docs/collector-polling.md#battle-log-only-when-it-can-have-changed.
 
+A player with no accepted profile whose last profile reported Legend I with
+Season ID 0 needs the profile only every 15 minutes; its battle log keeps the
+rules above. See docs/collector-polling.md#season-0-profiles.
+
 This state lives only in collector memory, one small entry per player checked
 since the collector started. A restart forgets it, which makes every player's
 next checks fetch both responses again, so forgetting costs requests, never
@@ -22,6 +26,7 @@ from datetime import datetime, timedelta
 
 from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row
 from .domain import RANKED_DAY_DURATION, battle_day_for, ranked_day_for
+from .profile import PROFILE_PARSER_VERSION, ProfileParseError, parse_profile
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 # Read from each valid profile. A defender's profile shows a battle at once;
@@ -33,6 +38,9 @@ PROFILE_SIGNALS = ("trophies", "attackWins", "defenseWins")
 DEFENSES_WON = "Unbreakable"
 # Battles that change nothing the other rules see are found by this fetch.
 SAFETY_INTERVAL = timedelta(minutes=15)
+# On 2026-10-03, 1,357 players' profiles had said Season 0 for 63-65 hours,
+# none with a Legend battle this Season. Each profile cost 561 requests a day.
+SEASON_ZERO_RECHECK = timedelta(minutes=15)
 # The official API caches each endpoint for up to 60 seconds, so a profile or
 # another player's log can show a battle before this player's log does. An owed
 # fetch only counts when it starts at least this long after that evidence.
@@ -97,6 +105,8 @@ class _Player:
     # The Legend day on which the last log showed exactly 8 valid attacks and
     # 8 valid defenses, with no malformed rows.
     finished_day: datetime | None = None
+    # When the newest profile reported Legend I with Season ID 0.
+    season_zero_at: datetime | None = None
 
 
 class BattleLogSchedule:
@@ -118,6 +128,12 @@ class BattleLogSchedule:
             if signals is None:
                 return False
             player = self._players.setdefault(normalized_tag, _Player())
+            if player.profile_at is None or completed_at >= player.profile_at:
+                player.season_zero_at = (
+                    completed_at
+                    if _season_zero(body, normalized_tag, completed_at)
+                    else None
+                )
             _note_profile(player, signals, completed_at)
             return True
         if endpoint == "battle_log":
@@ -172,6 +188,17 @@ class BattleLogSchedule:
             ):
                 opponent.owed = max(opponent.owed, 1)
                 _start_no_earlier_than(opponent, completed_at + FOLLOW_UP_GAP)
+
+    def profile_due(self, normalized_tag: str, *, now: datetime) -> bool:
+        """Whether an ordinary check of a player with no accepted profile
+        fetches the profile. A Season 0 one waits 15 minutes; any valid
+        profile, Refresh or Reset included, ends the wait at once."""
+        player = self._players.get(normalized_tag)
+        return (
+            player is None
+            or player.season_zero_at is None
+            or now - player.season_zero_at >= SEASON_ZERO_RECHECK
+        )
 
     def due(
         self,
@@ -338,6 +365,30 @@ def _profile_signals(body: bytes) -> tuple[int | None, ...] | None:
         None,
     )
     return (*signals, defenses_won)
+
+
+def _season_zero(body: bytes, normalized_tag: str, observed_at: datetime) -> bool:
+    """Whether the worker rejects this profile as Legend I with Season ID 0."""
+    try:
+        season = json.loads(body).get("currentLeagueSeasonId")
+    except (ValueError, AttributeError):
+        return False
+    if season not in (0, "0") or isinstance(season, bool):
+        return False
+    try:
+        profile = parse_profile(
+            body,
+            expected_tag=normalized_tag,
+            observed_at=observed_at,
+            endpoint_version="collector-schedule",
+            parser_version=PROFILE_PARSER_VERSION,
+        )
+    except ProfileParseError:
+        return False
+    return (
+        profile.eligibility_reason == "confirmed_legend_i"
+        and profile.source_contract_state == "conflict"
+    )
 
 
 def _count(value: object) -> bool:

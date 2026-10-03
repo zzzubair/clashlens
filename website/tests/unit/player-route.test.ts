@@ -879,6 +879,49 @@ describe("automatic tag lookup", () => {
     }
   });
 
+  it("explains a tracked player without a Season instead of preparing results", async () => {
+    // Even if a minute had passed, it is not a slow check.
+    mocks.lookupTimedOut = true;
+    mocks.getPlayerLookup.mockResolvedValue({
+      tag: TAG,
+      state: "tracking",
+      reason: "no_legend_battles",
+      profile: { name: "Season Clasher", clan: "Synthetic Clan", trophies: 5000 },
+    });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain(
+      "Season Clasher is in Legend League but hasn&#x27;t played a Legend League battle this Season.",
+    );
+    expect(html).toContain("This page updates as soon as they play.");
+    expect(html).toContain("Synthetic Clan");
+    expect(html).toContain("5,000");
+    expect(html).not.toContain("Current trophies");
+    expect(html).not.toContain("being prepared");
+    expect(html).not.toContain("It may still be running");
+    expect(html).not.toContain("Daily Legend log");
+    expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["season_unconfirmed", "has not confirmed this player&#x27;s Season yet"],
+    ["unknown_tier", "a league we do not recognize"],
+    ["profile_rejected", "player details we could not use"],
+    ["pending", "The first results are being prepared."],
+  ])("explains a tracked player with reason %s", async (reason, message) => {
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking", reason });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain(message);
+    expect(html).not.toContain("5,000");
+  });
+
   it("shows a limit refusal without claiming the check started", async () => {
     mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "unknown" });
     mocks.startPlayerLookup.mockRejectedValue(

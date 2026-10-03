@@ -246,8 +246,12 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     ? { tag: player.tag, state: player.trackingState }
     : data.lookup;
   const history = selectPlayerHistory(player);
+  // A tracked player whose rejected profile is explained is not being prepared.
   const isChecking =
-    lookup?.state === "checking" || (lookup?.state === "tracking" && player === null);
+    lookup?.state === "checking" ||
+    (lookup?.state === "tracking" &&
+      player === null &&
+      (lookup.reason ?? "pending") === "pending");
   useEffect(() => {
     if (!isChecking || lookupTimedOut) return;
     const timer = setInterval(() => {
@@ -422,7 +426,32 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     }
     return (
       <main id="main-content" tabIndex={-1} className="page-shell player-page">
-        <h1>{data.requestedTag}</h1>
+        {lookup?.profile ? (
+          <header className="player-header">
+            <div className="player-profile">
+              <h1>{lookup.profile.name}</h1>
+              <p className="player-identity">
+                <span className="player-tag prominent">{lookup.tag}</span>
+                {lookup.profile.clan ? (
+                  <span className="player-clan">{lookup.profile.clan}</span>
+                ) : null}
+              </p>
+            </div>
+            <div className="player-summary">
+              <div className="player-trophy-card">
+                <div>
+                  <span className="metric-label">Trophies</span>
+                  <strong className="player-trophy-count">
+                    <span className="trophy-mark" aria-hidden="true" />
+                    {lookup.profile.trophies.toLocaleString()}
+                  </strong>
+                </div>
+              </div>
+            </div>
+          </header>
+        ) : (
+          <h1>{data.requestedTag}</h1>
+        )}
         {lookup ? (
           <LookupNotice lookup={lookup} timedOut={lookupTimedOut} />
         ) : (
@@ -614,14 +643,37 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
     failed:
       "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
   };
+  // Clash Lens rechecks these players' profiles every 15 minutes.
+  const explanations = {
+    no_legend_battles: `${lookup.profile?.name ?? "This player"} is in Legend League but hasn't played a Legend League battle this Season.`,
+    season_unconfirmed:
+      "Clash of Clans has not confirmed this player's Season yet. We are still checking, but current results are unavailable until it does.",
+    unknown_tier:
+      "Clash of Clans reported a league we do not recognize for this player. We are still checking, but current results are unavailable until it reports a known league.",
+    profile_rejected:
+      "Clash of Clans sent player details we could not use. We are still checking, but current results are unavailable until it sends valid details.",
+  };
+  const explanation =
+    lookup.state === "tracking" && lookup.reason && lookup.reason !== "pending"
+      ? explanations[lookup.reason]
+      : null;
   return (
     <section aria-label="Player lookup" aria-live="polite">
       <p>
-        {timedOut && (lookup.state === "checking" || lookup.state === "tracking")
-          ? "The check is taking longer than expected. It may still be running."
-          : messages[lookup.state]}
+        {explanation ??
+          (timedOut && (lookup.state === "checking" || lookup.state === "tracking")
+            ? "The check is taking longer than expected. It may still be running."
+            : messages[lookup.state])}
       </p>
-      {lookup.state === "checking" || lookup.state === "tracking" ? (
+      {explanation && lookup.reason === "no_legend_battles" ? (
+        <p className="section-note">
+          Taking part in Legend League battles is optional. This page updates as soon as
+          they play.
+        </p>
+      ) : null}
+      {explanation ? (
+        <a href={canonicalPlayerPath(lookup.tag)}>Check again</a>
+      ) : lookup.state === "checking" || lookup.state === "tracking" ? (
         <a href={canonicalPlayerPath(lookup.tag)}>Check progress</a>
       ) : lookup.state === "failed" ||
         lookup.state === "not_found" ||

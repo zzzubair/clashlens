@@ -46,6 +46,9 @@ class CollectorWork:
     first_battle_pending: bool = False
     eligibility_recheck: bool = False
     collect_before: datetime | None = None
+    # No profile has passed the worker's checks yet, as for a player whose
+    # game profile reports Season 0.
+    no_accepted_profile: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,7 +451,9 @@ class CollectorDatabase:
                     f"""
                     WITH due AS (
                         SELECT id, normalized_tag, next_due_at,
-                               first_battle_pending
+                               first_battle_pending,
+                               current_profile_version_id IS NULL
+                                   AS no_accepted_profile
                         FROM players
                         WHERE active = true
                           AND next_due_at IS NOT NULL
@@ -465,7 +470,7 @@ class CollectorDatabase:
                         FROM due
                         WHERE player.id = due.id
                         RETURNING due.id, due.normalized_tag, due.next_due_at,
-                                  due.first_battle_pending
+                                  due.first_battle_pending, due.no_accepted_profile
                     )
                     SELECT claimed.id, claimed.normalized_tag, claimed.next_due_at,
                            CASE
@@ -475,7 +480,8 @@ class CollectorDatabase:
                                THEN profile.last_success_at + %s
                                ELSE NULL
                            END AS profile_fresh_until,
-                           claimed.first_battle_pending
+                           claimed.first_battle_pending,
+                           claimed.no_accepted_profile
                     FROM claimed
                     LEFT JOIN collector_response_state AS profile
                       ON profile.scope = 'player'
@@ -504,6 +510,7 @@ class CollectorDatabase:
                 row[2],
                 profile_fresh_until=row[3],
                 first_battle_pending=bool(row[4]),
+                no_accepted_profile=bool(row[5]),
             )
             for row in rows
         ]

@@ -435,6 +435,37 @@ finished each of those four days, almost all late: the hours after Reset, the
 busiest, gain nothing. The +5,000 column assumes new players finish like
 current ones.
 
+### Season 0 profiles
+
+On 2026-10-03, 1,357 of 13,263 active players had no accepted profile because
+the game reported their Legend I profile with `currentLeagueSeasonId` 0. All
+were at exactly 5,000 trophies, none had a Legend battle this Season, and their
+logs held only other battle types. Each profile request returned the same
+unusable answer about every 154 seconds, about 761,000 requests a day for the
+group.
+
+A regular check of a player with no accepted profile, whose last profile from
+this collector reported Legend I with Season ID 0, fetches the profile only
+when that profile is at least 15 minutes old. The worker's own profile rules
+decide what counts as Season 0, so an empty, malformed or non-Legend profile
+does not wait. The battle log keeps every rule above; without a fresh profile
+the check simply has no profile change to act on. The first profile with a
+valid Season, from any check, Refresh or Reset, ends the wait at once, before
+the worker even accepts it. A failed profile request is no evidence, so the
+next check retries it. Reset, settlement and Refresh requests are unchanged.
+A player with an accepted profile whose newest profile says Season 0 keeps its
+ordinary checks. The wait lives in collector memory, so a restart costs one
+profile and one battle log per waiting player.
+
+In the fake-game check model (`tests/test_battle_log_schedule.py`), a day of
+checks 91 seconds apart fetches the profile 96 times instead of 960 and the
+battle log 97 times either way. A defense the profile alone would have shown
+on the next check is saved by the 15-minute profile recheck or the safety
+fetch, about 12 minutes later in the measured case and never more than about
+15; a battle already in a tracked opponent's saved log is still fetched on the
+next check. At the measured rate this saves about 631,000 of the group's
+761,000 daily profile requests (83%).
+
 ### Settlement check, 20 minutes after Reset
 
 The game can apply the previous day's automatic defense loss minutes after

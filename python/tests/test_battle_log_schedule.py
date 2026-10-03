@@ -5,6 +5,7 @@ import importlib
 import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -95,14 +96,17 @@ def game(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     collector = _collector(spool, _Store(spool), client)
 
     def check(
-        tag: str = TAG, *, after: timedelta = CHECK_INTERVAL, lane: str = "ordinary"
+        tag: str = TAG,
+        *,
+        after: timedelta = CHECK_INTERVAL,
+        lane: str = "ordinary",
+        no_accepted_profile: bool = False,
     ) -> list[str]:
         """Run one check `after` the previous one; return its requests in order."""
         clock[0] += after
         client.fetched.clear()
-        asyncio.run(
-            collector.collect_player(CollectorWork(1, tag, clock[0]), lane=lane)
-        )
+        work = CollectorWork(1, tag, clock[0], no_accepted_profile=no_accepted_profile)
+        asyncio.run(collector.collect_player(work, lane=lane))
         return sorted(client.fetched, reverse=True)
 
     def settle(tag: str = TAG) -> None:
@@ -783,3 +787,143 @@ def test_finished_player_is_checked_every_8_minutes_with_the_profile_only(
     assert game.check(after=timedelta(minutes=8)) == PROFILE
     assert game.check(after=timedelta(minutes=8)) == PROFILE
     assert deferred[-1] == (1, game.clock[0] + timedelta(minutes=8))
+
+
+def _season_zero(game: SimpleNamespace, tag: str = TAG) -> dict[str, Any]:
+    """A Legend I profile reporting Season ID 0, as 1,357 did on 2026-10-03."""
+    body = json.loads(
+        (Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json").read_bytes()
+    )
+    body.update(tag=tag, trophies=5_000, attackWins=0, defenseWins=0)
+    body["currentLeagueSeasonId"] = 0
+    game.client.profiles[tag] = body
+    return body
+
+
+def _requests(checks: list[list[str]]) -> tuple[int, int]:
+    return (
+        sum(check.count("profile") for check in checks),
+        sum(check.count("battle_log") for check in checks),
+    )
+
+
+@pytest.mark.parametrize(
+    ("no_accepted_profile", "profiles"),
+    # A day of checks 91 seconds apart: the profile every 15 minutes (96 a day
+    # instead of 960), while the battle log keeps its own rules.
+    [(True, 96), (False, 960)],
+)
+def test_season_zero_profile_is_rechecked_every_15_minutes(
+    game: SimpleNamespace, no_accepted_profile: bool, profiles: int
+) -> None:
+    # Only a player with no accepted profile waits: one whose newest profile
+    # says Season 0 after an accepted one keeps its ordinary checks.
+    _season_zero(game)
+
+    checks = [game.check(no_accepted_profile=no_accepted_profile) for _ in range(960)]
+
+    assert _requests(checks) == (profiles, 97)
+    if no_accepted_profile:
+        log = ["battle_log"]
+        assert checks[:12] == [BOTH, log] + [[]] * 8 + [PROFILE, log]
+
+
+def test_valid_season_ends_the_wait_at_the_next_profile(
+    game: SimpleNamespace,
+) -> None:
+    profile = _season_zero(game)
+    assert game.check(no_accepted_profile=True) == BOTH
+    profile["currentLeagueSeasonId"] = 1788757200
+
+    checks = [game.check(no_accepted_profile=True) for _ in range(12)]
+
+    # The 15-minute recheck sees the valid Season; every check after it
+    # fetches the profile again, before the worker even accepts it.
+    assert checks[9] == PROFILE
+    assert all("profile" in check for check in checks[9:])
+
+
+def test_refresh_with_a_valid_season_ends_the_wait_at_once(
+    game: SimpleNamespace,
+) -> None:
+    profile = _season_zero(game)
+    game.check(no_accepted_profile=True)
+    profile["currentLeagueSeasonId"] = 1788757200
+
+    game.check(lane="interactive", after=timedelta(seconds=10))
+
+    assert "profile" in game.check(no_accepted_profile=True)
+
+
+def test_waiting_player_battle_is_found_by_the_safety_fetch_within_15_minutes(
+    game: SimpleNamespace,
+) -> None:
+    profile = _season_zero(game)
+    game.check(no_accepted_profile=True)
+    game.check(no_accepted_profile=True)
+    battle_at = game.clock[0] + timedelta(seconds=30)
+    profile["trophies"] -= 32
+    game.client.logs[TAG] = [_battle(UNTRACKED, battle_at, attack=False)]
+
+    checks = [game.check(no_accepted_profile=True) for _ in range(10)]
+
+    # An ordinary player's profile would show the defense on the next check;
+    # while waiting, the 15-minute recheck saves it about 12 minutes later.
+    first_log = next(i for i, check in enumerate(checks) if "battle_log" in check)
+    assert first_log == 8
+    assert checks[first_log] == BOTH
+
+
+def test_tracked_opponents_log_still_fetches_a_waiting_players_log(
+    game: SimpleNamespace,
+) -> None:
+    _season_zero(game)
+    game.check(no_accepted_profile=True)
+    game.check(no_accepted_profile=True)
+    game.settle(OPPONENT)
+    battle_at = game.clock[0]
+    game.client.logs[OPPONENT] = [_battle(TAG, battle_at)]
+    game.client.logs[TAG] = [_battle(OPPONENT, battle_at, attack=False)]
+    game.client.profile(OPPONENT)["trophies"] += 30
+    assert game.check(OPPONENT) == BOTH
+
+    assert game.check(no_accepted_profile=True) == ["battle_log"]
+
+
+def test_failed_season_zero_recheck_is_retried_on_the_next_check(
+    game: SimpleNamespace,
+) -> None:
+    _season_zero(game)
+    assert [game.check(no_accepted_profile=True) for _ in range(10)][-1] == []
+    game.client.profile_fails = True
+
+    # The 15-minute recheck fails, which also fetches the log as for any
+    # unusable profile. A failure is no evidence, so the next check retries.
+    assert game.check(no_accepted_profile=True) == BOTH
+    game.client.profile_fails = False
+    assert game.check(no_accepted_profile=True) == PROFILE
+    assert game.check(no_accepted_profile=True) == []
+
+
+@pytest.mark.parametrize("lane", ["reset", "interactive"])
+def test_reset_and_refresh_still_fetch_both_while_waiting(
+    game: SimpleNamespace, lane: str
+) -> None:
+    _season_zero(game)
+    game.check(no_accepted_profile=True)
+
+    assert [game.check(lane=lane) for _ in range(3)] == [BOTH] * 3
+
+
+def test_restart_forgets_the_wait_and_checks_both_once(
+    game: SimpleNamespace,
+) -> None:
+    _season_zero(game)
+    game.check(no_accepted_profile=True)
+    assert game.check(no_accepted_profile=True) == ["battle_log"]
+
+    game.collector.battle_logs = BattleLogSchedule()
+
+    assert game.check(no_accepted_profile=True) == BOTH
+    assert game.check(no_accepted_profile=True) == ["battle_log"]
+    assert game.check(no_accepted_profile=True) == []

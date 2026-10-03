@@ -87,6 +87,7 @@ def test_due_players_are_claimed_without_collector_work_rows(
                 "#2PP",
                 NOW - timedelta(seconds=1),
                 first_battle_pending=True,
+                no_accepted_profile=True,
             )
         ]
         with psycopg.connect(connection_info) as connection:
