@@ -27,12 +27,14 @@ from clashlens.army_analytics import CATEGORIES
 POPULATIONS = ("top-5", "top-10", "top-200", "band-6-10", "band-101-200")
 
 
-def _results(api: ApiDatabase) -> dict[tuple[str, str, str, int], dict]:
+def _results(
+    api: ApiDatabase, days: tuple[tuple[int, int], ...] = ((23, 24), (24, 24))
+) -> dict[tuple[str, str, str, int, int], dict]:
     results = {}
     for lens in ("offense", "defense"):
         for category in sorted(CATEGORIES):
             for population in POPULATIONS:
-                for start_day in (23, 24):
+                for start_day, end_day in days:
                     result = api_analytics.get_army_analytics(
                         api,
                         _selection(
@@ -40,11 +42,12 @@ def _results(api: ApiDatabase) -> dict[tuple[str, str, str, int], dict]:
                             category=category,
                             population=population,
                             start_day=start_day,
-                            end_day=24,
+                            end_day=end_day,
                         ),
                     )
                     assert result is not None
-                    results[(lens, category, population, start_day)] = result
+                    key = (lens, category, population, start_day, end_day)
+                    results[key] = result
     return results
 
 
@@ -72,6 +75,7 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
         ]
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(as_api_role(ci), army_cache_capacity=0)
+        cached_api = ApiDatabase(as_api_role(ci))
         fact_queries: list[str] = []
         original_connection = api.pool.connection
 
@@ -142,8 +146,8 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
             )
 
             from_facts = _results(api)
-            assert from_facts[("offense", "troops", "top-5", 23)]["total_attacks"] == 3
-            assert from_facts[("defense", "troops", "band-6-10", 23)]["total_attacks"] == 1
+            assert from_facts[("offense", "troops", "top-5", 23, 24)]["total_attacks"] == 3
+            assert from_facts[("defense", "troops", "band-6-10", 23, 24)]["total_attacks"] == 1
 
             fact_queries.clear()
             army_rank_bands.refresh_rank_band_totals(database)
@@ -157,7 +161,7 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
             assert processor.process_job(_army_job(database), owner="army-3").outcome == "processed"
             corrected_from_facts = _results(api)
             assert fact_queries
-            assert corrected_from_facts[("offense", "troops", "top-5", 23)][
+            assert corrected_from_facts[("offense", "troops", "top-5", 23, 24)][
                 "total_attacks"
             ] == 2
             fact_queries.clear()
@@ -166,15 +170,29 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
             assert fact_queries == []
             assert corrected_from_totals == corrected_from_facts
             # A Top N view's evidence hash changes with its own facts.
-            key = ("offense", "troops", "top-5", 23)
+            key = ("offense", "troops", "top-5", 23, 24)
             assert (
                 corrected_from_totals[key]["publication_identity"]
                 != from_totals[key]["publication_identity"]
             )
 
-            # A correction moves day 24's attack to day 23. Day 24's marker
-            # stays the same, so its saved totals must go with the moved fact:
-            # the page reads facts until the totals are counted again.
+            # Moving a battle to another Legend day also changes the marker of
+            # the day it left, so neither cached results nor saved totals for
+            # that day are reused. A day 23 leaderboard lets the page show day
+            # 23 alone; the second reader keeps the page's result cache.
+            _seed_frozen_snapshot_at(
+                database,
+                day2_start,
+                [
+                    (ids["#2PP"], 1, "fresh", "confirmed"),
+                    (ids["#8PP"], 7, "fresh", "confirmed"),
+                    (ids["#9PP"], 150, "fresh", "confirmed"),
+                ],
+            )
+            single_days = ((23, 23), (24, 24))
+            _results(cached_api, single_days)
+
+            # A day 23 correction moves day 24's attack to day 23.
             _publish_day_correction(
                 database,
                 "#2PP",
@@ -182,17 +200,37 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
                 version=3,
             )
             assert processor.process_job(_army_job(database), owner="army-4").outcome == "processed"
-            moved_from_facts = _results(api)
-            assert moved_from_facts[("offense", "troops", "top-5", 24)][
+            moved_back = _results(api, single_days)
+            assert moved_back[("offense", "troops", "top-5", 24, 24)][
                 "total_attacks"
             ] == 0
-            assert moved_from_facts[("offense", "troops", "top-5", 23)][
+            assert moved_back[("offense", "troops", "top-5", 23, 23)][
                 "total_attacks"
             ] == 2
+            assert _results(cached_api, single_days) == moved_back
+
+            # A day 24 build moves day 23's defense to day 24.
+            _publish_day(
+                database, "#8PP", [_event(first, "defense", ts1, 3, 100, -35)],
+                day_start=day2_start, day_number=24,
+            )
+            assert processor.process_job(_army_job(database), owner="army-5").outcome == "processed"
+            moved_forward = _results(api, single_days)
+            assert moved_forward[("defense", "troops", "band-6-10", 23, 23)][
+                "total_attacks"
+            ] == 0
+            assert moved_forward[("defense", "troops", "band-6-10", 24, 24)][
+                "total_attacks"
+            ] == 1
+            assert _results(cached_api, single_days) == moved_forward
+
             fact_queries.clear()
             army_rank_bands.refresh_rank_band_totals(database)
-            assert _results(api) == moved_from_facts
+            assert _results(api, ((24, 24),)) == {
+                key: value for key, value in moved_forward.items() if key[3] == 24
+            }
             assert fact_queries == []
         finally:
             api.close()
+            cached_api.close()
             database.close()

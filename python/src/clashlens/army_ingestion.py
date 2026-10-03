@@ -829,6 +829,23 @@ def _build_listed_army_facts(
             break
 
 
+# A completed day's marker hash: SHA-256 of the day's current
+# [battle_id,"lens","input_hash"] list as compact JSON, built in PostgreSQL
+# without sending every fact back.
+_DAY_FACT_INPUT_HASH = """
+    SELECT encode(sha256(convert_to(
+               '[' || COALESCE(string_agg(
+                   '[' || battle_id || ',"' || lens || '","'
+                       || input_hash || '"]',
+                   ',' ORDER BY battle_id, lens
+               ), '') || ']',
+               'UTF8'
+           )), 'hex')
+    FROM army_analytics_battle_facts
+    WHERE ranked_day_start = %s AND is_current
+"""
+
+
 def _finish_army_fact_day(
     database: Database,
     connection: Any,
@@ -854,9 +871,7 @@ def _finish_army_fact_day(
             [lens for _battle_id, lens in active_keys],
         ),
     )
-    # Durable per-day completion marker, atomic with the facts above. Its
-    # hash is SHA-256 of the day's current [battle_id,"lens","input_hash"]
-    # list as compact JSON, built here without sending every fact back.
+    # Durable per-day completion marker, atomic with the facts above.
     marker_filter = "AND state = 'Complete' AND coverage = 'complete'"
     marker_params: tuple[Any, ...] = (ranked_day_start,)
     if ranked_version_ids is not None:
@@ -884,21 +899,12 @@ def _finish_army_fact_day(
         )
     else:
         marker = connection.execute(
-            """
+            f"""
             INSERT INTO army_analytics_completed_days (
                 ranked_day_start, official_season_id, season_day_number,
                 fact_input_hash
             )
-            SELECT %s, %s, %s, encode(sha256(convert_to(
-                       '[' || COALESCE(string_agg(
-                           '[' || battle_id || ',"' || lens || '","'
-                               || input_hash || '"]',
-                           ',' ORDER BY battle_id, lens
-                       ), '') || ']',
-                       'UTF8'
-                   )), 'hex')
-            FROM army_analytics_battle_facts
-            WHERE ranked_day_start = %s AND is_current
+            VALUES (%s, %s, %s, ({_DAY_FACT_INPUT_HASH}))
             ON CONFLICT (ranked_day_start) DO UPDATE SET
                 official_season_id = EXCLUDED.official_season_id,
                 season_day_number = EXCLUDED.season_day_number,
@@ -1178,24 +1184,37 @@ def _build_army_fact_batch(
             elif trophies is not None:
                 trophies += change
     if superseded_ids:
-        connection.execute(
+        other_days = connection.execute(
             """
             WITH superseded AS (
                 UPDATE army_analytics_battle_facts SET is_current = false
                 WHERE id = ANY(%s::bigint[])
                 RETURNING ranked_day_start
             ), other_days AS (
-                SELECT ranked_day_start FROM superseded
+                SELECT DISTINCT ranked_day_start FROM superseded
                 WHERE ranked_day_start <> %s
             ), day_totals AS (
                 DELETE FROM army_analytics_day_totals
                 WHERE ranked_day_start IN (SELECT ranked_day_start FROM other_days)
+            ), rank_band_totals AS (
+                DELETE FROM army_analytics_rank_band_totals
+                WHERE ranked_day_start IN (SELECT ranked_day_start FROM other_days)
             )
-            DELETE FROM army_analytics_rank_band_totals
-            WHERE ranked_day_start IN (SELECT ranked_day_start FROM other_days)
+            SELECT ranked_day_start FROM other_days
             """,
             (superseded_ids, ranked_day_start),
-        )
+        ).fetchall()
+        # A battle that left another day changes that day's facts, so its
+        # completion marker is recomputed with them.
+        for (other_day,) in other_days:
+            connection.execute(
+                f"""
+                UPDATE army_analytics_completed_days
+                SET fact_input_hash = ({_DAY_FACT_INPUT_HASH})
+                WHERE ranked_day_start = %s
+                """,
+                (other_day, other_day),
+            )
     if fact_rows:
         connection.execute(
             """
