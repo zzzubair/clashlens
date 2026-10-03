@@ -274,7 +274,7 @@ def test_upload_clocks_ignore_repeat_sightings_and_restart_for_fresh_uploads(
             assert metrics["failed_uploads"] == 1
             assert metrics["newest_failed_upload_age_seconds"] >= 86400
 
-            # An operator retry starts a fresh wait.
+            # An operator retry keeps the upload's original wait.
             with psycopg.connect(connection_info) as connection:
                 retried = retry_failed_item(
                     connection, upload_hash=response_hash, apply=True
@@ -282,7 +282,7 @@ def test_upload_clocks_ignore_repeat_sightings_and_restart_for_fresh_uploads(
             assert retried["outcome"] == "requeued"
             metrics = database.health_metrics()
             assert metrics["pending_uploads"] == 1
-            assert metrics["oldest_pending_upload_age_seconds"] < 600
+            assert metrics["oldest_pending_upload_age_seconds"] >= 2 * 86400
 
             # Bytes first saved 96 days ago return after their archive copy
             # retired; the fresh upload has not waited 96 days.

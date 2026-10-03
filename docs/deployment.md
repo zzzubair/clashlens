@@ -756,8 +756,9 @@ use the [operating notes](operating.md#respond-to-alerts).
 - **Saved work waiting at least one hour**: a job waiting to be processed,
   from `oldest_pending_processing_age_seconds`, or a raw response waiting to
   be uploaded to the archive, from `oldest_pending_upload_age_seconds`. An
-  upload's wait starts when it is first saved, when retired bytes come back
-  for a fresh upload, or when an operator retries a failed upload. These
+  upload's wait starts when it is first saved, or when retired bytes come back
+  for a fresh upload. Retries, including an operator retry of a failed upload,
+  keep the original wait. These
   are two separate alerts. Since the Oct 1 worker fixes, the longest
   processing wait was 18 minutes and the longest upload wait under two
   minutes; Oct 1's stalls of up to 3.7 hours would have alerted.
