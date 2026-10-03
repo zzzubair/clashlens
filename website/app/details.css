@@ -735,7 +735,9 @@
     overflow-wrap: anywhere;
     order: 3;
   }
-  .analytics-page .analytics-results-table :is(.analytics-sort-button, .analytics-star-count) {
+  .analytics-page
+    .analytics-results-table
+    :is(.analytics-sort-button, .analytics-star-count) {
     white-space: normal;
   }
   .analytics-page .analytics-results-table tr > th:first-child {
