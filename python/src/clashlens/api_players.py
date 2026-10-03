@@ -126,7 +126,10 @@ def get_player_page(
                    player.current_observed_at,
                    {metadata_columns},
                    profile.profile_json -> 'clan' ->> 'name',
-                   player.current_profile_confirmed_at
+                   player.current_profile_confirmed_at,
+                   (SELECT last_success_at FROM collector_response_state
+                    WHERE scope = 'player' AND identity_key = player.normalized_tag
+                      AND endpoint = 'battle_log')
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -355,6 +358,9 @@ def get_player_page(
             "age_seconds": age_seconds,
             "coverage": "ranked_days" if daily_rows else "profile_only",
             "observed_at": observed_at.isoformat(),
+            "battle_log_checked_at": (
+                None if row[12] is None else row[12].astimezone(UTC).isoformat()
+            ),
             "source_http_status": int(row[6]),
             "endpoint_version": _text(row[7]),
             "schema_version": _text(row[8]),

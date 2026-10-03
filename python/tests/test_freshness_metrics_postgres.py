@@ -12,7 +12,7 @@ from test_api_db_public_ops import seed_profile
 from test_api_security import KEY, NOW, _signed_headers
 from test_collector import _Client, _collector, _Spool
 
-from clashlens import api_leaderboard
+from clashlens import api_leaderboard, api_players
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 from clashlens.collector_db import CollectorDatabase
@@ -387,3 +387,106 @@ def test_unchanged_success_advances_check_age_but_failure_does_not(database_url)
                     )
         finally:
             database.close()
+
+
+def test_update_status_reports_delayed_collection_and_processing(database_url):
+    from dataclasses import replace
+
+    from clashlens.collector_db import ResponseHandoff
+
+    now = datetime.fromtimestamp(NOW, UTC)
+    with domain_database(database_url) as info:
+        with psycopg.connect(info) as connection:
+            player_id = connection.execute(
+                "INSERT INTO players (normalized_tag, active) VALUES ('#2PP', true) RETURNING id"
+            ).fetchone()[0]
+        collector = CollectorDatabase(info)
+        database = ApiDatabase(as_api_role(info))
+        original = ResponseHandoff(
+            occurrence_key="old-profile",
+            scope="player",
+            identity_key="#2PP",
+            endpoint="profile",
+            player_id=player_id,
+            normalized_tag="#2PP",
+            request_started_at=now - timedelta(minutes=21),
+            response_completed_at=now - timedelta(minutes=20),
+            http_status=200,
+            response_hash="a" * 64,
+            content_fingerprint="b" * 64,
+            byte_size=4,
+            spool_key="sha256/aa/" + "a" * 64,
+            collector_version="test",
+            key_label="regular-a",
+            evidence_headers={},
+        )
+
+        client = TestClient(
+            create_app(
+                database=database,
+                keys={("typescript-website", "current"): KEY},
+                clock=lambda: NOW,
+            )
+        )
+
+        def status():
+            response = client.get("/v1/status", headers=_signed_headers("/v1/status"))
+            assert response.status_code == 200
+            body = response.json()
+            return body["collection_delayed"], body["processing_delayed"]
+
+        try:
+            with client:
+                # Nothing collected yet is not a delay.
+                assert status() == (False, False)
+                # One answer 20 minutes ago, still waiting to be processed.
+                collector.record_response(original)
+                assert status() == (True, True)
+                # A fresh answer clears collection; the old saved one still waits.
+                collector.record_response(
+                    replace(
+                        original,
+                        occurrence_key="new-profile",
+                        request_started_at=now - timedelta(minutes=2),
+                        response_completed_at=now - timedelta(minutes=1),
+                        response_hash="c" * 64,
+                        content_fingerprint="d" * 64,
+                        spool_key="sha256/cc/" + "c" * 64,
+                    )
+                )
+                assert status() == (False, True)
+                with psycopg.connect(info) as connection:
+                    connection.execute(
+                        "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s"
+                        " WHERE due_at < %s",
+                        (now, now - timedelta(minutes=10)),
+                    )
+                assert status() == (False, False)
+        finally:
+            collector.close()
+
+
+def test_player_page_reports_battle_log_check_separately(database_url):
+    now = datetime.fromtimestamp(NOW, UTC)
+    with domain_database(database_url) as info:
+        owner = ApiDatabase(info)
+        database = ApiDatabase(as_api_role(info))
+        try:
+            seed_profile(owner, "#2PP", 6000, observed_at=now - timedelta(minutes=1))
+            seed_profile(owner, "#9QQ", 6000, observed_at=now - timedelta(minutes=1))
+            checked_at = now - timedelta(hours=2)
+            with psycopg.connect(info) as connection:
+                seed_check(connection, "#2PP", "battle_log", checked_at)
+
+            def battle_log_checked_at(tag):
+                page = api_players.get_player_page(
+                    database, tag, now=now, freshness_seconds=900
+                )
+                return page["battle_log_checked_at"]
+
+            assert battle_log_checked_at("#2PP") == checked_at.isoformat()
+            # Never checked stays unknown, not "just now".
+            assert battle_log_checked_at("#9QQ") is None
+        finally:
+            database.close()
+            owner.close()

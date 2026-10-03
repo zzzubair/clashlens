@@ -11,6 +11,7 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { formatAge } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
   HistoricalSeasonDayEntry,
@@ -490,6 +491,22 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               >
                 {formatPlayerTimestamp(trackedPlayer.profile.freshness.observedAt)}
               </time>
+              {trackedPlayer.profile.freshness.state === "stale"
+                ? ` · ${formatAge(trackedPlayer.profile.freshness.ageSeconds)} old`
+                : null}
+            </p>
+            <p className="player-freshness">
+              <span>Battles checked</span>{" "}
+              {trackedPlayer.profile.battleLogCheckedAt ? (
+                <time
+                  className="player-updated"
+                  dateTime={trackedPlayer.profile.battleLogCheckedAt}
+                >
+                  {formatPlayerTimestamp(trackedPlayer.profile.battleLogCheckedAt)}
+                </time>
+              ) : (
+                "not yet"
+              )}
             </p>
           </div>
           <refreshFetcher.Form

@@ -22,6 +22,7 @@ from . import (
     api_leaderboard,
     api_player_lookup,
     api_players,
+    api_status,
     api_verification,
 )
 from .accounts import normalize_display_name, normalize_group_name, normalize_username
@@ -59,6 +60,7 @@ _PUBLIC_OPERATIONS = frozenset(
         "player.read",
         "refresh.status",
         "refresh.submit",
+        "status.read",
         "user.read",
     }
 )
@@ -335,6 +337,15 @@ def create_app(
                 **operating_metrics.snapshot(pool_health),
                 "live_leaderboard": leaderboard_metrics,
             }
+
+    @app.get("/v1/status")
+    def update_status(request: Request) -> JSONResponse:
+        _authorize(request, "status.read", production_database)
+        return JSONResponse(
+            content=api_status.get_update_status(
+                production_database, now=current_time()
+            )
+        )
 
     @app.get("/v1/players/search")
     def search_players(

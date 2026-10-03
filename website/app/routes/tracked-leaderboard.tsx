@@ -228,6 +228,9 @@ export default function TrackedLeaderboardRoute() {
               </>
             ) : null}
             . Across the whole leaderboard.
+            {leaderboard?.sourceObservations?.staleCount
+              ? ` ${leaderboard.sourceObservations.staleCount.toLocaleString()} of ${leaderboard.totalEntries.toLocaleString()} players were last updated over 10 minutes ago.`
+              : null}
           </p>
         ) : null}
       </section>

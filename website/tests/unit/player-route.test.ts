@@ -651,6 +651,41 @@ describe("automatic tag lookup", () => {
     expect(result.player?.season).toBeNull();
   });
 
+  it("shows an old profile's age and when battles were last checked", async () => {
+    const stale = {
+      ...PLAYER,
+      profile: {
+        ...PLAYER.profile,
+        freshness: {
+          state: "stale",
+          observedAt: "2026-08-06T12:00:00Z",
+          ageSeconds: 7_300,
+        },
+        battleLogCheckedAt: "2026-08-06T11:40:00Z",
+      },
+    } satisfies PlayerPage;
+    const render = async (player: PlayerPage) => {
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue(player),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      });
+      const result = await playerLoader({
+        request: requestFor(null),
+        params: { tag: TAG },
+      } as never);
+      const html = (await renderRoute(result)).split("<script>")[0];
+      return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
+    };
+    expect(await render(stale)).toContain(
+      "Updated 6 Aug 2026, 12:00 UTC · 2 hours oldBattles checked 6 Aug 2026, 11:40 UTC",
+    );
+    const fresh = await render({
+      ...PLAYER,
+      profile: { ...PLAYER.profile, battleLogCheckedAt: null },
+    });
+    expect(fresh).toContain("Updated 6 Aug 2026, 12:00 UTCBattles checked not yet");
+  });
+
   it("keeps a newly published battle when a completed Refresh has the same check time", async () => {
     mocks.createPythonClient.mockReturnValue({
       getPlayer: vi

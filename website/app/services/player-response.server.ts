@@ -421,6 +421,9 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         observedAt: isString(payload.observed_at) ? payload.observed_at : "",
         ageSeconds: isFiniteNumber(payload.age_seconds) ? payload.age_seconds : 0,
       },
+      battleLogCheckedAt: isUtcTimestamp(payload.battle_log_checked_at)
+        ? payload.battle_log_checked_at
+        : null,
       confidence: isOneOf(payload.public_confidence, [
         "high",
         "partial",
