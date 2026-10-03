@@ -714,11 +714,11 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
       ) : null}
       <div className="metric-grid">
         <MetricCard title="Offense">
-          <Metric label="Attacks" value={formatCount(summary.attackCount)} />
+          <Metric label="Attacks recorded" value={formatCount(summary.attackCount)} />
           <Metric label="Trophy gain" value={formatSigned(summary.attackGain)} />
         </MetricCard>
         <MetricCard title="Defense">
-          <Metric label="Defenses" value={formatCount(summary.defenseCount)} />
+          <Metric label="Defenses recorded" value={formatCount(summary.defenseCount)} />
           <Metric
             label="Trophy loss"
             value={
@@ -776,21 +776,34 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
               <th scope="col">Attack</th>
               <th scope="col">Defense</th>
               <th scope="col">Net</th>
+              <th scope="col">Recorded battle net</th>
               <th scope="col">End</th>
-              <th scope="col">Attacks</th>
-              <th scope="col">Defenses</th>
+              <th scope="col">Attacks recorded</th>
+              <th scope="col">Defenses recorded</th>
               <th scope="col">Adjustment</th>
             </tr>
           </thead>
           <tbody>
             {summary.dailyEntries.map((day) => {
-              const status = dayStatus(day.netChange, day.state, day.coverage, false);
+              const { status, reasons, battleNet } = presentDay(
+                {
+                  net: day.netChange,
+                  state: day.state,
+                  coverage: day.coverage,
+                  codes: day.flags,
+                  attackGain: day.attackGain,
+                  defenseLoss: day.defenseLoss,
+                  attacks: day.attacks,
+                  defenses: day.defenses,
+                },
+                false,
+              );
               return (
                 <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
                   <td>{day.dayNumber ?? "Unknown"}</td>
                   <td>
                     {status}
-                    {dayNotes(day.flags, day.state, status, false).map((reason) => (
+                    {reasons.map((reason) => (
                       <small className="table-note" key={reason}>
                         {reason}
                       </small>
@@ -804,6 +817,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                       : formatSigned(-day.defenseLoss)}
                   </td>
                   <td>{formatSigned(day.netChange)}</td>
+                  <td>{formatSigned(battleNet)}</td>
                   <td>{formatCount(day.endTrophies)}</td>
                   <td>{formatCount(day.attacks)}</td>
                   <td>{formatCount(day.defenses)}</td>
@@ -893,19 +907,40 @@ function isCurrentDay(player: PlayerPage | null, day: RankedDaySummary): boolean
   );
 }
 
+interface DayEvidence {
+  net: number | null;
+  state: string;
+  coverage: string;
+  codes: string[];
+  attackGain: number | null;
+  defenseLoss: number | null;
+  attacks: number | null;
+  defenses: number | null;
+}
+
 // Only Python's calendar check makes a day current; a saved "Live" state can
 // outlast its day. No saved result proves the Reset settled yet, so a finished
 // day with a number is still provisional.
-function dayStatus(
-  net: number | null,
-  state: string,
-  coverage: string,
-  isCurrentDay: boolean,
-): string {
-  if (isCurrentDay) return "In progress";
-  if (net === null) return "Result unknown";
-  if (state !== "Complete" || coverage !== "complete") return "Incomplete";
-  return "Provisional result";
+function presentDay(day: DayEvidence, isCurrentDay: boolean) {
+  const status = isCurrentDay
+    ? "In progress"
+    : day.net === null
+      ? "Result unknown"
+      : day.state !== "Complete" || day.coverage !== "complete" || day.codes.length > 0
+        ? "Incomplete"
+        : "Provisional result";
+  const reasons = dayReasons(day.codes, isCurrentDay, day);
+  if (reasons.length === 0 && status === "Incomplete")
+    reasons.push(
+      day.state === "Live"
+        ? "Final evidence for this day has not been processed yet."
+        : "Some daily evidence is unavailable.",
+    );
+  const battleNet =
+    day.attackGain === null || day.defenseLoss === null
+      ? null
+      : day.attackGain - day.defenseLoss;
+  return { status, reasons, battleNet };
 }
 
 const REASON_TEXT: Record<string, string> = {
@@ -955,32 +990,25 @@ const ENDING_REASONS = new Set([
   "end_baseline_incomplete",
 ]);
 
-// Plain words for Python's reason codes. Counts over eight have their own note.
-function dayReasons(codes: string[], isCurrentDay: boolean): string[] {
-  const reasons = codes
-    .filter((code) => !code.endsWith("_count_exceeds_eight"))
-    .map((code) =>
-      isCurrentDay && ENDING_REASONS.has(code)
-        ? "Ending evidence arrives after Reset."
-        : (REASON_TEXT[code] ?? "Some daily evidence is unavailable."),
-    );
-  return [...new Set(reasons)];
-}
-
-function dayNotes(
+// Plain words for Python's reason codes.
+function dayReasons(
   codes: string[],
-  state: string,
-  status: string,
   isCurrentDay: boolean,
+  counts: { attacks: number | null; defenses: number | null } = {
+    attacks: null,
+    defenses: null,
+  },
 ): string[] {
-  const reasons = dayReasons(codes, isCurrentDay);
-  if (codes.length === 0 && status === "Incomplete")
-    reasons.push(
-      state === "Live"
-        ? "Final evidence for this day has not been processed yet."
-        : "Some daily evidence is unavailable.",
-    );
-  return reasons;
+  const reasons = codes.map((code) =>
+    code === "attack_count_exceeds_eight"
+      ? excessNote(counts.attacks, "attacks")
+      : code === "defense_count_exceeds_eight"
+        ? excessNote(counts.defenses, "defenses")
+        : isCurrentDay && ENDING_REASONS.has(code)
+          ? "Ending evidence arrives after Reset."
+          : (REASON_TEXT[code] ?? "Some daily evidence is unavailable."),
+  );
+  return [...new Set(reasons)];
 }
 
 function LegendDay({
@@ -996,14 +1024,19 @@ function LegendDay({
 }) {
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
-  const status = dayStatus(
-    day.trophyChange,
-    day.state,
-    day.completeness.state,
+  const { status, reasons, battleNet } = presentDay(
+    {
+      net: day.trophyChange,
+      state: day.state,
+      coverage: day.completeness.state,
+      codes: day.uncertainty,
+      attackGain: day.offense.trophyGain,
+      defenseLoss: day.defense.trophyLoss,
+      attacks: day.offenseEvents.length,
+      defenses: day.defenseEvents.length,
+    },
     isCurrentDay,
   );
-  const reasons = dayNotes(day.uncertainty, day.state, status, isCurrentDay);
-  const battleNet = battleTrophyChange(day);
   return (
     <details
       className="legend-day"
@@ -1075,12 +1108,6 @@ function LegendDay({
       <p className="section-note">
         {`Recorded battle net ${formatSigned(battleNet)}: recorded attacks minus recorded defenses, without the automatic defense loss at Reset.`}
       </p>
-      {day.uncertainty.includes("attack_count_exceeds_eight") ? (
-        <p className="section-note">{excessNote(day.offenseEvents.length, "attacks")}</p>
-      ) : null}
-      {day.uncertainty.includes("defense_count_exceeds_eight") ? (
-        <p className="section-note">{excessNote(day.defenseEvents.length, "defenses")}</p>
-      ) : null}
       <div className="battle-columns">
         <BattleColumn
           title="Attacks"
@@ -1117,12 +1144,6 @@ function LiveBadge() {
       In progress
     </span>
   );
-}
-
-function battleTrophyChange(day: RankedDaySummary): number | null {
-  return day.offense.trophyGain === null || day.defense.trophyLoss === null
-    ? null
-    : day.offense.trophyGain - day.defense.trophyLoss;
 }
 
 function BattleColumn({
@@ -1254,8 +1275,10 @@ function valueTone(value: number | null): string {
   return value > 0 ? "score-positive" : "score-negative";
 }
 
-function excessNote(count: number, kind: "attacks" | "defenses"): string {
-  return `Clash of Clans returned ${count} ${kind} for this day, more than the usual 8, so this day is marked partial.`;
+function excessNote(count: number | null, kind: "attacks" | "defenses"): string {
+  return count === null
+    ? `Clash of Clans returned more than the usual 8 ${kind} for this day, so this day is marked partial.`
+    : `Clash of Clans returned ${count} ${kind} for this day, more than the usual 8, so this day is marked partial.`;
 }
 
 function formatCount(value: number | null): string {

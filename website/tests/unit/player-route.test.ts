@@ -963,6 +963,17 @@ describe("player day honesty", () => {
               flags: ["missing_end_baseline", "attack_star_total_mismatch"],
             },
             { ...entry, dayNumber: 3, netChange: null, flags: [] },
+            { ...entry, dayNumber: 4, flags: ["ranked_version_mismatch"] },
+            {
+              ...entry,
+              dayNumber: 5,
+              attackGain: 284,
+              netChange: 0,
+              defenses: 9,
+              state: "Partial",
+              coverage: "partial",
+              flags: ["defense_count_exceeds_eight"],
+            },
           ],
         },
         historicalError: null,
@@ -978,6 +989,17 @@ describe("player day honesty", () => {
     );
     expect(rows[1]).not.toContain("missing_end_baseline");
     expect(rows[2]).toContain("Result unknown");
+    expect(rows[2]).toContain("<td>Unknown</td><td>+26</td>");
+    expect(rows[3]).toContain("Incomplete");
+    expect(rows[3]).not.toContain("Provisional result");
+    expect(rows[3]).toContain("The evidence for this day conflicts.");
+    expect(rows[4]).toContain(
+      "Clash of Clans returned 9 defenses for this day, more than the usual 8, so this day is marked partial.",
+    );
+    expect(rows[4]).toContain("<td>0</td><td>0</td>");
+    expect(html).toContain("Attacks recorded");
+    expect(html).toContain("Defenses recorded");
+    expect(html).toContain("Recorded battle net");
   });
 
   it("shows the received warnings instead of a late-tracking explanation", async () => {
