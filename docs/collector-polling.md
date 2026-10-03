@@ -371,6 +371,40 @@ wait for their next pass.
 A Reset outage therefore holds ordinary collection while the provider-outage
 pause lasts, plus at most three more failed runs of each Reset work row.
 
+### Settlement check, 20 minutes after Reset
+
+The game can apply the previous day's automatic defense loss minutes after
+the Reset, so the Reset pair is only provisional
+([boundary settlement](domain.md#8-evidence-and-confidence-states)). In the same transaction that freezes the
+sweep, the collector schedules one `reset_settlement` work row per frozen
+member, due at 05:20 UTC, and links it to that member's boundary settlement
+row. Only the sweep's first capture schedules them, so restarts, finished or
+failed checks and members joining later add none, and a member leaving keeps
+its check. Each check fetches a new profile, saves it, then fetches the battle
+log; it never reuses a recent profile or skips the log. It keeps its first
+usable profile: a retry fetches only what has no usable answer yet, plus a
+battle log whose request started before that profile arrived. Both responses
+are always saved with their real request times, even when unchanged, and the
+work row keeps pointing at them, so the worker processes them behind newer
+responses instead of skipping them. Season Resets fetch no league history.
+
+The checks run in the 32 ordinary intent slots behind any unfinished Reset
+work, with the same retries as Reset work. They never block regular
+admission, the next Reset or the 05:30 late-battle check. No request starts
+23 hours 55 minutes after their Reset; when the next sweep is captured,
+unfinished checks fail as `settlement_expired` without a request, and
+responses already saved are still processed. Nothing reads the pair yet;
+every published result is unchanged.
+
+Budget at 13,263 members (October 3, 2026): 26,526 extra requests per Reset.
+Six regular keys at 25 starts per second take at least 177 seconds, but the
+32 slots are the real limit: production's early Reset pass, the same work,
+finished in 7m45s and 10m10s on October 1 and 2. Rankings and discovery due
+after 05:20 wait behind the pass. Each finished check keeps a work row, about
+220 bytes plus three index entries: 3-5 MB a day, about 1.8 GB a year, never
+deleted. A saved profile and log average 23 KB and 74 KB of raw bytes, up to
+1.3 GB a day before identical bytes are stored once.
+
 ## Spool, archive and rate enforcement
 
 Before each request the collector reserves its possible 4 MiB body and one spool

@@ -12,8 +12,7 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from . import collector_metrics, collector_uploads
-from .domain import is_season_boundary
+from . import collector_metrics, collector_reset, collector_uploads
 
 UploadClaim = collector_uploads.UploadClaim
 UploadLeaseLost = collector_uploads.UploadLeaseLost
@@ -408,13 +407,14 @@ class CollectorDatabase:
             "discovery_profile": {"profile", "league_history"},
             "global_player_rankings": {"global_player_rankings"},
             "live_refresh": {"profile", "battle_log"},
+            "reset_settlement": {"profile", "battle_log"},
         }.get(None if row is None else str(row[0]), _PLAYER_ENDPOINTS)
         if (
             row is None
             or handoff.endpoint not in allowed_endpoints
             or row[1] != handoff.player_id
             or row[2] != handoff.normalized_tag
-            or (row[0] == "reset_baseline" and handoff.response_completed_at < row[3])
+            or (row[3] is not None and handoff.response_completed_at < row[3])
         ):
             raise ValueError("collector work identity does not match response")
         return str(row[0])
@@ -558,14 +558,18 @@ class CollectorDatabase:
             with connection.transaction():
                 connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (intent_time,))
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, battle_log.response_completed_at < profile.response_completed_at FROM collector_work AS work LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
-                    (intent_time, interactive, interactive, interactive, limit),
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, battle_log.response_completed_at < profile.response_completed_at, battle_log.request_started_at < profile.response_completed_at FROM collector_work AS work LEFT JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'reset_settlement', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (work.kind <> 'reset_settlement' OR %s < sweep.boundary_at + %s) AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
+                    (intent_time, intent_time, collector_reset.COLLECTION_WINDOW, interactive, interactive, interactive, limit),
                 ).fetchall()
 
                 # A Reset retry fetches again only what has no usable answer yet,
-                # and a battle log older than the profile it must cover.
+                # and a battle log older than the profile it must cover. A
+                # settlement check keeps its first usable profile, and its log
+                # must have started after that profile arrived.
                 def unanswered(status: int | None) -> bool:
                     return status is None or not (200 <= status < 300 or status == 404)
+
+                paired = {"reset_baseline", "reset_settlement"}
 
                 intents = [
                     CollectorIntent(
@@ -578,8 +582,8 @@ class CollectorDatabase:
                         status=str(row[6]),
                         sweep_id=None if row[5] is None else int(row[5]),
                         league_history_required=(str(row[7]) != "not_applicable" and unanswered(row[10])) if row[1] == "reset_baseline" else str(row[7]) == "pending",
-                        profile_required=row[1] not in {"reset_baseline", "discovery_profile"} or unanswered(row[8]),
-                        battle_log_required=row[1] != "reset_baseline" or unanswered(row[8]) or unanswered(row[9]) or bool(row[11]),
+                        profile_required=row[1] not in {*paired, "discovery_profile"} or unanswered(row[8]),
+                        battle_log_required=row[1] not in paired or unanswered(row[8]) or unanswered(row[9]) or bool(row[12 if row[1] == "reset_settlement" else 11]),
                     )
                     for row in rows
                 ]
@@ -688,111 +692,15 @@ class CollectorDatabase:
             raise RuntimeError(
                 "regular work must drain before Reset membership freezes"
             )
-        utc_boundary = boundary_at.astimezone(UTC)
-        if (
-            utc_boundary.hour,
-            utc_boundary.minute,
-            utc_boundary.second,
-            utc_boundary.microsecond,
-        ) != (5, 0, 0, 0):
-            raise ValueError("Reset boundary must be 05:00 UTC")
-        # A season-ending Reset adds one league-history fetch per member.
-        league_history_status = (
-            "pending" if is_season_boundary(utc_boundary) else "not_applicable"
-        )
         with self._connection() as connection:
-            with connection.transaction():
-                older_boundary = connection.execute(
-                    """
-                    SELECT sweep.boundary_at
-                    FROM collector_reset_sweeps AS sweep
-                    WHERE sweep.boundary_at < %s
-                      AND EXISTS (
-                          SELECT 1 FROM collector_work AS work
-                          WHERE work.sweep_id = sweep.id
-                            AND work.kind = 'reset_baseline'
-                            AND work.status NOT IN ('complete', 'failed', 'cancelled')
-                      )
-                    ORDER BY sweep.boundary_at
-                    LIMIT 1
-                    FOR UPDATE
-                    """,
-                    (utc_boundary,),
-                ).fetchone()
-                if older_boundary is not None:
-                    return None
-                sweep_row = connection.execute(
-                    """
-                    INSERT INTO collector_reset_sweeps (boundary_at)
-                    VALUES (%s)
-                    ON CONFLICT DO NOTHING
-                    RETURNING id
-                    """,
-                    (utc_boundary,),
-                ).fetchone()
-                first_capture = sweep_row is not None
-                if sweep_row is None:
-                    sweep_row = connection.execute(
-                        "SELECT id FROM collector_reset_sweeps WHERE boundary_at = %s FOR UPDATE",
-                        (utc_boundary,),
-                    ).fetchone()
-                assert sweep_row is not None
-                sweep_id = int(sweep_row[0])
-                if first_capture:
-                    member_ids = connection.execute(
-                        "SELECT COALESCE(array_agg(id ORDER BY id), '{}'::bigint[]) FROM players WHERE active = true"
-                    ).fetchone()[0]
-                    connection.execute(
-                        """
-                        UPDATE collector_reset_sweeps
-                        SET member_ids = %s,
-                            membership_captured_at = clock_timestamp()
-                        WHERE id = %s
-                        """,
-                        (member_ids, sweep_id),
-                    )
-                else:
-                    member_ids = connection.execute(
-                        "SELECT member_ids FROM collector_reset_sweeps WHERE id = %s FOR UPDATE",
-                        (sweep_id,),
-                    ).fetchone()[0]
-                connection.execute(
-                    """
-                    INSERT INTO collector_work (
-                        kind, lane, scope, player_id, normalized_tag, due_at,
-                        coalescing_key, sweep_id, profile_status,
-                        battle_log_status, league_history_status
-                    )
-                    SELECT 'reset_baseline', 'reset', 'player', player.id,
-                           player.normalized_tag, %s,
-                           'reset:' || %s || ':' || player.id, %s, 'pending',
-                           'pending', %s
-                    FROM unnest(%s::bigint[]) AS member(player_id)
-                    JOIN players AS player ON player.id = member.player_id
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM collector_work AS existing
-                        WHERE existing.coalescing_key = 'reset:' || %s || ':' || player.id
-                    )
-                    """,
-                    (
-                        utc_boundary,
-                        sweep_id,
-                        sweep_id,
-                        league_history_status,
-                        member_ids,
-                        sweep_id,
-                    ),
-                )
+            sweep_id = collector_reset.begin_reset(connection, boundary_at)
+            if sweep_id is not None:
+                collector_reset.expire_settlement_checks(connection, boundary_at)
         return sweep_id
 
     def reset_ready(self, sweep_id: int) -> bool:
-        if sweep_id < 1:
-            raise ValueError("Reset sweep ID must be positive")
         with self._connection() as connection:
-            return connection.execute(
-                "SELECT NOT EXISTS (SELECT 1 FROM collector_work WHERE sweep_id = %s AND kind = 'reset_baseline' AND status NOT IN ('complete', 'failed', 'cancelled'))",
-                (sweep_id,),
-            ).fetchone()[0]
+            return collector_reset.reset_ready(connection, sweep_id)
 
     @staticmethod
     def _upsert_upload(
@@ -1132,8 +1040,8 @@ class CollectorDatabase:
         self, connection: Any, handoff: ResponseHandoff,
         state: tuple[Any, ...] | None, work_kind: str | None, saved: bool,
     ) -> bool:
-        # Reset needs boundary-time proof even when the used fields
-        # match the previous poll. Ordinary unchanged responses compact
+        # Reset and settlement checks need their own proof even when the
+        # used fields match the previous poll. Ordinary unchanged responses compact
         # to state: no observation, job, or upload row is created.
         # state[4] is the field fingerprint; rows upgraded before the
         # column existed hold the old byte hash there, so matching the
@@ -1144,7 +1052,7 @@ class CollectorDatabase:
             state is None
             or state[2] is None
             or state[4] not in (handoff.content_fingerprint, handoff.response_hash)
-            or work_kind == "reset_baseline"
+            or work_kind in {"reset_baseline", "reset_settlement"}
         ):
             return False
         # Unsaved, skip a row another transaction holds (a body players share,
@@ -1339,6 +1247,17 @@ class CollectorDatabase:
                                         THEN 'player_not_found' ELSE failure_category END,
                 updated_at = clock_timestamp()
             WHERE id = %s
+              -- A settlement check keeps its first usable profile and a
+              -- usable log started after it, even against a later duplicate.
+              AND NOT (kind = 'reset_settlement' AND EXISTS (
+                  SELECT 1 FROM collector_observations AS kept
+                  LEFT JOIN collector_observations AS profile
+                    ON profile.id = collector_work.profile_observation_id
+                  WHERE kept.id = collector_work.{observation_column}
+                    AND (kept.http_status BETWEEN 200 AND 299 OR kept.http_status = 404)
+                    AND (kept.endpoint = 'profile'
+                         OR kept.request_started_at >= profile.response_completed_at)
+              ))
             """,
             (observation_id, handoff.endpoint == 'profile' and handoff.http_status == 404,
              handoff.endpoint == 'profile' and handoff.http_status == 404,
