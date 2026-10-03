@@ -317,6 +317,8 @@ function SortHeading({
   return (
     <th
       scope="col"
+      role="columnheader"
+      data-column={column}
       aria-sort={active ? sort.direction : undefined}
       className="analytics-sort-heading"
     >
@@ -344,20 +346,28 @@ const ArmyResultRow = memo(function ArmyResultRow({
   isHistorical: boolean;
 }) {
   return (
-    <tr>
-      <th scope="row">{row.label}</th>
-      {isHistorical ? <td>{row.quantity}</td> : null}
-      <td>
+    <tr role="row">
+      <th scope="row" role="rowheader">
+        {row.label}
+      </th>
+      {isHistorical ? <td role="cell">{row.quantity}</td> : null}
+      <td role="cell" data-column="usage-count">
         {row.usageCount.toLocaleString()} / {row.usageDenominator.toLocaleString()}
       </td>
-      <td>{formatRate(row.usageRate)}</td>
+      <td role="cell" data-column="usage-rate">
+        {formatRate(row.usageRate)}
+      </td>
       {[1, 2, 3].map((stars) => {
         const count =
           row.starCounts?.[stars] ??
           [row.oneStarCount, row.twoStarCount, row.threeStarCount][stars - 1] ??
           0;
         return (
-          <td key={stars}>
+          <td
+            key={stars}
+            role="cell"
+            data-column={stars === 3 ? "three-star-rate" : undefined}
+          >
             <strong className="analytics-star-rate">
               {formatRate(row.usageCount ? count / row.usageCount : 0)}
             </strong>
@@ -369,8 +379,8 @@ const ArmyResultRow = memo(function ArmyResultRow({
       })}
       {!isHistorical ? (
         <>
-          <td>{row.averageStars!.toFixed(2)}</td>
-          <td>{row.averageDestruction!.toFixed(1)}%</td>
+          <td role="cell">{row.averageStars!.toFixed(2)}</td>
+          <td role="cell">{row.averageDestruction!.toFixed(1)}%</td>
         </>
       ) : null}
     </tr>
@@ -668,10 +678,7 @@ export default function ArmyAnalyticsRoute() {
             >
               {isHistorical ? <option value="all">All players</option> : null}
               {!isHistorical &&
-              !topPlayers.some(
-                (count) =>
-                  population === `top-${count}` || population === `streak-top-${count}`,
-              ) ? (
+              !topPlayers.some((count) => population === `top-${count}`) ? (
                 <option value={population}>Selected player group</option>
               ) : null}
               <optgroup label="Leaderboard position">
@@ -683,15 +690,6 @@ export default function ArmyAnalyticsRoute() {
                     </option>
                   ))}
               </optgroup>
-              {!snapshot ? (
-                <optgroup label="Top players on every selected day">
-                  {topPlayers.map((count) => (
-                    <option key={count} value={`streak-top-${count}`}>
-                      Consistent top {count.toLocaleString()}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
             </select>
           </label>
         </div>
@@ -850,12 +848,13 @@ export default function ArmyAnalyticsRoute() {
             aria-label="Army results table"
           >
             <table
-              className="data-table analytics-table"
+              className="data-table analytics-table analytics-results-table"
+              role="table"
               aria-label="Army analytics results"
               aria-describedby="army-selection-help army-rate-help"
             >
-              <thead>
-                <tr>
+              <thead role="rowgroup">
+                <tr role="row">
                   {columns.map((column) => (
                     <SortHeading
                       key={column}
@@ -866,10 +865,10 @@ export default function ArmyAnalyticsRoute() {
                   ))}
                 </tr>
               </thead>
-              <tbody>
+              <tbody role="rowgroup">
                 {analytics.rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={isHistorical ? 7 : 8}>
+                  <tr role="row">
+                    <td role="cell" colSpan={isHistorical ? 7 : 8}>
                       No recognized components in this selection.
                     </td>
                   </tr>

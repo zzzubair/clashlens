@@ -274,6 +274,9 @@ describe("army analytics route historical reads", () => {
     // The form keeps asking for the whole range so later days appear once ready.
     expect(html).toMatch(/name="start_day"[^>]*value="1"/);
     expect(html).toMatch(/name="end_day"[^>]*value="28"/);
+    // Consistent-top choices stay hidden until frozen leaderboards can confirm them.
+    expect(html).toContain('value="top-100"');
+    expect(html).not.toContain("streak-top-");
     const chosen = renderedText(await renderArmyRoute("season=current&start_day=25"));
     expect(chosen).not.toContain("days not tracked");
   });
