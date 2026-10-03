@@ -57,7 +57,9 @@ def repair_current_season_reset_baselines(
     opening Reset is re-checked as day 1's starting evidence but queues no
     leaderboard, army or day rebuild for the previous season. A completed pair
     also rebuilds the ended current-season day it starts, which may already
-    have been finished without it.
+    have been finished without it. Within the same batch limit, repairs of
+    complete pairs that failed and left an ended day Live are queued again
+    (counted as checked); ``failed_blockers`` lists those it cannot retry.
     """
 
     with database.pool.connection() as connection:
@@ -139,11 +141,208 @@ def repair_current_season_reset_baselines(
                 )
             job_ids.extend(pair_job_ids)
             failure_reasons.update(reasons)
+        with connection.transaction():
+            recovered, failed_blockers = _recover_failed_reset_repairs(
+                connection, limit=max_works - len(candidates)
+            )
     return {
-        "job_ids": job_ids,
-        "evaluated_count": len(candidates),
+        "job_ids": job_ids + recovered,
+        "evaluated_count": len(candidates) + len(recovered),
         "failure_reasons": dict(sorted(failure_reasons.items())),
+        "failed_blockers": failed_blockers,
     }
+
+
+# Failures from running out of time or retries, not from bad input.
+TRANSIENT_REPAIR_FAILURES = ("lease_expired_max_attempts", "database_deadlock")
+
+
+def _recover_failed_reset_repairs(
+    connection: Any, *, limit: int
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """Re-queue Reset repairs that failed while a day they rebuild stays Live.
+
+    The pair stays complete when its repair job fails, so the partial-pair
+    check above never finds it again. A repair that failed from running out
+    of time or retries is queued once more with its original inputs under a
+    new key naming the failed job, which stays as it was. Every other such
+    failure, including a failed re-queue, is returned as a blocker. A repair
+    sharing a day with other queued or running work, or with a recovery
+    queued earlier in this batch, waits for a later run. Recoveries and
+    blockers are each limited to ``limit``.
+    """
+
+    if limit <= 0:
+        return [], []
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended('reset-recovery', 0))"
+    )
+    rows = connection.execute(
+        """
+        WITH current_anchor AS (
+            SELECT current_start
+            FROM legend_season_anchors
+            WHERE state = 'confirmed' AND anchor_rule_version = %s
+            ORDER BY current_start DESC
+            LIMIT 1
+        ), failed AS (
+            SELECT job.id, job.deduplication_key, job.failure_category,
+                   job.input_json,
+                   (job.input_json ->> 'player_id')::bigint AS player_id
+            FROM python_processing_jobs_worker AS job
+            JOIN current_anchor AS anchor
+              ON (job.input_json ->> 'ranked_day_start')::timestamptz
+                 >= anchor.current_start
+             AND (job.input_json ->> 'ranked_day_start')::timestamptz
+                 < anchor.current_start + interval '28 days'
+            WHERE job.work_type = 'reconcile_ranked_day'
+              AND job.state = 'failed'
+              AND (
+                  job.deduplication_key LIKE 'reconcile:reset-baseline:%%'
+                  OR job.deduplication_key LIKE 'reconcile:reset-recovery:%%'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM python_processing_jobs_worker AS recovery
+                  WHERE recovery.deduplication_key =
+                      'reconcile:reset-recovery:' || job.id::text
+              )
+        ), jobs AS (
+            SELECT failed.id, failed.input_json, false AS active FROM failed
+            UNION ALL
+            SELECT job.id, job.input_json, true
+            FROM python_processing_jobs_worker AS job
+            WHERE job.work_type = 'reconcile_ranked_day'
+              AND job.state IN (
+                  'pending', 'waiting_retry', 'waiting_dependency', 'leased'
+              )
+              AND (job.input_json ->> 'player_id')::bigint IN (
+                  SELECT failed.player_id FROM failed
+              )
+        ), rebuilds AS (
+            SELECT job.id, job.active,
+                   (job.input_json ->> 'player_id')::bigint AS player_id,
+                   day.ranked_day_start
+            FROM jobs AS job
+            CROSS JOIN LATERAL (
+                SELECT (job.input_json ->> 'ranked_day_start')::timestamptz
+                UNION
+                SELECT (job.input_json ->> 'last_ranked_day_start')::timestamptz
+                WHERE job.input_json ? 'recalculate_season'
+                UNION
+                SELECT log.ranked_day_start
+                FROM api_player_daily_logs AS log
+                WHERE log.player_id = (job.input_json ->> 'player_id')::bigint
+                  AND log.ranked_day_start
+                      >= (job.input_json ->> 'ranked_day_start')::timestamptz
+                  AND log.official_season_id =
+                      job.input_json ->> 'recalculate_season'
+            ) AS day (ranked_day_start)
+        ), candidates AS (
+            SELECT failed.id, failed.failure_category, failed.input_json,
+                   coalesce(
+                       failed.deduplication_key LIKE 'reconcile:reset-baseline:%%'
+                       AND failed.failure_category = ANY(%s)
+                       AND (
+                           SELECT latest.id = (failed.input_json ->> 'reset_baseline_id')::bigint
+                                  AND latest.state = 'complete'
+                           FROM reset_baseline_evidence AS original
+                           JOIN reset_baseline_evidence AS latest
+                             ON latest.collector_work_id = original.collector_work_id
+                           WHERE original.id = (failed.input_json ->> 'reset_baseline_id')::bigint
+                           ORDER BY latest.version DESC, latest.id DESC
+                           LIMIT 1
+                       ),
+                       false
+                   ) AS retryable,
+                   (
+                       SELECT array_agg(own.ranked_day_start)
+                       FROM rebuilds AS own
+                       WHERE own.id = failed.id
+                   ) AS days
+            FROM failed
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM rebuilds AS own
+                JOIN rebuilds AS other
+                  ON other.active
+                 AND other.player_id = own.player_id
+                 AND other.ranked_day_start = own.ranked_day_start
+                WHERE own.id = failed.id
+            )
+              AND EXISTS (
+                SELECT 1
+                FROM rebuilds AS own
+                WHERE own.id = failed.id
+                  AND own.ranked_day_start + interval '1 day' <= clock_timestamp()
+                  AND (
+                      SELECT version.state
+                      FROM ranked_day_versions AS version
+                      WHERE version.player_id = own.player_id
+                        AND version.ranked_day_start = own.ranked_day_start
+                      ORDER BY version.version DESC, version.id DESC
+                      LIMIT 1
+                  ) = 'Live'
+            )
+        )
+        SELECT id, failure_category, input_json, retryable, days
+        FROM (
+            SELECT candidates.*,
+                   row_number() OVER (
+                       PARTITION BY retryable ORDER BY id
+                   ) AS position
+            FROM candidates
+        ) AS ranked
+        WHERE position <= %s
+        ORDER BY id
+        """,
+        (SEASON_ANCHOR_RULE_VERSION, list(TRANSIENT_REPAIR_FAILURES), limit),
+    ).fetchall()
+    job_ids: list[int] = []
+    blockers: list[dict[str, Any]] = []
+    queued_days: dict[int, set[datetime]] = {}
+    for job_id, failure_category, input_json, retryable, days in rows:
+        player_id = int(input_json["player_id"])
+        if not retryable:
+            blockers.append(
+                {
+                    "job_id": int(job_id),
+                    "player_id": player_id,
+                    "ranked_day_start": input_json["ranked_day_start"],
+                    "failure_category": (
+                        _text_value(failure_category) if failure_category else None
+                    ),
+                }
+            )
+            continue
+        player_days = queued_days.setdefault(player_id, set())
+        if player_days.intersection(days):
+            continue
+        row = connection.execute(
+            """
+            INSERT INTO python_processing_jobs_worker (
+                observation_id, work_type, deduplication_key, input_json,
+                state, due_at, parser_version, processing_version,
+                domain_rule_version, analytics_rule_version
+            ) VALUES (
+                NULL, 'reconcile_ranked_day', %s, %s, 'pending',
+                clock_timestamp(), %s, %s, %s, %s
+            )
+            ON CONFLICT (deduplication_key) DO NOTHING
+            RETURNING id
+            """,
+            (
+                f"reconcile:reset-recovery:{int(job_id)}",
+                Jsonb({**input_json, "recovers_job_id": int(job_id)}),
+                DEFAULT_PARSER_VERSION,
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
+            ),
+        ).fetchone()
+        if row is not None:
+            job_ids.append(int(row[0]))
+            player_days.update(days)
+    return job_ids, blockers
 
 
 def _evaluate_reset_baseline(

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation, text
+from psycopg.types.json import Jsonb
 from test_reconciliation import _input
 from test_reconciliation_postgres import (
     DAY_END,
@@ -21,6 +22,12 @@ from test_reconciliation_postgres import (
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 from clashlens import reconciliation_db
+from clashlens.db import (
+    ANALYTICS_RULE_VERSION,
+    DEFAULT_PARSER_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+)
 from clashlens.domain import ranked_day_for
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.reconciliation import (
@@ -356,6 +363,7 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                 "job_ids": [],
                 "evaluated_count": 1,
                 "failure_reasons": {"profile_after_first_event": 1},
+                "failed_blockers": [],
             }
             assert latest_states() == ["complete", "failed", "partial"]
             # A repaired pair rebuilds the day it ends and the ended day it
@@ -367,7 +375,12 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
             assert latest_states() == ["complete", "failed", "complete"]
             job = days[iso(DAY_START)]
             assert processor.process_job(job, owner="repair").outcome == "processed"
-            assert repair() == {"job_ids": [], "evaluated_count": 0, "failure_reasons": {}}
+            assert repair() == {
+                "job_ids": [],
+                "evaluated_count": 0,
+                "failure_reasons": {},
+                "failed_blockers": [],
+            }
             with database.pool.connection() as connection:
                 day_states = connection.execute(
                     """
@@ -380,5 +393,249 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                 ).fetchall()
             assert [row[0] for row in day_states] == [DAY_START, DAY_END]
             assert all(text(row[1]) != "Live" for row in day_states)
+        finally:
+            database.close()
+
+
+def test_republication_retries_failed_reset_repair_left_live(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Production job 1681969 on 2026-10-02: a repaired pair's day rebuild ran
+    # out of lease attempts, so its day stayed Live and the pair stayed complete.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        pairs = [
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key=key,
+                boundary=boundary,
+                trophies=trophies,
+                empty_battle_log=empty,
+                profile_parser_version=PROFILE_PARSER_VERSION,
+            )
+            for key, boundary, trophies, empty in (
+                ("start", DAY_START, 6000, True),
+                ("end", DAY_END, 6040, False),
+            )
+        ]
+        middle = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="middle",
+            endpoint="battle_log",
+            body=_battle_log(),
+            observed_at=DAY_START + timedelta(hours=7),
+            normalized_tag="#2PP",
+        )[1]
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(
+                    reconciliation_db.reset_baselines,
+                    "_refresh_reset_baseline_evidence",
+                    lambda *args, **kwargs: None,
+                )
+                for job_id in (*pairs[0][2:], middle, *pairs[1][2:]):
+                    assert (
+                        processor.process_job(job_id, owner="source").outcome
+                        == "processed"
+                    )
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                # The day was last calculated while it was still Live.
+                with monkeypatch.context() as patch:
+                    original = reconciliation_db.reconcile_ranked_day
+                    patch.setattr(
+                        reconciliation_db,
+                        "reconcile_ranked_day",
+                        lambda data: original(
+                            replace(data, now=DAY_START + timedelta(hours=7))
+                        ),
+                    )
+                    reconciliation_db.recalculate_ranked_day(
+                        database,
+                        connection,
+                        player_id=player_id,
+                        day_start=DAY_START,
+                        parser_version=DEFAULT_PARSER_VERSION,
+                        processing_version=PROCESSING_VERSION,
+                        domain_rule_version=DOMAIN_RULE_VERSION,
+                        analytics_rule_version=ANALYTICS_RULE_VERSION,
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO reset_baseline_evidence (
+                        sweep_id, player_id, boundary_at, collector_work_id,
+                        profile_observation_id, battle_log_observation_id,
+                        state, failure_reasons, evidence_key
+                    )
+                    SELECT work.sweep_id, work.player_id, sweep.boundary_at, work.id,
+                           work.profile_observation_id,
+                           work.battle_log_observation_id, 'partial',
+                           '["unprocessed_profile"]', md5(work.id::text) || md5('e')
+                    FROM collector_work AS work
+                    JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
+                    WHERE work.profile_observation_id = ANY(%s)
+                    """,
+                    ([pair[0] for pair in pairs],),
+                )
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'cancelled'"
+                    " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'"
+                )
+                connection.commit()
+
+            def repair(max_jobs: int = 100) -> dict:
+                return reconciliation_db.enqueue_current_season_republication(
+                    database, max_jobs=max_jobs
+                )
+
+            def jobs(ids: list[int]) -> list[tuple]:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        "SELECT id, status, deduplication_key, input_json"
+                        " FROM python_processing_jobs WHERE id = ANY(%s) ORDER BY id",
+                        (ids,),
+                    ).fetchall()
+
+            def day_state() -> str:
+                with database.pool.connection() as connection:
+                    return text(
+                        connection.execute(
+                            """
+                            SELECT state FROM ranked_day_versions
+                            WHERE player_id = %s AND ranked_day_start = %s
+                            ORDER BY version DESC, id DESC LIMIT 1
+                            """,
+                            (player_id, DAY_START),
+                        ).fetchone()[0]
+                    )
+
+            def set_status(ids: list[int], status: str, category=None) -> None:
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE python_processing_jobs SET status = %s,"
+                        " failure_category = %s, attempt_count = CASE WHEN"
+                        " %s = 'failed' THEN max_attempts ELSE 0 END"
+                        " WHERE id = ANY(%s)",
+                        (status, category, status, ids),
+                    )
+
+            def add_job(key: str, input_json: dict) -> int:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        "INSERT INTO python_processing_jobs_worker (observation_id,"
+                        " work_type, deduplication_key, input_json, state, due_at,"
+                        " parser_version, processing_version, domain_rule_version,"
+                        " analytics_rule_version) VALUES (NULL, 'reconcile_ranked_day',"
+                        " %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)"
+                        " RETURNING id",
+                        (
+                            key,
+                            Jsonb(input_json),
+                            DEFAULT_PARSER_VERSION,
+                            PROCESSING_VERSION,
+                            DOMAIN_RULE_VERSION,
+                            ANALYTICS_RULE_VERSION,
+                        ),
+                    ).fetchone()[0]
+
+            def iso(moment) -> str:
+                return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            with database.pool.connection() as connection:
+                season = text(
+                    connection.execute(
+                        "SELECT current_league_season_id FROM legend_season_anchors"
+                        " WHERE state = 'confirmed'"
+                    ).fetchone()[0]
+                )
+            earlier_day = DAY_START - timedelta(days=2)
+            # This rebuilds its own day and every later saved day of the
+            # Season, so it reaches the Live day although it starts earlier.
+            season_rebuild = {
+                "player_id": player_id,
+                "ranked_day_start": iso(earlier_day),
+                "last_ranked_day_start": iso(earlier_day),
+                "recalculate_season": season,
+            }
+            idle = {
+                "job_ids": [],
+                "evaluated_count": 0,
+                "failure_reasons": {},
+                "failed_blockers": [],
+            }
+
+            # An older failed repair that needs investigating.
+            blocker = add_job("reconcile:reset-baseline:investigate", season_rebuild)
+            set_status([blocker], "failed", "invalid_work_input")
+            reported_blocker = {
+                "job_id": blocker,
+                "player_id": player_id,
+                "ranked_day_start": iso(earlier_day),
+                "failure_category": "invalid_work_input",
+            }
+
+            first = repair()
+            assert first["evaluated_count"] == 2 and len(first["job_ids"]) == 2
+            set_status(first["job_ids"], "failed", "lease_expired_max_attempts")
+            assert day_state() == "Live"
+            failed = jobs(first["job_ids"])
+
+            # Other work whose rebuild reaches that day is left to finish.
+            active = add_job("test:active", season_rebuild)
+            assert repair() == idle
+            set_status([active], "cancelled")
+
+            # Both failed repairs rebuild the Live day, so one batch queues
+            # only the first again, with its original inputs; the failed jobs
+            # keep their history and a repeat queues nothing more.
+            second = repair(max_jobs=3)
+            assert second["evaluated_count"] == 1
+            assert second["failed_blockers"] == [reported_blocker]
+            recoveries = jobs(second["job_ids"])
+            assert [row[1:] for row in recoveries] == [
+                (
+                    "pending",
+                    f"reconcile:reset-recovery:{failed[0][0]}",
+                    {**failed[0][3], "recovers_job_id": failed[0][0]},
+                )
+            ]
+            assert [row[1] for row in jobs(first["job_ids"])] == ["failed", "failed"]
+            assert repair() == idle
+
+            # Older blockers do not use up the batch: the other failed repair
+            # is still queued once the first recovery has failed too.
+            set_status([recoveries[0][0]], "failed", "lease_expired_max_attempts")
+            third = repair(max_jobs=1)
+            assert third["evaluated_count"] == 1
+            assert third["failed_blockers"] == [reported_blocker]
+            assert [row[2] for row in jobs(third["job_ids"])] == [
+                f"reconcile:reset-recovery:{failed[1][0]}"
+            ]
+
+            # A recovery that fails too is reported, not queued again.
+            set_status(third["job_ids"], "cancelled")
+            assert repair() == {
+                **idle,
+                "failed_blockers": [
+                    reported_blocker,
+                    {
+                        "job_id": recoveries[0][0],
+                        "player_id": player_id,
+                        "ranked_day_start": failed[0][3]["ranked_day_start"],
+                        "failure_category": "lease_expired_max_attempts",
+                    },
+                ],
+            }
+            set_status([recoveries[0][0]], "pending")
+            assert (
+                processor.process_job(recoveries[0][0], owner="recovery").outcome
+                == "processed"
+            )
+            assert day_state() != "Live"
+            assert repair() == idle
         finally:
             database.close()

@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, text
+from domain_test_support import domain_database, store_observation, text
+from test_reconciliation_postgres import (
+    DAY_END,
+    DAY_START,
+    _battle_log,
+    _processor,
+    _store_baseline_pair,
+)
+from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import boundary
+from clashlens import army_ingestion, boundary
 from clashlens.db import Database
 
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
@@ -255,5 +264,133 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                         "UPDATE boundary_publication_manifests SET digest = %s WHERE id = %s",
                         ("c" * 64, manifests[1][0]),
                     )
+        finally:
+            database.close()
+
+
+def test_army_correction_during_publication_keeps_each_frozen_battle(
+    database_url: str, archive_server
+) -> None:
+    # A changed army code for an already-known battle arrives after the
+    # army inputs are frozen and before the army build finishes.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        pairs = [
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key=key,
+                boundary=day,
+                trophies=trophies,
+                empty_battle_log=empty,
+            )
+            for key, day, trophies, empty in (
+                ("start", DAY_START, 6000, True),
+                ("end", DAY_END, 6040, False),
+            )
+        ]
+        middle = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="middle",
+            endpoint="battle_log",
+            body=_battle_log(),
+            observed_at=DAY_START + timedelta(hours=7),
+            normalized_tag="#2PP",
+        )[1]
+        database, processor = _processor(connection_info, archive_server)
+        boundary_at = DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            for job_id in (*pairs[0][2:], middle, *pairs[1][2:]):
+                assert processor.process_job(job_id, owner="source").outcome == "processed"
+
+            def jobs(work_type: str) -> list[tuple]:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        "SELECT id, input_json FROM python_processing_jobs"
+                        " WHERE work_type = %s AND status = 'pending'"
+                        " AND coalesce(input_json->>'boundary_at', %s) = %s"
+                        " ORDER BY id",
+                        (work_type, boundary_at, boundary_at),
+                    ).fetchall()
+
+            for job_id, _input in jobs("reconcile_ranked_day"):
+                assert processor.process_job(job_id, owner="day").outcome == "processed"
+            [(army_job, army_input)] = jobs("build_army_analytics")
+            [(snapshot_job, _input)] = jobs("build_snapshot")
+            _process_snapshot_and_analytics(
+                connection_info, database, processor, snapshot_job, owner_prefix="snapshot"
+            )
+            body = json.loads(_battle_log())
+            body["items"][0]["armyShareCode"] = "u3x0-2x1"
+            changed = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="changed-after-freeze",
+                endpoint="battle_log",
+                body=json.dumps(body).encode(),
+                observed_at=DAY_END + timedelta(minutes=10),
+                normalized_tag="#2PP",
+            )[1]
+            assert processor.process_job(changed, owner="changed").outcome == "processed"
+
+            def current_fact() -> tuple:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        "SELECT battle_id, evidence_id, decode_id"
+                        " FROM army_analytics_battle_facts WHERE is_current"
+                    ).fetchall()
+
+            with database.pool.connection() as connection:
+                [frozen] = connection.execute(
+                    "SELECT input_identity FROM boundary_publication_manifest_rows"
+                    " WHERE manifest_id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
+                frozen = frozen[0]
+                assert connection.execute(
+                    "SELECT evidence_id FROM battle_perspectives"
+                ).fetchone()[0] not in frozen["evidence_ids"]
+                # A frozen battle whose evidence is not in the manifest fails
+                # the build instead of disappearing from a completed day.
+                with pytest.raises(ValueError, match="frozen army evidence missing"):
+                    army_ingestion._build_army_facts(
+                        database,
+                        connection,
+                        DAY_START.isoformat(),
+                        member_ids=[frozen["player_id"]],
+                        ranked_version_ids=[frozen["ranked_day_version_id"]],
+                        decode_ids=frozen["decode_ids"],
+                        evidence_ids=[],
+                        daily_log_ids=[frozen["daily_log_id"]],
+                        battle_ids=frozen["battle_ids"],
+                    )
+                connection.rollback()
+
+            # The original publication finishes with its frozen battle and
+            # decode, then the queued correction publishes the changed decode.
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+            assert current_fact() == [
+                (
+                    frozen["battle_ids"][0],
+                    frozen["evidence_ids"][0],
+                    frozen["decode_ids"][0],
+                )
+            ]
+            [(correction_job, correction_input)] = jobs("build_army_analytics")
+            assert correction_input["generation"] == army_input["generation"] + 1
+            assert (
+                processor.process_job(correction_job, owner="correction").outcome
+                == "processed"
+            )
+            [(battle_id, evidence_id, decode_id)] = current_fact()
+            assert battle_id == frozen["battle_ids"][0]
+            assert evidence_id not in frozen["evidence_ids"]
+            assert decode_id not in frozen["decode_ids"]
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_completed_days"
+                    " WHERE ranked_day_start = %s",
+                    (DAY_START,),
+                ).fetchone()[0] == 1
         finally:
             database.close()
