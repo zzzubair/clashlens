@@ -283,6 +283,82 @@ def test_empty_leaderboard_reports_no_samples(database_url):
             database.close()
 
 
+def test_finished_player_checked_every_8_minutes_stays_fresh(database_url):
+    from itertools import pairwise
+
+    from clashlens.battle_log_schedule import FINISHED_RECHECK
+    from clashlens.collector_db import REVISIT_INTERVAL, ResponseHandoff
+
+    start = datetime.fromtimestamp(NOW, UTC)
+    with domain_database(database_url) as info:
+        owner = ApiDatabase(info)
+        collector = CollectorDatabase(info)
+        board_reader = ApiDatabase(as_api_role(info))
+        try:
+            for tag in ("#FINISHED", "#PLAYING"):
+                seed_profile(owner, tag, 6000, observed_at=start)
+            with psycopg.connect(info) as connection:
+                # The worker stores this after processing the seeded profile.
+                connection.execute(
+                    "UPDATE players SET current_profile_fingerprint = %s",
+                    ("b" * 64,),
+                )
+                ids = dict(connection.execute("SELECT normalized_tag, id FROM players"))
+
+            def check(tag: str, at: datetime) -> None:
+                # The collector saves an unchanged profile, as on every check.
+                collector.record_response(
+                    ResponseHandoff(
+                        occurrence_key=f"{tag}-{at.isoformat()}",
+                        scope="player",
+                        identity_key=tag,
+                        endpoint="profile",
+                        player_id=ids[tag],
+                        normalized_tag=tag,
+                        request_started_at=at - timedelta(seconds=1),
+                        response_completed_at=at,
+                        http_status=200,
+                        response_hash="a" * 64,
+                        content_fingerprint="b" * 64,
+                        byte_size=4,
+                        spool_key="sha256/aa/" + "a" * 64,
+                        collector_version="test",
+                        key_label="regular-a",
+                        evidence_headers={},
+                    )
+                )
+
+            def stale_count(at: datetime) -> int:
+                # The Live Leaderboard's count, which the stale alert also reads.
+                board = api_leaderboard.get_live_leaderboard(
+                    board_reader, limit=2, now=at
+                )
+                assert board["total_entries"] == 2
+                return board["source_observations"]["stale_count"]
+
+            last = start + FINISHED_RECHECK * 7
+            missed = last + timedelta(minutes=10, seconds=1)
+            checks = sorted(
+                [(start + FINISHED_RECHECK * n, "#FINISHED") for n in range(8)]
+                + [
+                    (start + REVISIT_INTERVAL * n, "#PLAYING")
+                    for n in range(int((missed - start) / REVISIT_INTERVAL) + 1)
+                ]
+            )
+            for (at, tag), (following, _) in pairwise(checks):
+                check(tag, at)
+                # Just before the next check of either player, neither is stale.
+                if following <= last + FINISHED_RECHECK:
+                    assert stale_count(following - timedelta(seconds=1)) == 0
+            assert stale_count(last + FINISHED_RECHECK) == 0
+            # Without its next check the finished player goes stale at 10 minutes.
+            assert stale_count(missed) == 1
+        finally:
+            board_reader.close()
+            collector.close()
+            owner.close()
+
+
 def test_unchanged_success_advances_check_age_but_failure_does_not(database_url):
     from dataclasses import replace
 
