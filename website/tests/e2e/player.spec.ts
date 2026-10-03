@@ -423,13 +423,46 @@ test("not-found and uncertain eligibility are different outcomes", async ({ page
   await expect(page.getByText("Current trophies", { exact: true })).toHaveCount(0);
 });
 
+test("first lookup works without JavaScript and exposes a temporary failure with retry", async ({
+  browser,
+}) => {
+  // A lookup failing only with server errors runs three more times, five
+  // seconds apart, before it fails; each run waits on the fixture's slow 503s.
+  test.setTimeout(120_000);
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  try {
+    const page = await context.newPage();
+    await page.goto("/?q=%23LQQJ");
+    await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
+      "Checking this tag",
+    );
+    await expect(async () => {
+      await page.reload();
+      await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
+        "could not finish checking",
+      );
+    }).toPass({ timeout: 100_000, intervals: [1000] });
+    await expect(
+      page.getByRole("link", { name: "Try again", exact: true }),
+    ).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
 test("a Legend I player without a Season is explained, not prepared forever", async ({
   page,
 }) => {
+  // Earlier tests spend all six lookup starts one address gets per minute, so
+  // this last one waits for the next minute's allowance.
+  test.setTimeout(150_000);
   const lookup = page.getByRole("region", { name: "Player lookup" });
   const headline =
     "Lookup Season 0 Clasher is in Legend League but hasn't played a Legend League battle this Season.";
-  await page.goto("/players/%23LQQC");
+  await expect(async () => {
+    await page.goto("/players/%23LQQC");
+    await expect(lookup).not.toContainText("Waiting to check");
+  }).toPass({ timeout: 70_000, intervals: [5_000] });
   await expect(lookup).toContainText(headline, { timeout: 30_000 });
 
   // A later visit shows it at once, never reads saved data every second or
@@ -473,31 +506,4 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   // Its unconfirmed trophies stay out of name search.
   await page.goto("/?q=Lookup%20Season%200%20Clasher");
   await expect(page.locator(".search-results")).not.toContainText("#LQQC");
-});
-
-test("first lookup works without JavaScript and exposes a temporary failure with retry", async ({
-  browser,
-}) => {
-  // A lookup failing only with server errors runs three more times, five
-  // seconds apart, before it fails; each run waits on the fixture's slow 503s.
-  test.setTimeout(120_000);
-  const context = await browser.newContext({ javaScriptEnabled: false });
-  try {
-    const page = await context.newPage();
-    await page.goto("/?q=%23LQQJ");
-    await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
-      "Checking this tag",
-    );
-    await expect(async () => {
-      await page.reload();
-      await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
-        "could not finish checking",
-      );
-    }).toPass({ timeout: 100_000, intervals: [1000] });
-    await expect(
-      page.getByRole("link", { name: "Try again", exact: true }),
-    ).toBeVisible();
-  } finally {
-    await context.close();
-  }
 });
