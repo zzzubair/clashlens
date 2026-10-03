@@ -140,7 +140,9 @@ release procedure. No code change is needed.
 start per second across all callers, the interactive key included. It accepts
 whole numbers from 1 to 29 and defaults to 25. `./ops`, the collector command
 and its request pacing refuse 30 or more. Six regular keys at the default allow
-at most 150 requests per second. A regular check fetches the profile and, only
+at most 150 requests per second. A regular check fetches the profile (only every
+15 minutes for an unchanged
+[Season 0 profile](collector-polling.md#season-0-profiles)) and, only
 when trophies, win counts or defenses won changed recently, the player attacked
 in the last 10 minutes, a tracked opponent's log shows a battle this player's
 log lacks, it has no fresh battle log, or it is in the 5% control group, the
