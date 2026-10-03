@@ -138,6 +138,8 @@ first-battle checks before more repeats. Each group selects `players.next_due_at
 oldest first, breaking ties by player ID; either can use spare slots.
 Admission moves the player to admission time plus 90 seconds, then fetches
 the profile and, only when it can have changed, the battle log (next section).
+A player who has finished the Legend day is then checked every 8 minutes
+instead ([Finished for the day](#finished-for-the-day)).
 
 At about 1.2 requests per check, 13,263 active players every 90 seconds would
 need about 177 request starts/second, more than the 150 that six regular keys
@@ -187,7 +189,8 @@ fetches the profile first, saves it, and then fetches the battle log only when:
   not whole numbers. A profile saved by another request at the same time, such
   as a Refresh, does not stand in for it;
 - the last successful battle log is at least 15 minutes old, or the collector
-  has none for this player since it started (the safety fetch); or
+  has none for this player since it started (the safety fetch; skipped once the
+  player has [finished the day](#finished-for-the-day)); or
 - the player is in the control group (below).
 
 The follow-up fetch exists because the Clash API caches each endpoint for up to
@@ -251,8 +254,9 @@ published for one of the previous 7 Legend days is recalculated by the
 not when the late battle arrives.
 
 The collector keeps this state in memory: one entry per player it has checked
-since it started, at most about 660 bytes (measured with full 32-row battle
-logs, 8 bytes per remembered battle), about 8.8 MB for 13,263 players. It
+since it started, at most about 720 bytes (660 measured with full 32-row
+battle logs, 8 bytes per remembered battle, plus an estimated 56 for the
+finished Legend day), about 9.5 MB for 13,263 players. It
 grows only with the number of players checked, and is not saved. After a restart every player's first two checks fetch both
 responses again: up to about 26,500 extra battle-log requests, three minutes of
 all six keys, but never a missed battle.
@@ -371,6 +375,65 @@ as admitted work, so they never delay the sweep; once admission closes they
 wait for their next pass.
 A Reset outage therefore holds ordinary collection while the provider-outage
 pause lasts, plus at most three more failed runs of each Reset work row.
+
+### Finished for the day
+
+A Clasher has at most 8 attacks and 8 defenses a Legend day, so after both
+their battles and trophies cannot change until the next Reset. Such a player's
+regular checks then fetch only the profile, once every 8 minutes, when all
+of these hold:
+
+- the last saved battle log shows exactly 8 valid attacks and 8 valid defenses
+  on the current Legend day (each battle on the day of its `battleTimestamp`
+  less 5 minutes, as the worker stores it), and no malformed row; 9 of either
+  never counts;
+- this check's profile was usable and no battle-log fetch is owed, so the
+  profile has not changed since a log that followed its last change;
+- the newest battle in the log is at least 15 minutes old. The attacker's
+  profile can show the last attack late: from September 29 to October 3,
+  2026, trophies changed more than 15 minutes after the 16th battle on 177 of
+  40,743 finished days (0.43%), and more than 10 minutes on 506 (1.2%).
+
+The 15-minute safety fetch of the battle log stops for these players.
+Players in the control group (about 5%, see above) still fetch the battle
+log on every check. An 8-minute wait that would end at 04:53 or later, two
+minutes before regular checks stop at 04:55, is not taken: the player keeps
+the 90-second cadence until 04:55, so a check that starts a minute or two late
+is still admitted and their Live Leaderboard entry does not go stale before
+the Reset. If a later profile does change, the usual battle-log fetches and
+90-second cadence resume. Eight minutes keeps the player page (stale after 15 minutes)
+and the Live Leaderboard (stale after 10 minutes, with an alert on any stale
+entry) fresh even when checks start a minute or two late, as they do when the
+keys set the pace. The 05:00 Reset sweep, the 05:20 settlement checks and
+Refresh are unchanged. The next check time is a database update of
+`next_due_at`, so it survives a collector restart; it never makes a check
+earlier, and inactive players are left alone. A failed update keeps the normal
+cadence. "Undisputed" means the player's own log alone: the collector's
+database role cannot read `legend_battles`, so a disagreement between the two
+players' copies of a battle (55 of those 40,743 days) does not change the
+cadence. Rechecking this player's profile cannot resolve it.
+
+Measured with the 13,263 players active on October 3 against the battles
+recorded from September 29 to October 3, 2026, the share of players finished
+at each UTC hour and the resulting revisit time for everyone else (six keys
+at 150 requests a second, 1.22 requests a check, 1.12 for a finished player
+before this change; never below 90 seconds):
+
+| UTC hour | Finished | 13,263 players | +5,000 players |
+| --- | ---: | ---: | ---: |
+| 05:00–12:00 | 0–0.1% | 108 s | 149 s |
+| 16:00 | 1.5% | 107 s | 147 s |
+| 20:00 | 8.6% | 101 s | 140 s |
+| 23:00 | 19.6% | 92 s | 128 s |
+| 02:00 | 38.5% | 90 s | 106 s |
+| 04:00 | 64.1% | 90 s | 90 s |
+
+Over a day 11.6% of players are finished on average. Their checks drop from
+about 1.4 million requests a day to 0.28 million, saving about 1.1 million of
+the 13 million requests six keys allow. Between 73% and 80% of active players
+finished each of those four days, almost all late: the hours after Reset, the
+busiest, gain nothing. The +5,000 column assumes new players finish like
+current ones.
 
 ### Settlement check, 20 minutes after Reset
 
@@ -505,5 +568,7 @@ growth, spool recovery, and memory/swap behavior. Profiles must have a median
 gap below 300 seconds and a worst gap below 600 seconds; battle logs, which are
 skipped until they can have changed, need only every player revisited with a
 worst gap within the 15-minute safety fetch plus one check (1,020 seconds).
+Fixture players have at most 2 Legend battles, so none
+[finishes the day](#finished-for-the-day) and skips the safety fetch.
 It uses loopback fixtures; a real Legend-day run still needs separate
 authorization.

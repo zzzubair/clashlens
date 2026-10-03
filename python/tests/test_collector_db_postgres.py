@@ -1392,3 +1392,33 @@ def test_response_cannot_mark_another_players_work_observed(
                     collector_work_id=first_work_id,
                 )
             )
+
+
+def test_deferred_player_is_not_due_before_the_given_time(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        finished = _player(connection_info)
+        inactive = _player(connection_info, "#8PP")
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET active = false WHERE id = %s", (inactive,)
+            )
+        # The collector's own database role makes the change.
+        options = conninfo_to_dict(connection_info)["options"]
+        database = CollectorDatabase(
+            make_conninfo(
+                connection_info, options=f"{options} -c role=clashlens_collector"
+            )
+        )
+        reset = NOW.replace(hour=5)
+        assert database.claim_due_players(limit=10, now=NOW)
+
+        database.defer_regular_check(finished, reset)
+        database.defer_regular_check(inactive, reset)
+
+        before_reset = reset - timedelta(minutes=6)
+        assert database.claim_due_players(limit=10, now=before_reset) == []
+        with psycopg.connect(connection_info) as connection:
+            due = dict(connection.execute("SELECT id, next_due_at FROM players"))
+        assert due == {finished: reset, inactive: NOW - timedelta(seconds=1)}

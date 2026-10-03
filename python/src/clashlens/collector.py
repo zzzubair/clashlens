@@ -243,11 +243,13 @@ class Collector:
         profile = await self._collect_endpoint(
             work, "profile", "ordinary", pool, reservation=reservation, usable=usable
         )
-        if profile == "capacity_paused" or not self.battle_logs.due(
-            work.normalized_tag,
-            profile_usable=usable[-1:] == [True],
-            now=datetime.now(UTC),
+        if profile == "capacity_paused":
+            return [profile]
+        profile_usable = usable[-1:] == [True]
+        if not self.battle_logs.due(
+            work.normalized_tag, profile_usable=profile_usable, now=datetime.now(UTC)
         ):
+            await self._defer_finished_player(work, profile_usable)
             return [profile]
         stack, reservations = await self._reserve_endpoints_safely(("battle_log",))
         try:
@@ -256,7 +258,29 @@ class Collector:
             )
         finally:
             await _drain_to_thread(stack.close)
+        if battle_log != "capacity_paused":
+            await self._defer_finished_player(work, profile_usable)
         return [profile, battle_log]
+
+    async def _defer_finished_player(
+        self, work: CollectorWork, profile_usable: bool
+    ) -> None:
+        """Check a Clasher who finished the Legend day less often until Reset."""
+        until = self.battle_logs.finished_recheck_at(
+            work.normalized_tag, profile_usable=profile_usable, now=datetime.now(UTC)
+        )
+        if (
+            until is None
+            or work.player_id is None
+            or work.collector_work_id is not None
+        ):
+            return
+        try:
+            await self._database_call(
+                self.database.defer_regular_check, work.player_id, until
+            )
+        except (psycopg.Error, PoolTimeout):
+            pass  # The player keeps the normal cadence.
 
     def _reserve_endpoints(
         self, endpoints: tuple[str, ...]
