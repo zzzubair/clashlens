@@ -818,7 +818,7 @@ def test_season_zero_profile_is_rechecked_every_15_minutes(
     assert checks[:12] == [BOTH, log] + [[]] * 8 + [PROFILE, log]
 
 
-def test_season_zero_after_a_valid_profile_waits_too(
+def test_season_zero_after_a_valid_profile_waits_from_the_next_reset(
     game: SimpleNamespace,
 ) -> None:
     # As for a Clasher accepted in September who reports Season 0 in October.
@@ -827,10 +827,14 @@ def test_season_zero_after_a_valid_profile_waits_too(
     game.settle()
     profile["currentLeagueSeasonId"] = 0
 
-    checks = [game.check() for _ in range(11)]
+    # The Legend day that saw a valid Season keeps ordinary checks.
+    assert [game.check() for _ in range(5)] == [PROFILE] * 5
 
-    # The battle log keeps its 15-minute safety fetch.
-    assert checks == [PROFILE] + [[]] * 7 + [["battle_log"], [], PROFILE]
+    # 06:00 UTC, after the next Reset.
+    checks = [game.check(after=timedelta(hours=18))]
+    checks += [game.check() for _ in range(10)]
+
+    assert checks == [BOTH] + [[]] * 9 + [BOTH]
 
 
 def test_valid_season_ends_the_wait_at_the_next_profile(
@@ -871,14 +875,28 @@ def test_waiting_player_battle_is_found_by_the_recheck_within_15_minutes(
     profile["trophies"] -= 32
     game.client.logs[TAG] = [_battle(UNTRACKED, battle_at, attack=False)]
 
-    checks = [game.check() for _ in range(10)]
+    checks = [game.check() for _ in range(16)]
 
     # An ordinary player's profile would show the defense on the next check;
     # while waiting, the 15-minute recheck saves it about 12 minutes later,
-    # and the changed counts return the player to ordinary checks.
+    # and the changed counts keep ordinary checks for the rest of the day.
     first_log = next(i for i, check in enumerate(checks) if "battle_log" in check)
     assert first_log == 8
-    assert checks[first_log:] == [BOTH, BOTH]
+    assert checks[first_log] == BOTH
+    assert all("profile" in check for check in checks[first_log:])
+
+
+@pytest.mark.parametrize("lane", ["reset", "interactive"])
+def test_changed_counts_from_refresh_or_reset_end_the_wait_for_the_day(
+    game: SimpleNamespace, lane: str
+) -> None:
+    profile = _season_zero(game)
+    game.check()
+    profile["attackWins"] += 1
+
+    game.check(lane=lane, after=timedelta(seconds=10))
+
+    assert all("profile" in game.check() for _ in range(8))
 
 
 def test_tracked_opponents_log_still_fetches_a_waiting_players_log(

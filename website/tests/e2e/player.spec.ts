@@ -445,9 +445,23 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   await page.clock.runFor(10_000);
   expect(reloads).toEqual([]);
   await page.clock.runFor(51_000);
-  await expect.poll(() => reloads.length).toBeGreaterThan(0);
+  await expect.poll(() => reloads.length).toBe(1);
   await expect(lookup).toContainText(headline);
+  await page.clock.runFor(61_000);
+  await expect.poll(() => reloads.length).toBe(2);
   await expect(lookup).not.toContainText("taking longer");
+
+  // A hidden tab pauses the rereads.
+  await page.evaluate(() =>
+    Object.defineProperty(document, "hidden", { configurable: true, value: true }),
+  );
+  await page.clock.runFor(125_000);
+  expect(reloads).toHaveLength(2);
+  await page.evaluate(() =>
+    Object.defineProperty(document, "hidden", { configurable: true, value: false }),
+  );
+  await page.clock.runFor(61_000);
+  await expect.poll(() => reloads.length).toBe(3);
   await expect(
     page.getByRole("heading", { name: "Lookup Season 0 Clasher" }),
   ).toBeVisible();

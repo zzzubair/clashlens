@@ -7,8 +7,9 @@ battle log only when it can have changed. See
 docs/collector-polling.md#battle-log-only-when-it-can-have-changed.
 
 A player whose last profile reported Legend I with Season ID 0 and unchanged
-counts needs the profile only every 15 minutes; its battle log keeps the rules
-above, seeing profile changes only then. See
+counts, with no valid Season or changed counts since the last Reset, needs the
+profile only every 15 minutes; its battle log keeps the rules above, seeing
+profile changes only then. See
 docs/collector-polling.md#season-0-profiles.
 
 This state lives only in collector memory, one small entry per player checked
@@ -109,6 +110,9 @@ class _Player:
     # When the newest profile reported Legend I with Season ID 0 and the
     # same counts as the one before.
     season_zero_at: datetime | None = None
+    # After a valid Season or changed counts, ordinary checks last until the
+    # next Reset.
+    ordinary_until: datetime | None = None
 
 
 class BattleLogSchedule:
@@ -131,14 +135,16 @@ class BattleLogSchedule:
                 return False
             player = self._players.setdefault(normalized_tag, _Player())
             if player.profile_at is None or completed_at >= player.profile_at:
-                if _season_zero(body, normalized_tag, completed_at):
-                    # Only a quiet one waits; changed counts mean battles.
-                    unchanged = player.signals in (None, signals)
-                    player.season_zero_at = completed_at if unchanged else None
-                elif player.season_zero_at is not None:
-                    # A valid Season counts as a change, so the log is fetched.
-                    player.season_zero_at = None
-                    player.signals = None
+                if not _season_zero(body, normalized_tag, completed_at):
+                    if player.season_zero_at is not None:
+                        # A valid Season counts as a change, so the log is fetched.
+                        player.signals = None
+                    _check_until_reset(player, completed_at)
+                elif player.signals not in (None, signals):
+                    # Changed counts mean battles.
+                    _check_until_reset(player, completed_at)
+                elif player.ordinary_until is None or completed_at >= player.ordinary_until:
+                    player.season_zero_at = completed_at
             _note_profile(player, signals, completed_at)
             return True
         if endpoint == "battle_log":
@@ -197,7 +203,7 @@ class BattleLogSchedule:
     def profile_due(self, normalized_tag: str, *, now: datetime) -> bool:
         """Whether an ordinary check fetches the profile. An unchanged Season 0
         one waits 15 minutes; any valid or changed profile, Refresh or Reset
-        included, ends the wait at once."""
+        included, ends the wait until the next Reset."""
         player = self._players.get(normalized_tag)
         return (
             player is None
@@ -339,6 +345,12 @@ def _note_profile(
         player.owed_since = completed_at
     player.signals = signals
     player.profile_at = completed_at
+
+
+def _check_until_reset(player: _Player, at: datetime) -> None:
+    player.season_zero_at = None
+    if player.ordinary_until is None or player.ordinary_until <= at:
+        player.ordinary_until = ranked_day_for(at).end
 
 
 def _start_no_earlier_than(player: _Player, at: datetime) -> None:

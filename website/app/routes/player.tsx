@@ -249,9 +249,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const lookup: PlayerLookup | null =
     player && !explained ? { tag: player.tag, state: player.trackingState } : data.lookup;
   const history = selectPlayerHistory(player);
+  // Once explained, this visit rereads once a minute, through failed or
+  // partial reads, until it gets a normal page or a final answer.
+  const [explainedVisit, setExplainedVisit] = useState(explained);
+  if (explained && !explainedVisit) setExplainedVisit(true);
+  const minuteChecks =
+    explainedVisit &&
+    trackedPlayer === null &&
+    (lookup === null || lookup.state === "checking" || lookup.state === "tracking");
   const isChecking =
-    lookup?.state === "checking" ||
-    (lookup?.state === "tracking" && player === null && !explained);
+    !explainedVisit &&
+    (lookup?.state === "checking" || (lookup?.state === "tracking" && player === null));
   useEffect(() => {
     if (!isChecking || lookupTimedOut) return;
     const timer = setInterval(() => {
@@ -260,14 +268,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     }, 1000);
     return () => clearInterval(timer);
   }, [isChecking, lookupTimedOut, revalidator]);
-  // An explained page rereads saved data once a minute while it is visible.
   useEffect(() => {
-    if (!explained) return;
+    if (!minuteChecks) return;
     const timer = setInterval(() => {
       if (!document.hidden && revalidator.state === "idle") revalidator.revalidate();
     }, 60_000);
     return () => clearInterval(timer);
-  }, [explained, revalidator]);
+  }, [minuteChecks, revalidator]);
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;
