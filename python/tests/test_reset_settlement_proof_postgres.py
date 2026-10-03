@@ -608,3 +608,53 @@ def test_a_response_rechecks_a_reset_judged_while_it_waited(
             assert _verdict(connection_info)[:3] == ("settled", scenario["target"], [])
         finally:
             database.close()
+
+
+def test_battle_log_takes_its_reset_locks_before_any_army_or_generation_row(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server, [scenario["early_log"], scenario["early_profile"]])
+        # A later log reports one more battle of the ended day, so its army is new.
+        body = json.loads(_battles(RESET)[0])
+        body["items"].insert(0, _row(True, RESET - 30 * MINUTE, 3, 100, OPPONENTS[-1]))
+        _, job = _save(connection_info, archive_server, "battle_log",
+                       json.dumps(body).encode(), RESET + 50 * MINUTE)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            with psycopg.connect(connection_info) as holder, ThreadPoolExecutor(1) as pool:
+                # The completed Reset pair created the Reset's publication record.
+                assert holder.execute(
+                    "SELECT count(*) FROM boundary_publication_generations WHERE boundary_at = %s",
+                    (RESET,),
+                ).fetchone()[0] == 1
+                holder.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                               (f"reset-settlement:{scenario['player']}:{RESET.isoformat()}",))
+                log = pool.submit(processor.process_job, job, owner="late-log")
+                waiting = _wait_for_advisory_wait(holder, log)
+                assert not holder.execute(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"boundary-publication:{RESET.isoformat()}",),
+                ).fetchone()[0]
+                assert holder.execute(
+                    """
+                    SELECT count(*) FROM pg_locks
+                    WHERE pid = %s AND mode IN ('RowShareLock', 'RowExclusiveLock')
+                      AND relation IN ('boundary_publication_generations'::regclass,
+                                       'battle_army_decodes'::regclass)
+                    """,
+                    (waiting,),
+                ).fetchone()[0] == 0
+                holder.commit()
+                assert log.result(timeout=60).outcome == "processed"
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_army_decodes AS decode"
+                    " JOIN battle_evidence AS report ON report.battle_id = decode.battle_id"
+                    " WHERE report.battle_timestamp = %s",
+                    (RESET - 30 * MINUTE,),
+                ).fetchone()[0] > 0
+        finally:
+            database.close()

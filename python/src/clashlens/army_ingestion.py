@@ -8,7 +8,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair, boundary, boundary_publication
+from . import battle_day_repair, boundary, boundary_publication, reset_settlement
 from .army_decoder import (
     DECODER_VERSION,
     DecodedArmy,
@@ -52,7 +52,8 @@ def _upsert_army_decodes(
     connection: Any,
     battle_ids: list[int],
     *,
-    reset_baseline: tuple[int, datetime] | None = None,
+    reset_baseline: tuple[int, int, datetime] | None = None,
+    observation_id: int | None = None,
 ) -> None:
     if not battle_ids:
         return
@@ -149,21 +150,24 @@ def _upsert_army_decodes(
         players_by_day.setdefault(day_start.astimezone(UTC), set()).update(
             (int(attacker_id), int(defender_id))
         )
-    # Lock order everywhere: a Reset baseline's work lock, then Reset locks
-    # oldest first, then army rows. A Reset battle log records its baseline
-    # (work lock, then its Reset lock) after these army writes, so it takes
-    # both first; otherwise it could hold an army row another job needs while
-    # that job holds the Reset lock.
+    # Lock order everywhere: a Reset baseline's work lock, then Reset
+    # publication locks, then Reset settlement locks, then army rows. A Reset
+    # battle log records its baseline and re-judges its Resets after these
+    # army writes, so it takes all of them first; otherwise it could hold an
+    # army or generation row another job needs while that job holds a lock.
     boundaries = {day_start + timedelta(days=1) for day_start in players_by_day}
+    resets: list[tuple[int, datetime]] = []
     if reset_baseline is not None:
-        work_id, boundary_at = reset_baseline
+        work_id, player_id, boundary_at = reset_baseline
         connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"reset-baseline:{work_id}",),
         )
         boundaries.add(boundary_at.astimezone(UTC))
-    for boundary_at in sorted(boundaries):
-        boundary.lock_boundary_publication(connection, boundary_at)
+        resets.append((player_id, boundary_at))
+    reset_settlement.lock_resets(
+        database, connection, observation_id, resets, tuple(boundaries)
+    )
     current_evidence = {
         (int(battle_id), _text_value(perspective)): int(evidence_id)
         for battle_id, perspective, evidence_id in connection.execute(

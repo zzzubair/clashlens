@@ -576,8 +576,10 @@ def _evaluate_reset_baseline(
         evidence_id = int(inserted[0])
 
     publishes = state in {"complete", "failed"} and ends_day
-    if publishes:
-        boundary.lock_boundary_publication(connection, boundary_at)
+    reset_settlement.lock_resets(
+        database, connection, observation_id, [(int(player_id), boundary_at)],
+        (boundary_at,) if publishes else (),
+    )
     reset_settlement.record_provisional_boundary(
         connection,
         player_id=int(player_id),
@@ -586,7 +588,6 @@ def _evaluate_reset_baseline(
         early_baseline_id=evidence_id,
         early_state=state,
         reasons=reasons,
-        observation_id=observation_id,
     )
     if publishes:
         _record_boundary_baseline(database,

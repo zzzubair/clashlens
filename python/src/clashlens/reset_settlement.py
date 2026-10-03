@@ -22,7 +22,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import ranked_day_inputs
+from . import boundary, ranked_day_inputs
 from .collector_reset import COLLECTION_WINDOW, SETTLEMENT_DELAY
 from .db import PROCESSING_VERSION, Database
 from .domain import (
@@ -53,7 +53,6 @@ def record_provisional_boundary(
     early_baseline_id: int,
     early_state: str,
     reasons: list[str],
-    observation_id: int | None,
 ) -> None:
     """Record the Reset pair evidence of a still-provisional boundary.
 
@@ -61,12 +60,9 @@ def record_provisional_boundary(
     pair proves the responses were processed, not that trophies settled. A
     repeat with the same evidence changes nothing, and a boundary already
     settled or unresolved keeps that verdict. A boundary with a settlement
-    check keeps the check's reasons; the pair's own are in its proof. It
-    first locks this Reset and every one ``observation_id`` may re-judge.
+    check keeps the check's reasons; the pair's own are in its proof.
     """
     early = {"baseline_id": early_baseline_id, "state": early_state, "reasons": reasons}
-    _lock_resets(connection, [(player_id, boundary_at),
-                              *_observation_resets(connection, observation_id, every=True)])
     connection.execute(
         """
         INSERT INTO reset_boundary_settlements (
@@ -468,9 +464,14 @@ def _lock_reset(connection: Any, player_id: int, boundary_at: datetime) -> str:
     return season_id
 
 
-def _lock_resets(connection: Any, resets: list[tuple[int, datetime]]) -> None:
-    """Lock Resets oldest first, after any publication lock, so jobs never
-    wait on each other's Resets in opposite orders."""
+def lock_resets(database: Database, connection: Any, observation_id: int | None,
+                resets: list[tuple[int, datetime]], publications: tuple[datetime, ...] = ()) -> None:
+    """Before any generation row: publication locks, then the locks of ``resets``
+    and of every Reset ``observation_id`` may re-judge, each oldest first."""
+    for boundary_at in sorted({at.astimezone(UTC) for at in publications}):
+        boundary.lock_boundary_publication(connection, boundary_at)
+    if _has_settlements(database, connection):
+        resets = [*resets, *_observation_resets(connection, observation_id, every=True)]
     for player_id, boundary_at in sorted(set(resets), key=lambda r: (r[1], r[0])):
         _lock_reset(connection, player_id, boundary_at)
 
@@ -501,7 +502,7 @@ def refresh_for_observation(database: Database, connection: Any, observation_id:
     """
     if not _has_settlements(database, connection):
         return
-    _lock_resets(connection, _observation_resets(connection, observation_id, every=True))
+    lock_resets(database, connection, observation_id, [])
     for player_id, boundary_at in _observation_resets(connection, observation_id):
         refresh_boundary(database, connection, player_id, boundary_at)
 
