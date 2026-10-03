@@ -97,9 +97,11 @@ onwards whose newest processing outcome is not `processed` (finished-job
 cleanup keeps outcomes, so a missing job proves nothing); any replay
 request for such a response that is not complete; any publication
 generation at a Reset from Season start to Season end, the closing Reset
-included, that is not published; and any correction from Season start
-onwards that is not finalized with a published generation. A missing table, failed query or check over 10 seconds blocks.
-Each blocker lists at most five example ids under `blocking_work`. Until
+included, that is not published or superseded; and any correction from
+Season start onwards that is not finalized with a published or superseded
+generation. A missing table, failed query or check over 10 seconds blocks.
+Each blocker lists at most five example ids under `blocking_work`; missing
+tables and failed checks are listed by name instead. Until
 the expanded history above can be checked, it also always reports
 `promised_history: ["expanded_history_unavailable"]`, so no Season can
 close yet. The applied `finalized` record fences writers atomically before
