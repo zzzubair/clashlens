@@ -23,7 +23,9 @@ class RecordingProcessor:
         self._lock = threading.Lock()
         self.available_jobs = available_jobs
 
-    def process_once(self, *, owner: str, lease_seconds: int) -> ProcessResult | None:
+    def process_once(
+        self, *, owner: str, lease_seconds: int, work_types: object = None
+    ) -> ProcessResult | None:
         with self._lock:
             if self.available_jobs is not None:
                 if self.available_jobs <= 0:
@@ -308,7 +310,7 @@ def _run_until_stopped(processor: object, **overrides: object) -> threading.Thre
         "lease_seconds": 30,
         "idle_seconds": 0.01,
         "claims_ready": lambda: True,
-        "maintain": lambda: None,
+        "maintain": lambda _turns: None,
         "on_result": lambda _result: None,
     }
     arguments.update(overrides)
@@ -374,7 +376,7 @@ def test_maintenance_failure_is_retried_without_stopping_lanes(capsys) -> None:
     maintained_again = Event()
     maintenance_calls = 0
 
-    def maintain() -> None:
+    def maintain(_turns: object) -> None:
         nonlocal maintenance_calls
         maintenance_calls += 1
         if maintenance_calls == 1:
@@ -412,7 +414,7 @@ def test_lanes_do_not_claim_while_the_spool_is_not_ready() -> None:
         processor,
         stop_requested=stop,
         claims_ready=claims_ready,
-        maintain=lambda: maintained.append(True),
+        maintain=lambda _turns: maintained.append(True),
     )
     try:
         assert ready_checks.wait(5)
@@ -432,7 +434,7 @@ def test_lanes_stop_claiming_when_the_spool_fails_during_slow_maintenance() -> N
     maintenance_started = Event()
     release_maintenance = Event()
 
-    def maintain() -> None:
+    def maintain(_turns: object) -> None:
         maintenance_started.set()
         assert release_maintenance.wait(10), "test release gate was not opened"
 
@@ -488,7 +490,7 @@ def test_no_job_or_maintenance_starts_after_stop_during_a_slow_ready_check() -> 
         processor,
         stop_requested=stop,
         claims_ready=claims_ready,
-        maintain=lambda: maintained.append(True),
+        maintain=lambda _turns: maintained.append(True),
     )
     try:
         assert all_checks_waiting.wait(5), "three lanes and the timer must check"
