@@ -5,10 +5,8 @@ import time
 from threading import Event, Semaphore
 
 import pytest
-from test_worker_lifecycle import _worker_namespace
 
 import clashlens.worker as worker_module
-from clashlens import cli
 from clashlens.worker import (
     ProcessResult,
     TimedMaintenance,
@@ -255,97 +253,3 @@ def test_continuous_lanes_reserve_two_thirds_for_responses(
     assert BUILD in build_lanes[0][0] and DAILY not in build_lanes[0][0]
     assert DAILY in build_lanes[0][1]
     assert lane_work_types(1, 1) is None
-
-
-def test_derived_work_cannot_hold_every_database_connection(monkeypatch) -> None:
-    # Twelve slots on seven connections: long derived jobs could once take
-    # every lane connection, and four derived slots waited on two connections.
-    release_derived = Event()
-    derived_holding = 0
-    responses_done = Event()
-    lock = threading.Lock()
-    responses = 0
-    pools: list[int] = []
-    stop: list[Event] = []
-
-    class ConnectionPoolDatabase:
-        def __init__(self, _url: str, *, max_size: int, **_kwargs: object) -> None:
-            self.connections = threading.BoundedSemaphore(max_size)
-            pools.append(max_size)
-
-        def maintain_queue(self, *, max_jobs: int) -> int:
-            return 0
-
-        def close(self) -> None:
-            return
-
-    class FakeArchive:
-        @staticmethod
-        def check_ready() -> bool:
-            return True
-
-    class ConnectionHoldingProcessor:
-        def __init__(self, database: ConnectionPoolDatabase, *_: object) -> None:
-            self.database = database
-
-        def process_once(
-            self, *, owner: str, lease_seconds: int, work_types: tuple[str, ...]
-        ) -> ProcessResult | None:
-            nonlocal responses, derived_holding
-            if RESPONSE not in work_types:
-                if not self.database.connections.acquire(blocking=False):
-                    raise TimeoutError("a derived slot waited for a connection")
-                try:
-                    with lock:
-                        derived_holding += 1
-                    assert release_derived.wait(10), "test gate was not opened"
-                    return None
-                finally:
-                    self.database.connections.release()
-            if not self.database.connections.acquire(timeout=2):
-                raise TimeoutError("no free connection")
-            try:
-                with lock:
-                    responses += 1
-                    if responses == 100:
-                        responses_done.set()
-                    return ProcessResult(responses, "processed")
-            finally:
-                self.database.connections.release()
-
-    monkeypatch.setattr(cli, "Database", ConnectionPoolDatabase)
-    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
-    monkeypatch.setattr(cli, "ObservationProcessor", ConnectionHoldingProcessor)
-    monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
-    arguments = _worker_namespace(
-        run_forever=True, concurrency=12, database_pool_size=7
-    )
-    worker_thread = threading.Thread(
-        target=cli._run_worker, args=(arguments,), daemon=True
-    )
-    worker_thread.start()
-    try:
-        assert _wait_for(lambda: derived_holding == 2)
-        time.sleep(0.1)  # every derived slot has looked for work
-        assert responses_done.wait(5), f"only {responses} responses finished"
-        assert derived_holding == 2 and not release_derived.is_set()
-    finally:
-        release_derived.set()
-        stop[0].set()
-        worker_thread.join(10)
-    assert not worker_thread.is_alive()
-    assert pools == [3, 2, 2]
-
-
-def test_continuous_workers_refuse_a_pool_without_a_response_connection(
-    monkeypatch,
-) -> None:
-    opened: list[object] = []
-    monkeypatch.setattr(cli, "Database", lambda *args, **kwargs: opened.append(args))
-    arguments = _worker_namespace(
-        run_forever=True, concurrency=12, database_pool_size=3
-    )
-
-    with pytest.raises(ValueError, match="at least 4"):
-        cli._run_worker(arguments)
-    assert opened == []

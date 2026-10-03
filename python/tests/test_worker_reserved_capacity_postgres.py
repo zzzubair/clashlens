@@ -64,12 +64,7 @@ def test_real_responses_finish_while_builds_hold_derived_lanes(
         database, processor = _processor(
             connection_info,
             archive_server,
-            database_factory=lambda info: Database(info, max_size=8),
-        )
-        derived_database, derived_processor = _processor(
-            connection_info,
-            archive_server,
-            database_factory=lambda info: Database(info, max_size=4),
+            database_factory=lambda info: Database(info, max_size=12),
         )
         stop = Event()
         thread = threading.Thread(
@@ -84,7 +79,6 @@ def test_real_responses_finish_while_builds_hold_derived_lanes(
                 "claims_ready": lambda: True,
                 "maintain": lambda _turns: None,
                 "on_result": lambda _result: None,
-                "derived_processor": derived_processor,
             },
             daemon=True,
         )
@@ -132,5 +126,4 @@ def test_real_responses_finish_while_builds_hold_derived_lanes(
             stop.set()
             thread.join(30)
             database.close()
-            derived_database.close()
     assert not thread.is_alive()
