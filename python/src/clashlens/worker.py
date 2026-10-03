@@ -573,7 +573,7 @@ class ObservationProcessor:
                 return ProcessResult(claim.job_id, "lease_lost")
             return ProcessResult(
                 claim.job_id,
-                "retrying" if state == "waiting_retry" else "failed",
+                "retrying" if state in {"waiting_retry", "waiting_dependency"} else "failed",
                 error.category,
             )
         except LeaseLost:
@@ -732,7 +732,7 @@ class ObservationProcessor:
             return ProcessResult(claim.job_id, "lease_lost")
         return ProcessResult(
             claim.job_id,
-            "retrying" if state == "waiting_retry" else "failed",
+            "retrying" if state in {"waiting_retry", "waiting_dependency"} else "failed",
             category,
         )
 
