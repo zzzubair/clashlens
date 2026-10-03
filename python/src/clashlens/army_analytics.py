@@ -34,7 +34,9 @@ SORTS = frozenset(
         "average-destruction",
     }
 )
-TOP_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 500, 1000})
+TOP_PRESETS = frozenset({5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000})
+# Consistent top reads every member's facts, so it stays within the top 1,000.
+STREAK_PRESETS = frozenset(count for count in TOP_PRESETS if count <= 1000)
 RANK_BANDS = frozenset(
     {
         (1, 5),
@@ -44,8 +46,27 @@ RANK_BANDS = frozenset(
         (51, 100),
         (101, 200),
         *((start, start + 99) for start in range(201, 1000, 100)),
+        (1001, 2000),
+        (2001, 5000),
+        (5001, 10000),
     }
 )
+# A trophy range is any whole-number range inside these limits.
+TROPHY_RANGE_LIMITS = (0, 99999)
+
+
+def rank_band_firsts(low: int, high: int) -> list[int] | None:
+    """First positions of the rank bands that make up ranks low-high.
+
+    None unless low-high starts and ends on rank band edges. The bands split
+    ranks 1-10,000 without gaps, so those between the edges cover the rest.
+    """
+    covered = [
+        (first, last) for first, last in sorted(RANK_BANDS) if low <= first and last <= high
+    ]
+    if not covered or covered[0][0] != low or covered[-1][1] != high:
+        return None
+    return [first for first, _last in covered]
 
 
 class ArmyAnalyticsUnavailable(Exception):
@@ -363,15 +384,15 @@ def _validate_population(value: str) -> None:
         return
     if (match := re.fullmatch(r"streak-top-(\d+)", value)) and int(
         match.group(1)
-    ) in TOP_PRESETS:
+    ) in STREAK_PRESETS:
         return
-    if (match := re.fullmatch(r"band-(\d+)-(\d+)", value)) and (
-        int(match.group(1)),
-        int(match.group(2)),
-    ) in RANK_BANDS:
+    if (match := re.fullmatch(r"band-(\d{1,5})-(\d{1,5})", value)) and (
+        rank_band_firsts(int(match.group(1)), int(match.group(2))) is not None
+    ):
         return
-    if match := re.fullmatch(r"trophies-(\d+)-(\d+)", value):
+    if match := re.fullmatch(r"trophies-(\d{1,5})-(\d{1,5})", value):
         minimum, maximum = map(int, match.groups())
-        if minimum >= 5000 and maximum >= minimum:
+        lowest, highest = TROPHY_RANGE_LIMITS
+        if lowest <= minimum <= maximum <= highest:
             return
     raise ValueError("invalid population filter")

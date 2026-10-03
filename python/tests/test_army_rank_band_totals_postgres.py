@@ -24,7 +24,18 @@ from clashlens import api_analytics, army_rank_bands
 from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import CATEGORIES
 
-POPULATIONS = ("top-5", "top-10", "top-200", "band-6-10", "band-101-200")
+POPULATIONS = (
+    "top-5",
+    "top-10",
+    "top-200",
+    "top-2000",
+    "top-10000",
+    "band-1-100",
+    "band-6-10",
+    "band-101-200",
+    "band-1001-2000",
+    "band-5001-10000",
+)
 
 
 def _results(
@@ -140,20 +151,50 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
                 DAY_START + timedelta(days=2),
                 [
                     (ids["#2PP"], 1, "fresh", "confirmed"),
-                    (ids["#8PP"], 7, "fresh", "confirmed"),
+                    (ids["#8PP"], 1500, "fresh", "confirmed"),
                     (ids["#9PP"], 150, "fresh", "confirmed"),
                 ],
             )
 
             from_facts = _results(api)
             assert from_facts[("offense", "troops", "top-5", 23, 24)]["total_attacks"] == 3
-            assert from_facts[("defense", "troops", "band-6-10", 23, 24)]["total_attacks"] == 1
+            assert from_facts[("defense", "troops", "band-1001-2000", 23, 24)][
+                "total_attacks"
+            ] == 1
+            assert from_facts[("defense", "troops", "top-10000", 23, 24)][
+                "total_attacks"
+            ] == 1
+            assert from_facts[("defense", "troops", "top-200", 23, 24)][
+                "total_attacks"
+            ] == 0
+
+            # A trophy range may start below 5,000 and may hold no attacks.
+            wide, empty = (
+                api_analytics.get_army_analytics(
+                    api, _selection(population=population, start_day=23, end_day=24)
+                )
+                for population in ("trophies-3000-6100", "trophies-100-200")
+            )
+            assert wide is not None and wide["total_attacks"] == 3
+            assert empty is not None
+            assert (empty["total_attacks"], empty["rows"]) == (0, [])
 
             fact_queries.clear()
             army_rank_bands.refresh_rank_band_totals(database)
             from_totals = _results(api)
             assert fact_queries == []
             assert from_totals == from_facts
+
+            # Totals saved before ranks 1,001-10,000 had bands lack those rows:
+            # the next check counts them instead of keeping the old ones.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "DELETE FROM army_analytics_rank_band_totals"
+                    " WHERE first_position > 1000"
+                )
+            army_rank_bands.refresh_rank_band_totals(database)
+            assert _results(api) == from_facts
+            assert fact_queries == []
 
             # Rebuilding day 23 without its partial attack: until the totals are
             # counted again the page reads facts, then the totals take over.
@@ -185,7 +226,7 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
                 day2_start,
                 [
                     (ids["#2PP"], 1, "fresh", "confirmed"),
-                    (ids["#8PP"], 7, "fresh", "confirmed"),
+                    (ids["#8PP"], 1500, "fresh", "confirmed"),
                     (ids["#9PP"], 150, "fresh", "confirmed"),
                 ],
             )
@@ -216,10 +257,10 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
             )
             assert processor.process_job(_army_job(database), owner="army-5").outcome == "processed"
             moved_forward = _results(api, single_days)
-            assert moved_forward[("defense", "troops", "band-6-10", 23, 23)][
+            assert moved_forward[("defense", "troops", "band-1001-2000", 23, 23)][
                 "total_attacks"
             ] == 0
-            assert moved_forward[("defense", "troops", "band-6-10", 24, 24)][
+            assert moved_forward[("defense", "troops", "band-1001-2000", 24, 24)][
                 "total_attacks"
             ] == 1
             assert _results(cached_api, single_days) == moved_forward

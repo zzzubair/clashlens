@@ -3,12 +3,12 @@
 The Armies page's Top N and rank-band views count every attack, on every
 selected Legend day, by the players in that part of the newest selected day's
 frozen leaderboard. Reading those facts grows with each stored day, so the
-worker saves each Legend day's totals for the 14 rank bands covering ranks
-1-1000 of the newest leaderboard, and the page adds up at most 28 x 14 rows.
+worker saves each Legend day's totals for the 17 rank bands covering ranks
+1-10,000 of the newest leaderboard, and the page adds up at most 28 x 17 rows.
 
-Each Season keeps only its newest leaderboard's totals: about 8,600 rows at
-day 28, replaced at each Reset and deleted with their Legend day when season
-retirement deletes its completed-day marker. A row holds the day's marker
+Each Season keeps only its newest leaderboard's totals: about 10,500 rows and
+16 MB at day 28, replaced at each Reset and deleted with their Legend day when
+season retirement deletes its completed-day marker. A row holds the day's marker
 hash it was counted from; once a day is rebuilt the row no longer matches,
 the page reads facts instead, and the next check here counts again.
 """
@@ -30,11 +30,12 @@ from .army_analytics import (
     add_army_fact,
     merge_army_totals,
     new_army_totals,
+    rank_band_firsts,
 )
 
 BANDS = tuple(sorted(RANK_BANDS))
 _LAST_POSITION = BANDS[-1][1]
-# A count reads the top 1000's facts for the Season so far, about a minute
+# A count reads the top 10,000's facts for the Season so far, a few minutes
 # late in a Season, so a failed one waits before trying again.
 RETRY_SECONDS = 600
 _retry_at = float("-inf")
@@ -117,18 +118,23 @@ def _refresh(database: Any) -> int | None:
                 (season_id, last_day),
             ).fetchall()
         }
+        # Totals saved before a rank band was added lack its rows.
         saved = {
-            (int(row[0]), _text(row[1]))
+            (int(row[0]), _text(row[1]), int(row[2]))
             for row in connection.execute(
                 """
-                SELECT DISTINCT season_day_number, fact_input_hash
+                SELECT DISTINCT season_day_number, fact_input_hash, first_position
                 FROM army_analytics_rank_band_totals
                 WHERE snapshot_id = %s
                 """,
                 (snapshot_id,),
             ).fetchall()
         }
-        if saved == {(day, marker) for day, (_start, marker) in days.items()}:
+        if saved == {
+            (day, marker, first)
+            for day, (_start, marker) in days.items()
+            for first, _last in BANDS
+        }:
             return None
         _count(connection, snapshot_id, season_id, days)
         return snapshot_id
@@ -274,15 +280,11 @@ def band_of(position: int) -> int:
 
 def _bands(population: str) -> list[int] | None:
     if population.startswith("top-"):
-        low, high = 1, int(population.removeprefix("top-"))
-    elif population.startswith("band-"):
+        return rank_band_firsts(1, int(population.removeprefix("top-")))
+    if population.startswith("band-"):
         low, high = map(int, population.removeprefix("band-").split("-"))
-    else:
-        return None
-    covered = [(first, last) for first, last in BANDS if low <= first and last <= high]
-    if sum(last - first + 1 for first, last in covered) != high - low + 1:
-        return None
-    return [first for first, _last in covered]
+        return rank_band_firsts(low, high)
+    return None
 
 
 def rank_band_digest(

@@ -501,3 +501,109 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("1 other battle record had no opponent and was excluded");
   });
 });
+
+describe("army analytics player groups", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
+  });
+
+  it("offers the larger tops, rank ranges and a custom trophy range", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-10000", [23], 0)),
+    });
+    const html = await renderArmyRoute("season=current&population=top-10000");
+    for (const population of [
+      "top-1000",
+      "top-2000",
+      "top-5000",
+      "top-10000",
+      "band-1-100",
+      "band-901-1000",
+      "band-1001-2000",
+      "band-2001-5000",
+      "band-5001-10000",
+      "trophies",
+    ]) {
+      expect(html).toContain(`value="${population}"`);
+    }
+    expect(html).not.toContain("Selected player group");
+    expect(html).not.toContain('name="trophy_min"');
+    // An empty group still shows the page, with zero records and no rows.
+    const text = renderedText(html);
+    expect(text).toContain("by top-10,000 players");
+    expect(text).toContain("Battle records 0 Recorded in this selection");
+    expect(text).toContain("No recognized components in this selection.");
+  });
+
+  it.each([
+    "top-2000",
+    "top-5000",
+    "top-10000",
+    "band-1-100",
+    "band-1001-2000",
+    "band-5001-10000",
+    "trophies-3800-4999",
+  ])("asks the API for %s", async (population) => {
+    const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    await armyLoader({
+      request: requestFor(`season=current&population=${population}`),
+      params: {},
+    } as never);
+    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
+    expect(query.get("population")).toBe(population);
+  });
+
+  it("turns the custom trophy fields into one shareable range", async () => {
+    const result = await armyLoader({
+      request: requestFor(
+        "season=current&population=trophies&trophy_min=3800&trophy_max=05200&lens=defense",
+      ),
+      params: {},
+    } as never);
+    expect((result as Response).status).toBe(302);
+    expect((result as Response).headers.get("location")).toBe(
+      "/analytics/armies?season=current&population=trophies-3800-5200&lens=defense",
+    );
+  });
+
+  it("shows a chosen trophy range in its fields", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi
+        .fn()
+        .mockResolvedValue(currentAnalytics("trophies-3800-5200", [23], 0)),
+    });
+    const html = await renderArmyRoute("season=current&population=trophies-3800-5200");
+    expect(html).toMatch(/<option value="trophies" selected="">/);
+    expect(html).toMatch(/name="trophy_min"[^>]*value="3800"/);
+    expect(html).toMatch(/name="trophy_max"[^>]*value="5200"/);
+    expect(renderedText(html)).toContain(
+      "by players with 3,800 to 5,200 trophies at battle time",
+    );
+  });
+
+  it.each([
+    ["population=trophies&trophy_min=6000&trophy_max=5000", "can’t be above"],
+    ["population=trophies-6000-5000", "can’t be above"],
+    ["population=trophies&trophy_min=&trophy_max=5000", "whole numbers"],
+    ["population=trophies&trophy_min=-1&trophy_max=5000", "whole numbers"],
+    ["population=trophies&trophy_min=12.5&trophy_max=5000", "whole numbers"],
+    ["population=trophies-5000-100000", "whole numbers"],
+    ["population=trophies-abc", "whole numbers"],
+  ])("rejects the trophy range %s before asking the API", async (query, message) => {
+    const getArmyAnalytics = vi.fn();
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    const result = await armyLoader({
+      request: requestFor(`season=current&${query}`),
+      params: {},
+    } as never);
+    expect(getArmyAnalytics).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      init: { status: 422 },
+      data: { analytics: null, error: { error: { code: "invalid_input" } } },
+    });
+    const error = (result as { data: { error: { error: { message: string } } } }).data
+      .error.error.message;
+    expect(error).toContain(message);
+  });
+});

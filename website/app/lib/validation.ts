@@ -50,3 +50,18 @@ export function isRefreshStatusPayload(value: unknown): value is RefreshStatus {
         )))
   );
 }
+
+// The API's trophy-range rule: whole numbers from 0 to 99,999, minimum no
+// higher than maximum.
+export const TROPHY_RANGE_LIMITS = [0, 99_999] as const;
+
+export function trophyRangeProblem(minimum: string, maximum: string): string | null {
+  const [lowest, highest] = TROPHY_RANGE_LIMITS;
+  const values = [minimum, maximum].map((value) =>
+    /^\d{1,5}$/.test(value.trim()) ? Number(value) : Number.NaN,
+  );
+  if (values.some((value) => !(value >= lowest && value <= highest)))
+    return "Enter trophies as whole numbers from 0 to 99,999.";
+  if (values[0] > values[1]) return "Minimum trophies can’t be above maximum trophies.";
+  return null;
+}
