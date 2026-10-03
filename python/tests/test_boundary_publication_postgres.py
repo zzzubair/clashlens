@@ -1391,7 +1391,7 @@ def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
                 observed_at=DAY_START,
                 normalized_tag="#2PP",
             )
-            _insert_confirmed_anchor(database, "test-current", "test-previous")
+            _insert_confirmed_anchor(database, "1783918800", "1781499600")
             with database.pool.connection() as connection:
                 army_job = connection.execute(
                     """
