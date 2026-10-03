@@ -738,12 +738,13 @@ use the [operating notes](operating.md#respond-to-alerts).
   those metrics or the overdue age are missing. Checks resume as soon as Reset
   work finishes, with no fixed clock window.
 - **A widely or badly stale Live Leaderboard for five minutes**: more than
-  **1%** of entries last updated over ten minutes ago, or any one entry over
-  **30 minutes** ago, on every check for **300 seconds** (six checks in a
-  row; an unavailable check does not restart the count). Exactly 1% or exactly
-  30 minutes does not count. Until Reset work is known to be finished, measured
-  as for the overdue-check alert, only the 30-minute rule applies, because the
-  Reset pause and sweep leave most players over ten minutes old for a while.
+  **5%** of entries last updated over ten minutes ago, or any one entry over
+  **20 minutes** ago, on every check for **300 seconds** (six checks in a
+  row; an unavailable check does not restart the count). Exactly 5% or exactly
+  20 minutes does not count. It is neither raised nor cleared during the
+  **04:55–05:00 UTC** Reset pause or while Reset work is unfinished, measured
+  as for the overdue-check alert, because both leave most players over ten
+  minutes old for a while; the five minutes start again afterwards.
   Staleness uses the
   [Live Leaderboard membership and freshness rules](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
@@ -764,13 +765,17 @@ use the [operating notes](operating.md#respond-to-alerts).
   It retains one time and one content identifier per player, about
   1 MiB for 13,000 players, with no growing check history. A valid empty
   leaderboard reports `0 0 0`, has no freshness breach, and permits an existing
-  freshness alert to recover. The thresholds come from Oct 3, 2026: the old
-  any-stale-entry rule alerted at 18:30, 20:04 and 20:10 UTC and recovered
-  within 3 to 10 minutes each time, while minute-by-minute samples from
-  20:41 UTC showed 11,869 entries, none over ten minutes old and the oldest
-  under eight minutes. Production then used about 130 of its 150 official API
-  requests per second, so a single player sometimes waits past ten minutes.
-  1% is about 119 players, and 30 minutes is three times the freshness limit.
+  freshness alert to recover. The thresholds come from Oct 3, 2026, when
+  production used about 130 of its 150 official API requests per second. The
+  old any-stale-entry rule alerted at 18:30, 20:04, 20:10 and 21:10 UTC, the
+  first three recovering within 3 to 10 minutes. Read-only samples of the
+  11,870-entry board every 30 to 60 seconds found none over ten minutes old
+  from 20:41 to 20:56 UTC, with the oldest under eight minutes. After the
+  21:20 UTC deploy restarted the stack, 100 to 380 entries (0.9% to 3.2%) were
+  over ten minutes old in every sample from 21:25 to 21:36, and the oldest
+  peaked at 15 minutes. That is normal near the request limit, so 5% and
+  20 minutes leave room above it. A stopped collector still passes 20 minutes
+  about 8 minutes after it stops, so it alerts about 13 minutes after.
   Use the [collection and processing measurements](operating.md#collection-or-processing-behind)
   to distinguish delayed collection from delayed processing.
 - **A new permanent failure of a processing job or raw-response upload in

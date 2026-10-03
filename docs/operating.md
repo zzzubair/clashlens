@@ -210,11 +210,12 @@ conditions are healthy. The website-unreachable alert comes from the
 
 Two thresholds keep the channel quiet enough to read:
 
-- **Live Leaderboard:** alerts only when more than 1% of its players were last
-  updated over ten minutes ago, or one player over 30 minutes ago, on every
-  check for five minutes. During unfinished Reset work only the 30-minute rule
-  counts. One player briefly past ten minutes is normal near the official API
-  request limit and does not alert.
+- **Live Leaderboard:** alerts only when more than 5% of its players were last
+  updated over ten minutes ago, or one player over 20 minutes ago, on every
+  check for five minutes. The 04:55–05:00 UTC Reset pause and unfinished Reset
+  work are not counted. Up to about 3% of players a little past ten minutes is
+  normal near the official API request limit, such as after a deploy, and does
+  not alert.
 - **Every recovery:** sent only after 15 minutes of clear checks. A problem
   that returns within those 15 minutes continues the same incident without a
   new message, so the recovery can arrive up to 15 minutes after the fix.

@@ -199,7 +199,7 @@ def trigger(rt, condition, value=True):
     elif condition == "collection":
         rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
     elif condition == "leaderboard":
-        rt.leaderboard = "1 13000 1801" if value else "0 13000 0"
+        rt.leaderboard = "1 13000 1201" if value else "0 13000 0"
     elif condition == "failures":
         rt.metrics["clashlens_collector_newest_failed_upload_age_seconds"] = (
             86399 if value else 86400
@@ -436,23 +436,34 @@ def test_stale_leaderboard_alerts_only_when_widespread_or_long_for_five_minutes(
             assert rt.run() == 0
             rt.now += 60
 
-    # Exactly 1% stale, or one player exactly 30 minutes old, is tolerated.
-    minutes(10, "130 13000 1800")
+    # Exactly 5% stale, or one player exactly 20 minutes old, is tolerated.
+    minutes(10, "650 13000 1200")
     # Over the line for four minutes, then back: no alert and no recovery.
-    minutes(4, "131 13000 900")
+    minutes(4, "651 13000 900")
     minutes(1, "0 13000 300")
-    minutes(4, "1 13000 1801")
+    minutes(4, "1 13000 1201")
     minutes(1, "0 13000 300")
-    # During Reset work only the oldest player's age counts.
+    assert not rt.posts
+    # Either rule alone alerts on its sixth check in a row.
+    for board in ("651 13000 900", "1 13000 1201"):
+        minutes(5, board)
+        assert len(rt.posts) % 2 == 0
+        minutes(1, board)
+        assert "Live Leaderboard" in rt.posts[-1]["content"]
+        minutes(16, "0 13000 300")
+        assert "recovered" in rt.posts[-1]["content"]
+    assert len(rt.posts) == 4
+    # The Reset pause, then unfinished Reset work, are not counted.
+    rt.now = datetime(2026, 9, 28, 4, 55, tzinfo=UTC).timestamp()
+    minutes(6, "9000 13000 1500")
     rt.metrics["clashlens_collector_reset_total"] = 200
     rt.metrics["clashlens_collector_reset_terminal"] = 199
-    minutes(10, "9000 13000 1500")
-    assert not rt.posts
+    minutes(15, "9000 13000 1801")
+    rt.metrics["clashlens_collector_reset_terminal"] = 200
     minutes(5, "9000 13000 1801")
-    assert not rt.posts
+    assert len(rt.posts) == 4
     minutes(1, "9000 13000 1801")
-    assert len(rt.posts) == 1
-    assert "Live Leaderboard" in rt.posts[0]["content"]
+    assert len(rt.posts) == 5
 
 
 def test_recovery_waits_for_fifteen_clear_minutes_and_folds_repeats(
@@ -497,7 +508,7 @@ def test_stopped_time_counts_toward_neither_hold(runtime, monkeypatch):
     trigger(rt, "reads")
     assert rt.run() == 0
     trigger(rt, "reads", False)
-    rt.leaderboard = "0 13000 1801"
+    rt.leaderboard = "0 13000 1201"
     rt.now += 60
     assert rt.run() == 0
     intent = rt.state_dir / "alert-intent"

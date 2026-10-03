@@ -48,8 +48,8 @@ CONDITIONS = {
     ),
     "leaderboard": (
         (
-            "For five minutes, over 1% of Live Leaderboard players were last updated"
-            " over ten minutes ago, or one player over 30 minutes ago"
+            "For five minutes, over 5% of Live Leaderboard players were last updated"
+            " over ten minutes ago, or one player over 20 minutes ago"
         ),
         "./ops queue-status",
     ),
@@ -85,8 +85,8 @@ CONDITIONS = {
 RECOVERY_HOLD = 900
 # The Live Leaderboard alerts only when staleness is widespread or one player
 # is badly behind, and stays so for LEADERBOARD_HOLD seconds of checks.
-LEADERBOARD_STALE_SHARE = 0.01
-LEADERBOARD_OLDEST = 1800
+LEADERBOARD_STALE_SHARE = 0.05
+LEADERBOARD_OLDEST = 1200
 LEADERBOARD_HOLD = 300
 
 
@@ -528,13 +528,16 @@ def observe(
             findings[name] = values[0] > 0
         else:
             stale, total, oldest = values
-            # Reset work leaves most players briefly stale; only the oldest
-            # player's age counts until it is known to have finished.
-            settled = reset_total is not None and reset_terminal == reset_total
-            over = oldest > LEADERBOARD_OLDEST or (
-                settled and stale > LEADERBOARD_STALE_SHARE * total
+            # The Reset pause and sweep leave most players stale for a while.
+            clock = datetime.fromtimestamp(now, UTC).strftime("%H:%M")
+            resetting = "04:55" <= clock < "05:00" or (
+                reset_total is not None and reset_terminal != reset_total
             )
-            if over:
+            over = oldest > LEADERBOARD_OLDEST or stale > LEADERBOARD_STALE_SHARE * total
+            if resetting:
+                state.pop("leaderboard_stale_since", None)
+                findings[name] = None
+            elif over:
                 since = max(
                     state.setdefault("leaderboard_stale_since", now),
                     state.get("resumed_at", 0),
