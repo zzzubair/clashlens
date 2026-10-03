@@ -15,7 +15,11 @@ from .army_decoder import (
     DecodeFailure,
     decode_army_share_code,
 )
-from .army_season_summaries import acquire_army_season_lock, materialize_army_season
+from .army_season_summaries import (
+    acquire_army_season_lock,
+    materialize_army_season,
+    store_army_day_totals,
+)
 from .catalog import CATALOG_HASH, CATALOG_VERSION
 from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, anchored_ranked_day
@@ -364,7 +368,6 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                            army_manifest_id, army_rule_version, target_at, target_rule
                     FROM boundary_publication_generations
                     WHERE boundary_at = %s AND generation = %s
-                    FOR UPDATE
                     """,
                     (boundary_at, int(generation_input)),
                 ).fetchone()
@@ -459,70 +462,50 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     SEASON_DETAIL_RETIRED,
                     f"season {season_id} detail is retired",
                 )
-            if generation_row is not None:
-                connection.execute(
-                    """
-                    UPDATE boundary_publication_generations
-                    SET army_state = 'building', updated_at = clock_timestamp()
-                    WHERE id = %s AND army_state = 'ready'
-                    """,
-                    (generation_row[0],),
-                )
-            manifest_members = None
+            # The generation row is read without a lock. The snapshot and
+            # analytics builds lock that row, so holding it for the whole
+            # fact build made them wait; the publish update below locks it
+            # only at the end and fences on the state read here.
             manifest_versions = None
-            manifest_decodes = None
-            manifest_daily_logs = None
-            manifest_battles = None
             if generation_row is not None:
-                manifest_rows = connection.execute(
-                    "SELECT player_id, ranked_day_version_id, input_identity->'decode_ids', input_identity FROM boundary_publication_manifest_rows WHERE manifest_id = %s ORDER BY ordinal",
-                    (manifest_id,),
-                ).fetchall()
-                manifest_members = [int(row[0]) for row in manifest_rows]
                 manifest_versions = [
-                    int(row[1]) for row in manifest_rows if row[1] is not None
+                    int(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT ranked_day_version_id
+                        FROM boundary_publication_manifest_rows
+                        WHERE manifest_id = %s AND ranked_day_version_id IS NOT NULL
+                        ORDER BY ordinal
+                        """,
+                        (manifest_id,),
+                    ).fetchall()
                 ]
-                manifest_decodes = [
-                    int(decode_id)
-                    for row in manifest_rows
-                    for decode_id in (row[2] or [])
-                ]
-                manifest_daily_logs = [
-                    int(row[3]["daily_log_id"])
-                    for row in manifest_rows
-                    if isinstance(row[3], dict)
-                    and row[3].get("daily_log_id") is not None
-                ]
-                manifest_battles = [
-                    int(battle_id)
-                    for row in manifest_rows
-                    for battle_id in (
-                        row[3].get("battle_ids", []) if isinstance(row[3], dict) else []
-                    )
-                ]
-                manifest_evidence = [
-                    int(evidence_id)
-                    for row in manifest_rows
-                    for evidence_id in (
-                        row[3].get("evidence_ids", [])
-                        if isinstance(row[3], dict)
-                        else []
-                    )
-                ]
-            else:
-                manifest_evidence = None
             ranked_day_start = datetime.fromisoformat(str(ranked_day_str)).astimezone(
                 UTC
             )
-            # Two builds for one ranked day must not interleave: fact
+            # No two army day builds interleave, for any days: fact
             # versions are computed as latest+1 and the day sweep marks
-            # is_current, so a collision would surface as a unique
-            # violation instead of a clean retry. Different days build
-            # concurrently.
+            # is_current, and a battle moved across a Reset replaces
+            # another day's current fact and saved totals while that
+            # day's build may be counting and saving them. One shared
+            # lock cannot deadlock; a day build takes about 80 seconds.
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"army-facts:{ranked_day_start.isoformat()}",),
+                ("army-facts",),
             )
+            # A build of this generation that held the lock may have
+            # published it meanwhile.
+            if generation_row is not None and _text_value(
+                connection.execute(
+                    "SELECT army_state FROM boundary_publication_generations"
+                    " WHERE id = %s",
+                    (generation_row[0],),
+                ).fetchone()[0]
+            ) in {"superseded", "published"}:
+                database._finish_claim(
+                    connection, claim, job, state="complete", outcome="stale_superseded"
+                )
+                return
             season_id = _ensure_army_day_dependency(
                 database,
                 connection,
@@ -535,12 +518,8 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 database,
                 connection,
                 str(ranked_day_str),
-                member_ids=manifest_members,
+                manifest_id=manifest_id if generation_row is not None else None,
                 ranked_version_ids=manifest_versions,
-                decode_ids=manifest_decodes,
-                evidence_ids=manifest_evidence,
-                daily_log_ids=manifest_daily_logs,
-                battle_ids=manifest_battles,
             )
             if generation_row is not None:
                 marker = connection.execute(
@@ -597,7 +576,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                             'classifications', (SELECT COALESCE(jsonb_object_agg(army_status, count), '{}'::jsonb) FROM (SELECT army_status, count(*) FROM boundary_publication_generation_members WHERE generation_id = %s GROUP BY army_status) AS counts)
                         ),
                         updated_at = clock_timestamp()
-                    WHERE id = %s AND army_state = 'building'
+                    WHERE id = %s AND army_state IN ('ready', 'building')
                       AND army_manifest_id = %s
                     RETURNING id
                     """,
@@ -665,6 +644,7 @@ def _build_army_facts(
     connection: Any,
     ranked_day_str: str,
     *,
+    manifest_id: int | None = None,
     member_ids: list[int] | None = None,
     ranked_version_ids: list[int] | None = None,
     decode_ids: list[int] | None = None,
@@ -673,6 +653,112 @@ def _build_army_facts(
     battle_ids: list[int] | None = None,
 ) -> None:
     ranked_day_start = datetime.fromisoformat(ranked_day_str).astimezone(UTC)
+    active_keys: set[tuple[int, str]] = set()
+    if manifest_id is not None:
+        _build_manifest_army_facts(
+            database, connection, ranked_day_start, manifest_id, active_keys
+        )
+    else:
+        _build_listed_army_facts(
+            database,
+            connection,
+            ranked_day_start,
+            active_keys,
+            member_ids=member_ids,
+            ranked_version_ids=ranked_version_ids,
+            decode_ids=decode_ids,
+            evidence_ids=evidence_ids,
+            daily_log_ids=daily_log_ids,
+            battle_ids=battle_ids,
+        )
+    _finish_army_fact_day(
+        database, connection, ranked_day_start, ranked_version_ids, active_keys
+    )
+
+
+def _build_manifest_army_facts(
+    database: Database,
+    connection: Any,
+    ranked_day_start: datetime,
+    manifest_id: int,
+    active_keys: set[tuple[int, str]],
+) -> None:
+    """Build facts from a frozen manifest, one page of manifest rows at a time.
+
+    Each page reads only its own players' frozen daily log, ranked-day
+    version, battle, decode and evidence IDs. Passing the whole day's ID
+    lists to every page made each lookup sift the full day again.
+    """
+    version_filter = (
+        "AND d.ranked_day_version_id = m.ranked_day_version_id"
+        if getattr(database, "_supports_coordinator_contract", False)
+        else ""
+    )
+    after_ordinal = 0
+    while True:
+        rows = connection.execute(
+            f"""
+            SELECT m.ordinal, rv.id, d.player_id, d.battles,
+                   d.official_season_id, d.season_day_number, rv.start_trophies,
+                   m.input_identity -> 'battle_ids',
+                   m.input_identity -> 'decode_ids',
+                   m.input_identity -> 'evidence_ids'
+            FROM boundary_publication_manifest_rows AS m
+            LEFT JOIN api_player_daily_logs AS d
+              ON d.id = (m.input_identity ->> 'daily_log_id')::bigint
+             AND d.player_id = m.player_id
+             AND d.ranked_day_start = %s
+             {version_filter}
+            LEFT JOIN ranked_day_versions AS rv
+              ON rv.id = m.ranked_day_version_id
+             AND rv.player_id = d.player_id
+             AND rv.ranked_day_start = d.ranked_day_start
+            WHERE m.manifest_id = %s AND m.ordinal > %s
+            ORDER BY m.ordinal
+            LIMIT %s
+            """,
+            (ranked_day_start, manifest_id, after_ordinal, ARMY_FACT_PLAYER_BATCH),
+        ).fetchall()
+        if not rows:
+            break
+        after_ordinal = int(rows[-1][0])
+        battle_ids, decode_ids, evidence_ids = (
+            sorted(
+                {
+                    int(value)
+                    for row in rows
+                    if isinstance(row[column], list)
+                    for value in row[column]
+                }
+            )
+            for column in (7, 8, 9)
+        )
+        _build_army_fact_batch(
+            connection,
+            ranked_day_start,
+            [row[1:7] for row in rows if row[1] is not None],
+            battle_ids=battle_ids,
+            decode_ids=decode_ids,
+            evidence_ids=evidence_ids,
+            active_keys=active_keys,
+        )
+        if len(rows) < ARMY_FACT_PLAYER_BATCH:
+            break
+
+
+def _build_listed_army_facts(
+    database: Database,
+    connection: Any,
+    ranked_day_start: datetime,
+    active_keys: set[tuple[int, str]],
+    *,
+    member_ids: list[int] | None,
+    ranked_version_ids: list[int] | None,
+    decode_ids: list[int] | None,
+    evidence_ids: list[int] | None,
+    daily_log_ids: list[int] | None,
+    battle_ids: list[int] | None,
+) -> None:
     # Published daily logs own the canonical per-lens battle events;
     # ranked_day_versions contributes the battle-time starting trophies.
     version_filter = ""
@@ -694,7 +780,6 @@ def _build_army_facts(
     # A Legend day has about 183,000 facts for 13,000 players. Building them
     # in player batches keeps the worker's memory and each insert bounded;
     # the whole day still commits as one transaction.
-    active_keys: set[tuple[int, str]] = set()
     after_player_id = 0
     while True:
         versions = connection.execute(
@@ -742,6 +827,15 @@ def _build_army_facts(
             )
         if len(versions) < ARMY_FACT_PLAYER_BATCH:
             break
+
+
+def _finish_army_fact_day(
+    database: Database,
+    connection: Any,
+    ranked_day_start: datetime,
+    ranked_version_ids: list[int] | None,
+    active_keys: set[tuple[int, str]],
+) -> None:
     connection.execute(
         """
         UPDATE army_analytics_battle_facts AS fact
@@ -760,7 +854,9 @@ def _build_army_facts(
             [lens for _battle_id, lens in active_keys],
         ),
     )
-    # Durable per-day completion marker, atomic with the facts above.
+    # Durable per-day completion marker, atomic with the facts above. Its
+    # hash is SHA-256 of the day's current [battle_id,"lens","input_hash"]
+    # list as compact JSON, built here without sending every fact back.
     marker_filter = "AND state = 'Complete' AND coverage = 'complete'"
     marker_params: tuple[Any, ...] = (ranked_day_start,)
     if ranked_version_ids is not None:
@@ -776,49 +872,56 @@ def _build_army_facts(
         """,
         marker_params,
     ).fetchone()
-    if marker_day is not None:
-        marker_rows = connection.execute(
-            """
-            SELECT battle_id, lens, input_hash
-            FROM army_analytics_battle_facts
-            WHERE ranked_day_start = %s AND is_current
-            ORDER BY battle_id, lens
-            """,
-            (ranked_day_start,),
-        ).fetchall()
-        marker_hash = hashlib.sha256(
-            json.dumps(
-                [
-                    [int(r[0]), _text_value(r[1]), _text_value(r[2])]
-                    for r in marker_rows
-                ],
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
+    if marker_day is None:
+        # Totals from an earlier build of this day no longer describe it.
         connection.execute(
+            "DELETE FROM army_analytics_day_totals WHERE ranked_day_start = %s",
+            (ranked_day_start,),
+        )
+    else:
+        marker = connection.execute(
             """
             INSERT INTO army_analytics_completed_days (
                 ranked_day_start, official_season_id, season_day_number,
                 fact_input_hash
-            ) VALUES (%s, %s, %s, %s)
+            )
+            SELECT %s, %s, %s, encode(sha256(convert_to(
+                       '[' || COALESCE(string_agg(
+                           '[' || battle_id || ',"' || lens || '","'
+                               || input_hash || '"]',
+                           ',' ORDER BY battle_id, lens
+                       ), '') || ']',
+                       'UTF8'
+                   )), 'hex')
+            FROM army_analytics_battle_facts
+            WHERE ranked_day_start = %s AND is_current
             ON CONFLICT (ranked_day_start) DO UPDATE SET
                 official_season_id = EXCLUDED.official_season_id,
                 season_day_number = EXCLUDED.season_day_number,
                 fact_input_hash = EXCLUDED.fact_input_hash,
                 completed_at = clock_timestamp()
+            RETURNING fact_input_hash
             """,
             (
                 ranked_day_start,
                 _text_value(marker_day[0]),
                 int(marker_day[1]),
-                marker_hash,
+                ranked_day_start,
             ),
+        ).fetchone()
+        store_army_day_totals(
+            connection,
+            ranked_day_start,
+            _text_value(marker_day[0]),
+            int(marker_day[1]),
+            _text_value(marker[0]),
         )
         # A late correction refreshes an already-summarized season.
         # Seasons without summaries (live seasons stay on explicit
         # preview-first backfill) cost one season lock plus one existence
-        # lookup; summarized seasons pay one projection per lens per day build (fact scan
-        # plus per-category upserts, writes skipped when digests match).
+        # lookup; summarized seasons pay one projection per lens per day build
+        # (adding up stored day totals plus per-category upserts, writes
+        # skipped when digests match).
         # Each lens refreshes in a savepoint so a projection failure
         # warns without rolling back the day facts/marker above.
         _refresh_army_season_summaries(database, connection, _text_value(marker_day[0]))
@@ -888,8 +991,7 @@ def _build_army_fact_batch(
         decode_params = (decode_ids,)
     decode_rows = connection.execute(
         f"""
-        SELECT battle_id, perspective, id, evidence_id, status, failure_category,
-               home_troops, spells, siege, cc_troops, heroes, unresolved_components
+        SELECT battle_id, perspective, id, evidence_id, status, failure_category
         FROM battle_army_decodes
         WHERE battle_id = ANY(%s::bigint[])
           AND perspective = ANY(%s::text[])
@@ -926,15 +1028,17 @@ def _build_army_fact_batch(
     else:
         # A frozen manifest names the evidence it promised to use. Read those
         # saved records, not the current pointer a later report may have moved.
+        # The battle and perspective conditions keep the battle/perspective
+        # index usable; the IDs alone read every evidence row from disk.
         evidence_rows = connection.execute(
             """
             SELECT battle_id, perspective, id, NULL
             FROM battle_evidence
-            WHERE id = ANY(%s::bigint[])
-              AND battle_id = ANY(%s::bigint[])
+            WHERE battle_id = ANY(%s::bigint[])
               AND perspective = ANY(%s::text[])
+              AND id = ANY(%s::bigint[])
             """,
-            (evidence_ids, battle_id_values, perspective_values),
+            (battle_id_values, perspective_values, evidence_ids),
         ).fetchall()
     evidence = {
         (
@@ -1045,12 +1149,6 @@ def _build_army_fact_batch(
                     "failure_reason": (
                         _text_value(decode[5]) if decode and decode[5] else None
                     ),
-                    "home_troops": (decode[6] or []) if decode else [],
-                    "spells": (decode[7] or []) if decode else [],
-                    "siege": (decode[8] or []) if decode else [],
-                    "cc_troops": (decode[9] or []) if decode else [],
-                    "heroes": (decode[10] or []) if decode else [],
-                    "unresolved_components": ((decode[11] or []) if decode else []),
                     "perspective_disagreement": disagreement,
                     "input_hash": input_hash,
                     "version": (
@@ -1066,8 +1164,19 @@ def _build_army_fact_batch(
                 trophies += change
     if superseded_ids:
         connection.execute(
-            "UPDATE army_analytics_battle_facts SET is_current=false WHERE id = ANY(%s::bigint[])",
-            (superseded_ids,),
+            """
+            WITH superseded AS (
+                UPDATE army_analytics_battle_facts SET is_current = false
+                WHERE id = ANY(%s::bigint[])
+                RETURNING ranked_day_start
+            )
+            DELETE FROM army_analytics_day_totals
+            WHERE ranked_day_start IN (
+                SELECT ranked_day_start FROM superseded
+                WHERE ranked_day_start <> %s
+            )
+            """,
+            (superseded_ids, ranked_day_start),
         )
     if fact_rows:
         connection.execute(
@@ -1076,27 +1185,23 @@ def _build_army_fact_batch(
                 battle_id, evidence_id, decode_id, source_ranked_day_version_id,
                 ranked_day_start, official_season_id, season_day_number, lens,
                 population_player_id, battle_time_trophies, stars,
-                destruction_percentage, army_state, failure_reason, home_troops,
-                spells, siege, cc_troops, heroes, unresolved_components,
+                destruction_percentage, army_state, failure_reason,
                 perspective_disagreement, input_hash, version, supersedes_id
             )
             SELECT row.battle_id, row.evidence_id, row.decode_id,
                    row.source_ranked_day_version_id, %s, row.official_season_id,
                    row.season_day_number, row.lens, row.population_player_id,
                    row.battle_time_trophies, row.stars, row.destruction_percentage,
-                   row.army_state, row.failure_reason, row.home_troops,
-                   row.spells, row.siege, row.cc_troops, row.heroes,
-                   row.unresolved_components, row.perspective_disagreement,
-                   row.input_hash, row.version, row.supersedes_id
+                   row.army_state, row.failure_reason,
+                   row.perspective_disagreement, row.input_hash, row.version,
+                   row.supersedes_id
             FROM jsonb_to_recordset(%s::jsonb) AS row(
                 battle_id bigint, evidence_id bigint, decode_id bigint,
                 source_ranked_day_version_id bigint, official_season_id text,
                 season_day_number integer, lens text, population_player_id bigint,
                 battle_time_trophies integer, stars integer,
                 destruction_percentage integer, army_state text,
-                failure_reason text, home_troops jsonb, spells jsonb,
-                siege jsonb, cc_troops jsonb, heroes jsonb,
-                unresolved_components jsonb, perspective_disagreement boolean,
+                failure_reason text, perspective_disagreement boolean,
                 input_hash text, version integer, supersedes_id bigint
             )
             """,

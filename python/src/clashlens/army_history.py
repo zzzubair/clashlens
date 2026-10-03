@@ -52,18 +52,29 @@ def home_units(fact: dict[str, Any]) -> Counter[str]:
     return units
 
 
+def count_usage(counts: dict[tuple[str, int], list[int]], fact: dict[str, Any]) -> None:
+    """Add one fact's [uses, one-star, two-star, three-star] per ID/quantity."""
+    if fact["army_state"] not in {"decoded", "partial"}:
+        return
+    stars = int(fact["stars"])
+    for typed_id, quantity in home_units(fact).items():
+        totals = counts.setdefault((typed_id, quantity), [0, 0, 0, 0])
+        totals[0] += 1
+        if stars:
+            totals[stars] += 1
+
+
 def aggregate_usage(facts: list[dict[str, Any]]) -> dict[str, list[list[Any]]]:
     """[typed ID, quantity, uses, one-star, two-star, three-star]."""
     counts: dict[tuple[str, int], list[int]] = {}
     for fact in facts:
-        if fact["army_state"] not in {"decoded", "partial"}:
-            continue
-        stars = int(fact["stars"])
-        for typed_id, quantity in home_units(fact).items():
-            totals = counts.setdefault((typed_id, quantity), [0, 0, 0, 0])
-            totals[0] += 1
-            if stars:
-                totals[stars] += 1
+        count_usage(counts, fact)
+    return usage_by_category(counts)
+
+
+def usage_by_category(
+    counts: dict[tuple[str, int], list[int]],
+) -> dict[str, list[list[Any]]]:
     result: dict[str, list[list[Any]]] = {key: [] for key in HISTORY_CATEGORIES}
     for (typed_id, quantity), totals in sorted(counts.items()):
         result[_NAMESPACE[typed_id.split(":", 1)[0]]].append(

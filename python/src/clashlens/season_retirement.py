@@ -303,7 +303,9 @@ def finalize_season_detail(
     }
     for lens in LENSES:
         try:
-            projected_lens = _project_lens(connection, season_id, lens)
+            projected_lens = _project_lens(
+                connection, season_id, lens, recount=True
+            )
         except Exception as error:  # noqa: BLE001 - reported, blocks finalization
             failures.append({"lens": lens, "error": str(error)[:200]})
             continue

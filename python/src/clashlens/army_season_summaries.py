@@ -10,7 +10,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .army_history import HISTORY_CATEGORIES, aggregate_usage
+from .army_history import HISTORY_CATEGORIES, count_usage, usage_by_category
 
 # The completed-season gate is shared with the player summaries so both
 # slices agree on when a season is finalizable.
@@ -71,51 +71,190 @@ def acquire_army_season_lock(connection: Any, season_id: str, lens: str) -> None
     )
 
 
-def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
+def _new_totals() -> dict[str, Any]:
+    return {
+        "total_attacks": 0,
+        "army_states": Counter(),
+        "unknown_affected_attacks": 0,
+        "unknown_component_occurrences": 0,
+        "perspective_disagreement_count": 0,
+        "usage": {},
+    }
+
+
+def _count_facts(
+    connection: Any,
+    totals_by_lens: dict[str, dict[str, Any]],
+    where: str,
+    params: tuple[Any, ...],
+) -> None:
+    """Add current facts to per-lens totals, streamed to bound memory.
+
+    Army contents come through the facts' decoded-army records.
+    """
+    with connection.transaction(), connection.cursor(
+        name="army_fact_totals"
+    ) as cursor:
+        cursor.itersize = 2000
+        cursor.execute(
+            f"""
+            SELECT lens, stars, army_state, home_troops, spells, siege, heroes,
+                   unresolved_components, perspective_disagreement
+            FROM army_analytics_battle_facts_with_armies
+            WHERE is_current AND {where}
+            """,
+            params,
+        )
+        for row in cursor:
+            totals = totals_by_lens.setdefault(_text(row[0]), _new_totals())
+            fact = {
+                "stars": int(row[1]),
+                "army_state": _text(row[2]),
+                "home_troops": row[3] or [],
+                "spells": row[4] or [],
+                "siege": row[5] or [],
+                "heroes": row[6] or [],
+                "unresolved_components": row[7] or [],
+            }
+            totals["total_attacks"] += 1
+            totals["army_states"][fact["army_state"]] += 1
+            totals["unknown_affected_attacks"] += bool(fact["unresolved_components"])
+            totals["unknown_component_occurrences"] += len(
+                fact["unresolved_components"]
+            )
+            totals["perspective_disagreement_count"] += bool(row[8])
+            count_usage(totals["usage"], fact)
+
+
+def store_army_day_totals(
+    connection: Any,
+    ranked_day_start: datetime,
+    season_id: str,
+    season_day_number: int,
+    fact_input_hash: str,
+) -> None:
+    """Save one completed day's per-lens totals beside its marker."""
+    totals_by_lens: dict[str, dict[str, Any]] = {}
+    _count_facts(
+        connection,
+        totals_by_lens,
+        "official_season_id = %s AND season_day_number = %s",
+        (season_id, season_day_number),
+    )
+    rows = []
+    for lens in LENSES:
+        totals = totals_by_lens.get(lens, _new_totals())
+        rows.append(
+            {
+                "lens": lens,
+                "total_attacks": totals["total_attacks"],
+                "army_states": dict(sorted(totals["army_states"].items())),
+                "unknown_affected_attacks": totals["unknown_affected_attacks"],
+                "unknown_component_occurrences": totals[
+                    "unknown_component_occurrences"
+                ],
+                "perspective_disagreement_count": totals[
+                    "perspective_disagreement_count"
+                ],
+                "unit_usage": [
+                    [typed_id, quantity, *counts]
+                    for (typed_id, quantity), counts in sorted(
+                        totals["usage"].items()
+                    )
+                ],
+            }
+        )
+    connection.execute(
+        """
+        INSERT INTO army_analytics_day_totals (
+            ranked_day_start, lens, official_season_id, season_day_number,
+            fact_input_hash, total_attacks, army_states,
+            unknown_affected_attacks, unknown_component_occurrences,
+            perspective_disagreement_count, unit_usage
+        )
+        SELECT %s, row.lens, %s, %s, %s, row.total_attacks, row.army_states,
+               row.unknown_affected_attacks, row.unknown_component_occurrences,
+               row.perspective_disagreement_count, row.unit_usage
+        FROM jsonb_to_recordset(%s::jsonb) AS row(
+            lens text, total_attacks integer, army_states jsonb,
+            unknown_affected_attacks integer,
+            unknown_component_occurrences integer,
+            perspective_disagreement_count integer, unit_usage jsonb
+        )
+        ON CONFLICT (ranked_day_start, lens) DO UPDATE SET
+            official_season_id = EXCLUDED.official_season_id,
+            season_day_number = EXCLUDED.season_day_number,
+            fact_input_hash = EXCLUDED.fact_input_hash,
+            total_attacks = EXCLUDED.total_attacks,
+            army_states = EXCLUDED.army_states,
+            unknown_affected_attacks = EXCLUDED.unknown_affected_attacks,
+            unknown_component_occurrences = EXCLUDED.unknown_component_occurrences,
+            perspective_disagreement_count = EXCLUDED.perspective_disagreement_count,
+            unit_usage = EXCLUDED.unit_usage
+        """,
+        (ranked_day_start, season_id, season_day_number, fact_input_hash, Jsonb(rows)),
+    )
+
+
+def _project_lens(
+    connection: Any, season_id: str, lens: str, *, recount: bool = False
+) -> dict[str, Any]:
     """Aggregate one season-lens across all categories from current facts.
 
     Facts are keyed one-current-row per (battle_id, lens), so each lens
-    counts its own attacks exactly once.
+    counts its own attacks exactly once. Days with saved totals from their
+    latest build are added up from those; other days, or every day when
+    ``recount`` is set, are counted from their facts.
     """
-    rows = connection.execute(
+    days = connection.execute(
         """
-        SELECT stars, army_state, home_troops,
-               spells, siege, heroes, unresolved_components,
-               perspective_disagreement
-        FROM army_analytics_battle_facts
-        WHERE official_season_id = %s AND lens = %s AND is_current
-        ORDER BY battle_id
+        SELECT day.season_day_number, totals.total_attacks, totals.army_states,
+               totals.unknown_affected_attacks,
+               totals.unknown_component_occurrences,
+               totals.perspective_disagreement_count, totals.unit_usage
+        FROM army_analytics_completed_days AS day
+        LEFT JOIN army_analytics_day_totals AS totals
+          ON totals.ranked_day_start = day.ranked_day_start
+         AND totals.lens = %s
+         AND totals.official_season_id = day.official_season_id
+         AND totals.season_day_number = day.season_day_number
+         AND totals.fact_input_hash = day.fact_input_hash
+        WHERE day.official_season_id = %s
         """,
-        (season_id, lens),
+        (lens, season_id),
     ).fetchall()
-    facts = [
-        {
-            "stars": int(row[0]),
-            "army_state": _text(row[1]),
-            "home_troops": row[2] or [],
-            "spells": row[3] or [],
-            "siege": row[4] or [],
-            "heroes": row[5] or [],
-            "unresolved_components": row[6] or [],
-            "perspective_disagreement": bool(row[7]),
-        }
-        for row in rows
-    ]
-    observed = {
-        int(row[0])
-        for row in connection.execute(
-            """
-            SELECT season_day_number FROM army_analytics_completed_days
-            WHERE official_season_id = %s
-            """,
-            (season_id,),
-        ).fetchall()
-    }
+    observed = {int(row[0]) for row in days}
+    totals = _new_totals()
+    saved_days: list[int] = []
+    for row in days:
+        if recount or row[1] is None:
+            continue
+        saved_days.append(int(row[0]))
+        totals["total_attacks"] += int(row[1])
+        totals["army_states"].update(
+            {state: int(count) for state, count in row[2].items()}
+        )
+        totals["unknown_affected_attacks"] += int(row[3])
+        totals["unknown_component_occurrences"] += int(row[4])
+        totals["perspective_disagreement_count"] += int(row[5])
+        for typed_id, quantity, *counts in row[6]:
+            usage = totals["usage"].setdefault((typed_id, quantity), [0, 0, 0, 0])
+            for index, count in enumerate(counts):
+                usage[index] += count
+    remaining_days = [day for day in _SEASON_DAYS if day not in saved_days]
+    if remaining_days:
+        _count_facts(
+            connection,
+            {lens: totals},
+            "official_season_id = %s AND lens = %s"
+            " AND season_day_number = ANY(%s::integer[])",
+            (season_id, lens, remaining_days),
+        )
     missing = sorted(set(_SEASON_DAYS) - observed)
     coverage_state = "complete" if len(observed) == 28 and not missing else "partial"
     summaries: dict[str, Any] = {}
-    usage = aggregate_usage(facts)
-    states = Counter(fact["army_state"] for fact in facts)
+    usage = usage_by_category(totals["usage"])
+    states = Counter(totals["army_states"])
     army_states = {
         "fully_decoded": states.pop("decoded", 0),
         "partial": states.pop("partial", 0),
@@ -131,12 +270,12 @@ def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
             "days_missing": len(missing),
             "missing_days": missing,
             "coverage_state": coverage_state,
-            "total_attacks": len(facts),
+            "total_attacks": totals["total_attacks"],
             "usable_army_sample": army_states["fully_decoded"] + army_states["partial"],
             "army_states": army_states,
-            "unknown_affected_attacks": sum(bool(f["unresolved_components"]) for f in facts),
-            "unknown_component_occurrences": sum(len(f["unresolved_components"]) for f in facts),
-            "perspective_disagreement_count": sum(f["perspective_disagreement"] for f in facts),
+            "unknown_affected_attacks": totals["unknown_affected_attacks"],
+            "unknown_component_occurrences": totals["unknown_component_occurrences"],
+            "perspective_disagreement_count": totals["perspective_disagreement_count"],
             "missing_trophy_membership_evidence": 0,
             "result_rows": [],
             "unit_usage": usage[category],
