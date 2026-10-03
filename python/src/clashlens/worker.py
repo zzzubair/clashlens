@@ -830,9 +830,7 @@ class ObservationProcessor:
         # attempts, and record the database's reason without the row values.
         detail = error.diag.message_primary or type(error).__name__
         try:
-            return self._fail(
-                claim, "database_rejected", detail=detail, retryable=True
-            )
+            return self._fail(claim, "database_rejected", detail=detail, retryable=True)
         except (
             *DATABASE_REJECTIONS,
             DeadlockDetected,

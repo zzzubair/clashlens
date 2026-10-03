@@ -912,9 +912,9 @@ When PostgreSQL refuses a job's writes, through a trigger's check, a
 constraint or an invalid value, the worker records `database_rejected` with
 PostgreSQL's one-line reason, and the normal attempt limit decides whether the
 job retries or fails. Other jobs keep running. If recording that failure is
-refused too, the worker leaves the lease to expire and queue maintenance
-recovers the job. A lost database connection still stops the worker so systemd
-restarts it.
+refused, conflicts or times out too, the worker leaves the lease to expire and
+queue maintenance retries the job, or fails it on its last attempt. A lost
+database connection still stops the worker so systemd restarts it.
 
 The running worker cancels any single database statement after 15 minutes,
 including time spent waiting for a lock, set by

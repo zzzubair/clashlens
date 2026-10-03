@@ -403,9 +403,9 @@ def test_rejected_job_write_fails_only_that_job(
                     (job_id,),
                 )
 
-            assert ProcessResult(
-                rejected_job, "retrying", "database_rejected"
-            ) in results
+            assert (
+                ProcessResult(rejected_job, "retrying", "database_rejected") in results
+            )
             assert job("status", other_job) == "complete"
             if rejection == "job_write":
                 assert job("status", rejected_job) == "waiting_retry"
