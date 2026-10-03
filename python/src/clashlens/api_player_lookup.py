@@ -25,8 +25,8 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
         player_id, active, eligibility, confirmed, no_current_profile = row
         if active:
             why = _why_no_results(connection, player_id)
-            # A newest Season 0 profile is explained even after accepted ones.
-            if no_current_profile or "profile" in why:
+            # A newest rejected profile is explained even after accepted ones.
+            if no_current_profile or why["reason"] != "pending":
                 return {"tag": tag, "state": "tracking", **why}
             state = "tracking"
         elif confirmed:

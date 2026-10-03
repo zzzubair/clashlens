@@ -33,8 +33,9 @@ current results and rereads saved data once a minute while visible instead of
 once a second. For a Legend I profile with Season ID 0 and no Legend battle
 this Season it shows that profile's name, tag, clan and trophies, says the
 player hasn't played a Legend League battle this Season, and shows no daily
-log. A Season 0 profile is explained this way even when older results were
-accepted; those stay as saved history, never as current trophies. Season 0
+log. A rejected newest profile is explained even when older results were
+accepted; those stay as saved history, never as current trophies, until a
+lookup shows an accepted profile again. Season 0
 trophies stay out of search, the Live board and groups.
 
 Name results include active players or players with recorded history. Empty

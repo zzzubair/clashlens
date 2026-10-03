@@ -983,6 +983,16 @@ describe("automatic tag lookup", () => {
     },
   );
 
+  it("lets a final lookup outrank an older saved page after an explanation", () => {
+    expect(
+      playerLookupView(PLAYER, { tag: TAG, state: "not_in_legend" }, true),
+    ).toMatchObject({
+      trackedPlayer: null,
+      lookup: { state: "not_in_legend" },
+      minuteChecks: false,
+    });
+  });
+
   it("keeps the one-second check for a first-time lookup", () => {
     expect(playerLookupView(null, { tag: TAG, state: "tracking" }, false)).toMatchObject({
       minuteChecks: false,

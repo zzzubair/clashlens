@@ -575,6 +575,7 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
             database.close()
 
 
+@pytest.mark.parametrize("accepted_before", [False, True])
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [
@@ -585,7 +586,7 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
     ],
 )
 def test_other_rejected_profiles_get_their_own_explanation(
-    database_url, archive_server, changes, reason
+    database_url, archive_server, changes, reason, accepted_before
 ):
     with migrated_production_database(
         database_url, include_compact_collector=True
@@ -594,18 +595,22 @@ def test_other_rejected_profiles_get_their_own_explanation(
         worker, processor = _processor(info, archive_server)
         try:
             assert submit(database)["state"] == "checking"
-            # A confirmed Legend I player whose newest profile is unusable.
+            # A confirmed Legend I player whose newest profile is unusable,
+            # with or without an older accepted profile.
             _process_profile(
-                info, archive_server, processor, "season-0", currentLeagueSeasonId=0
+                info, archive_server, processor, "first",
+                **({} if accepted_before else {"currentLeagueSeasonId": 0}),
             )
             _process_profile(info, archive_server, processor, "rejected", **changes)
 
             lookup = api_player_lookup.get_lookup(database, "#2PP")
 
             assert lookup == {"tag": "#2PP", "state": "tracking", "reason": reason}
-            assert api_players.get_player_page(
+            page = api_players.get_player_page(
                 database, "#2PP", now=NOW, freshness_seconds=900
-            ) is None
+            )
+            # The older accepted profile stays saved, never replaced.
+            assert (page and page["trophies"]) == (6123 if accepted_before else None)
         finally:
             worker.close()
             database.close()

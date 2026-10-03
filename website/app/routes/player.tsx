@@ -191,7 +191,7 @@ export function playerLookupView(
   const saved =
     player !== null &&
     !explainsNoResults(fetched) &&
-    !(explainedVisit && fetched === null);
+    (!explainedVisit || fetched?.state === "tracking");
   const trackedPlayer = saved && player?.trackingState === "tracking" ? player : null;
   const lookup: PlayerLookup | null =
     saved && player ? { tag: player.tag, state: player.trackingState } : fetched;
