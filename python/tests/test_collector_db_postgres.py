@@ -103,6 +103,31 @@ def test_due_players_are_claimed_without_collector_work_rows(
         assert next_due_at == NOW + timedelta(seconds=90)
 
 
+def test_due_players_are_claimed_while_a_worker_row_references_them(
+    database_url: str,
+) -> None:
+    # A worker transaction saving rows that point at players (a Reset
+    # manifest lists every member) holds a key-share lock on each player
+    # until it commits. On Oct 3 one held 13,264 for 8 minutes.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        referenced = _player(connection_info, "#REFERENCED")
+        changing = _player(connection_info, "#CHANGING")
+        database = CollectorDatabase(connection_info)
+
+        with psycopg.connect(connection_info) as worker:
+            worker.execute(
+                "SELECT 1 FROM players WHERE id = %s FOR KEY SHARE", (referenced,)
+            )
+            worker.execute(
+                "SELECT 1 FROM players WHERE id = %s FOR NO KEY UPDATE", (changing,)
+            )
+
+            claimed = database.claim_due_players(limit=10, now=NOW)
+
+        # A player row another transaction is changing is still skipped.
+        assert [work.player_id for work in claimed] == [referenced]
+
+
 def test_due_claim_reuses_only_a_current_profile_before_the_first_successful_battle(
     database_url: str,
 ) -> None:
