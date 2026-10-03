@@ -440,14 +440,15 @@ def _freeze_boundary_manifest(
             decode_ids: list[int] = []
             moved: dict[tuple[int, str], int] = {}
             if daily_log is not None and isinstance(daily_log[1], list):
-                battle_ids = [
-                    int(event["battle_id"])
+                sides = [
+                    (int(event["battle_id"]), event.get("lens"))
                     for event in daily_log[1]
                     if isinstance(event, dict)
                     and str(event.get("battle_id", "")).isdigit()
                 ]
+                battle_ids = [battle_id for battle_id, _lens in sides]
                 if battle_ids:
-                    moved = _moved_sides(connection, battle_ids)
+                    moved = _moved_sides(connection, sides)
                     decode_ids = sorted(
                         {
                             *(
@@ -531,14 +532,15 @@ def _freeze_boundary_manifest(
                 (season_version_ids,),
             ).fetchall()
             season_daily_log_ids = [int(row[0]) for row in season_logs]
+            season_sides = {
+                (int(event["battle_id"]), event.get("lens"))
+                for row in season_logs
+                for event in (row[1] if isinstance(row[1], list) else [])
+                if isinstance(event, dict)
+                and str(event.get("battle_id", "")).isdigit()
+            }
             season_battle_ids = sorted(
-                {
-                    int(event["battle_id"])
-                    for row in season_logs
-                    for event in (row[1] if isinstance(row[1], list) else [])
-                    if isinstance(event, dict)
-                    and str(event.get("battle_id", "")).isdigit()
-                }
+                {battle_id for battle_id, _lens in season_sides}
             )
             season_evidence_ids = [
                 int(row[0])
@@ -552,9 +554,13 @@ def _freeze_boundary_manifest(
                     (season_battle_ids,),
                 ).fetchall()
             ]
-            season_moved, _ = battle_day_repair.merged_battles(
-                connection, season_battle_ids, season_evidence_ids
-            )
+            season_moved = {
+                side: to_id
+                for side, to_id in battle_day_repair.merged_battles(
+                    connection, season_battle_ids, season_evidence_ids
+                )[0].items()
+                if side in season_sides
+            }
             season_decode_ids = sorted(
                 {
                     *(
@@ -923,10 +929,10 @@ def _boundary_snapshot_status(
 
 
 def _moved_sides(
-    connection: Any, battle_ids: list[int]
+    connection: Any, sides: list[tuple[int, Any]]
 ) -> dict[tuple[int, str], int]:
-    """Map each (battle, lens) of ``battle_ids`` 0057 moved to its battle now."""
-    listed = sorted(set(battle_ids))
+    """Map each listed (battle, lens) 0057 moved to the battle it is on now."""
+    listed = sorted({battle_id for battle_id, _lens in sides})
     if not listed:
         return {}
     moved, _ = battle_day_repair.merged_battles(
@@ -941,7 +947,8 @@ def _moved_sides(
             ).fetchall()
         ],
     )
-    return moved
+    listed_sides = set(sides)
+    return {side: to_id for side, to_id in moved.items() if side in listed_sides}
 
 
 def _moved_side_arrays(
@@ -1019,7 +1026,7 @@ def _boundary_army_status(
     ]
     if not sides:
         return "complete"
-    moved = _moved_sides(connection, [battle_id for battle_id, _lens in sides])
+    moved = _moved_sides(connection, sides)
     battle_ids = [moved.get(side, side[0]) for side in sides]
     decoded = connection.execute(
         """

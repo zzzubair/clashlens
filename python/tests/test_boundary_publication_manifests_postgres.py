@@ -735,7 +735,54 @@ def test_army_frozen_after_a_merge_reads_the_moved_report(
     def merge_then_freeze(database, connection, *, generation_id, artifact_kind):
         if artifact_kind == "army" and not moves:
             [(old,)] = connection.execute("SELECT id FROM legend_battles").fetchall()
-            moves.append((old, _merge_into_day_before(connection, old)))
+            target = _merge_into_day_before(connection, old)
+            moves.append((old, target))
+            # 0057 also moved the opponent's defense, which this player's
+            # day does not list: it stays out of their frozen inputs.
+            connection.execute(
+                """
+                WITH defense AS (
+                    INSERT INTO battle_evidence (
+                        battle_id, source_row_id, observation_id,
+                        reporting_player_id, perspective, battle_timestamp,
+                        stars, destruction_percentage, army_share_code,
+                        reporter_trophies, opponent_trophies, attacker_gain,
+                        defender_loss, trophy_rule_version,
+                        source_observed_at, parser_version
+                    )
+                    SELECT battle_id, source_row_id, observation_id,
+                           reporting_player_id, 'defender', battle_timestamp,
+                           stars, destruction_percentage, army_share_code,
+                           reporter_trophies, opponent_trophies, attacker_gain,
+                           defender_loss, trophy_rule_version,
+                           source_observed_at, parser_version || '-defense'
+                    FROM battle_evidence WHERE battle_id = %s
+                    RETURNING id
+                ), decode AS (
+                    INSERT INTO battle_army_decodes (
+                        battle_id, evidence_id, perspective, raw_code,
+                        decoder_version, catalog_version, catalog_hash, status,
+                        failure_category, exact_army_id, identity_hash
+                    )
+                    SELECT decode.battle_id, defense.id, 'defender',
+                           decode.raw_code, decode.decoder_version,
+                           decode.catalog_version, decode.catalog_hash,
+                           decode.status, decode.failure_category,
+                           decode.exact_army_id, decode.identity_hash
+                    FROM battle_army_decodes AS decode, defense
+                    WHERE decode.battle_id = %s AND decode.is_active
+                )
+                INSERT INTO battle_day_repairs (
+                    from_battle_id, to_battle_id, perspective, evidence_id,
+                    attacker_player_id, defender_player_id, from_day, to_day
+                )
+                SELECT repair.from_battle_id, repair.to_battle_id, 'defender',
+                       defense.id, repair.attacker_player_id,
+                       repair.defender_player_id, repair.from_day, repair.to_day
+                FROM battle_day_repairs AS repair, defense
+                """,
+                (target, target),
+            )
         return freeze(
             database,
             connection,
