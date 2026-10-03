@@ -1136,6 +1136,32 @@ describe("player day honesty", () => {
               coverage: "partial",
               flags: ["defense_count_exceeds_eight"],
             },
+            // Prodigi's Day 24: no start-of-day checks, but all 8 of each.
+            {
+              ...entry,
+              dayNumber: 24,
+              attackGain: 300,
+              defenseLoss: 311,
+              netChange: -11,
+              state: "Partial",
+              coverage: "partial",
+              flags: ["missing_start_battle_log_baseline", "missing_start_baseline"],
+            },
+            {
+              ...entry,
+              dayNumber: 25,
+              state: "Partial",
+              coverage: "partial",
+              flags: ["missing_start_baseline", "perspective_disagreement"],
+            },
+            {
+              ...entry,
+              dayNumber: 26,
+              attacks: 7,
+              state: "Partial",
+              coverage: "partial",
+              flags: ["missing_start_baseline"],
+            },
           ],
         },
         historicalError: null,
@@ -1159,6 +1185,13 @@ describe("player day honesty", () => {
       "Clash of Clans returned 9 defenses for this day, more than the usual 8, so this day is marked partial.",
     );
     expect(rows[4]).toContain("<td>0</td><td>0</td>");
+    expect(rows[5]).toContain("<td>Provisional result");
+    expect(rows[5]).not.toContain("Incomplete");
+    expect(rows[5]).toContain("<td>-11</td><td>-11</td>");
+    expect(rows[5]).toContain("The battle log was not checked at the start of this day.");
+    expect(rows[6]).toContain("Incomplete");
+    expect(rows[6]).toContain("The two players&#x27; battle logs disagree about a result.");
+    expect(rows[7]).toContain("Incomplete");
     expect(html).toContain("Attacks recorded");
     expect(html).toContain("Defenses recorded");
     expect(html).toContain("Recorded battle net");
