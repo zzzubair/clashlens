@@ -560,7 +560,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           {trackedPlayer.dataQuality.map((warning) => (
             <p className="section-note" key={`${warning.code}-${warning.label}`}>
               <strong>{warning.label}:</strong>{" "}
-              {/^[a-z0-9_:]+(; [a-z0-9_:]+)*$/.test(warning.detail)
+              {/^[a-z0-9_:]+(; [a-z0-9_:]+)*$/i.test(warning.detail)
                 ? dayReasons(warning.detail.split("; "), true).join(" ")
                 : warning.detail}
             </p>

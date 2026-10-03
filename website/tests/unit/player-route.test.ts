@@ -1016,6 +1016,11 @@ describe("player day honesty", () => {
           label: "Incomplete ranked-day data",
           detail: "missing_end_battle_log_baseline; new_unknown_code",
         },
+        {
+          code: "uncertain",
+          label: "Saved day state",
+          detail: "ranked_day_state:Inconsistent; ranked_day_state:Malformed",
+        },
       ],
     });
     expect(html).not.toContain("tracking started partway");
@@ -1026,5 +1031,9 @@ describe("player day honesty", () => {
       "Ending evidence arrives after Reset. Some daily evidence is unavailable.",
     );
     expect(html).not.toContain("new_unknown_code");
+    expect(html).toContain(
+      "The evidence for this day conflicts. Some saved evidence for this day could not be read.",
+    );
+    expect(html).not.toContain("ranked_day_state");
   });
 });
