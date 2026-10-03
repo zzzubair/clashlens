@@ -26,8 +26,9 @@ def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
     """Take a Reset's publication lock for the rest of the transaction.
 
     Lock order everywhere: a player-day lock, then this lock for the Reset
-    ending that day, then that Reset's generation rows; several Resets are
-    taken oldest first. Every path that locks or updates a generation row
+    ending that day, then that Reset's settlement locks
+    (reset_settlement.lock_resets), then its generation rows; several Resets
+    are taken oldest first. Every path that locks or updates a generation row
     takes this lock first: a build that locked the row and then waited here,
     while a day-result rebuild held this lock and waited for the row,
     deadlocked. A rebuild locks its latest day result before this lock, so
