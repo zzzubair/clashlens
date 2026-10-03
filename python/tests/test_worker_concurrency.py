@@ -423,3 +423,44 @@ def test_lanes_do_not_claim_while_the_spool_is_not_ready() -> None:
     assert not thread.is_alive()
     assert processor.calls == []
     assert maintained == []
+
+
+def test_lanes_stop_claiming_when_the_spool_fails_during_slow_maintenance() -> None:
+    stop = Event()
+    spool_ready = Event()
+    spool_ready.set()
+    maintenance_started = Event()
+    release_maintenance = Event()
+
+    def maintain() -> None:
+        maintenance_started.set()
+        assert release_maintenance.wait(10), "test release gate was not opened"
+
+    processor = RecordingProcessor()
+    thread = _run_until_stopped(
+        processor,
+        stop_requested=stop,
+        claims_ready=spool_ready.is_set,
+        maintain=maintain,
+    )
+    try:
+        assert maintenance_started.wait(5)
+        spool_ready.clear()
+        time.sleep(0.05)
+        claims_when_spool_failed = len(processor.calls)
+        time.sleep(0.1)
+        assert len(processor.calls) == claims_when_spool_failed
+        spool_ready.set()
+        deadline = time.monotonic() + 5
+        while (
+            len(processor.calls) == claims_when_spool_failed
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert len(processor.calls) > claims_when_spool_failed
+        assert not release_maintenance.is_set()
+    finally:
+        release_maintenance.set()
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()

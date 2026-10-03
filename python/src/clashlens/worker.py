@@ -319,13 +319,11 @@ def process_until_stopped(
     stopped.
     """
     _validate_lanes(concurrency, owner, lease_seconds)
-    ready = Event()
     report_lock = threading.Lock()
 
     def maintenance_timer() -> None:
         while not stop_requested.is_set():
             if claims_ready():
-                ready.set()
                 try:
                     maintain()
                 except Exception as error:  # noqa: BLE001 - retried next tick
@@ -339,8 +337,6 @@ def process_until_stopped(
                         ),
                         flush=True,
                     )
-            else:
-                ready.clear()
             stop_requested.wait(idle_seconds)
 
     def claim_loop(lane_index: int, stop_claiming: Event) -> None:
@@ -350,7 +346,7 @@ def process_until_stopped(
                     owner=lane_owner(owner, lane_index),
                     lease_seconds=lease_seconds,
                 )
-                if ready.is_set()
+                if claims_ready()
                 else None
             )
             if result is None:
