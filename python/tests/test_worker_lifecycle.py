@@ -883,7 +883,7 @@ def test_maintenance_runs_while_every_lane_holds_a_connection(
     monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
     monkeypatch.setattr(cli, "ObservationProcessor", ConnectionHoldingProcessor)
     monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
-    arguments = _worker_namespace(run_forever=True, concurrency=3, database_pool_size=3)
+    arguments = _worker_namespace(run_forever=True, concurrency=3, database_pool_size=5)
     worker_thread = threading.Thread(
         target=cli._run_worker, args=(arguments,), daemon=True
     )

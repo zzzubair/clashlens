@@ -988,6 +988,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     maintain=maintenance.run_due,
                     on_result=report_result,
                     derived_processor=derived,
+                    derived_connections=derived_pool_size,
                 )
             while not stop_requested.is_set():
                 results = process_batch()

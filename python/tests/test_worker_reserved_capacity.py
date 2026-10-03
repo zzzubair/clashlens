@@ -258,10 +258,10 @@ def test_continuous_lanes_reserve_two_thirds_for_responses(
 
 
 def test_derived_work_cannot_hold_every_database_connection(monkeypatch) -> None:
-    # Twelve slots on four connections: four long derived jobs could once take
-    # all four, leaving every response slot without a connection.
+    # Twelve slots on seven connections: long derived jobs could once take
+    # every lane connection, and four derived slots waited on two connections.
     release_derived = Event()
-    derived_holding = Event()
+    derived_holding = 0
     responses_done = Event()
     lock = threading.Lock()
     responses = 0
@@ -291,12 +291,17 @@ def test_derived_work_cannot_hold_every_database_connection(monkeypatch) -> None
         def process_once(
             self, *, owner: str, lease_seconds: int, work_types: tuple[str, ...]
         ) -> ProcessResult | None:
-            nonlocal responses
+            nonlocal responses, derived_holding
             if RESPONSE not in work_types:
-                with self.database.connections:
-                    derived_holding.set()
+                if not self.database.connections.acquire(blocking=False):
+                    raise TimeoutError("a derived slot waited for a connection")
+                try:
+                    with lock:
+                        derived_holding += 1
                     assert release_derived.wait(10), "test gate was not opened"
-                return None
+                    return None
+                finally:
+                    self.database.connections.release()
             if not self.database.connections.acquire(timeout=2):
                 raise TimeoutError("no free connection")
             try:
@@ -313,24 +318,23 @@ def test_derived_work_cannot_hold_every_database_connection(monkeypatch) -> None
     monkeypatch.setattr(cli, "ObservationProcessor", ConnectionHoldingProcessor)
     monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
     arguments = _worker_namespace(
-        run_forever=True, concurrency=12, database_pool_size=4
+        run_forever=True, concurrency=12, database_pool_size=7
     )
     worker_thread = threading.Thread(
         target=cli._run_worker, args=(arguments,), daemon=True
     )
     worker_thread.start()
     try:
-        assert derived_holding.wait(5)
-        time.sleep(0.1)  # every derived slot has asked for a connection
+        assert _wait_for(lambda: derived_holding == 2)
+        time.sleep(0.1)  # every derived slot has looked for work
         assert responses_done.wait(5), f"only {responses} responses finished"
-        assert not release_derived.is_set()
+        assert derived_holding == 2 and not release_derived.is_set()
     finally:
         release_derived.set()
         stop[0].set()
         worker_thread.join(10)
     assert not worker_thread.is_alive()
-    assert pools == [3, 2, 1]
-
+    assert pools == [3, 2, 2]
 
 
 def test_continuous_workers_refuse_a_pool_without_a_response_connection(
@@ -339,9 +343,9 @@ def test_continuous_workers_refuse_a_pool_without_a_response_connection(
     opened: list[object] = []
     monkeypatch.setattr(cli, "Database", lambda *args, **kwargs: opened.append(args))
     arguments = _worker_namespace(
-        run_forever=True, concurrency=12, database_pool_size=1
+        run_forever=True, concurrency=12, database_pool_size=3
     )
 
-    with pytest.raises(ValueError, match="at least 2"):
+    with pytest.raises(ValueError, match="at least 4"):
         cli._run_worker(arguments)
     assert opened == []

@@ -212,17 +212,18 @@ def lane_work_types(
 def database_pool_sizes(pool_size: int, concurrency: int) -> tuple[int, int, int]:
     """Response, derived and maintenance connections for ``concurrency`` lanes.
 
-    With two or more continuous lanes, response lanes get about two thirds of
-    ``pool_size`` and derived lanes the rest, so derived work can never hold
-    every connection, and maintenance gets its own. Otherwise every lane and
-    maintenance share ``pool_size``.
+    With two or more continuous lanes, maintenance keeps its own connections
+    out of ``pool_size``, response lanes get about two thirds of the rest and
+    derived lanes the remainder, so derived work can never hold every
+    connection. Otherwise every lane and maintenance share ``pool_size``.
     """
     if concurrency < 2:
         return pool_size, 0, 0
-    responses = response_lane_count(pool_size)
+    lane_connections = pool_size - MAINTENANCE_POOL_SIZE
+    responses = response_lane_count(lane_connections)
     if responses == 0:
-        raise ValueError("database pool size must be at least 2 with concurrency")
-    return responses, pool_size - responses, MAINTENANCE_POOL_SIZE
+        raise ValueError("database pool size must be at least 4 with concurrency")
+    return responses, lane_connections - responses, MAINTENANCE_POOL_SIZE
 
 
 class TimedMaintenance:
@@ -377,6 +378,7 @@ def process_until_stopped(
     maintain: Callable[[Semaphore], None],
     on_result: Callable[[ProcessResult], None],
     derived_processor: ObservationProcessor | None = None,
+    derived_connections: int | None = None,
 ) -> None:
     """Keep ``concurrency`` lanes claiming until ``stop_requested`` is set.
 
@@ -393,13 +395,20 @@ def process_until_stopped(
 
     With two or more lanes, ``lane_work_types`` reserves lanes for responses
     so long derived work can never hold them all. Each derived lane takes a
-    turn from a shared semaphore, one per derived lane, before it claims, and
-    ``maintain`` receives the same semaphore for its heavy work. Derived lanes
-    use ``derived_processor``, when given, so they hold their own connections.
+    turn from a shared semaphore before it claims, and ``maintain`` receives
+    the same semaphore for its heavy work. There is one turn per derived lane,
+    or per ``derived_connections`` when fewer, so no derived lane waits for a
+    connection. Derived lanes use ``derived_processor``, when given, so they
+    hold their own connections.
     """
     _validate_lanes(concurrency, owner, lease_seconds)
     report_lock = threading.Lock()
-    derived_turns = Semaphore(max(1, concurrency - response_lane_count(concurrency)))
+    derived_lanes = concurrency - response_lane_count(concurrency)
+    derived_turns = Semaphore(
+        derived_lanes
+        if derived_connections is None
+        else min(derived_lanes, derived_connections)
+    )
     derived = processor if derived_processor is None else derived_processor
 
     def maintenance_timer() -> None:

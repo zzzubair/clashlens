@@ -173,10 +173,13 @@ that tick, staying due, when no turn is free. Queue maintenance does not wait
 for a turn. This worker checks Reset publications on its timer's first tick
 rather than before its threads start.
 
-`--database-pool-size` is split the same way: response threads get about two
-thirds of its connections, 8 of production's 12, and derived threads the
-rest, so derived work never holds a connection a response needs. Maintenance
-keeps its own two. The worker refuses a size below 2 with two or more threads.
+`--database-pool-size` is split the same way, never opening more connections
+than it allows. Maintenance takes two of them, response threads about two
+thirds of the rest and derived threads the remainder, so derived work never
+holds a connection a response needs: 8, 4 and 2 for a size of 14, or 7, 3 and
+2 for 12. Derived threads take no more turns than they have connections, so
+none waits for one. The worker refuses a size below 4 with two or more
+threads.
 
 A job holds a lock on its queue row from the start of its work until it
 commits. Claims and maintenance skip locked rows, so the
