@@ -37,8 +37,8 @@ def commit_later(
 ) -> asyncio.Task[None]:
     collector._count("commit_deferred")
     task = asyncio.create_task(_retry(collector, behind, handoff, name, serialized))
-    collector._later_commits.add(task)
-    task.add_done_callback(collector._later_commits.discard)
+    collector._later_commits[task] = handoff.collector_work_id
+    task.add_done_callback(lambda done: collector._later_commits.pop(done, None))
     return task
 
 

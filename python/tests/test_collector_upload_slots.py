@@ -311,15 +311,44 @@ def test_work_waits_for_its_held_save_instead_of_fetching_again(
     assert not collector._handoff_recovery_required
 
 
-def test_restart_recovery_leaves_held_saves_to_commit_later_in_order() -> None:
+def test_restart_recovery_leaves_held_saves_to_commit_later_and_holds_their_work() -> None:
     spool = _Spool()
-    store = _Store(spool)
-    collector = _collector(spool, store, _Client(spool))
-    held = _held_saves(store)
     now = datetime.now(UTC)
+    refresh = CollectorIntent(
+        "live_refresh", now, 1, "#2PP", work_id=7, battle_log_required=False
+    )
+
+    class WorkStore(_Store):
+        def __init__(self, spool: _Spool) -> None:
+            super().__init__(spool)
+            self.completed: list[int] = []
+
+        def pending_intents(
+            self, limit: int, now: datetime, *, interactive: bool, held: list[int]
+        ) -> list[CollectorIntent]:
+            # As the database query does, held work is never picked.
+            due = interactive and 7 not in self.completed and 7 not in held
+            return [refresh] if due else []
+
+        def complete_intent(self, work_id: int) -> bool:
+            self.completed.append(work_id)
+            return True
+
+        @staticmethod
+        def begin_reset(_boundary: datetime, *, local_regular_inflight: int) -> None:
+            return None
+
+        @staticmethod
+        def expire_settlement_checks(_now: datetime) -> int:
+            return 0
+
+    store = WorkStore(spool)
+    client = _Client(spool)
+    collector = _collector(spool, store, client)
+    held = _held_saves(store)
     body = b"profile"
     first = collector._make_handoff(
-        CollectorWork(1, "#2PP", now),
+        CollectorWork(1, "#2PP", now, collector_work_id=7),
         FetchedResponse("profile", body, 200, now, now, "regular-1", {}),
         hashlib.sha256(body).hexdigest(),
     )
@@ -334,16 +363,30 @@ def test_restart_recovery_leaves_held_saves_to_commit_later_in_order() -> None:
 
     async def scenario() -> None:
         collector_commits.commit_unrecovered(collector, collector._unrecovered)
-        await asyncio.sleep(0.05)
-        assert store.handoffs == []
-        held.clear()
-        await asyncio.wait_for(asyncio.gather(*collector._later_commits), 5)
+        stop = asyncio.Event()
+        intents = asyncio.create_task(collector._intent_loop(stop, False, 0.01))
+        try:
+            await asyncio.sleep(0.2)
+            # The Refresh's saved responses are pending, so it is not fetched again.
+            assert collector.held_work() == [7, 7]
+            assert store.handoffs == []
+            assert client.fetch_count == 0
+            held.clear()
+            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 5)
+            while not store.completed:
+                await asyncio.sleep(0.01)
+        finally:
+            stop.set()
+            await intents
 
     asyncio.run(scenario())
 
-    assert [handoff.occurrence_key for handoff in store.handoffs] == [
+    assert [handoff.occurrence_key for handoff in store.handoffs[:2]] == [
         first.occurrence_key,
         "second",
     ]
+    # Once they landed, the Refresh was picked again and ran as usual.
+    assert client.fetch_count == 1
+    assert store.completed == [7]
     assert spool.handoffs == {}
     assert not collector._handoff_recovery_required

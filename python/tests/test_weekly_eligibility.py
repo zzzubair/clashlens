@@ -115,6 +115,9 @@ def test_slow_weekly_collection_has_no_catchup_burst(monkeypatch):
 
     monkeypatch.setattr(weekly_eligibility, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     monkeypatch.setattr(weekly_eligibility.asyncio, "wait_for", wait)
-    collector = SimpleNamespace(database=None, _database_call=database_call, collect_intent=collect)
+    collector = SimpleNamespace(
+        database=None, _database_call=database_call, collect_intent=collect,
+        held_work=list,
+    )
     asyncio.run(weekly_eligibility.run(collector, stop))
     assert starts == [0.0, 10.0, 12.0]

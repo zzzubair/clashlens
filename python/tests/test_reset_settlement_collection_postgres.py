@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -717,3 +718,56 @@ def test_monday_and_season_checks_have_two_endpoints_and_no_acceptance(
         # The early Season pair still fetches league history; the check never does.
         assert early_history == ("pending" if boundary == SEASON_RESET else "not_applicable")
         assert settlement == [("provisional", None, None)]
+
+
+@pytest.mark.parametrize(
+    ("hold", "scheduled_while_held"),
+    [
+        # Rows a worker inserts that point at the sweep key-share it.
+        ("SELECT 1 FROM collector_reset_sweeps FOR KEY SHARE", True),
+        ("SELECT 1 FROM collector_reset_sweeps FOR UPDATE", False),
+    ],
+)
+def test_reset_sweep_never_waits_long_behind_a_worker_holding_it(
+    database_url: str, hold: str, scheduled_while_held: bool
+) -> None:
+    # On 2026-10-03 a worker building a Reset publication held such rows for
+    # about 10 minutes, and all collection waited behind the sweep step.
+    with domain_database(database_url) as connection_info:
+        _players(connection_info, TAG)
+        database = CollectorDatabase(connection_info)
+        try:
+            sweep_id = database.begin_reset(WEDNESDAY_RESET)
+            assert sweep_id is not None
+            with (
+                ThreadPoolExecutor(1) as pool,
+                psycopg.connect(connection_info) as worker,
+            ):
+                worker.execute(hold)
+                started = time.monotonic()
+                again = pool.submit(database.begin_reset, WEDNESDAY_RESET)
+                expected = sweep_id if scheduled_while_held else None
+                assert again.result(timeout=10) == expected
+                assert time.monotonic() - started < 5
+            assert database.begin_reset(WEDNESDAY_RESET) == sweep_id
+        finally:
+            database.close()
+
+
+def test_work_with_saves_still_committing_is_not_picked(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        _players(connection_info, TAG, "#2QQ")
+        database = CollectorDatabase(connection_info)
+        try:
+            database.begin_reset(WEDNESDAY_RESET)
+            now = WEDNESDAY_RESET + timedelta(minutes=1)
+            due = database.pending_intents(limit=10, now=now, interactive=False)
+            assert len(due) == 2
+            held = due[0].work_id
+            assert held is not None
+            left = database.pending_intents(
+                limit=10, now=now, interactive=False, held=[held]
+            )
+            assert [intent.work_id for intent in left] == [due[1].work_id]
+        finally:
+            database.close()

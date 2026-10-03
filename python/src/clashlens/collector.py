@@ -127,7 +127,7 @@ class Collector:
         # has committed or failed, so the next one commits after it, or to the
         # task committing it later when a worker's lock held it up.
         self._handoff_turns: dict[asyncio.Lock, collector_commits.Turn] = {}
-        self._later_commits: set[asyncio.Task[None]] = set()
+        self._later_commits: dict[asyncio.Task[None], int | None] = {}
         self._unrecovered: list[tuple[str, ResponseHandoff, bool]] = []
         # Newest committed (seen time, field fingerprint) per scope, identity
         # and endpoint, from this process only; empty after a restart.
@@ -609,6 +609,10 @@ class Collector:
         seen = (handoff.response_completed_at, handoff.content_fingerprint)
         self._committed[identity] = max(seen, self._committed.get(identity) or seen)
         await _drain_to_thread(self.spool.remove_handoff, name)
+
+    def held_work(self) -> list[int]:
+        """Work whose saved responses still wait to commit; it is not fetched again."""
+        return [work for work in self._later_commits.values() if work is not None]
 
     def _make_handoff(
         self,
@@ -1111,6 +1115,7 @@ class Collector:
                         limit=limit,
                         now=now,
                         interactive=is_interactive,
+                        held=self.held_work(),
                     )
                     for intent in intents:
                         if intent.work_id is not None and intent.work_id not in active:

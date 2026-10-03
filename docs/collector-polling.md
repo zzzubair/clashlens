@@ -529,7 +529,9 @@ such as its player. It then stays saved on disk and the collector moves on,
 retrying the update in the background after any earlier saved response in its
 group, until it lands or the collector restarts and replays it. Work such as a
 Refresh or a Reset check waits for its own saved responses to land instead of
-fetching them again. Restart replay, the update that checks a Clasher who
+fetching them again, and work whose responses a restart left waiting is not
+picked until they land. Starting a Reset sweep also waits at most 3 seconds,
+then tries again on a later pass. Restart replay, the update that checks a Clasher who
 finished the Legend day less often, and marking work finished wait the same 3
 seconds: replay leaves the rest to the background, the Clasher keeps the normal
 check cadence, and finishing is retried. A shared body already sighted within the last 10 minutes
