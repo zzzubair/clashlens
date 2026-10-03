@@ -174,7 +174,8 @@ def recalculate_ranked_day(
         is not None
         else None
     )
-    coverage_query = f"""
+    coverage_rows = connection.execute(
+        f"""
         SELECT
             blo.observation_id,
             blo.observed_at,
@@ -187,8 +188,7 @@ def recalculate_ranked_day(
             COALESCE(processing.outcome = 'processed', false),
             observed.response_hash,
             blo.parser_version,
-            processing.processing_version,
-            evidence.earliest_battle_at
+            processing.processing_version
         FROM battle_log_observations AS blo
         JOIN collector_observations AS observed
           ON observed.id = blo.observation_id
@@ -202,8 +202,7 @@ def recalculate_ranked_day(
                     AS battle_identities,
                 array_agg(sr.{source_row_id_column} ORDER BY sr.{source_row_id_column})
                     FILTER (WHERE sr.{source_row_id_column} IS NOT NULL)
-                    AS source_row_ids,
-                min(be.battle_timestamp) AS earliest_battle_at
+                    AS source_row_ids
             FROM {source_rows_relation} AS sr
             LEFT JOIN battle_evidence AS be
               ON {evidence_join}
@@ -224,10 +223,6 @@ def recalculate_ranked_day(
             WHERE sr.battle_log_observation_id = blo.id
         ) AS row_flags ON true
         WHERE blo.player_id = %s
-    """
-    coverage_rows = connection.execute(
-        coverage_query
-        + """
           AND blo.observed_at >= COALESCE(
               (SELECT start_blo.observed_at
                  FROM battle_log_observations AS start_blo
@@ -282,8 +277,8 @@ def recalculate_ranked_day(
             or row[2:] != coverage_rows[index - 1][2:]
             or row[2:] != coverage_rows[index + 1][2:]
         ]
-    def coverage_observation(row: Any) -> CoverageObservation:
-        return CoverageObservation(
+    coverage = tuple(
+        CoverageObservation(
             observation_id=int(row[0]),
             observed_at=row[1],
             row_count=int(row[2]),
@@ -298,19 +293,9 @@ def recalculate_ranked_day(
             processing_version=(
                 _text_value(row[11]) if row[11] is not None else None
             ),
-            earliest_battle_at=row[12],
         )
-
-    coverage = tuple(coverage_observation(row) for row in coverage_rows)
-    day_end_row = connection.execute(
-        coverage_query
-        + """
-          AND blo.observed_at >= %s
-        ORDER BY blo.observed_at, blo.id
-        LIMIT 1
-        """,
-        (player_id, domain.battle_window(ranked_day.start)[1]),
-    ).fetchone()
+        for row in coverage_rows
+    )
     contribution_rows = connection.execute(
         """
         SELECT
@@ -539,11 +524,6 @@ def recalculate_ranked_day(
             perspective_disagreement=perspective_disagreement,
             malformed_evidence=malformed_evidence,
             unclassified_evidence=unclassified_evidence,
-            day_end_battle_log=(
-                coverage_observation(day_end_row)
-                if day_end_row is not None
-                else None
-            ),
             start_baseline_evidence=(
                 start_baseline["evidence"]
                 if start_baseline is not None
