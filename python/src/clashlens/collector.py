@@ -16,7 +16,7 @@ from uuid import uuid4
 import psycopg
 from psycopg_pool import PoolTimeout
 
-from . import collector_uploads, weekly_eligibility
+from . import collector_intents, collector_reset, collector_uploads, weekly_eligibility
 from .archive import ArchiveReadError, S3ArchiveReader
 from .battle_log_schedule import BattleLogSchedule
 from .collector_db import (
@@ -28,6 +28,7 @@ from .collector_db import (
 )
 from .collector_http import (
     SAFE_RESPONSE_HEADERS,
+    CollectionWindowClosed,
     FetchedResponse,
     KeyPool,
     OfficialApiClient,
@@ -65,11 +66,6 @@ _REGULAR_PARALLELISM = 256
 # A quarter of regular slots keeps overdue revisits moving until discovery drains.
 _REGULAR_REPEAT_MINIMUM = 64
 _ORDINARY_INTENT_PARALLELISM = 32
-# Player work kept for retry when every failure was transient.
-_RETRIED_INTENTS = frozenset({"reset_baseline", "initial_collection", "live_refresh"})
-# Failed runs allowed outside a provider-outage pause before such work settles
-# as missing, so a few failing players cannot hold ordinary collection.
-_RETRIES_WHILE_ANSWERING = 3
 
 
 class Collector:
@@ -305,79 +301,8 @@ class Collector:
         )
 
     async def collect_intent(self, intent: CollectorIntent) -> str:
-        """Run one durable Reset, interactive, ranking, or discovery job."""
-        if intent.work_id is None:
-            raise ValueError("collector intent has no durable work row")
-        if intent.kind == "global_player_rankings":
-            work = CollectorWork(
-                None,
-                "global",
-                intent.due_at or intent.cycle_at,
-                collector_work_id=intent.work_id,
-            )
-            endpoints = ("global_player_rankings",)
-            lane = "ordinary"
-        else:
-            if intent.player_id is None or intent.normalized_tag is None:
-                raise ValueError("player collector intent has no player identity")
-            work = CollectorWork(
-                intent.player_id,
-                intent.normalized_tag,
-                intent.due_at or intent.cycle_at,
-                collector_work_id=intent.work_id,
-                eligibility_recheck=intent.eligibility_recheck,
-            )
-            endpoints = tuple(
-                endpoint
-                for endpoint, required in (
-                    ("profile", intent.profile_required),
-                    ("battle_log", intent.battle_log_required and intent.kind != "discovery_profile"),
-                    ("league_history", intent.league_history_required),
-                )
-                if required
-            )
-            lane = (
-                "reset"
-                if intent.kind == "reset_baseline"
-                else (
-                    "interactive"
-                    if intent.kind in {"initial_collection", "live_refresh"}
-                    else "ordinary"
-                )
-            )
-        outcomes = await self.collect_player(work, lane=lane, endpoints=endpoints)
-        if "capacity_paused" in outcomes:
-            return "capacity_paused"
-        if outcomes != ["recorded"] * len(endpoints):
-            # A provider outage must not become a permanent player failure,
-            # but once the API answers again a few retries are enough.
-            retryable = "failed" not in outcomes and intent.kind in _RETRIED_INTENTS
-            outage = getattr(self.client, "provider_outage", None)
-            if retryable and not getattr(outage, "active", False):
-                used = self._retries_while_answering.get(intent.work_id, 0) + 1
-                self._retries_while_answering[intent.work_id] = used
-                retryable = used <= _RETRIES_WHILE_ANSWERING
-            status = await self._database_call(
-                self.database.fail_intent,
-                intent.work_id,
-                category="provider_failure",
-                detail="one or more required endpoint requests failed",
-                retryable=retryable,
-            )
-            if status != "waiting_retry":
-                self._retries_while_answering.pop(intent.work_id, None)
-                return "failed"
-            return "retrying"
-        self._retries_while_answering.pop(intent.work_id, None)
-        completed = await self._database_call(
-            self.database.complete_intent, intent.work_id
-        )
-        if completed and intent.kind == "live_refresh":
-            self.refresh_latency_seconds += max(
-                0.0, (datetime.now(UTC) - intent.cycle_at).total_seconds()
-            )
-            self.refresh_count += 1
-        return "complete" if completed else "incomplete"
+        """Run one durable Reset, settlement, interactive, ranking, or discovery job."""
+        return await collector_intents.collect_intent(self, intent)
 
     async def _collect_endpoint(
         self,
@@ -416,7 +341,14 @@ class Collector:
                             response = await self.client.fetch_rankings(pool)
                         else:
                             response = await self.client.fetch_player(
-                                pool, work.normalized_tag, endpoint
+                                pool,
+                                work.normalized_tag,
+                                endpoint,
+                                **(
+                                    {}
+                                    if work.collect_before is None
+                                    else {"start_before": work.collect_before}
+                                ),
                             )
                     except asyncio.CancelledError as cancelled:
                         # Only cancelling this task stops it; a request's own
@@ -424,6 +356,8 @@ class Collector:
                         if asyncio.current_task().cancelling():
                             raise
                         raise ProviderFailure("request_cancelled", retryable=True) from cancelled
+                except CollectionWindowClosed:
+                    return "window_closed"
                 except ProviderFailure as error:
                     await self._database_call(
                         self.database.record_transport_failure,
@@ -1072,6 +1006,7 @@ class Collector:
         active: dict[int, tuple[bool, asyncio.Task[str]]] = {}
         scheduled_boundary: datetime | None = None
         next_rankings_at = datetime.min.replace(tzinfo=UTC)
+        next_expiry_at = next_rankings_at
         graceful = False
         try:
             while not stop_requested.is_set():
@@ -1082,6 +1017,13 @@ class Collector:
                     )
                     next_rankings_at = _next_five_minute_cycle(now)
                 boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
+                if now >= next_expiry_at:
+                    expired = await self._database_call(
+                        self.database.expire_settlement_checks, now
+                    )
+                    if expired == 0:
+                        closes = boundary - timedelta(days=1) + collector_reset.COLLECTION_WINDOW
+                        next_expiry_at = closes if closes > now else closes + timedelta(days=1)
                 if now >= boundary and boundary != scheduled_boundary:
                     async with self._regular_admission_lock:
                         if self.regular_inflight == 0:

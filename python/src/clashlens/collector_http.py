@@ -54,6 +54,10 @@ class ProviderFailure(RuntimeError):
         self.key_label = key_label
 
 
+class CollectionWindowClosed(RuntimeError):
+    """A request would start after its work's collection window closed."""
+
+
 class _DetachedTimeout(ProviderFailure):
     def __init__(self, release_when: asyncio.Future[None]) -> None:
         super().__init__("timeout", retryable=True)
@@ -654,7 +658,11 @@ class OfficialApiClient:
         )
 
     async def fetch_player(
-        self, pool: KeyPool, normalized_tag: str, endpoint: str
+        self,
+        pool: KeyPool,
+        normalized_tag: str,
+        endpoint: str,
+        start_before: datetime | None = None,
     ) -> FetchedResponse:
         if endpoint == "profile":
             suffix = f"/v1/players/{quote(normalized_tag, safe='')}"
@@ -664,7 +672,7 @@ class OfficialApiClient:
             suffix = f"/v1/players/{quote(normalized_tag, safe='')}/leaguehistory"
         else:
             raise ValueError("unknown player endpoint")
-        return await self._fetch(pool, endpoint, self.origin + suffix)
+        return await self._fetch(pool, endpoint, self.origin + suffix, start_before)
 
     async def fetch_rankings(self, pool: KeyPool) -> FetchedResponse:
         return await self._fetch(
@@ -673,7 +681,13 @@ class OfficialApiClient:
             self.origin + "/v1/locations/global/rankings/players?limit=200",
         )
 
-    async def _fetch(self, pool: KeyPool, endpoint: str, url: str) -> FetchedResponse:
+    async def _fetch(
+        self,
+        pool: KeyPool,
+        endpoint: str,
+        url: str,
+        start_before: datetime | None = None,
+    ) -> FetchedResponse:
         outage = self.provider_outage
         probe = False
         # A request that cannot start within the request timeout, waiting for
@@ -687,13 +701,15 @@ class OfficialApiClient:
             nonlocal probe
             if probe:
                 await start_request()
-                return
-            while True:
-                probe = await outage.admit()
-                await start_request()
-                if probe or not outage.active:
-                    waiting.reschedule(None)
-                    return
+            else:
+                while True:
+                    probe = await outage.admit()
+                    await start_request()
+                    if probe or not outage.active:
+                        waiting.reschedule(None)
+                        break
+            if start_before is not None and datetime.now(UTC) >= start_before:
+                raise CollectionWindowClosed
 
         async def request(key: ApiKey, start_request: StartRequest) -> FetchedResponse:
             await self._executor_slots.acquire()

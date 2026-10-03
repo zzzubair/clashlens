@@ -1243,7 +1243,7 @@ def test_reset_compact_work_freezes_membership_and_pairs_endpoints(
                 (sweep_id,),
             ).fetchone()[0]
             rows = connection.execute(
-                "SELECT id, player_id, profile_status, battle_log_status FROM collector_work WHERE sweep_id = %s",
+                "SELECT id, player_id, profile_status, battle_log_status FROM collector_work WHERE sweep_id = %s AND kind = 'reset_baseline'",
                 (sweep_id,),
             ).fetchall()
         assert member_ids == [first_player]

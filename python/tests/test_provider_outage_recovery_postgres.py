@@ -111,10 +111,19 @@ def _reset_work(
     return database, sweep_id
 
 
+def _reset_intents(database: CollectorDatabase) -> list:
+    # The sweep's settlement checks can be due too; these tests drive Reset work.
+    return [
+        intent
+        for intent in database.pending_intents(
+            limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+        )
+        if intent.kind == "reset_baseline"
+    ]
+
+
 def _collect_reset(collector: Collector, database: CollectorDatabase) -> str:
-    (intent,) = database.pending_intents(
-        limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
-    )
+    (intent,) = _reset_intents(database)
     return asyncio.run(collector.collect_intent(intent))
 
 
@@ -225,12 +234,7 @@ def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
             origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
         )
         first, later = sorted(
-            database.pending_intents(
-                limit=10,
-                now=datetime.now(UTC) + timedelta(minutes=1),
-                interactive=False,
-            ),
-            key=lambda intent: intent.work_id,
+            _reset_intents(database), key=lambda intent: intent.work_id
         )
         # The first work saved responses inside the Reset window whose
         # processing has not finished, for example because their file cannot
@@ -349,9 +353,7 @@ def test_interrupted_reset_retry_fetches_the_battle_log_again_after_restart(
 
         # The retry saves a good profile, then stops before its battle log.
         _Provider.mode = "answer"
-        (intent,) = database.pending_intents(
-            limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
-        )
+        (intent,) = _reset_intents(database)
         work = CollectorWork(
             intent.player_id, TAG, intent.due_at, collector_work_id=intent.work_id
         )
@@ -360,9 +362,7 @@ def test_interrupted_reset_retry_fetches_the_battle_log_again_after_restart(
         ) == ["recorded"]
 
         # After a restart the older battle log is still fetched again.
-        (resumed,) = database.pending_intents(
-            limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
-        )
+        (resumed,) = _reset_intents(database)
         assert not resumed.profile_required and resumed.battle_log_required
         assert (
             asyncio.run(
@@ -492,11 +492,7 @@ def test_reset_failing_while_the_api_answers_settles_after_three_retries(
         )
 
         async def collect() -> str:
-            (intent,) = database.pending_intents(
-                limit=10,
-                now=datetime.now(UTC) + timedelta(minutes=1),
-                interactive=False,
-            )
+            (intent,) = _reset_intents(database)
             return await collector.collect_intent(intent)
 
         async def run() -> None:
