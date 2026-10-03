@@ -1190,7 +1190,9 @@ describe("player day honesty", () => {
     expect(rows[5]).toContain("<td>-11</td><td>-11</td>");
     expect(rows[5]).toContain("The battle log was not checked at the start of this day.");
     expect(rows[6]).toContain("Incomplete");
-    expect(rows[6]).toContain("The two players&#x27; battle logs disagree about a result.");
+    expect(rows[6]).toContain(
+      "The two players&#x27; battle logs disagree about a result.",
+    );
     expect(rows[7]).toContain("Incomplete");
     expect(html).toContain("Attacks recorded");
     expect(html).toContain("Defenses recorded");
