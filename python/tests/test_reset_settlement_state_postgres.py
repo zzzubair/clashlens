@@ -430,18 +430,80 @@ def test_rejected_reset_profile_gives_no_start(
 def test_reset_profile_read_after_the_first_battle_gives_no_start(
     database_url: str, archive_server
 ) -> None:
-    # A 05:06 attack comes before a delayed 05:10 Reset profile of 6,040.
-    attack_at = DAY_END + timedelta(minutes=6)
+    # Eight attacks (+320) and eight defenses (-280) from 05:06 come before
+    # a delayed 05:30 Reset profile of 6,040.
     log = json.loads(_battle_log())
-    log["items"][0]["battleTimestamp"] = attack_at.strftime("%Y%m%dT%H%M%S.000Z")
+    template = log["items"][0]
+    log["items"] = [
+        {**template, "attack": index < 8,
+         "stars": 0 if index == 15 else 3,
+         "destructionPercentage": 0 if index == 15 else 100,
+         "opponentPlayerTag": f"#{tag}P{'Y' if index < 8 else 'L'}",
+         "battleTimestamp": (DAY_END + timedelta(minutes=6 + index)).strftime(
+             "%Y%m%dT%H%M%S.000Z")}
+        for index, tag in enumerate("89QGRJCU" * 2)
+    ]
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
                            DAY_END - timedelta(days=1), profile=_profile(6000),
                            log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, DAY_END,
                             profile=_profile(6040), log=json.dumps(log).encode(),
-                            profile_at=DAY_END + timedelta(minutes=10),
-                            log_at=DAY_END + timedelta(minutes=11))
+                            profile_at=DAY_END + timedelta(minutes=30),
+                            log_at=DAY_END + timedelta(minutes=31))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for day_start in (DAY_END - timedelta(days=1), DAY_END):
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start,
+                    now=DAY_END + timedelta(hours=1),
+                    request_key=day_start.isoformat(),
+                )
+                assert processor.process_job(job, owner="day") is not None
+        finally:
+            database.close()
+        days = {row[0]: row[1:] for row in _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   start_trophies, next_start_trophies, attack_count,
+                   defense_count, attack_gain, observed_defense_loss
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+        evidence = _rows(connection_info, f"""
+            SELECT evidence.profile_valid, evidence.failure_reasons,
+                   profile.source_contract_state, profile.trophies
+            FROM reset_baseline_evidence AS evidence
+            JOIN player_profile_effects AS effect
+              ON effect.observation_id = evidence.profile_observation_id
+            JOIN player_profile_versions AS profile
+              ON profile.id = effect.profile_version_id
+            WHERE evidence.boundary_at = '{DAY_END.isoformat()}'
+            ORDER BY evidence.version DESC, evidence.id DESC LIMIT 1""")
+        current = _rows(connection_info, CURRENT_PROFILE)
+    # The accepted 6,040 is kept as evidence but starts neither day. It is
+    # still the current profile, so the player page can calculate a 6,000
+    # start from it and the sixteen recorded battles.
+    assert evidence == [
+        (False, ["profile_after_first_event"], "accepted", 6040)
+    ]
+    assert days[DAY_END - timedelta(days=1)][:2] == (6000, None)
+    assert days[DAY_END][0] is None
+    assert days[DAY_END][2:] == (8, 8, 320, 280)
+    assert current == [(6040, "accepted")]
+
+
+def test_legend_ii_reset_profile_is_current_but_gives_no_start(
+    database_url: str, archive_server
+) -> None:
+    # A demoted player's Legend II profile, under a valid Season.
+    payload = json.loads(_profile(4900))
+    payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           DAY_END - timedelta(days=1), profile=_profile(6000),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, DAY_END,
+                            profile=json.dumps(payload).encode(),
+                            log=_battle_log(empty=True))
         _process(connection_info, archive_server, jobs)
         database, processor = _processor(connection_info, archive_server)
         try:
@@ -458,22 +520,7 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
             SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
                    start_trophies, next_start_trophies
             FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
-        evidence = _rows(connection_info, f"""
-            SELECT evidence.profile_valid, evidence.failure_reasons,
-                   profile.source_contract_state, profile.trophies
-            FROM reset_baseline_evidence AS evidence
-            JOIN player_profile_effects AS effect
-              ON effect.observation_id = evidence.profile_observation_id
-            JOIN player_profile_versions AS profile
-              ON profile.id = effect.profile_version_id
-            WHERE evidence.boundary_at = '{DAY_END.isoformat()}'
-            ORDER BY evidence.version DESC, evidence.id DESC LIMIT 1""")
         current = _rows(connection_info, CURRENT_PROFILE)
-    # The accepted 6,040 is kept as evidence but starts neither day. It is
-    # still the current profile, which the player page can calculate from.
-    assert evidence == [
-        (False, ["profile_after_first_event"], "accepted", 6040)
-    ]
     assert days[DAY_END - timedelta(days=1)] == (6000, None)
     assert days[DAY_END][0] is None
-    assert current == [(6040, "accepted")]
+    assert current == [(4900, "accepted")]
