@@ -72,6 +72,17 @@ export function formatAge(seconds: number): string {
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 
+/** Starts at the server's time so the first render matches, then ticks every 30 seconds. */
+export function useCurrentTime(loadedAt: string | undefined) {
+  const [now, setNow] = useState(() => (loadedAt ? Date.parse(loadedAt) : 0));
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [loadedAt]);
+  return now;
+}
+
 export function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown";

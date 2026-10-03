@@ -651,6 +651,50 @@ describe("automatic tag lookup", () => {
     expect(result.player?.season).toBeNull();
   });
 
+  it("shows an old profile's age and when battle history was last published", async () => {
+    const stale = {
+      ...PLAYER,
+      profile: {
+        ...PLAYER.profile,
+        freshness: {
+          state: "stale",
+          observedAt: "2026-08-06T12:00:00Z",
+          ageSeconds: 7_300,
+        },
+        battleHistoryUpdatedAt: "2026-08-06T11:40:00Z",
+      },
+    } satisfies PlayerPage;
+    const render = async (player: PlayerPage) => {
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue(player),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      });
+      const result = await playerLoader({
+        request: requestFor(null),
+        params: { tag: TAG },
+      } as never);
+      const html = (await renderRoute(result)).split("<script>")[0];
+      return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
+    };
+    expect(await render(stale)).toContain(
+      "Updated 6 Aug 2026, 12:00 UTC · 2 hours oldBattle history updated 6 Aug 2026, 11:40 UTC · 2 hours old",
+    );
+    const fresh = await render({
+      ...PLAYER,
+      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: null },
+    });
+    expect(fresh).toContain(
+      "Updated 6 Aug 2026, 12:00 UTCBattle history updated not yet",
+    );
+    const oldHistory = await render({
+      ...PLAYER,
+      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-08-06T11:40:00Z" },
+    });
+    expect(oldHistory).toContain(
+      "Updated 6 Aug 2026, 12:00 UTCBattle history updated 6 Aug 2026, 11:40 UTC · 20 minutes old",
+    );
+  });
+
   it("keeps a newly published battle when a completed Refresh has the same check time", async () => {
     mocks.createPythonClient.mockReturnValue({
       getPlayer: vi

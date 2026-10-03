@@ -601,7 +601,8 @@ h3 {
   color: var(--cl-ink);
 }
 
-.player-updated {
+.player-updated,
+.player-history-updated {
   font-family: var(--cl-font);
   font-size: 0.72rem;
   font-weight: 600;

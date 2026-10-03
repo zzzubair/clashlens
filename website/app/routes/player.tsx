@@ -11,12 +11,14 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { formatAge, useCurrentTime } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
   PlayerPage,
   PlayerLookup,
+  PlayerProfile,
   RankedBattleEvent,
   RankedDaySummary,
   RefreshError,
@@ -482,15 +484,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 {trackedPlayer.profile.trophies.toLocaleString()}
               </strong>
             </div>
-            <p className="player-freshness">
-              <span>Updated</span>{" "}
-              <time
-                className="player-updated"
-                dateTime={trackedPlayer.profile.freshness.observedAt}
-              >
-                {formatPlayerTimestamp(trackedPlayer.profile.freshness.observedAt)}
-              </time>
-            </p>
+            <PlayerFreshness profile={trackedPlayer.profile} />
           </div>
           <refreshFetcher.Form
             className="player-refresh-form"
@@ -860,6 +854,47 @@ function formatPlayerDate(date: Date): string {
 function legendDayDate(period: string): string {
   const date = new Date(period.split(" – ")[0]);
   return Number.isNaN(date.getTime()) ? "Date unavailable" : formatPlayerDate(date);
+}
+
+const FRESHNESS_LIMIT_SECONDS = 15 * 60;
+
+function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
+  const { observedAt, ageSeconds } = profile.freshness;
+  const loadedAt = Date.parse(observedAt) + ageSeconds * 1000;
+  const now = useCurrentTime(
+    Number.isNaN(loadedAt) ? undefined : new Date(loadedAt).toISOString(),
+  );
+  const oldAge = (value: string) => {
+    const age = Math.floor((now - Date.parse(value)) / 1000);
+    return age > FRESHNESS_LIMIT_SECONDS ? ` · ${formatAge(age)} old` : null;
+  };
+  return (
+    <>
+      <p className="player-freshness">
+        <span>Updated</span>{" "}
+        <time className="player-updated" dateTime={observedAt}>
+          {formatPlayerTimestamp(observedAt)}
+        </time>
+        {oldAge(observedAt)}
+      </p>
+      <p className="player-freshness">
+        <span>Battle history updated</span>{" "}
+        {profile.battleHistoryUpdatedAt ? (
+          <>
+            <time
+              className="player-history-updated"
+              dateTime={profile.battleHistoryUpdatedAt}
+            >
+              {formatPlayerTimestamp(profile.battleHistoryUpdatedAt)}
+            </time>
+            {oldAge(profile.battleHistoryUpdatedAt)}
+          </>
+        ) : (
+          "not yet"
+        )}
+      </p>
+    </>
+  );
 }
 
 function formatPlayerTimestamp(value: string): string {

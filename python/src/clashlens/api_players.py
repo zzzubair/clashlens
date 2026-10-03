@@ -172,6 +172,9 @@ def get_player_page(
             """,
             (normalized_tag,),
         ).fetchall()
+        history_updated_at = max(
+            (day[19].astimezone(UTC) for day in daily_rows), default=None
+        )
         public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
         daily_logs = [_daily_log(day) for day in daily_rows]
         battle_ids = {
@@ -355,6 +358,9 @@ def get_player_page(
             "age_seconds": age_seconds,
             "coverage": "ranked_days" if daily_rows else "profile_only",
             "observed_at": observed_at.isoformat(),
+            "battle_history_updated_at": (
+                None if history_updated_at is None else history_updated_at.isoformat()
+            ),
             "source_http_status": int(row[6]),
             "endpoint_version": _text(row[7]),
             "schema_version": _text(row[8]),

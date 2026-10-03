@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import {
   data,
   Form,
@@ -11,7 +11,7 @@ import {
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark } from "../components/LeaderboardShared";
-import { formatAge, LocalTimestamp } from "../components/Provenance";
+import { formatAge, LocalTimestamp, useCurrentTime } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
@@ -151,16 +151,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export function headers() {
   return { "Cache-Control": "no-store" };
-}
-
-function useCurrentTime(loadedAt: string | undefined) {
-  const [now, setNow] = useState(() => (loadedAt ? Date.parse(loadedAt) : 0));
-  useEffect(() => {
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, [loadedAt]);
-  return now;
 }
 
 export default function TrackedLeaderboardRoute() {

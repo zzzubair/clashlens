@@ -905,3 +905,22 @@ h3 {
     width: 100%;
   }
 }
+
+/* Site-wide delayed-updates notice: same width as the page, quieter text. */
+.status-banner.updates-notice {
+  width: min(100% - 3rem, 72rem);
+  margin: 0.85rem auto 0;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.updates-notice p {
+  margin: 0;
+}
+
+@media (max-width: 34rem) {
+  .status-banner.updates-notice {
+    width: calc(100% - 2rem);
+  }
+}

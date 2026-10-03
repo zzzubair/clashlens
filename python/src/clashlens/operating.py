@@ -35,6 +35,7 @@ API_ROUTES = (
     "livez",
     "readyz",
     "operator",
+    "update_status",
     "player_search",
     "player_read",
     "player_refresh",
@@ -152,6 +153,8 @@ def api_route(path: str) -> str:
         return "readyz"
     if path == "/operatorz":
         return "operator"
+    if path == "/v1/status":
+        return "update_status"
     if path == "/v1/players/search":
         return "player_search"
     if path.startswith("/v1/players/") and path.endswith("/verifytoken"):

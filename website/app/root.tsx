@@ -17,6 +17,8 @@ import {
 
 import type { Route } from "./+types/root";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
+import { UpdatesNotice } from "./components/UpdatesNotice";
+import type { UpdateStatus } from "./lib/contracts";
 import "./app.css";
 import "./theme.css";
 import "./explore.css";
@@ -28,24 +30,30 @@ export interface RootLoaderData {
   accountLabel: string | null;
   accountUsername: string | null;
   logoutIdempotencyKey: string | null;
+  updateStatus: UpdateStatus | null;
 }
 
 /**
- * Root loader for the navigation bar. Logged-out public requests never call
- * the private Python service. Signed-in requests resolve only the public
- * account label; no provider identity reaches the browser. Any missing or
- * broken login configuration falls back to logged-out.
+ * Root loader for the navigation bar and the delayed-updates notice. The
+ * notice reads one shared, briefly cached status from the private Python
+ * service. Signed-in requests also resolve only the public account label; no
+ * provider identity reaches the browser. Any missing or broken login
+ * configuration falls back to logged-out.
  */
 export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoaderData> {
+  const updateStatus = import("./server/update-status.server")
+    .then(({ loadUpdateStatus }) => loadUpdateStatus())
+    .catch(() => null);
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");
-    return await loadRootNavigation(request);
+    return { ...(await loadRootNavigation(request)), updateStatus: await updateStatus };
   } catch {
     return {
       loggedIn: false,
       accountLabel: null,
       accountUsername: null,
       logoutIdempotencyKey: null,
+      updateStatus: await updateStatus,
     };
   }
 }
@@ -178,6 +186,7 @@ export default function App() {
           )}
         </nav>
       </header>
+      {data.updateStatus ? <UpdatesNotice status={data.updateStatus} /> : null}
       {location.pathname !== "/" ? <div className="page-back">{backLink}</div> : null}
       <Outlet />
     </>
