@@ -376,6 +376,12 @@ def enqueue_current_season_republication(
             shield_job_ids = _enqueue_false_shield_rebuilds(connection, max_jobs)
             if shield_job_ids:
                 return {**repaired, "job_ids": shield_job_ids}
+            live_job_ids, live_blockers = _enqueue_ended_live_rebuilds(
+                connection, max_jobs
+            )
+            repaired["failed_blockers"].extend(live_blockers)
+            if live_job_ids:
+                return {**repaired, "job_ids": live_job_ids}
             candidates = connection.execute(
                 """
                 WITH current_anchor AS (
@@ -571,3 +577,154 @@ def _enqueue_false_shield_rebuilds(connection: Any, max_jobs: int) -> list[int]:
         if row is not None:
             job_ids.append(int(row[0]))
     return job_ids
+
+
+def _enqueue_ended_live_rebuilds(
+    connection: Any, max_jobs: int
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """Queue rebuilds of ended days whose latest published result is Live,
+    or has no published net despite 8 undisputed attacks and 8 undisputed
+    defenses.
+
+    A day calculated before its Reset stays Live until it is calculated
+    again. Failed Reset evidence did not do that, and a day with no Reset
+    check never had it done. A day with every attack and defense recorded
+    has a known net, which older calculations left out. Each job rebuilds a
+    player's oldest such day not yet requested and every later saved day of
+    its Season, so later days read the finished one; the result may honestly
+    be Partial with no end total. The previous Season is covered too, so its
+    last days can still be finished after the anchor moves on. The key names
+    the version replaced, so a later such result is repaired again even after
+    an earlier request finished. A failed request whose result is still
+    latest is not queued again but returned, at most ``max_jobs`` of them, as
+    a blocker; deleting the failed job lets a later run queue it.
+    """
+    rows = connection.execute(
+        """
+        WITH anchor AS (
+            SELECT current_league_season_id, previous_league_season_id,
+                   previous_start
+            FROM legend_season_anchors
+            WHERE state = 'confirmed' AND anchor_rule_version = %s
+            ORDER BY current_start DESC
+            LIMIT 1
+        ), latest AS (
+            SELECT DISTINCT ON (log.player_id, log.ranked_day_start)
+                   log.player_id, log.ranked_day_start,
+                   log.official_season_id, log.ranked_day_version_id,
+                   log.net_trophy_change
+            FROM api_player_daily_logs AS log
+            JOIN anchor
+              ON log.official_season_id IN (
+                  anchor.current_league_season_id,
+                  anchor.previous_league_season_id
+              )
+            WHERE log.ranked_day_start >= anchor.previous_start
+              AND log.ranked_day_start + interval '1 day' <= clock_timestamp()
+            ORDER BY log.player_id, log.ranked_day_start, log.version DESC
+        ), unfinished AS (
+            SELECT version.id, latest.player_id, latest.ranked_day_start,
+                   latest.official_season_id, job.id AS job_id,
+                   job.state AS job_state, job.failure_category
+            FROM latest
+            JOIN ranked_day_versions AS version
+              ON version.id = latest.ranked_day_version_id
+            LEFT JOIN python_processing_jobs_worker AS job
+              ON job.deduplication_key = 'reconcile:ended-live:' || version.id::text
+            WHERE version.state = 'Live'
+               OR (
+                  latest.net_trophy_change IS NULL
+                  AND version.attack_count = 8
+                  AND version.defense_count = 8
+                  AND NOT version.failure_reasons ?| ARRAY[
+                      'perspective_disagreement',
+                      'duplicate_contribution_disagreement'
+                  ]
+               )
+        ), oldest AS (
+            SELECT DISTINCT ON (player_id) *
+            FROM unfinished
+            WHERE job_id IS NULL
+            ORDER BY player_id, ranked_day_start
+        ), candidates AS (
+            SELECT * FROM oldest
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM python_processing_jobs_worker AS active
+                WHERE active.work_type = 'reconcile_ranked_day'
+                  AND active.state IN (
+                      'pending', 'waiting_retry', 'waiting_dependency', 'leased'
+                  )
+                  AND (active.input_json ->> 'player_id')::bigint = oldest.player_id
+                  AND (
+                      (active.input_json ->> 'ranked_day_start')::timestamptz
+                          = oldest.ranked_day_start
+                      OR active.input_json ->> 'recalculate_season'
+                          = oldest.official_season_id
+                  )
+            )
+            UNION ALL
+            SELECT * FROM unfinished WHERE job_state = 'failed'
+        )
+        SELECT id, player_id, ranked_day_start, official_season_id,
+               job_id, failure_category
+        FROM (
+            SELECT candidates.*,
+                   row_number() OVER (
+                       PARTITION BY job_id IS NULL
+                       ORDER BY ranked_day_start, player_id
+                   ) AS position
+            FROM candidates
+        ) AS ranked
+        WHERE position <= %s
+        ORDER BY ranked_day_start, player_id
+        """,
+        (SEASON_ANCHOR_RULE_VERSION, max_jobs),
+    ).fetchall()
+    job_ids: list[int] = []
+    blockers: list[dict[str, Any]] = []
+    for version_id, player_id, day_start, season_id, job_id, category in rows:
+        day_text = day_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if job_id is not None:
+            blockers.append(
+                {
+                    "job_id": int(job_id),
+                    "player_id": int(player_id),
+                    "ranked_day_start": day_text,
+                    "failure_category": _text_value(category) if category else None,
+                }
+            )
+            continue
+        row = connection.execute(
+            """
+            INSERT INTO python_processing_jobs_worker (
+                observation_id, work_type, deduplication_key, input_json,
+                state, due_at, parser_version, processing_version,
+                domain_rule_version, analytics_rule_version
+            ) VALUES (
+                NULL, 'reconcile_ranked_day', %s, %s, 'pending',
+                clock_timestamp(), %s, %s, %s, %s
+            )
+            ON CONFLICT (deduplication_key) DO NOTHING
+            RETURNING id
+            """,
+            (
+                f"reconcile:ended-live:{int(version_id)}",
+                Jsonb(
+                    {
+                        "player_id": int(player_id),
+                        "ranked_day_start": day_text,
+                        "last_ranked_day_start": day_text,
+                        "recalculate_season": _text_value(season_id),
+                        "trigger": "ended_live_rebuild",
+                    }
+                ),
+                DEFAULT_PARSER_VERSION,
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
+            ),
+        ).fetchone()
+        if row is not None:
+            job_ids.append(int(row[0]))
+    return job_ids, blockers

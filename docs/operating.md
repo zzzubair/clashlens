@@ -422,6 +422,22 @@ Once no partial pairs remain to check, the same command first queues up to
 `--max-jobs` rebuilds of current-season days still marked inferred shielded
 although the next Reset's trophies differ (two days on 2026-10-03). Each
 rebuilds that day and every later saved day, and the day becomes uncertain.
+When none remain, it queues up to `--max-jobs` rebuilds of players whose
+latest published result for an ended day is still `Live`, or shows no net
+although it holds 8 attacks and 8 defenses with neither side disputed, in the
+current or previous Season, oldest day first, including days with no ending
+Reset check.
+Each rebuilds the player's oldest such day not yet requested and every later
+saved day of its Season; a day may end `Partial` with no end-of-day total
+when the evidence cannot prove one. The key
+`reconcile:ended-live:<ranked-day version id>` names the result replaced, so
+each such result is queued once and an earlier request never holds back the
+player's later days. Players with a rebuild of that day or Season already
+queued or running wait for a later run. A request that failed while its
+result is still the latest is not queued again but listed, at most
+`--max-jobs` of them, in `failed_blockers`. Until October 2026 a failed
+ending Reset check never recalculated its day, which left 4,705 ended days
+`Live` on 2026-10-03.
 When none remain, it queues up to `--max-jobs` published current-season
 player-days that lack the current reconciliation rule version.
 
