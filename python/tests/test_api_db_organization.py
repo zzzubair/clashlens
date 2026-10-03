@@ -17,7 +17,7 @@ from clashlens.verification import VerificationOutcome
 
 
 def account_binding(
-    account_id: int,
+    account_id: int | None,
     operation: str,
     target: str,
     identity: dict[str, object],
@@ -505,8 +505,20 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
             assert api_accounts.list_groups(database, owner_id)[0]["tags"] == ["#8PY"]
 
             # Another account's group reads as missing, and nothing joins it.
+            api_accounts.create_account(database,
+                account_binding(
+                    None, "account.create", "/v1/account", {"username": "otherowner"},
+                    subject="other-owner-subject",
+                ),
+                username="otherowner",
+                normalized_username="otherowner",
+                display_name="Other Owner",
+            )
+            other = api_accounts.resolve_account(database, "google", "other-owner-subject")
+            assert other is not None
             assert add_player(
-                database, owner_id + 1, group_id, "#2PP", subject="other-subject"
+                database, other.internal_id, group_id, "#2PP",
+                subject="other-owner-subject",
             ).payload == {"error": "group_not_found"}
             assert api_accounts.list_groups(database, owner_id)[0]["tags"] == ["#8PY"]
         finally:

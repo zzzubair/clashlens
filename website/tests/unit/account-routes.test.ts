@@ -843,19 +843,6 @@ describe("account routes", () => {
       } as never);
       expect(dataOf(badTags).status).toBe(400);
 
-      const tooManyTags = await groupsAction({
-        request: formRequest("/account/groups", {
-          action: "create",
-          name: "Clanmates",
-          tags: Array.from({ length: 21 }, () => "#2PP").join(","),
-          idempotencyKey: IDEMPOTENCY_KEY,
-        }),
-      } as never);
-      expect(dataOf<{ fieldErrors: { tags: string } }>(tooManyTags)).toMatchObject({
-        status: 400,
-        data: { fieldErrors: { tags: "A group can hold up to 20 player tags." } },
-      });
-
       const badGroupId = await groupsAction({
         request: formRequest("/account/groups", {
           action: "update",

@@ -7,7 +7,17 @@
   justify-content: space-between;
 }
 
+.group-card .player-action-list li {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.group-card .player-action-list .inline-form {
+  flex: 0 0 auto;
+}
+
 .group-card .player-action-name {
+  flex: 1 1 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 0.2rem 0.6rem;

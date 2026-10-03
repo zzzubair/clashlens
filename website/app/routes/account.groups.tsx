@@ -200,8 +200,10 @@ export async function action({ request, context }: Route.ActionArgs) {
       // Refuse duplicates and a full group before spending a player lookup.
       const group = (await client.listGroups()).find((row) => row.groupId === groupId);
       if (group === undefined) return reply(404, { generalError: GROUP_GONE });
-      if (group.tags.includes(tag as string)) {
-        return reply(409, { fieldErrors: { tag: `${tag} is already in this group.` } });
+      const member = group.players.find((player) => player.tag === tag);
+      if (member !== undefined) {
+        const who = member.name === null ? member.tag : `${member.name} (${member.tag})`;
+        return reply(409, { fieldErrors: { tag: `${who} is already in this group.` } });
       }
       if (group.tags.length >= MAX_GROUP_TAGS) {
         return reply(422, { fieldErrors: { tag: GROUP_FULL } });
@@ -465,7 +467,7 @@ function GroupCard({
       </div>
       {count > 0 ? (
         <ul className="player-action-list" aria-label={`Players in ${group.name}`}>
-          {group.players.map((player) => (
+          {sortByName(group.players).map((player) => (
             <MemberRow
               key={player.tag}
               groupId={id}
@@ -575,6 +577,16 @@ function GroupCard({
         </form>
       </details>
     </li>
+  );
+}
+
+/** Names are what people remember, so members list by name, tag-only last. */
+function sortByName(players: GroupPlayer[]): GroupPlayer[] {
+  return [...players].sort(
+    (left, right) =>
+      Number(left.name === null) - Number(right.name === null) ||
+      (left.name ?? left.tag).localeCompare(right.name ?? right.tag) ||
+      left.tag.localeCompare(right.tag),
   );
 }
 

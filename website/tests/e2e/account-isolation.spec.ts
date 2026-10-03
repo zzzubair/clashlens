@@ -31,12 +31,7 @@ test("two signed-in accounts keep saved players and groups private through direc
       expect(saved.ok()).toBeTruthy();
       const created = await context.request.post(`${origin}/account/groups`, {
         headers: { Origin: origin },
-        form: {
-          action: "create",
-          name: groupName,
-          tags: tag,
-          idempotencyKey: randomUUID(),
-        },
+        form: { action: "create", name: groupName, idempotencyKey: randomUUID() },
       });
       expect(created.ok()).toBeTruthy();
       await page.goto("/account/groups");
@@ -45,6 +40,11 @@ test("two signed-in accounts keep saved players and groups private through direc
         .filter({ has: page.getByRole("heading", { name: groupName, exact: true }) })
         .last();
       const groupId = await group.locator('input[name="groupId"]').first().inputValue();
+      const added = await context.request.post(`${origin}/account/groups`, {
+        headers: { Origin: origin },
+        form: { action: "add-player", groupId, tag, idempotencyKey: randomUUID() },
+      });
+      expect(added.ok()).toBeTruthy();
       owners.push({
         context,
         page,
@@ -69,7 +69,7 @@ test("two signed-in accounts keep saved players and groups private through direc
         expect(body).not.toContain(other.tag);
       }
       // Forged forms use the attacker's real session and fresh operation ids.
-      for (const action of ["update", "delete"]) {
+      for (const action of ["update", "delete", "add-player", "remove-player"]) {
         const responses = [];
         for (const groupId of [other.groupId, randomUUID()]) {
           responses.push(
@@ -79,7 +79,7 @@ test("two signed-in accounts keep saved players and groups private through direc
                 action,
                 groupId,
                 name: "Changed",
-                tags: owner.tag,
+                tag: action === "remove-player" ? other.tag : owner.tag,
                 confirm: "on",
                 idempotencyKey: randomUUID(),
               },
