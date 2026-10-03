@@ -48,6 +48,9 @@ it("renders the about page from its Markdown file", async () => {
     '<a href="https://developer.clashofclans.com/">Clash of Clans API</a>',
   );
   expect(html).toContain('<a href="https://www.postgresql.org/">PostgreSQL</a>');
+  expect(html).toContain(
+    '<a href="https://www.cloudflare.com/products/tunnel/">Cloudflare Tunnel</a>',
+  );
   expect(html).toContain('<a href="https://www.supercell.com/fan-content-policy">');
   // The owner's intro placeholder is a note in the file, not page text.
   expect(readFileSync("app/content/about.md", "utf8")).toContain(

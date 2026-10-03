@@ -50,6 +50,7 @@ projects and services.
 - [Podman](https://podman.io/) on [Fedora Linux](https://fedoraproject.org/), which run every part of Clash Lens
 - [Alpine Linux](https://alpinelinux.org/) and [Tinyproxy](https://tinyproxy.github.io/) for the relay that sends requests to the Clash of Clans API
 - [Scaleway](https://www.scaleway.com/) for long-term storage and the relay server
+- [Cloudflare Tunnel](https://www.cloudflare.com/products/tunnel/) for connecting this website to the internet
 - [Cloudflare R2](https://www.cloudflare.com/developer-platform/products/r2/) for database backup storage
 - [Tailscale](https://tailscale.com/) for the private link between the server and the relay
 - [Google](https://developers.google.com/identity) and [Discord](https://discord.com/) for sign-in
