@@ -16,6 +16,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg_pool import ConnectionPool
 
 from clashlens import battle_ingestion, ingestion
+from clashlens.api_db import _screen_events
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import DEFAULT_POOL_SIZE, Database
 from clashlens.domain import ranked_day_for
@@ -726,45 +727,43 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
                 player_ids.values()
             )
 
-            attacker_reconciliation_job = next(
-                int(row[0])
-                for row in pending_reconciliations
-                if int(row[1]) == player_ids["#2PP"]
-            )
-            attacker_result = processor.process_job(
-                attacker_reconciliation_job,
-                owner="live-attacker-disagreement",
-            )
-            assert attacker_result is not None
-            assert attacker_result.outcome == "processed"
-            with database.pool.connection() as connection:
-                latest_battles, attacker_version_count = connection.execute(
-                    """
-                    SELECT latest.battles, versions.version_count
-                    FROM (
-                        SELECT battles
-                        FROM api_player_daily_logs
-                        WHERE player_id = %s AND ranked_day_start = %s
-                        ORDER BY version DESC
-                        LIMIT 1
-                    ) AS latest
-                    CROSS JOIN (
-                        SELECT count(*) AS version_count
-                        FROM ranked_day_versions
-                        WHERE player_id = %s AND ranked_day_start = %s
-                    ) AS versions
-                    """,
-                    (
-                        player_ids["#2PP"],
-                        ranked_day.start,
-                        player_ids["#2PP"],
-                        ranked_day.start,
+            # Each side keeps its own counted report, shown and flagged as
+            # disputed, instead of the row being dropped from the page.
+            for tag, versions in (("#2PP", 2), ("#8PP", 1)):
+                result = processor.process_job(
+                    next(
+                        int(row[0])
+                        for row in pending_reconciliations
+                        if int(row[1]) == player_ids[tag]
                     ),
-                ).fetchone()
-            assert attacker_version_count == 2
-            assert len(latest_battles) == 1
-            assert latest_battles[0]["disagreement"] is True
-            assert "battle_id" not in latest_battles[0]
+                    owner=f"live-disagreement-{tag}",
+                )
+                assert result is not None and result.outcome == "processed"
+                with database.pool.connection() as connection:
+                    latest_battles, version_count = connection.execute(
+                        """
+                        SELECT latest.battles, versions.version_count
+                        FROM (
+                            SELECT battles
+                            FROM api_player_daily_logs
+                            WHERE player_id = %s AND ranked_day_start = %s
+                            ORDER BY version DESC
+                            LIMIT 1
+                        ) AS latest
+                        CROSS JOIN (
+                            SELECT count(*) AS version_count
+                            FROM ranked_day_versions
+                            WHERE player_id = %s AND ranked_day_start = %s
+                        ) AS versions
+                        """,
+                        (player_ids[tag], ranked_day.start) * 2,
+                    ).fetchone()
+                assert version_count == versions
+                assert len(latest_battles) == 1
+                assert latest_battles[0]["disagreement"] is True
+                offense, defense = _screen_events(latest_battles)
+                assert len(offense + defense) == 1
+                assert (offense + defense)[0]["perspective_disagreement"] is True
         finally:
             database.close()
 

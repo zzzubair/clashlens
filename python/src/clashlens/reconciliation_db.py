@@ -1295,6 +1295,9 @@ def enqueue_current_season_republication(
         return repaired
     with database.pool.connection() as connection:
         with connection.transaction():
+            shield_job_ids = _enqueue_false_shield_rebuilds(connection, max_jobs)
+            if shield_job_ids:
+                return {**repaired, "job_ids": shield_job_ids}
             candidates = connection.execute(
                 """
                 WITH current_anchor AS (
@@ -1408,3 +1411,85 @@ def enqueue_current_season_republication(
                 if row is not None:
                     job_ids.append(int(row[0]))
             return {**repaired, "job_ids": job_ids}
+
+
+def _enqueue_false_shield_rebuilds(connection: Any, max_jobs: int) -> list[int]:
+    """Queue rebuilds of current-season days wrongly inferred shielded.
+
+    Older code inferred a shield on a no-event day even when the next Reset's
+    observed trophies differed. Each job rebuilds that day and every later
+    saved day in the Season, so later shield durations use the corrected day.
+    """
+    rows = connection.execute(
+        """
+        WITH current_anchor AS (
+            SELECT current_league_season_id, current_start
+            FROM legend_season_anchors
+            WHERE state = 'confirmed' AND anchor_rule_version = %s
+            ORDER BY current_start DESC
+            LIMIT 1
+        ), latest AS (
+            SELECT DISTINCT ON (log.player_id, log.ranked_day_start)
+                   log.player_id, log.ranked_day_start,
+                   log.official_season_id, log.ranked_day_version_id
+            FROM api_player_daily_logs AS log
+            JOIN current_anchor AS anchor
+              ON log.official_season_id = anchor.current_league_season_id
+            WHERE log.ranked_day_start >= anchor.current_start
+              AND log.ranked_day_start < anchor.current_start + interval '28 days'
+            ORDER BY log.player_id, log.ranked_day_start, log.version DESC
+        )
+        SELECT version.id, latest.player_id, latest.ranked_day_start,
+               latest.official_season_id
+        FROM latest
+        JOIN ranked_day_versions AS version
+          ON version.id = latest.ranked_day_version_id
+        WHERE version.shield_state = 'inferred_shielded'
+          AND version.unexplained_residual IS DISTINCT FROM 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM python_processing_jobs_worker AS job
+              WHERE job.deduplication_key =
+                  'reconcile:false-shield:' || version.id::text
+          )
+        ORDER BY latest.player_id, latest.ranked_day_start
+        LIMIT %s
+        """,
+        (SEASON_ANCHOR_RULE_VERSION, max_jobs),
+    ).fetchall()
+    job_ids: list[int] = []
+    for version_id, player_id, ranked_day_start, official_season_id in rows:
+        day_text = ranked_day_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        row = connection.execute(
+            """
+            INSERT INTO python_processing_jobs_worker (
+                observation_id, work_type, deduplication_key, input_json,
+                state, due_at, parser_version, processing_version,
+                domain_rule_version, analytics_rule_version
+            ) VALUES (
+                NULL, 'reconcile_ranked_day', %s, %s, 'pending',
+                clock_timestamp(), %s, %s, %s, %s
+            )
+            ON CONFLICT (deduplication_key) DO NOTHING
+            RETURNING id
+            """,
+            (
+                f"reconcile:false-shield:{int(version_id)}",
+                Jsonb(
+                    {
+                        "player_id": int(player_id),
+                        "ranked_day_start": day_text,
+                        "last_ranked_day_start": day_text,
+                        "recalculate_season": _text_value(official_season_id),
+                        "trigger": "false_shield_rebuild",
+                    }
+                ),
+                DEFAULT_PARSER_VERSION,
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
+            ),
+        ).fetchone()
+        if row is not None:
+            job_ids.append(int(row[0]))
+    return job_ids

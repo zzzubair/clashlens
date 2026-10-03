@@ -391,9 +391,12 @@ so automatic defense loss and shield duration use the corrected earlier day.
 The worker then publishes the days on its own.
 Only days whose Reset evidence is still in the database can be rebuilt;
 older days need the archived raw responses replayed, which this does not do.
-Once no partial pairs remain to check, the same command queues up to
-`--max-jobs` published current-season player-days that lack the current
-reconciliation rule version.
+Once no partial pairs remain to check, the same command first queues up to
+`--max-jobs` rebuilds of current-season days still marked inferred shielded
+although the next Reset's trophies differ (two days on 2026-10-03). Each
+rebuilds that day and every later saved day, and the day becomes uncertain.
+When none remain, it queues up to `--max-jobs` published current-season
+player-days that lack the current reconciliation rule version.
 
 **Cost:** on 2026-10-02 this re-checks 25,599 pairs for the 2026-10-01 and
 2026-10-02 Resets. Each queues one job, about 25,600 jobs in total. Each job

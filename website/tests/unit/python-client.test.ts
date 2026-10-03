@@ -929,20 +929,18 @@ describe("server-only Python client response boundary", () => {
         season_days: [currentDay],
       },
     };
+    // Audit example #J9Y9J80L: the game returned nine real attacks for one day.
+    const nineAttacks = {
+      ...currentDay,
+      uncertainty_reasons: ["attack_count_exceeds_eight"],
+      offense_events: Array.from({ length: 9 }, (_, index) => ({
+        ...offenseEvents[0],
+        battle_id: `extra-attack-${index}`,
+      })),
+    };
     const tooManyEvents = {
       ...full,
-      screen_ready: {
-        ...full.screen_ready,
-        current_day: {
-          ...currentDay,
-          offense_events: Array.from({ length: 9 }, (_, index) => ({
-            ...offenseEvents[0],
-            battle_id: `extra-attack-${index}`,
-          })),
-        },
-        recent_days: [],
-        season_days: [],
-      },
+      screen_ready: { ...full.screen_ready, season_days: [nineAttacks] },
     };
     const nullProvenance = {
       ...full,
@@ -1000,10 +998,9 @@ describe("server-only Python client response boundary", () => {
       status: 502,
       payload: { error: "malformed" },
     });
-    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
-      status: 502,
-      payload: { error: "malformed" },
-    });
+    const [excessDay] = (await createPythonClient().getPlayer("#2PP")).seasonDays;
+    expect(excessDay.offenseEvents).toHaveLength(9);
+    expect(excessDay.uncertainty).toEqual(["attack_count_exceeds_eight"]);
     // Shared/player provenance cannot use the live leaderboard's empty-source exception.
     await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
       status: 502,

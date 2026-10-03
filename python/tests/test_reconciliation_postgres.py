@@ -932,6 +932,87 @@ def test_postgres_persists_complete_inferred_shield_evidence(
             database.close()
 
 
+def test_republication_rebuilds_a_day_wrongly_inferred_shielded(
+    database_url: str,
+    archive_server,
+) -> None:
+    # Audit example #2QP9LCLU: no battles, yet trophies went 5,029 -> 5,004.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = []
+        for key, boundary, trophies in (
+            ("false-shield-start", DAY_START, 5029),
+            ("false-shield-end", DAY_END, 5004),
+        ):
+            jobs.extend(
+                _store_baseline_pair(
+                    connection_info,
+                    archive_server,
+                    key=key,
+                    boundary=boundary,
+                    trophies=trophies,
+                    empty_battle_log=True,
+                )[2:]
+            )
+        database, processor = _processor(connection_info, archive_server)
+        latest_version_sql = """
+            SELECT id, version, state, shield_state, shield_duration_days
+            FROM ranked_day_versions
+            WHERE ranked_day_start = %s
+            ORDER BY version DESC
+            LIMIT 1
+        """
+        try:
+            for job_id in jobs:
+                result = processor.process_job(job_id, owner=f"false-shield-{job_id}")
+                assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                reconcile_job = connection.execute(
+                    """
+                    SELECT id FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND input_json->>'ranked_day_start' = %s
+                    ORDER BY id LIMIT 1
+                    """,
+                    (DAY_START.strftime("%Y-%m-%dT%H:%M:%SZ"),),
+                ).fetchone()
+            result = processor.process_job(int(reconcile_job[0]), owner="first")
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                first = connection.execute(latest_version_sql, (DAY_START,)).fetchone()
+                assert text(first[2]) == "Inconsistent"
+                assert text(first[3]) == "unknown"
+                # Recreate the version older code saved for this day.
+                connection.execute(
+                    """
+                    UPDATE ranked_day_versions
+                    SET shield_state = 'inferred_shielded',
+                        shield_duration_days = 1,
+                        result_hash = repeat('a', 64)
+                    WHERE id = %s
+                    """,
+                    (first[0],),
+                )
+                connection.commit()
+            rebuild_jobs = reconciliation_db.enqueue_current_season_republication(
+                database, max_jobs=10
+            )["job_ids"]
+            assert len(rebuild_jobs) == 1
+            result = processor.process_job(rebuild_jobs[0], owner="rebuild")
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                rebuilt = connection.execute(
+                    latest_version_sql, (DAY_START,)
+                ).fetchone()
+            assert rebuilt[1] == first[1] + 1
+            assert text(rebuilt[2]) == "Inconsistent"
+            assert (text(rebuilt[3]), rebuilt[4]) == ("unknown", None)
+            assert reconciliation_db.enqueue_current_season_republication(
+                database, max_jobs=10
+            )["job_ids"] == []
+        finally:
+            database.close()
+
+
 def test_reconciliation_publishes_frozen_canonical_battle_projection(
     database_url: str,
     archive_server,

@@ -354,9 +354,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         (isInteger(value.start_trophies) && value.start_trophies >= 0)
       ) ||
       !Array.isArray(value.offense_events) ||
-      value.offense_events.length > 8 ||
-      !Array.isArray(value.defense_events) ||
-      value.defense_events.length > 8
+      !Array.isArray(value.defense_events)
     )
       malformed();
     const valid = [

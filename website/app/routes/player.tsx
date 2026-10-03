@@ -938,6 +938,12 @@ function LegendDay({
           </strong>
         </span>
       </summary>
+      {day.uncertainty.includes("attack_count_exceeds_eight") ? (
+        <p className="section-note">{excessNote(day.offenseEvents.length, "attacks")}</p>
+      ) : null}
+      {day.uncertainty.includes("defense_count_exceeds_eight") ? (
+        <p className="section-note">{excessNote(day.defenseEvents.length, "defenses")}</p>
+      ) : null}
       <div className="battle-columns">
         <BattleColumn
           title="Attacks"
@@ -997,7 +1003,8 @@ function BattleColumn({
     <section className="battle-column" aria-label={title}>
       <h3>{title}</h3>
       <ol className="battle-slots">
-        {Array.from({ length: 8 }, (_, index) => {
+        {/* Show every saved battle; the game sometimes returns more than eight. */}
+        {Array.from({ length: Math.max(8, events.length) }, (_, index) => {
           const event = events[index];
           return event ? (
             <li
@@ -1103,6 +1110,10 @@ function formatSigned(value: number | null): string {
 function valueTone(value: number | null): string {
   if (value === null || value === 0) return "score-neutral";
   return value > 0 ? "score-positive" : "score-negative";
+}
+
+function excessNote(count: number, kind: "attacks" | "defenses"): string {
+  return `Clash of Clans returned ${count} ${kind} for this day, more than the usual 8, so this day is marked partial.`;
 }
 
 function formatCount(value: number | null): string {
