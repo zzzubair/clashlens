@@ -473,7 +473,9 @@ and uploads with their failure category.
 once its cause is fixed. Failed processing jobs have no retry command; see
 [failed work](deployment.md#failed-work) and escalate.
 
-**Recovered:** 24 hours after the newest permanent failure.
+**Recovered:** 24 hours after the newest permanent failure. The alert means a
+new permanent failure in the last 24 hours; its recovery means no new one for
+24 hours, not that anything was repaired.
 
 ### Reset publication missing
 

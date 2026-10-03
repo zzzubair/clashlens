@@ -365,37 +365,34 @@ class ObservationProcessor:
     def _process_claim(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
         # PostgreSQL rolls back only one side of a deadlock. Rerun that job under
         # the same claim so it neither stops the worker nor uses up an attempt.
-        for _ in range(DATABASE_CONFLICT_RETRIES):
-            try:
-                return self._process_claim_once(claim, lease_seconds=lease_seconds)
-            except (DeadlockDetected, SerializationFailure):
-                continue
-            except QueryCanceled:
-                # The worker's statement deadline cancelled stuck work and its
-                # transaction rolled back. Give the attempt back so queue
-                # maintenance requeues the job once its lease expires, rather
-                # than failing it if this was its last attempt.
-                try:
-                    self.database.refund_claim_attempt(claim)
-                except (LeaseLost, QueryCanceled):
-                    return ProcessResult(claim.job_id, "lease_lost")
-                return ProcessResult(claim.job_id, "retrying", "database_timeout")
+        reason = "database_deadlock"
         try:
-            return self._fail(claim, "database_deadlock", retryable=True)
-        except (DeadlockDetected, SerializationFailure):
-            # The failed transaction recorded no outcome. Restore its retry
-            # slot so queue maintenance can recover it later, even if conflicts
-            # outlast the lease. Only report retrying once the refund commits;
-            # it is lost only if another worker or maintenance took the job.
-            while True:
+            for _ in range(DATABASE_CONFLICT_RETRIES):
                 try:
-                    self.database.refund_claim_attempt(claim)
-                    break
-                except LeaseLost:
-                    return ProcessResult(claim.job_id, "lease_lost")
+                    return self._process_claim_once(claim, lease_seconds=lease_seconds)
                 except (DeadlockDetected, SerializationFailure):
                     continue
-            return ProcessResult(claim.job_id, "retrying", "database_deadlock")
+            return self._fail(claim, "database_deadlock", retryable=True)
+        except (DeadlockDetected, SerializationFailure):
+            pass
+        except QueryCanceled:
+            # The worker's statement deadline cancelled stuck work and its
+            # transaction rolled back.
+            reason = "database_timeout"
+        # The failed or cancelled transaction recorded no outcome. Restore its
+        # retry slot so queue maintenance can recover it later, rather than
+        # failing it if this was its last attempt, even if conflicts outlast
+        # the lease. Only report retrying once the refund commits; it is lost
+        # only if another worker or maintenance took the job.
+        while True:
+            try:
+                self.database.refund_claim_attempt(claim)
+                break
+            except LeaseLost:
+                return ProcessResult(claim.job_id, "lease_lost")
+            except (DeadlockDetected, SerializationFailure, QueryCanceled):
+                continue
+        return ProcessResult(claim.job_id, "retrying", reason)
 
     def _process_claim_once(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
         if claim.work_type == "reconcile_ranked_day":

@@ -51,7 +51,10 @@ CONDITIONS = {
         "./ops queue-status",
     ),
     "failures": (
-        "A processing job or raw-response upload failed permanently in the last 24 hours",
+        (
+            "A new permanent failure of a processing job or raw-response upload in the last 24 hours"
+            " (recovery means no new permanent failure for 24 hours, not that anything was repaired)"
+        ),
         "./ops failed-items",
     ),
     "processing": (
@@ -368,9 +371,15 @@ def observe(
         findings["collection"] = overdue >= 600
     if metrics_read:
         prefix = "clashlens_collector_"
-        findings["failures"] = any(
-            metrics.get(f"{prefix}newest_failed_{kind}_age_seconds", math.inf) < 86400
-            for kind in ("processing", "upload")
+        recent = []
+        for kind, count in (("processing", "processing"), ("upload", "uploads")):
+            age = metrics.get(f"{prefix}newest_failed_{kind}_age_seconds")
+            if age is None and metrics.get(f"{prefix}failed_{count}") != 0:
+                recent.append(None)
+            else:
+                recent.append(age is not None and age < 86400)
+        findings["failures"] = (
+            True if True in recent else None if None in recent else False
         )
         for name, kind in (("processing", "processing"), ("uploads", "upload")):
             age = metrics.get(f"{prefix}oldest_pending_{kind}_age_seconds")

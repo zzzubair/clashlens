@@ -744,11 +744,14 @@ use the [operating notes](operating.md#respond-to-alerts).
   no freshness breach, and permits an existing freshness alert to recover.
   Use the [collection and processing measurements](operating.md#collection-or-processing-behind)
   to distinguish delayed collection from delayed processing.
-- **A processing job or raw-response upload that failed permanently in the
-  last 24 hours**, from the collector's `newest_failed_processing_age_seconds`
-  and `newest_failed_upload_age_seconds`. Failed jobs stay failed, so this
-  reports new failures: it recovers 24 hours after the newest one. Failures
-  older than that, such as those present at deployment, do not alert.
+- **A new permanent failure of a processing job or raw-response upload in
+  the last 24 hours**, from the collector's
+  `newest_failed_processing_age_seconds` and `newest_failed_upload_age_seconds`.
+  Failed jobs stay failed, so this reports new failures. Its recovery means no
+  new permanent failure for 24 hours, not that anything was repaired: the failed
+  work stays failed until someone fixes it. Failures older than that, such as
+  those present at deployment, do not alert. A missing age counts as unknown
+  unless the matching `failed_processing` or `failed_uploads` count is zero.
 - **Saved work waiting at least one hour**: a job waiting to be processed,
   from `oldest_pending_processing_age_seconds`, or a raw response waiting to
   be uploaded to the archive, from `oldest_pending_upload_age_seconds`. These
@@ -762,6 +765,10 @@ use the [operating notes](operating.md#respond-to-alerts).
   after it, for every Reset since the first record. The check enters the
   private API container and prints only the count. It recovers only when
   every counted Reset is published; a fresh Live Leaderboard does not clear it.
+  The one-hour grace is provisional: no Reset has published normally on
+  production yet. On Oct 2 collection took about 8 minutes and the Live
+  Leaderboard was fully fresh about 13 minutes after Reset. Tighten it once
+  real publication times can be measured.
 
 Missing collector measurements or a failed publication check never clear these
 alerts, and each recovers only when its own measurement does.

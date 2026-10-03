@@ -32,6 +32,8 @@ def runtime(tmp_path, monkeypatch):
             "clashlens_collector_reset_total": 0,
             "clashlens_collector_reset_terminal": 0,
             "clashlens_collector_pending_processing": 0,
+            "clashlens_collector_failed_processing": 0,
+            "clashlens_collector_failed_uploads": 0,
             "clashlens_collector_oldest_pending_processing_age_seconds": 0,
             "clashlens_collector_oldest_pending_upload_age_seconds": 0,
         },
@@ -431,6 +433,26 @@ def test_saved_work_alerts_clear_only_when_their_own_problem_clears(runtime):
     assert not any("publication time" in post["content"] for post in rt.posts[4:])
     state = json.loads((rt.state_dir / "alerts.json").read_text())
     assert "site" not in state["incidents"]
+
+
+def test_missing_failure_age_is_unknown_unless_nothing_has_failed(runtime):
+    rt = runtime
+    trigger(rt, "failures")
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    # An older collector reports failed counts but no newest-failure ages.
+    del rt.metrics["clashlens_collector_newest_failed_upload_age_seconds"]
+    rt.metrics["clashlens_collector_failed_processing"] = 1
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.metrics["clashlens_collector_failed_processing"] = 0
+    del rt.metrics["clashlens_collector_failed_uploads"]
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.metrics["clashlens_collector_failed_uploads"] = 0
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    assert "recovered" in rt.posts[-1]["content"]
 
 
 def test_outside_check_alerts_after_two_minutes_down_and_again_on_recovery(runtime):
