@@ -486,7 +486,7 @@ function GroupCard({
         </p>
       ) : null}
 
-      <add.Form method="post" className="add-player-form" ref={addForm}>
+      <add.Form method="post" action="." className="add-player-form" ref={addForm}>
         <input type="hidden" name="action" value="add-player" />
         <input type="hidden" name="groupId" value={id} />
         <input
@@ -601,7 +601,7 @@ function MemberRow({
             : STATE_LABELS[player.state]}
         </span>
       </span>
-      <remove.Form method="post" className="inline-form">
+      <remove.Form method="post" action="." className="inline-form">
         <input type="hidden" name="action" value="remove-player" />
         <input type="hidden" name="groupId" value={groupId} />
         <input type="hidden" name="tag" value={player.tag} />
