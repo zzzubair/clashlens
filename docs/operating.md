@@ -435,8 +435,9 @@ each such result is queued once and an earlier request never holds back the
 player's later days. Players with a rebuild of that day or Season already
 queued or running wait for a later run. A request that failed while its
 result is still the latest is not queued again but listed, at most
-`--max-jobs` of them, in `failed_blockers`. Until October 2026 a failed ending Reset check never
-recalculated its day, which left 4,705 ended days `Live` on 2026-10-03.
+`--max-jobs` of them, in `failed_blockers`. Until October 2026 a failed
+ending Reset check never recalculated its day, which left 4,705 ended days
+`Live` on 2026-10-03.
 When none remain, it queues up to `--max-jobs` published current-season
 player-days that lack the current reconciliation rule version.
 
