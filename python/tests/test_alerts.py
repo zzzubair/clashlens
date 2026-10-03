@@ -47,7 +47,7 @@ def runtime(tmp_path, monkeypatch):
         backup_failed=False,
         backup_error=None,
         reads_failed=False,
-        leaderboard="0 13000",
+        leaderboard="0 13000 0",
         publication="0",
         site_status=200,
         disk_used=10,
@@ -125,6 +125,14 @@ def runtime(tmp_path, monkeypatch):
 
     monkeypatch.setattr(alerts, "request", local_request)
     monkeypatch.setattr(alerts.time, "time", lambda: rt.now)
+    # Each condition's own rule is tested without the holds; the holds have
+    # their own tests below.
+    rt.holds = {
+        "RECOVERY_HOLD": alerts.RECOVERY_HOLD,
+        "LEADERBOARD_HOLD": alerts.LEADERBOARD_HOLD,
+    }
+    monkeypatch.setattr(alerts, "RECOVERY_HOLD", 0)
+    monkeypatch.setattr(alerts, "LEADERBOARD_HOLD", 0)
     monkeypatch.setattr(
         alerts.shutil,
         "disk_usage",
@@ -191,7 +199,7 @@ def trigger(rt, condition, value=True):
     elif condition == "collection":
         rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
     elif condition == "leaderboard":
-        rt.leaderboard = "1 13000" if value else "0 13000"
+        rt.leaderboard = "1 13000 1801" if value else "0 13000 0"
     elif condition == "failures":
         rt.metrics["clashlens_collector_newest_failed_upload_age_seconds"] = (
             86399 if value else 86400
@@ -403,16 +411,113 @@ def test_unreadable_leaderboard_freshness_fails_the_check_without_clearing(runti
 
 def test_empty_leaderboard_is_healthy_and_recovers_an_open_alert(runtime):
     rt = runtime
-    rt.leaderboard = "0 0"
+    rt.leaderboard = "0 0 0"
     assert rt.run() == 0
     assert not rt.posts
     trigger(rt, "leaderboard")
     assert rt.run() == 0
     assert len(rt.posts) == 1
-    rt.leaderboard = "0 0"
+    rt.leaderboard = "0 0 0"
     assert rt.run() == 0
     assert len(rt.posts) == 2
     assert "recovered" in rt.posts[-1]["content"]
+
+
+def test_stale_leaderboard_alerts_only_when_widespread_or_long_for_five_minutes(
+    runtime, monkeypatch
+):
+    rt = runtime
+    for name, value in rt.holds.items():
+        monkeypatch.setattr(alerts, name, value)
+
+    def minutes(count, board):
+        rt.leaderboard = board
+        for _ in range(count):
+            assert rt.run() == 0
+            rt.now += 60
+
+    # Exactly 1% stale, or one player exactly 30 minutes old, is tolerated.
+    minutes(10, "130 13000 1800")
+    # Over the line for four minutes, then back: no alert and no recovery.
+    minutes(4, "131 13000 900")
+    minutes(1, "0 13000 300")
+    minutes(4, "1 13000 1801")
+    minutes(1, "0 13000 300")
+    # During Reset work only the oldest player's age counts.
+    rt.metrics["clashlens_collector_reset_total"] = 200
+    rt.metrics["clashlens_collector_reset_terminal"] = 199
+    minutes(10, "9000 13000 1500")
+    assert not rt.posts
+    minutes(5, "9000 13000 1801")
+    assert not rt.posts
+    minutes(1, "9000 13000 1801")
+    assert len(rt.posts) == 1
+    assert "Live Leaderboard" in rt.posts[0]["content"]
+
+
+def test_recovery_waits_for_fifteen_clear_minutes_and_folds_repeats(
+    runtime, monkeypatch
+):
+    rt = runtime
+    for name, value in rt.holds.items():
+        monkeypatch.setattr(alerts, name, value)
+    trigger(rt, "reads")
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    # Clear for 14 minutes, then failing again: still the same incident.
+    trigger(rt, "reads", False)
+    for _ in range(15):
+        rt.now += 60
+        assert rt.run() == 0
+    trigger(rt, "reads")
+    rt.now += 60
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    trigger(rt, "reads", False)
+    rt.now += 60
+    cleared = rt.now
+    assert rt.run() == 0
+    rt.now += 899
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.now += 1
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    first_cleared = datetime.fromtimestamp(cleared, UTC).isoformat()
+    assert f"recovered at {first_cleared}" in rt.posts[1]["content"]
+    rt.now += 60
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+
+
+def test_stopped_time_counts_toward_neither_hold(runtime, monkeypatch):
+    rt = runtime
+    for name, value in rt.holds.items():
+        monkeypatch.setattr(alerts, name, value)
+    trigger(rt, "reads")
+    assert rt.run() == 0
+    trigger(rt, "reads", False)
+    rt.leaderboard = "0 13000 1801"
+    rt.now += 60
+    assert rt.run() == 0
+    intent = rt.state_dir / "alert-intent"
+    intent.write_text("stopped\n")
+    rt.now += 3600
+    intent.write_text("running\n")
+    os.utime(intent, (rt.now, rt.now))
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.now += 299
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.now += 1
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    assert "Live Leaderboard" in rt.posts[1]["content"]
+    rt.now += 600
+    assert rt.run() == 0
+    assert len(rt.posts) == 3
+    assert "recovered" in rt.posts[2]["content"]
 
 
 def test_saved_work_alerts_clear_only_when_their_own_problem_clears(runtime):
@@ -617,7 +722,7 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
             capsys.readouterr()
             alerts.leaderboard_freshness_probe(accepted_at)
             runtime.leaderboard = capsys.readouterr().out.strip()
-            assert runtime.leaderboard == "0 0"
+            assert runtime.leaderboard == "0 0 0"
             runtime.now = accepted_at.timestamp()
             assert runtime.run() == 0
             assert not runtime.posts
@@ -752,7 +857,7 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
             ))
             board, counts = alert_at(accepted_at + timedelta(hours=3))
             assert [entry["tag"] for entry in board["entries"]] == ["#2PP"]
-            assert counts == "1 1"
+            assert counts == "1 1 10800"
             assert len(runtime.posts) == 1
             # Not found, then the same answer again: hidden, and the alert clears.
             check(not_found, accepted_at + timedelta(hours=3), "nf-404", status=404)
@@ -763,7 +868,7 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
             board, counts = alert_at(accepted_at + timedelta(hours=3, minutes=6))
             assert board["entries"] == [] and board["total_entries"] == 0
             assert board["tracked_population"] == 1
-            assert counts == "0 0"
+            assert counts == "0 0 0"
             assert len(runtime.posts) == 2
             assert "recovered" in runtime.posts[-1]["content"]
             if later_status is not None:
@@ -790,7 +895,7 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
             board, counts = alert_at(accepted_at + timedelta(hours=3, minutes=9))
             assert board["entries"] == [] and board["total_entries"] == 0
             assert board["tracked_population"] == 1
-            assert counts == "0 0"
+            assert counts == "0 0 0"
             assert len(runtime.posts) == 2
             # The next successful check brings the player straight back, fresh.
             found_at = accepted_at + timedelta(hours=3, minutes=10)
@@ -799,7 +904,7 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
             [entry] = board["entries"]
             assert entry["tag"] == "#2PP"
             assert entry["observed_at"] == found_at.isoformat()
-            assert counts == "0 1"
+            assert counts == "0 1 60"
             assert len(runtime.posts) == 2
         finally:
             api.close()

@@ -737,10 +737,18 @@ use the [operating notes](operating.md#respond-to-alerts).
   `clashlens_collector_reset_total > clashlens_collector_reset_terminal`, or while
   those metrics or the overdue age are missing. Checks resume as soon as Reset
   work finishes, with no fixed clock window.
-- **Any stale Live Leaderboard entry**, using the
+- **A widely or badly stale Live Leaderboard for five minutes**: more than
+  **1%** of entries last updated over ten minutes ago, or any one entry over
+  **30 minutes** ago, on every check for **300 seconds** (six checks in a
+  row; an unavailable check does not restart the count). Exactly 1% or exactly
+  30 minutes does not count. Until Reset work is known to be finished, measured
+  as for the overdue-check alert, only the 30-minute rule applies, because the
+  Reset pause and sweep leave most players over ten minutes old for a while.
+  Staleness uses the
   [Live Leaderboard membership and freshness rules](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
-  printing only two counts, with the same not-found exclusion.
+  printing only the stale count, the entry count and the oldest entry's age in
+  seconds, with the same not-found exclusion.
   [Migration 0043](../deploy/migrations/0043_api_profile_not_found_read.sql) adds
   the durable not-found time to the existing response state, fills it from
   retained responses, and grants the private API read access. It adds no index
@@ -754,9 +762,15 @@ use the [operating notes](operating.md#respond-to-alerts).
   is a successful profile already applied to the shown profile; otherwise the
   identifier stays unknown until the next profile is applied.
   It retains one time and one content identifier per player, about
-  1 MiB for 13,000 players, with no growing check history. There is no percentage
-  allowance or extra alert delay. A valid empty leaderboard reports `0 0`, has
-  no freshness breach, and permits an existing freshness alert to recover.
+  1 MiB for 13,000 players, with no growing check history. A valid empty
+  leaderboard reports `0 0 0`, has no freshness breach, and permits an existing
+  freshness alert to recover. The thresholds come from Oct 3, 2026: the old
+  any-stale-entry rule alerted at 18:30, 20:04 and 20:10 UTC and recovered
+  within 3 to 10 minutes each time, while minute-by-minute samples from
+  20:41 UTC showed 11,869 entries, none over ten minutes old and the oldest
+  under eight minutes. Production then used about 130 of its 150 official API
+  requests per second, so a single player sometimes waits past ten minutes.
+  1% is about 119 players, and 30 minutes is three times the freshness limit.
   Use the [collection and processing measurements](operating.md#collection-or-processing-behind)
   to distinguish delayed collection from delayed processing.
 - **A new permanent failure of a processing job or raw-response upload in
@@ -796,13 +810,20 @@ alerts, and each recovers only when its own measurement does.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.
+A recovery is sent only after **15 minutes** (900 seconds) of checks that all
+show the condition clear, and it reports when the condition first cleared.
+If the problem returns sooner, the open incident continues with no new
+message, so several short incidents become one alert and one recovery.
+An unavailable measurement or an intentional stop restarts the 15 minutes,
+and an intentional stop also restarts the Live Leaderboard's five minutes.
+A problem that never alerted never sends a recovery.
 Missing disk measurements or restart history never clear an existing alert.
 `alerts.json` and `alerts.lock` live under the existing private ops state
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
 replaced with mode 600 and contains eleven condition records with at most one
-pending transition each, plus when backup check timeouts or errors began,
-normally under 4 KiB. It keeps no growing event history, keys, URLs, player lists
-or account data.
+pending transition and one first-clear time each, plus when backup check
+timeouts or errors and Live Leaderboard staleness began, normally under 4 KiB.
+It keeps no growing event history, keys, URLs, player lists or account data.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
 responses fail the command and leave the transition pending for the next run.
@@ -836,7 +857,8 @@ Capacity budgets remain deferred under #140.
 
 The Paris relay checks `https://preview.clashlens.net/` and its `/healthz`
 every minute, from outside rogue, and posts to the same Discord channel when
-either has failed every check for two minutes, then again when both answer.
+either has failed every check for two minutes, then again when both have
+answered every check for 15 minutes.
 A check fails on a timeout after 10 seconds, a redirect or any non-2xx answer.
 An intentional `./ops down` also alerts here. It runs the same
 [`alerts.py`](../python/src/clashlens/alerts.py) with `--uptime`, using the

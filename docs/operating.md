@@ -208,6 +208,17 @@ A successful exit means the check and delivery worked, not that all eleven
 conditions are healthy. The website-unreachable alert comes from the
 [outside check](deployment.md#outside-availability-check) on the Paris relay.
 
+Two thresholds keep the channel quiet enough to read:
+
+- **Live Leaderboard:** alerts only when more than 1% of its players were last
+  updated over ten minutes ago, or one player over 30 minutes ago, on every
+  check for five minutes. During unfinished Reset work only the 30-minute rule
+  counts. One player briefly past ten minutes is normal near the official API
+  request limit and does not alert.
+- **Every recovery:** sent only after 15 minutes of clear checks. A problem
+  that returns within those 15 minutes continues the same incident without a
+  new message, so the recovery can arrive up to 15 minutes after the fix.
+
 ### Tracker stopped
 
 Use the [fetch-gap condition](deployment.md#alert-conditions), which accounts

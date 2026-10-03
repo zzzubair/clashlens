@@ -708,7 +708,7 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
             monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
             capsys.readouterr()
             alerts.leaderboard_freshness_probe(checked_at + timedelta(minutes=1))
-            assert capsys.readouterr().out.strip() == "0 1"
+            assert capsys.readouterr().out.strip() == "0 1 60"
         finally:
             if api is not None:
                 api.close()
@@ -891,7 +891,9 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
             url_file.write_text(as_api_role(connection_info))
             monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
             capsys.readouterr()
-            for seconds, expected in ((599, "0 1"), (600, "0 1"), (600.5, "1 1"), (720, "1 1")):
+            for seconds, expected in (
+                (599, "0 1 599"), (600, "0 1 600"), (600.5, "1 1 600"), (720, "1 1 720")
+            ):
                 now = checked_at + timedelta(seconds=seconds)
                 assert page(now)[:2] == ("fresh", checked_at.isoformat())
                 alerts.leaderboard_freshness_probe(now)
