@@ -251,7 +251,9 @@ A domain change is complete only when every affected source observation, derived
 - A battle saved after its ended day's result was published is added to that
   day by a once-per-Reset check. From 05:30 UTC, every 10 minutes until it
   runs, the worker waits for the Reset sweep to finish and for every response
-  fetched before it finished to be processed. It then looks at every battle
+  fetched before it finished to be processed, except
+  [settlement checks'](collector-polling.md#settlement-check-20-minutes-after-reset).
+  It then looks at every battle
   on the previous 7 Legend days with a report saved within 5 minutes of its
   day's end or later. For each player who reported that battle, the day's
   latest saved result must list their report and whether the two players'

@@ -191,11 +191,10 @@ its daily log; on 2026-10-02 that was about 13 copies per player-day and
 1.5-2 GB a day. Since migration 0052, `./ops` runs
 `python -m clashlens.ranked_day_compaction` in the worker container from the
 `clashlens-ranked-day-compaction.timer`, 5 minutes after the previous run
-finished. Once a Legend day has ended and its Reset work is done (the Reset
-sweep has finished, every response fetched before then has been processed and
-at least 30 minutes have passed, the same check the late-battle sweep waits
-for), the run deletes that day's replaced copies with their daily logs and
-adjustments. It keeps:
+finished. Once a Legend day has ended and its Reset work is done (the same
+check the [late-battle sweep](domain.md#6-ranked-day-and-leaderboard-snapshots)
+waits for, and at least 30 minutes have passed), the run deletes that day's
+replaced copies with their daily logs and adjustments. It keeps:
 
 - the newest copy of each player-day, and the copy the newest daily log points at;
 - every copy a publication generation, publication manifest, frozen
