@@ -459,6 +459,17 @@ def _evaluate_reset_baseline(
     profile_valid = bool(profile["valid"])
     battle_log_valid = bool(battle_log["valid"])
     hard_failure = any(endpoint["hard_failure"] for endpoint in endpoints.values())
+    # The profile proves the Reset only if the battle log was collected at or
+    # after it, so the log shows every battle before the profile.
+    if (
+        profile["collected_at"] is not None
+        and battle_log["collected_at"] is not None
+        and battle_log["collected_at"] < profile["collected_at"]
+    ):
+        retrying = profile["work_status"] in {"pending", "waiting_retry"}
+        reasons.append(f"battle_log_before_profile{'_retrying' if retrying else ''}")
+        profile_valid = False
+        hard_failure = hard_failure or not retrying
     if profile_valid and battle_log_valid and not hard_failure:
         state = "complete"
         reasons = []
@@ -877,6 +888,8 @@ def _load_reset_endpoint_evidence(
 
     return {
         "observation_id": observation_id,
+        "collected_at": row[4],
+        "work_status": _text_value(row[14]),
         "processing_outcome_id": processing_id,
         "processing_outcome": processing_outcome,
         "reasons": reasons,

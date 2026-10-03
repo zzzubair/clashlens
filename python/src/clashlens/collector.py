@@ -183,6 +183,9 @@ class Collector:
             if reuse_fresh_profile:
                 selected_endpoints = ("battle_log",)
                 selected_reservations = (reservations[1],)
+            # Reset responses go out one after another, so each battle log is
+            # collected after the profile it must cover.
+            in_order = lane == "reset"
             tasks = [
                 asyncio.create_task(
                     self._collect_endpoint(
@@ -196,9 +199,14 @@ class Collector:
                 for endpoint, reservation in zip(
                     selected_endpoints, selected_reservations, strict=True
                 )
+                if not in_order
             ]
             try:
                 outcomes = list(await asyncio.gather(*tasks))
+                for endpoint, reservation in zip(selected_endpoints if in_order else (), selected_reservations):
+                    outcomes.append(outcomes[-1] if set(outcomes) - {"recorded"} else await self._collect_endpoint(
+                        work, endpoint, lane, pool, reservation=reservation
+                    ))
                 if (
                     reuse_fresh_profile
                     and work.profile_fresh_until is not None
@@ -408,13 +416,12 @@ class Collector:
                 if owned_reservation:
                     current_reservation.__enter__()
                 started_at = datetime.now(UTC)
-                expiry = asyncio.timeout(
-                    None
-                    if work.expires_at is None
-                    else (work.expires_at - started_at).total_seconds()
-                )
+                remaining = work.expires_at and (work.expires_at - started_at).total_seconds()
+                expiry = asyncio.timeout(remaining)
                 try:
                     try:
+                        if remaining is not None and remaining <= 0:
+                            raise ProviderFailure("work_expired", retryable=False)
                         async with expiry:
                             if endpoint == "global_player_rankings":
                                 response = await self.client.fetch_rankings(pool)
@@ -422,8 +429,8 @@ class Collector:
                                 response = await self.client.fetch_player(
                                     pool, work.normalized_tag, endpoint
                                 )
-                    except TimeoutError as timeout:
-                        if not expiry.expired():
+                    except (TimeoutError, asyncio.CancelledError) as timeout:
+                        if not expiry.expired() or asyncio.current_task().cancelling():
                             raise
                         raise ProviderFailure("work_expired", retryable=False) from timeout
                 except ProviderFailure as error:
@@ -1326,12 +1333,6 @@ class Collector:
             ),
             f'clashlens_collector_archive_health{{state="{self.archive_health}"}} 1',
         ]
-        outage = getattr(self.client, "provider_outage", None)
-        if outage is not None:
-            lines += [
-                f"clashlens_collector_provider_outage {int(outage.active)}",
-                f"clashlens_collector_provider_outage_pauses_total {outage.pauses}",
-            ]
         for pool_name, pool in (
             ("regular", self.regular_keys),
             ("interactive", self.interactive_keys),

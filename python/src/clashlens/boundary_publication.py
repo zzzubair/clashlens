@@ -37,7 +37,8 @@ def reevaluate_boundary_publications(database) -> int:
             is None
         ):
             return 0
-        reset_baselines.settle_failed_reset_work(database)
+    reset_baselines.settle_failed_reset_work(database)
+    with database.pool.connection() as connection:
         with connection.transaction():
             generations = connection.execute(
                 """

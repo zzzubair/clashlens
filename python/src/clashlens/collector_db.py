@@ -493,6 +493,10 @@ class CollectorDatabase:
                     ),
                     prepare=False,
                 ).fetchall()
+        # Regular requests, even ones waiting out an outage, give up at the
+        # next Reset so it can start on time.
+        reset_at = claim_time.astimezone(UTC).replace(hour=5, minute=0, second=0, microsecond=0)
+        reset_at += timedelta(days=int(reset_at <= claim_time))
         return [
             CollectorWork(
                 int(row[0]),
@@ -500,6 +504,7 @@ class CollectorDatabase:
                 row[2],
                 profile_fresh_until=row[3],
                 first_battle_pending=bool(row[4]),
+                expires_at=reset_at,
             )
             for row in rows
         ]
@@ -574,7 +579,7 @@ class CollectorDatabase:
                         sweep_id=None if row[5] is None else int(row[5]),
                         league_history_required=str(row[7]) != "not_applicable" and unanswered(row[10]),
                         profile_required=unanswered(row[8]),
-                        battle_log_required=unanswered(row[9]),
+                        battle_log_required=unanswered(row[8]) or unanswered(row[9]),
                         expires_at=row[11],
                     )
                     for row in rows

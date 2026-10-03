@@ -365,7 +365,6 @@ class ProviderOutage:
         self.failures = 0
         self.delay = 0.0
         self.paused_until = 0.0
-        self.pauses = 0
         self._probing = False
         self._stopped = False
         self._changed = asyncio.Event()
@@ -411,7 +410,6 @@ class ProviderOutage:
             self.delay = min(self.max_delay, self.delay * 2)
         elif not self.delay and self.failures >= self.threshold:
             self.delay = self.base_delay
-            self.pauses += 1
         else:
             return
         self.paused_until = monotonic() + self.delay

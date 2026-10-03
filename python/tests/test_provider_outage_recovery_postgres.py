@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -29,17 +30,23 @@ class _Provider(BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.1"
     mode = "drop"
+    requests = 0
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
     def do_GET(self) -> None:
+        type(self).requests += 1
+        if type(self).mode == "slow":
+            time.sleep(1)
         if type(self).mode == "drop":
             self.close_connection = True
             self.connection.shutdown(2)
             return
-        unavailable = type(self).mode == "unavailable" or (
-            type(self).mode == "battle_log_unavailable" and "/battlelog" in self.path
+        unavailable = (
+            type(self).mode == "unavailable"
+            or (type(self).mode == "battle_log_unavailable" and "/battlelog" in self.path)
+            or (type(self).mode == "profile_unavailable" and "/battlelog" not in self.path)
         )
         status = 503 if unavailable else 200
         body = b'{"tag":"#2PP"}' if status == 200 else b"{}"
@@ -53,6 +60,7 @@ class _Provider(BaseHTTPRequestHandler):
 @contextmanager
 def _provider():
     _Provider.mode = "drop"
+    _Provider.requests = 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -153,8 +161,8 @@ def test_reset_given_up_without_any_response_still_settles_its_publication(
 
         # A worker (re)start revisits the failed work: no processing job
         # exists, yet the Reset records failed evidence and its publication
-        # stops waiting for this player.
-        worker = Database(connection_info)
+        # stops waiting for this player, even with one database connection.
+        worker = Database(connection_info, max_size=1)
         try:
             boundary_publication.reevaluate_boundary_publications(worker)
             boundary_publication.reevaluate_boundary_publications(worker)
@@ -233,6 +241,90 @@ def test_reset_retry_waiting_out_a_pause_stops_when_its_legend_day_ends(
         assert asyncio.run(run()) == "failed"
         # No later answer is saved as if it were the Reset.
         assert _work(connection_info) == ("failed", None, None)
+
+
+def test_retried_reset_profile_brings_a_battle_log_collected_after_it(
+    database_url: str, tmp_path
+) -> None:
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before the retry could be checked")
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, _sweep_id = _reset_work(connection_info, boundary)
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        _Provider.mode = "profile_unavailable"
+
+        assert _collect_reset(collector, database) == "retrying"
+        # The battle log waits for its profile instead of going out first.
+        assert _Provider.requests == 3
+        assert _work(connection_info)[2] is None
+
+        _Provider.mode = "answer"
+        assert _collect_reset(collector, database) == "complete"
+        with psycopg.connect(connection_info) as connection:
+            profile_at, battle_log_at = connection.execute(
+                "SELECT profile.response_completed_at, battle_log.request_started_at"
+                " FROM collector_work AS work"
+                " JOIN collector_observations AS profile ON profile.id = work.profile_observation_id"
+                " JOIN collector_observations AS battle_log"
+                "   ON battle_log.id = work.battle_log_observation_id"
+                " WHERE work.kind = 'reset_baseline'"
+            ).fetchone()
+        assert battle_log_at >= profile_at
+
+
+@pytest.mark.parametrize("mode", ["unavailable", "slow"])
+def test_reset_request_never_runs_past_its_legend_day(
+    database_url: str, tmp_path, mode: str
+) -> None:
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before the retry could be checked")
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, _sweep_id = _reset_work(connection_info, boundary)
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        _Provider.mode = mode
+        (intent,) = database.pending_intents(
+            limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+        )
+        # Stand-in for 04:55 UTC: a server error's retry wait, or a slow
+        # answer, runs past the end of the Legend day.
+        intent = replace(intent, expires_at=datetime.now(UTC) + timedelta(seconds=0.2))
+
+        assert asyncio.run(asyncio.wait_for(collector.collect_intent(intent), 5)) == "failed"
+        # No second attempt starts after the cutoff.
+        assert _Provider.requests == 1
+        assert _work(connection_info)[0] == "failed"
+
+
+def test_regular_requests_waiting_out_an_outage_give_up_at_the_reset(
+    database_url: str, tmp_path
+) -> None:
+    claim_at = datetime(2026, 8, 4, 4, 30, tzinfo=UTC)
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "INSERT INTO players (normalized_tag, active, next_due_at) VALUES (%s, true, %s)",
+                (TAG, claim_at - timedelta(minutes=1)),
+            )
+        database = CollectorDatabase(connection_info)
+        (work,) = database.claim_due_players(limit=10, now=claim_at)
+        # Regular work admitted before 04:55 gives up at the 05:00 Reset.
+        assert work.expires_at == datetime(2026, 8, 4, 5, tzinfo=UTC)
+
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector.client.provider_outage = ProviderOutage(threshold=1, base_delay=30)
+
+        async def run() -> list[str]:
+            await collector.collect_player(replace(work, expires_at=None), lane="ordinary")
+            assert collector.client.provider_outage.active
+            # Stand-in for 05:00: the outage pause outlasts the Legend day.
+            waiting = replace(work, expires_at=datetime.now(UTC) + timedelta(seconds=0.3))
+            return await asyncio.wait_for(collector.collect_player(waiting, lane="ordinary"), 5)
+
+        assert "recorded" not in asyncio.run(run())
 
 
 def test_reset_server_error_is_not_final_while_the_collector_retries(

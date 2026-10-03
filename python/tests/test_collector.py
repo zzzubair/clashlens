@@ -237,7 +237,7 @@ def _collector(spool: _Spool, store: _Store, client: _Client) -> Collector:
     )
 
 
-def test_reset_pair_is_reserved_then_fetched_concurrently_then_handed_off() -> None:
+def test_reset_pair_is_reserved_then_fetched_profile_first_then_handed_off() -> None:
     spool = _Spool()
     store = _Store(spool)
     client = _Client(spool)
@@ -250,10 +250,12 @@ def test_reset_pair_is_reserved_then_fetched_concurrently_then_handed_off() -> N
     )
 
     assert outcomes == ["recorded", "recorded"]
-    assert client.maximum_active == 2
-    first_fetch = min(
-        index for index, event in enumerate(spool.events) if event.startswith("fetch:")
-    )
+    # The battle log goes out only after the profile, so it shows every
+    # battle before the profile that proves the Reset.
+    assert client.maximum_active == 1
+    fetches = [event for event in spool.events if event.startswith("fetch:")]
+    assert fetches == ["fetch:profile", "fetch:battle_log"]
+    first_fetch = spool.events.index("fetch:profile")
     assert spool.events[:first_fetch] == ["reserve", "reserve"]
     assert len(store.handoffs) == 2
     assert all(
@@ -393,7 +395,7 @@ def test_regular_collection_fetches_profile_when_first_battle_fails() -> None:
     assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
 
 
-def test_reset_pair_publishes_spool_handoffs_concurrently() -> None:
+def test_interactive_pair_publishes_spool_handoffs_concurrently() -> None:
     class ConcurrentSpool(_Spool):
         def __init__(self) -> None:
             super().__init__()
@@ -415,7 +417,7 @@ def test_reset_pair_publishes_spool_handoffs_concurrently() -> None:
 
     assert asyncio.run(
         collector.collect_player(
-            CollectorWork(1, "#2PP", datetime.now(UTC)), lane="reset"
+            CollectorWork(1, "#2PP", datetime.now(UTC)), lane="interactive"
         )
     ) == ["recorded", "recorded"]
 

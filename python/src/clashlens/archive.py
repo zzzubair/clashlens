@@ -586,8 +586,7 @@ class SpoolFirstReader:
 
     def readiness(self) -> dict[str, Any]:
         ready, reason = self.spool.readiness(admission=False)
-        admission = self.spool.readiness()[1] if ready else reason
-        return {"ready": ready, "component": "spool", "reason": reason, "admission": admission, "remote_health": self.archive.check_marker_health()}
+        return {"ready": ready, "component": "spool", "reason": reason, "remote_health": self.archive.check_marker_health()}
 
     def check_marker_health(self) -> str:
         return self.archive.check_marker_health()

@@ -313,9 +313,12 @@ the work waits five seconds and runs again instead of failing. Runs that fail
 during a provider-outage pause (below) are not counted. Once the API is
 answering again, the work gets three more failed runs, then fails and settles
 as missing, so a few failing players cannot hold ordinary collection. The
-count is kept in collector memory, so a restart allows three more. A retry
-fetches only the responses that have no usable answer yet, so a profile saved
-before the player's first battle is kept. Nothing retries past 04:55 UTC, when
+count is kept in collector memory, so a restart allows three more. Reset
+work fetches the profile, then the battle log, then any league history, and
+stops at the first one that fails. A retry fetches only the responses that have
+no usable answer yet, so a profile saved before the player's first battle is
+kept; a retried profile always brings a new battle log after it. Nothing
+retries past 04:55 UTC, when
 the Legend day it belongs to ends: a request still waiting then, including one
 held by a provider-outage pause, is dropped and the work fails. HTTP 401 or
 403 still fails it at once. Raw responses that will be kept are published
@@ -329,19 +332,20 @@ probe. Each failed probe doubles the wait, up to 60 seconds; any other answer
 ends the pause and the waiting requests start under the normal key limits.
 HTTP 429 and 401/403 keep their per-key handling and never start the pause, so
 an outage neither pauses nor disables a key. Shutdown releases waiting requests
-as retryable failures. `/metrics` reports `clashlens_collector_provider_outage`
-(1 while paused) and `clashlens_collector_provider_outage_pauses_total`.
+as retryable failures.
 
 Reset work that fails with no response has no processing job. The worker
 checks every 10 seconds, and at start, for failed Reset work of any age without
-final evidence, up to 100 rows per check. It records the missing or failed responses as
-`failed` evidence, and that player's Reset publication becomes unavailable
+final evidence, up to 100 rows per check. It records the missing or failed
+responses as `failed` evidence, and that player's Reset publication becomes unavailable
 instead of waiting forever. A Reset HTTP 429 or 5xx response counts as failed
 only after its work fails; while the work is retrying it stays `partial`. A
 retried profile proves the Reset only if it was collected before the player's
 first battle of the new Legend day, so a later profile is never used as the
-exact Reset value. A profile or battle log collected after 04:55 UTC the next
-day is rejected as late.
+exact Reset value. A profile also proves the Reset only when its battle log
+was collected at the same time or later, so the log shows every battle before
+the profile. A profile or battle log collected after 04:55 UTC the next day is
+rejected as late. These responses stay saved as evidence either way.
 
 Refresh and initial collection use the separate interactive key. Refreshes
 coalesce while active, have a 30-second cooldown, and never change the regular
@@ -352,6 +356,8 @@ At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
 profile/battle work row per member. Regular work stays blocked until all Reset
 work is terminal; unfinished older Reset work also blocks the next boundary.
+A regular request still waiting at 05:00, for example during a provider-outage
+pause, is dropped, so the Reset sweep starts on time even mid-outage.
 A Reset outage therefore holds ordinary collection while the provider-outage
 pause lasts, plus at most three more failed runs of each Reset work row.
 
