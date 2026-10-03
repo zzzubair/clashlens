@@ -155,6 +155,8 @@ describe("blog posts", () => {
     "//evil.example/x.png",
     "/\\evil.example/x.png",
     "/\\[broken",
+    "//site.invalid/cover.png",
+    "/\\site.invalid/cover.png",
     "https://images.example:bad/cover.png",
     "http://images.example/cover.png",
     "images/cover.png",

@@ -178,7 +178,7 @@ function unquote(value: string): string {
 
 /** A path that stays on this site, or an https URL, that both parse as addresses. */
 function isValidCover(value: string): boolean {
-  if (/\s/.test(value)) return false;
+  if (/\s/.test(value) || /^\/[/\\]/.test(value)) return false;
   const base = "https://site.invalid";
   try {
     const url = new URL(value, base);
