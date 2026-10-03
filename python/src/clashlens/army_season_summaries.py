@@ -241,13 +241,15 @@ def _project_lens(
             usage = totals["usage"].setdefault((typed_id, quantity), [0, 0, 0, 0])
             for index, count in enumerate(counts):
                 usage[index] += count
-    _count_facts(
-        connection,
-        {lens: totals},
-        "official_season_id = %s AND lens = %s"
-        " AND NOT (season_day_number = ANY(%s::integer[]))",
-        (season_id, lens, saved_days),
-    )
+    remaining_days = [day for day in _SEASON_DAYS if day not in saved_days]
+    if remaining_days:
+        _count_facts(
+            connection,
+            {lens: totals},
+            "official_season_id = %s AND lens = %s"
+            " AND season_day_number = ANY(%s::integer[])",
+            (season_id, lens, remaining_days),
+        )
     missing = sorted(set(_SEASON_DAYS) - observed)
     coverage_state = "complete" if len(observed) == 28 and not missing else "partial"
     summaries: dict[str, Any] = {}

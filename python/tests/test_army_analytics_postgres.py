@@ -448,6 +448,131 @@ def test_army_fact_statements_are_bounded_and_pinned_failed_decodes_survive(
     assert large_postgres <= small_postgres + 1
 
 
+def test_battle_moved_to_the_next_day_is_counted_once_in_the_season(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from clashlens.army_season_summaries import _project_lens
+
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server, monkeypatch)
+        try:
+            _observation, battle_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="army-moved-battle",
+                endpoint="battle_log",
+                body=json.dumps(
+                    {
+                        "items": [
+                            _battle_row(
+                                opponent="#8PP",
+                                offset_hours=1,
+                                code=FIXTURE_CODE,
+                                stars=3,
+                                destruction=100,
+                            )
+                        ]
+                    }
+                ).encode(),
+                observed_at=DAY_START + timedelta(hours=2),
+                normalized_tag="#2PP",
+            )
+            assert processor.process_job(battle_job, owner="moved").outcome in {
+                "processed",
+                "processed_with_gaps",
+            }
+            _mark_day_complete(database)
+            database._suppress_fixture_enqueue = True
+            next_day = DAY_START + timedelta(days=1)
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                battle_id = connection.execute(
+                    "SELECT id FROM legend_battles WHERE attacker_player_id = %s",
+                    (player_id,),
+                ).fetchone()[0]
+                event = {
+                    "battle_id": battle_id,
+                    "lens": "offense",
+                    "included": True,
+                    "battle_timestamp": (DAY_START + timedelta(hours=1)).isoformat(),
+                    "trophy_change": 40,
+                    "stars": 3,
+                    "destruction_percentage": 100,
+                }
+
+                def publish_log(day_start: datetime, day_number: int) -> None:
+                    connection.execute(
+                        """
+                        INSERT INTO api_player_daily_logs (
+                            player_id, ranked_day_start, version, state,
+                            coverage, adjustments, battles, partial_reasons,
+                            ranked_day_end, official_season_id,
+                            season_day_number, confidence, attack_count,
+                            attack_three_star_count, attack_gain,
+                            defense_count, defense_three_star_count,
+                            defense_loss, net_trophy_change
+                        ) VALUES (
+                            %s, %s, 1, 'Complete', 'complete', %s, %s, %s, %s,
+                            %s, %s, 'exact', 1, 1, 40, 0, 0, 0, 40
+                        )
+                        """,
+                        (
+                            player_id,
+                            day_start,
+                            Jsonb([]),
+                            Jsonb([event]),
+                            Jsonb([]),
+                            day_start + timedelta(days=1),
+                            SEASON_ID,
+                            day_number,
+                        ),
+                    )
+
+                publish_log(DAY_START, 23)
+                army_ingestion._build_army_facts(
+                    database, connection, DAY_START.isoformat()
+                )
+                # A correction moves the battle across the Reset to the next day.
+                connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end,
+                        official_season_id, season_day_number,
+                        season_anchor_rule_version, reconciliation_rule_version,
+                        result_hash, version, state, confidence, input_hash,
+                        evidence_complete, coverage_complete, start_trophies
+                    ) VALUES (
+                        %s, %s, %s, %s, 24, 'legend-season-anchor-v1',
+                        'legend-ranked-day-v1', repeat('c', 64), 1,
+                        'Complete', 'exact', repeat('d', 64), true, true, 6040
+                    )
+                    """,
+                    (player_id, next_day, next_day + timedelta(days=1), SEASON_ID),
+                )
+                publish_log(next_day, 24)
+                army_ingestion._build_army_facts(
+                    database, connection, next_day.isoformat()
+                )
+                connection.commit()
+
+                assert connection.execute(
+                    """
+                    SELECT ranked_day_start FROM army_analytics_battle_facts
+                    WHERE battle_id = %s AND lens = 'offense' AND is_current
+                    """,
+                    (battle_id,),
+                ).fetchall() == [(next_day,)]
+                summed = _project_lens(connection, SEASON_ID, "offense")
+                assert summed["troops"]["total_attacks"] == 1
+                assert summed == _project_lens(
+                    connection, SEASON_ID, "offense", recount=True
+                )
+        finally:
+            database.close()
+
+
 def test_completed_day_publishes_facts_without_legacy_rollups(
     database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as connection_info:

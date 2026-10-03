@@ -1027,22 +1027,18 @@ def _build_army_fact_batch(
     else:
         # A frozen manifest names the evidence it promised to use. Read those
         # saved records, not the current pointer a later report may have moved.
-        # Selecting by battle reads only the battle/perspective index; looking
-        # the IDs up directly read every evidence row from disk.
-        pinned_evidence = set(evidence_ids)
-        evidence_rows = [
-            row
-            for row in connection.execute(
-                """
-                SELECT battle_id, perspective, id, NULL
-                FROM battle_evidence
-                WHERE battle_id = ANY(%s::bigint[])
-                  AND perspective = ANY(%s::text[])
-                """,
-                (battle_id_values, perspective_values),
-            ).fetchall()
-            if int(row[2]) in pinned_evidence
-        ]
+        # The battle and perspective conditions keep the battle/perspective
+        # index usable; the IDs alone read every evidence row from disk.
+        evidence_rows = connection.execute(
+            """
+            SELECT battle_id, perspective, id, NULL
+            FROM battle_evidence
+            WHERE battle_id = ANY(%s::bigint[])
+              AND perspective = ANY(%s::text[])
+              AND id = ANY(%s::bigint[])
+            """,
+            (battle_id_values, perspective_values, evidence_ids),
+        ).fetchall()
     evidence = {
         (
             int(row[0]),
@@ -1167,8 +1163,19 @@ def _build_army_fact_batch(
                 trophies += change
     if superseded_ids:
         connection.execute(
-            "UPDATE army_analytics_battle_facts SET is_current=false WHERE id = ANY(%s::bigint[])",
-            (superseded_ids,),
+            """
+            WITH superseded AS (
+                UPDATE army_analytics_battle_facts SET is_current = false
+                WHERE id = ANY(%s::bigint[])
+                RETURNING ranked_day_start
+            )
+            DELETE FROM army_analytics_day_totals
+            WHERE ranked_day_start IN (
+                SELECT ranked_day_start FROM superseded
+                WHERE ranked_day_start <> %s
+            )
+            """,
+            (superseded_ids, ranked_day_start),
         )
     if fact_rows:
         connection.execute(
