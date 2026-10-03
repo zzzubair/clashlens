@@ -881,7 +881,10 @@ function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
         <span>Battle history updated</span>{" "}
         {profile.battleHistoryUpdatedAt ? (
           <>
-            <time className="player-updated" dateTime={profile.battleHistoryUpdatedAt}>
+            <time
+              className="player-history-updated"
+              dateTime={profile.battleHistoryUpdatedAt}
+            >
               {formatPlayerTimestamp(profile.battleHistoryUpdatedAt)}
             </time>
             {oldAge(profile.battleHistoryUpdatedAt)}
