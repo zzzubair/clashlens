@@ -13,6 +13,18 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
             LEFT JOIN collector_observations AS observation
               ON observation.id = job.observation_id
             WHERE job.status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
+        ), failed_jobs AS (
+            SELECT count(*) AS failed_count, max(updated_at) AS newest_at
+            FROM python_processing_jobs WHERE status = 'failed'
+        ), uploads AS (
+            SELECT count(*) AS pending_count, min(created_at) AS oldest_at
+            FROM collector_response_uploads
+            WHERE state IN ('pending', 'leased')
+               OR (state = 'failed' AND next_attempt_at < 'infinity'::timestamptz)
+        ), failed_uploads AS (
+            SELECT count(*) AS failed_count, max(updated_at) AS newest_at
+            FROM collector_response_uploads
+            WHERE state = 'failed' AND next_attempt_at = 'infinity'::timestamptz
         ), check_ages AS (
             -- Profile checks only: regular checks skip the battle log on purpose.
             SELECT CASE WHEN profile.last_success_at IS NOT NULL
@@ -40,17 +52,17 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                (SELECT count(*) FROM players WHERE active = true AND next_due_at <= clock_timestamp()),
                COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - min(next_due_at))) FROM players WHERE active = true AND next_due_at <= clock_timestamp()), 0),
                (SELECT pending_count FROM processing),
-               (SELECT count(*) FROM collector_response_uploads
-                WHERE state IN ('pending', 'leased')
-                   OR (state = 'failed' AND next_attempt_at < 'infinity'::timestamptz)),
-               (SELECT count(*) FROM python_processing_jobs WHERE status = 'failed'),
-               (SELECT count(*) FROM collector_response_uploads
-                WHERE state = 'failed' AND next_attempt_at = 'infinity'::timestamptz),
+               (SELECT pending_count FROM uploads),
+               (SELECT failed_count FROM failed_jobs),
+               (SELECT failed_count FROM failed_uploads),
                (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline'),
                (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline' AND status IN ('complete', 'failed', 'cancelled')),
                (SELECT CASE WHEN max(last_success_at) IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM clock_timestamp() - max(last_success_at))) END
                 FROM collector_response_state),
                COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - oldest_saved_at)) FROM processing), 0),
+               COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - oldest_at)) FROM uploads), 0),
+               (SELECT CASE WHEN newest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - newest_at)) END FROM failed_jobs),
+               (SELECT CASE WHEN newest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - newest_at)) END FROM failed_uploads),
                extract(epoch FROM statement_timestamp()),
                checks.samples, checks.missing, checks.p50, checks.p95, checks.maximum
         FROM checks"""
@@ -68,6 +80,9 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
         "reset_terminal",
         "last_success_age_seconds",
         "oldest_pending_processing_age_seconds",
+        "oldest_pending_upload_age_seconds",
+        "newest_failed_processing_age_seconds",
+        "newest_failed_upload_age_seconds",
         "metrics_sample_timestamp_seconds",
         "check_age_sample_players",
         "check_age_missing_players",

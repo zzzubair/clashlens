@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -759,6 +760,77 @@ def test_repair_outlasting_its_lease_completes_on_its_first_attempt(
                     (job_id,),
                 )
                 == "complete:1"
+            )
+        finally:
+            database.close()
+
+
+def test_stuck_repair_is_cancelled_and_retried_without_using_its_last_attempt(
+    database_url: str, monkeypatch
+) -> None:
+    # The 2026-10-03 audit held a lock a repair needed: the repair waited
+    # forever, kept its job row locked, and looked healthy the whole time.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            _insert_observation(connection, occurrence_key="stuck-repair-source")
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+            ).fetchone()[0]
+            job_id = _insert_job(
+                connection,
+                work_type="reconcile_ranked_day",
+                deduplication_key="reconcile:stuck-repair",
+                input_json={
+                    "player_id": player_id,
+                    "ranked_day_start": "2026-08-03T05:00:00Z",
+                },
+                due_at="2026-08-03T19:35:01+00:00",
+                max_attempts=1,
+            )
+
+        def stuck_rebuild(_database, connection, **_kwargs) -> None:
+            connection.execute(
+                "UPDATE players SET active = true WHERE id = %s", (player_id,)
+            )
+            connection.execute("SELECT pg_advisory_xact_lock(4242)")
+
+        monkeypatch.setattr(reconciliation_db, "recalculate_ranked_day", stuck_rebuild)
+        database = Database(connection_info, statement_timeout_seconds=1)
+        results: list[ProcessResult | None] = []
+        try:
+            with psycopg.connect(connection_info, autocommit=True) as holder:
+                holder.execute("SELECT pg_advisory_lock(4242)")
+                lane = threading.Thread(
+                    target=lambda: results.append(
+                        ObservationProcessor(database, archive=object()).process_job(
+                            job_id, owner="stuck-repair", lease_seconds=1
+                        )
+                    ),
+                    daemon=True,
+                )
+                lane.start()
+                lane.join(timeout=15)
+                stuck = lane.is_alive()
+            lane.join(timeout=15)
+
+            assert not stuck, "the stuck repair was never cancelled"
+            assert results == [ProcessResult(job_id, "retrying", "database_timeout")]
+            # Its partial work was rolled back and its only attempt is unused.
+            assert (
+                database.scalar(
+                    "SELECT active FROM players WHERE id = %s", (player_id,)
+                )
+                is False
+            )
+            time.sleep(1.1)
+            assert database.maintain_queue(max_jobs=10) == 1
+            assert (
+                database.scalar(
+                    "SELECT status || ':' || attempt_count FROM python_processing_jobs "
+                    "WHERE id = %s",
+                    (job_id,),
+                )
+                == "pending:0"
             )
         finally:
             database.close()

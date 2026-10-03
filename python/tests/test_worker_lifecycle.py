@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from psycopg.errors import DeadlockDetected, SerializationFailure
+from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
 
 from clashlens import cli, ingestion, job_outcomes, reconciliation_db
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION, LeaseLost
@@ -39,13 +39,22 @@ class NoClaimDatabase:
         raise AssertionError("shutdown must stop before claiming another job")
 
 
-@pytest.mark.parametrize("conflict", [DeadlockDetected, SerializationFailure])
+@pytest.mark.parametrize(
+    ("conflict", "failure_error"),
+    [
+        (DeadlockDetected, DeadlockDetected),
+        (SerializationFailure, SerializationFailure),
+        # The statement deadline cancels a stuck failure write or the work itself.
+        (DeadlockDetected, QueryCanceled),
+        (QueryCanceled, QueryCanceled),
+    ],
+)
 @pytest.mark.parametrize("spent_attempts", [0, 2])
 @pytest.mark.parametrize(
     ("refund_conflicts", "lose_lease"), [(0, False), (2, False), (3, False), (3, True)]
 )
 def test_failure_write_conflict_keeps_worker_processing(
-    conflict, spent_attempts, refund_conflicts, lose_lease, monkeypatch
+    conflict, failure_error, spent_attempts, refund_conflicts, lose_lease, monkeypatch
 ) -> None:
     claims = [
         SimpleNamespace(
@@ -79,7 +88,7 @@ def test_failure_write_conflict_keeps_worker_processing(
         def refund_claim_attempt(self, claim):
             if self.refund_conflicts:
                 self.refund_conflicts -= 1
-                raise conflict()
+                raise failure_error()
             if lose_lease:
                 raise LeaseLost("job lease expired during recovery")
             self.spent_attempts = claim.attempt_count
@@ -95,7 +104,7 @@ def test_failure_write_conflict_keeps_worker_processing(
             raise conflict()
 
     def fail_claim(*_args, **_kwargs):
-        raise conflict()
+        raise failure_error()
 
     monkeypatch.setattr(
         reconciliation_db, "complete_reconciliation", complete_reconciliation
@@ -113,7 +122,13 @@ def test_failure_write_conflict_keeps_worker_processing(
     assert results == [
         ProcessResult(17, "lease_lost")
         if lose_lease
-        else ProcessResult(17, "retrying", "database_deadlock"),
+        else ProcessResult(
+            17,
+            "retrying",
+            "database_timeout"
+            if failure_error is QueryCanceled
+            else "database_deadlock",
+        ),
         ProcessResult(18, "processed"),
     ]
     if lose_lease:
@@ -889,10 +904,12 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
         max_size: int,
         expected_contract_version: int,
         player_discovery_enabled: bool,
+        statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version
         recorded["player_discovery_enabled"] = player_discovery_enabled
+        recorded["statement_timeout_seconds"] = statement_timeout_seconds
         database = PoolRecordingDatabase(_url, max_size=max_size)
         recorded["database"] = database
         return database
@@ -911,6 +928,7 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
     assert recorded["database_max_size"] == 4
     assert recorded["expected_contract_version"] == 5
     assert recorded["player_discovery_enabled"] is True
+    assert recorded["statement_timeout_seconds"] == 900
     assert recorded["archive_pool_size"] == 4
     assert recorded["process_until_idle"]["owner"] == "cli-worker"
     assert recorded["process_until_idle"]["max_jobs"] == 3
@@ -937,6 +955,7 @@ def test_run_worker_disables_player_discovery_when_flagged(monkeypatch) -> None:
         max_size: int,
         expected_contract_version: int,
         player_discovery_enabled: bool,
+        statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["player_discovery_enabled"] = player_discovery_enabled
         return PoolRecordingDatabase(_url, max_size=max_size)
@@ -967,6 +986,7 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         max_size: int,
         expected_contract_version: int,
         player_discovery_enabled: bool,
+        statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version
@@ -1030,6 +1050,7 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
         max_size: int,
         expected_contract_version: int,
         player_discovery_enabled: bool,
+        statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version

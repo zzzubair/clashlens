@@ -24,6 +24,10 @@ PYTHON_BACKFILL_PRIORITY = 25
 PYTHON_LIVE_PRIORITY = 100
 DEFAULT_POOL_SIZE = 4
 MAX_POOL_SIZE = 64
+# The running worker cancels any one database statement, including time spent
+# waiting for a lock, after 15 minutes. Its slowest statements since
+# 2026-10-01 took under a minute, so only stuck work reaches this.
+WORKER_STATEMENT_TIMEOUT_SECONDS = 900
 
 # Work types this worker image may claim. Unsupported work types (for example
 # build_export) and unknown or future contracts stay pending and unclaimed so a
@@ -570,6 +574,7 @@ class Database:
         max_size: int = DEFAULT_POOL_SIZE,
         expected_contract_version: int | None = None,
         player_discovery_enabled: bool = True,
+        statement_timeout_seconds: int | None = None,
     ) -> None:
         if max_size < 1:
             raise ValueError("database pool size must be positive")
@@ -577,11 +582,19 @@ class Database:
             raise ValueError("database pool size exceeds the supported maximum")
         self.stage_metrics: Any | None = None
         self.player_discovery_enabled = player_discovery_enabled
+
+        def configure(connection: Any) -> None:
+            connection.execute(
+                f"SET statement_timeout = '{statement_timeout_seconds}s'"
+            )
+            connection.commit()
+
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=1,
             max_size=max_size,
             open=True,
+            configure=None if statement_timeout_seconds is None else configure,
         )
         with self.pool.connection() as connection:
             worker_view = connection.execute(

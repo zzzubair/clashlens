@@ -794,7 +794,7 @@ class CollectorDatabase:
                     collector_response_uploads.latest_sighting_at,
                     EXCLUDED.latest_sighting_at
                 ),
-                updated_at = clock_timestamp()
+                updated_at = CASE WHEN collector_response_uploads.state = 'failed' THEN collector_response_uploads.updated_at ELSE clock_timestamp() END
             WHERE collector_response_uploads.spool_key = EXCLUDED.spool_key
               AND collector_response_uploads.byte_size = EXCLUDED.byte_size
             RETURNING state, archive_reference
@@ -1258,7 +1258,7 @@ class CollectorDatabase:
                                 next_attempt_at = clock_timestamp(),
                                 last_error_category = NULL,
                                 last_error_detail = NULL,
-                                local_deleted_at = NULL,
+                                local_deleted_at = NULL, created_at = clock_timestamp(),
                                 updated_at = clock_timestamp()
                             WHERE response_hash = %s
                               AND state = 'complete'

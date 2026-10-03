@@ -678,7 +678,7 @@ without printing configuration files.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the seven conditions below and posts changes to the
+`./ops alert-check` checks the eleven conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
@@ -759,13 +759,47 @@ use the [operating notes](operating.md#respond-to-alerts).
   no freshness breach, and permits an existing freshness alert to recover.
   Use the [collection and processing measurements](operating.md#collection-or-processing-behind)
   to distinguish delayed collection from delayed processing.
+- **A new permanent failure of a processing job or raw-response upload in
+  the last 24 hours**, from the collector's
+  `newest_failed_processing_age_seconds` and `newest_failed_upload_age_seconds`.
+  Failed jobs stay failed, so this reports new failures. Its recovery means no
+  new permanent failure for 24 hours, not that anything was repaired: the failed
+  work stays failed until someone fixes it. Failures older than that, such as
+  those present at deployment, do not alert. A missing age counts as unknown
+  unless the matching `failed_processing` or `failed_uploads` count is zero.
+  Seeing a failed upload's bytes again does not restart its 24 hours.
+  A manual retry of a failed item clears the alert early; a repeat failure
+  raises a fresh alert.
+- **Saved work waiting at least one hour**: a job waiting to be processed,
+  from `oldest_pending_processing_age_seconds`, or a raw response waiting to
+  be uploaded to the archive, from `oldest_pending_upload_age_seconds`. An
+  upload's wait starts when it is first saved, or when retired bytes come back
+  for a fresh upload. Retries, including an operator retry of a failed upload,
+  keep the original wait. These
+  are two separate alerts. Since the Oct 1 worker fixes, the longest
+  processing wait was 18 minutes and the longest upload wait under two
+  minutes; Oct 1's stalls of up to 3.7 hours would have alerted.
+- **A Reset publication over an hour past its target time**: no publication
+  record for that Reset has published both its frozen leaderboard and its army
+  results an hour after the existing target, five minutes after Reset or ten
+  on Mondays. A Reset with no publication record at all counts 70 minutes
+  after it, for every Reset since the first record. The check enters the
+  private API container and prints only the count. It recovers only when
+  every counted Reset is published; a fresh Live Leaderboard does not clear it.
+  The one-hour grace is provisional: no Reset has published normally on
+  production yet. On Oct 2 collection took about 8 minutes and the Live
+  Leaderboard was fully fresh about 13 minutes after Reset. Tighten it once
+  real publication times can be measured.
+
+Missing collector measurements or a failed publication check never clear these
+alerts, and each recovers only when its own measurement does.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.
 Missing disk measurements or restart history never clear an existing alert.
 `alerts.json` and `alerts.lock` live under the existing private ops state
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
-replaced with mode 600 and contains seven condition records with at most one
+replaced with mode 600 and contains eleven condition records with at most one
 pending transition each, plus when backup check timeouts or errors began,
 normally under 4 KiB. It keeps no growing event history, keys, URLs, player lists
 or account data.
@@ -789,14 +823,72 @@ journalctl --user -u clashlens-alert.service --since today
 The journal reports failed delivery or unavailable measurements without printing
 HTTP response bodies or exception details. Slow failed probes may delay the next
 check; the service times out after four minutes. This local checker cannot notify
-Discord while the host, user service manager or network is unavailable, or after
-an out-of-band stop of `clashlens.target`. Confirm recovery after those outages.
+Discord while the host, user service manager or network is unavailable, when
+its disk is full, or after an out-of-band stop of `clashlens.target`. The
+[outside check](#outside-availability-check) covers an unreachable website.
 A real test alert was delivered and Zubair confirmed channel visibility; see
 [the delivery evidence](discord-alert-validation.md#owner-requested-live-delivery-test).
 Real recovery delivery, channel privacy and reboot behaviour still require a
 separately approved rehearsal.
-Job/upload stalls, missed Reset publication and capacity budgets remain deferred
-under #140; this command adds none of those policies.
+Capacity budgets remain deferred under #140.
+
+### Outside availability check
+
+The Paris relay checks `https://preview.clashlens.net/` and its `/healthz`
+every minute, from outside rogue, and posts to the same Discord channel when
+either has failed every check for two minutes, then again when both answer.
+A check fails on a timeout after 10 seconds, a redirect or any non-2xx answer.
+An intentional `./ops down` also alerts here. It runs the same
+[`alerts.py`](../python/src/clashlens/alerts.py) with `--uptime`, using the
+Python 3 the relay already has. Its state is one incident record under
+`/var/lib/clashlens-uptime`, under 1 KiB.
+
+Installed on 2026-10-03 as the system user `clashlens-uptime`, with the
+webhook URL copied from rogue to `/etc/clashlens-uptime/discord-webhook`,
+owned by that user with mode 600. To install or update it, copy `alerts.py`
+to `/opt/clashlens/uptime/alerts.py`, mode 644, owned by root, and these two
+units to `/etc/systemd/system/`, then run
+`systemctl daemon-reload && systemctl enable --now clashlens-uptime.timer`.
+
+`clashlens-uptime.service`:
+
+```ini
+[Unit]
+Description=Clash Lens outside availability check
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=clashlens-uptime
+StateDirectory=clashlens-uptime
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 /opt/clashlens/uptime/alerts.py --uptime /var/lib/clashlens-uptime /etc/clashlens-uptime/discord-webhook https://preview.clashlens.net/ https://preview.clashlens.net/healthz
+TimeoutStartSec=2min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+```
+
+`clashlens-uptime.timer`:
+
+```ini
+[Unit]
+Description=Run the Clash Lens outside availability check every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:30
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+```
+
+Check it with `systemctl status clashlens-uptime.timer` and
+`journalctl -u clashlens-uptime.service --since today` on the relay. While the
+site is down each run exits unsuccessfully and logs one fixed line. The relay
+cannot alert if the relay itself or Discord is down.
 
 ## Failed work
 
@@ -815,6 +907,17 @@ expiry while the job is still leased to the same owner with the same claim
 token. A new claim replaces that token, and queue maintenance clears it, so
 restoration cannot change a job another worker or maintenance has taken; the
 expired worker returns `lease_lost` instead.
+
+The running worker cancels any single database statement after 15 minutes,
+including time spent waiting for a lock, set by
+`WORKER_STATEMENT_TIMEOUT_SECONDS` in [`db.py`](../python/src/clashlens/db.py).
+Its slowest statements from Oct 1 20:04 to Oct 3 took 56 seconds. Cancelling
+rolls the job's transaction back and gives its attempt back, so queue
+maintenance requeues it after its lease expires even on its last attempt. The
+worker logs it as `retrying` with `database_timeout`. A job that hits the
+deadline every time keeps being retried and raises the one-hour processing
+alert. A cancelled statement outside a job, such as queue maintenance, stops
+the worker, which restarts. Operator commands have no deadline.
 
 Production runs one worker process, whose queue maintenance runs between
 batches. If maintenance in another worker process reaches an expired job on
