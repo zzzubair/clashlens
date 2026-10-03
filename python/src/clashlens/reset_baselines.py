@@ -369,15 +369,23 @@ def settle_failed_reset_work(database: Database, *, max_works: int = 100) -> int
                     SELECT work.id
                     FROM collector_reset_sweeps AS sweep
                     JOIN collector_work AS work ON work.sweep_id = sweep.id
+                    LEFT JOIN LATERAL (
+                        SELECT evidence.state, evidence.failure_reasons
+                        FROM reset_baseline_evidence AS evidence
+                        WHERE evidence.collector_work_id = work.id
+                        ORDER BY evidence.version DESC, evidence.id DESC
+                        LIMIT 1
+                    ) AS latest ON true
                     WHERE work.kind = 'reset_baseline'
                       AND work.status = 'failed'
-                      AND COALESCE((
-                          SELECT evidence.state
-                          FROM reset_baseline_evidence AS evidence
-                          WHERE evidence.collector_work_id = work.id
-                          ORDER BY evidence.version DESC, evidence.id DESC
-                          LIMIT 1
-                      ), 'partial') = 'partial'
+                      AND COALESCE(latest.state, 'partial') = 'partial'
+                      -- A saved response not yet processed re-checks its
+                      -- pair when its own job finishes; this pass cannot.
+                      AND NOT COALESCE(
+                          latest.failure_reasons
+                          ?| array['unprocessed_profile', 'unprocessed_battle_log'],
+                          false
+                      )
                     ORDER BY work.id
                     LIMIT %s
                     """,

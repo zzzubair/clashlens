@@ -11,7 +11,7 @@ import psycopg
 import pytest
 from domain_test_support import domain_database
 
-from clashlens import boundary_publication
+from clashlens import boundary_publication, reset_baselines
 from clashlens.archive import SpoolFirstReader
 from clashlens.collector import Collector
 from clashlens.collector_db import CollectorDatabase, CollectorWork
@@ -177,6 +177,50 @@ def test_reset_given_up_without_any_response_still_settles_its_publication(
             ("failed", ["missing_profile_observation", "missing_battle_log_observation"])
         ]
         assert members == [("unavailable", "unavailable")]
+
+
+def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
+    database_url: str, tmp_path
+) -> None:
+    # The previous Reset, so failed work is final.
+    boundary = _latest_reset(datetime.now(UTC)) - timedelta(days=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        with psycopg.connect(connection_info) as connection:
+            for tag in (TAG, "#8QV"):
+                connection.execute(
+                    "INSERT INTO players (normalized_tag, active, next_due_at) VALUES (%s, true, %s)",
+                    (tag, boundary),
+                )
+        database = CollectorDatabase(connection_info)
+        assert database.begin_reset(boundary) is not None
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        first, later = sorted(
+            database.pending_intents(
+                limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+            ),
+            key=lambda intent: intent.work_id,
+        )
+        # The first work saved responses whose processing has not finished,
+        # for example because their file cannot be read yet; the later work
+        # got no response at all.
+        _Provider.mode = "battle_log_unavailable"
+        assert asyncio.run(collector.collect_intent(first)) == "failed"
+        _Provider.mode = "drop"
+        assert asyncio.run(collector.collect_intent(later)) == "failed"
+
+        worker = Database(connection_info)
+        try:
+            for _ in range(2):
+                reset_baselines.settle_failed_reset_work(worker, max_works=1)
+        finally:
+            worker.close()
+        with psycopg.connect(connection_info) as connection:
+            states = dict(
+                connection.execute(
+                    "SELECT collector_work_id, state FROM reset_baseline_evidence"
+                ).fetchall()
+            )
+        assert states == {first.work_id: "partial", later.work_id: "failed"}
 
 
 def test_reset_retry_keeps_the_profile_that_already_answered(
