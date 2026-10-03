@@ -1,10 +1,11 @@
 import type { UpdateStatus } from "../lib/contracts";
-import { LocalTimestamp, formatAge } from "./Provenance";
+import { LocalTimestamp, formatAge, useCurrentTime } from "./Provenance";
 
 /** One quiet site-wide line; it states a cause only when the data shows one. */
 export function UpdatesNotice({ status }: { status: UpdateStatus }) {
+  const now = useCurrentTime(status.checkedAt);
   const ago = (value: string) =>
-    `${formatAge(Math.max(0, (Date.parse(status.checkedAt) - Date.parse(value)) / 1000))} ago`;
+    `${formatAge(Math.max(0, (now - Date.parse(value)) / 1000))} ago`;
   return (
     <div className="status-banner status-banner-warning updates-notice" role="status">
       <p>

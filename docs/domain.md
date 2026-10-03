@@ -116,10 +116,12 @@ A domain change is complete only when every affected source observation, derived
   The private player response's `observed_at`, `age_seconds`, `freshness`, and
   screen-ready provenance use this same time; see
   [`get_player_page`](../python/src/clashlens/api_players.py).
-- When that time is stale, the page also shows its age. Battle history updated
-  shows separately when the newest shown daily result was published, with its
-  age once that is more than 15 minutes old, or "not yet". A successful battle
-  log request alone does not move it.
+- When that time is more than 15 minutes old, the page also shows its age.
+  Battle history updated shows separately when the newest shown daily result
+  was published, with its age once that is more than 15 minutes old, or "not
+  yet". A successful battle log request alone does not move it. These ages, and
+  the delayed-updates notice's ages, keep advancing every 30 seconds while the
+  page stays open.
 
 ### Delayed updates notice
 

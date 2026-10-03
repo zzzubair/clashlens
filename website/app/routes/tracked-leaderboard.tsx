@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import {
   data,
   Form,
@@ -11,7 +11,7 @@ import {
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark } from "../components/LeaderboardShared";
-import { formatAge, LocalTimestamp } from "../components/Provenance";
+import { formatAge, LocalTimestamp, useCurrentTime } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
@@ -153,16 +153,6 @@ export function headers() {
   return { "Cache-Control": "no-store" };
 }
 
-function useCurrentTime(loadedAt: string | undefined) {
-  const [now, setNow] = useState(() => (loadedAt ? Date.parse(loadedAt) : 0));
-  useEffect(() => {
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, [loadedAt]);
-  return now;
-}
-
 export default function TrackedLeaderboardRoute() {
   const { leaderboard, error, pageUnavailableUrl, view, query, search, focusTag } =
     useLoaderData<typeof loader>();
@@ -228,9 +218,6 @@ export default function TrackedLeaderboardRoute() {
               </>
             ) : null}
             . Across the whole leaderboard.
-            {leaderboard?.sourceObservations?.staleCount
-              ? ` ${leaderboard.sourceObservations.staleCount.toLocaleString()} of ${leaderboard.totalEntries.toLocaleString()} players were last updated over 10 minutes ago.`
-              : null}
           </p>
         ) : null}
       </section>

@@ -517,19 +517,15 @@ def test_player_page_reports_battle_history_publication_separately(database_url)
                 # A successful battle log request alone does not move the time.
                 seed_check(connection, "#2PP", "battle_log", now - timedelta(minutes=1))
 
-            def battle_history(tag):
+            def battle_history_updated_at(tag):
                 page = api_players.get_player_page(
                     database, tag, now=now, freshness_seconds=900
                 )
-                return (
-                    page["battle_history_updated_at"],
-                    page["battle_history_age_seconds"],
-                    page["battle_history_freshness"],
-                )
+                return page["battle_history_updated_at"]
 
-            assert battle_history("#2PP") == (published_at.isoformat(), 7200, "stale")
+            assert battle_history_updated_at("#2PP") == published_at.isoformat()
             # Nothing published stays unknown, not "just now".
-            assert battle_history("#9QQ") == (None, None, None)
+            assert battle_history_updated_at("#9QQ") is None
         finally:
             database.close()
             owner.close()

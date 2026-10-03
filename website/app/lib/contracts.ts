@@ -129,7 +129,7 @@ export interface PlayerProfile {
   clan: string;
   trophies: number;
   freshness: Freshness;
-  battleHistory?: Freshness | null;
+  battleHistoryUpdatedAt?: string | null;
   confidence: ConfidenceState;
   coverage: CoverageState;
   eligibility: "legend-i" | "uncertain";

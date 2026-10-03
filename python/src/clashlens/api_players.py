@@ -175,14 +175,6 @@ def get_player_page(
         history_updated_at = max(
             (day[19].astimezone(UTC) for day in daily_rows), default=None
         )
-        history_age_seconds = history_freshness = None
-        if history_updated_at is not None:
-            history_age_seconds = max(
-                0, int((now.astimezone(UTC) - history_updated_at).total_seconds())
-            )
-            history_freshness = (
-                "fresh" if history_age_seconds <= freshness_seconds else "stale"
-            )
         public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
         daily_logs = [_daily_log(day) for day in daily_rows]
         battle_ids = {
@@ -369,8 +361,6 @@ def get_player_page(
             "battle_history_updated_at": (
                 None if history_updated_at is None else history_updated_at.isoformat()
             ),
-            "battle_history_age_seconds": history_age_seconds,
-            "battle_history_freshness": history_freshness,
             "source_http_status": int(row[6]),
             "endpoint_version": _text(row[7]),
             "schema_version": _text(row[8]),

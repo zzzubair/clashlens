@@ -661,11 +661,7 @@ describe("automatic tag lookup", () => {
           observedAt: "2026-08-06T12:00:00Z",
           ageSeconds: 7_300,
         },
-        battleHistory: {
-          state: "stale",
-          observedAt: "2026-08-06T11:40:00Z",
-          ageSeconds: 8_500,
-        },
+        battleHistoryUpdatedAt: "2026-08-06T11:40:00Z",
       },
     } satisfies PlayerPage;
     const render = async (player: PlayerPage) => {
@@ -685,10 +681,17 @@ describe("automatic tag lookup", () => {
     );
     const fresh = await render({
       ...PLAYER,
-      profile: { ...PLAYER.profile, battleHistory: null },
+      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: null },
     });
     expect(fresh).toContain(
       "Updated 6 Aug 2026, 12:00 UTCBattle history updated not yet",
+    );
+    const oldHistory = await render({
+      ...PLAYER,
+      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-08-06T11:40:00Z" },
+    });
+    expect(oldHistory).toContain(
+      "Updated 6 Aug 2026, 12:00 UTCBattle history updated 6 Aug 2026, 11:40 UTC · 20 minutes old",
     );
   });
 
