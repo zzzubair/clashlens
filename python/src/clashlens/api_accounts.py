@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.types.json import Jsonb
 
-from . import api_db
+from . import api_db, api_player_lookup
 from .api_db import (
     AccountContext,
     ApiDatabase,
@@ -15,6 +15,10 @@ from .api_db import (
     _account_context,
     _text,
 )
+
+# Saving a group starts at most this many new player checks, the most a
+# comparison shows, so one save cannot flood the collector's visitor lane.
+GROUP_LOOKUP_LIMIT = 20
 
 
 def resolve_account(
@@ -1023,11 +1027,16 @@ def _replace_group_players(
     group_id: int,
     normalized_tags: list[str],
 ) -> None:
+    tags = sorted(set(normalized_tags))
+    # A player lookup takes the tag lock before touching the player row, so
+    # take every tag lock first, in one order, before inserting players.
+    for normalized_tag in tags:
+        api_player_lookup.lock_tag(connection, normalized_tag)
     connection.execute(
         "DELETE FROM account_group_players WHERE group_id = %s",
         (group_id,),
     )
-    for normalized_tag in sorted(set(normalized_tags)):
+    for normalized_tag in tags:
         player_id = api_db._ensure_player(connection, normalized_tag)
         connection.execute(
             """
@@ -1036,6 +1045,22 @@ def _replace_group_players(
             """,
             (group_id, player_id),
         )
+    # A tag Clash Lens has no profile for starts the same check a player page
+    # visit starts, so the group shows it as being checked, not inactive.
+    unchecked = connection.execute(
+        """
+        SELECT player.normalized_tag
+        FROM account_group_players AS member
+        JOIN players AS player ON player.id = member.player_id
+        WHERE member.group_id = %s AND NOT player.active
+          AND player.current_profile_version_id IS NULL
+        ORDER BY player.normalized_tag
+        LIMIT %s
+        """,
+        (group_id, GROUP_LOOKUP_LIMIT),
+    ).fetchall()
+    for (normalized_tag,) in unchecked:
+        api_player_lookup.admit(connection, _text(normalized_tag))
 
 
 def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:

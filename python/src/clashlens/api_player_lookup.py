@@ -77,6 +77,42 @@ def get_lookup(database: ApiDatabase, tag: str) -> dict[str, Any]:
         return _lookup(connection, tag)
 
 
+def lock_tag(connection: Any, normalized_tag: str) -> None:
+    """Take the per-tag lock the existing enqueue function also takes."""
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (normalized_tag,),
+    )
+
+
+def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
+    """Start a profile check for a tag Clash Lens has no answer for yet."""
+    # Serialize the evidence read with admission so simultaneous visits
+    # reuse work.
+    lock_tag(connection, normalized_tag)
+    lookup = _lookup(connection, normalized_tag)
+    if lookup["state"] in {"unknown", "failed", "not_found"}:
+        # Failed and negative checks have the same minimum retry interval
+        # as Refresh. Known real players are never rechecked by a visit.
+        recent = connection.execute(
+            """
+            SELECT 1 FROM collector_work
+            WHERE normalized_tag = %s
+              AND kind IN ('initial_collection', 'live_refresh', 'discovery_profile')
+              AND updated_at > clock_timestamp() - interval '30 seconds'
+            LIMIT 1
+            """,
+            (normalized_tag,),
+        ).fetchone()
+        if recent is None:
+            connection.execute(
+                "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
+                (normalized_tag,),
+            ).fetchone()
+            lookup = _lookup(connection, normalized_tag)
+    return lookup
+
+
 def submit_lookup(
     database: ApiDatabase, binding: RequestBinding, *, normalized_tag: str
 ) -> OperationResult:
@@ -85,32 +121,7 @@ def submit_lookup(
             existing = api_db._reserve_request(database, connection, binding)
             if existing is not None:
                 return existing
-            # The existing enqueue function takes this same tag lock. Serialize
-            # the evidence read with admission so simultaneous visits reuse work.
-            connection.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (normalized_tag,),
-            )
-            lookup = _lookup(connection, normalized_tag)
-            if lookup["state"] in {"unknown", "failed", "not_found"}:
-                # Failed and negative checks have the same minimum retry interval
-                # as Refresh. Known real players are never rechecked by a visit.
-                recent = connection.execute(
-                    """
-                    SELECT 1 FROM collector_work
-                    WHERE normalized_tag = %s
-                      AND kind IN ('initial_collection', 'live_refresh', 'discovery_profile')
-                      AND updated_at > clock_timestamp() - interval '30 seconds'
-                    LIMIT 1
-                    """,
-                    (normalized_tag,),
-                ).fetchone()
-                if recent is None:
-                    connection.execute(
-                        "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
-                        (normalized_tag,),
-                    ).fetchone()
-                    lookup = _lookup(connection, normalized_tag)
+            lookup = admit(connection, normalized_tag)
             result = OperationResult(200, lookup)
             api_db._complete_request(connection, binding.request_id, result)
             return result

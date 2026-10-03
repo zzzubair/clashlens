@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import (
     api_accounts,
     api_analytics,
+    api_groups,
     api_leaderboard,
     api_player_lookup,
     api_players,
@@ -802,6 +803,33 @@ def create_app(
             group_id=group_id,
         )
         return _operation_response(result)
+
+    @app.get("/v1/account/groups/{group_id}/comparison")
+    def group_comparison(
+        group_id: str, request: Request, days: int = Query(default=7)
+    ) -> JSONResponse:
+        context = _authorize(request, "groups.read", production_database)
+        assert production_database is not None and context.account is not None
+        if days not in api_groups.COMPARISON_DAYS:
+            raise ApiError(422, "invalid_request")
+        try:
+            result = api_groups.get_group_comparison(production_database,
+                context.account.internal_id,
+                _safe_uuid(group_id),
+                days=days,
+                now=current_time(),
+                freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
+            )
+        except api_groups.GroupTooLarge as error:
+            raise ApiError(
+                422,
+                "group_too_large",
+                detail=f"{error.member_count} players; compare at most "
+                f"{api_groups.MAX_COMPARED_MEMBERS}",
+            ) from error
+        if result is None:
+            raise ApiError(404, "group_not_found")
+        return JSONResponse(status_code=200, content=result)
 
     @app.get("/v1/account/summary")
     def summary(request: Request) -> JSONResponse:

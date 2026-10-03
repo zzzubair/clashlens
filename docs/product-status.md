@@ -36,7 +36,8 @@ arrivals, deploying alerts with tracking, warm-up before Reset and safe stop.
 4. **Expanded history by November 2 at 05:00 UTC at the latest, ideally during
    October.** Protect required detail until the new views are ready and
    verified, even if cleanup is delayed.
-5. **Later:** private group comparison and the Jev army-classification experiment.
+5. **Later:** the Jev army-classification experiment. Private group comparison
+   was brought forward on 2026-10-03 after player feedback.
 
 The start date does not waive accuracy, delivered alerts, backup/restore proof,
 capacity or cost checks. Smaller runs are tests, not a reduced launch population.
@@ -54,7 +55,7 @@ deletion still require their specific approvals.
 | Accuracy, Reset and rankings | Preserve evidence, honest missing/partial results, one battle across duplicate reports, 05:00 UTC Legend days and 28-day seasons. Public rank is among Clash Lens tracked players. A full real Legend day at 12,500 active players, plus weekly known-player checks, is still unproven. | [Domain contract](domain.md), #128 |
 | Player history | Keep daily EOD, gain, loss and EOD difference from the previous day; Day 1 uses 5,000 and Day 28 supplies season-ending trophies. Show only Clash Lens final rank. Existing summaries have daily entries, but stored battle net and official final rank are not these new meanings. | [#139](https://github.com/zzzubair/clashlens/issues/139) |
 | Army analytics | Percentages use completed Legend days after Reset. Attacks are BY selected players; defenses AGAINST them. Historical all-player and final-season Top 100 views must retain individual Clan Castle usage. Current history has all-player unit/quantity/star summaries only. | #139, [Retention contract](history-retention.md) |
-| Accounts, saved players and groups | Usernames are fixed; display names remain editable. Verified ownership is public, saved lists/groups private, and membership proves no ownership. New tag inputs share discovery rules. A one-off Google Sheets export is planned after the website and Discord bot; it is not designed yet. Two-account privacy tests now cover [direct website requests](../website/tests/e2e/account-isolation.spec.ts) and [private API requests](../python/tests/test_private_api_isolation.py). Real-provider completion and deployed privacy verification remain. | [#123](https://github.com/zzzubair/clashlens/issues/123), #127 |
+| Accounts, saved players and groups | Usernames are fixed; display names remain editable. Verified ownership is public, saved lists/groups private, and membership proves no ownership. New tag inputs share discovery rules; saving a group starts the player lookup for up to 20 unknown tags. A group of up to 20 players can be compared side by side over 3, 7 or 14 ended Legend days, with the account's own verified players shown alongside. Storage is not extended for it: days from a finished season whose daily detail was cleaned up show as history no longer kept, and the page says how many of the chosen days that affects. A one-off Google Sheets export is planned after the website and Discord bot; it is not designed yet. Two-account privacy tests now cover [direct website requests](../website/tests/e2e/account-isolation.spec.ts) and [private API requests](../python/tests/test_private_api_isolation.py). Real-provider completion and deployed privacy verification remain. | [#123](https://github.com/zzzubair/clashlens/issues/123), #127 |
 | Website and performance | Preserve desktop controls/detail and usable phone, tablet, older-device and slow-network behavior. #137 improved measured Chromium cases and the current-season Clan Castle toggle. Physical-device/browser breadth and full production load remain unproven. | #127, [#130](https://github.com/zzzubair/clashlens/issues/130) |
 | Recovery and retention | Prove seven-day recovery with required raw bytes still available during restore. Allow season corrections for seven days, then checked finalization and bounded cleanup. These are separate windows. Raw-response cleanup with its recovery hold is built but not switched on in production. Finished processing jobs are deleted automatically 48 hours after they finish. | [#122](https://github.com/zzzubair/clashlens/issues/122), [#129](https://github.com/zzzubair/clashlens/issues/129) |
 | Discord and support | Public discussion/feedback, Discord-only private tickets through an existing bot, and a separate private operator-alert channel using an incoming webhook. No custom ticket bot or email fallback. The alert channel and webhook exist and a real test alert was delivered on September 27. A separate Clash Lens Discord bot for Clashers is planned after the website; its features are not decided. | [#138](https://github.com/zzzubair/clashlens/issues/138), [#124](https://github.com/zzzubair/clashlens/issues/124) |
@@ -176,11 +177,11 @@ existing eligibility processing locally; live import and capacity are pending.
   transcript retention and support staffing. Alert thresholds, including
   job/upload stalls and missed Reset publication, are defined in
   [alert conditions](deployment.md#alert-conditions).
-- [#61](https://github.com/zzzubair/clashlens/issues/61) stays post-launch. Its
-  14-day cross-season comparison needs a retention review: compact history does
-  not retain all requested daily destruction/star data, and seven-day detail
-  retirement can remove part of that window. Do not promise those comparisons
-  or extend storage silently as part of launch.
+- [#61](https://github.com/zzzubair/clashlens/issues/61) group comparison was
+  brought forward without extending storage; see the accounts row above for
+  how cleaned-up days are shown. Compact history still does not retain all
+  daily destruction/star data, so do not promise full 14-day cross-season
+  detail or extend storage silently.
 - Jev remains a later experiment for comparing named army types by usage and
   three-star rate. One main type per army, uncertain results unclassified,
   current season only. A labeled evaluation, reusable classifications and

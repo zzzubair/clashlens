@@ -56,7 +56,10 @@ def create_owner(database: ApiDatabase) -> int:
 def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    # Saving a group can start a player check, which needs the collector tables.
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = create_owner(database)
@@ -149,7 +152,10 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
 def test_group_update_and_delete_require_the_owning_account(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    # Saving a group can start a player check, which needs the collector tables.
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             owner_id = create_owner(database)
