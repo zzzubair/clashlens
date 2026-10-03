@@ -16,7 +16,7 @@ const ON_TIME = {
   collection_delayed: false,
   last_collected_at: "2026-10-03T04:59:58+00:00",
   processing_delayed: false,
-  oldest_waiting_at: null,
+  oldest_waiting_saved_at: null,
 };
 
 function noticeText(payload: Record<string, unknown>): string | null {
@@ -46,9 +46,11 @@ describe("delayed-updates notice", () => {
   it("blames a processing backlog, not the API, when answers are arriving", () => {
     const text = noticeText({
       processing_delayed: true,
-      oldest_waiting_at: "2026-10-03T03:45:00+00:00",
+      oldest_waiting_saved_at: "2026-10-03T03:45:00+00:00",
     });
-    expect(text).toContain("New data is waiting to be processed");
+    expect(text).toContain(
+      "New data is waiting to be processed; the oldest waiting data was saved at",
+    );
     expect(text).toContain("3 Oct 2026, 03:45 UTC (1 hour ago)");
     expect(text).not.toContain("Clash of Clans API");
   });
@@ -84,11 +86,11 @@ describe("delayed-updates status read", () => {
       Response.json({
         ...ON_TIME,
         processing_delayed: true,
-        oldest_waiting_at: "2026-10-03T04:00:00+00:00",
+        oldest_waiting_saved_at: "2026-10-03T04:00:00+00:00",
       }),
     );
     expect(await loadUpdateStatus(30_000)).toMatchObject({
-      oldestWaitingAt: "2026-10-03T04:00:00+00:00",
+      oldestWaitingSavedAt: "2026-10-03T04:00:00+00:00",
       lastCollectedAt: null,
     });
     expect(fetch).toHaveBeenCalledTimes(2);

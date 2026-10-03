@@ -16,11 +16,11 @@ export function UpdatesNotice({ status }: { status: UpdateStatus }) {
             {ago(status.lastCollectedAt)}).{" "}
           </>
         ) : null}
-        {status.oldestWaitingAt ? (
+        {status.oldestWaitingSavedAt ? (
           <>
-            New data is waiting to be processed; the oldest is from{" "}
-            <LocalTimestamp value={status.oldestWaitingAt} /> (
-            {ago(status.oldestWaitingAt)}).{" "}
+            New data is waiting to be processed; the oldest waiting data was saved at{" "}
+            <LocalTimestamp value={status.oldestWaitingSavedAt} /> (
+            {ago(status.oldestWaitingSavedAt)}).{" "}
           </>
         ) : null}
         Saved values stay on the page with the time they were last updated.

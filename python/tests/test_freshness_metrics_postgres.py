@@ -435,15 +435,36 @@ def test_update_status_reports_delayed_collection_and_processing(database_url):
             body = response.json()
             return body["collection_delayed"], body["processing_delayed"]
 
+        def record(handoff):
+            collector.record_response(handoff)
+            # Saved when the answer arrived, as in production.
+            with psycopg.connect(info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET created_at = %s"
+                    " WHERE deduplication_key = %s",
+                    (
+                        handoff.response_completed_at,
+                        "process-response:" + handoff.occurrence_key,
+                    ),
+                )
+
+        def set_old_job(status, due_at):
+            with psycopg.connect(info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = %s, due_at = %s"
+                    " WHERE created_at < %s",
+                    (status, due_at, now - timedelta(minutes=10)),
+                )
+
         try:
             with client:
                 # Nothing collected yet is not a delay.
                 assert status() == (False, False)
                 # One answer 20 minutes ago, still waiting to be processed.
-                collector.record_response(original)
+                record(original)
                 assert status() == (True, True)
                 # A fresh answer clears collection; the old saved one still waits.
-                collector.record_response(
+                record(
                     replace(
                         original,
                         occurrence_key="new-profile",
@@ -455,18 +476,26 @@ def test_update_status_reports_delayed_collection_and_processing(database_url):
                     )
                 )
                 assert status() == (False, True)
-                with psycopg.connect(info) as connection:
-                    connection.execute(
-                        "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s"
-                        " WHERE due_at < %s",
-                        (now, now - timedelta(minutes=10)),
-                    )
+                # Waiting for storage, or retried a minute ago, still counts from
+                # when the data was saved 20 minutes ago.
+                set_old_job("waiting_dependency", now + timedelta(minutes=5))
+                assert status() == (False, True)
+                set_old_job("waiting_retry", now - timedelta(minutes=1))
+                assert status() == (False, True)
+                body = client.get(
+                    "/v1/status", headers=_signed_headers("/v1/status")
+                ).json()
+                assert (
+                    body["oldest_waiting_saved_at"]
+                    == (now - timedelta(minutes=20)).isoformat()
+                )
+                set_old_job("complete", now)
                 assert status() == (False, False)
         finally:
             collector.close()
 
 
-def test_player_page_reports_battle_log_check_separately(database_url):
+def test_player_page_reports_battle_history_publication_separately(database_url):
     now = datetime.fromtimestamp(NOW, UTC)
     with domain_database(database_url) as info:
         owner = ApiDatabase(info)
@@ -474,19 +503,33 @@ def test_player_page_reports_battle_log_check_separately(database_url):
         try:
             seed_profile(owner, "#2PP", 6000, observed_at=now - timedelta(minutes=1))
             seed_profile(owner, "#9QQ", 6000, observed_at=now - timedelta(minutes=1))
-            checked_at = now - timedelta(hours=2)
+            published_at = now - timedelta(hours=2)
             with psycopg.connect(info) as connection:
-                seed_check(connection, "#2PP", "battle_log", checked_at)
+                connection.execute(
+                    "UPDATE api_player_daily_logs SET published_at = %s"
+                    " WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#2PP')",
+                    (published_at,),
+                )
+                connection.execute(
+                    "DELETE FROM api_player_daily_logs"
+                    " WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#9QQ')"
+                )
+                # A successful battle log request alone does not move the time.
+                seed_check(connection, "#2PP", "battle_log", now - timedelta(minutes=1))
 
-            def battle_log_checked_at(tag):
+            def battle_history(tag):
                 page = api_players.get_player_page(
                     database, tag, now=now, freshness_seconds=900
                 )
-                return page["battle_log_checked_at"]
+                return (
+                    page["battle_history_updated_at"],
+                    page["battle_history_age_seconds"],
+                    page["battle_history_freshness"],
+                )
 
-            assert battle_log_checked_at("#2PP") == checked_at.isoformat()
-            # Never checked stays unknown, not "just now".
-            assert battle_log_checked_at("#9QQ") is None
+            assert battle_history("#2PP") == (published_at.isoformat(), 7200, "stale")
+            # Nothing published stays unknown, not "just now".
+            assert battle_history("#9QQ") == (None, None, None)
         finally:
             database.close()
             owner.close()

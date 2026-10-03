@@ -17,16 +17,16 @@ def get_update_status(database: ApiDatabase, *, now: datetime) -> dict[str, Any]
             """
             SELECT (SELECT max(last_success_at) FROM collector_response_state
                     WHERE scope = 'player' AND endpoint IN ('profile', 'battle_log')),
-                   (SELECT min(due_at) FROM python_processing_jobs
-                    WHERE work_type = 'process_observation'
-                      AND status IN ('pending', 'waiting_retry')
-                      AND due_at <= %s)
-            """,
-            (now,),
+                   (SELECT min(created_at) FROM python_processing_jobs
+                    WHERE work_type IN ('process_observation', 'reconcile_ranked_day')
+                      AND status IN (
+                          'pending', 'waiting_retry', 'waiting_dependency', 'leased'
+                      ))
+            """
         ).fetchone()
     now = now.astimezone(UTC)
     limit = now - timedelta(seconds=DELAY_SECONDS)
-    last_success, oldest_waiting = (
+    last_success, oldest_waiting_saved = (
         None if value is None else value.astimezone(UTC) for value in row
     )
     return {
@@ -36,8 +36,10 @@ def get_update_status(database: ApiDatabase, *, now: datetime) -> dict[str, Any]
         # No answer at all counts as delayed only once something was ever collected.
         "collection_delayed": last_success is not None and last_success < limit,
         "last_collected_at": None if last_success is None else last_success.isoformat(),
-        "processing_delayed": oldest_waiting is not None and oldest_waiting < limit,
-        "oldest_waiting_at": (
-            None if oldest_waiting is None else oldest_waiting.isoformat()
+        "processing_delayed": (
+            oldest_waiting_saved is not None and oldest_waiting_saved < limit
+        ),
+        "oldest_waiting_saved_at": (
+            None if oldest_waiting_saved is None else oldest_waiting_saved.isoformat()
         ),
     }

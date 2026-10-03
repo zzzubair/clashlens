@@ -129,7 +129,7 @@ export interface PlayerProfile {
   clan: string;
   trophies: number;
   freshness: Freshness;
-  battleLogCheckedAt?: string | null;
+  battleHistory?: Freshness | null;
   confidence: ConfidenceState;
   coverage: CoverageState;
   eligibility: "legend-i" | "uncertain";
@@ -140,8 +140,8 @@ export interface UpdateStatus {
   checkedAt: string;
   /** Set when no Clash of Clans API answer arrived for the delay limit. */
   lastCollectedAt: string | null;
-  /** Set when saved answers have waited longer than the delay limit. */
-  oldestWaitingAt: string | null;
+  /** When the oldest data still waiting to be processed was saved, once that wait passes the delay limit. */
+  oldestWaitingSavedAt: string | null;
 }
 
 export interface ArmyComponent {

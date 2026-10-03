@@ -651,7 +651,7 @@ describe("automatic tag lookup", () => {
     expect(result.player?.season).toBeNull();
   });
 
-  it("shows an old profile's age and when battles were last checked", async () => {
+  it("shows an old profile's age and when battle history was last published", async () => {
     const stale = {
       ...PLAYER,
       profile: {
@@ -661,7 +661,11 @@ describe("automatic tag lookup", () => {
           observedAt: "2026-08-06T12:00:00Z",
           ageSeconds: 7_300,
         },
-        battleLogCheckedAt: "2026-08-06T11:40:00Z",
+        battleHistory: {
+          state: "stale",
+          observedAt: "2026-08-06T11:40:00Z",
+          ageSeconds: 8_500,
+        },
       },
     } satisfies PlayerPage;
     const render = async (player: PlayerPage) => {
@@ -677,13 +681,15 @@ describe("automatic tag lookup", () => {
       return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
     };
     expect(await render(stale)).toContain(
-      "Updated 6 Aug 2026, 12:00 UTC · 2 hours oldBattles checked 6 Aug 2026, 11:40 UTC",
+      "Updated 6 Aug 2026, 12:00 UTC · 2 hours oldBattle history updated 6 Aug 2026, 11:40 UTC · 2 hours old",
     );
     const fresh = await render({
       ...PLAYER,
-      profile: { ...PLAYER.profile, battleLogCheckedAt: null },
+      profile: { ...PLAYER.profile, battleHistory: null },
     });
-    expect(fresh).toContain("Updated 6 Aug 2026, 12:00 UTCBattles checked not yet");
+    expect(fresh).toContain(
+      "Updated 6 Aug 2026, 12:00 UTCBattle history updated not yet",
+    );
   });
 
   it("keeps a newly published battle when a completed Refresh has the same check time", async () => {

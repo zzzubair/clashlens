@@ -44,10 +44,10 @@ export function mapUpdateStatus(payload: unknown): UpdateStatus | null {
     payload.collection_delayed === true && isUtcTimestamp(payload.last_collected_at)
       ? payload.last_collected_at
       : null;
-  const oldestWaitingAt =
-    payload.processing_delayed === true && isUtcTimestamp(payload.oldest_waiting_at)
-      ? payload.oldest_waiting_at
+  const oldestWaitingSavedAt =
+    payload.processing_delayed === true && isUtcTimestamp(payload.oldest_waiting_saved_at)
+      ? payload.oldest_waiting_saved_at
       : null;
-  if (lastCollectedAt === null && oldestWaitingAt === null) return null;
-  return { checkedAt: payload.checked_at, lastCollectedAt, oldestWaitingAt };
+  if (lastCollectedAt === null && oldestWaitingSavedAt === null) return null;
+  return { checkedAt: payload.checked_at, lastCollectedAt, oldestWaitingSavedAt };
 }

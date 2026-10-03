@@ -116,16 +116,20 @@ A domain change is complete only when every affected source observation, derived
   The private player response's `observed_at`, `age_seconds`, `freshness`, and
   screen-ready provenance use this same time; see
   [`get_player_page`](../python/src/clashlens/api_players.py).
-- When that time is stale, the page also shows its age. Battles checked shows
-  the last successful battle log check separately, or "not yet".
+- When that time is stale, the page also shows its age. Battle history updated
+  shows separately when the newest shown daily result was published, with its
+  age once that is more than 15 minutes old, or "not yet". A successful battle
+  log request alone does not move it.
 
 ### Delayed updates notice
 
 - Every page shows one "Updates are delayed" notice when no official API
-  profile or battle log answer has succeeded for 15 minutes, or when a saved
-  response due for processing has waited over 15 minutes. It names only the
-  delay the data shows: no API answer since a time, or data waiting to be
-  processed since a time. Saved values stay visible with their age; a delay
+  profile or battle log answer has succeeded for 15 minutes, or when work
+  needed to publish shown results (processing a saved response, or rebuilding
+  a player's Legend day) was saved over 15 minutes ago and is still unfinished,
+  including retries and waits for storage. It names only the delay the data
+  shows: no API answer since a time, or when the oldest waiting data was
+  saved. Saved values stay visible with their age; a delay
   never turns them into zero or removes a player. Affected Legend days stay
   incomplete until the existing battle log continuity checks prove otherwise.
   See [`get_update_status`](../python/src/clashlens/api_status.py).

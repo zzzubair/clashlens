@@ -496,14 +496,21 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 : null}
             </p>
             <p className="player-freshness">
-              <span>Battles checked</span>{" "}
-              {trackedPlayer.profile.battleLogCheckedAt ? (
-                <time
-                  className="player-updated"
-                  dateTime={trackedPlayer.profile.battleLogCheckedAt}
-                >
-                  {formatPlayerTimestamp(trackedPlayer.profile.battleLogCheckedAt)}
-                </time>
+              <span>Battle history updated</span>{" "}
+              {trackedPlayer.profile.battleHistory ? (
+                <>
+                  <time
+                    className="player-updated"
+                    dateTime={trackedPlayer.profile.battleHistory.observedAt}
+                  >
+                    {formatPlayerTimestamp(
+                      trackedPlayer.profile.battleHistory.observedAt,
+                    )}
+                  </time>
+                  {trackedPlayer.profile.battleHistory.state === "stale"
+                    ? ` · ${formatAge(trackedPlayer.profile.battleHistory.ageSeconds)} old`
+                    : null}
+                </>
               ) : (
                 "not yet"
               )}
