@@ -18,7 +18,7 @@ from .army_decoder import (
 from .army_season_summaries import acquire_army_season_lock, materialize_army_season
 from .catalog import CATALOG_HASH, CATALOG_VERSION
 from .db import Claim, Database, _text_value
-from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError
+from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, anchored_ranked_day
 
 ARMY_FACT_PLAYER_BATCH = 500
 
@@ -1178,14 +1178,13 @@ def _season_metadata_for_ranked_day(
     ).fetchone()
     if anchor is None or ranked_day_start < anchor[3]:
         raise ValueError("dependency_not_ready: confirmed season anchor is unavailable")
-    if ranked_day_start >= anchor[2]:
-        season_id, season_start = _text_value(anchor[0]), anchor[2]
-    else:
-        season_id, season_start = _text_value(anchor[1]), anchor[3]
-    season_day = (ranked_day_start - season_start).days + 1
-    if not 1 <= season_day <= 28:
-        raise ValueError("dependency_not_ready: ranked day is outside confirmed season")
-    return season_id, season_day
+    try:
+        day = anchored_ranked_day(
+            ranked_day_start, _text_value(anchor[0]), _text_value(anchor[1])
+        )
+    except DomainRuleError as error:
+        raise ValueError("dependency_not_ready: confirmed season anchor is off phase") from error
+    return day.official_season_id, day.day_number
 
 
 def complete_army_redecode(database: Database, claim: Claim) -> None:

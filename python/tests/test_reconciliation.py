@@ -188,6 +188,56 @@ def test_weekly_and_season_reset_adjustments_reconcile_against_5000_baseline() -
     assert season.boundary_adjustment_type == "season_reset"
 
 
+def test_5000_after_a_reset_does_not_confirm_the_automatic_loss_or_final_total() -> (
+    None
+):
+    # October 4, day 28: the same battles with two different previous-day
+    # losses give two different final totals, and both become 5,000.
+    sunday = ranked_day_for(datetime(2026, 10, 4, 12, tzinfo=UTC))
+    previous_losses = (20, 80)
+    season = [
+        reconcile_ranked_day(
+            _input(
+                ranked_day=sunday,
+                now=sunday.end + timedelta(minutes=1),
+                next_start_trophies=5000,
+                boundary_kind="season",
+                previous_day=PreviousRankedDay(True, 2, loss, 0),
+            )
+        )
+        for loss in previous_losses
+    ]
+    below_floor = reconcile_ranked_day(
+        _input(start_trophies=4900, next_start_trophies=5000, boundary_kind="weekly")
+    )
+    # Ending on exactly 5,000 hides a missed loss just the same.
+    at_floor = reconcile_ranked_day(
+        _input(start_trophies=5060, next_start_trophies=5000, boundary_kind="weekly")
+    )
+    season_mismatch = reconcile_ranked_day(
+        _input(next_start_trophies=4999, boundary_kind="season")
+    )
+    above_floor = reconcile_ranked_day(
+        _input(next_start_trophies=5940, boundary_kind="weekly")
+    )
+
+    assert [r.final_trophies_before_reset for r in season] == [5940, 5800]
+    for result in (*season, below_floor, at_floor):
+        assert result.state == "Complete"
+        assert result.unexplained_residual == 0
+        assert result.automatic_defense_evidence_state == "calculated"
+        assert result.confidence == "inferred"
+    assert below_floor.boundary_adjustment_type == "weekly_reset"
+    assert at_floor.final_trophies_before_reset == 5000
+    assert (season_mismatch.state, season_mismatch.confidence) == (
+        "Inconsistent",
+        "uncertain",
+    )
+    # Above 5,000 a weekly Reset keeps the total, so the reading still proves it.
+    assert above_floor.automatic_defense_evidence_state == "confirmed"
+    assert above_floor.confidence == "exact"
+
+
 def test_automatic_defense_uses_previous_and_current_observed_losses() -> None:
     result = reconcile_ranked_day(
         _input(

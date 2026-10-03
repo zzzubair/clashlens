@@ -17,7 +17,12 @@ from .db import (
     Database,
     _text_value,
 )
-from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, ranked_day_for
+from .domain import (
+    SEASON_ANCHOR_RULE_VERSION,
+    DomainRuleError,
+    RankedDay,
+    ranked_day_for,
+)
 from .profile import normalize_player_tag
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
@@ -125,22 +130,8 @@ def recalculate_ranked_day(
     ).fetchone()
     season_id = _text_value(season_row[0]) if season_row else None
     if season_id is None:
-        anchor_row = connection.execute(
-            """
-            SELECT current_league_season_id, previous_league_season_id,
-                   current_start, previous_start
-            FROM legend_season_anchors
-            WHERE state = 'confirmed' AND anchor_rule_version = %s
-            ORDER BY current_start DESC LIMIT 1
-            """,
-            (SEASON_ANCHOR_RULE_VERSION,),
-        ).fetchone()
-        if anchor_row is not None:
-            season_id = _text_value(
-                anchor_row[0]
-                if ranked_day.start >= anchor_row[2]
-                else anchor_row[1]
-            )
+        season_day = _anchored_day(connection, ranked_day.start)[1]
+        season_id = season_day.official_season_id if season_day else None
     if season_id is not None and season_id != "unknown":
         acquire_season_lock_shared(connection, season_id)
     if is_detail_retired_for_day(connection, ranked_day.start) or (
@@ -438,28 +429,13 @@ def recalculate_ranked_day(
         if previous_row is not None
         else None
     )
-    anchor = connection.execute(
-        """
-        SELECT current_league_season_id, previous_league_season_id,
-               current_start, previous_start
-        FROM legend_season_anchors
-        WHERE state = 'confirmed' AND anchor_rule_version = %s
-        """,
-        (SEASON_ANCHOR_RULE_VERSION,),
-    ).fetchone()
-    anchor_valid = anchor is not None and ranked_day.start >= anchor[3]
-    if anchor is None:
-        official_season_id = "unknown"
-        season_start = ranked_day.start
-    elif ranked_day.start >= anchor[2]:
-        official_season_id = _text_value(anchor[0])
-        season_start = anchor[2]
-    else:
-        official_season_id = _text_value(anchor[1])
-        season_start = anchor[3]
-    season_day_number = (ranked_day.start - season_start).days + 1
+    anchor, season_day = _anchored_day(connection, ranked_day.start)
+    # Days before the anchor's previous Season stay an anchor conflict.
+    anchor_valid = season_day is not None and ranked_day.start >= anchor[3]
+    official_season_id = season_day.official_season_id if season_day else "unknown"
+    season_day_number = season_day.day_number if season_day else 1
     boundary_kind = None
-    if anchor is not None and ranked_day.end == anchor[2]:
+    if season_day is not None and ranked_day.end == season_day.season_end:
         boundary_kind = "season"
     elif ranked_day.end.weekday() == 0:
         boundary_kind = "weekly"
@@ -820,6 +796,26 @@ def recalculate_ranked_day(
             ranked_day_version_id=version_id,
             ranked_day_input_hash=input_hash,
         )
+
+
+def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:
+    """The confirmed anchor row and the day's Season identity counted from it
+    in 28-day steps; no identity without an anchor or with an off-phase one."""
+    anchor = connection.execute(
+        """
+        SELECT current_league_season_id, previous_league_season_id,
+               current_start, previous_start
+        FROM legend_season_anchors
+        WHERE state = 'confirmed' AND anchor_rule_version = %s
+        ORDER BY current_start DESC LIMIT 1
+        """,
+        (SEASON_ANCHOR_RULE_VERSION,),
+    ).fetchone()
+    try:
+        ids = (_text_value(anchor[0]), _text_value(anchor[1])) if anchor else None
+        return anchor, domain.anchored_ranked_day(day_start, *ids) if ids else None
+    except DomainRuleError:
+        return anchor, None
 
 
 def _restored_result_hash(result_hash: str, replaces_version_id: Any) -> str:
