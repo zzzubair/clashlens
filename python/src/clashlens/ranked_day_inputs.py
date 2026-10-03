@@ -212,7 +212,8 @@ def load_contributions(
         JOIN battle_evidence AS e ON e.id = p.evidence_id
         JOIN battle_source_rows AS source_row
           ON source_row.id = e.source_row_id
-        WHERE e.battle_timestamp >= %s
+        WHERE b.ranked_day_start = %s
+          AND e.battle_timestamp >= %s
           AND e.battle_timestamp < %s
           AND (
               (p.perspective = 'attacker' AND b.attacker_player_id = %s)
@@ -221,7 +222,7 @@ def load_contributions(
           )
         ORDER BY b.id, p.perspective
         """,
-        (*domain.battle_window(ranked_day.start), player_id, player_id),
+        (ranked_day.start, *domain.battle_window(ranked_day.start), player_id, player_id),
     ).fetchall()
     return tuple(
         BattleContribution(
@@ -506,6 +507,8 @@ def load_first_reports(
         JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
         WHERE (battle.attacker_player_id = %(player)s
                OR battle.defender_player_id = %(player)s)
+          AND battle.ranked_day_start > LEAST(%(since)s, %(new_day)s) - interval '2 days'
+          AND battle.ranked_day_start < %(until)s
           AND evidence.battle_timestamp >= LEAST(%(since)s, %(new_day)s)
           AND evidence.battle_timestamp < %(until)s
         """,

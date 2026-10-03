@@ -311,11 +311,19 @@ def test_terminal_work_refresh_and_fence_use_dependency_days(
             assert _verdict(connection_info, RESET)[:3] == ("provisional", None, [])
             assert reset_settlement.refresh_terminal_work(database) == 0
 
-            # An unfinished check holds its two days' detail from retirement.
+            # An unfinished check, or a judged one whose saved battle log is
+            # still unprocessed, holds its two days' detail from retirement.
+            log_id, _ = _save(connection_info, archive_server, "battle_log",
+                              b'{"items": []}', recent + 25 * MINUTE)
             with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_work SET battle_log_status = 'observed',"
+                    " battle_log_observation_id = %s WHERE id = %s",
+                    (log_id, checks[recent]),
+                )
                 blocking = close_blockers(
                     connection, "season", recent - 2 * DAY, recent - DAY + timedelta(seconds=1))
-                assert len(blocking.get("reset_settlement_checks", [])) == 1
+                assert len(blocking.get("reset_settlement_checks", [])) == 2
                 assert "reset_settlement_checks" not in close_blockers(
                     connection, "season", recent + DAY, recent + 2 * DAY)
 

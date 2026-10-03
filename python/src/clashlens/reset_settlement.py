@@ -62,6 +62,7 @@ def record_provisional_boundary(
     check keeps the check's reasons; the pair's own are in its proof.
     """
     early = {"baseline_id": early_baseline_id, "state": early_state, "reasons": reasons}
+    _lock_player(connection, player_id, boundary_at)
     connection.execute(
         """
         INSERT INTO reset_boundary_settlements (
@@ -153,15 +154,11 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
         "rule": PROOF_RULE_VERSION,
         "observations": [r.observation_id for r in readings.values() if r is not None],
         "readings": {
-            name: {
-                "observation_id": r.observation_id,
-                "request_started_at": r.request_started_at.isoformat(),
-                "response_completed_at": r.response_completed_at.isoformat(),
-                "outcome": r.outcome,
-                "trophies": r.trophies,
-            }
-            for name, r in readings.items()
-            if r is not None
+            name: {"observation_id": r.observation_id,
+                   "request_started_at": r.request_started_at.isoformat(),
+                   "response_completed_at": r.response_completed_at.isoformat(),
+                   "outcome": r.outcome, "trophies": r.trophies}
+            for name, r in readings.items() if r is not None
         },
     }
 
@@ -222,13 +219,8 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
         if prior_from <= at < ended_until
     }
     for battle in inputs.battles:
-        if (
-            not battle.valid
-            or battle.failure_reason
-            or battle.disagreement
-            or battle.opponent_tag is None
-            or battle.amount is None
-        ):
+        if (not battle.valid or battle.failure_reason or battle.disagreement
+                or battle.opponent_tag is None or battle.amount is None):
             reasons.append("battle_report_unusable")
         if battle.source_rule_version != TROPHY_ALLOCATION_RULE_VERSION:
             reasons.append("rule_correction_pending")
@@ -284,11 +276,8 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
             len(prior_defenses) + len(defenses)
         ) * (MAX_DAILY_DEFENSES - len(defenses))
     proof["automatic_loss_basis"] = {
-        "prior_defenses": len(prior_defenses),
-        "prior_defense_loss": sum(prior_defenses),
-        "defenses": len(defenses),
-        "defense_loss": sum(defenses),
-        "automatic_loss": automatic,
+        "prior_defenses": len(prior_defenses), "prior_defense_loss": sum(prior_defenses),
+        "defenses": len(defenses), "defense_loss": sum(defenses), "automatic_loss": automatic,
     }
     root = inputs.root
     if root is None:
@@ -302,12 +291,8 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     assert root is not None and automatic is not None
     target = root.trophies + sum(attacks) - sum(defenses) - automatic
     proof["catchup"] = {
-        "root": {
-            "boundary_at": root.boundary_at.isoformat(),
-            "trophies": root.trophies,
-            "fingerprint": root.fingerprint,
-            "change_number": root.change_number,
-        },
+        "root": {"boundary_at": root.boundary_at.isoformat(), "trophies": root.trophies,
+                 "fingerprint": root.fingerprint, "change_number": root.change_number},
         "attack_gain": sum(attacks),
         "defense_loss": sum(defenses),
         "target": target,
@@ -441,20 +426,15 @@ def refresh_boundary(
 ) -> None:
     """Re-judge one Reset and record a changed verdict (guard 7).
 
-    Runs in the caller's transaction, under the boundary's own lock, so the
-    inputs are re-read after any concurrent writer finished. A finalized
+    Runs in the caller's transaction, under the player's settlement lock, so
+    the inputs are re-read after any concurrent writer finished. A finalized
     Season keeps its verdict. Admitting a new ``settled`` verdict needs the
     switch; losing one never does. A change to a settled verdict re-judges
     the next Reset, whose target it roots.
     """
-    from .season_retirement import acquire_season_lock_shared, is_season_detail_retired
+    from .season_retirement import is_season_detail_retired
 
-    season_id = ranked_day_for(boundary_at - DAY).official_season_id
-    acquire_season_lock_shared(connection, season_id)
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"reset-settlement:{player_id}:{boundary_at.isoformat()}",),
-    )
+    season_id = _lock_player(connection, player_id, boundary_at)
     if is_season_detail_retired(connection, season_id):
         return
     inputs = load_proof_inputs(database, connection, player_id, boundary_at)
@@ -497,6 +477,18 @@ def refresh_boundary(
     )
     if SETTLED in (current[0], verdict.state) and depth < MAX_CASCADE:
         refresh_boundary(database, connection, player_id, boundary_at + DAY, depth=depth + 1)
+
+
+def _lock_player(connection: Any, player_id: int, boundary_at: datetime) -> str:
+    """Hold the Reset's Season and one lock over all the player's Resets, so
+    two jobs never take a player's Resets in opposite orders."""
+    from .season_retirement import acquire_season_lock_shared
+
+    season_id = ranked_day_for(boundary_at - DAY).official_season_id
+    acquire_season_lock_shared(connection, season_id)
+    connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                       (f"reset-settlement:{player_id}",))
+    return season_id
 
 
 def _has_settlements(database: Database, connection: Any) -> bool:

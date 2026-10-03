@@ -135,7 +135,6 @@ _CHECKS = {
         JOIN collector_work AS work ON work.id = settlement.delayed_work_id
         WHERE settlement.boundary_at > %(season_start)s
           AND settlement.boundary_at - interval '2 days' < %(season_end)s
-          AND settlement.state = 'provisional'
           AND (work.status NOT IN ('complete', 'failed', 'cancelled')
                OR EXISTS (
                    SELECT 1 FROM collector_observations AS observed
