@@ -128,6 +128,28 @@ _CHECKS = {
                            AND generation.army_state = ANY(%(settled)s), false)
         ORDER BY correction.id LIMIT %(limit)s
     """,
+    # A Reset's settlement check reads the two days before it, so it holds
+    # their detail until it finishes, its responses are processed and it is
+    # judged.
+    "reset_settlement_checks": """
+        SELECT settlement.id FROM reset_boundary_settlements AS settlement
+        JOIN collector_work AS work ON work.id = settlement.delayed_work_id
+        WHERE settlement.boundary_at > %(season_start)s
+          AND settlement.boundary_at - interval '2 days' < %(season_end)s
+          AND (work.status NOT IN ('complete', 'failed', 'cancelled')
+               OR (settlement.state = 'provisional'
+                   AND settlement.reasons <> '["new_reset_proofs_disabled"]'::jsonb)
+               OR EXISTS (
+                   SELECT 1 FROM collector_observations AS observed
+                   WHERE observed.id IN (work.profile_observation_id,
+                                         work.battle_log_observation_id)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM observation_processing_outcomes AS outcome
+                         WHERE outcome.observation_id = observed.id
+                     )
+               ))
+        ORDER BY settlement.id LIMIT %(limit)s
+    """,
 }
 
 

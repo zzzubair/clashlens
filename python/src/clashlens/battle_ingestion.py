@@ -20,14 +20,14 @@ from .domain import (
 
 def _battle_log_reset_baseline(
     connection: Any, claim: Claim
-) -> tuple[int, datetime] | None:
-    """The (collector work id, Reset) whose baseline this battle log records."""
+) -> tuple[int, int, datetime] | None:
+    """The (collector work id, player, Reset) whose baseline this battle log records."""
     if claim.observation_id is None:
         return None
     context = reset_baselines._load_reset_baseline_context(
         connection, claim.observation_id
     )
-    return None if context is None else (int(context[0]), context[4])
+    return None if context is None else (int(context[0]), int(context[1]), context[4])
 
 
 def supersede_battle_log(
@@ -483,6 +483,7 @@ def complete_battle_log(
                 connection,
                 sorted(affected_battle_ids),
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
+                observation_id=claim.observation_id,
             )
 
             outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -891,6 +892,7 @@ def _complete_battle_log_legacy(
                 connection,
                 sorted(affected_battle_ids),
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
+                observation_id=claim.observation_id,
             )
 
             job_outcomes._record_parsed_payload(

@@ -97,9 +97,13 @@ onwards whose newest processing outcome is not `processed` (finished-job
 cleanup keeps outcomes, so a missing job proves nothing); any replay
 request for such a response that is not complete; any publication
 generation at a Reset from Season start to Season end, the closing Reset
-included, that is not published or superseded; and any correction from
+included, that is not published or superseded; any correction from
 Season start onwards that is not finalized with a published or superseded
-generation. A missing table, failed query or check over 10 seconds blocks.
+generation; and any
+[Reset settlement check](domain.md#8-evidence-and-confidence-states) that
+reads the Season's days and is unfinished, has an unprocessed response, or
+is still provisional, unless it is a judged candidate held back only
+because `CLASHLENS_ENABLE_NEW_RESET_PROOFS` is off. A missing table, failed query or check over 10 seconds blocks.
 Each blocker lists at most five example ids under `blocking_work`; missing
 tables and failed checks are listed by name instead. Until
 the expanded history above can be checked, it also always reports

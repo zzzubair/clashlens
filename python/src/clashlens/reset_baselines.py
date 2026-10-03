@@ -44,6 +44,7 @@ def _refresh_reset_baseline_evidence(
         failure_category=failure_category,
         failure_retryable=failure_retryable,
     )
+    reset_settlement.refresh_for_observation(database, connection, claim.observation_id)
 
 
 def repair_current_season_reset_baselines(
@@ -574,6 +575,11 @@ def _evaluate_reset_baseline(
         assert inserted is not None
         evidence_id = int(inserted[0])
 
+    publishes = state in {"complete", "failed"} and ends_day
+    reset_settlement.lock_resets(
+        database, connection, observation_id, [(int(player_id), boundary_at)],
+        (boundary_at,) if publishes else (),
+    )
     reset_settlement.record_provisional_boundary(
         connection,
         player_id=int(player_id),
@@ -583,14 +589,15 @@ def _evaluate_reset_baseline(
         early_state=state,
         reasons=reasons,
     )
-    if state in {"complete", "failed"} and ends_day:
-        _record_boundary_baseline(database, 
+    if publishes:
+        _record_boundary_baseline(database,
             connection,
             boundary_at=boundary_at,
             reset_sweep_id=int(sweep_id),
             player_id=int(player_id),
             state=state,
         )
+    reset_settlement.refresh_boundary(database, connection, int(player_id), boundary_at)
     if state != "complete":
         return [], reasons
     day_starts = [boundary_at - timedelta(days=1)] if ends_day else []

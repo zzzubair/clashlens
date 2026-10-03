@@ -464,5 +464,12 @@ def test_a_battle_with_reports_from_two_days_stays_where_it_is(
                 assert connection.execute(
                     "SELECT count(DISTINCT battle_id), count(*) FROM battle_evidence"
                 ).fetchone() == (1, 2)
+            # The 05:01 attack still counts on the day before, though its
+            # battle stays saved under the next day.
+            job_id = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=DAY, now=DAY, request_key="kept"
+            )
+            assert processor.process_job(job_id, owner="kept") is not None
+            assert _counts(connection_info)[DAY][0] == 1
         finally:
             database.close()

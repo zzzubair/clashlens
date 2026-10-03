@@ -29,6 +29,7 @@ from . import (
     job_outcomes,
     late_battle_sweep,
     reconciliation_db,
+    reset_settlement,
     snapshots,
 )
 from .archive import ArchiveReadError, ArchiveReadResult, S3ArchiveReader
@@ -236,6 +237,7 @@ class TimedMaintenance:
     def reevaluate(self) -> None:
         if isinstance(self.database, Database):
             boundary_publication.reevaluate_boundary_publications(self.database)
+            reset_settlement.refresh_terminal_work(self.database)
 
     def run_due(self, derived_turns: Semaphore | None = None) -> None:
         current_time = monotonic()
