@@ -42,6 +42,27 @@ export interface PrivateGroup {
   tags: string[];
 }
 
+export type GroupPlayerState =
+  | "tracking"
+  | "checking"
+  | "not_found"
+  | "not_in_legend"
+  | "uncertain"
+  | "failed"
+  | "unknown";
+
+/** One group member with the stored in-game name and trophies, when known. */
+export interface GroupPlayer {
+  tag: string;
+  name: string | null;
+  trophies: number | null;
+  state: GroupPlayerState;
+}
+
+export interface ListedGroup extends PrivateGroup {
+  players: GroupPlayer[];
+}
+
 export interface GroupDeleteResult {
   groupId: string;
   deleted: boolean;
@@ -241,13 +262,51 @@ function asGroupPayload(value: unknown): GroupPayload | null {
   return { group_id, name, tags: [...tags] };
 }
 
-export function mapGroups(value: unknown): PrivateGroup[] | null {
+const GROUP_PLAYER_STATES: readonly GroupPlayerState[] = [
+  "tracking",
+  "checking",
+  "not_found",
+  "not_in_legend",
+  "uncertain",
+  "failed",
+  "unknown",
+];
+
+export function mapGroupPlayer(value: unknown): GroupPlayer | null {
+  if (!isRecord(value)) return null;
+  const { tag, name, trophies, state } = value;
+  if (
+    !isCanonicalTag(tag) ||
+    !(name === null || isString(name)) ||
+    !(trophies === null || (Number.isSafeInteger(trophies) && Number(trophies) >= 0)) ||
+    !GROUP_PLAYER_STATES.includes(state as GroupPlayerState)
+  ) {
+    return null;
+  }
+  return {
+    tag,
+    name: name as string | null,
+    trophies: trophies as number | null,
+    state: state as GroupPlayerState,
+  };
+}
+
+export function mapGroups(value: unknown): ListedGroup[] | null {
   if (!isRecord(value) || !Array.isArray(value.groups)) return null;
-  const groups: PrivateGroup[] = [];
+  const groups: ListedGroup[] = [];
   for (const entry of value.groups) {
     const payload = asGroupPayload(entry);
-    if (payload === null) return null;
-    groups.push({ groupId: payload.group_id, name: payload.name, tags: payload.tags });
+    if (payload === null || !isRecord(entry) || !Array.isArray(entry.players)) {
+      return null;
+    }
+    const players = entry.players.map(mapGroupPlayer);
+    if (players.some((player) => player === null)) return null;
+    groups.push({
+      groupId: payload.group_id,
+      name: payload.name,
+      tags: payload.tags,
+      players: players as GroupPlayer[],
+    });
   }
   return groups;
 }

@@ -14,6 +14,7 @@ import type {
   AccountSummary,
   ClashLensAccount,
   GroupDeleteResult,
+  ListedGroup,
   PrivateGroup,
   PublicUser,
   SavedPlayer,
@@ -37,7 +38,6 @@ import {
   normalizeDisplayName,
   normalizeGroupName,
   normalizeSubmittedPlayerTag,
-  normalizeTagList,
   normalizeUsername,
 } from "../lib/account-validation";
 import { normalizePlayerTag } from "../lib/player-tag";
@@ -112,7 +112,7 @@ export interface PythonClient {
   listSavedTags(): Promise<SavedPlayer[]>;
   addSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
   removeSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
-  listGroups(): Promise<PrivateGroup[]>;
+  listGroups(): Promise<ListedGroup[]>;
   createGroup(input: GroupInput, idempotencyKey: string): Promise<PrivateGroup>;
   updateGroup(
     groupId: string,
@@ -161,9 +161,9 @@ export interface AccountNameInput {
   displayName: string;
 }
 
+/** Players join a group one at a time (services/group-players.server.ts). */
 export interface GroupInput {
   name: string;
-  tags: string[];
 }
 
 /**
@@ -1295,7 +1295,7 @@ async function removeSavedTag(
 
 async function listGroups(
   identity: GoogleAccountIdentity | undefined,
-): Promise<PrivateGroup[]> {
+): Promise<ListedGroup[]> {
   requireIdentity(identity);
   const payload = await requestJson<unknown>(
     "/v1/account/groups",
@@ -1318,14 +1318,13 @@ async function createGroup(
     throw new PythonApiError(400, { error: "invalid_input" });
   }
   const name = normalizeGroupName(input.name);
-  const tags = normalizeTagList(input.tags);
-  if (name === null || tags === null) {
+  if (name === null) {
     throw new PythonApiError(422, { error: "invalid_request" });
   }
   const payload = await requestJson<unknown>(
     "/v1/account/groups",
     "POST",
-    jsonBody({ name, tags }),
+    jsonBody({ name }),
     undefined,
     idempotencyKey,
     identity,
@@ -1344,14 +1343,13 @@ async function updateGroup(
     throw new PythonApiError(400, { error: "invalid_input" });
   }
   const name = normalizeGroupName(input.name);
-  const tags = normalizeTagList(input.tags);
-  if (name === null || tags === null) {
+  if (name === null) {
     throw new PythonApiError(422, { error: "invalid_request" });
   }
   const payload = await requestJson<unknown>(
     `/v1/account/groups/${groupId}`,
     "PATCH",
-    jsonBody({ name, tags }),
+    jsonBody({ name }),
     undefined,
     idempotencyKey,
     identity,

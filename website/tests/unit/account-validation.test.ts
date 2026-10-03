@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   isInappropriateName,
-  MAX_GROUP_TAGS,
   normalizeDisplayName,
   normalizeGroupName,
-  normalizeTagList,
   normalizeUsername,
   RESERVED_USERNAMES,
 } from "../../app/lib/account-validation";
@@ -91,24 +89,5 @@ describe("strict inappropriate-name early feedback", () => {
   it("applies the filter to normalized usernames", () => {
     // The filter operates on the submitted value, before username normalization.
     expect(isInappropriateName("  Fvck3r  ")).toBe(true);
-  });
-});
-
-describe("player tag list normalization", () => {
-  it("normalizes, deduplicates, and sorts tags", () => {
-    expect(normalizeTagList([" #2pp ", "#2PL", "#2pp"])).toEqual(["#2PL", "#2PP"]);
-  });
-
-  it("rejects an invalid tag in the list", () => {
-    expect(normalizeTagList(["#2PP", "not-a-tag"])).toBeNull();
-  });
-
-  it("rejects a list over the group limit", () => {
-    const many = Array.from({ length: MAX_GROUP_TAGS + 1 }, (_, index) => `#2${index}PP`);
-    expect(normalizeTagList(many)).toBeNull();
-  });
-
-  it("accepts an empty list", () => {
-    expect(normalizeTagList([])).toEqual([]);
   });
 });

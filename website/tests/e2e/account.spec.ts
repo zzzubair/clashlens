@@ -39,13 +39,27 @@ test("a Clasher can sign in and use account features against the real backend", 
   await page.goto("/account/groups");
   if (await page.getByRole("heading", { name: "No private groups yet" }).isVisible()) {
     await page.getByLabel("Group name").first().fill("War plan");
-    await page.getByLabel("Player tags").first().fill("#2PP");
     await page.getByRole("button", { name: "Create group" }).click();
     await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
     await expect(page.getByLabel("Group name").first()).toHaveValue("");
-    await expect(page.getByLabel("Player tags").first()).toHaveValue("");
+    await expect(
+      page
+        .locator(".group-card")
+        .filter({ has: page.getByRole("heading", { name: "War plan" }) })
+        .getByLabel("Add player"),
+    ).toHaveValue("");
   }
   await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
+  const warPlan = page.locator(".group-card").filter({
+    has: page.getByRole("heading", { name: "War plan" }),
+  });
+  const member = warPlan.getByRole("button", { name: /^Remove .+ from War plan$/ });
+  if ((await member.count()) === 0) {
+    // Players join one at a time, after the game confirms the tag.
+    await warPlan.getByLabel("Add player").fill("#2PP");
+    await warPlan.getByRole("button", { name: "Add player" }).click();
+  }
+  await expect(member).toBeVisible();
 
   await page.goto("/account/verify-player");
   await page.getByLabel("Player tag").fill("#2PP");
