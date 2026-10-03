@@ -41,7 +41,11 @@ maintainer-only Discord recovery command.
 ### TypeScript website and browser
 
 The TypeScript backend owns browser sessions, provider login, and
-presentation-oriented calls to the private Python API. The browser talks only
+presentation-oriented calls to the private Python API. Logout records a SHA-256
+fingerprint of that login cookie through the private API, and the backend asks
+the API before trusting any login cookie, so a copied cookie stops working once
+its login logs out. The API keeps each fingerprint for 25 hours, one hour past
+the cookie's own lifetime. The browser talks only
 to that backend. Neither the browser nor TypeScript may access PostgreSQL or
 the raw archive directly, or reimplement Python-owned domain calculations,
 confidence rules, rankings, or cohort membership.

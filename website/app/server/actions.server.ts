@@ -22,6 +22,7 @@ import { LOGIN_COOKIE_NAME, parseLoginCookieValue } from "./auth-cookies.server"
 import type { LoginIdentity } from "./auth-cookies.server";
 import type { WebsiteConfig } from "./config.server";
 import { safeWebsiteError } from "./errors.server";
+import { isLoginRevoked } from "./login-session.server";
 
 const MAX_COOKIE_HEADER_BYTES = 8192;
 const MAX_COOKIE_PAIRS = 64;
@@ -75,19 +76,27 @@ export function parseCookieHeader(
 }
 
 /**
- * Read and verify the signed login cookie for a request. Returns the Google
- * identity or null when login is disabled, the cookie is missing, or the
- * value is malformed, tampered, or expired. Never throws for request input.
+ * Read and verify the signed login cookie for a request, then ask the private
+ * API whether that login has logged out. Returns the provider identity or null
+ * when login is disabled, the cookie is missing, or the value is malformed,
+ * tampered, expired, or logged out. Throws PythonApiError only when the API
+ * cannot answer, never for request input.
  */
-export function readLoginIdentity(
+export async function readLoginIdentity(
   request: Request,
   config: WebsiteConfig,
-): LoginIdentity | null {
+): Promise<LoginIdentity | null> {
   if (!config.loginEnabled || config.loginSecret.length !== 32) return null;
   const cookies = parseCookieHeader(request.headers.get("cookie"));
   const value = cookies.get(LOGIN_COOKIE_NAME);
   if (value === undefined) return null;
-  return parseLoginCookieValue(value, config.loginSecret, Math.floor(Date.now() / 1000));
+  const identity = parseLoginCookieValue(
+    value,
+    config.loginSecret,
+    Math.floor(Date.now() / 1000),
+  );
+  if (identity === null) return null;
+  return (await isLoginRevoked(identity, value)) ? null : identity;
 }
 
 /**

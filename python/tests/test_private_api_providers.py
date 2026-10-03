@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import psycopg
 from fastapi.testclient import TestClient
-from test_api_migration import migrated_production_database
+from test_api_migration import ROOT, migrated_production_database
 from test_private_api import signed_headers
 
 from clashlens.api import create_app
@@ -238,5 +239,58 @@ def test_collision_final_provider_and_unknown_provider_fail_safely(
                 )
                 assert unknown.status_code == 404
                 assert unknown.json() == {"error": "provider_not_found"}
+        finally:
+            database.close()
+
+
+def _session_call(client: TestClient, action: str, session: str, *, provider: str = "google"):
+    target = f"/v1/account/session/{action}"
+    body = b'{"session": "%s"}' % session.encode()
+    return client.post(
+        target,
+        content=body,
+        headers=signed_headers(
+            target,
+            method="POST",
+            body=body,
+            provider=provider,
+            subject="google-subject-1001" if provider else "",
+        ),
+    )
+
+
+def test_logout_ends_only_that_login_and_old_logouts_are_dropped(database_url: str) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                (ROOT / "deploy/migrations/0054_login_session_revocations.sql").read_text()
+            )
+        database = ApiDatabase(connection_info)
+        try:
+            with _app(database) as client:
+                ended, other = "a" * 43, "b" * 43
+                assert _session_call(client, "check", ended).json() == {"revoked": False}
+                for _ in range(2):  # Logging out twice is harmless.
+                    revoked = _session_call(client, "revoke", ended)
+                    assert revoked.status_code == 200
+                    assert revoked.json() == {"revoked": True}
+                assert _session_call(client, "check", ended).json() == {"revoked": True}
+                assert _session_call(client, "check", other).json() == {"revoked": False}
+
+                # A login without a provider identity, or a malformed one, is refused.
+                assert _session_call(client, "check", ended, provider="").status_code == 403
+                assert _session_call(client, "revoke", other, provider="").status_code == 403
+                assert _session_call(client, "check", "short").status_code == 422
+
+                # A login cookie lasts 24 hours, so a logout over 25 hours old is
+                # deleted the next time someone logs out.
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE login_session_revocations"
+                        " SET revoked_at = now() - interval '26 hours'"
+                    )
+                assert _session_call(client, "revoke", other).status_code == 200
+                assert _session_call(client, "check", ended).json() == {"revoked": False}
+                assert _session_call(client, "check", other).json() == {"revoked": True}
         finally:
             database.close()

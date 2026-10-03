@@ -16,6 +16,10 @@ vi.mock("../../app/server/auth-guard.server", () => ({
   requireLogin: mocks.requireLogin,
 }));
 
+vi.mock("../../app/server/login-session.server", () => ({
+  isLoginRevoked: async () => false,
+}));
+
 vi.mock("../../app/server/provider-start.server", () => ({
   startProviderAuthorization: mocks.startProviderAuthorization,
 }));

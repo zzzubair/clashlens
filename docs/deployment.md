@@ -125,11 +125,13 @@ target so it stays stopped after later reboots:
 
 ## Production configuration
 
-Copy `app.env.example` to `app.env`, replace every `CHANGE_ME`, and make it
-private:
+The settings template is not in this public repository. It is kept private on
+the server, next to the production settings, at
+`~/.config/clashlens/issue92/app.env.example`. Copy it to `app.env` in the
+checkout, replace every `CHANGE_ME`, and make it private:
 
 ```sh
-cp app.env.example app.env
+cp ~/.config/clashlens/issue92/app.env.example app.env
 chmod 600 app.env
 ```
 
@@ -176,6 +178,13 @@ The database also has separate collector, worker, and API roles, plus a
 [raw-response cleanup](#raw-response-cleanup) role. The admin database URL
 exists only as a short-lived Podman secret during fixture bootstrap or while an
 operator explicitly handles a failed item.
+Every container in the pod shares `127.0.0.1`, so the database image starts
+PostgreSQL with [`deploy/postgres/pg_hba.conf`](../deploy/postgres/pg_hba.conf):
+every network connection, the administrator's included, needs that role's
+password. Only the database container's own Unix socket, which `./ops`, health
+checks and backups use, skips the password. The cluster's own `pg_hba.conf` is
+ignored, so a new or restored cluster cannot fall back to its password-free
+defaults.
 
 ### Paris fixed-address relay
 

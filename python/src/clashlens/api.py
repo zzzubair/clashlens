@@ -74,6 +74,8 @@ _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
         "providers.unlink",
         "saved_tags.read",
         "saved_tags.write",
+        "session.check",
+        "session.revoke",
         "summary.read",
     }
 )
@@ -109,6 +111,11 @@ class GroupBody(StrictBody):
 
 class ProviderLinkBody(StrictBody):
     provider_subject: str = Field(min_length=1, max_length=255)
+
+
+class LoginSessionBody(StrictBody):
+    # SHA-256 of one signed login cookie value, unpadded base64url.
+    session: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
 class ExportBody(StrictBody):
@@ -646,6 +653,26 @@ def create_app(
         if result is None:
             raise ApiError(404, "account_not_found")
         return JSONResponse(status_code=200, content=result)
+
+    # The website asks before trusting a login cookie and records logouts, so
+    # a copied cookie stops working once its login has logged out.
+    @app.post("/v1/account/session/check")
+    def check_login_session(body: LoginSessionBody, request: Request) -> JSONResponse:
+        _authorize(
+            request, "session.check", production_database, allow_unresolved_identity=True
+        )
+        assert production_database is not None
+        revoked = api_accounts.login_session_revoked(production_database, body.session)
+        return JSONResponse(status_code=200, content={"revoked": revoked})
+
+    @app.post("/v1/account/session/revoke")
+    def revoke_login_session(body: LoginSessionBody, request: Request) -> JSONResponse:
+        _authorize(
+            request, "session.revoke", production_database, allow_unresolved_identity=True
+        )
+        assert production_database is not None
+        api_accounts.revoke_login_session(production_database, body.session)
+        return JSONResponse(status_code=200, content={"revoked": True})
 
     @app.patch("/v1/account")
     def update_account(body: AccountUpdateBody, request: Request) -> JSONResponse:

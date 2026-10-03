@@ -4,6 +4,15 @@ const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   createGoogleOidcService: vi.fn(),
   createPythonClient: vi.fn(),
+  // Stands in for the private API's record of logged-out login cookies.
+  loggedOut: new Set<string>(),
+  revokeLogin: vi.fn(),
+}));
+
+vi.mock("../../app/server/login-session.server", () => ({
+  isLoginRevoked: async (_identity: unknown, cookie: string) =>
+    mocks.loggedOut.has(cookie),
+  revokeLogin: mocks.revokeLogin,
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -47,6 +56,7 @@ import { loader as loginLoader } from "../../app/routes/login";
 import { action as logoutAction, loader as logoutLoader } from "../../app/routes/logout";
 import { action as refreshAction } from "../../app/routes/refresh";
 import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import { requireLogin } from "../../app/server/auth-guard.server";
 import { createClientAddressContext } from "../../app/server/client-address.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
@@ -74,6 +84,14 @@ function dataOf<T>(result: unknown): {
     headers: wrapped.init.headers ?? {},
   };
 }
+
+beforeEach(() => {
+  mocks.loggedOut.clear();
+  mocks.revokeLogin.mockReset();
+  mocks.revokeLogin.mockImplementation(async (_identity: unknown, cookie: string) => {
+    mocks.loggedOut.add(cookie);
+  });
+});
 
 function isResponse(value: unknown): value is Response {
   return value instanceof Response;
@@ -333,6 +351,66 @@ describe("logout route", () => {
     );
   });
 
+  it("stops a copied login cookie from working after logout", async () => {
+    const config = testConfig();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const login = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds - 60);
+    const copied = `${LOGIN_COOKIE_NAME}=${login}`;
+    const account = () =>
+      new Request(`${ORIGIN}/account`, { headers: { cookie: copied } });
+    await expect(requireLogin(account())).resolves.toEqual(IDENTITY);
+
+    const response = await logoutAction({
+      request: new Request(`${ORIGIN}/logout`, {
+        method: "POST",
+        headers: { Origin: ORIGIN, cookie: copied },
+        body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
+      }),
+    } as never);
+    expect((response as Response).status).toBe(302);
+    expect(mocks.revokeLogin).toHaveBeenCalledWith(IDENTITY, login);
+
+    // The same cookie, replayed from another browser, is no longer a login.
+    await expect(requireLogin(account())).rejects.toSatisfy((thrown: unknown) => {
+      expect((thrown as Response).headers.get("Location")).toBe(
+        "/login?returnPath=%2Faccount",
+      );
+      return true;
+    });
+    const loginPage = await loginLoader({
+      request: new Request(`${ORIGIN}/login`, { headers: { cookie: copied } }),
+    } as never);
+    expect(loginPage).toEqual({ loginAvailable: true, returnPath: "/account" });
+    // A fresh sign-in is a new login and still works.
+    const fresh = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds);
+    await expect(
+      requireLogin(
+        new Request(`${ORIGIN}/account`, {
+          headers: { cookie: `${LOGIN_COOKIE_NAME}=${fresh}` },
+        }),
+      ),
+    ).resolves.toEqual(IDENTITY);
+  });
+
+  it("answers 503 but still clears this browser when the logout cannot be recorded", async () => {
+    const config = testConfig();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const login = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds - 60);
+    mocks.revokeLogin.mockRejectedValueOnce(new Error("unavailable"));
+    const response = (await logoutAction({
+      request: new Request(`${ORIGIN}/logout`, {
+        method: "POST",
+        headers: { Origin: ORIGIN, cookie: `${LOGIN_COOKIE_NAME}=${login}` },
+        body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
+      }),
+    } as never)) as Response;
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Location")).toBeNull();
+    expect(response.headers.getSetCookie()).toEqual([
+      `${LOGIN_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Secure`,
+    ]);
+  });
+
   it("accepts a same-origin Referer when Origin is absent", async () => {
     const response = await logoutAction({
       request: new Request(`${ORIGIN}/logout`, {
@@ -585,6 +663,39 @@ describe("auth.google.callback loader", () => {
         {
           headers: {
             cookie: `${OAUTH_COOKIE_NAME}=${oauthValue}; ${LOGIN_COOKIE_NAME}=${changedLogin}`,
+          },
+        },
+      ),
+    } as never);
+    const { data, status } = dataOf<{ error: { code: string } | null }>(result);
+    expect(status).toBe(400);
+    expect(data.error?.code).toBe("login_required");
+    expect(service.validateCallback).not.toHaveBeenCalled();
+    expect(mocks.createPythonClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a privileged callback from a login that has logged out", async () => {
+    const originalLogin = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      now() - 10,
+    );
+    mocks.loggedOut.add(originalLogin);
+    const transaction = createOAuthTransaction(
+      "/account/providers",
+      now() - 10,
+      undefined,
+      "link",
+      "google",
+      createLoginSessionBinding(originalLogin),
+    );
+    const oauthValue = createOAuthTransactionCookieValue(transaction, config.loginSecret);
+    const result = await callbackLoader({
+      request: new Request(
+        `${ORIGIN}/auth/google/callback?code=provider-code&state=${transaction.state}`,
+        {
+          headers: {
+            cookie: `${OAUTH_COOKIE_NAME}=${oauthValue}; ${LOGIN_COOKIE_NAME}=${originalLogin}`,
           },
         },
       ),

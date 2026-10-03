@@ -15,7 +15,7 @@ export async function loadRootNavigation(request: Request): Promise<RootNavigati
   try {
     const config = getWebsiteConfig();
     if (!config.loginEnabled) return loggedOutNavigation();
-    const identity = readLoginIdentity(request, config);
+    const identity = await readLoginIdentity(request, config);
     if (identity === null) return loggedOutNavigation();
 
     let accountLabel: string | null = null;

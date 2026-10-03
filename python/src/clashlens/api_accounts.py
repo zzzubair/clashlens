@@ -33,6 +33,30 @@ def resolve_account(
         return None if row is None else _account_context(row)
 
 
+def login_session_revoked(database, session_hash: str) -> bool:
+    with database.pool.connection() as connection:
+        row = connection.execute(
+            "SELECT EXISTS (SELECT 1 FROM login_session_revocations WHERE session_hash = %s)",
+            (session_hash,),
+        ).fetchone()
+        return bool(row and row[0])
+
+
+def revoke_login_session(database, session_hash: str) -> None:
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            # A login cookie lives 24 hours, so an older logout guards nothing.
+            connection.execute(
+                "DELETE FROM login_session_revocations"
+                " WHERE revoked_at < now() - interval '25 hours'"
+            )
+            connection.execute(
+                "INSERT INTO login_session_revocations (session_hash) VALUES (%s)"
+                " ON CONFLICT (session_hash) DO NOTHING",
+                (session_hash,),
+            )
+
+
 def create_account(
     database: ApiDatabase,
     binding: RequestBinding,

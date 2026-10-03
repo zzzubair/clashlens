@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({ isLoginRevoked: vi.fn() }));
+
+vi.mock("../../app/server/login-session.server", () => ({
+  isLoginRevoked: mocks.isLoginRevoked,
+}));
 
 import {
   DEFAULT_FORM_LIMITS,
@@ -88,10 +94,15 @@ describe("parseCookieHeader bounds", () => {
 });
 
 describe("readLoginIdentity", () => {
-  it("returns the exact signed identity for a valid cookie and nothing else", () => {
+  beforeEach(() => {
+    mocks.isLoginRevoked.mockReset();
+    mocks.isLoginRevoked.mockResolvedValue(false);
+  });
+
+  it("returns the exact signed identity for a valid cookie and nothing else", async () => {
     const config = testConfig();
     const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
-    const identity = readLoginIdentity(
+    const identity = await readLoginIdentity(
       requestWithCookie(`${LOGIN_COOKIE_NAME}=${cookie}`),
       config,
     );
@@ -102,7 +113,7 @@ describe("readLoginIdentity", () => {
     ]);
   });
 
-  it("returns null for a missing, tampered, or expired cookie", () => {
+  it("returns null for a missing, tampered, or expired cookie", async () => {
     const config = testConfig();
     const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
     const [, signaturePart] = cookie.split(".");
@@ -115,9 +126,12 @@ describe("readLoginIdentity", () => {
         e: NOW_SECONDS + 86_400,
       }),
     ).toString("base64url")}.${signaturePart}`;
-    expect(readLoginIdentity(requestWithCookie(undefined), config)).toBeNull();
+    expect(await readLoginIdentity(requestWithCookie(undefined), config)).toBeNull();
     expect(
-      readLoginIdentity(requestWithCookie(`${LOGIN_COOKIE_NAME}=${forged}`), config),
+      await readLoginIdentity(
+        requestWithCookie(`${LOGIN_COOKIE_NAME}=${forged}`),
+        config,
+      ),
     ).toBeNull();
     const expired = createLoginCookieValue(
       IDENTITY,
@@ -125,25 +139,52 @@ describe("readLoginIdentity", () => {
       NOW_SECONDS - 86_401,
     );
     expect(
-      readLoginIdentity(requestWithCookie(`${LOGIN_COOKIE_NAME}=${expired}`), config),
+      await readLoginIdentity(
+        requestWithCookie(`${LOGIN_COOKIE_NAME}=${expired}`),
+        config,
+      ),
     ).toBeNull();
     expect(
-      readLoginIdentity(requestWithCookie("clashlens_login=junk"), config),
+      await readLoginIdentity(requestWithCookie("clashlens_login=junk"), config),
     ).toBeNull();
   });
 
-  it("returns null when login is disabled or the secret is not exactly 32 bytes", () => {
+  it("returns null when login is disabled or the secret is not exactly 32 bytes", async () => {
     const disabled = testConfig({ CLASHLENS_LOGIN_ENABLED: "false" });
     expect(
-      readLoginIdentity(requestWithCookie("clashlens_login=x"), disabled),
+      await readLoginIdentity(requestWithCookie("clashlens_login=x"), disabled),
     ).toBeNull();
     const shortSecret: WebsiteConfig = {
       ...testConfig(),
       loginSecret: Buffer.alloc(16),
     };
     expect(
-      readLoginIdentity(requestWithCookie("clashlens_login=x"), shortSecret),
+      await readLoginIdentity(requestWithCookie("clashlens_login=x"), shortSecret),
     ).toBeNull();
+  });
+
+  it("returns null once the login has logged out and refuses to guess when the API fails", async () => {
+    const config = testConfig();
+    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
+    const request = requestWithCookie(`${LOGIN_COOKIE_NAME}=${cookie}`);
+    mocks.isLoginRevoked.mockResolvedValueOnce(true);
+    expect(await readLoginIdentity(request, config)).toBeNull();
+    expect(mocks.isLoginRevoked).toHaveBeenCalledWith(IDENTITY, cookie);
+    mocks.isLoginRevoked.mockRejectedValueOnce(
+      new PythonApiError(503, { error: "unavailable" }),
+    );
+    await expect(readLoginIdentity(request, config)).rejects.toBeInstanceOf(
+      PythonApiError,
+    );
+  });
+
+  it("never asks the API about a missing or invalid cookie", async () => {
+    const config = testConfig();
+    expect(
+      await readLoginIdentity(requestWithCookie("clashlens_login=junk"), config),
+    ).toBeNull();
+    expect(await readLoginIdentity(requestWithCookie(undefined), config)).toBeNull();
+    expect(mocks.isLoginRevoked).not.toHaveBeenCalled();
   });
 });
 

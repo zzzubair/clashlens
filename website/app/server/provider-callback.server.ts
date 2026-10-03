@@ -26,6 +26,7 @@ import {
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
 } from "./auth-cookies.server";
+import { isLoginRevoked, revokeLogin } from "./login-session.server";
 import { getWebsiteConfig } from "./config.server";
 import type { WebsiteConfig } from "./config.server";
 import { constantTimeEqual, OAuthCallbackError } from "./google-oidc.server";
@@ -110,8 +111,15 @@ export async function completeProviderCallback(
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   let session: LoginProviderIdentity | null = null;
+  const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
   if (transaction.intent !== "login") {
-    const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
+    const loginRequired: CallbackErrorView = {
+      kind: "error",
+      status: 400,
+      code: "login_required",
+      message: "Sign in to your Clash Lens account before changing sign-in connections.",
+      clearTransactionCookie,
+    };
     session = parseLoginCookieValue(rawLoginCookie, config.loginSecret, nowSeconds);
     if (
       session === null ||
@@ -122,14 +130,13 @@ export async function completeProviderCallback(
         createLoginSessionBinding(rawLoginCookie),
       )
     ) {
-      return {
-        kind: "error",
-        status: 400,
-        code: "login_required",
-        message:
-          "Sign in to your Clash Lens account before changing sign-in connections.",
-        clearTransactionCookie,
-      };
+      return loginRequired;
+    }
+    // The same login started this change, but it may have logged out since.
+    try {
+      if (await isLoginRevoked(session, rawLoginCookie)) return loginRequired;
+    } catch {
+      return unavailable(clearTransactionCookie);
     }
   }
 
@@ -267,9 +274,13 @@ export async function completeProviderCallback(
     return unavailable(clearTransactionCookie);
   }
 
-  // If the unlinked provider created the current session, clear it and ask
-  // for login through the remaining provider.
+  // If the unlinked provider created the current session, end it and ask for
+  // login through the remaining provider. Ending it on the server keeps a copy
+  // of the cookie from working again if that provider is linked back later.
   if (session.provider === provider) {
+    if (rawLoginCookie !== undefined) {
+      await revokeLogin(session, rawLoginCookie).catch(() => undefined);
+    }
     return {
       kind: "redirect",
       location: "/login",

@@ -63,6 +63,10 @@ export async function createWebsiteServer(build: ServerBuild, clientDirectory: s
     throw new Error("Missing socket context adapter");
   const listener = createRequestListener({ build, getLoadContext: entry.getLoadContext });
   const handleRequest: RequestListener = async (request, response) => {
+    // No other site may show these pages inside a frame, so it cannot overlay
+    // them to trick a click. X-Frame-Options covers older browsers.
+    response.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+    response.setHeader("X-Frame-Options", "DENY");
     let pathname: string;
     try {
       pathname = decodeURIComponent(

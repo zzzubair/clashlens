@@ -8,6 +8,10 @@ RUN CGO_ENABLED=0 GOEXPERIMENT=jsonv2 go build -mod=readonly -p=2 -trimpath \
     -ldflags='-s -w -X github.com/wal-g/wal-g/cmd/pg.walgVersion=v3.0.9' \
     -o /wal-g ./main/pg
 
-FROM docker.io/library/postgres:18-alpine
+# Fixture releases stop here; only production backups need wal-g.
+FROM docker.io/library/postgres:18-alpine AS fixture
+COPY pg_hba.conf /etc/clashlens/pg_hba.conf
+
+FROM fixture AS production
 COPY --from=wal-g /wal-g /usr/local/bin/wal-g
 RUN wal-g --version

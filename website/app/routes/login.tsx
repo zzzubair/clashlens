@@ -28,7 +28,9 @@ export async function loader({ request }: Route.LoaderArgs): Promise<LoginLoader
   const rawReturnPath = new URL(request.url).searchParams.get("returnPath");
   const returnPath =
     safeReturnPath(rawReturnPath, config.publicOrigin) ?? DEFAULT_RETURN_PATH;
-  if (config.loginEnabled && readLoginIdentity(request, config) !== null) {
+  // A login the API cannot check shows the sign-in page rather than redirecting.
+  const identity = await readLoginIdentity(request, config).catch(() => null);
+  if (config.loginEnabled && identity !== null) {
     throw redirect(returnPath);
   }
   return { loginAvailable: config.loginEnabled, returnPath };

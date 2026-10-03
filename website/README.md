@@ -139,7 +139,7 @@ only the configured host and port.
 The application can use Google OpenID Connect when the deployment supplies
 the login settings and protected secret files. Local issuer overrides are for
 tests only; production requires an exact HTTPS public origin. See
-`app.env.example` and [`docs/deployment.md`](../docs/deployment.md) for the
+[`docs/deployment.md`](../docs/deployment.md#production-configuration) for the
 operator configuration.
 
 ## Preview on Rogue
