@@ -4,6 +4,8 @@ holds only the Resets it lists."""
 
 from __future__ import annotations
 
+import itertools
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -19,7 +21,11 @@ from clashlens import boundary, boundary_publication, domain_repair, reset_basel
 from clashlens.army_decoder import DECODER_VERSION
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database
-from clashlens.domain import HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION
+from clashlens.domain import (
+    HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
+    TROPHY_ALLOCATION_RULE_VERSION,
+)
+from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
 SEASON, NEXT_SEASON = "1788757200", "1791176400"
 START = datetime(2026, 9, 7, 5, tzinfo=UTC)
@@ -76,6 +82,7 @@ def _report(
     connection, reporter: int, opponent: int, day: datetime, *,
     at: datetime | None = None, destruction: int = 55, code: str | None = None,
     observation_id: int = 0, perspective: str = "attacker",
+    rule: str = HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
 ) -> int:
     """Save one selected report on ``day`` and return its id."""
     sides = (reporter, opponent) if perspective == "attacker" else (opponent, reporter)
@@ -97,7 +104,7 @@ def _report(
         """,
         (battle_id, battle_id, observation_id, reporter, perspective,
          at or day + timedelta(hours=2),
-         destruction, code, HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION, day + DAY),
+         destruction, code, rule, day + DAY),
     ).fetchone()[0]
     connection.execute(
         "INSERT INTO battle_perspectives (battle_id, perspective, evidence_id,"
@@ -110,18 +117,35 @@ def _report(
 def _saved_day(
     connection, player_id: int, day: datetime, season: str = SEASON, version: int = 1
 ) -> None:
+    """Save a day result built, as reconciliation does, from the newest
+    saved result of the day before."""
     connection.execute(
         """
         INSERT INTO ranked_day_versions (
             player_id, ranked_day_start, ranked_day_end, official_season_id,
             season_day_number, season_anchor_rule_version,
             reconciliation_rule_version, result_hash, version, state, confidence,
-            input_hash, evidence_complete, coverage_complete
-        ) VALUES (%s, %s, %s, %s, 1, 'legend-season-anchor-v1', 'test', %s, %s,
-                  'Complete', 'exact', %s, true, true)
+            input_hash, evidence_complete, coverage_complete, input_evidence
+        ) VALUES (%s, %s, %s, %s, 1, 'legend-season-anchor-v1', %s, %s, %s,
+                  'Complete', 'exact', %s, true, true,
+                  jsonb_build_object('previous_day', jsonb_build_object('version_id', (
+                      SELECT id FROM ranked_day_versions
+                      WHERE player_id = %s AND ranked_day_start = %s
+                      ORDER BY version DESC, id DESC LIMIT 1
+                  ))))
         """,
-        (player_id, day, day + DAY, season, f"{version:x}" * 64, version, "a" * 64),
+        (player_id, day, day + DAY, season, RECONCILIATION_RULE_VERSION,
+         f"{version:x}" * 64, version, "a" * 64, player_id, day - DAY),
     )
+
+
+def _population(connection, boundary_at: datetime, *player_ids: int) -> int:
+    """Capture the players a Reset's publication covers."""
+    return connection.execute(
+        "INSERT INTO collector_reset_sweeps (boundary_at, member_ids,"
+        " membership_captured_at) VALUES (%s, %s, clock_timestamp()) RETURNING id",
+        (boundary_at, list(player_ids)),
+    ).fetchone()[0]
 
 
 def _items(connection_info: str, kind: str) -> list[tuple]:
@@ -151,6 +175,8 @@ def test_campaign_preview_has_no_writes(database_url: str, archive_server) -> No
             gone = _player(connection, "#GONE")
             _report(connection, kept, gone, START, observation_id=observation_id)
             _report(connection, gone, kept, START + DAY, code="u1x0-2x1")
+            for boundary_at in (START + DAY, START + 2 * DAY):
+                _population(connection, boundary_at, kept, gone)
             tables = ("domain_repair_campaigns", "domain_repair_items", "python_processing_jobs",
                       "battle_evidence", "battle_perspectives", "boundary_publication_generations")
             count = " UNION ALL ".join(f"SELECT '{table}', count(*) FROM {table}" for table in tables)
@@ -179,6 +205,7 @@ def test_campaign_inventory_unions_reasons_once(database_url: str) -> None:
             _report(connection, opponent, player, day3, destruction=56, code="u1x0-2x1")
             for day in (day2, day3, START + 3 * DAY):
                 _saved_day(connection, player, day)
+                _population(connection, day + DAY, player, opponent)
             _saved_day(connection, player, day3, version=2)  # same day, again
 
         first = domain_repair.register(worker, SEASON, now=NOW)
@@ -232,6 +259,8 @@ def test_campaign_includes_closing_boundary_and_next_season_dependency(
             _saved_day(connection, player, day28)
             _saved_day(connection, player, END, NEXT_SEASON)
             _saved_day(connection, player, END + DAY, NEXT_SEASON)
+            for boundary_at in (END, END + DAY, END + 2 * DAY):
+                _population(connection, boundary_at, player)
         domain_repair.register(worker, SEASON, now=NOW)
         # Day 28 ends at the October 5 Reset; the next Season's first day
         # starts from it and is listed to recalculate. Later October days are
@@ -280,6 +309,8 @@ def test_campaign_lists_only_moves_not_yet_published(database_url: str) -> None:
                         (player, day, Jsonb(battles)),
                     )
                     _saved_day(connection, player, day)
+            for boundary_at in (day2 + DAY, day3 + DAY):
+                _population(connection, boundary_at, shown, stale, opponent)
             stale_evidence = evidence_id
         report = domain_repair.register(worker, SEASON, now=NOW)
         assert [row[:2] for row in _items(connection_info, "source")] == [
@@ -298,12 +329,27 @@ def test_campaign_registration_drops_finished_work_until_activated(
         with _owner(connection_info) as connection:
             player, opponent = _player(connection, "#CODE"), _player(connection, "#OTHER")
             first = _report(connection, player, opponent, START, destruction=56, code="u1x0-2x1")
+            for boundary_at in (START + DAY, START + 2 * DAY):
+                _population(connection, boundary_at, player, opponent)
         assert domain_repair.register(worker, SEASON, now=NOW)["items"] == {
             "decode_batch": 1, "publication": 1
         }
-        # The decode queued before the campaign finishes and publishes, so
-        # registering again leaves nothing listed or held for it.
+        # The decode queued before the campaign saves its result and queues
+        # the Reset's correction: the Reset stays listed until that publishes.
         _decoded(connection_info, first)
+        with _owner(connection_info) as connection:
+            connection.execute(
+                "INSERT INTO boundary_publication_corrections (boundary_at,"
+                " source_generation_id, affected_artifacts, pending_inputs)"
+                " VALUES (%s, 0, ARRAY['army'], %s)",
+                (START + DAY, Jsonb([{"kind": "decode"}])),
+            )
+        assert domain_repair.register(worker, SEASON, now=NOW)["items"] == {"publication": 1}
+        assert [row[:2] for row in _items(connection_info, "publication")] == [
+            (_key("boundary", START + DAY), ["catalogue"])
+        ]
+        with _owner(connection_info) as connection:
+            connection.execute("UPDATE boundary_publication_corrections SET state = 'finalized'")
         assert domain_repair.register(worker, SEASON, now=NOW)["items"] == {}
         assert _items(connection_info, "decode_batch") == []
         assert _items(connection_info, "publication") == []
@@ -344,6 +390,10 @@ def test_campaign_hold_defers_only_affected_artifacts(
             _report(connection, player, opponent, held - DAY)
             _saved_day(connection, player, held - DAY)
             _saved_day(connection, player, held)
+            sweeps = {
+                boundary_at: _population(connection, boundary_at, player, opponent)
+                for boundary_at in (held, held_next, free)
+            }
         with pytest.raises(domain_repair.CampaignRefused, match="not installed"):
             domain_repair.activate(worker, SEASON, now=NOW)
         domain_repair.register(worker, SEASON, now=NOW)
@@ -357,17 +407,11 @@ def test_campaign_hold_defers_only_affected_artifacts(
                     " WHERE army_manifest_id IS NOT NULL ORDER BY 1"
                 ).fetchall()]
 
-        for boundary_at in (held, held_next, free):
-            with _owner(connection_info) as connection:
-                sweep_id = connection.execute(
-                    "INSERT INTO collector_reset_sweeps (boundary_at, member_ids,"
-                    " membership_captured_at) VALUES (%s, %s, clock_timestamp()) RETURNING id",
-                    (boundary_at, [opponent]),
-                ).fetchone()[0]
+        for boundary_at, member in itertools.product((held, held_next, free), (player, opponent)):
             with worker.pool.connection() as connection:
                 reset_baselines._record_boundary_baseline(
-                    worker, connection, boundary_at=boundary_at, reset_sweep_id=sweep_id,
-                    player_id=opponent, state="failed",
+                    worker, connection, boundary_at=boundary_at,
+                    reset_sweep_id=sweeps[boundary_at], player_id=member, state="failed",
                 )
         assert builds() == [free]
         boundary_publication.reevaluate_boundary_publications(worker)
@@ -415,6 +459,112 @@ def test_campaign_hold_defers_only_affected_artifacts(
                     """
                 ).fetchall()
             ] == [(held, "queued", 1), (held_next, "queued", 1), (free, "active", 2)]
+
+
+def test_campaign_lists_only_resets_whose_population_uses_the_change(
+    database_url: str,
+) -> None:
+    with _campaign_database(database_url) as (connection_info, worker):
+        day2, day5 = START + DAY, START + 4 * DAY
+        with _owner(connection_info) as connection:
+            player, opponent = _player(connection, "#PAY"), _player(connection, "#OPP")
+            left, other = _player(connection, "#LEFT"), _player(connection, "#GONE")
+            _report(connection, player, opponent, day2)
+            _saved_day(connection, player, day2)
+            _saved_day(connection, player, day2 + DAY)
+            # Both players of a battle needing its decode left before its Reset.
+            _report(connection, left, other, day5, destruction=56, code="u1x0-2x1")
+            _population(connection, day2 + DAY, opponent)
+            _population(connection, day2 + 2 * DAY, player, opponent)
+            _population(connection, day5 + DAY, player, opponent)
+        report = domain_repair.register(worker, SEASON, now=NOW)
+        # The report, decode and both days still need repair; only the Reset
+        # whose population includes the player is held.
+        assert report["items"] == {"source": 1, "decode_batch": 1, "day": 2, "publication": 1}
+        assert [row[0] for row in _items(connection_info, "publication")] == [
+            _key("boundary", day2 + 2 * DAY)
+        ]
+
+
+def test_campaign_keeps_days_a_finished_fix_left_stale(database_url: str) -> None:
+    with _campaign_database(database_url) as (connection_info, worker):
+        day2, day3, day4, day5 = (START + n * DAY for n in (1, 2, 3, 4))
+        with _owner(connection_info) as connection:
+            moved, paid = _player(connection, "#MOVED"), _player(connection, "#PAID")
+            opponent = _player(connection, "#OPP")
+            evidence_id = _report(connection, moved, opponent, day2, destruction=56)
+            connection.execute(
+                """
+                INSERT INTO battle_day_repairs (
+                    from_battle_id, to_battle_id, perspective, evidence_id,
+                    attacker_player_id, defender_player_id, from_day, to_day
+                ) SELECT 0, battle_id, 'attacker', id, %s, %s, %s, %s
+                FROM battle_evidence WHERE id = %s
+                """,
+                (moved, opponent, day3, day2, evidence_id),
+            )
+            # Both moved days already show the move, but day 4 was built
+            # from day 3's result before the move was rebuilt.
+            for day, battles in ((day2, [{"source_evidence_id": evidence_id}]), (day3, [])):
+                connection.execute(
+                    "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
+                    " version, state, coverage, battles) VALUES (%s, %s, 2,"
+                    " 'Complete', 'complete', %s)",
+                    (moved, day, Jsonb(battles)),
+                )
+            for day in (day2, day3, day4, day5):
+                _saved_day(connection, moved, day)
+            _saved_day(connection, moved, day3, version=2)
+            # A 2-star/55% report already read again under the new payout,
+            # whose saved day still counts the old one.
+            _report(connection, paid, opponent, day2, rule=TROPHY_ALLOCATION_RULE_VERSION)
+            _saved_day(connection, paid, day2)
+            for boundary_at in (day3, day4, day5, day5 + DAY):
+                _population(connection, boundary_at, moved, paid)
+        report = domain_repair.register(worker, SEASON, now=NOW)
+        assert _items(connection_info, "source") == []
+        assert [row[:2] for row in _items(connection_info, "day")] == sorted([
+            (_key("day", moved, day4), ["dependency"]),
+            (_key("day", moved, day5), ["dependency"]),
+            (_key("day", paid, day2), ["payout"]),
+        ])
+        assert [row[0] for row in _items(connection_info, "publication")] == [
+            _key("boundary", day) for day in (day3, day5, day5 + DAY)
+        ]
+        assert report["items"] == {"day": 3, "publication": 3}
+
+
+def test_campaign_saves_nothing_once_the_window_closes_mid_write(
+    database_url: str, monkeypatch
+) -> None:
+    closing = "1999999999"
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            # A Season whose correction window closes two seconds from now.
+            connection.execute(
+                """
+                INSERT INTO legend_season_anchors (
+                    current_league_season_id, previous_league_season_id,
+                    current_start, previous_start, anchor_rule_version,
+                    source_profile_version_id, state
+                ) SELECT %s, '1999999998', start, start - interval '28 days',
+                         'legend-season-anchor-v1', 1, 'confirmed'
+                FROM (SELECT clock_timestamp() - interval '35 days'
+                             + interval '2 seconds' AS start) AS season
+                """,
+                (closing,),
+            )
+        inventory = domain_repair._inventory
+
+        def slow_inventory(*arguments):
+            time.sleep(2.5)
+            return inventory(*arguments)
+
+        monkeypatch.setattr(domain_repair, "_inventory", slow_inventory)
+        with pytest.raises(domain_repair.CampaignRefused, match="window closed"):
+            domain_repair.register(worker, closing)
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute("SELECT count(*) FROM domain_repair_campaigns").fetchone() == (0,)
 
 
 def _set_publication_items(connection_info: str, state: str) -> None:

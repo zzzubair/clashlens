@@ -12,11 +12,15 @@ campaign lists everything they change once, for one coordinated rebuild:
 - ``decode_batch``: up to 100 battles (keyed by battle id / 100) whose
   selected reports need only a catalogue v2 decode.
 - ``day``: one player's saved Legend day, from the first their own reports
-  change through every later saved day of the Season, plus the next Season's
-  first saved day as a ``dependency`` to recalculate, since it starts from day
-  28's end. Later next-Season days are left to the repair, which recalculates
-  days in order and lists any further day whose result changes.
-- ``publication``: one Reset whose publication uses a listed day or decode.
+  change, or whose saved result does not yet show a finished fix or was
+  built from an older result of the day before, through every later saved
+  day of the Season, plus the next Season's first saved day as a
+  ``dependency`` to recalculate, since it starts from day 28's end. Later
+  next-Season days are left to the repair, which recalculates days in order
+  and lists any further day whose result changes.
+- ``publication``: one Reset whose captured population includes a player
+  with a listed day or a battle needing a decode on its day, or whose
+  correction is not yet published.
 
 A payout report whose raw response is gone, or an item in a finalized Season
 or past its own Season's correction window, is excluded, never done.
@@ -100,7 +104,8 @@ def boundary_held(connection: Any, boundary_at: datetime) -> bool:
 
 _INVENTORY = """
 WITH selected AS (
-    SELECT p.battle_id, p.evidence_id, b.ranked_day_start, e.stars,
+    SELECT p.battle_id, p.evidence_id, b.ranked_day_start, e.reporting_player_id AS player_id,
+           b.attacker_player_id, b.defender_player_id, e.stars,
            e.destruction_percentage, e.trophy_rule_version, e.army_share_code,
            date_bin('1 day', e.battle_timestamp - %(grace)s,
                     timestamptz '2000-01-01 05:00:00+00') AS own_day
@@ -123,7 +128,9 @@ WITH selected AS (
     WHERE from_day >= %(start)s AND from_day < %(end)s
        OR to_day >= %(start)s AND to_day < %(end)s
 ), needs_decode AS (
-    SELECT battle_id, evidence_id, ranked_day_start FROM selected
+    SELECT battle_id, evidence_id, ranked_day_start, attacker_player_id,
+           defender_player_id
+    FROM selected
     WHERE army_share_code IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM battle_army_decodes AS d
         WHERE d.evidence_id = selected.evidence_id AND d.is_active
@@ -137,13 +144,56 @@ WITH selected AS (
            array_agg(DISTINCT c.reason) AS reasons
     FROM changes AS c JOIN battle_evidence AS e ON e.id = c.evidence_id
     GROUP BY 1, 2, 3, 4
+), settled AS (
+    SELECT player_id, boundary_at - interval '1 day' AS day
+    FROM reset_boundary_settlements
+    WHERE state = 'settled' AND boundary_at > %(start)s AND boundary_at <= %(end)s
+), affected AS (
+    -- Players whose saved days these fixes change, repaired yet or not.
+    SELECT player_id FROM selected WHERE stars = 2 AND destruction_percentage = 55
+    UNION
+    SELECT CASE perspective WHEN 'attacker' THEN attacker_player_id
+                            ELSE defender_player_id END
+    FROM battle_day_repairs
+    WHERE from_day >= %(start)s AND from_day < %(end)s
+       OR to_day >= %(start)s AND to_day < %(end)s
+    UNION
+    SELECT player_id FROM settled
+), newest AS (
+    SELECT DISTINCT ON (player_id, ranked_day_start) player_id, ranked_day_start, id
+    FROM ranked_day_versions
+    WHERE player_id IN (SELECT player_id FROM affected)
+      AND ranked_day_start >= %(start)s - interval '1 day'
+      AND ranked_day_start <= %(end)s
+      AND reconciliation_rule_version = %(reconciliation)s
+    ORDER BY player_id, ranked_day_start, version DESC, id DESC
+), saved AS (
+    SELECT newest.player_id, newest.ranked_day_start, newest.id,
+           v.input_evidence -> 'previous_day' ->> 'version_id' AS built_from,
+           v.trophy_allocation_rule_versions ? %(old_rule)s AS old_payout
+    FROM newest JOIN ranked_day_versions AS v ON v.id = newest.id
 ), touched AS (
     SELECT player_id, day, reason
     FROM sources, unnest(ARRAY[from_day, to_day]) AS day, unnest(reasons) AS reason
     UNION ALL
-    SELECT player_id, boundary_at - interval '1 day', 'settlement'
-    FROM reset_boundary_settlements
-    WHERE state = 'settled' AND boundary_at > %(start)s AND boundary_at <= %(end)s
+    -- A report read again under the new payout whose saved day still
+    -- counts the old one.
+    SELECT s.player_id, s.ranked_day_start, 'payout'
+    FROM selected AS s
+    JOIN saved ON saved.player_id = s.player_id
+              AND saved.ranked_day_start = s.ranked_day_start
+    WHERE s.stars = 2 AND s.destruction_percentage = 55 AND saved.old_payout
+    UNION ALL
+    -- A saved day built from an earlier result of the day before it.
+    SELECT saved.player_id, saved.ranked_day_start, 'dependency'
+    FROM saved
+    JOIN newest AS previous
+      ON previous.player_id = saved.player_id
+     AND previous.ranked_day_start = saved.ranked_day_start - interval '1 day'
+    WHERE saved.ranked_day_start >= %(start)s
+      AND saved.built_from IS DISTINCT FROM previous.id::text
+    UNION ALL
+    SELECT player_id, day, 'settlement' FROM settled
 ), days AS (
     SELECT v.player_id, v.ranked_day_start, min(v.official_season_id) AS season,
            coalesce(array_agg(DISTINCT t.reason) FILTER (WHERE t.reason IS NOT NULL),
@@ -155,6 +205,11 @@ WITH selected AS (
     LEFT JOIN touched AS t
       ON t.player_id = v.player_id AND t.day = v.ranked_day_start
     GROUP BY 1, 2
+), population AS (
+    SELECT sweep.boundary_at, member.player_id
+    FROM collector_reset_sweeps AS sweep, unnest(sweep.member_ids) AS member(player_id)
+    WHERE sweep.boundary_at >= %(start)s
+      AND sweep.boundary_at <= %(end)s + interval '1 day'
 )
 SELECT 'source', 'evidence:' || evidence_id,
        reasons || CASE WHEN evidence_id IN (SELECT evidence_id FROM needs_decode)
@@ -183,11 +238,26 @@ SELECT 'publication', 'boundary:' || extract(epoch FROM boundary_at)::bigint,
        array_agg(DISTINCT reason), NULL, NULL, NULL, NULL, NULL, NULL, NULL,
        NULL, boundary_at, NULL, NULL
 FROM (
-    SELECT ranked_day_start + interval '1 day' AS boundary_at, reason
-    FROM days, unnest(reasons) AS reason
+    SELECT population.boundary_at, reason
+    FROM days, unnest(reasons) AS reason, population
+    WHERE population.player_id = days.player_id
+      AND population.boundary_at = days.ranked_day_start + interval '1 day'
     UNION ALL
-    SELECT DISTINCT ranked_day_start + interval '1 day', 'catalogue'
-    FROM needs_decode
+    SELECT DISTINCT population.boundary_at, 'catalogue'
+    FROM needs_decode,
+         unnest(ARRAY[attacker_player_id, defender_player_id]) AS player(id),
+         population
+    WHERE population.player_id = player.id
+      AND population.boundary_at = needs_decode.ranked_day_start + interval '1 day'
+    UNION ALL
+    -- A correction not yet published, such as one a decode already queued.
+    SELECT boundary_at,
+           CASE WHEN pending_inputs @> '[{{"kind": "decode"}}]'
+                  OR affected_artifacts = ARRAY['army']::text[]
+                THEN 'catalogue' ELSE 'dependency' END
+    FROM boundary_publication_corrections
+    WHERE state NOT IN ('finalized', 'terminal')
+      AND boundary_at > %(start)s AND boundary_at <= %(end)s
 ) AS publication
 GROUP BY boundary_at
 """
@@ -216,6 +286,7 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
         "start": start, "end": campaign_window(start)[0], "grace": BATTLE_DAY_GRACE,
         "old_rule": HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
         "decoder": DECODER_VERSION, "catalog": CATALOG_VERSION,
+        "reconciliation": RECONCILIATION_RULE_VERSION,
     }
     items = []
     query = _INVENTORY.format(unfinished_moves=UNFINISHED_MOVES)
@@ -279,21 +350,29 @@ def _open(connection: Any, season_id: str, now: datetime | None, *, write: bool)
         raise CampaignRefused(f"season {season_id} has no confirmed start")
     start = row[0].astimezone(UTC)
     deadline = campaign_window(start)[1]
-    now = now or connection.execute("SELECT clock_timestamp()").fetchone()[0]
-    if write:
-        from .season_retirement import acquire_season_lock_shared
+    if not write:
+        now = now or connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        return start, deadline, now
+    from .season_retirement import acquire_season_lock_shared
 
-        acquire_season_lock_shared(connection, season_id)
-        if connection.execute(
-            "SELECT 1 FROM season_detail_retirements WHERE official_season_id = %s",
-            (season_id,),
-        ).fetchone():
-            raise CampaignRefused(f"season {season_id} is finalized")
-        if now >= deadline:
-            raise CampaignRefused(
-                f"season {season_id} correction window closed at {deadline.isoformat()}"
-            )
-    return start, deadline, now
+    acquire_season_lock_shared(connection, season_id)
+    if connection.execute(
+        "SELECT 1 FROM season_detail_retirements WHERE official_season_id = %s",
+        (season_id,),
+    ).fetchone():
+        raise CampaignRefused(f"season {season_id} is finalized")
+    return start, deadline, _still_open(connection, season_id, deadline, now)
+
+
+def _still_open(connection: Any, season_id: str, deadline: datetime,
+                now: datetime | None) -> datetime:
+    """The time now, refusing once the Season's correction window closed."""
+    now = now or connection.execute("SELECT clock_timestamp()").fetchone()[0]
+    if now >= deadline:
+        raise CampaignRefused(
+            f"season {season_id} correction window closed at {deadline.isoformat()}"
+        )
+    return now
 
 
 def preview(database: Database, season_id: str, *, now: datetime | None = None) -> dict:
@@ -314,8 +393,8 @@ def register(database: Database, season_id: str, *, now: datetime | None = None)
     Refused once the campaign is activated, so no held item is dropped.
     """
     with database.pool.connection() as connection, connection.transaction():
-        start, deadline, now = _open(connection, season_id, now, write=True)
-        items = _inventory(connection, season_id, start, now)
+        start, deadline, cutoff = _open(connection, season_id, now, write=True)
+        items = _inventory(connection, season_id, start, cutoff)
         connection.execute(
             """
             INSERT INTO domain_repair_campaigns (
@@ -325,7 +404,7 @@ def register(database: Database, season_id: str, *, now: datetime | None = None)
             ON CONFLICT (official_season_id) DO NOTHING
             """,
             (season_id, start, campaign_window(start)[0], deadline,
-             Jsonb(target_versions()), now),
+             Jsonb(target_versions()), cutoff),
         )
         campaign_id, state = connection.execute(
             "SELECT id, state FROM domain_repair_campaigns"
@@ -350,9 +429,10 @@ def register(database: Database, season_id: str, *, now: datetime | None = None)
                 target_versions = %s, updated_at = clock_timestamp()
             WHERE id = %s
             """,
-            (summary["plan_digest"], Jsonb(summary), now, Jsonb(target_versions()),
+            (summary["plan_digest"], Jsonb(summary), cutoff, Jsonb(target_versions()),
              campaign_id),
         )
+        _still_open(connection, season_id, deadline, now)
         return {"action": "register", "season": season_id, "campaign_id": campaign_id,
                 "write_deadline": deadline.isoformat(), **summary}
 
@@ -363,7 +443,7 @@ def activate(database: Database, season_id: str, *, now: datetime | None = None)
     if missing:
         raise CampaignRefused(f"repair stages not installed: {', '.join(missing)}")
     with database.pool.connection() as connection, connection.transaction():
-        _open(connection, season_id, now, write=True)
+        deadline = _open(connection, season_id, now, write=True)[1]
         row = connection.execute(
             "SELECT id, state, target_versions FROM domain_repair_campaigns"
             " WHERE official_season_id = %s FOR UPDATE",
@@ -378,6 +458,7 @@ def activate(database: Database, season_id: str, *, now: datetime | None = None)
             " updated_at = clock_timestamp() WHERE id = %s",
             (row[0],),
         )
+        _still_open(connection, season_id, deadline, now)
         return {"action": "activate", "season": season_id, "campaign_id": row[0]}
 
 
