@@ -53,6 +53,16 @@ def test_finalize_preview_and_apply_wait_seven_days(database_url: str) -> None:
                     early = finalize_season_detail(connection, SEASON, EARLY, apply=apply)
                     assert early == {"season_id": SEASON, **WAITING, "already_finalized": False, "applied": False}
                     connection.rollback()
+                not_ended = finalize_season_detail(connection, SEASON, SEASON_END - timedelta(hours=1))
+                assert (not_ended["status"], not_ended["reason"], not_ended["eligible_at"]) == (
+                    "not_completed", "season_not_completed", ELIGIBLE.isoformat(),
+                )
+                older = DAY0 - timedelta(days=56)
+                no_history = finalize_season_detail(connection, str(int(older.timestamp())), ELIGIBLE)
+                assert (no_history["reason"], no_history["eligible_at"]) == (
+                    "no_history", (older + timedelta(days=35)).isoformat(),
+                )
+                connection.rollback()
                 assert _counts(connection) == before
                 ready = finalize_season_detail(connection, SEASON, ELIGIBLE)
                 assert ready["status"] == "ready"

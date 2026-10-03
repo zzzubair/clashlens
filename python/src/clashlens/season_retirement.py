@@ -272,22 +272,23 @@ def finalize_season_detail(
             "already_finalized": False,
             "applied": False,
         }
+    bounds = _canonical_season_bounds(connection, season_id)
+    close_at, close_reason = season_close_block(bounds, bounds, now_utc)
     completed, reason = _season_completed(connection, season_id, now_utc)
     if not completed:
         return {
             "season_id": season_id,
             "status": "not_completed",
             "reason": reason,
+            **close_at,
             "already_finalized": False,
             "applied": False,
         }
-    bounds = _canonical_season_bounds(connection, season_id)
-    close_at, reason = season_close_block(bounds, bounds, now_utc)
-    if reason is not None:
+    if close_reason is not None:
         return {
             "season_id": season_id,
             "status": "blocked",
-            "reason": reason,
+            "reason": close_reason,
             **close_at,
             "already_finalized": False,
             "applied": False,
