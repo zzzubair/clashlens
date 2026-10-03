@@ -1285,7 +1285,7 @@ def enqueue_current_season_republication(
 
     if isinstance(max_jobs, bool) or not 1 <= max_jobs <= 1000:
         raise ValueError("current-season republication batch must be 1 to 1000")
-    # Days whose battles migration 0055 moved come first. Then days left Live
+    # Days whose battles migration 0057 moved come first. Then days left Live
     # by Reset pairs wrongly recorded as partial: finishing them is what lets
     # those days publish at all.
     moved = battle_day_repair.enqueue_rebuilds(database, max_jobs=max_jobs)

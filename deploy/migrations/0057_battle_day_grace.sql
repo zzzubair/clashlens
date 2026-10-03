@@ -168,6 +168,6 @@ BEGIN
 END
 $$;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (55)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (57)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

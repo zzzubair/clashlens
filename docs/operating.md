@@ -413,10 +413,10 @@ When none remain, it queues up to `--max-jobs` published current-season
 player-days that lack the current reconciliation rule version.
 
 Before all of that, each run queues up to `--max-jobs` rebuilds of players
-with a battle that migration 0055 moved to the Legend day before, as listed in
+with a battle that migration 0057 moved to the Legend day before, as listed in
 `battle_day_repairs`. Each rebuilds the earlier of the battle's two days that
 the player has published, then every later saved day in that Season. After
-deploying 0055, run the command until it queues nothing.
+deploying 0057, run the command until it queues nothing.
 
 **Cost:** on 2026-10-02 this re-checks 25,599 pairs for the 2026-10-01 and
 2026-10-02 Resets. Each queues one job, about 25,600 jobs in total. Each job

@@ -1,7 +1,7 @@
 """A battle reported in the first 5 minutes after a Reset counts on the day before.
 
 Battles saved under the old rule, by their timestamp's own day, are moved by
-migration 0055; the republish command then rebuilds the published days.
+migration 0057; the republish command then rebuilds the published days.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from clashlens import battle, domain, reconciliation_db
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for
 
 MIGRATION = (
-    Path(__file__).parents[2] / "deploy/migrations/0055_battle_day_grace.sql"
+    Path(__file__).parents[2] / "deploy/migrations/0057_battle_day_grace.sql"
 )
 ANCHOR = datetime(2026, 8, 3, 5, tzinfo=UTC)
 DAY = ANCHOR + timedelta(days=1)

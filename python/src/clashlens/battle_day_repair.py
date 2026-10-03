@@ -1,6 +1,6 @@
 """Queue rebuilds of published Legend days whose battles moved day.
 
-Migration 0055 moved each saved battle reported in the first
+Migration 0057 moved each saved battle reported in the first
 ``domain.BATTLE_DAY_GRACE`` after a Reset to the previous Legend day and
 listed each moved report in ``battle_day_repairs``. Both players of each moved
 battle have their published days rebuilt, from the earlier of the battle's old
