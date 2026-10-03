@@ -916,6 +916,13 @@ refused, conflicts or times out too, the worker leaves the lease to expire and
 queue maintenance retries the job, or fails it on its last attempt. A lost
 database connection still stops the worker so systemd restarts it.
 
+When a job waits 30 seconds for a free connection from the worker's shared
+pool and gets none, only that job stops. The worker gives its attempt back and
+logs it as `retrying` with `database_pool_timeout`, and queue maintenance
+requeues it after its lease expires. If no connection is free for giving the
+attempt back either, the lease still expires and maintenance retries the job,
+or fails it on its last attempt. Other jobs keep running.
+
 The running worker cancels any single database statement after 15 minutes,
 including time spent waiting for a lock, set by
 `WORKER_STATEMENT_TIMEOUT_SECONDS` in [`db.py`](../python/src/clashlens/db.py).

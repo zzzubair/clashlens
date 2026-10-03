@@ -3,11 +3,16 @@ from __future__ import annotations
 import threading
 import time
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
+from psycopg_pool import PoolTimeout
 
+from clashlens import reconciliation_db
+from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
 from clashlens.worker import (
     MAX_CONCURRENCY,
+    ObservationProcessor,
     ProcessResult,
     lane_owner,
     process_concurrently,
@@ -301,6 +306,92 @@ def test_lane_exception_never_exposes_job_details_or_credentials() -> None:
 
     assert secret not in str(excinfo.value)
     assert "archive-secret-material" not in str(excinfo.value)
+
+
+def test_pool_timeout_in_one_lane_retries_while_other_lanes_keep_working() -> None:
+    stop = Event()
+    lane_one_recovered = Event()
+    lock = threading.Lock()
+    lane_one_timeouts = 0
+    worked_after_timeout: set[str] = set()
+
+    class PoolBusyProcessor:
+        def process_once(self, *, owner: str, **_kwargs: object) -> ProcessResult:
+            nonlocal lane_one_timeouts
+            lane = owner.rsplit(".", 1)[1]
+            with lock:
+                if lane == "lane-1" and lane_one_timeouts < 2:
+                    lane_one_timeouts += 1
+                    raise PoolTimeout("couldn't get a connection after 30.00 sec")
+                if lane_one_timeouts:
+                    worked_after_timeout.add(lane)
+            if lane == "lane-1":
+                lane_one_recovered.set()
+            time.sleep(0.005)
+            return ProcessResult(1, "processed")
+
+    thread = _run_until_stopped(PoolBusyProcessor(), stop_requested=stop)
+    try:
+        assert lane_one_recovered.wait(5), "the lane that waited never claimed again"
+        deadline = time.monotonic() + 5
+        while len(worked_after_timeout) < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert thread.is_alive()
+    finally:
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert worked_after_timeout == {"lane-1", "lane-2", "lane-3"}
+
+
+@pytest.mark.parametrize("refund_waits", [False, True])
+def test_pool_timeout_during_a_job_retries_that_job(refund_waits, monkeypatch) -> None:
+    claims = [
+        SimpleNamespace(
+            job_id=job_id,
+            work_type="reconcile_ranked_day",
+            processing_version=PROCESSING_VERSION,
+            domain_rule_version=DOMAIN_RULE_VERSION,
+            attempt_count=1,
+            max_attempts=3,
+        )
+        for job_id in (17, 18)
+    ]
+    refunded: list[int] = []
+
+    class Database:
+        def claim_job(self, **_kwargs: object) -> object:
+            return claims.pop(0) if claims else None
+
+        def renew_claim(self, _claim: object, **_kwargs: object) -> None:
+            pass
+
+        def refund_claim_attempt(self, claim: SimpleNamespace) -> None:
+            if refund_waits:
+                raise PoolTimeout("couldn't get a connection after 30.00 sec")
+            refunded.append(claim.job_id)
+
+    def complete_reconciliation(_database: object, claim: SimpleNamespace) -> None:
+        if claim.job_id == 17:
+            raise PoolTimeout("couldn't get a connection after 30.00 sec")
+
+    monkeypatch.setattr(
+        reconciliation_db, "complete_reconciliation", complete_reconciliation
+    )
+    results = process_concurrently(
+        ObservationProcessor(Database(), archive=object()),
+        concurrency=1,
+        owner="pool-busy",
+        max_jobs=2,
+    )
+
+    assert results == [
+        ProcessResult(17, "retrying", "database_pool_timeout"),
+        ProcessResult(18, "processed"),
+    ]
+    # Without a connection for the refund, the lease runs out and queue
+    # maintenance retries the job instead.
+    assert refunded == ([] if refund_waits else [17])
 
 
 def _run_until_stopped(processor: object, **overrides: object) -> threading.Thread:
