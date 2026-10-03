@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -11,7 +12,10 @@ from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_domain_processing_postgres import _processor
 
+from clashlens.collector_db import CollectorDatabase, ResponseHandoff, ResponseResult
 from clashlens.history import prune_completed_history
+from clashlens.profile import PROFILE_PARSER_VERSION
+from clashlens.response_fields import content_fingerprint
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 OBSERVED = datetime(2026, 9, 1, 6, tzinfo=UTC)
@@ -131,3 +135,78 @@ def test_cleanup_role_can_only_delete_finished_jobs(database_url, archive_server
             assert connection.execute(
                 "SELECT count(*) FROM python_processing_jobs"
             ).fetchone()[0] == 1
+
+
+def test_cleanup_ignores_temporary_tables_the_cleanup_role_creates(database_url, archive_server):
+    with domain_database(database_url) as info:
+        _jobs(info, 1, archive_server)
+        with psycopg.connect(_as_cleanup_role(info)) as connection:
+            connection.execute(
+                """
+                CREATE TEMPORARY TABLE python_processing_jobs (
+                    id bigint, status text, work_type text, updated_at timestamptz
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs VALUES (
+                    1, 'complete', 'process_observation', clock_timestamp() - interval '49 hours'
+                )
+                """
+            )
+            preview = prune_completed_history(connection, jobs_only=True)
+            assert preview["eligible_python_processing_jobs"] == 0
+
+
+def test_collector_restart_accepts_a_saved_response_whose_job_was_removed(
+    database_url, archive_server
+):
+    body = PROFILE_FIXTURE.read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+    with domain_database(database_url, include_coordinator=True) as info:
+        observation, job = store_observation(
+            info, archive_server, occurrence_key="restart", endpoint="profile", body=body,
+            observed_at=OBSERVED, normalized_tag="#2PP", parser_version=PROFILE_PARSER_VERSION,
+        )
+        database, processor = _processor(info, archive_server)
+        collector = CollectorDatabase(info)
+        try:
+            assert processor.process_job(job, owner="cleanup-test").outcome == "processed"
+            with psycopg.connect(info) as connection:
+                player_id = connection.execute(
+                    "SELECT player_id FROM collector_observations WHERE id = %s", (observation,)
+                ).fetchone()[0]
+            handoff = ResponseHandoff(
+                occurrence_key="restart", scope="player", identity_key="#2PP",
+                endpoint="profile", player_id=player_id, normalized_tag="#2PP",
+                request_started_at=OBSERVED - timedelta(seconds=1),
+                response_completed_at=OBSERVED, http_status=200, response_hash=digest,
+                content_fingerprint=content_fingerprint(
+                    "profile", body, http_status=200, response_hash=digest
+                ),
+                byte_size=len(body), spool_key=f"sha256/{digest[:2]}/{digest}",
+                collector_version="cleanup-test", key_label="regular-a",
+                evidence_headers={"content-type": "application/json"},
+            )
+            assert collector.record_response(handoff).processing_job_id == job
+            with psycopg.connect(info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs "
+                    "SET updated_at = clock_timestamp() - interval '49 hours'"
+                )
+            with psycopg.connect(_as_cleanup_role(info)) as connection:
+                applied = prune_completed_history(connection, jobs_only=True, apply=True)
+                assert applied["deleted_python_processing_jobs"] == 1
+
+            # A restart replays the saved response; it must count as already recorded.
+            recorded = ResponseResult(True, observation, None, digest, PROFILE_PARSER_VERSION)
+            assert collector.record_recovered_response(handoff, serialized=True) == recorded
+            assert collector.record_response(handoff) == recorded
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM python_processing_jobs"
+                ).fetchone()[0] == 0
+        finally:
+            collector.close()
+            database.close()

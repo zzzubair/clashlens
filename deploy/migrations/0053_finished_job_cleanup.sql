@@ -65,7 +65,7 @@ $$;
 DO $$
 BEGIN
     EXECUTE format(
-        'ALTER FUNCTION %I.clashlens_prune_finished_jobs(integer, integer, boolean) SET search_path TO pg_catalog, %I',
+        'ALTER FUNCTION %I.clashlens_prune_finished_jobs(integer, integer, boolean) SET search_path TO pg_catalog, %I, pg_temp',
         current_schema(), current_schema()
     );
 END
