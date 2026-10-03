@@ -363,6 +363,17 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # useful to consumers that only inspect the shield evidence state.
         shield_evidence.setdefault("unknown_reason", "coverage_incomplete")
 
+    if (
+        net_trophy_change is None
+        and not inconsistent_evidence
+        and attack_count == MAX_DAILY_ATTACKS
+        and defense_count == MAX_DAILY_DEFENSES
+    ):
+        # The game allows 8 attacks and 8 defenses a day, so none can be
+        # missing, and 8 defenses leave no automatic defense loss: the
+        # recorded battles alone give the day's result.
+        net_trophy_change = attack_gain - defense_loss
+
     unique_failures = tuple(dict.fromkeys(failures))
     state = "Partial"
     if malformed_evidence:

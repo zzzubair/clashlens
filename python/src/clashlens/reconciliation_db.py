@@ -486,7 +486,11 @@ def recalculate_ranked_day(
                 result.observed_defense_loss,
                 result.automatic_defense_loss,
                 result.automatic_defense_evidence_state,
-                result.net_trophy_change,
+                # This table keeps only a net proven by trophy readings; a
+                # net from 8 attacks and 8 defenses alone is published below.
+                result.net_trophy_change
+                if result.final_trophies_before_reset is not None
+                else None,
                 result.observed_trophy_change,
                 result.boundary_adjustment,
                 result.boundary_adjustment_type,

@@ -223,7 +223,7 @@ def get_player_page(
                 if army is not None:
                     battle["army"] = army
         screen_days = [
-            _screen_daily_log_with_events(day, public_confidence)
+            _screen_daily_log_with_events(day, public_confidence, now)
             for day in display_logs
         ]
         now_utc = now.astimezone(UTC)
@@ -322,7 +322,7 @@ def get_player_page(
                 if army is not None:
                     battle["army"] = army
         season_days = [
-            _screen_daily_log_with_events(day, public_confidence)
+            _screen_daily_log_with_events(day, public_confidence, now)
             for day in season_display_logs
         ]
         data_quality = []

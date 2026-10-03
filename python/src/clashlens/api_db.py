@@ -14,6 +14,7 @@ from psycopg_pool import ConnectionPool
 from .catalog import catalog_name
 from .operating import database_pool_health
 from .profile import normalize_player_tag
+from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 API_CONTRACT_VERSION = 2
 VERIFICATION_RESERVATION_SECONDS = 45
@@ -541,13 +542,61 @@ def _screen_daily_log(day: dict[str, Any], profile_confidence: str) -> dict[str,
 
 
 def _screen_daily_log_with_events(
-    day: dict[str, Any], profile_confidence: str
+    day: dict[str, Any], profile_confidence: str, now: datetime
 ) -> dict[str, Any]:
     screen_day = _screen_daily_log(day, profile_confidence)
     offense_events, defense_events = _screen_events(day.get("battles"))
     screen_day["offense_events"] = offense_events
     screen_day["defense_events"] = defense_events
+    end = day["ranked_day_end"]
+    in_progress = end is not None and datetime.fromisoformat(end) > now
+    screen_day["battles_complete"] = in_progress and _battles_so_far_complete(
+        screen_day, offense_events, defense_events
+    )
     return screen_day
+
+
+# Missing trophy and profile readings, the battle log check after Reset that
+# a day in progress cannot have yet, and the automatic defense loss do not
+# change what the recorded battles add up to.
+_BATTLE_SUM_NEUTRAL_REASONS = frozenset(
+    {
+        "missing_start_baseline",
+        "start_baseline_incomplete",
+        "missing_end_baseline",
+        "end_baseline_incomplete",
+        "missing_end_battle_log_baseline",
+        "automatic_defense_basis_unavailable",
+        "player_not_eligible",
+    }
+)
+_DISPUTE_REASONS = frozenset(
+    {"perspective_disagreement", "duplicate_contribution_disagreement"}
+)
+
+
+def _battles_so_far_complete(
+    screen_day: dict[str, Any],
+    offense: list[dict[str, Any]],
+    defense: list[dict[str, Any]],
+) -> bool:
+    """Whether the listed battles are every battle of the day so far. The game
+    allows 8 attacks and 8 defenses a day, so 8 of each leave none missing."""
+    reasons = set(screen_day["uncertainty_reasons"])
+    all_battles = (
+        len(offense) == MAX_DAILY_ATTACKS
+        and len(defense) == MAX_DAILY_DEFENSES
+        and not reasons & _DISPUTE_REASONS
+    )
+    return (
+        (all_battles or reasons <= _BATTLE_SUM_NEUTRAL_REASONS)
+        and screen_day["attack_count"] == len(offense) <= MAX_DAILY_ATTACKS
+        and screen_day["defense_count"] == len(defense) <= MAX_DAILY_DEFENSES
+        and screen_day["attack_gain"] == sum(item["trophy_change"] for item in offense)
+        and screen_day["defense_loss"]
+        == -sum(item["trophy_change"] for item in defense)
+        and not any(item["perspective_disagreement"] for item in [*offense, *defense])
+    )
 
 
 def _screen_events(

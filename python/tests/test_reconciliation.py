@@ -628,3 +628,50 @@ def test_ranked_day_battle_events_can_be_empty() -> None:
         )
         == []
     )
+
+
+
+def test_a_finished_day_with_eight_attacks_and_eight_defenses_has_a_known_net() -> (
+    None
+):
+    battles = (
+        *(BattleContribution(f"a{n}", "offense", 40) for n in range(7)),
+        BattleContribution("a7", "offense", 20),
+        *(BattleContribution(f"d{n}", "defense", 40) for n in range(7)),
+        BattleContribution("d7", "defense", 31),
+    )
+    # Prodigi's Day 24: no Reset checks, so no trophy readings and no proof
+    # the player was in Legend I, and an unreadable row in a battle log read.
+    day = {
+        "start_baseline_id": None,
+        "end_baseline_id": None,
+        "start_trophies": None,
+        "next_start_trophies": None,
+        "start_baseline_battle_log_observation_id": None,
+        "end_baseline_battle_log_observation_id": None,
+        "contributions": battles,
+        "player_eligible": False,
+        "malformed_evidence": True,
+    }
+    result = reconcile_ranked_day(_input(**day))
+    assert result.net_trophy_change == 300 - 311
+    assert result.state == "Malformed"
+    assert "player_not_eligible" in result.failure_reasons
+
+    ninth = BattleContribution("a8", "offense", 10)
+    unknown = [
+        # A ninth attack is a data error, not a valid day.
+        {"contributions": (*battles, ninth)},
+        # Seven defenses leave the automatic defense loss unknown.
+        {"contributions": battles[:-1]},
+        # Seven attacks may hide a missing one.
+        {"contributions": battles[1:]},
+        {"perspective_disagreement": True},
+        # The day is still in progress.
+        {"now": DAY.end - timedelta(hours=1)},
+    ]
+    results = [
+        reconcile_ranked_day(_input(**{**day, **change})) for change in unknown
+    ]
+    assert [result.net_trophy_change for result in results] == [None] * len(unknown)
+    assert "attack_count_exceeds_eight" in results[0].failure_reasons

@@ -473,3 +473,40 @@ def test_a_battle_with_reports_from_two_days_stays_where_it_is(
             assert _counts(connection_info)[DAY][0] == 1
         finally:
             database.close()
+
+
+
+def test_a_day_of_eight_attacks_and_defenses_publishes_its_net(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _seed_battle_anchor(connection_info, ANCHOR)
+            # No Reset checks, so no trophy readings for DAY.
+            rows = []
+            for hour in range(1, 9):
+                rows.append(_row(True, DAY + timedelta(hours=hour), _opponent(hour)))
+                rows.append(
+                    _row(False, DAY + timedelta(hours=hour, minutes=30), _opponent(10 + hour))
+                )
+            _save(connection_info, archive_server, processor, TAG, rows)
+            job_id = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=DAY, now=DAY, request_key="net"
+            )
+            assert processor.process_job(job_id, owner="net") is not None
+            with psycopg.connect(connection_info) as connection:
+                published = connection.execute(
+                    """
+                    SELECT attack_count, defense_count, attack_gain,
+                           defense_loss, net_trophy_change
+                    FROM api_player_daily_logs
+                    WHERE ranked_day_start = %s
+                    ORDER BY version DESC LIMIT 1
+                    """,
+                    (DAY,),
+                ).fetchone()
+            assert published[:2] == (8, 8)
+            assert published[4] == published[2] - published[3]
+        finally:
+            database.close()

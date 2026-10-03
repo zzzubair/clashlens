@@ -992,6 +992,75 @@ describe("player day honesty", () => {
     expect(dayHtml(html, "2026-10-02")).toContain("Ending evidence arrives after Reset.");
   });
 
+  const battles = (id: string, start: string, changes: number[]) =>
+    changes.map((trophyChange, slot) => ({
+      ...SAVED_DAY.offenseEvents[0],
+      battleId: `${id}-${slot}`,
+      battleTimestamp: new Date(Date.parse(start) + (slot + 1) * 3_600_000).toISOString(),
+      trophyChange,
+    }));
+
+  // Prodigi's Day 24: no start-of-day check, but 8 attacks and 8 defenses,
+  // so Python saved the net the battles add up to.
+  const DAY_24: RankedDaySummary = {
+    ...ENDED_DAY,
+    dayNumber: 24,
+    period: "2026-09-30T05:00:00Z – 2026-10-01T05:00:00Z",
+    offense: { attacks: 8, threeStars: 7, trophyGain: 300 },
+    defense: { defenses: 8, threeStarsAgainst: 3, trophyLoss: 311 },
+    trophyChange: -11,
+    offenseEvents: battles(
+      "a24",
+      "2026-09-30T05:00:00Z",
+      [40, 40, 40, 40, 40, 40, 40, 20],
+    ),
+    defenseEvents: battles(
+      "d24",
+      "2026-09-30T05:00:00Z",
+      [-40, -40, -40, -40, -40, -40, -40, -31],
+    ),
+    uncertainty: ["missing_start_battle_log_baseline", "missing_start_baseline"],
+  };
+
+  it("shows a finished day's saved net with what is still missing", async () => {
+    const row = dayHtml(await page([DAY_24]), "2026-09-30");
+    expect(row).toMatch(net("-11"));
+    expect(row).toContain("Incomplete");
+    expect(row).not.toContain("so far");
+    expect(row).toContain("The battle log was not checked at the start of this day.");
+  });
+
+  it("shows today's net so far only when every battle so far is recorded", async () => {
+    // Prodigi's Day 27, in progress: 5,412 + 295 - 139 = 5,568 trophies now.
+    const day27: RankedDaySummary = {
+      ...TODAY,
+      dayNumber: 27,
+      offense: { attacks: 8, threeStars: 7, trophyGain: 295 },
+      defense: { defenses: 4, threeStarsAgainst: 2, trophyLoss: 139 },
+      battlesComplete: true,
+      offenseEvents: battles(
+        "a27",
+        "2026-10-03T05:00:00Z",
+        [40, 40, 40, 40, 40, 40, 40, 15],
+      ),
+      defenseEvents: battles("d27", "2026-10-03T05:00:00Z", [-40, -40, -40, -19]),
+      uncertainty: [
+        "missing_end_battle_log_baseline",
+        "automatic_defense_basis_unavailable",
+      ],
+    };
+    const today = dayHtml(await page([day27], { currentDay: day27 }), "2026-10-03");
+    expect(today).toContain("In progress");
+    expect(today).toMatch(
+      /<small>Net<\/small><strong class="[^"]+">\+156<\/strong><span>so far<\/span>/,
+    );
+
+    const gap = { ...day27, battlesComplete: false };
+    const unknown = dayHtml(await page([gap], { currentDay: gap }), "2026-10-03");
+    expect(unknown).toMatch(net("Unknown"));
+    expect(unknown).not.toContain("so far");
+  });
+
   it("keeps a legacy complete day provisional", async () => {
     const complete = {
       ...ENDED_DAY,

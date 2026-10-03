@@ -8,7 +8,13 @@ from psycopg.types.json import Jsonb
 from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_analytics, api_leaderboard, api_players
-from clashlens.api_db import ApiDatabase, RequestBinding, _public_army, _screen_events
+from clashlens.api_db import (
+    ApiDatabase,
+    RequestBinding,
+    _public_army,
+    _screen_daily_log_with_events,
+    _screen_events,
+)
 from clashlens.domain import ranked_day_for
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -563,6 +569,97 @@ def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> Non
     assert defense[0]["trophy_change"] == -30
     assert defense[0]["perspective_disagreement"] is False
     assert _screen_events(None) == ([], [])
+
+
+def _stored_day(
+    start: datetime, attacks: list[int], defenses: list[int], reasons: list[str]
+) -> dict[str, object]:
+    def battle(lens: str, slot: int, change: int) -> dict[str, object]:
+        return {
+            "lens": lens,
+            "battle_id": f"{lens}-{slot}",
+            "battle_timestamp": (start + timedelta(hours=slot + 1)).isoformat(),
+            "opponent": {"tag": "#2PY", "name": "Opponent"},
+            "destruction_percentage": 100,
+            "stars": 3,
+            "trophy_change": change,
+        }
+
+    return {
+        "ranked_day_start": start.isoformat(),
+        "ranked_day_end": (start + timedelta(days=1)).isoformat(),
+        "state": "Partial",
+        "coverage": "partial",
+        "confidence": "partial",
+        "attack_count": len(attacks),
+        "attack_gain": sum(attacks),
+        "defense_count": len(defenses),
+        "defense_loss": -sum(defenses),
+        "net_trophy_change": None,
+        "partial_reasons": reasons,
+        "battles": [
+            *(battle("offense", slot, change) for slot, change in enumerate(attacks)),
+            *(battle("defense", slot, change) for slot, change in enumerate(defenses)),
+        ],
+    }
+
+
+def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
+    now = datetime(2026, 10, 3, 19, 0, tzinfo=UTC)
+    # Prodigi's Day 27, in progress: the net so far is left to the page.
+    day_27 = _stored_day(
+        datetime(2026, 10, 3, 5, 0, tzinfo=UTC),
+        [40] * 7 + [15],
+        [-40, -40, -40, -19],
+        [
+            "missing_end_battle_log_baseline",
+            "automatic_defense_basis_unavailable",
+            "player_not_eligible",
+        ],
+    )
+    screen = _screen_daily_log_with_events(day_27, "high", now)
+    assert screen["battles_complete"] is True
+    assert screen["attack_gain"] - screen["defense_loss"] == 295 - 139 == 156
+    assert screen["net_trophy_change"] is None
+
+    unknown = [
+        # A gap today means battles so far may be missing, even with eight.
+        {**day_27, "partial_reasons": ["missing_start_battle_log_baseline"]},
+        # The two players' battle logs disagree about a result.
+        {**day_27, "partial_reasons": ["perspective_disagreement"]},
+        # The totals do not match the listed battles.
+        {**day_27, "defense_loss": 140},
+        # A finished day's net comes only from its saved result.
+        _stored_day(
+            datetime(2026, 9, 30, 5, 0, tzinfo=UTC),
+            [40] * 7 + [20],
+            [-40] * 7 + [-31],
+            ["missing_start_baseline"],
+        ),
+    ]
+    screens = [_screen_daily_log_with_events(day, "high", now) for day in unknown]
+    assert [screen["battles_complete"] for screen in screens] == [False] * 4
+    assert screens[3]["net_trophy_change"] is None
+
+    # All 8 attacks and 8 defenses today: none can be missing, whatever
+    # checks were missed, unless a battle is disputed.
+    all_today = _stored_day(
+        datetime(2026, 10, 3, 5, 0, tzinfo=UTC),
+        [40] * 7 + [20],
+        [-40] * 7 + [-31],
+        ["missing_start_battle_log_baseline", "missing_start_baseline"],
+    )
+    screen = _screen_daily_log_with_events(all_today, "high", now)
+    assert screen["battles_complete"] is True
+    assert screen["attack_gain"] - screen["defense_loss"] == -11
+    disputed = {
+        **all_today,
+        "partial_reasons": [
+            "missing_start_battle_log_baseline",
+            "duplicate_contribution_disagreement",
+        ],
+    }
+    assert not _screen_daily_log_with_events(disputed, "high", now)["battles_complete"]
 
 
 def test_player_screen_ready_limits_season_days_to_current_official_season(

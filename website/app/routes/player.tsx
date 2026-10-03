@@ -1145,9 +1145,16 @@ function LegendDay({
         </span>
         <span className="legend-day-stat legend-day-net">
           <small>Net</small>
-          <strong className={valueTone(day.trophyChange)}>
-            {formatSigned(day.trophyChange)}
-          </strong>
+          {isCurrentDay && day.trophyChange === null && day.battlesComplete ? (
+            <>
+              <strong className={valueTone(battleNet)}>{formatSigned(battleNet)}</strong>
+              <span>so far</span>
+            </>
+          ) : (
+            <strong className={valueTone(day.trophyChange)}>
+              {formatSigned(day.trophyChange)}
+            </strong>
+          )}
         </span>
       </summary>
       {reasons.map((reason) => (
