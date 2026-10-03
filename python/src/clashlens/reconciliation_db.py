@@ -7,7 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, reset_baselines
+from . import battle_day_repair, boundary, domain, reset_baselines
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -348,7 +348,7 @@ def recalculate_ranked_day(
           )
         ORDER BY b.id, p.perspective
         """,
-        (ranked_day.start, ranked_day.end, player_id, player_id),
+        (*domain.battle_window(ranked_day.start), player_id, player_id),
     ).fetchall()
     contributions = tuple(
         BattleContribution(
@@ -1140,8 +1140,7 @@ def _enqueue_live_reconciliation(
         """,
         (
             ranked_day.start,
-            ranked_day.start,
-            ranked_day.end,
+            *domain.battle_window(ranked_day.start),
             player_id,
             player_id,
         ),
@@ -1286,11 +1285,16 @@ def enqueue_current_season_republication(
 
     if isinstance(max_jobs, bool) or not 1 <= max_jobs <= 1000:
         raise ValueError("current-season republication batch must be 1 to 1000")
-    # Days left Live by Reset pairs wrongly recorded as partial come first:
-    # finishing them is what lets those days publish at all.
+    # Days whose battles migration 0057 moved come first. Then days left Live
+    # by Reset pairs wrongly recorded as partial: finishing them is what lets
+    # those days publish at all.
+    moved = battle_day_repair.enqueue_rebuilds(database, max_jobs=max_jobs)
+    if moved["job_ids"]:
+        return moved
     repaired = reset_baselines.repair_current_season_reset_baselines(
         database, max_works=max_jobs
     )
+    repaired["failed_blockers"][:0] = moved["failed_blockers"]
     if repaired["evaluated_count"]:
         return repaired
     with database.pool.connection() as connection:

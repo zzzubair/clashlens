@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .domain import DomainRuleError, allocate_trophies, ranked_day_for
+from .domain import DomainRuleError, allocate_trophies, battle_day_for
 from .profile import ProfileParseError, normalize_player_tag
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
@@ -169,7 +169,7 @@ def _parse_row(
             if is_attacker
             else (opponent_tag, reporting_tag)
         )
-        day = ranked_day_for(timestamp)
+        day = battle_day_for(timestamp)
         reporter_trophies = _optional_int(
             source.get("trophies", source.get("playerTrophies")), "reporter trophies"
         )

@@ -18,7 +18,7 @@ from .db import (
     Database,
     _text_value,
 )
-from .domain import SEASON_ANCHOR_RULE_VERSION
+from .domain import SEASON_ANCHOR_RULE_VERSION, battle_window
 
 
 def _refresh_reset_baseline_evidence(
@@ -798,9 +798,9 @@ def _load_reset_endpoint_evidence(
                         OR battle.defender_player_id = %s
                     )
                       AND evidence.battle_timestamp >= %s
-                      AND evidence.battle_timestamp < %s + interval '1 day'
+                      AND evidence.battle_timestamp < %s
                     """,
-                    (player_id, player_id, boundary_at, boundary_at),
+                    (player_id, player_id, *battle_window(boundary_at)),
                 ).fetchone()[0]
                 if first_event is not None and row[4] >= first_event:
                     reasons.append("profile_after_first_event")

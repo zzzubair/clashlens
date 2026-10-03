@@ -9,6 +9,12 @@ BOOTSTRAP_CURRENT_SEASON_ID = "1783918800"
 BOOTSTRAP_PREVIOUS_SEASON_ID = "1781499600"
 RANKED_DAY_DURATION = timedelta(days=1)
 SEASON_DURATION = timedelta(days=28)
+# No new-day attack can start in the first minutes after the Reset, so a
+# battle reported in the first five minutes finished a previous-day attack.
+# The attacker's report is stamped when the attack ends, often after the
+# Reset; the defender's for the same battle usually before it. The Reset
+# itself stays at 05:00 UTC.
+BATTLE_DAY_GRACE = timedelta(minutes=5)
 
 _ALLOCATION_THRESHOLDS: dict[int, tuple[tuple[int, int], ...]] = {
     0: ((0, 0), (10, 1), (20, 2), (30, 3), (40, 4)),
@@ -193,6 +199,18 @@ def validate_legend_season_start(season_id: str, *, observed_at: datetime) -> da
 def is_season_boundary(boundary: datetime) -> bool:
     """True when a 05:00 UTC Reset boundary also opens a new season."""
     return ranked_day_for(boundary).season_start == boundary.astimezone(UTC)
+
+
+def battle_day_for(timestamp: datetime) -> RankedDay:
+    """The Legend day a battle report belongs to: reports stamped in the first
+    ``BATTLE_DAY_GRACE`` after a Reset belong to the day before it."""
+    return ranked_day_for(timestamp - BATTLE_DAY_GRACE)
+
+
+def battle_window(day_start: datetime) -> tuple[datetime, datetime]:
+    """Report timestamps ``[start, end)`` of the Legend day starting then."""
+    start = day_start + BATTLE_DAY_GRACE
+    return start, start + RANKED_DAY_DURATION
 
 
 def ranked_day_for(

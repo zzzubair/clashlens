@@ -24,7 +24,7 @@ from .db import (
     _snapshot_freshness,
     _text_value,
 )
-from .domain import DomainRuleError
+from .domain import DomainRuleError, battle_window
 
 
 def reevaluate_boundary_publications(database) -> int:
@@ -556,7 +556,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     ) AS latest
                     ORDER BY latest.battle_timestamp, latest.battle_id
                     """,
-                    (snapshot_id, perspective, period_start, period_end),
+                    (snapshot_id, perspective, *battle_window(period_start)),
                 ).fetchall()
                 quality = connection.execute(
                     f"""
