@@ -1008,26 +1008,30 @@ def remove_group_player(
 def list_groups(database: ApiDatabase, account_id: int) -> list[dict[str, Any]]:
     with database.pool.connection() as connection:
         rows = connection.execute(
-            """
-            SELECT public_id, name, id FROM account_groups
-            WHERE account_id = %s
-            ORDER BY normalized_name, public_id
-            LIMIT 500
+            f"""
+            SELECT group_row.public_id, group_row.name, player.normalized_tag,
+                   player.active, profile.name, accepted.trophies
+            FROM account_groups AS group_row
+            LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
+            {_MEMBER_JOINS}
+            WHERE group_row.account_id = %s
+            ORDER BY group_row.normalized_name, group_row.public_id, player.normalized_tag
+            LIMIT 10000
             """,
             (account_id,),
         ).fetchall()
-        groups = []
+        groups: dict[str, dict[str, Any]] = {}
         for row in rows:
-            players = _group_players(connection, int(row[2]))
-            groups.append(
-                {
-                    "group_id": str(row[0]),
-                    "name": _text(row[1]),
-                    "tags": [player["tag"] for player in players],
-                    "players": players,
-                }
+            public_id = str(row[0])
+            group = groups.setdefault(
+                public_id,
+                {"group_id": public_id, "name": _text(row[1]), "tags": [], "players": []},
             )
-        return groups
+            if row[2] is not None:
+                player = _group_player(connection, row[2:])
+                group["tags"].append(player["tag"])
+                group["players"].append(player)
+        return list(groups.values())
 
 
 def search_public_users(
@@ -1174,33 +1178,48 @@ def _lock_group(connection: Any, binding: RequestBinding, group_id: str) -> int 
     return None if row is None else int(row[0])
 
 
+# Profile parsing validates the name separately from Legend season/tier
+# evidence, so the latest name shows even when those Legend details fail checks.
+# Trophies come only from accepted Legend statistics.
+_MEMBER_JOINS = """
+    LEFT JOIN players AS player ON player.id = member.player_id
+    LEFT JOIN player_profile_versions AS accepted
+        ON accepted.id = player.current_profile_version_id
+       AND accepted.source_contract_state = 'accepted'
+    LEFT JOIN LATERAL (
+        SELECT name, player_id FROM player_profile_versions
+        WHERE normalized_tag = player.normalized_tag
+        ORDER BY observed_at DESC, id DESC LIMIT 1
+    ) AS profile ON profile.player_id = player.id
+"""
+
+
 def _group_players(connection: Any, group_id: int) -> list[dict[str, Any]]:
     """Each member's tag with the stored in-game name and trophies, when known."""
     rows = connection.execute(
-        """
-        SELECT player.normalized_tag, player.active, profile.name, profile.trophies
+        f"""
+        SELECT player.normalized_tag, player.active, profile.name, accepted.trophies
         FROM account_group_players AS member
-        JOIN players AS player ON player.id = member.player_id
-        LEFT JOIN player_profile_versions AS profile
-            ON profile.id = player.current_profile_version_id
-           AND profile.source_contract_state = 'accepted'
+        {_MEMBER_JOINS}
         WHERE member.group_id = %s
         ORDER BY player.normalized_tag
         LIMIT 101
         """,
         (group_id,),
     ).fetchall()
-    return [
-        {
-            "tag": _text(row[0]),
-            "name": None if row[2] is None else _text(row[2]),
-            "trophies": None if row[3] is None else int(row[3]),
-            "state": "tracking"
-            if row[1]
-            else api_player_lookup._lookup(connection, _text(row[0]))["state"],
-        }
-        for row in rows
-    ]
+    return [_group_player(connection, row) for row in rows]
+
+
+def _group_player(connection: Any, row: Any) -> dict[str, Any]:
+    tag, active, name, trophies = row
+    return {
+        "tag": _text(tag),
+        "name": None if name is None else _text(name),
+        "trophies": None if trophies is None else int(trophies),
+        "state": "tracking"
+        if active
+        else api_player_lookup._lookup(connection, _text(tag))["state"],
+    }
 
 
 def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:

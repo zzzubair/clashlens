@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice, product
+from pathlib import Path
 from uuid import uuid4
 
 import psycopg
 import pytest
-from test_api_db_public_ops import seed_profile
-from test_api_db_verification import NOW, verification_binding
+from domain_test_support import store_observation
+from test_api_db_public_ops import NOW, anonymous_binding, seed_profile
+from test_api_db_verification import verification_binding
 from test_api_migration import migrated_production_database
+from test_domain_processing_postgres import _processor
 
 from clashlens import api_accounts, api_player_lookup, api_verification, job_outcomes
 from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.verification import VerificationOutcome
 
 
@@ -552,4 +557,64 @@ def test_a_full_group_refuses_the_twenty_first_player(database_url: str) -> None
             assert full.payload == {"error": "group_full"}
             assert "#2PP" not in api_accounts.list_groups(database, owner_id)[0]["tags"]
         finally:
+            database.close()
+
+
+def test_a_confirmed_player_without_legend_details_joins_with_their_name(
+    database_url: str, archive_server
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        worker, processor = _processor(info, archive_server)
+        try:
+            owner_id = create_owner(database)
+            group_id = api_accounts.create_group(database,
+                account_binding(
+                    owner_id, "groups.create", "/v1/account/groups",
+                    {"name": "Main", "tags": []},
+                ),
+                name="Main",
+                normalized_name="main",
+                normalized_tags=[],
+            ).payload["group_id"]
+            api_player_lookup.submit_lookup(
+                database,
+                anonymous_binding("refresh.submit", "/v1/players/#2PP/lookup", "#2PP"),
+                normalized_tag="#2PP",
+            )
+            body = json.loads(
+                (
+                    Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json"
+                ).read_bytes()
+            )
+            body["leagueTier"] = None
+            body["townHallLevel"] = 1
+            store_observation(
+                info,
+                archive_server,
+                occurrence_key="lookup-profile",
+                endpoint="profile",
+                body=json.dumps(body).encode(),
+                observed_at=NOW,
+                normalized_tag="#2PP",
+                parser_version=PROFILE_PARSER_VERSION,
+            )
+            result = processor.process_once(owner="group-test")
+            assert result is not None and result.outcome == "processed"
+
+            added = add_player(database, owner_id, group_id, "#2PP")
+
+            player = {
+                "tag": "#2PP",
+                "name": "Synthetic Legend I",
+                "trophies": None,
+                "state": "uncertain",
+            }
+            assert added.status_code == 200
+            assert added.payload == {"group_id": group_id, **player}
+            assert api_accounts.list_groups(database, owner_id)[0]["players"] == [player]
+        finally:
+            worker.close()
             database.close()

@@ -84,13 +84,3 @@
   font-size: 0.86rem;
   font-weight: 650;
 }
-
-.group-settings summary {
-  cursor: pointer;
-  font-size: 0.9rem;
-  font-weight: 650;
-}
-
-.group-settings[open] summary {
-  margin-bottom: 0.9rem;
-}

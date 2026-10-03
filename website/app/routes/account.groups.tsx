@@ -467,7 +467,7 @@ function GroupCard({
       </div>
       {count > 0 ? (
         <ul className="player-action-list" aria-label={`Players in ${group.name}`}>
-          {sortByName(group.players).map((player) => (
+          {group.players.map((player) => (
             <MemberRow
               key={player.tag}
               groupId={id}
@@ -535,58 +535,42 @@ function GroupCard({
         {addResult?.generalError ? <ErrorNotice error={addResult.generalError} /> : null}
       </add.Form>
 
-      <details
-        className="group-settings"
-        open={actionData?.action === "update" || actionData?.action === "delete"}
-      >
-        <summary>Rename or delete group</summary>
-        <form method="post" className="stack-form">
-          <input type="hidden" name="action" value="update" />
+      <form method="post" className="stack-form">
+        <input type="hidden" name="action" value="update" />
+        <input type="hidden" name="groupId" value={id} />
+        <input type="hidden" name="idempotencyKey" value={updateKey} />
+        <NameField
+          id={`group-update-name-${id}`}
+          value={actionData?.action === "update" ? actionData.values.name : group.name}
+          error={
+            actionData?.action === "update" ? actionData.fieldErrors.name : undefined
+          }
+        />
+        <button type="submit" className="button button-secondary">
+          Save name
+        </button>
+      </form>
+      <form method="post" className="stack-form danger-form">
+        <fieldset className="form-fieldset">
+          <legend>Delete group</legend>
+          <input type="hidden" name="action" value="delete" />
           <input type="hidden" name="groupId" value={id} />
-          <input type="hidden" name="idempotencyKey" value={updateKey} />
-          <NameField
-            id={`group-update-name-${id}`}
-            value={actionData?.action === "update" ? actionData.values.name : group.name}
-            error={
-              actionData?.action === "update" ? actionData.fieldErrors.name : undefined
-            }
-          />
-          <button type="submit" className="button button-secondary">
-            Save name
+          <input type="hidden" name="idempotencyKey" value={deleteKey} />
+          <label className="confirm-line">
+            <input type="checkbox" name="confirm" required />I understand this group and
+            its membership will be deleted.
+          </label>
+          {actionData?.action === "delete" && actionData.fieldErrors.confirm ? (
+            <p className="field-error" role="alert">
+              {actionData.fieldErrors.confirm}
+            </p>
+          ) : null}
+          <button type="submit" className="button button-secondary danger-button">
+            Delete group
           </button>
-        </form>
-        <form method="post" className="stack-form danger-form">
-          <fieldset className="form-fieldset">
-            <legend>Delete group</legend>
-            <input type="hidden" name="action" value="delete" />
-            <input type="hidden" name="groupId" value={id} />
-            <input type="hidden" name="idempotencyKey" value={deleteKey} />
-            <label className="confirm-line">
-              <input type="checkbox" name="confirm" required />I understand this group and
-              its membership will be deleted.
-            </label>
-            {actionData?.action === "delete" && actionData.fieldErrors.confirm ? (
-              <p className="field-error" role="alert">
-                {actionData.fieldErrors.confirm}
-              </p>
-            ) : null}
-            <button type="submit" className="button button-secondary danger-button">
-              Delete group
-            </button>
-          </fieldset>
-        </form>
-      </details>
+        </fieldset>
+      </form>
     </li>
-  );
-}
-
-/** Names are what people remember, so members list by name, tag-only last. */
-function sortByName(players: GroupPlayer[]): GroupPlayer[] {
-  return [...players].sort(
-    (left, right) =>
-      Number(left.name === null) - Number(right.name === null) ||
-      (left.name ?? left.tag).localeCompare(right.name ?? right.tag) ||
-      left.tag.localeCompare(right.tag),
   );
 }
 
