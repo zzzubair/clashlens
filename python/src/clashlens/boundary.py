@@ -7,6 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from . import battle_day_repair
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
@@ -921,13 +922,27 @@ def _boundary_army_status(
         return "partial"
     if daily_state != "Complete" or daily_coverage != "complete":
         return "pending"
-    battle_ids = [
-        int(event["battle_id"])
+    sides = [
+        (int(event["battle_id"]), event.get("lens"))
         for event in (daily_log[0] if isinstance(daily_log[0], list) else [])
         if isinstance(event, dict) and str(event.get("battle_id", "")).isdigit()
     ]
-    if not battle_ids:
+    if not sides:
         return "complete"
+    # A listed side 0057 moved off its battle is decoded where it is now.
+    moved, _ = battle_day_repair.merged_battles(
+        connection,
+        sorted({battle_id for battle_id, _lens in sides}),
+        [
+            int(row[0])
+            for row in connection.execute(
+                "SELECT evidence_id FROM battle_perspectives"
+                " WHERE battle_id = ANY(%s::bigint[])",
+                ([battle_id for battle_id, _lens in sides],),
+            ).fetchall()
+        ],
+    )
+    battle_ids = [moved.get(side, side[0]) for side in sides]
     decoded = connection.execute(
         """
         SELECT count(DISTINCT battle_id)

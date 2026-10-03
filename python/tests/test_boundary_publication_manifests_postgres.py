@@ -848,3 +848,46 @@ def test_frozen_army_build_keeps_a_report_still_on_its_battle(
                 ]
         finally:
             database.close()
+
+
+def test_army_readiness_counts_a_battle_merged_after_its_day(
+    database_url: str, archive_server
+) -> None:
+    # 0057 merged battles a saved day listed into the day before's rows and
+    # deleted them; counting decodes by the old ids kept those players' army
+    # readiness pending, so the Reset's next army build never started.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, _army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                [(player, version, frozen)] = connection.execute(
+                    "SELECT player_id, ranked_day_version_id, input_identity"
+                    " FROM boundary_publication_manifest_rows"
+                    " WHERE manifest_id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
+                [old] = frozen["battle_ids"]
+                target = _merge_into_day_before(connection, old)
+
+                def readiness() -> str:
+                    return boundary._boundary_army_status(
+                        database,
+                        connection,
+                        player_id=player,
+                        ranked_day_version_id=version,
+                        snapshot_status="complete",
+                    )
+
+                assert readiness() == "complete"
+                # It still waits for the moved battle's own decode.
+                connection.execute(
+                    "UPDATE battle_army_decodes SET is_active = false"
+                    " WHERE battle_id = %s",
+                    (target,),
+                )
+                assert readiness() == "pending"
+        finally:
+            database.close()
