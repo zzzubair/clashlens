@@ -186,11 +186,17 @@ export interface ArmyAnalytics {
   perspectiveDisagreementCount: number;
   missingTrophyMembershipEvidence: number;
   cohortEvidence: {
+    cohortPlayers: number;
     staleOrUncertainCohortMembers: number;
     streakExcludedPlayers: number;
     shieldedPlayerDays: number;
   };
-  collectionCoverage: { state: string; completedDays: number; coveredDays?: number[] };
+  collectionCoverage: {
+    state: string;
+    completedDays: number;
+    coveredDays?: number[];
+    streakGapDays?: number[];
+  };
   freshness: { state: string };
   reproducibility: {
     officialSeasonId: string;

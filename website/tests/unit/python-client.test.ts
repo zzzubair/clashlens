@@ -1032,6 +1032,7 @@ describe("server-only Python client response boundary", () => {
       perspective_disagreement_count: 0,
       missing_trophy_membership_evidence: 3,
       cohort_evidence: {
+        cohort_players: 4,
         stale_or_uncertain_cohort_members: 2,
         streak_excluded_players: 1,
         shielded_player_days: 3,
@@ -1133,6 +1134,7 @@ describe("server-only Python client response boundary", () => {
       perspectiveDisagreementCount: 0,
       missingTrophyMembershipEvidence: 3,
       cohortEvidence: {
+        cohortPlayers: 4,
         staleOrUncertainCohortMembers: 2,
         streakExcludedPlayers: 1,
         shieldedPlayerDays: 3,
