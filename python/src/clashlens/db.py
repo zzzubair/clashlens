@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -42,6 +42,14 @@ SUPPORTED_WORK_TYPES = (
     "build_analytics",
     "build_army_analytics",
     "redecode_army",
+)
+# Work a worker slot may be limited to. Responses are the collector's saved
+# API responses; population builds each read a whole Reset's players.
+RESPONSE_WORK_TYPES = ("process_observation", "replay_observation")
+POPULATION_BUILD_WORK_TYPES = (
+    "build_snapshot",
+    "build_analytics",
+    "build_army_analytics",
 )
 
 
@@ -332,6 +340,7 @@ def _claim_select_statement(
     supports_dependency: bool = True,
     denormalized_contract: bool = True,
     supports_coordinator: bool = False,
+    work_types: Collection[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT and its named parameters.
 
@@ -346,6 +355,8 @@ def _claim_select_statement(
     row claimed by another lane between the probe and the lock is skipped,
     never double claimed. A direct ``job_id`` claim replaces the probes with
     a point lookup and still applies the same where and supported filters.
+    ``work_types`` limits every probe and the lock-time recheck to those work
+    types, so a limited worker never claims, and never skips over, other work.
     """
     supported_filter, supported_params = _supported_claim_filter(
         "job",
@@ -354,6 +365,11 @@ def _claim_select_statement(
         supports_coordinator=supports_coordinator,
     )
     params: dict[str, Any] = {**supported_params}
+    if work_types is not None:
+        if not work_types or not set(work_types) <= set(SUPPORTED_WORK_TYPES):
+            raise ValueError("claim work types must be supported work types")
+        supported_filter = f"({supported_filter} AND job.work_type = ANY(%(claim_work_types)s::text[]))"
+        params["claim_work_types"] = sorted(work_types)
     if job_id is not None:
         params["job_id"] = job_id
     score = f"""CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
@@ -877,6 +893,7 @@ class Database:
         owner: str,
         lease_seconds: int = 30,
         job_id: int | None = None,
+        work_types: Collection[str] | None = None,
     ) -> Claim | None:
         if not owner:
             raise ValueError("lease owner is required")
@@ -893,6 +910,7 @@ class Database:
                     supports_coordinator=getattr(
                         self, "_supports_coordinator_contract", False
                     ),
+                    work_types=work_types,
                 )
                 row = connection.execute(claim_statement, claim_params).fetchone()
                 if row is None:

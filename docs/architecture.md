@@ -139,7 +139,8 @@ that player's profile and battle log together, with the profile first, starting
 with players whose leaderboard entry is oldest, including its latest profile
 confirmation. Players with no observation or confirmation time go first.
 Every fourth claim keeps the existing oldest-first order so daily results and
-other derived work keep moving. If all planned claims are rejected, that call
+other derived work keep moving; on a response-only thread, described below,
+that order covers responses only. If all planned claims are rejected, that call
 falls back to the existing order without refreshing the plan again.
 
 Worker threads share the newest-job plan, but each thread claims its own next
@@ -159,6 +160,21 @@ wait for a job or a connection nor hold one a thread needs. A failed
 round is logged as `worker_maintenance` with only its error type and retried
 10 seconds later. Any other worker still claims `--max-jobs` jobs per batch
 and runs maintenance between batches.
+
+Those threads are split by kind of work so long jobs cannot hold them all.
+About two thirds, 8 of the production worker's 12, claim only responses; they
+alone use the newest-job plan. The rest claim derived work: daily results,
+builds and army redecodes. Only one derived thread may claim a snapshot,
+analytics or army build. It looks for a build first and takes other derived
+work only when none is ready, so one build runs at a time and the other
+derived threads keep daily results moving. The Reset publication checks and
+the correction sweep take a derived thread's turn before they start, and skip
+that tick, staying due, when no turn is free. Queue maintenance does not wait
+for a turn. This worker checks Reset publications on its timer's first tick
+rather than before its threads start.
+
+All threads still share one `--database-pool-size` pool; giving response and
+derived threads separate connection limits is deferred.
 
 A job holds a lock on its queue row from the start of its work until it
 commits. Claims and maintenance skip locked rows, so the

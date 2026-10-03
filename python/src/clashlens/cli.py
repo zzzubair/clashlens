@@ -856,10 +856,10 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         if arguments.run_forever and concurrency > 1:
             maintenance_database = open_database(MAINTENANCE_POOL_SIZE)
         maintenance = TimedMaintenance(maintenance_database, stage_metrics)
-        maintenance.reevaluate()
+        if maintenance_database is database:  # else the timer's first tick does
+            maintenance.reevaluate()
         if isinstance(processor, ObservationProcessor):
-            processor.stage_metrics = stage_metrics
-            database.stage_metrics = stage_metrics
+            processor.stage_metrics = database.stage_metrics = stage_metrics
 
         def process_batch() -> list[ProcessResult]:
             # Local spool and PostgreSQL own claim readiness. Remote marker

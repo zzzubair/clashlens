@@ -5,7 +5,7 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from threading import Event, Lock
+from threading import Event, Lock, Semaphore
 from time import monotonic
 from typing import Any
 
@@ -38,7 +38,10 @@ from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
+    POPULATION_BUILD_WORK_TYPES,
     PROCESSING_VERSION,
+    RESPONSE_WORK_TYPES,
+    SUPPORTED_WORK_TYPES,
     Claim,
     Database,
     LeaseLost,
@@ -66,6 +69,15 @@ NEWEST_PLAN_SIZE = 5000
 NEWEST_PLAN_MAX_AGE_SECONDS = 30.0
 NEWEST_PLAN_EMPTY_RETRY_SECONDS = 1.0
 OLDEST_FIRST_CLAIM_EVERY = 4
+# A continuous worker with two or more lanes keeps about two thirds of them
+# (8 of 12) for responses. The rest run derived work: daily results, builds
+# and redecodes. Only one of them may run a population build, and the timer's
+# Reset publication checks and correction sweep take one of their turns.
+DERIVED_WITHOUT_BUILDS = tuple(
+    work_type
+    for work_type in SUPPORTED_WORK_TYPES
+    if work_type not in RESPONSE_WORK_TYPES + POPULATION_BUILD_WORK_TYPES
+)
 STAGE_DURATION_BUCKETS_SECONDS = (
     0.0001,
     0.00025,
@@ -176,8 +188,34 @@ DATABASE_REJECTIONS = (RaiseException, IntegrityError, DataError)
 MAINTENANCE_POOL_SIZE = 2
 
 
+def response_lane_count(concurrency: int) -> int:
+    """Response-only lanes in a continuous worker of ``concurrency`` lanes."""
+    if concurrency < 2:
+        return 0
+    return max(1, min(concurrency - 1, round(concurrency * 2 / 3)))
+
+
+def lane_work_types(
+    lane_index: int, concurrency: int
+) -> tuple[tuple[str, ...], ...] | None:
+    """The work one continuous lane claims, tried in order; None means any."""
+    responses = response_lane_count(concurrency)
+    if responses == 0:
+        return None
+    if lane_index <= responses:
+        return (RESPONSE_WORK_TYPES,)
+    if lane_index == responses + 1:
+        return (POPULATION_BUILD_WORK_TYPES, DERIVED_WITHOUT_BUILDS)
+    return (DERIVED_WITHOUT_BUILDS,)
+
+
 class TimedMaintenance:
-    """Reset publication checks and queue maintenance, each every 10 seconds."""
+    """Reset publication checks and queue maintenance, each every 10 seconds.
+
+    Given ``derived_turns``, the publication checks and correction sweep run
+    only after taking a derived lane's turn, and stay due without one; queue
+    maintenance does not wait for a turn.
+    """
 
     def __init__(self, database: Database, stage_metrics: StageMetrics) -> None:
         self.database = database
@@ -190,12 +228,18 @@ class TimedMaintenance:
         if isinstance(self.database, Database):
             boundary_publication.reevaluate_boundary_publications(self.database)
 
-    def run_due(self) -> None:
+    def run_due(self, derived_turns: Semaphore | None = None) -> None:
         current_time = monotonic()
-        if current_time >= self.next_reevaluation_at:
-            self.next_reevaluation_at = current_time + 10
-            self.reevaluate()
-            self.late_battles.run_when_due()
+        if current_time >= self.next_reevaluation_at and (
+            derived_turns is None or derived_turns.acquire(blocking=False)
+        ):
+            try:
+                self.next_reevaluation_at = current_time + 10
+                self.reevaluate()
+                self.late_battles.run_when_due()
+            finally:
+                if derived_turns is not None:
+                    derived_turns.release()
         if current_time >= self.next_queue_maintenance_at:
             self.next_queue_maintenance_at = current_time + 10
             maintenance_started_at = monotonic()
@@ -314,7 +358,7 @@ def process_until_stopped(
     stop_requested: Event,
     idle_seconds: float,
     claims_ready: Callable[[], bool],
-    maintain: Callable[[], None],
+    maintain: Callable[[Semaphore], None],
     on_result: Callable[[ProcessResult], None],
 ) -> None:
     """Keep ``concurrency`` lanes claiming until ``stop_requested`` is set.
@@ -329,15 +373,21 @@ def process_until_stopped(
     job finishes, one at a time. Lane failures are isolated as in
     ``_run_lanes``, and the call returns once every lane and the timer have
     stopped.
+
+    With two or more lanes, ``lane_work_types`` reserves lanes for responses
+    so long derived work can never hold them all. Each derived lane takes a
+    turn from a shared semaphore, one per derived lane, before it claims, and
+    ``maintain`` receives the same semaphore for its heavy work.
     """
     _validate_lanes(concurrency, owner, lease_seconds)
     report_lock = threading.Lock()
+    derived_turns = Semaphore(max(1, concurrency - response_lane_count(concurrency)))
 
     def maintenance_timer() -> None:
         while not stop_requested.is_set():
             if claims_ready() and not stop_requested.is_set():
                 try:
-                    maintain()
+                    maintain(derived_turns)
                 except Exception as error:  # noqa: BLE001 - retried next tick
                     print(
                         json.dumps(
@@ -355,18 +405,28 @@ def process_until_stopped(
         def stopped() -> bool:
             return stop_claiming.is_set() or stop_requested.is_set()
 
+        work_type_order = lane_work_types(lane_index, concurrency)
+        limits = [{"work_types": kinds} for kinds in work_type_order or ()] or [{}]
+        takes_turns = work_type_order not in (None, (RESPONSE_WORK_TYPES,))
         while not stopped():
-            ready = claims_ready()
-            if stopped():
-                return
-            result = (
-                processor.process_once(
-                    owner=lane_owner(owner, lane_index),
-                    lease_seconds=lease_seconds,
-                )
-                if ready
-                else None
-            )
+            if takes_turns and not derived_turns.acquire(timeout=idle_seconds):
+                continue
+            try:
+                ready = claims_ready()
+                if stopped():
+                    return
+                result = None
+                for limit in limits if ready else ():
+                    result = processor.process_once(
+                        owner=lane_owner(owner, lane_index),
+                        lease_seconds=lease_seconds,
+                        **limit,
+                    )
+                    if result is not None:
+                        break
+            finally:
+                if takes_turns:
+                    derived_turns.release()
             if result is None:
                 stop_requested.wait(idle_seconds)
                 continue
@@ -406,19 +466,35 @@ class ObservationProcessor:
             self.stage_metrics.record(stage, monotonic() - started_at)
 
     def process_once(
-        self, *, owner: str, lease_seconds: int = 30
+        self,
+        *,
+        owner: str,
+        lease_seconds: int = 30,
+        work_types: tuple[str, ...] | None = None,
     ) -> ProcessResult | None:
         started_at = monotonic()
-        claim = self._claim_next(owner=owner, lease_seconds=lease_seconds)
+        claim = self._claim_next(
+            owner=owner, lease_seconds=lease_seconds, work_types=work_types
+        )
         self._record_stage("python_claim", started_at)
         if claim is None:
             return None
         return self._process_claim(claim, lease_seconds=lease_seconds)
 
-    def _claim_next(self, *, owner: str, lease_seconds: int) -> Claim | None:
-        with self._plan_lock:
-            self._claim_count += 1
-            planned = self._claim_count % OLDEST_FIRST_CLAIM_EVERY != 0
+    def _claim_next(
+        self,
+        *,
+        owner: str,
+        lease_seconds: int,
+        work_types: tuple[str, ...] | None = None,
+    ) -> Claim | None:
+        # The newest-first plan holds only responses, so derived lanes skip it.
+        limit = {} if work_types is None else {"work_types": work_types}
+        planned = False
+        if work_types is None or "process_observation" in work_types:
+            with self._plan_lock:
+                self._claim_count += 1
+                planned = self._claim_count % OLDEST_FIRST_CLAIM_EVERY != 0
         if planned:
             for attempt in range(NEWEST_PLAN_SIZE):
                 if attempt == 0:
@@ -429,11 +505,13 @@ class ObservationProcessor:
                 if job_id is None:
                     break
                 claim = self.database.claim_job(
-                    owner=owner, lease_seconds=lease_seconds, job_id=job_id
+                    owner=owner, lease_seconds=lease_seconds, job_id=job_id, **limit
                 )
                 if claim is not None:
                     return claim
-        return self.database.claim_job(owner=owner, lease_seconds=lease_seconds)
+        return self.database.claim_job(
+            owner=owner, lease_seconds=lease_seconds, **limit
+        )
 
     def _next_planned_job(self) -> int | None:
         plan_source = getattr(self.database, "newest_job_plan", None)

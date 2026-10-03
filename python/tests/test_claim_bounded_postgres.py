@@ -12,11 +12,13 @@ from test_claim_jobs_postgres import (
 import clashlens.db as db_module
 from clashlens.db import (
     _CLAIM_CANDIDATE_LIMIT,
+    POPULATION_BUILD_WORK_TYPES,
+    RESPONSE_WORK_TYPES,
     Database,
     _claim_select_statement,
     _supported_job_filter,
 )
-from clashlens.worker import MAX_CONCURRENCY
+from clashlens.worker import DERIVED_WITHOUT_BUILDS, MAX_CONCURRENCY
 
 EXECUTION_TIME_PATTERN = re.compile(r"Execution Time: ([0-9.]+) ms")
 
@@ -199,10 +201,12 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
 
 
 def _explain_claim(
-    connection: psycopg.Connection,
+    connection: psycopg.Connection, work_types: tuple[str, ...] | None = None
 ) -> tuple[str, float]:
     """EXPLAIN ANALYZE the exact claim statement and return (plan, millis)."""
-    statement, params = _claim_select_statement("python_processing_jobs_worker")
+    statement, params = _claim_select_statement(
+        "python_processing_jobs_worker", work_types=work_types
+    )
     plan = connection.execute(
         f"EXPLAIN (ANALYZE, COSTS OFF) {statement}", params
     ).fetchall()
@@ -308,6 +312,65 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
             assert claim is not None, "claim at production depth returned no job"
         finally:
             database.close()
+
+
+def _insert_daily_jobs(connection: psycopg.Connection, count: int, due: str) -> None:
+    connection.execute(
+        """
+        INSERT INTO python_processing_jobs (
+            work_type, deduplication_key, input_json, status, due_at, priority,
+            parser_version, processing_version, domain_rule_version,
+            analytics_rule_version
+        )
+        SELECT 'reconcile_ranked_day', 'reconcile:depth:' || %s || ':' || i,
+               jsonb_build_object('player_id', ((i - 1) %% 20000) + 1,
+                                  'ranked_day_start', '2026-08-03T05:00:00Z'),
+               'pending', clock_timestamp() - %s::interval, 100,
+               'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
+               'clashlens-domain-rules-v1', 'legend-analytics-v1'
+        FROM generate_series(1, %s) AS i
+        """,
+        (due, due, count),
+    )
+    connection.execute("ANALYZE python_processing_jobs")
+
+
+def test_limited_claims_find_their_work_behind_the_other_kind(
+    database_url: str,
+) -> None:
+    # Derived slots must find a daily job behind 19,220 due responses, and
+    # response slots a response behind 20,000 older daily jobs, both quickly.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            _seed_production_depth(connection)
+            _insert_daily_jobs(connection, 8, "0 minutes")
+            for work_types in (POPULATION_BUILD_WORK_TYPES, DERIVED_WITHOUT_BUILDS):
+                plan_text, millis = _explain_claim(connection, work_types)
+                assert "Seq Scan on python_processing_jobs" not in plan_text
+                assert millis < 100, (
+                    f"derived claim took {millis:.1f} ms behind responses:\n"
+                    f"{plan_text}"
+                )
+            _insert_daily_jobs(connection, 20000, "2 hours")
+            plan_text, millis = _explain_claim(connection, RESPONSE_WORK_TYPES)
+            assert "Seq Scan on python_processing_jobs" not in plan_text
+            assert millis < 100, (
+                f"response claim took {millis:.1f} ms behind daily jobs:\n"
+                f"{plan_text}"
+            )
+
+        database = Database(connection_info)
+        try:
+            response = database.claim_job(
+                owner="depth-response", work_types=RESPONSE_WORK_TYPES
+            )
+            derived = database.claim_job(
+                owner="depth-derived", work_types=DERIVED_WITHOUT_BUILDS
+            )
+        finally:
+            database.close()
+        assert response is not None and response.work_type == "process_observation"
+        assert derived is not None and derived.work_type == "reconcile_ranked_day"
 
 
 def test_claim_skips_dead_queue_entries_left_before_vacuum(database_url: str) -> None:

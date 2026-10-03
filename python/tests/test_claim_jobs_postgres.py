@@ -14,8 +14,18 @@ from psycopg.conninfo import make_conninfo
 
 from clashlens import ingestion, reconciliation_db, reset_baselines
 from clashlens.archive import S3ArchiveReader
-from clashlens.db import Database, LeaseLost
-from clashlens.worker import ObservationProcessor, ProcessResult, process_concurrently
+from clashlens.db import (
+    POPULATION_BUILD_WORK_TYPES,
+    RESPONSE_WORK_TYPES,
+    Database,
+    LeaseLost,
+)
+from clashlens.worker import (
+    DERIVED_WITHOUT_BUILDS,
+    ObservationProcessor,
+    ProcessResult,
+    process_concurrently,
+)
 
 PARSER_VERSION = "supercell-source-parser-v1"
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
@@ -1341,5 +1351,105 @@ def test_claim_does_not_sweep_expired_unsupported_lease_but_maintenance_does(
                 )
                 == "stale"
             )
+        finally:
+            database.close()
+
+
+def test_limited_claims_never_take_or_skip_past_other_work(database_url: str) -> None:
+    # Older responses in every claimable state sit ahead of one daily job.
+    # A derived-only claim takes the daily job and leaves every response
+    # untouched; a response-only claim then reaches each of them.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            response_ids = []
+            for state, priority in (
+                ("pending", 100),
+                ("pending", 60),
+                ("waiting_retry", 100),
+                ("waiting_dependency", 100),
+                ("leased", 100),
+            ):
+                key = f"limited:{state}:{priority}"
+                response_ids.append(
+                    _insert_job(
+                        connection,
+                        work_type="process_observation",
+                        deduplication_key=key,
+                        input_json={},
+                        observation_id=_insert_observation(
+                            connection, occurrence_key=key
+                        ),
+                        priority=priority,
+                        due_at="2026-08-01T00:00:00Z",
+                        max_attempts=3,
+                    )
+                )
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs
+                    SET status = %s, attempt_count = 1,
+                        lease_owner = CASE WHEN %s = 'leased' THEN 'gone' END,
+                        lease_token = CASE WHEN %s = 'leased' THEN 'gone' END,
+                        lease_expires_at = CASE WHEN %s = 'leased'
+                            THEN clock_timestamp() - interval '1 minute' END
+                    WHERE id = %s
+                    """,
+                    (state, state, state, state, response_ids[-1]),
+                )
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+            ).fetchone()[0]
+            daily_id = _insert_job(
+                connection,
+                work_type="reconcile_ranked_day",
+                deduplication_key="limited:daily",
+                input_json={
+                    "player_id": player_id,
+                    "ranked_day_start": "2026-08-03T05:00:00Z",
+                },
+                due_at="2026-08-03T19:35:01+00:00",
+            )
+            connection.commit()
+
+        database = Database(connection_info)
+        try:
+            derived = database.claim_job(
+                owner="derived-lane", work_types=DERIVED_WITHOUT_BUILDS
+            )
+            assert derived is not None and derived.job_id == daily_id
+            assert (
+                database.claim_job(
+                    owner="build-lane", work_types=POPULATION_BUILD_WORK_TYPES
+                )
+                is None
+            )
+            assert (
+                database.claim_job(
+                    owner="build-lane",
+                    job_id=response_ids[0],
+                    work_types=POPULATION_BUILD_WORK_TYPES,
+                )
+                is None
+            )
+            assert database.scalar(
+                """
+                SELECT count(*) FROM python_processing_jobs AS job
+                WHERE job.id = ANY(%s) AND (job.attempt_count <> 1
+                   OR EXISTS (SELECT 1 FROM python_processing_attempts AS attempt
+                              WHERE attempt.job_id = job.id))
+                """,
+                (response_ids,),
+            ) == 0
+            claimed = {
+                claim.job_id
+                for claim in (
+                    database.claim_job(
+                        owner="response-lane", work_types=RESPONSE_WORK_TYPES
+                    )
+                    for _ in response_ids
+                )
+                if claim is not None
+            }
+            assert claimed == set(response_ids)
         finally:
             database.close()
