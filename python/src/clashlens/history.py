@@ -1,4 +1,6 @@
-"""Bounded, operator-invoked compaction of completed collection bookkeeping.
+"""Bounded compaction of completed collection bookkeeping.
+
+Operators run it by hand; a timer runs only the finished-job part (``jobs_only``).
 
 This does not delete raw objects, battles, profiles, publications, or corrections.
 The database's restrictive domain foreign keys are a final safety barrier.
@@ -242,6 +244,7 @@ def prune_completed_history(
     max_jobs: int = 1000,
     apply: bool = False,
     max_discoveries: int = 1000,
+    jobs_only: bool = False,
 ) -> dict[str, int | bool]:
     if not 48 <= retention_hours <= 24 * 28:
         raise ValueError("retention_hours must be between 48 and 672")
@@ -249,6 +252,14 @@ def prune_completed_history(
         raise ValueError("max_jobs must be between 1 and 1000")
     if not 1 <= max_discoveries <= 1000:
         raise ValueError("max_discoveries must be between 1 and 1000")
+    if jobs_only:
+        # The scheduled cleanup: finished processing jobs only, under a role
+        # that can do nothing else.
+        return {
+            **_prune_finished_jobs(connection, retention_hours, max_jobs, apply),
+            "apply": apply,
+            "retention_hours": retention_hours,
+        }
     discoveries = _prune_discovery_children(
         connection, retention_hours, max_discoveries, apply
     )
@@ -338,17 +349,26 @@ def prune_completed_history(
     }
 
 
+def _prune_finished_jobs(connection: Any, hours: int, limit: int, apply: bool) -> dict[str, int]:
+    # Migration 0053's function owns which jobs are finished and old enough.
+    with connection.transaction():
+        connection.execute("SET LOCAL lock_timeout = '1s'")
+        connection.execute("SET LOCAL statement_timeout = '30s'")
+        eligible, deleted = connection.execute(
+            "SELECT eligible, deleted FROM clashlens_prune_finished_jobs(%s, %s, %s)",
+            (hours, limit, apply),
+        ).fetchone()
+    return {
+        "eligible_python_processing_jobs": eligible,
+        "deleted_python_processing_jobs": deleted,
+    }
+
+
 def _prune_unused_content(connection: Any, hours: int, limit: int, apply: bool) -> dict[str, int]:
     # Only these operational tables are eligible; account/export jobs and domain
     # histories are deliberately outside this cleanup surface.
+    counts = _prune_finished_jobs(connection, hours, limit, apply)
     predicates = {
-        "python_processing_jobs": """
-            target.status = 'complete'
-            AND target.work_type <> 'build_export'
-            AND target.updated_at < clock_timestamp() - make_interval(hours => %s)
-            AND NOT EXISTS (SELECT 1 FROM boundary_publication_legacy_job_migrations
-                            WHERE job_id = target.id)
-        """,
         "official_top200_entries": """
             target.version_id IS NULL AND target.parsed_payload_id IS NOT NULL
             AND EXISTS (SELECT 1 FROM parsed_source_payloads AS payload
@@ -376,7 +396,6 @@ def _prune_unused_content(connection: Any, hours: int, limit: int, apply: bool) 
             AND NOT EXISTS (SELECT 1 FROM collector_observations WHERE response_hash = target.response_hash)
         """,
     }
-    counts = {}
     for table, predicate in predicates.items():
         with connection.transaction():
             connection.execute("SET LOCAL lock_timeout = '1s'")

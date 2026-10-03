@@ -634,6 +634,17 @@ A run with any failed object exits unsuccessfully, which marks the service
 failed. Logs record its report and each failed object's location and error type.
 The next run retries.
 
+## Finished-job cleanup
+
+Every production `up` installs `clashlens-history-retention.timer`, which
+deletes processing jobs 48 hours after they finish; nothing in `app.env` turns
+it on or off. `up` also stores `clashlens-history-operator-database-url`, a
+Podman secret only the cleanup container mounts. It logs in as
+`clashlens_history_retention` (migration 0053) with a random password that
+`up` replaces each time; that role can only run the one deletion function.
+Fixture stacks get no timer, and the role cannot log in there. Checks and
+failure handling are in [operating](operating.md#finished-job-cleanup-failed).
+
 ## Status and logs
 
 ```sh

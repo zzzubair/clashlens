@@ -29,7 +29,12 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
         else:
             work_row = connection.execute(
                 """
-                SELECT work.status, work.failure_category, processing.status
+                -- Cleanup deletes only finished jobs, so a saved profile
+                -- response whose job is gone was processed.
+                SELECT work.status, work.failure_category,
+                       COALESCE(processing.status, CASE
+                           WHEN work.profile_observation_id IS NOT NULL THEN 'complete'
+                       END)
                 FROM (
                     SELECT status, failure_category, profile_observation_id
                     FROM collector_work

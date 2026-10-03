@@ -44,6 +44,9 @@ Healthy looks like this:
   [backup schedule](deployment.md#postgresql-backups-and-recovery).
   A historical `failed_count` alone does not prove a current failure.
   A warming-up seven-day window is not full recovery coverage.
+- `clashlens-history-retention.timer` is active with a next run under a
+  minute away. It deletes finished processing jobs 48 hours after they finish;
+  see [finished-job cleanup failed](#finished-job-cleanup-failed).
 
 After alert deployment, also run:
 
@@ -57,7 +60,7 @@ The private probe should exit successfully; its
 [private-read condition](deployment.md#alert-conditions) explains what it checks.
 The alert timer should be active with recent successful runs matching the
 [configured schedule](deployment.md#private-discord-alerts).
-The alert, backup, raw-response cleanup and ranked-day copy cleanup services run once per timer firing, so `inactive (dead)`
+The alert, backup, raw-response cleanup, ranked-day copy cleanup and finished-job cleanup services run once per timer firing, so `inactive (dead)`
 between successful runs is normal. `failed`, missing units, delivery failures or
 unavailable measurements need investigation.
 
@@ -427,6 +430,32 @@ set `CLASHLENS_ARCHIVE_RETENTION=preview` and run
 `./ops up` with approval.
 
 **Recovered:** the next batch succeeds and its report has `failed_objects=0`.
+
+### Finished-job cleanup failed
+
+Every production `up` installs `clashlens-history-retention.timer`. Five
+minutes after `up`, and then 30 seconds after each batch ends, it deletes up
+to 1,000 processing jobs that finished more than 48 hours ago, with their
+attempts. Pending, leased, waiting, failed and cancelled jobs are never
+deleted, and the results the jobs produced stay. About 650,000 jobs finish a
+day; the timer can delete roughly 2 million. It connects as
+`clashlens_history_retention`, a database role that can only run this
+deletion, with a password `up` replaces each time. It does not take the shared
+operation lock, so it never delays deployment or backups; `up` and `down`
+stop it first. No Discord alert reports a failed batch.
+
+**First checks:** `systemctl --user status clashlens-history-retention.service --no-pager`
+and `./ops logs history-retention --since '1 hour ago' --no-pager`. Each batch
+prints one JSON report with `eligible_python_processing_jobs` and
+`deleted_python_processing_jobs`.
+
+**Fix or escalate:** a lock or statement timeout fails only that batch; the
+next one retries. If every batch fails, run `./ops up` with approval to reset
+the role's password, then investigate the database error. Never delete jobs
+by hand. `./ops history-prune` runs one batch now.
+
+**Recovered:** the service's latest run succeeded, and while older finished
+jobs remain, batches report `deleted_python_processing_jobs` above zero.
 
 ### When alerts themselves fail
 

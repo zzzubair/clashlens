@@ -1,0 +1,11 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens finished-job cleanup schedule
+PartOf=clashlens.target
+
+[Timer]
+# One batch of up to 1,000 finished jobs, then the next batch 30 seconds after
+# it finishes: roughly 2 million a day against about 650,000 new ones.
+OnActiveSec=5min
+OnUnitInactiveSec=30s
+Unit=clashlens-history-retention.service

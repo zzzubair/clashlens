@@ -402,3 +402,54 @@ def test_ancillary_failure_waits_for_profile_processing_without_recollecting(
         finally:
             collector.close()
             database.close()
+
+
+def test_lookup_still_fails_and_retries_after_its_finished_job_is_cleaned_up(
+    database_url,
+):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        collector = CollectorDatabase(info)
+        try:
+            assert submit(database)["state"] == "checking"
+            with database.pool.connection() as connection:
+                work_id, player_id = connection.execute(
+                    "SELECT id, player_id FROM collector_work"
+                ).fetchone()
+            collector.record_response(
+                _handoff(
+                    occurrence_key="lookup-cleaned",
+                    response_hash=_hash("lookup-cleaned"),
+                    player_id=player_id,
+                    collector_work_id=work_id,
+                )
+            )
+            with database.pool.connection() as connection:
+                # Collection and processing finished without a profile, three days ago.
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs SET status = 'complete',
+                        completed_at = clock_timestamp() - interval '3 days',
+                        updated_at = clock_timestamp() - interval '3 days'
+                    """
+                )
+                connection.execute(
+                    """
+                    UPDATE collector_work SET status = 'complete',
+                        completed_at = clock_timestamp() - interval '3 days',
+                        updated_at = clock_timestamp() - interval '3 days'
+                    """
+                )
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "failed"
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT deleted FROM clashlens_prune_finished_jobs(48, 1000, true)"
+                ).fetchone()[0] == 1
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "failed"
+            assert submit(database)["state"] == "checking"
+            assert database.scalar("SELECT count(*) FROM collector_work") == 2
+        finally:
+            collector.close()
+            database.close()

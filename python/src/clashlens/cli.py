@@ -244,6 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=1000,
     )
     prune_history.add_argument("--apply", action="store_true")
+    prune_history.add_argument("--jobs-only", action="store_true", help="finished processing jobs only (the scheduled cleanup)")
 
     prune_archive = subparsers.add_parser(
         "prune-archive",
@@ -509,6 +510,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_jobs=arguments.max_jobs,
                     max_discoveries=arguments.max_discoveries,
                     apply=arguments.apply,
+                    jobs_only=arguments.jobs_only,
                 )
             print(json.dumps(report, sort_keys=True))
             return 0
