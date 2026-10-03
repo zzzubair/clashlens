@@ -603,6 +603,49 @@ def test_changed_armies_check_only_their_players_frozen_army_inputs(
             database.close()
 
 
+def _merge_into_day_before(connection, old: int) -> int:
+    """Do to battle ``old`` what 0057 did to a merged battle; return its new row."""
+    target = connection.execute(
+        """
+        INSERT INTO legend_battles
+            (ranked_day_start, attacker_player_id, defender_player_id)
+        SELECT ranked_day_start - interval '1 day',
+               attacker_player_id, defender_player_id
+        FROM legend_battles WHERE id = %s
+        RETURNING id
+        """,
+        (old,),
+    ).fetchone()[0]
+    connection.execute(
+        """
+        INSERT INTO battle_day_repairs (
+            from_battle_id, to_battle_id, perspective, evidence_id,
+            attacker_player_id, defender_player_id, from_day, to_day
+        )
+        SELECT battle.id, %s, side.perspective, side.evidence_id,
+               battle.attacker_player_id, battle.defender_player_id,
+               battle.ranked_day_start,
+               battle.ranked_day_start - interval '1 day'
+        FROM legend_battles AS battle
+        JOIN battle_perspectives AS side ON side.battle_id = battle.id
+        WHERE battle.id = %s
+        """,
+        (target, old),
+    )
+    for table in (
+        "battle_evidence",
+        "battle_perspectives",
+        "battle_army_decodes",
+        "army_analytics_battle_facts",
+    ):
+        connection.execute(
+            f"UPDATE {table} SET battle_id = %s WHERE battle_id = %s",
+            (target, old),
+        )
+    connection.execute("DELETE FROM legend_battles WHERE id = %s", (old,))
+    return target
+
+
 def test_frozen_army_build_follows_a_battle_merged_after_the_freeze(
     database_url: str, archive_server
 ) -> None:
@@ -622,51 +665,15 @@ def test_frozen_army_build_follows_a_battle_merged_after_the_freeze(
                     (army_input["manifest_id"],),
                 ).fetchall()
                 [old] = frozen["battle_ids"]
-                # What 0057 did to a merged battle.
-                target = connection.execute(
-                    """
-                    INSERT INTO legend_battles
-                        (ranked_day_start, attacker_player_id, defender_player_id)
-                    SELECT ranked_day_start - interval '1 day',
-                           attacker_player_id, defender_player_id
-                    FROM legend_battles WHERE id = %s
-                    RETURNING id
-                    """,
-                    (old,),
-                ).fetchone()[0]
-                connection.execute(
-                    """
-                    INSERT INTO battle_day_repairs (
-                        from_battle_id, to_battle_id, perspective, evidence_id,
-                        attacker_player_id, defender_player_id, from_day, to_day
-                    )
-                    SELECT battle.id, %s, side.perspective, side.evidence_id,
-                           battle.attacker_player_id, battle.defender_player_id,
-                           battle.ranked_day_start,
-                           battle.ranked_day_start - interval '1 day'
-                    FROM legend_battles AS battle
-                    JOIN battle_perspectives AS side ON side.battle_id = battle.id
-                    WHERE battle.id = %s
-                    """,
-                    (target, old),
-                )
-                for table in (
-                    "battle_evidence",
-                    "battle_perspectives",
-                    "battle_army_decodes",
-                    "army_analytics_battle_facts",
-                ):
-                    connection.execute(
-                        f"UPDATE {table} SET battle_id = %s WHERE battle_id = %s",
-                        (target, old),
-                    )
-                connection.execute("DELETE FROM legend_battles WHERE id = %s", (old,))
+                target = _merge_into_day_before(connection, old)
                 # The moved decode is still the frozen one: no correction.
-                assert not boundary_publication._boundary_army_manifest_needs_correction(
-                    database,
-                    connection,
-                    manifest_id=army_input["manifest_id"],
-                    player_ids=[frozen["player_id"]],
+                assert (
+                    not boundary_publication._boundary_army_manifest_needs_correction(
+                        database,
+                        connection,
+                        manifest_id=army_input["manifest_id"],
+                        player_ids=[frozen["player_id"]],
+                    )
                 )
             assert processor.process_job(army_job, owner="army").outcome == "processed"
             with database.pool.connection() as connection:
@@ -676,5 +683,76 @@ def test_frozen_army_build_follows_a_battle_merged_after_the_freeze(
                 ).fetchall() == [
                     (target, frozen["evidence_ids"][0], frozen["decode_ids"][0])
                 ]
+        finally:
+            database.close()
+
+
+def test_army_frozen_after_a_merge_reads_the_moved_report(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The Oct 1 Reset's army inputs were frozen after 0057 had moved a report
+    # but before the day was rebuilt: they named the old battle and, its row
+    # gone, no report for it. Job 2074885 then failed with "frozen army
+    # evidence missing for battle 48183 offense".
+    freeze = boundary._freeze_boundary_manifest
+    moves: list[tuple[int, int]] = []
+
+    def merge_then_freeze(database, connection, *, generation_id, artifact_kind):
+        if artifact_kind == "army" and not moves:
+            [(old,)] = connection.execute("SELECT id FROM legend_battles").fetchall()
+            moves.append((old, _merge_into_day_before(connection, old)))
+        return freeze(
+            database,
+            connection,
+            generation_id=generation_id,
+            artifact_kind=artifact_kind,
+        )
+
+    monkeypatch.setattr(boundary, "_freeze_boundary_manifest", merge_then_freeze)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            [(old, target)] = moves
+            with database.pool.connection() as connection:
+                [(frozen,)] = connection.execute(
+                    "SELECT input_identity FROM boundary_publication_manifest_rows"
+                    " WHERE manifest_id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
+                assert (frozen["battle_ids"], frozen["evidence_ids"]) == ([old], [])
+                [(moved_report,)] = connection.execute(
+                    "SELECT evidence_id FROM battle_day_repairs"
+                    " WHERE perspective = 'attacker'"
+                ).fetchall()
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+            with database.pool.connection() as connection:
+                # Its decode was frozen as missing, as it was then.
+                assert connection.execute(
+                    "SELECT battle_id, evidence_id, decode_id"
+                    " FROM army_analytics_battle_facts WHERE is_current"
+                ).fetchall() == [(target, moved_report, None)]
+                # A side with no recorded move still fails clearly.
+                connection.execute("DELETE FROM battle_day_repairs")
+                with pytest.raises(
+                    ValueError,
+                    match=f"frozen army evidence missing for battle {old} ",
+                ):
+                    army_ingestion._build_army_fact_batch(
+                        connection,
+                        DAY_START,
+                        connection.execute(
+                            "SELECT ranked_day_version_id, player_id, battles,"
+                            " official_season_id, season_day_number, NULL"
+                            " FROM api_player_daily_logs WHERE id = %s",
+                            (frozen["daily_log_id"],),
+                        ).fetchall(),
+                        battle_ids=[old],
+                        decode_ids=[],
+                        evidence_ids=[],
+                        active_keys=set(),
+                    )
         finally:
             database.close()
