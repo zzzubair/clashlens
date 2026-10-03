@@ -280,3 +280,25 @@ def test_malformed_and_partial_invalidate() -> None:
         assert hasattr(r, "category")
     # empty code already tested elsewhere
     assert decode_army_share_code("").category == "empty_army_share_code"
+
+
+def test_dragon_duke_revenge_deck_army_decodes_completely() -> None:
+    # A current Legend army link: Dragon Duke with Revenge Deck and Fire Heart.
+    result = decode_army_share_code(
+        "h0p11e10_51-1p3e48_39-2p16e24_5-7p4e60_52u11x132-5x7s2x2-4x35d2x98"
+    )
+    assert result.status == "decoded"
+    assert result.unknown == ()
+    assert result.identity_hash is not None
+    duke = next(hero for hero in result.heroes if hero.hero_typed_id == "hero:7")
+    assert {catalog.catalog_name(item) for item in duke.equipment_typed_ids} == {
+        "Revenge Deck",
+        "Fire Heart",
+    }
+
+
+def test_every_catalog_unit_has_its_own_display_name() -> None:
+    # Two units sharing a name would show as one on the Armies page.
+    names = [entry["name"] for entry in catalog.catalog_entries().values()]
+    assert sorted(name for name in names if names.count(name) > 1) == []
+    assert catalog.catalog_name("troop:177") == "Meteor Golem"

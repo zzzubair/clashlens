@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -971,3 +972,85 @@ def test_deadlocked_battle_log_is_retried_without_using_an_attempt(
 
     assert result.outcome == "processed"
     assert (text(job[0]), job[1]) == ("complete", 1)
+
+
+def test_catalog_v2_migration_redecodes_saved_armies_once(
+    database_url: str, archive_server
+) -> None:
+    migration = (
+        Path(__file__).parents[2] / "deploy/migrations/0055_unit_catalog_v2.sql"
+    ).read_text(encoding="utf-8")
+    tracked_at = datetime(2026, 8, 4, 12, tzinfo=UTC)
+    untracked_at = datetime(2026, 8, 2, 12, tzinfo=UTC)
+    with domain_database(database_url) as ci:
+        _, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="catalog-v2",
+            endpoint="battle_log",
+            body=json.dumps(
+                {
+                    "items": [
+                        _live_row(True, "#8PP", "h7p4e60_52u5x177s1x2", tracked_at),
+                        _live_row(True, "#9PP", "h7p4e60_52u5x177", untracked_at),
+                    ]
+                }
+            ).encode(),
+            observed_at=tracked_at + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        db, proc = _processor(ci, archive_server)
+        try:
+            assert proc.process_job(job_id, owner="seed").outcome == "processed"
+            with psycopg.connect(ci, autocommit=True) as connection:
+                tracked_battle, untracked_battle = (
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT id FROM legend_battles ORDER BY ranked_day_start DESC"
+                    ).fetchall()
+                )
+                connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end,
+                        official_season_id, season_day_number,
+                        season_anchor_rule_version, reconciliation_rule_version,
+                        result_hash, version, state, confidence, coverage_complete
+                    )
+                    SELECT id, '2026-08-04T05:00:00Z', '2026-08-05T05:00:00Z',
+                           'test-season', 1, 'test-anchor', 'test-reconciliation',
+                           repeat('a', 64), 1, 'Live', 'exact', false
+                    FROM players WHERE normalized_tag = '#2PP'
+                    """
+                )
+                # Armies saved before the upgrade carry the old catalog.
+                connection.execute(
+                    "UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v1'"
+                )
+                connection.execute(migration)
+                connection.execute(migration)
+                jobs = connection.execute(
+                    """
+                    SELECT id, input_json FROM python_processing_jobs
+                    WHERE work_type = 'redecode_army'
+                    """
+                ).fetchall()
+            assert [job[1] for job in jobs] == [{"battle_ids": [tracked_battle]}]
+            assert proc.process_job(jobs[0][0], owner="redecode").outcome == "processed"
+            with db.pool.connection() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT battle_id, catalog_version, status, exact_army_id, heroes
+                    FROM battle_army_decodes WHERE is_active ORDER BY battle_id, id
+                    """
+                ).fetchall()
+        finally:
+            db.close()
+    upgraded = [row for row in rows if text(row[1]) == "unit-catalog-v2"]
+    assert [(row[0], text(row[2])) for row in upgraded] == [(tracked_battle, "decoded")]
+    assert upgraded[0][3] is not None
+    assert upgraded[0][4][0]["equipment"] == ["equipment:52", "equipment:60"]
+    # The old decodes stay as history, including the battle nothing re-decoded.
+    assert sorted(
+        row[0] for row in rows if text(row[1]) == "unit-catalog-v1"
+    ) == sorted([tracked_battle, untracked_battle])
