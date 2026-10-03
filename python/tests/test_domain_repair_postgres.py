@@ -4,6 +4,7 @@ holds only the Resets it lists."""
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -19,7 +20,14 @@ from clashlens import boundary, boundary_publication, domain_repair, reset_basel
 from clashlens.army_decoder import DECODER_VERSION
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database
-from clashlens.domain import HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION
+from clashlens.domain import HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION, ranked_day_for
+from clashlens.reconciliation import (
+    BattleContribution,
+    CoverageObservation,
+    PreviousRankedDay,
+    ReconciliationInput,
+    reconcile_ranked_day,
+)
 
 SEASON, NEXT_SEASON = "1788757200", "1791176400"
 START = datetime(2026, 9, 7, 5, tzinfo=UTC)
@@ -75,13 +83,14 @@ def _player(connection, tag: str) -> int:
 def _report(
     connection, reporter: int, opponent: int, day: datetime, *,
     at: datetime | None = None, destruction: int = 55, code: str | None = None,
-    observation_id: int = 0,
+    observation_id: int = 0, perspective: str = "attacker",
 ) -> int:
-    """Save one selected attack report on ``day`` and return its id."""
+    """Save one selected report on ``day`` and return its id."""
+    sides = (reporter, opponent) if perspective == "attacker" else (opponent, reporter)
     battle_id = connection.execute(
         "INSERT INTO legend_battles (ranked_day_start, attacker_player_id,"
         " defender_player_id) VALUES (%s, %s, %s) RETURNING id",
-        (day, reporter, opponent),
+        (day, *sides),
     ).fetchone()[0]
     evidence_id = connection.execute(
         """
@@ -90,24 +99,24 @@ def _report(
             perspective, battle_timestamp, stars, destruction_percentage,
             army_share_code, attacker_gain, defender_loss, trophy_rule_version,
             source_observed_at, parser_version
-        ) VALUES (%s, %s, %s, %s, 'attacker', %s, 2, %s, %s, 18, 18, %s, %s,
+        ) VALUES (%s, %s, %s, %s, %s, %s, 2, %s, %s, 18, 18, %s, %s,
                   'supercell-source-parser-v2')
         RETURNING id
         """,
-        (battle_id, battle_id, observation_id, reporter, at or day + timedelta(hours=2),
+        (battle_id, battle_id, observation_id, reporter, perspective,
+         at or day + timedelta(hours=2),
          destruction, code, HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION, day + DAY),
     ).fetchone()[0]
     connection.execute(
         "INSERT INTO battle_perspectives (battle_id, perspective, evidence_id,"
-        " source_observed_at) VALUES (%s, 'attacker', %s, %s)",
-        (battle_id, evidence_id, day + DAY),
+        " source_observed_at) VALUES (%s, %s, %s, %s)",
+        (battle_id, perspective, evidence_id, day + DAY),
     )
     return evidence_id
 
 
 def _saved_day(
-    connection, player_id: int, day: datetime, season: str = SEASON, version: int = 1,
-    *, state: str = "Complete", attacks: int = 0, defenses: int = 0,
+    connection, player_id: int, day: datetime, season: str = SEASON, version: int = 1
 ) -> None:
     connection.execute(
         """
@@ -115,13 +124,66 @@ def _saved_day(
             player_id, ranked_day_start, ranked_day_end, official_season_id,
             season_day_number, season_anchor_rule_version,
             reconciliation_rule_version, result_hash, version, state, confidence,
-            input_hash, evidence_complete, coverage_complete, attack_count,
-            defense_count
+            input_hash, evidence_complete, coverage_complete
         ) VALUES (%s, %s, %s, %s, 1, 'legend-season-anchor-v1', 'test', %s, %s,
-                  %s, 'exact', %s, true, true, %s, %s)
+                  'Complete', 'exact', %s, true, true)
         """,
-        (player_id, day, day + DAY, season, f"{version:x}" * 64, version, state,
-         "a" * 64, attacks, defenses),
+        (player_id, day, day + DAY, season, f"{version:x}" * 64, version, "a" * 64),
+    )
+
+
+def _calculated_day(
+    connection, player_id: int, day: datetime, *, start: int, end: int,
+    attacks=(), defenses=(), previous: PreviousRankedDay | None = None,
+) -> PreviousRankedDay:
+    """Save a day as the product calculates it from complete battle-log
+    coverage and these (report id, trophies) battles, every one 2-star/55%,
+    and return what the next day reads of it."""
+    result = reconcile_ranked_day(ReconciliationInput(
+        ranked_day=ranked_day_for(day), now=DEADLINE + 7 * DAY,
+        start_baseline_id=1, end_baseline_id=2, start_trophies=start,
+        next_start_trophies=end,
+        coverage_observations=(CoverageObservation(
+            observed_at=day, row_count=0, battle_identities=(), has_row_gap=False,
+            observation_id=1,
+        ),),
+        contributions=tuple(
+            BattleContribution(
+                battle_identity=str(report), lens=lens, trophy_amount=trophies,
+                source_evidence_id=report, stars=2, destruction_percentage=55,
+                attacker_gain=trophies, defender_loss=trophies,
+                source_rule_version=HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
+            )
+            for lens, battles in (("offense", attacks), ("defense", defenses))
+            for report, trophies in battles
+        ),
+        previous_day=previous, boundary_kind=None, season_anchor_valid=True,
+        start_baseline_battle_log_observation_id=1,
+        end_baseline_battle_log_observation_id=1,
+    ))
+    connection.execute(
+        """
+        INSERT INTO ranked_day_versions (
+            player_id, ranked_day_start, ranked_day_end, official_season_id,
+            season_day_number, season_anchor_rule_version,
+            reconciliation_rule_version, result_hash, version, state, confidence,
+            input_hash, coverage_complete, attack_count, defense_count,
+            observed_defense_loss, input_evidence
+        ) VALUES (%s, %s, %s, %s, 1, 'legend-season-anchor-v1', 'test', %s, 1, %s,
+                  %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (player_id, day, day + DAY, SEASON if day < END else NEXT_SEASON,
+         hashlib.sha256(f"{player_id}:{day}".encode()).hexdigest(), result.state,
+         result.confidence, "a" * 64, result.coverage_complete, result.attack_count,
+         result.defense_count, result.observed_defense_loss, Jsonb(result.input_evidence)),
+    )
+    return PreviousRankedDay(
+        complete=result.state == "Complete" and result.coverage_complete,
+        observed_defense_count=result.defense_count,
+        observed_defense_loss=result.observed_defense_loss,
+        shield_run_length=0, coverage_complete=result.coverage_complete,
+        shield_state=result.shield_state, ranked_day_start=day, state=result.state,
+        confidence=result.confidence,
     )
 
 
@@ -222,64 +284,121 @@ def test_campaign_window_is_season_end_plus_seven_days(database_url: str) -> Non
             ).fetchall() == [(SEASON, DEADLINE)]
 
 
-def test_campaign_includes_closing_boundary_and_next_season_dependency(
-    database_url: str,
-) -> None:
+def test_campaign_leaves_out_next_season_days_it_cannot_change(database_url: str) -> None:
     with _campaign_database(database_url) as (connection_info, worker):
         with _owner(connection_info) as connection:
             player, opponent = _player(connection, "#LAST"), _player(connection, "#OTHER")
             day28 = END - DAY
-            _report(connection, player, opponent, day28)
-            _saved_day(connection, player, day28)
-            # The next Season's first day only attacked, so its result does not
-            # read day 28's and its second day cannot change.
-            _saved_day(connection, player, END, NEXT_SEASON, attacks=1)
-            _saved_day(connection, player, END + DAY, NEXT_SEASON)
+            report = _report(connection, player, opponent, day28)
+            previous = _calculated_day(connection, player, day28, start=5000, end=5017,
+                                       attacks=[(report, 18)])
+            # The next Season's first day only attacked, so it reads nothing
+            # of day 28 that its correction changes.
+            _calculated_day(connection, player, END, start=5017, end=5047,
+                            attacks=[(800_000, 30)], previous=previous)
         domain_repair.register(worker, SEASON, now=NOW)
-        # Day 28 ends at the October 5 Reset; the next Season's first day
-        # starts from it, and only that day of the next Season is listed.
         assert [row[0] for row in _items(connection_info, "publication")] == [
-            _key("boundary", END), _key("boundary", END + DAY)
+            _key("boundary", END)
         ]
-        days = _items(connection_info, "day")
-        assert [(row[0], row[4]) for row in days] == [
-            (_key("day", player, day28), SEASON), (_key("day", player, END), NEXT_SEASON)
+        assert [(row[0], row[4]) for row in _items(connection_info, "day")] == [
+            (_key("day", player, day28), SEASON)
         ]
-        # After September's window closes, the October day is still open.
         late = domain_repair.preview(worker, SEASON, now=DEADLINE)
         assert not late["open"]
         assert late["excluded"] == {"raw_unavailable": 1, "window_expired": 2}
-        assert late["items"] == {"source": 1, "day": 2, "publication": 2}
+        assert late["items"] == {"source": 1, "day": 1, "publication": 1}
 
 
-def test_campaign_follows_next_season_days_that_can_change(database_url: str) -> None:
+def test_campaign_follows_next_season_days_a_correction_changes(database_url: str) -> None:
     with _campaign_database(database_url) as (connection_info, worker):
+        day28 = END - DAY
         with _owner(connection_info) as connection:
-            player, opponent = _player(connection, "#CHAIN"), _player(connection, "#IDLE")
-            day28 = END - DAY
-            _report(connection, player, opponent, day28)
-            _saved_day(connection, player, day28)
-            # Day 1's one defense takes its automatic loss from day 28's
-            # defenses, so day 28's 17 can make it Complete, which day 2's
-            # automatic loss needs. Day 2 only attacked, so day 3 cannot change.
-            _saved_day(connection, player, END, NEXT_SEASON, state="Partial", defenses=1)
-            _saved_day(connection, player, END + DAY, NEXT_SEASON, attacks=1)
-            _saved_day(connection, player, END + 2 * DAY, NEXT_SEASON)
-            # Days with no battles carry the chain, but never past the window.
-            _report(connection, opponent, player, day28)
-            for day in range(9):
-                _saved_day(connection, opponent, day28 + day * DAY,
-                           SEASON if day == 0 else NEXT_SEASON)
-        domain_repair.register(worker, SEASON, now=NOW)
-        days = [row[0] for row in _items(connection_info, "day")]
-        assert sorted(days) == sorted(
-            [_key("day", player, day) for day in (day28, END, END + DAY)]
-            + [_key("day", opponent, day28 + day * DAY) for day in range(8)]
+            chain, short = _player(connection, "#CHAIN"), _player(connection, "#SHORT")
+            opponent = _player(connection, "#OPP")
+            for player in (chain, short):
+                # Day 28's eight defenses lost 227, its 2-star/55% one saved
+                # as 18, so day 28 is Inconsistent until corrected to 17.
+                report = _report(connection, player, opponent, day28, perspective="defender")
+                previous = _calculated_day(
+                    connection, player, day28, start=5500, end=5273,
+                    defenses=[(report, 18), *((900_000 + n, 30) for n in range(7))],
+                )
+                # Each next-Season day's one 20-trophy defense takes its
+                # automatic loss from the day before, so it is Partial until
+                # day 28, then each day after it, turns Complete.
+                trophies, losses = 5273, [189, *[140] * 7]
+                for number, loss in enumerate(losses):
+                    day = END + number * DAY
+                    if player == short and number == 2:
+                        # Only attacking, day 3 reads nothing that changes.
+                        previous = _calculated_day(
+                            connection, player, day, start=trophies, end=trophies + 30,
+                            attacks=[(800_000, 30)], previous=previous,
+                        )
+                        break
+                    previous = _calculated_day(
+                        connection, player, day, start=trophies,
+                        end=trophies - 20 - loss, defenses=[(800_000, 20)],
+                        previous=previous,
+                    )
+                    trophies -= 20 + loss
+        domain_repair.register(worker, SEASON, now=DEADLINE - timedelta(hours=1))
+        assert sorted(row[0] for row in _items(connection_info, "day")) == sorted(
+            [_key("day", short, day) for day in (day28, END, END + DAY)]
+            # The day starting at the window's close is never listed.
+            + [_key("day", chain, day28 + number * DAY) for number in range(8)]
         )
-        # The last listed Reset is the window's close.
         assert {row[0] for row in _items(connection_info, "publication")} == {
-            _key("boundary", END + day * DAY) for day in range(8)
+            _key("boundary", END + number * DAY) for number in range(8)
         }
+
+
+def test_campaign_follows_a_move_out_of_next_season_first_day(database_url: str) -> None:
+    with _campaign_database(database_url) as (connection_info, worker):
+        day28 = END - DAY
+        with _owner(connection_info) as connection:
+            player, opponent = _player(connection, "#NINE"), _player(connection, "#OPP")
+            # A 30-trophy defense two minutes after the Reset belongs to day
+            # 28; its report is saved there, but day 1's result still counts it.
+            moved = _report(connection, player, opponent, day28, perspective="defender",
+                            at=END + timedelta(minutes=2), destruction=56)
+            connection.execute(
+                """
+                INSERT INTO battle_day_repairs (
+                    from_battle_id, to_battle_id, perspective, evidence_id,
+                    attacker_player_id, defender_player_id, from_day, to_day
+                ) SELECT 0, battle_id, 'defender', id, %s, %s, %s, %s
+                FROM battle_evidence WHERE id = %s
+                """,
+                (opponent, player, END, day28, moved),
+            )
+            connection.execute(
+                "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
+                " version, state, coverage, battles) VALUES (%s, %s, 1, 'Partial',"
+                " 'complete', %s)",
+                (player, END, Jsonb([{"source_evidence_id": moved}])),
+            )
+            previous = _calculated_day(connection, player, day28, start=5300, end=5270)
+            # Nine defenses make day 1 Inconsistent; without the moved one
+            # its eight explain its trophies, and day 2 can take its
+            # automatic loss from it: (160 + 20) // 9 * 7 = 140.
+            previous = _calculated_day(
+                connection, player, END, start=5270, end=5110, previous=previous,
+                defenses=[(moved, 30), *((900_000 + n, 20) for n in range(8))],
+            )
+            previous = _calculated_day(connection, player, END + DAY, start=5110, end=4950,
+                                       defenses=[(800_000, 20)], previous=previous)
+            _calculated_day(connection, player, END + 2 * DAY, start=4950, end=4980,
+                            attacks=[(800_001, 30)], previous=previous)
+        domain_repair.register(worker, SEASON, now=END + 3 * DAY)
+        assert [row[:2] for row in _items(connection_info, "day")] == [
+            (_key("day", player, day28), ["moved"]),
+            (_key("day", player, END), ["moved"]),
+            (_key("day", player, END + DAY), ["dependency"]),
+        ]
+        assert [row[0] for row in _items(connection_info, "publication")] == [
+            _key("boundary", END + number * DAY) for number in range(3)
+        ]
 
 
 def test_campaign_lists_only_moves_not_yet_published(database_url: str) -> None:

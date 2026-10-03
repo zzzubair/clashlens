@@ -13,10 +13,10 @@ campaign lists everything they change once, for one coordinated rebuild:
   selected reports need only a catalogue v2 decode.
 - ``day``: one player's saved Legend day, from the first their own reports
   change through every later saved day of the Season, then each next-Season
-  day whose day before can still change, before the correction window closes.
-  A day reads its day before's completeness and defenses only when its own
-  coverage is complete and it had 1 to 7 defenses, or no battles; the chain
-  stops after the first next-Season day that reads neither.
+  day whose result the corrections change, found by calculating the player's
+  saved days again from their saved inputs, as found and as corrected. The
+  first next-Season day whose result is unchanged ends the list, as does the
+  correction window's close.
 - ``publication``: one Reset whose publication uses a listed day or decode.
 
 A payout report whose raw response is gone, or an item in a finalized Season
@@ -33,9 +33,10 @@ At the Season's end plus seven days the command refuses every write for it.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -51,8 +52,18 @@ from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     SEASON_DURATION,
     TROPHY_ALLOCATION_RULE_VERSION,
+    allocate_trophies,
+    ranked_day_for,
 )
-from .reconciliation import RECONCILIATION_RULE_VERSION
+from .reconciliation import (
+    RECONCILIATION_RULE_VERSION,
+    BattleContribution,
+    CoverageObservation,
+    PreviousRankedDay,
+    ReconciliationInput,
+    ReconciliationResult,
+    reconcile_ranked_day,
+)
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 ACTIONS = ("preview", "register", "activate")
@@ -100,7 +111,7 @@ def boundary_held(connection: Any, boundary_at: datetime) -> bool:
 
 
 _INVENTORY = """
-WITH RECURSIVE selected AS (
+WITH selected AS (
     SELECT p.battle_id, p.evidence_id, b.ranked_day_start, e.stars,
            e.destruction_percentage, e.trophy_rule_version, e.army_share_code,
            date_bin('1 day', e.battle_timestamp - %(grace)s,
@@ -145,32 +156,17 @@ WITH RECURSIVE selected AS (
     SELECT player_id, boundary_at - interval '1 day', 'settlement'
     FROM reset_boundary_settlements
     WHERE state = 'settled' AND boundary_at > %(start)s AND boundary_at <= %(end)s
-), saved AS (
-    SELECT DISTINCT ON (v.player_id, v.ranked_day_start)
-           v.player_id, v.ranked_day_start, v.official_season_id,
-           v.coverage_complete AND (v.defense_count BETWEEN 1 AND 7
-               OR v.attack_count = 0 AND v.defense_count = 0) AS reads_previous
+), days AS (
+    SELECT v.player_id, v.ranked_day_start, min(v.official_season_id) AS season,
+           coalesce(array_agg(DISTINCT t.reason) FILTER (WHERE t.reason IS NOT NULL),
+                    ARRAY['dependency']) AS reasons
     FROM (SELECT player_id, min(day) AS first_day FROM touched GROUP BY 1) AS chain
     JOIN ranked_day_versions AS v
       ON v.player_id = chain.player_id
-     AND v.ranked_day_start >= chain.first_day AND v.ranked_day_start < %(deadline)s
-    ORDER BY v.player_id, v.ranked_day_start, v.version DESC
-), reached AS (
-    SELECT * FROM saved WHERE ranked_day_start <= %(end)s
-    UNION ALL
-    SELECT later.* FROM reached
-    JOIN saved AS later
-      ON later.player_id = reached.player_id
-     AND later.ranked_day_start = reached.ranked_day_start + interval '1 day'
-    WHERE reached.ranked_day_start >= %(end)s AND reached.reads_previous
-), days AS (
-    SELECT r.player_id, r.ranked_day_start, r.official_season_id AS season,
-           coalesce(array_agg(DISTINCT t.reason) FILTER (WHERE t.reason IS NOT NULL),
-                    ARRAY['dependency']) AS reasons
-    FROM reached AS r
+     AND v.ranked_day_start >= chain.first_day AND v.ranked_day_start < %(end)s
     LEFT JOIN touched AS t
-      ON t.player_id = r.player_id AND t.day = r.ranked_day_start
-    GROUP BY 1, 2, 3
+      ON t.player_id = v.player_id AND t.day = v.ranked_day_start
+    GROUP BY 1, 2
 )
 SELECT 'source', 'evidence:' || evidence_id,
        reasons || CASE WHEN evidence_id IN (SELECT evidence_id FROM needs_decode)
@@ -228,9 +224,8 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
     }
     from .battle_day_repair import UNFINISHED_MOVES
 
-    end, deadline = campaign_window(start)
     parameters = {
-        "start": start, "end": end, "deadline": deadline, "grace": BATTLE_DAY_GRACE,
+        "start": start, "end": campaign_window(start)[0], "grace": BATTLE_DAY_GRACE,
         "old_rule": HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
         "decoder": DECODER_VERSION, "catalog": CATALOG_VERSION,
     }
@@ -242,6 +237,9 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
                     reasons=sorted({_text_value(value) for value in item["reasons"]}))
         if item["battle_ids"] is not None:
             item["battle_ids"] = sorted(item["battle_ids"])
+        items.append(item)
+    items += _next_season_items(connection, items, start, now)
+    for item in items:
         # A moved battle can reach the previous Season's last day, and day
         # 28's end the next Season's first: each keeps its own window.
         day = item["ranked_day_start"] or (
@@ -255,8 +253,199 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
             item["exclusion"] = "season_finalized"
         elif item["exclusion"] is None and now >= campaign_window(own_start)[1]:
             item["exclusion"] = "window_expired"
-        items.append(item)
     return items
+
+
+def _next_season_items(
+    connection: Any, items: list[dict], start: datetime, now: datetime
+) -> list[dict]:
+    """Next-Season days the corrections change, and the Resets ending them.
+
+    Each corrected player's saved days, from their first changed day, are
+    calculated again from their saved inputs as found and as corrected: 17
+    for a listed 2-star/55% report, a moved report on its new day, a settled
+    Reset's trophies, and the corrected day before. A next-Season day is
+    listed while its corrected result differs; the first unchanged day, or
+    the correction window's close, ends the player's list.
+    """
+    end, deadline = campaign_window(start)
+    first: dict[int, datetime] = {}
+    reasons: dict[tuple[int, datetime], set[str]] = defaultdict(set)
+    payouts: set[int] = set()
+    moves: dict[int, tuple[datetime, datetime]] = {}
+    for item in items:
+        if item["kind"] != "source":
+            continue
+        player_id = item["player_id"]
+        for day in (item["from_day"], item["to_day"]):
+            first[player_id] = min(day, first.get(player_id, day))
+            reasons[player_id, day].update({"payout", "moved"} & set(item["reasons"]))
+        if "payout" in item["reasons"]:
+            payouts.add(item["evidence_id"])
+        if item["from_day"] != item["to_day"]:
+            moves[item["evidence_id"]] = (item["from_day"], item["to_day"])
+    settled: dict[tuple[int, datetime], int] = {}
+    for player_id, boundary_at, trophies in connection.execute(
+        "SELECT player_id, boundary_at, selected_trophies FROM reset_boundary_settlements"
+        " WHERE state = 'settled' AND boundary_at > %s AND boundary_at <= %s",
+        (start, end),
+    ).fetchall():
+        settled[player_id, boundary_at] = trophies
+        day = boundary_at - RANKED_DAY_DURATION
+        first[player_id] = min(day, first.get(player_id, day))
+    if not first:
+        return []
+    saved: dict[int, dict[datetime, tuple[Any, dict]]] = defaultdict(dict)
+    for player_id, day, season, evidence in connection.execute(
+        """
+        SELECT DISTINCT ON (v.player_id, v.ranked_day_start)
+               v.player_id, v.ranked_day_start, v.official_season_id, v.input_evidence
+        FROM ranked_day_versions AS v
+        WHERE v.player_id = ANY(%(players)s)
+          AND v.ranked_day_start >= %(first)s AND v.ranked_day_start < %(deadline)s
+          AND EXISTS (
+              SELECT 1 FROM ranked_day_versions AS next_season
+              WHERE next_season.player_id = v.player_id
+                AND next_season.ranked_day_start = %(end)s
+          )
+        ORDER BY v.player_id, v.ranked_day_start, v.version DESC, v.id DESC
+        """,
+        {"players": list(first), "first": min(first.values()),
+         "end": end, "deadline": deadline},
+    ).fetchall():
+        if day >= first[player_id]:
+            saved[player_id][day] = (season, evidence)
+
+    found: dict[datetime, set[str]] = defaultdict(set)
+    listed = []
+    for player_id, days in saved.items():
+        reports = {
+            contribution["source_evidence_id"]: contribution
+            for _, evidence in days.values() for contribution in evidence["contributions"]
+        }
+        corrected: dict[datetime, ReconciliationResult] = {}
+        for day in sorted(days):
+            season, evidence = days[day]
+            current = _saved_input(evidence, now)
+            kept = [
+                contribution for contribution in evidence["contributions"]
+                if moves.get(contribution["source_evidence_id"], (None,))[0] != day
+            ]
+            kept += [
+                reports[evidence_id] for evidence_id, (_, to_day) in moves.items()
+                if to_day == day and evidence_id in reports
+                and evidence_id not in {c["source_evidence_id"] for c in kept}
+            ]
+            before = corrected.get(day - RANKED_DAY_DURATION)
+            fixed = dataclasses.replace(
+                current,
+                contributions=tuple(_contribution(c, c["source_evidence_id"] in payouts)
+                                    for c in kept),
+                start_trophies=settled.get((player_id, day), current.start_trophies),
+                next_start_trophies=settled.get(
+                    (player_id, day + RANKED_DAY_DURATION), current.next_start_trophies
+                ),
+                previous_day=current.previous_day if before is None else PreviousRankedDay(
+                    complete=before.state == "Complete" and before.coverage_complete,
+                    observed_defense_count=before.defense_count,
+                    observed_defense_loss=before.observed_defense_loss,
+                    shield_run_length=(
+                        before.shield_duration_days or 0
+                        if before.shield_state == "inferred_shielded" else 0
+                    ),
+                    coverage_complete=before.coverage_complete,
+                    shield_state=before.shield_state,
+                    ranked_day_start=day - RANKED_DAY_DURATION,
+                    state=before.state,
+                    confidence=before.confidence,
+                ),
+            )
+            corrected[day] = reconcile_ranked_day(fixed)
+            if day < end:
+                continue
+            if _outcome(fixed, corrected[day]) == _outcome(
+                current, reconcile_ranked_day(current)
+            ):
+                break
+            day_reasons = sorted(reasons.get((player_id, day)) or {"dependency"})
+            found[day + RANKED_DAY_DURATION].update(day_reasons)
+            listed.append(_item(
+                "day", f"day:{player_id}:{int(day.timestamp())}", day_reasons,
+                player_id=player_id, ranked_day_start=day, official_season_id=season,
+            ))
+    return listed + [
+        _item("publication", f"boundary:{int(boundary_at.timestamp())}", sorted(names),
+              boundary_at=boundary_at)
+        for boundary_at, names in found.items()
+    ]
+
+
+def _item(kind: str, target_key: str, reasons: list[str], **values: Any) -> dict:
+    return {**dict.fromkeys(_COLUMNS), "kind": kind, "target_key": target_key,
+            "reasons": reasons, **values}
+
+
+def _outcome(data: ReconciliationInput, result: ReconciliationResult) -> tuple:
+    """What a day passes on: its trophies, completeness and defenses."""
+    return (
+        data.start_trophies, result.state, result.automatic_defense_loss,
+        result.final_trophies_before_reset, result.defense_count,
+        result.observed_defense_loss, result.shield_state, result.shield_duration_days,
+    )
+
+
+def _when(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
+
+
+def _known(kind: type, values: dict) -> dict:
+    names = {field.name for field in dataclasses.fields(kind)}
+    return {name: value for name, value in values.items() if name in names}
+
+
+def _contribution(saved: dict, payout: bool = False) -> BattleContribution:
+    """One saved contribution, with the 2-star/55% payout corrected."""
+    values = {**_known(BattleContribution, saved),
+              "source_observed_at": _when(saved["source_observed_at"]),
+              "battle_timestamp": _when(saved["battle_timestamp"])}
+    if payout:
+        allocation = allocate_trophies(saved["stars"], saved["destruction_percentage"])
+        values.update(
+            trophy_amount=(allocation.attacker_gain if saved["lens"] == "offense"
+                           else allocation.defender_loss),
+            attacker_gain=allocation.attacker_gain,
+            defender_loss=allocation.defender_loss,
+            source_rule_version=allocation.rule_version,
+        )
+    return BattleContribution(**values)
+
+
+def _saved_input(evidence: dict, now: datetime) -> ReconciliationInput:
+    """The inputs a saved day result was calculated from."""
+    rules, previous = evidence["rule_versions"], evidence["previous_day"]
+    return ReconciliationInput(**{
+        **_known(ReconciliationInput, evidence),
+        "ranked_day": ranked_day_for(_when(evidence["ranked_day_start"])),
+        "now": now,
+        "coverage_observations": tuple(
+            CoverageObservation(**{
+                **_known(CoverageObservation, observation),
+                "observed_at": _when(observation["observed_at"]),
+                "battle_identities": tuple(observation["battle_identities"]),
+                "source_row_ids": tuple(observation["source_row_ids"]),
+            })
+            for observation in evidence["coverage_observations"]
+        ),
+        "contributions": tuple(map(_contribution, evidence["contributions"])),
+        "previous_day": previous and PreviousRankedDay(**{
+            **previous, "ranked_day_start": _when(previous["ranked_day_start"]),
+        }),
+        "parser_version": rules["parser"],
+        "processing_version": rules["processing"],
+        "domain_rule_version": rules["domain"],
+        "season_anchor_rule_version": rules["season_anchor"],
+        "trophy_allocation_rule_versions": tuple(rules["trophy_allocation"]),
+    })
 
 
 def _summary(items: list[dict]) -> dict[str, Any]:
