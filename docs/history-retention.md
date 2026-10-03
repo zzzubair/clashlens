@@ -75,16 +75,34 @@ counted back from them. A Season whose window cannot be established, or
 a stored window that is missing or disagrees with it, blocks; every
 blocked result carries `eligible_at` whenever the window is known. Player
 and army summaries still build and refresh as soon as the Season ends;
-only closing waits. The wait is a clock check only: it does not yet
-prove that every late battle, replay or correction has been processed.
+only closing waits. The wait is a clock check only; the close guard below
+checks the work.
 
 Finalization verifies the season ended
 under the same completed-season gate, every required player summary and
 every army lens/category matches its current projection (complete or
 explicitly partial summaries are accepted; missing rows, stale digests,
-or unexplained failures block), and season-scoped processing, replay,
-publication-generation, and correction work is terminal. Unknown fails
-closed. The applied `finalized` record fences writers atomically before
+or unexplained failures block), and then asks the close guard
+(`season_finalization_guard.py`). Retirement asks it again on every run,
+so a `finalized` record, including one older code wrote, is never enough.
+Arrival time never excuses work. The guard blocks on any processing job
+that is not complete with a success outcome, unless its own dates prove
+it cannot touch the Season: a response saved before the Legend day ahead
+of the Season, a Legend day outside that day to the closing day, a Reset
+outside Season start to Season end, or an army redecode whose battles all
+fall on other Seasons' days. A job whose source, dates or battles cannot
+be read, an export or an unknown kind of work stays in scope. It also
+blocks on any saved response from the Legend day before the Season
+onwards whose newest processing outcome is not `processed` (finished-job
+cleanup keeps outcomes, so a missing job proves nothing); any replay
+request for such a response that is not complete; any publication
+generation at a Reset from Season start to Season end, the closing Reset
+included, that is not published; and any correction from Season start
+onwards that is not finalized with a published generation. A missing table, failed query or check over 10 seconds blocks.
+Each blocker lists at most five example ids under `blocking_work`. Until
+the expanded history above can be checked, it also always reports
+`promised_history: ["expanded_history_unavailable"]`, so no Season can
+close yet. The applied `finalized` record fences writers atomically before
 any deletion. Retirement then deletes all `api_player_daily_logs` for
 the season, its `army_analytics_battle_facts`, redundant
 `army_analytics_completed_days` markers and their `army_analytics_day_totals`
