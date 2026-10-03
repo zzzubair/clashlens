@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation
 from test_domain_processing_postgres import _role_connection
 from test_reconciliation_postgres import BATTLE_FIXTURE, DAY_END, _processor, _profile
@@ -610,8 +611,9 @@ def test_a_response_rechecks_a_reset_judged_while_it_waited(
             database.close()
 
 
+@pytest.mark.parametrize("path", ["current", "before_content_dedup"])
 def test_battle_log_takes_its_reset_locks_before_any_army_or_generation_row(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, path: str
 ) -> None:
     monkeypatch.setenv(SWITCH, "true")
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -623,6 +625,8 @@ def test_battle_log_takes_its_reset_locks_before_any_army_or_generation_row(
         _, job = _save(connection_info, archive_server, "battle_log",
                        json.dumps(body).encode(), RESET + 50 * MINUTE)
         database, processor = _processor(connection_info, archive_server)
+        # The older battle-log path, still used before parsed-content dedup.
+        database._supports_content_dedup = path == "current"
         try:
             with psycopg.connect(connection_info) as holder, ThreadPoolExecutor(1) as pool:
                 # The completed Reset pair created the Reset's publication record.
