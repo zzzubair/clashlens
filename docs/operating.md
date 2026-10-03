@@ -464,11 +464,14 @@ Check the Armies page against the
 **Repair campaign:** `--campaign preview --season <Season ID>` lists, without
 writing anything, every report, decode, player day and Reset publication of
 that Season that the 2-star/55% payout, five-minute day move, catalogue v2
-decodes and accepted Reset settlements change, and which are excluded (raw
-response gone, Season finalized, correction window closed). `--campaign
-register` saves that list as a dormant campaign that holds nothing and queues
-nothing; registering again replaces it with what is still outstanding. `--campaign activate` refuses until every repair stage is installed;
-an active campaign holds its listed Reset publications until each is done.
+decodes and accepted Reset settlements change, plus each affected player's
+first saved day of the next Season, to recalculate, and which are excluded
+(raw response gone, Season finalized, correction window closed). Later
+next-Season days are left to the repair itself. `--campaign register` saves
+that list as a dormant campaign that holds nothing and queues nothing;
+registering again replaces it with what is still outstanding. `--campaign
+activate` refuses until every repair stage is installed; an active campaign
+holds its listed Reset publications until each is done.
 Every campaign write for a Season is refused from its end plus seven days
 (September 2026: from 2026-10-12 05:00 UTC). On 2026-10-03 a September
 preview read 590 reports, 102,381 battles needing decodes in 4,653 batches,

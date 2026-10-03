@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0063.
+-- Clash Lens deployment migration 0064.
 -- One saved repair campaign per Season: the reports, player days and Reset
 -- publications that the 2-star/55% payout fix, the five-minute battle day
 -- move, the unit catalogue v2 decodes and accepted Reset settlements change.
@@ -86,6 +86,6 @@ GRANT DELETE ON domain_repair_items TO clashlens_python_worker;
 GRANT USAGE ON SEQUENCE domain_repair_campaigns_id_seq,
     domain_repair_items_id_seq TO clashlens_python_worker;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (63)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (64)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;
