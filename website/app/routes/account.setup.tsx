@@ -190,8 +190,9 @@ export default function AccountSetupRoute() {
       <section className="hero" aria-labelledby="setup-title">
         <h1 id="setup-title">Create your account</h1>
         <p className="lede">
-          Choose a unique username and a display name. Your Google identity is never shown
-          publicly and your email address is never used.
+          Choose a unique username and a display name. You can't change your username
+          later. Your sign-in identity is never shown publicly and your email address is
+          never used.
         </p>
       </section>
 

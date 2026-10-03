@@ -107,7 +107,9 @@ export async function action({ request }: Route.ActionArgs) {
       idempotencyKey,
     );
     if (result.status === "linked" || result.status === "already_linked") {
-      return redirect("/account", { status: 303, headers: NO_STORE });
+      // The profile confirms the link by showing this tag.
+      const linked = encodeURIComponent(result.tag ?? (tag as string));
+      return redirect(`/account?linked=${linked}`, { status: 303, headers: NO_STORE });
     }
     return data<VerifyPlayerActionData>(
       {
@@ -194,9 +196,9 @@ export default function VerifyPlayerRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="verify-title">
-        <h1 id="verify-title">Link account</h1>
+        <h1 id="verify-title">Link your Clash player</h1>
         <p className="lede">
-          Link a Clash of Clans account you own to your Clash Lens profile.
+          Link a Clash of Clans player you own to your Clash Lens profile.
         </p>
       </section>
 
@@ -215,7 +217,7 @@ export default function VerifyPlayerRoute() {
         </div>
       ) : null}
 
-      <section className="form-panel" aria-label="Link account form">
+      <section className="form-panel" aria-label="Link your Clash player form">
         <h2>Enter your player tag and API token</h2>
         <form method="post" className="stack-form" noValidate>
           <input
@@ -281,7 +283,7 @@ export default function VerifyPlayerRoute() {
             </p>
           </div>
           <button type="submit" className="button button-primary">
-            Link account
+            Link player
           </button>
         </form>
       </section>

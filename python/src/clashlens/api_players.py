@@ -579,10 +579,12 @@ def search_known_players(
                        WHERE history.player_id = player.id LIMIT 1)
                    OR (SELECT true FROM player_league_history_entries AS history
                        WHERE history.player_id = player.id LIMIT 1))
-            ORDER BY lower(player.name), player.normalized_tag
+            -- An exact name match first, then the strongest players.
+            ORDER BY lower(player.name) = lower(%s) DESC, player.trophies DESC,
+                     lower(player.name), player.normalized_tag
             LIMIT %s
             """,
-            (f"%{escaped_query}%", limit),
+            (f"%{escaped_query}%", query, limit),
         ).fetchall()
         results = []
         for row in rows:

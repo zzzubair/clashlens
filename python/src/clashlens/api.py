@@ -109,7 +109,8 @@ class SavedTagBody(StrictBody):
 
 class GroupBody(StrictBody):
     name: str = Field(min_length=1, max_length=80)
-    tags: list[str] = Field(max_length=100)
+    # A group holds no more players than its comparison can show.
+    tags: list[str] = Field(max_length=api_groups.MAX_COMPARED_MEMBERS)
 
 
 class ProviderLinkBody(StrictBody):

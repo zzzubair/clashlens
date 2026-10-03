@@ -478,8 +478,8 @@ describe("automatic tag lookup", () => {
 
   it.each([
     ["not_found", "Player not found"],
-    ["not_in_legend", "not in Legend I"],
-    ["uncertain", "could not confirm"],
+    ["not_in_legend", "not in Legend I. Clash Lens tracks Legend League players only."],
+    ["uncertain", "Clash Lens tracks Legend League players only."],
     ["failed", "could not finish checking"],
   ])(
     "shows %s honestly and preserves saved seasons without another lookup",
@@ -491,11 +491,24 @@ describe("automatic tag lookup", () => {
       } as never);
       const html = await renderRoute(result);
       expect(html).toContain(message);
+      const visible = html.split("<script")[0];
+      expect(visible).not.toContain("The requested player data is not available.");
       expect(html).toContain("Historical seasons");
       expect(html).not.toContain("Current trophies");
       expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
     },
   );
+
+  it("tells a Clasher to check a mistyped tag instead of refreshing", async () => {
+    const result = await playerLoader({
+      request: new Request("https://clashlens.example/players/not-a-tag"),
+      params: { tag: "not-a-tag" },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain("The submitted player tag is not valid.");
+    expect(html).toContain("Check the tag and try again.");
+    expect(html).not.toContain("Try refreshing");
+  });
 
   it("hides the old current profile when newer evidence says the player left Legend I", async () => {
     mocks.createPythonClient.mockReturnValue({
@@ -534,7 +547,7 @@ describe("automatic tag lookup", () => {
       } as never);
       const html = await renderRoute(result);
       expect(html).toContain(result.lookupError!.error.message);
-      expect(html).toContain("could not confirm their Legend I eligibility");
+      expect(html).toContain("could not confirm they are in Legend I");
       expect(html).toContain("Historical seasons");
       expect(html).toContain(
         season === null ? "Saved Legend history" : "Daily trophy totals",

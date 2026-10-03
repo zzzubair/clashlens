@@ -24,7 +24,9 @@ export const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
 ]);
 
 export const MAX_NAME_LENGTH = 80;
-export const MAX_GROUP_TAGS = 100;
+// Matches the most players a group comparison shows (MAX_COMPARED_MEMBERS in
+// python/src/clashlens/api_groups.py).
+export const MAX_GROUP_TAGS = 20;
 export const MAX_VERIFICATION_TOKEN_LENGTH = 512;
 
 /** Canonical player tag for account forms, which accept an optional leading `#`. */

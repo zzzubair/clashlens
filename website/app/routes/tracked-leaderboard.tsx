@@ -301,10 +301,16 @@ export default function TrackedLeaderboardRoute() {
               <h2 id="standings-table-title">Standings</h2>
               <p>
                 {entries.length > 0
-                  ? `Ranks ${entries[0].rank}–${entries[entries.length - 1].rank}`
+                  ? `Ranks ${entries[0].rank.toLocaleString()}–${entries[entries.length - 1].rank.toLocaleString()}`
                   : "No listed players"}
                 {` · ${leaderboard.totalEntries.toLocaleString()} listed · ${leaderboard.totalTracked.toLocaleString()} tracked players`}
               </p>
+              {leaderboard.totalTracked > leaderboard.totalEntries ? (
+                <p>
+                  Tracked players are listed once Clash Lens confirms their current
+                  profile.
+                </p>
+              ) : null}
             </div>
             {entries.length > 0 ? (
               <span className="page-position">

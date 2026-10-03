@@ -415,7 +415,7 @@ describe("logout route", () => {
     ).resolves.toEqual(IDENTITY);
   });
 
-  it("answers 503 but still clears this browser when the logout cannot be recorded", async () => {
+  it("returns home with a notice and still clears this browser when the logout cannot be recorded", async () => {
     const config = testConfig();
     const nowSeconds = Math.floor(Date.now() / 1000);
     const login = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds - 60);
@@ -427,8 +427,8 @@ describe("logout route", () => {
         body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
       }),
     } as never)) as Response;
-    expect(response.status).toBe(503);
-    expect(response.headers.get("Location")).toBeNull();
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe("/?logout=unrecorded");
     expect(response.headers.getSetCookie()).toEqual([
       `${LOGIN_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Secure`,
     ]);

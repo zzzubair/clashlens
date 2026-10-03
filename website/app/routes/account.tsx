@@ -3,6 +3,7 @@ import { Link, redirect, useLoaderData } from "react-router";
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { AccountSummary } from "../lib/account-contracts";
 import type { WebsiteErrorResponse } from "../lib/contracts";
+import { normalizePlayerTag } from "../lib/player-tag";
 import type { Route } from "./+types/account";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -15,6 +16,7 @@ export interface AccountLoaderData {
 /**
  * GET /account — open the signed-in user's public profile. The
  * provider identity signs the private Python calls and never appears here.
+ * A `linked` player tag passes through so the profile can confirm the link.
  */
 export async function loader({ request }: Route.LoaderArgs): Promise<AccountLoaderData> {
   const { requireLogin } = await import("../server/auth-guard.server");
@@ -31,7 +33,11 @@ export async function loader({ request }: Route.LoaderArgs): Promise<AccountLoad
     error = await safeError(cause);
   }
   if (summary) {
-    throw redirect(`/users/${encodeURIComponent(summary.username)}`, {
+    const linked = normalizePlayerTag(
+      new URL(request.url).searchParams.get("linked") ?? "",
+    );
+    const query = linked ? `?linked=${encodeURIComponent(linked)}` : "";
+    throw redirect(`/users/${encodeURIComponent(summary.username)}${query}`, {
       headers: NO_STORE,
     });
   }
