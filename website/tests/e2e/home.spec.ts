@@ -6,6 +6,10 @@ test("fan content notice is exact, linked and readable on phones in both themes"
   await page.setViewportSize({ width: 320, height: 812 });
   await page.goto("/");
   const footer = page.getByRole("contentinfo");
+  await expect(footer.getByRole("link", { name: "Blog" })).toHaveAttribute(
+    "href",
+    "/blog",
+  );
   await expect(footer.locator("p")).toHaveText(
     "This material is unofficial and is not endorsed by Supercell. For more information see Supercell's Fan Content Policy: www.supercell.com/fan-content-policy.",
   );
