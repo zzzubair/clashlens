@@ -73,6 +73,45 @@ def reevaluate_boundary_publications(database) -> int:
                 (boundaries,),
             ).fetchall()
             for generation_id, boundary_at in generations:
+                # A player 0057 moved a battle of may have been saved pending
+                # before readiness followed the move; check them again.
+                for player_id, version_id, snapshot_status in connection.execute(
+                    """
+                    SELECT member.player_id, member.ranked_day_version_id,
+                           member.snapshot_status
+                    FROM boundary_publication_generation_members AS member
+                    JOIN boundary_publication_generations AS generation
+                      ON generation.id = member.generation_id
+                    WHERE member.generation_id = %s
+                      AND generation.army_state = 'pending'
+                      AND member.army_status = 'pending'
+                      AND member.ranked_day_version_id IS NOT NULL
+                      AND member.player_id IN (
+                          SELECT attacker_player_id FROM battle_day_repairs
+                          UNION
+                          SELECT defender_player_id FROM battle_day_repairs
+                      )
+                    ORDER BY member.player_id
+                    FOR UPDATE OF member
+                    """,
+                    (generation_id,),
+                ).fetchall():
+                    army_status = boundary._boundary_army_status(
+                        database,
+                        connection,
+                        player_id=int(player_id),
+                        ranked_day_version_id=int(version_id),
+                        snapshot_status=_text_value(snapshot_status),
+                    )
+                    if army_status != "pending":
+                        connection.execute(
+                            """
+                            UPDATE boundary_publication_generation_members
+                            SET army_status = %s, updated_at = clock_timestamp()
+                            WHERE generation_id = %s AND player_id = %s
+                            """,
+                            (army_status, int(generation_id), int(player_id)),
+                        )
                 boundary._try_enqueue_boundary_artifacts(
                     database,
                     connection,

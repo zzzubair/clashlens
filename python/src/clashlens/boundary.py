@@ -7,6 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from . import battle_day_repair
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
@@ -437,26 +438,33 @@ def _freeze_boundary_manifest(
             identity["daily_log_id"] = int(daily_log[0]) if daily_log else None
             battle_ids: list[int] = []
             decode_ids: list[int] = []
+            moved: dict[tuple[int, str], int] = {}
             if daily_log is not None and isinstance(daily_log[1], list):
-                battle_ids = [
-                    int(event["battle_id"])
+                sides = [
+                    (int(event["battle_id"]), event.get("lens"))
                     for event in daily_log[1]
                     if isinstance(event, dict)
                     and str(event.get("battle_id", "")).isdigit()
                 ]
+                battle_ids = [battle_id for battle_id, _lens in sides]
                 if battle_ids:
-                    decode_ids = [
-                        int(row[0])
-                        for row in connection.execute(
-                            """
-                            SELECT id FROM battle_army_decodes
-                            WHERE battle_id = ANY(%s::bigint[]) AND is_active
-                              AND decoder_version = %s AND catalog_version = %s
-                            ORDER BY id
-                            """,
-                            (battle_ids, DECODER_VERSION, CATALOG_VERSION),
-                        ).fetchall()
-                    ]
+                    moved = _moved_sides(connection, sides)
+                    decode_ids = sorted(
+                        {
+                            *(
+                                int(row[0])
+                                for row in connection.execute(
+                                    """
+                                    SELECT id FROM battle_army_decodes
+                                    WHERE battle_id = ANY(%s::bigint[]) AND is_active
+                                      AND decoder_version = %s AND catalog_version = %s
+                                    """,
+                                    (battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                                ).fetchall()
+                            ),
+                            *_moved_decode_ids(connection, moved),
+                        }
+                    )
             evidence_ids: list[int] = []
             if daily_log is not None and isinstance(daily_log[1], list):
                 for event in daily_log[1]:
@@ -475,7 +483,13 @@ def _freeze_boundary_manifest(
                         WHERE perspective.battle_id = %s
                           AND perspective.perspective = %s
                         """,
-                        (int(event["battle_id"]), perspective),
+                        (
+                            moved.get(
+                                (int(event["battle_id"]), event.get("lens")),
+                                int(event["battle_id"]),
+                            ),
+                            perspective,
+                        ),
                     ).fetchone()
                     if evidence_row is not None:
                         evidence_ids.append(int(evidence_row[0]))
@@ -518,29 +532,16 @@ def _freeze_boundary_manifest(
                 (season_version_ids,),
             ).fetchall()
             season_daily_log_ids = [int(row[0]) for row in season_logs]
+            season_sides = {
+                (int(event["battle_id"]), event.get("lens"))
+                for row in season_logs
+                for event in (row[1] if isinstance(row[1], list) else [])
+                if isinstance(event, dict)
+                and str(event.get("battle_id", "")).isdigit()
+            }
             season_battle_ids = sorted(
-                {
-                    int(event["battle_id"])
-                    for row in season_logs
-                    for event in (row[1] if isinstance(row[1], list) else [])
-                    if isinstance(event, dict)
-                    and str(event.get("battle_id", "")).isdigit()
-                }
+                {battle_id for battle_id, _lens in season_sides}
             )
-            season_decode_ids = [
-                int(row[0])
-                for row in connection.execute(
-                    """
-                    SELECT id
-                    FROM battle_army_decodes
-                    WHERE battle_id = ANY(%s::bigint[])
-                      AND decoder_version = %s AND catalog_version = %s
-                      AND is_active
-                    ORDER BY id
-                    """,
-                    (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
-                ).fetchall()
-            ]
             season_evidence_ids = [
                 int(row[0])
                 for row in connection.execute(
@@ -553,6 +554,49 @@ def _freeze_boundary_manifest(
                     (season_battle_ids,),
                 ).fetchall()
             ]
+            season_moved = {
+                side: to_id
+                for side, to_id in battle_day_repair.merged_battles(
+                    connection, season_battle_ids, season_evidence_ids
+                )[0].items()
+                if side in season_sides
+            }
+            season_decode_ids = sorted(
+                {
+                    *(
+                        int(row[0])
+                        for row in connection.execute(
+                            """
+                            SELECT id
+                            FROM battle_army_decodes
+                            WHERE battle_id = ANY(%s::bigint[])
+                              AND decoder_version = %s AND catalog_version = %s
+                              AND is_active
+                            """,
+                            (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                        ).fetchall()
+                    ),
+                    *_moved_decode_ids(connection, season_moved),
+                }
+            )
+            season_evidence_ids = sorted(
+                {
+                    *season_evidence_ids,
+                    *(
+                        int(row[0])
+                        for row in connection.execute(
+                            """
+                            SELECT perspective.evidence_id
+                            FROM battle_perspectives AS perspective
+                            JOIN unnest(%s::bigint[], %s::text[])
+                              AS side (battle_id, perspective)
+                              USING (battle_id, perspective)
+                            """,
+                            _moved_side_arrays(season_moved),
+                        ).fetchall()
+                    ),
+                }
+            )
             season_inputs = {
                 "ranked_version_ids": season_version_ids,
                 "daily_log_ids": season_daily_log_ids,
@@ -884,6 +928,60 @@ def _boundary_snapshot_status(
     return "complete" if profile is not None else "missing"
 
 
+def _moved_sides(
+    connection: Any, sides: list[tuple[int, Any]]
+) -> dict[tuple[int, str], int]:
+    """Map each listed (battle, lens) 0057 moved to the battle it is on now."""
+    listed = sorted({battle_id for battle_id, _lens in sides})
+    if not listed:
+        return {}
+    moved, _ = battle_day_repair.merged_battles(
+        connection,
+        listed,
+        [
+            int(row[0])
+            for row in connection.execute(
+                "SELECT evidence_id FROM battle_perspectives"
+                " WHERE battle_id = ANY(%s::bigint[])",
+                (listed,),
+            ).fetchall()
+        ],
+    )
+    listed_sides = set(sides)
+    return {side: to_id for side, to_id in moved.items() if side in listed_sides}
+
+
+def _moved_side_arrays(
+    moved: dict[tuple[int, str], int],
+) -> tuple[list[int], list[str]]:
+    return (
+        list(moved.values()),
+        ["attacker" if lens == "offense" else "defender" for _id, lens in moved],
+    )
+
+
+def _moved_decode_ids(
+    connection: Any, moved: dict[tuple[int, str], int]
+) -> list[int]:
+    """Current decodes of moved sides, read on the battles they are on now."""
+    if not moved:
+        return []
+    return [
+        int(row[0])
+        for row in connection.execute(
+            """
+            SELECT decode.id
+            FROM battle_army_decodes AS decode
+            JOIN unnest(%s::bigint[], %s::text[]) AS side (battle_id, perspective)
+              USING (battle_id, perspective)
+            WHERE decode.is_active
+              AND decode.decoder_version = %s AND decode.catalog_version = %s
+            """,
+            (*_moved_side_arrays(moved), DECODER_VERSION, CATALOG_VERSION),
+        ).fetchall()
+    ]
+
+
 def _boundary_army_status(
     database: Database,
     connection: Any,
@@ -921,13 +1019,15 @@ def _boundary_army_status(
         return "partial"
     if daily_state != "Complete" or daily_coverage != "complete":
         return "pending"
-    battle_ids = [
-        int(event["battle_id"])
+    sides = [
+        (int(event["battle_id"]), event.get("lens"))
         for event in (daily_log[0] if isinstance(daily_log[0], list) else [])
         if isinstance(event, dict) and str(event.get("battle_id", "")).isdigit()
     ]
-    if not battle_ids:
+    if not sides:
         return "complete"
+    moved = _moved_sides(connection, sides)
+    battle_ids = [moved.get(side, side[0]) for side in sides]
     decoded = connection.execute(
         """
         SELECT count(DISTINCT battle_id)
