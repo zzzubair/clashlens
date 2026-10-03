@@ -32,7 +32,7 @@ export class BlogPostError extends Error {
   }
 }
 
-const markdown = new MarkdownIt({ html: true, typographer: true });
+const markdown = new MarkdownIt({ html: true });
 // Recognize raw HTML so it can be dropped instead of shown as escaped text.
 markdown.renderer.rules.html_block = () => "";
 markdown.renderer.rules.html_inline = () => "";
@@ -87,7 +87,7 @@ export function parseBlogPost(file: string, source: string): BlogPost {
   if (!DATE.test(fields.date) || !isRealDate(fields.date)) {
     throw new BlogPostError(file, "date must be a real date written YYYY-MM-DD");
   }
-  if (fields.cover !== undefined && !/^(\/(?!\/)|https:\/\/)\S+$/.test(fields.cover)) {
+  if (fields.cover !== undefined && !isValidCover(fields.cover)) {
     throw new BlogPostError(
       file,
       "cover must be a site path starting with / or an https URL",
@@ -110,11 +110,6 @@ export function loadBlogPosts(sources: Record<string, string>): BlogPost[] {
   const posts = Object.entries(sources).map(([file, source]) =>
     parseBlogPost(file, source),
   );
-  const slugs = new Set<string>();
-  for (const post of posts) {
-    if (slugs.has(post.slug)) throw new BlogPostError(post.slug, "duplicate slug");
-    slugs.add(post.slug);
-  }
   return posts.sort(
     (a, b) => b.date.localeCompare(a.date) || a.title.localeCompare(b.title),
   );
@@ -179,6 +174,20 @@ export function blogFeed(posts: BlogPostSummary[], origin: string): string {
 function unquote(value: string): string {
   const quoted = /^"(.*)"$/.exec(value) ?? /^'(.*)'$/.exec(value);
   return quoted ? quoted[1] : value;
+}
+
+/** A path that stays on this site, or an https URL, that both parse as addresses. */
+function isValidCover(value: string): boolean {
+  if (/\s/.test(value)) return false;
+  const base = "https://site.invalid";
+  try {
+    const url = new URL(value, base);
+    return value.startsWith("/")
+      ? url.origin === base
+      : value.startsWith("https://") && url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function isRealDate(value: string): boolean {

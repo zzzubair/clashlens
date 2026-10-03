@@ -27,4 +27,5 @@ the post and in Discord link previews; 1200 by 630 pixels suits previews best.
 
 Posts support Markdown headings, lists, links, images, tables, quotes and code
 blocks. Raw HTML is removed, not shown. `npm run test:unit` fails if a post
-has missing or unknown front matter, a bad date or a badly formed file name.
+has missing or unknown front matter, a bad date, a bad cover address or a badly
+formed file name.

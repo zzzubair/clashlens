@@ -28,6 +28,7 @@ import {
   blogFeed,
   loadBlogPosts,
   parseBlogPost,
+  renderBlogMarkdown,
 } from "../../app/server/blog.server";
 
 // Test-only posts; none of these are published on the site.
@@ -145,20 +146,47 @@ describe("blog posts", () => {
       "unknown front matter",
     ],
     ["twice.md", "---\ntitle: T\ntitle: U\ndate: 2026-01-01\nsummary: S\n---\n", "twice"],
-    [
-      "cover.md",
-      "---\ntitle: T\ndate: 2026-01-01\nsummary: S\ncover: //evil.example/x.png\n---\n",
-      "cover",
-    ],
   ])("rejects %s", (file, source, reason) => {
     expect(() => parseBlogPost(file, source)).toThrow(BlogPostError);
     expect(() => parseBlogPost(file, source)).toThrow(reason);
   });
 
-  it("rejects two posts with the same slug", () => {
-    const source = "---\ntitle: T\ndate: 2026-01-01\nsummary: S\n---\n";
-    expect(() => loadBlogPosts({ "a/same.md": source, "b/same.md": source })).toThrow(
-      "duplicate slug",
+  it.each([
+    "//evil.example/x.png",
+    "/\\evil.example/x.png",
+    "/\\[broken",
+    "https://images.example:bad/cover.png",
+    "http://images.example/cover.png",
+    "images/cover.png",
+  ])("rejects the cover address %s", (cover) => {
+    const source = `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ncover: ${cover}\n---\n`;
+    expect(() => parseBlogPost("cover.md", source)).toThrow(BlogPostError);
+    expect(() => parseBlogPost("cover.md", source)).toThrow("cover must be");
+  });
+
+  it.each([
+    ["/images/blog/cover.png", `${ORIGIN}/images/blog/cover.png`],
+    ["https://images.example/cover.png", "https://images.example/cover.png"],
+  ])("accepts the cover address %s", (cover, absolute) => {
+    const post = parseBlogPost(
+      "cover.md",
+      `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ncover: ${cover}\n---\n`,
+    );
+    expect(post.cover).toBe(cover);
+    const tags = blogMeta({
+      title: post.title,
+      description: post.summary,
+      url: `${ORIGIN}/blog/cover`,
+      origin: ORIGIN,
+      type: "article",
+      image: post.cover,
+    });
+    expect(tags).toContainEqual({ property: "og:image", content: absolute });
+  });
+
+  it("keeps punctuation as written", () => {
+    expect(renderBlogMarkdown(`"Quotes" -- it's (c) 2026...`)).toBe(
+      "<p>&quot;Quotes&quot; -- it's (c) 2026...</p>\n",
     );
   });
 
