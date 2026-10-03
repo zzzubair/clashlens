@@ -449,7 +449,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                                unresolved_components,
                                perspective_disagreement, input_hash,
                                source_ranked_day_version_id
-                        FROM army_analytics_battle_facts
+                        FROM army_analytics_battle_facts_with_armies
                         WHERE official_season_id = %s
                           AND season_day_number = %s AND lens = %s
                           AND is_current
@@ -618,7 +618,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                         SET home_troops = %s::jsonb
                         WHERE battle_id = %s AND lens = 'offense' AND is_current
                         """,
-                        (json.dumps(original_troops), attacker_vs_defender),
+                        (None if original_troops is None else json.dumps(original_troops), attacker_vs_defender),
                     )
 
                 # Reads calculate from retained facts without persistent

@@ -372,9 +372,50 @@ def complete_analytics(database: Database, claim: Claim) -> None:
         claim.input_json.get("snapshot_input_hash"), "snapshot_input_hash"
     )
     content_dedup = getattr(database, "_supports_content_dedup", False)
-    source_rows_relation = (
-        "battle_log_observation_source_rows" if content_dedup else "battle_source_rows"
-    )
+    # Each stored row of the day's selected battle logs, once per log that
+    # returned it, in each storage layout the compatibility view
+    # battle_log_observation_source_rows lists. That view expands every
+    # stored log before the day filter applies, so this selects the logs
+    # first. A legacy row counts once per evidence version, as in the view;
+    # the newer layouts' latest-evidence lookup returns one row and is
+    # omitted. A row with no outcome of its own takes its source row's.
+    occurrences = """
+        SELECT NULL::text AS outcome, source.id AS source_row_id
+        FROM selected_log AS log
+        JOIN battle_source_rows AS source
+          ON source.battle_log_observation_id = log.id
+    """
+    if content_dedup:
+        occurrences = """
+            SELECT NULL::text AS outcome, source.id AS source_row_id
+            FROM selected_log AS log
+            JOIN battle_source_rows AS source
+              ON source.battle_log_observation_id = log.id
+            LEFT JOIN battle_evidence AS evidence
+              ON evidence.source_row_id = source.id
+             AND evidence.observation_row_id IS NULL
+            WHERE log.parsed_payload_id IS NULL
+            UNION ALL
+            SELECT occurrence.outcome, occurrence.source_row_id
+            FROM selected_log AS log
+            JOIN battle_log_observation_rows AS occurrence
+              ON occurrence.battle_log_observation_id = log.id
+            WHERE log.parsed_payload_id IS NULL
+            UNION ALL
+            SELECT NULL, member.source_row_id
+            FROM selected_log AS log
+            JOIN battle_payload_rows AS member
+              ON member.parsed_payload_id = log.parsed_payload_id
+             AND member.reporting_player_id = log.player_id
+            UNION ALL
+            SELECT NULL, member.source_row_id
+            FROM selected_log AS log
+            JOIN battle_payload_row_lists AS list
+              ON list.parsed_payload_id = log.parsed_payload_id
+             AND list.reporting_player_id = log.player_id
+            CROSS JOIN LATERAL unnest(list.source_row_ids) AS member (source_row_id)
+            WHERE member.source_row_id IS NOT NULL
+        """
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim)
@@ -518,6 +559,44 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 stale_count=int(snapshot[8]),
             )
             prior_snapshot_id = int(snapshot[3]) if snapshot[3] is not None else None
+            # Malformed rows and rows without an army share code, counted per
+            # log that returned them. A row counted here is in both lenses'
+            # samples, so one count serves both. Each distinct row's stored
+            # JSON is read once, however many logs returned it.
+            quality = connection.execute(
+                f"""
+                WITH selected_log AS MATERIALIZED (
+                    SELECT log.id, log.parsed_payload_id, log.player_id
+                    FROM battle_log_observations AS log
+                    JOIN leaderboard_snapshot_entries AS se
+                      ON se.snapshot_id = %s AND se.player_id = log.player_id
+                    WHERE log.observed_at >= %s
+                      AND log.observed_at < %s
+                ), counted AS (
+                    SELECT outcome, source_row_id, count(*) AS occurrences
+                    FROM ({occurrences}) AS occurrence
+                    GROUP BY outcome, source_row_id
+                )
+                SELECT COALESCE(sum(counted.occurrences), 0)
+                FROM counted
+                JOIN battle_source_rows AS source
+                  ON source.id = counted.source_row_id
+                WHERE COALESCE(counted.outcome, source.outcome)
+                          = 'malformed_legend_row'
+                   OR (
+                      COALESCE(counted.outcome, source.outcome) = 'valid_legend'
+                      AND (
+                          NOT (source.source_json ? 'armyShareCode')
+                          OR source.source_json ->> 'armyShareCode' IS NULL
+                          OR source.source_json ->> 'armyShareCode' = ''
+                      )
+                   )
+                """,
+                (snapshot_id, period_start, period_end),
+            ).fetchone()
+            assert quality is not None
+            missing_code_count = 0
+            malformed_code_count = int(quality[0])
             for lens, perspective in (
                 ("offense", "attacker"),
                 ("defense", "defender"),
@@ -560,59 +639,6 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     """,
                     (snapshot_id, perspective, *battle_window(period_start)),
                 ).fetchall()
-                quality = connection.execute(
-                    f"""
-                    SELECT
-                        0,
-                        count(*) FILTER (
-                            WHERE source_row.outcome = 'malformed_legend_row'
-                               OR (
-                                  source_row.outcome = 'valid_legend'
-                                  AND (
-                                      NOT (source_row.source_json ? 'armyShareCode')
-                                      OR source_row.source_json ->> 'armyShareCode' IS NULL
-                                      OR source_row.source_json ->> 'armyShareCode' = ''
-                                  )
-                               )
-                        )
-                    FROM battle_log_observations AS log
-                    JOIN {source_rows_relation} AS source_row
-                      ON source_row.battle_log_observation_id = log.id
-                    JOIN leaderboard_snapshot_entries AS se
-                      ON se.snapshot_id = %s AND se.player_id = log.player_id
-                    WHERE log.observed_at >= %s
-                      AND log.observed_at < %s
-                      AND (
-                          (
-                              log.parser_version = 'supercell-source-parser-v2'
-                              AND source_row.source_json ->> 'attack' = %s
-                          )
-                          OR (
-                              log.parser_version = 'supercell-source-parser-v1'
-                              AND source_row.source_json ->> 'attackOrDefense' = %s
-                          )
-                          OR source_row.outcome <> 'valid_legend'
-                          OR (
-                              source_row.outcome = 'valid_legend'
-                              AND (
-                                  NOT (source_row.source_json ? 'armyShareCode')
-                                  OR source_row.source_json ->> 'armyShareCode' IS NULL
-                                  OR source_row.source_json ->> 'armyShareCode' = ''
-                              )
-                          )
-                      )
-                    """,
-                    (
-                        snapshot_id,
-                        period_start,
-                        period_end,
-                        "true" if perspective == "attacker" else "false",
-                        "attack" if perspective == "attacker" else "defense",
-                    ),
-                ).fetchone()
-                assert quality is not None
-                missing_code_count = int(quality[0])
-                malformed_code_count = int(quality[1])
                 sample_size = len(sample_rows)
                 three_star_count = sum(int(row[2]) == 3 for row in sample_rows)
                 disagreement_count = sum(

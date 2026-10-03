@@ -756,3 +756,68 @@ def test_first_materialization_serializes_with_correction(
             assert sum(row[2] for row in summary["unit_usage"] if row[0] == "troop:58") == 2
         finally:
             database.close()
+
+
+def test_saved_day_totals_add_up_to_the_counted_season(database_url: str) -> None:
+    """A season adds up saved day totals; a rebuilt day replaces its own."""
+    project = army_summaries_module._project_lens
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            _seed(connection, offense=_offense_specs(), defense=_defense_specs())
+
+            def counted() -> dict:
+                return {
+                    lens: project(connection, SEASON, lens, recount=True)
+                    for lens in ("offense", "defense")
+                }
+
+            def summed() -> dict:
+                return {
+                    lens: project(connection, SEASON, lens)
+                    for lens in ("offense", "defense")
+                }
+
+            def save_day_one(fact_hash: str) -> None:
+                connection.execute(
+                    "UPDATE army_analytics_completed_days SET fact_input_hash = %s"
+                    " WHERE ranked_day_start = %s",
+                    (fact_hash, DAY0),
+                )
+                army_summaries_module.store_army_day_totals(
+                    connection, DAY0, SEASON, 1, fact_hash
+                )
+
+            before = counted()
+            save_day_one("1" * 64)
+            assert summed() == before
+            # Saving the same day again replaces its totals.
+            save_day_one("1" * 64)
+            assert summed() == before
+
+            # The season reads the saved totals, not the day's facts.
+            connection.execute(
+                """
+                UPDATE army_analytics_battle_facts
+                SET home_troops = '[["troop:58", 3]]'::jsonb
+                WHERE official_season_id = %s AND lens = 'offense' AND stars = 3
+                """,
+                (SEASON,),
+            )
+            assert summed() == before
+            # A day rebuilt without new totals is counted from its facts.
+            connection.execute(
+                "UPDATE army_analytics_completed_days SET fact_input_hash = %s"
+                " WHERE ranked_day_start = %s",
+                ("2" * 64, DAY0),
+            )
+            corrected = counted()
+            assert corrected != before
+            assert summed() == corrected
+            # Its new totals replace the old ones instead of adding to them.
+            save_day_one("2" * 64)
+            assert summed() == corrected
+            assert corrected["offense"]["troops"]["unit_usage"] == [
+                ["troop:58", 1, 1, 1, 0, 0],
+                ["troop:58", 2, 1, 0, 1, 0],
+                ["troop:58", 3, 2, 0, 0, 2],
+            ]

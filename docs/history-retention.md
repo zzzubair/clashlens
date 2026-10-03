@@ -69,8 +69,9 @@ or unexplained failures block), and season-scoped processing, replay,
 publication-generation, and correction work is terminal. Unknown fails
 closed. The applied `finalized` record fences writers atomically before
 any deletion. Retirement then deletes all `api_player_daily_logs` for
-the season, its `army_analytics_battle_facts` and redundant
-`army_analytics_completed_days` markers, and battle detail
+the season, its `army_analytics_battle_facts`, redundant
+`army_analytics_completed_days` markers and their `army_analytics_day_totals`,
+and battle detail
 (decodes, perspectives, evidence, source reports, payload membership,
 battles) only where no retained, live, shared, or protected dependency
 still needs them; each table is limited to 1–1000 rows per invocation

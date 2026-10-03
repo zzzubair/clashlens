@@ -403,7 +403,7 @@ def _build_fact_population(
                     """
                     SELECT army_state, home_troops, spells, siege, cc_troops,
                            heroes, unresolved_components, decode_id
-                    FROM army_analytics_battle_facts
+                    FROM army_analytics_battle_facts_with_armies
                     WHERE battle_id = %s AND lens = 'offense' AND is_current
                     """,
                     (failed[1],),

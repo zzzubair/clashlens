@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -392,5 +393,117 @@ def test_army_correction_during_publication_keeps_each_frozen_battle(
                     " WHERE ranked_day_start = %s",
                     (DAY_START,),
                 ).fetchone()[0] == 1
+        finally:
+            database.close()
+
+
+def test_army_build_leaves_the_generation_unlocked_until_it_publishes(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The snapshot and analytics builds lock the generation row. A day's army
+    # build used to hold that lock for its whole run, so a Reset publication's
+    # two builds ran one after the other.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        pairs = [
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key=key,
+                boundary=day,
+                trophies=trophies,
+                empty_battle_log=empty,
+            )
+            for key, day, trophies, empty in (
+                ("start", DAY_START, 6000, True),
+                ("end", DAY_END, 6040, False),
+            )
+        ]
+        middle = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="middle",
+            endpoint="battle_log",
+            body=_battle_log(),
+            observed_at=DAY_START + timedelta(hours=7),
+            normalized_tag="#2PP",
+        )[1]
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for job_id in (*pairs[0][2:], middle, *pairs[1][2:]):
+                assert processor.process_job(job_id, owner="source").outcome == "processed"
+            with database.pool.connection() as connection:
+                for (job_id,) in connection.execute(
+                    "SELECT id FROM python_processing_jobs"
+                    " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'"
+                ).fetchall():
+                    assert processor.process_job(job_id, owner="day").outcome == "processed"
+                [(army_job,)] = connection.execute(
+                    "SELECT id FROM python_processing_jobs"
+                    " WHERE work_type = 'build_army_analytics' AND status = 'pending'"
+                    " AND input_json->>'boundary_at' = %s",
+                    (DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ"),),
+                ).fetchall()
+
+            real_build = army_ingestion._build_army_facts
+            locked_during_build = []
+
+            def probe_then_build(*args, **kwargs):
+                with psycopg.connect(connection_info) as other:
+                    try:
+                        other.execute(
+                            "SELECT id FROM boundary_publication_generations"
+                            " WHERE boundary_at = %s FOR UPDATE NOWAIT",
+                            (DAY_END,),
+                        ).fetchall()
+                        locked_during_build.append(False)
+                    except psycopg.errors.LockNotAvailable:
+                        locked_during_build.append(True)
+                return real_build(*args, **kwargs)
+
+            monkeypatch.setattr(army_ingestion, "_build_army_facts", probe_then_build)
+            # One manifest row per page also reads past the last full page.
+            monkeypatch.setattr(army_ingestion, "ARMY_FACT_PLAYER_BATCH", 1)
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+            assert locked_during_build == [False]
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT army_state FROM boundary_publication_generations"
+                    " WHERE boundary_at = %s",
+                    (DAY_END,),
+                ).fetchone()[0] == "published"
+                facts = connection.execute(
+                    "SELECT battle_id, lens, input_hash FROM army_analytics_battle_facts"
+                    " WHERE ranked_day_start = %s AND is_current ORDER BY battle_id, lens",
+                    (DAY_START,),
+                ).fetchall()
+                assert len(facts) == 1
+                # The day's hash keeps its earlier definition, so a rebuilt
+                # day with unchanged facts keeps its published identity.
+                assert connection.execute(
+                    "SELECT fact_input_hash FROM army_analytics_completed_days"
+                    " WHERE ranked_day_start = %s",
+                    (DAY_START,),
+                ).fetchone()[0] == hashlib.sha256(
+                    json.dumps(
+                        [[int(row[0]), text(row[1]), text(row[2])] for row in facts],
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                # The fact keeps no copy of its army; reads get the decode's.
+                armies = "home_troops, spells, siege, cc_troops, heroes, unresolved_components"
+                assert connection.execute(
+                    f"SELECT {armies} FROM army_analytics_battle_facts"
+                ).fetchone() == (None,) * 6
+                read = connection.execute(
+                    f"SELECT decode_id, {armies} FROM army_analytics_battle_facts_with_armies"
+                ).fetchone()
+                assert read[0] is not None
+                assert read[1:] == tuple(
+                    value if value is not None else []
+                    for value in connection.execute(
+                        f"SELECT {armies} FROM battle_army_decodes WHERE id = %s",
+                        (read[0],),
+                    ).fetchone()
+                )
         finally:
             database.close()

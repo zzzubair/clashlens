@@ -543,7 +543,7 @@ def get_army_analytics(
                            {component_column} AS component_payload,
                            unresolved_components, perspective_disagreement,
                            input_hash, source_ranked_day_version_id
-                    FROM army_analytics_battle_facts
+                    FROM army_analytics_battle_facts_with_armies
                     WHERE {" AND ".join(fact_filters)}
                     ORDER BY battle_id
                     """,
@@ -893,7 +893,7 @@ def _query_troops_aggregates(
                         THEN jsonb_array_length(unresolved_components) ELSE 0 END
                ), 0),
                count(*) FILTER (WHERE perspective_disagreement)
-        FROM army_analytics_battle_facts
+        FROM army_analytics_battle_facts_with_armies
         WHERE {fact_where}
         GROUP BY army_state
         """,
@@ -907,7 +907,7 @@ def _query_troops_aggregates(
                count(*) FILTER (WHERE selected.stars = 3),
                sum(selected.stars),
                sum(selected.destruction_percentage)
-        FROM army_analytics_battle_facts AS selected
+        FROM army_analytics_battle_facts_with_armies AS selected
         CROSS JOIN LATERAL (
             SELECT DISTINCT
                    CASE jsonb_typeof(value -> 0)
