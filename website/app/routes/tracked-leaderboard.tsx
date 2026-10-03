@@ -19,6 +19,10 @@ import "../leaderboard-search.css";
 
 const PAGE_SIZE = 100;
 const OLD_UPDATE_SECONDS = 600;
+// A saved Daily board is incomplete when none of its players was saved in the
+// 30 minutes before Reset. Collection pauses at 04:55, so normal boards end about
+// 5 minutes before Reset; the Oct 3, 2026 outage board ended 5 hours before.
+const INCOMPLETE_INPUT_GAP_SECONDS = 30 * 60;
 const formatDate = (value: string) =>
   new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(
     new Date(value),
@@ -171,6 +175,17 @@ export default function TrackedLeaderboardRoute() {
   const now = useCurrentTime(leaderboard?.generatedAt);
   const ageSeconds = (observedAt: string) =>
     Math.max(0, Math.floor((now - Date.parse(observedAt)) / 1000));
+  const secondsBeforeReset = (observedAt: string) =>
+    daily ? Math.max(0, (Date.parse(daily.resetAt) - Date.parse(observedAt)) / 1000) : 0;
+  const newestInput = daily ? leaderboard?.provenance.observedAt : null;
+  const incomplete =
+    !!newestInput && secondsBeforeReset(newestInput) > INCOMPLETE_INPUT_GAP_SECONDS;
+  const savedBeforeReset = (observedAt: string) =>
+    incomplete && secondsBeforeReset(observedAt) > INCOMPLETE_INPUT_GAP_SECONDS ? (
+      <span className="player-update-age">
+        {formatAge(secondsBeforeReset(observedAt))} before Reset
+      </span>
+    ) : null;
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell rankings-page">
@@ -219,6 +234,20 @@ export default function TrackedLeaderboardRoute() {
             ) : null}
             . Across the whole leaderboard.
           </p>
+        ) : null}
+        {incomplete && newestInput ? (
+          <div
+            className="status-banner status-banner-warning daily-incomplete"
+            role="status"
+          >
+            <p>
+              <strong>These standings are incomplete.</strong> No player updates were
+              saved in the {formatAge(secondsBeforeReset(newestInput))} before this
+              day&apos;s Reset; the newest is from <LocalTimestamp value={newestInput} />.
+              Trophies are each player&apos;s last saved value before then, not their
+              end-of-day result.
+            </p>
+          </div>
         ) : null}
       </section>
 
@@ -392,6 +421,7 @@ export default function TrackedLeaderboardRoute() {
                                 OLD_UPDATE_SECONDS ? (
                                 <span className="player-update-age">Over 10 min old</span>
                               ) : null}
+                              {savedBeforeReset(entry.freshness.observedAt)}
                             </summary>
                             <LocalTimestamp value={entry.freshness.observedAt} />
                           </details>
@@ -410,7 +440,9 @@ export default function TrackedLeaderboardRoute() {
                                 ? " · Over 10 min old"
                                 : null}
                             </span>
-                          ) : null}
+                          ) : (
+                            savedBeforeReset(entry.freshness.observedAt)
+                          )}
                         </td>
                       </tr>
                     ))}

@@ -582,6 +582,16 @@
   letter-spacing: -0.045em;
 }
 
+.rankings-header .daily-incomplete {
+  margin: 0.85rem 0 0;
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.daily-incomplete p {
+  margin: 0;
+}
+
 .rankings-context {
   max-width: 74ch;
   margin: 0.85rem 0 0;

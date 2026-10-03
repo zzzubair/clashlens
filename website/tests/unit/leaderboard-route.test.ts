@@ -170,3 +170,36 @@ it("does not mislabel service failures as missing standings", async () => {
   expect(html).not.toContain("No standings available yet");
   expect(html).not.toContain("Go to page 1");
 });
+
+it.each([
+  ["2026-10-03T04:55:00Z", false],
+  ["2026-10-03T04:30:00Z", false],
+  ["2026-10-03T00:00:19Z", true],
+] as const)(
+  "marks a Daily board whose newest input is %s as incomplete: %s",
+  async (newestInput, incomplete) => {
+    const fixture = structuredClone(board);
+    fixture.view = "daily";
+    fixture.daily = {
+      officialSeasonId: "1788757200",
+      dayNumber: 26,
+      resetAt: "2026-10-03T05:00:00Z",
+      seasonStartAt: "2026-09-07T05:00:00Z",
+      seasonEndAt: "2026-10-05T05:00:00Z",
+      previousSnapshot: null,
+      nextSnapshot: null,
+    };
+    fixture.provenance.observedAt = newestInput;
+    fixture.entries[0].freshness.observedAt = "2026-10-02T23:59:00Z";
+    mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+    const { html } = await render("view=daily&season=1788757200&day=26&page=1");
+    expect(html.includes("These standings are incomplete.")).toBe(incomplete);
+    if (incomplete) {
+      expect(html).toContain("No player updates were saved in the 4 hours before");
+      expect(html).toMatch(
+        /the newest is from <time[^>]+dateTime="2026-10-03T00:00:19Z"/,
+      );
+      expect(html.match(/5 hours before Reset/g)).toHaveLength(2);
+    } else expect(html).not.toContain("before Reset");
+  },
+);
