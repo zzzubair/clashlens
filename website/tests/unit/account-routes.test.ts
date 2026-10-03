@@ -1,3 +1,10 @@
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createStaticHandler,
+  createStaticRouter,
+  StaticRouterProvider,
+} from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -46,7 +53,7 @@ import {
   action as groupsAction,
   loader as groupsLoader,
 } from "../../app/routes/account.groups";
-import {
+import ProfileRoute, {
   action as profileAction,
   loader as profileLoader,
 } from "../../app/routes/account.profile";
@@ -495,12 +502,11 @@ describe("account routes", () => {
       assertNoProviderData(result);
     });
 
-    it("updates names with stored preferences and redirects", async () => {
+    it("updates the display name, keeping the stored username and preferences", async () => {
       await expect(
         profileAction({
           request: formRequest("/account/profile", {
             idempotencyKey: IDEMPOTENCY_KEY,
-            username: "nova88",
             displayName: "Nova Nova",
           }),
         } as never),
@@ -529,6 +535,37 @@ describe("account routes", () => {
       expect(client.updateAccount).not.toHaveBeenCalled();
     });
 
+    it("shows the username error inside a valid username list item", async () => {
+      const handler = createStaticHandler([
+        {
+          path: "/account/profile",
+          Component: ProfileRoute,
+          loader: profileLoader as never,
+          action: profileAction as never,
+        },
+      ]);
+      const context = await handler.query(
+        formRequest("/account/profile", {
+          idempotencyKey: IDEMPOTENCY_KEY,
+          username: "anothername",
+          displayName: "Nova Nova",
+        }),
+      );
+      if (context instanceof Response) throw new Error("unexpected response");
+      const html = renderToString(
+        createElement(StaticRouterProvider, {
+          router: createStaticRouter(handler.dataRoutes, context),
+          context,
+          hydrate: false,
+        }),
+      );
+      // A <dl> may only hold <dt>/<dd> directly, so the alert sits inside a <dd>.
+      expect(html).toContain(
+        '<dd><p class="field-error" role="alert">To request a username change, contact support.</p></dd>',
+      );
+      expect(html).not.toContain('<dd class="field-error"');
+    });
+
     it("redirects an unresolved account to setup from the action too", async () => {
       client.getAccount = vi.fn(async () => {
         throw new PythonApiError(404, { error: "account_not_found" });
@@ -548,8 +585,7 @@ describe("account routes", () => {
       const badName = await profileAction({
         request: formRequest("/account/profile", {
           idempotencyKey: IDEMPOTENCY_KEY,
-          username: "FuckYou",
-          displayName: "Nova",
+          displayName: "FuckYou",
         }),
       } as never);
       expect(dataOf(badName).status).toBe(400);

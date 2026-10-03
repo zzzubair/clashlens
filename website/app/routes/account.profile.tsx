@@ -77,16 +77,18 @@ export async function action({ request }: Route.ActionArgs) {
   const idempotencyKey = form["idempotencyKey"] ?? "";
   if (!actions.isIdempotencyKey(idempotencyKey)) return invalidFormResponse();
 
+  // The page shows the username as fixed text; a posted one must still match.
+  const postedUsername = form["username"];
   const values = {
-    username: form["username"] ?? "",
+    username: postedUsername ?? "",
     displayName: form["displayName"] ?? "",
   };
-  const validation = actions.validateAccountNames(values);
-  if (validation.fieldErrors.username || validation.fieldErrors.displayName) {
+  const { displayName, fieldErrors } = actions.validateAccountNames(values);
+  if (fieldErrors.displayName) {
     return data<ProfileActionData>(
       {
         idempotencyKey: actions.freshIdempotencyKey(),
-        fieldErrors: validation.fieldErrors,
+        fieldErrors: { displayName: fieldErrors.displayName },
         generalError: null,
         values,
       },
@@ -98,7 +100,10 @@ export async function action({ request }: Route.ActionArgs) {
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient(identity);
     const account = await client.getAccount();
-    if (validation.username !== account.username) {
+    if (
+      postedUsername !== undefined &&
+      normalizeUsername(postedUsername) !== account.username
+    ) {
       return data<ProfileActionData>(
         {
           idempotencyKey: actions.freshIdempotencyKey(),
@@ -112,7 +117,7 @@ export async function action({ request }: Route.ActionArgs) {
     await client.updateAccount(
       {
         username: account.username,
-        displayName: validation.displayName as string,
+        displayName: displayName as string,
         preferences: account.preferences,
       },
       idempotencyKey,
@@ -187,37 +192,24 @@ export function headers() {
 export default function AccountProfileRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<ProfileActionData>();
-  const [values, setValues] = useState(
-    actionData?.values ?? {
-      username: loaderData.username,
-      displayName: loaderData.displayName,
-    },
+  const [displayName, setDisplayName] = useState(
+    actionData?.values.displayName ?? loaderData.displayName,
   );
-  const [clientErrors, setClientErrors] = useState<{
-    username?: string;
-    displayName?: string;
-  }>({});
+  const [clientError, setClientError] = useState<string>();
 
-  const serverErrors = actionData?.fieldErrors ?? {};
-  const usernameError = serverErrors.username ?? clientErrors.username;
-  const displayNameError = serverErrors.displayName ?? clientErrors.displayName;
+  const usernameError = actionData?.fieldErrors.username;
+  const displayNameError = actionData?.fieldErrors.displayName ?? clientError;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    const errors: { username?: string; displayName?: string } = {};
-    if (normalizeUsername(values.username) === null) {
-      errors.username =
-        "Username must start with a letter and use 3–32 lowercase letters, numbers, or underscores.";
-    } else if (isInappropriateName(values.username)) {
-      errors.username = "Choose a different username.";
-    }
-    if (normalizeDisplayName(values.displayName) === null) {
-      errors.displayName =
+    let error: string | undefined;
+    if (normalizeDisplayName(displayName) === null) {
+      error =
         "Display name must be 1–80 characters and must not contain control characters.";
-    } else if (isInappropriateName(values.displayName)) {
-      errors.displayName = "Choose a different display name.";
+    } else if (isInappropriateName(displayName)) {
+      error = "Choose a different display name.";
     }
-    setClientErrors(errors);
-    if (errors.username || errors.displayName) event.preventDefault();
+    setClientError(error);
+    if (error) event.preventDefault();
   }
 
   return (
@@ -239,34 +231,22 @@ export default function AccountProfileRoute() {
             name="idempotencyKey"
             value={actionData?.idempotencyKey ?? loaderData.idempotencyKey}
           />
-          <div className="form-field">
-            <label htmlFor="profile-username">Username</label>
-            <input
-              id="profile-username"
-              name="username"
-              type="text"
-              autoComplete="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              value={loaderData.username}
-              readOnly
-              aria-invalid={usernameError ? true : undefined}
-              aria-describedby={
-                usernameError
-                  ? "profile-username-help profile-username-error"
-                  : "profile-username-help"
-              }
-            />
+          <dl className="form-field fixed-field">
+            <dt>Username</dt>
+            <dd className="fixed-value">
+              {loaderData.username ? `@${loaderData.username}` : null}
+            </dd>
             {usernameError ? (
-              <p id="profile-username-error" className="field-error" role="alert">
-                {usernameError}
-              </p>
+              <dd>
+                <p className="field-error" role="alert">
+                  {usernameError}
+                </p>
+              </dd>
             ) : null}
-            <p id="profile-username-help" className="form-help">
-              Your username is your unique Clash Lens address. To request a username
-              change, contact support.
-            </p>
-          </div>
+            <dd className="form-help">
+              Usernames can't be changed. Contact support if you need a new one.
+            </dd>
+          </dl>
           <div className="form-field">
             <label htmlFor="profile-display-name">Display name</label>
             <input
@@ -274,18 +254,12 @@ export default function AccountProfileRoute() {
               name="displayName"
               type="text"
               autoComplete="nickname"
-              value={values.displayName}
+              value={displayName}
               aria-invalid={displayNameError ? true : undefined}
               aria-describedby={
                 displayNameError ? "profile-display-name-error" : undefined
               }
-              onChange={(event) => {
-                const displayName = event.currentTarget.value;
-                setValues((current) => ({
-                  ...current,
-                  displayName,
-                }));
-              }}
+              onChange={(event) => setDisplayName(event.currentTarget.value)}
             />
             {displayNameError ? (
               <p id="profile-display-name-error" className="field-error" role="alert">

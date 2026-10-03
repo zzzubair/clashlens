@@ -192,6 +192,15 @@ main {
 .home-page .search-controls {
   border-color: var(--cl-input-border);
 }
+.fixed-field,
+.fixed-field dd {
+  margin: 0;
+}
+.fixed-value {
+  color: var(--cl-ink);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
 .table-wrap {
   max-width: 100%;
 }
