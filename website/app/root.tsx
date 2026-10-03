@@ -58,13 +58,16 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
   }
 }
 
+export function meta() {
+  return [{ title: "Clash Lens" }];
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Clash Lens</title>
         <meta name="theme-color" content="#ffffff" suppressHydrationWarning />
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
@@ -88,6 +91,7 @@ export function Layout({ children }: { children: ReactNode }) {
             .
           </p>
           <nav aria-label="Site information">
+            <a href="/blog">Blog</a>
             <a href="/about">About</a>
           </nav>
         </footer>
@@ -140,6 +144,7 @@ export default function App() {
           </NavLink>
           <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
           <NavLink to="/analytics/armies">Armies</NavLink>
+          <NavLink to="/blog">Blog</NavLink>
           <NavLink to="/account/saved-players">Saved players</NavLink>
           <NavLink to="/account/groups">Groups</NavLink>
           <NavLink to="/about">About</NavLink>

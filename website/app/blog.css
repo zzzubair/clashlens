@@ -1,0 +1,159 @@
+/* Blog list and articles. Colors come from the theme tokens, so both themes work. */
+
+.blog-list {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.blog-list article {
+  padding: 1.1rem 1.25rem;
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+}
+
+.blog-list h2 {
+  margin-bottom: 0.25rem;
+}
+
+.blog-list h2 a:hover {
+  text-decoration: underline;
+}
+
+.blog-list p {
+  margin: 0;
+}
+
+.blog-date {
+  margin: 0 0 0.5rem;
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+}
+
+.blog-feed-link {
+  margin-top: 2rem;
+  font-size: 0.9rem;
+}
+
+.blog-feed-link a {
+  text-decoration: underline;
+}
+
+.blog-article {
+  max-width: 44rem;
+}
+
+.blog-article-header {
+  margin-bottom: 1.5rem;
+}
+
+.blog-article-header .eyebrow {
+  margin-bottom: 0.5rem;
+}
+
+.blog-cover {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--cl-border);
+}
+
+.blog-body {
+  font-size: 1.08rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.blog-body > * {
+  margin-block: 0 1.1rem;
+}
+
+.blog-body :is(h2, h3, h4, h5, h6) {
+  margin-top: 2rem;
+  margin-bottom: 0.6rem;
+}
+
+.blog-body a {
+  color: var(--cl-action-text);
+  text-decoration: underline;
+}
+
+.blog-body :is(ul, ol) {
+  padding-left: 1.4rem;
+}
+
+.blog-body li + li {
+  margin-top: 0.3rem;
+}
+
+.blog-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+.blog-body blockquote {
+  margin-inline: 0;
+  padding: 0.25rem 0 0.25rem 1rem;
+  color: var(--cl-muted);
+  border-left: 3px solid var(--cl-action);
+}
+
+.blog-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.blog-body code {
+  padding: 0.1em 0.3em;
+  background: var(--cl-panel);
+  font-family: var(--cl-font-mono);
+  font-size: 0.9em;
+}
+
+.blog-body pre {
+  overflow-x: auto;
+  padding: 0.9rem 1rem;
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-border);
+  line-height: 1.45;
+}
+
+.blog-body pre code {
+  padding: 0;
+  background: none;
+  overflow-wrap: normal;
+}
+
+.blog-table {
+  overflow-x: auto;
+}
+
+.blog-body :is(pre, .blog-table):focus-visible {
+  outline: 3px solid var(--cl-orange);
+  outline-offset: 2px;
+}
+
+.blog-table table {
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+  overflow-wrap: normal;
+}
+
+.blog-table :is(th, td) {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--cl-border);
+}
+
+.blog-table th {
+  border-bottom-color: var(--cl-outline);
+}
+
+.blog-body hr {
+  border: 0;
+  border-top: 1px solid var(--cl-border);
+}

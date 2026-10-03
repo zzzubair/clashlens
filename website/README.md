@@ -69,6 +69,10 @@ means both API responses were saved, not that the worker has processed them, so
 processing that takes longer than about 8 seconds appears only after the next
 Refresh or page load.
 
+The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
+publishes an RSS feed at `/blog/rss.xml`. Posts are Markdown files in
+[`blog/`](blog/README.md), built into the website; raw HTML in a post is removed.
+
 ## Requirements and setup
 
 - Node.js 24 LTS and npm with the committed `package-lock.json`; and
