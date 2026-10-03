@@ -2,7 +2,7 @@
 -- troop:167 is named apart from the Barracks Meteor Golem troop:177. Every
 -- unit-catalog-v1 army stays as history, but pages only read the catalog the
 -- running code pins, so this queues re-decoding of every saved battle the
--- re-decode job can place in a Legend day. `up` runs it while services are
+-- re-decode job can safely take (the skipped ones are listed below). `up` runs it while services are
 -- stopped, so no worker on the old catalog can claim these jobs. A repeat run
 -- over the same battles adds no job, and re-decoding a battle already on v2
 -- writes nothing.
@@ -21,13 +21,37 @@ ON CONFLICT (version) DO NOTHING;
 -- Batches of 100 battles in the backfill class, below live work. Newer
 -- battles fall due first so the days still waiting on Reset publication are
 -- re-decoded before older ones. Battles on a day without a Legend-day record
--- are skipped: the re-decode job cannot place them in a Season.
+-- are skipped: the re-decode job cannot place them in a Season. Battles in a
+-- finalized or retired Season are skipped: the job refuses any batch that
+-- holds one. Battles on a completed day with no current Reset publication
+-- record are skipped: re-decoding them would queue statistics work the
+-- publication guard rejects, rolling back the whole batch. Those historical
+-- days are not repaired here; repairing them is a possible follow-up.
 WITH numbered AS (
     SELECT id, (row_number() OVER (ORDER BY id) - 1) / 100 AS batch
     FROM legend_battles AS battle
     WHERE EXISTS (
         SELECT 1 FROM ranked_day_versions AS ranked
         WHERE ranked.ranked_day_start = battle.ranked_day_start
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM ranked_day_versions AS ranked
+        JOIN season_detail_retirements AS retirement
+          ON retirement.official_season_id = ranked.official_season_id
+        WHERE ranked.ranked_day_start = battle.ranked_day_start
+          AND retirement.status IN ('finalized', 'retired')
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM ranked_day_versions AS ranked
+        WHERE ranked.ranked_day_start = battle.ranked_day_start
+          AND ranked.state = 'Complete'
+          AND ranked.coverage_complete
+          AND NOT EXISTS (
+              SELECT 1 FROM boundary_publication_generations AS generation
+              WHERE generation.boundary_at = battle.ranked_day_start + interval '24 hours'
+                AND generation.snapshot_state <> 'superseded'
+                AND generation.army_state <> 'superseded'
+          )
     )
 ), batches AS (
     SELECT batch, jsonb_agg(id ORDER BY id) AS battle_ids,
