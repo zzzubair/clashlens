@@ -25,6 +25,7 @@ from .db import (
     _text_value,
 )
 from .domain import DomainRuleError, battle_window
+from .domain_repair import boundary_held
 
 
 def reevaluate_boundary_publications(database) -> int:
@@ -224,6 +225,9 @@ def _maybe_emit_boundary_signal(
             """,
             (generation_id,),
         )
+        # A repair campaign holding this Reset starts no queued correction.
+        if boundary_held(connection, row[0]):
+            return
         queued = connection.execute(
             """
             SELECT id, affected_artifacts, pending_inputs
@@ -1111,9 +1115,12 @@ def _queue_boundary_army_correction(
     ).fetchone()
     if current is None or current[2] is None or _text_value(current[1]) == "superseded":
         return
+    # A repair campaign holding this Reset leaves the published generation
+    # and queues the correction, as for one not yet published.
     if (
         _text_value(current[0]) == "published"
         and _text_value(current[1]) == "published"
+        and not boundary_held(connection, boundary_at)
     ):
         connection.execute(
             """

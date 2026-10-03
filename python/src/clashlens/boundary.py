@@ -21,6 +21,7 @@ from .db import (
     _text_value,
 )
 from .domain import RANKED_DAY_DURATION, season_is_current
+from .domain_repair import boundary_held
 
 
 def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
@@ -760,6 +761,8 @@ def _inherit_deferred_army_successor_snapshot(
 def _try_enqueue_boundary_artifacts(
     database, connection: Any, *, boundary_at: datetime, generation_id: int
 ) -> None:
+    if boundary_held(connection, boundary_at):
+        return
     _inherit_deferred_army_successor_snapshot(database, 
         connection, generation_id=generation_id
     )
@@ -1147,6 +1150,8 @@ def _record_boundary_generation(
         fully_published = (
             _text_value(current[2]) == "published"
             and _text_value(current[3]) == "published"
+            # A repair campaign holding this Reset keeps the change queued.
+            and not (changed and boundary_held(connection, boundary_at))
         )
         active_target_correction = connection.execute(
             """
