@@ -81,12 +81,21 @@ def claim_upload(
                 SET state = 'leased', lease_owner = %s, lease_token = %s,
                     lease_expires_at = %s, attempt_count = attempt_count + 1,
                     settled_lease_token = NULL, last_error_retryable = NULL,
+                    upload_generation = CASE
+                        WHEN upload_generation = '' AND EXISTS (
+                            SELECT 1 FROM archive_catalogue AS catalogue
+                            WHERE catalogue.response_hash = %s
+                              AND catalogue.availability <> 'verified'
+                              AND position('/generation/' IN catalogue.archive_reference) = 0
+                        ) THEN %s
+                        ELSE upload_generation
+                    END,
                     updated_at = clock_timestamp()
                 WHERE response_hash = %s
                 RETURNING response_hash, spool_key, byte_size, lease_expires_at,
                           attempt_count, upload_generation
                 """,
-                (owner, token, expires, row[0]),
+                (owner, token, expires, row[0], uuid4().hex, row[0]),
             ).fetchone()
             assert claimed is not None
     return UploadClaim(
@@ -164,13 +173,7 @@ def _lock_upload(connection: Any, response_hash: str) -> tuple[Any, ...] | None:
         SELECT response_hash, spool_key, byte_size, state, lease_owner,
                lease_token, lease_expires_at, attempt_count,
                upload_generation,
-               GREATEST(
-                   clashlens_season_retire_after(latest_sighting_at),
-                   COALESCE(
-                       minimum_retire_after,
-                       clashlens_season_retire_after(latest_sighting_at)
-                   )
-               ) AS retire_after,
+               latest_sighting_at,
                settled_lease_token,
                archive_reference, archive_instance_id, completed_at,
                last_error_category, last_error_detail, last_error_retryable
@@ -233,7 +236,7 @@ def complete_upload(
             )
             existing = connection.execute(
                 """
-                SELECT response_hash, byte_size, archive_instance_id
+                SELECT response_hash, byte_size, archive_instance_id, availability
                 FROM archive_catalogue
                 WHERE archive_reference = %s
                 FOR UPDATE
@@ -248,19 +251,47 @@ def complete_upload(
                 raise ValueError(
                     "archive reference is already bound to different bytes"
                 )
-            if existing is None:
+            if existing is not None and existing[3] != "verified":
+                connection.execute(
+                    """
+                    UPDATE collector_response_uploads
+                    SET state = 'pending', upload_generation = %s,
+                        lease_owner = NULL, lease_token = NULL,
+                        lease_expires_at = NULL,
+                        next_attempt_at = clock_timestamp(),
+                        updated_at = clock_timestamp()
+                    WHERE response_hash = %s
+                    """,
+                    (uuid4().hex, claim.response_hash),
+                )
+                return
+            if existing is not None:
+                connection.execute(
+                    """
+                    UPDATE archive_catalogue
+                    SET retire_after = clashlens_season_retire_after(%s)
+                    WHERE archive_reference = %s
+                      AND retire_after < clashlens_season_retire_after(%s)
+                    """,
+                    (row[9], archive_reference, row[9]),
+                )
+            else:
                 connection.execute(
                     """
                     INSERT INTO archive_catalogue (
                         response_hash, archive_reference, byte_size,
-                        archive_instance_id, retire_after
-                    ) VALUES (%s, %s, %s, %s, %s)
+                        archive_instance_id, first_verified_at, retire_after
+                    ) VALUES (
+                        %s, %s, %s, %s, %s,
+                        clashlens_season_retire_after(%s)
+                    )
                     """,
                     (
                         claim.response_hash,
                         archive_reference,
                         claim.byte_size,
                         archive_instance_id,
+                        complete_time,
                         row[9],
                     ),
                 )

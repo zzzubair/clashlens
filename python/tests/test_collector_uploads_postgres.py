@@ -455,11 +455,9 @@ def test_fail_upload_reconciles_exact_retry_but_fences_an_old_owner(
             )
 
 
-def test_upload_retire_after_follows_the_response_season(
+def test_late_upload_counts_86_days_from_its_latest_sighting(
     database_url: str,
 ) -> None:
-    # A season-N response uploaded days later still retires with season N:
-    # retire_after derives from response_completed_at, not upload completion.
     response_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     uploaded_later = response_at + timedelta(days=40)
     with upload_database(database_url) as connection_info:
@@ -500,16 +498,12 @@ def test_upload_retire_after_follows_the_response_season(
         with psycopg.connect(connection_info) as connection:
             row = connection.execute(
                 """
-                SELECT retire_after,
-                       clashlens_season_retire_after(%s),
-                       clashlens_season_retire_after(%s)
+                SELECT retire_after, first_verified_at
                 FROM archive_catalogue WHERE response_hash = %s
                 """,
-                (response_at, uploaded_later, response_hash),
+                (response_hash,),
             ).fetchone()
-        assert row is not None
-        assert row[0] == row[1]
-        assert row[0] != row[2]
+        assert row == (response_at + timedelta(days=86), uploaded_later)
 
 
 def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
@@ -517,7 +511,7 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
 ) -> None:
     response_at = NOW
     seen_next_season = response_at + timedelta(days=29)
-    upload_at = seen_next_season + timedelta(days=30)
+    upload_at = response_at + timedelta(days=2)
     with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
@@ -579,10 +573,10 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
                        clashlens_season_retire_after(%s)
                 FROM archive_catalogue WHERE response_hash = %s
                 """,
-                (seen_next_season, response_at, response_hash),
+                (seen_next_season, upload_at, response_hash),
             ).fetchone()
         assert row is not None
-        assert row[0] == row[1]
+        assert row[0] == row[1] == seen_next_season + timedelta(days=86)
         assert row[0] != row[2]
 
 
@@ -787,6 +781,90 @@ def test_identical_response_reuploads_when_its_location_is_tombstoned(
                 archive_instance_id="fixture-instance",
                 now=NOW + timedelta(minutes=5),
             )
+
+
+@pytest.mark.parametrize(
+    ("at_claim", "at_completion"),
+    [
+        ("verified", "verified"),
+        ("retiring", "retiring"),
+        ("expired", "expired"),
+        ("verified", "retiring"),
+    ],
+)
+def test_upload_never_reuses_a_tombstoned_legacy_location(
+    database_url: str, at_claim: str, at_completion: str
+) -> None:
+    # A location catalogued before upload rows existed has no upload row, so
+    # its bytes seen again would upload to the same key without a generation.
+    with upload_database(database_url) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        response_hash = _hash("legacy-location")
+        reference = f"s3://evidence/sha256/{response_hash[:2]}/{response_hash}"
+        _archive_instance(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO archive_catalogue (
+                    response_hash, archive_reference, byte_size, archive_instance_id,
+                    first_verified_at, retire_after, availability
+                ) VALUES (%s, %s, 1, 'fixture-instance', %s, %s, %s)
+                """,
+                (response_hash, reference, NOW - timedelta(days=200), NOW - timedelta(days=1), at_claim),
+            )
+        observed = database.record_response(
+            _handoff(
+                occurrence_key="legacy-location-seen-again",
+                response_hash=response_hash,
+                player_id=player_id,
+            )
+        )
+        claim = claim_upload(database, owner="uploader", lease_seconds=120, now=NOW)
+        assert claim is not None
+        # The write destination is chosen before any bytes are written.
+        assert (claim.generation == "") is (at_claim == "verified")
+        destination = reference + (f"/generation/{claim.generation}" if claim.generation else "")
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE archive_catalogue SET availability = %s WHERE archive_reference = %s",
+                (at_completion, reference),
+            )
+        complete_upload(
+            database,
+            claim,
+            archive_reference=destination,
+            archive_instance_id="fixture-instance",
+            now=NOW + timedelta(minutes=1),
+        )
+        with psycopg.connect(connection_info) as connection:
+            bound = connection.execute(
+                "SELECT archive_reference FROM collector_observations WHERE id = %s",
+                (observed.observation_id,),
+            ).fetchone()[0]
+            retire_after = connection.execute(
+                "SELECT retire_after FROM archive_catalogue WHERE archive_reference = %s",
+                (bound or reference,),
+            ).fetchone()[0]
+        if destination != reference:
+            assert bound == destination
+            assert retire_after == NOW + timedelta(days=86)
+            return
+        if at_completion == "verified":
+            assert bound == destination
+            assert retire_after == NOW + timedelta(days=86)
+            return
+        # Marked between claim and completion: never attached, uploaded again.
+        assert bound is None
+        assert retire_after == NOW - timedelta(days=1)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE collector_response_uploads SET next_attempt_at = %s WHERE response_hash = %s",
+                (NOW + timedelta(minutes=1), response_hash),
+            )
+        retry = claim_upload(database, owner="uploader", now=NOW + timedelta(minutes=1))
+        assert retry is not None and retry.response_hash == response_hash
+        assert len(retry.generation) == 32
 
 
 def test_ignored_raw_change_follows_the_retained_observation_archive(

@@ -356,8 +356,10 @@ cancelled. Many players can share one body, such as the same not-found profile,
 so the check does not wait while another response updates that body's records,
 or while the worker holds that player or their last saved response; it saves
 the response instead. A shared body already sighted within the last 10 minutes
-of the same season keeps its earlier latest sighting time, which only orders
-spool cleanup and starts the archive retention clock. No response waits on the
+keeps its earlier latest sighting time, which only orders spool cleanup and
+starts the archive retention clock, so its deletion can come up to 10 minutes
+early. A body already marked for deletion is never recorded this way; it is
+saved again. No response waits on the
 database while holding the shared lock: the lock covers only the spool write,
 so a later response is saved before it waits for an earlier one's database
 commit. Saved responses for the same lock
@@ -394,12 +396,10 @@ Missing files still let cleanup finish a deletion interrupted by a crash.
 
 League history is collected initially and after each season-ending Reset. It
 is stored in full and parsed separately from profiles and battle logs. Raw
-responses currently become eligible for retirement 56 days after their season
-ends; a body seen in a later season keeps that season's later deadline. The
-agreed replacement must also preserve bytes needed by seven-day backup recovery,
-including restore time; see [history-retention.md](history-retention.md).
-Retirement requires separate operator
-credentials and is never part of starting or stopping the stack.
+response deadlines and recovery protection belong in
+[history-retention.md](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
+The [deployment runbook](deployment.md#raw-response-cleanup) owns cleanup
+credentials, scheduling and enablement.
 
 Collection allows six concurrent requests per key. Request-start limits and
 shared permission rules belong in [Clash API keys](operating.md#clash-api-keys).

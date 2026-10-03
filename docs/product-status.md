@@ -56,7 +56,7 @@ deletion still require their specific approvals.
 | Army analytics | Percentages use completed Legend days after Reset. Attacks are BY selected players; defenses AGAINST them. Historical all-player and final-season Top 100 views must retain individual Clan Castle usage. Current history has all-player unit/quantity/star summaries only. | #139, [Retention contract](history-retention.md) |
 | Accounts, saved players and groups | Usernames are fixed; display names remain editable. Verified ownership is public, saved lists/groups private, and membership proves no ownership. New tag inputs share discovery rules. A one-off Google Sheets export is planned after the website and Discord bot; it is not designed yet. Two-account privacy tests now cover [direct website requests](../website/tests/e2e/account-isolation.spec.ts) and [private API requests](../python/tests/test_private_api_isolation.py). Real-provider completion and deployed privacy verification remain. | [#123](https://github.com/zzzubair/clashlens/issues/123), #127 |
 | Website and performance | Preserve desktop controls/detail and usable phone, tablet, older-device and slow-network behavior. #137 improved measured Chromium cases and the current-season Clan Castle toggle. Physical-device/browser breadth and full production load remain unproven. | #127, [#130](https://github.com/zzzubair/clashlens/issues/130) |
-| Recovery and retention | Prove seven-day recovery with required raw bytes still available during restore. Allow season corrections for seven days, then checked finalization and bounded cleanup. These are separate windows. Scheduling and physical-expiry protection are not finished. | [#122](https://github.com/zzzubair/clashlens/issues/122), [#129](https://github.com/zzzubair/clashlens/issues/129) |
+| Recovery and retention | Prove seven-day recovery with required raw bytes still available during restore. Allow season corrections for seven days, then checked finalization and bounded cleanup. These are separate windows. Raw-response cleanup with its recovery hold is built but not switched on in production. | [#122](https://github.com/zzzubair/clashlens/issues/122), [#129](https://github.com/zzzubair/clashlens/issues/129) |
 | Discord and support | Public discussion/feedback, Discord-only private tickets through an existing bot, and a separate private operator-alert channel using an incoming webhook. No custom ticket bot or email fallback. The alert channel and webhook exist and a real test alert was delivered on September 27. A separate Clash Lens Discord bot for Clashers is planned after the website; its features are not decided. | [#138](https://github.com/zzzubair/clashlens/issues/138), [#124](https://github.com/zzzubair/clashlens/issues/124) |
 | Release and operation | Tracking and public website have separate readiness records. Keep exact revisions, usable data checks, restore/reboot/upgrade evidence, costs and an operating guide. | [#131](https://github.com/zzzubair/clashlens/issues/131) |
 
@@ -169,8 +169,9 @@ existing eligibility processing locally; live import and capacity are pending.
   needed key count, measured growth capacity and cost. Prove the weekly Monday
   eligibility pass and reuse of that week's result across repeat inputs and
   daily clan checks. The 22,157 known count is not a measured active count.
-- Added storage for both historical populations and Clan Castle units; measured
-  raw-deletion restore allowance and the revised six-month projection.
+- Added storage for both historical populations and Clan Castle units, proof
+  that restores fit the [raw-expiry allowance](history-retention.md#implemented-raw-expiry-and-required-recovery-protection),
+  and the revised six-month projection.
 - Discord server/invite/channel identifiers, ticket provider/plan, permissions,
   transcript retention and support staffing. Overdue-check and Live Leaderboard
   thresholds are defined in [alert conditions](deployment.md#alert-conditions);

@@ -2,8 +2,8 @@
 
 ## Agreed changes, 2026-09-25
 
-These requirements extend the delivered #126 format; they are not yet runtime
-behavior. [#139](https://github.com/zzzubair/clashlens/issues/139) owns the new
+These requirements extend the delivered #126 format; implementation and
+remaining gaps are described below. [#139](https://github.com/zzzubair/clashlens/issues/139) owns the new
 history views, [#129](https://github.com/zzzubair/clashlens/issues/129) owns
 scheduled cleanup, and [#122](https://github.com/zzzubair/clashlens/issues/122)
 owns backup-compatible raw retention. See [product-status.md](product-status.md)
@@ -34,8 +34,9 @@ for deadlines and the full product map.
   does not make a finalized season reopenable in the current code.
 - Keep raw responses available for every restore promised by the seven-day
   backup window, including time to perform the restore. This is separate from
-  the seven-day season-correction window. Physical expiry enforcement and its
-  measured allowance/cost are still outstanding in #122 and #129.
+  the seven-day season-correction window. See
+  [raw expiry and recovery protection](#implemented-raw-expiry-and-required-recovery-protection)
+  for the implemented rule and required restore proof.
 
 No existing counters, coverage evidence, unknown-unit history or kept production
 data are authorised for deletion by this documentation change. Historical day
@@ -251,46 +252,83 @@ relation files or imply that retained WAL/backups have expired. Do not run
 
 ## Implemented raw expiry and required recovery protection
 
-Do **not** configure an upload-age lifecycle on the evidence namespace. The
-current code makes a response eligible for retirement 56 days after the 28-day
-season containing its latest sighting ends:
-the season boundary starts the clock, not each response's individual age. A body
-still returned in a later season keeps that season's later deadline; an earlier
-sighting never shortens it. The deadline derives from the response's own
-completion time, not the upload's: a season response uploaded after the season
-boundary still retires with its season. Existing catalogue entries are dated
-by their first verification time.
+Do **not** configure an upload-age lifecycle on the evidence namespace. A raw
+response becomes due **86 days after its latest sighting**. A body returned
+again later moves its deadline later; an earlier sighting never shortens it.
+An unchanged poll within 10 minutes of the previous sighting does not move it,
+so deletion can come up to 10 minutes before the exact latest sighting plus 86
+days.
+Uploading late does not start another retention clock.
 
-That eligibility deadline alone does not meet the newly agreed recovery rule.
-Before enabling production expiry, #122/#129 must prove that no still-promised
-restore can reference bytes already deleted, including the restore allowance.
-The command below is the existing interface, not approval to apply its current
-physical-deletion timing in production.
+Migration 0046 recalculates existing stored responses from the later of their
+latest retained sighting and first verification, and discards the old season
+deadline. The latest retained sighting is the newest of that location's
+observations, its upload record's latest sighting and the newest compact poll
+state for its hash.
+A response with no retained sighting counts from its first verification. Records
+with neither time have no deadline and are never automatically deleted.
 
-Run on the collector host, mounting the **exact same spool and lock directory**
-and using its archive instance/bucket/marker configuration. Supply separate
-operator database and object credentials with DELETE permission; do not add
-DELETE permission to normal collection credentials.
+- **Retiring**: the state cleanup gives a due response, which blocks every new
+  use of it while its bytes still exist.
+- **Recovery hold**: the nine days a retiring response waits before cleanup
+  deletes its bytes.
+- **Marked or held response**: a response that is retiring and still inside its
+  recovery hold.
+
+A response the old code had already marked `retiring`
+starts its recovery hold at its recalculated deadline, or at upgrade time if
+that is later.
+
+A due response is not deleted straight away. Cleanup first marks it `retiring`,
+which blocks every new use, then deletes its bytes only **nine days later**: the
+seven-day recovery window chosen on September 25 plus a two-day allowance to
+carry out a restore. A restore can target any point from the last seven days.
+Anything still usable at that point was marked after it, so its bytes survive at
+least two more days after the restore starts. For longer restores while
+production keeps running, follow the
+[restore procedure](deployment.md#restore-into-a-separate-database).
+
+A response therefore stays usable for at least 86 days after its latest
+sighting, less at most 10 minutes. With no unfinished work and cleanup keeping
+up, its bytes stay about 95 days, plus the wait for the next cleanup batch. The
+measured 21.83 GB/day of new raw responses (October 2) means about 2.07 TB
+stored, roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
+
+Any unfinished upload of the same bytes and unfinished/failed processing or
+replay keep a response usable. Marking commits before any
+DELETE, and the delete step rechecks that the row is still this archive's held
+tombstone. An unknown or failed DELETE leaves the row `retiring`, is counted in
+`failed_objects`, does not stop the batch and is retried by the next run.
+Recollection uses a new immutable `generation/<token>` location, so a delayed
+old DELETE cannot remove new bytes. An upload whose original location is already
+`retiring` or `expired` gets a new generation before it writes anything. One
+whose location is marked while it uploads is never attached to it: it uploads
+again under a new generation. One that finishes on a kept location extends its
+deadline when its latest sighting is later. Catalogue tombstones remain;
+cleanup does not compact them. Bucket versioning, noncurrent versions, backup retention and
+orphan objects need separately verified provider policies; deleting a current
+key does not prove all provider storage was reclaimed.
+
+Do not enable production expiry until #122/#129 prove that no still-promised
+restore can reference deleted bytes: restore a genuine seven-day-old point and
+read the raw references it needs. The code stays off by default until then.
+[`deployment.md`](deployment.md#raw-response-cleanup) owns the scheduled job,
+its credentials and the dry-run-first enablement steps. The command it runs is:
 
 ```sh
-python -m clashlens prune-archive --max-objects 100
-# Only after reviewing the preview and verifying the shared spool:
-python -m clashlens prune-archive --max-objects 100 --apply
+python -m clashlens prune-archive --max-objects 1000          # preview
+python -m clashlens prune-archive --max-objects 1000 --apply  # mark and delete
 ```
 
-This command uses the normal archive and spool arguments/environment settings.
-It validates archive identity through the normal reader initialization. A wrong
-spool path defeats cross-process locking: provisioning the shared mount is an
-operator prerequisite, not something the command can prove remotely.
-
-Pending verification and unfinished/failed processing or replay protect an
-object. Retirement commits a tombstone before remote DELETE. Unknown DELETE
-outcomes stay `retiring` and are retried. Recollection uses a new immutable
-`generation/<token>` location, so a delayed old DELETE cannot remove new bytes.
-Catalogue tombstones remain; this command does not compact them. Bucket versioning,
-noncurrent versions, backup retention and orphan objects need separately verified
-provider policies; deleting a current key does not prove all provider storage was
-reclaimed.
+Each run deletes up to the batch size of held responses whose nine days have
+passed, then marks up to the batch size of due ones. The preview changes nothing
+and reports how many objects and bytes that one batch would delete and mark.
+It must run on the collector host with the **exact same spool**, because a wrong
+spool path defeats cross-process locking.
+Migration 0047 adds a lookup from each processing job to its source response,
+built in the normal migration transaction while application services are stopped,
+so each response's in-use check finds matching jobs through that lookup rather
+than searching the whole job history.
 
 The local spool remains bounded temporary storage, not a bucket mirror. Existing
 spool cleanup is separate from remote retirement. After raw expiry or operational

@@ -180,9 +180,10 @@ limitation, alongside the useful per-response cost.
 The current system does not prove that all database storage stays within
 that baseline. Ordinary collection observations and archive catalogue
 tombstones do not have a general deletion policy. A bounded local spool
-does not imply a bounded database. Existing season-finalization and
-retirement commands remain operator-invoked and are not scheduled by
-`./ops`. This change does not delete retained data to make a projection fit.
+does not imply a bounded database. Season-finalization and detail-retirement
+commands remain operator-invoked. Raw-response cleanup now has its own
+[optional schedule](deployment.md#raw-response-cleanup). The #110 change did
+not delete retained data to make a projection fit.
 
 Migration 0028 adds one latest-sighting timestamp per content-addressed
 upload, preserving the retention deadline even when an upload is delayed
@@ -190,14 +191,12 @@ and compact response state moves on. Its eight-byte value adds roughly
 0.8–3.2 MB/day at the modeled 100,000–400,000 new hashes/day, before tuple
 overhead. That is a modeled cost, not an observed live change rate.
 
-Some legacy compact sightings cannot be reconstructed. The migration
-therefore also gives existing uploads a one-time retirement floor based on
-the migration's season, preserving any later deadline. That separate
-nullable timestamp uses eight bytes on legacy upload rows; new uploads do
-not receive this floor. Existing verified objects may consequently remain
-longer. The extra archive cost depends on the legacy bytes otherwise due
-for retirement; this fixture test does not measure a live archive. No
-index on per-poll freshness is added.
+Some legacy compact sightings cannot be reconstructed. Migration 0028 added a
+one-time minimum retention deadline for existing uploads. Migration 0046 removes that
+separate timestamp and replaces the season-based rule; see
+[raw expiry and recovery protection](history-retention.md#implemented-raw-expiry-and-required-recovery-protection)
+for current upgrade behavior and archive cost. The #110 fixture test did not
+measure a live archive or add an index on per-poll freshness.
 
 Migration 0029 records the settled upload attempt as a UUID and its retry
 disposition. The values use up to 17 bytes per upload, approximately

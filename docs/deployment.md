@@ -172,9 +172,10 @@ The archive credentials have separate duties. The collector credential creates
 immutable raw responses and may read back the marker or one exact object to
 prove a write; the worker credential can only read. Neither runtime credential
 may list, overwrite, delete, or broadly browse archive objects.
-The database also has separate collector, worker, and API roles. The admin
-database URL exists only as a short-lived Podman secret during fixture
-bootstrap or while an operator explicitly handles a failed item.
+The database also has separate collector, worker, and API roles, plus a
+[raw-response cleanup](#raw-response-cleanup) role. The admin database URL
+exists only as a short-lived Podman secret during fixture bootstrap or while an
+operator explicitly handles a failed item.
 
 ### Paris fixed-address relay
 
@@ -341,10 +342,9 @@ applications each hold one API key:
   overwrite. Its key pair goes in `app.env` as `CLASHLENS_ARCHIVE_*`.
 - `clashlens-archive-worker` — object read only. Its key pair goes in
   `app.env` as `CLASHLENS_WORKER_ARCHIVE_*`.
-- `clashlens-archive-operator` — object delete only, for `prune-archive`.
-  Keep its key pair in a separate mode-600 file outside `app.env`, the
-  checkout, and the generated unit environment; it is used only by explicit
-  operator runs.
+- `clashlens-archive-operator` — object delete only, for
+  [raw-response cleanup](#raw-response-cleanup). Keep its key pair outside
+  `app.env`, the checkout and the generated unit environment, as described there.
 
 The bucket policy is an allowlist: anything not granted there is denied for
 the scoped credentials, which is what makes list, delete, and unconditional
@@ -528,6 +528,8 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    object referenced by the sample and verify its hash. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
 5. Repeat for the seven-day-old boundary, using a full backup from before it.
+   If the restore could take more than two days while production keeps
+   running, first run `systemctl --user stop clashlens-archive-retention.timer`.
    Repeat affected checks after the season history and cleanup work in #140
    changes stored data or maintenance.
 
@@ -547,16 +549,10 @@ until they age out; failed uploads can leave partial objects requiring separatel
 reviewed cleanup. Real traffic must be measured before accepting the €60 total
 monthly envelope. Do not silently let failed pruning or WAL uploads accumulate.
 
-On September 25 Zubair chose to preserve raw responses for the entire promised
-seven-day recovery window, including time to restore. The current season-end
-plus 56-day expiry code does not yet enforce this protection: a restored
-catalogue could reference a response deleted later. #122 owns implementation
-and restore proof; #129 must use that protection in scheduled cleanup. Do not
-enable production expiry until it is proven. Seven extra days add about 10%
-to the older modeled 70-day average raw lifetime, roughly €0.40–€2/month using
-#120's €4–€20 range. This is an earlier pricing model, not a measured bill or a
-final restore allowance; reprice it for 12,500 live players, weekly checks of
-the 22,157-tag known pool and measured growth.
+The raw-response retention rule, recovery protection and projected cost belong in
+[raw expiry](history-retention.md#implemented-raw-expiry-and-required-recovery-protection)
+and the enablement prerequisites belong in
+[raw-response cleanup](#raw-response-cleanup).
 
 Validation on 2026-09-19 used a separate PostgreSQL cluster with all 34 migrations
 and synthetic records, under R2 prefix `validation-20260919`. A full backup took
@@ -579,6 +575,64 @@ seven-day-old point, and verify host reboot. Earlier small restores and service
 checks do not prove those remaining gates. Keep real collection disabled until
 backups and #124 alerts are proven. This documentation update does not deploy
 or close #122.
+
+## Raw-response cleanup
+
+The scheduled cleanup deletes old raw responses from the Scaleway archive under
+the [raw-expiry rule and recovery protection](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
+It is off by default. Store the operator key pair as two service-owned mode-600
+one-line files beside the Clash API keys:
+`clashlens-archive-operator-access-key` and
+`clashlens-archive-operator-secret-key` in `CLASHLENS_API_KEY_HOST_DIR`. Then set
+`CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD` (32–128 URL-safe characters, like the
+other role passwords) and `CLASHLENS_ARCHIVE_RETENTION` in `app.env`:
+
+- `off`: no timer, `up` removes the operator secrets from Podman, and the
+  cleanup database role cannot log in.
+- `preview`: no timer; `./ops archive-prune` previews one batch on request. It
+  changes nothing.
+- `apply`: the timer marks and deletes.
+
+`up` copies the operator keys and the cleanup role's database address into
+Podman secrets that only the cleanup container mounts. The database secret,
+`clashlens-archive-operator-database-url`, logs in as
+`clashlens_archive_retention`, not the administrator. That role can read only
+the archive identity, the stored-response list, upload states, each
+observation's stored-response location and each job's status; it can change
+only a stored response's deletion state, and it locks observations and jobs
+through one fixed database function. These secrets remain after `down`; the
+next production `up` with `CLASHLENS_ARCHIVE_RETENTION=off` removes them. The
+collector, worker, API and website never receive them. Each run starts a short-lived container with the
+same spool as the collector, processes one batch of up to 1,000 deletions and
+1,000 markings, and prints one JSON report. In `apply` the timer starts five
+minutes after `up` and runs again 30 seconds after each batch finishes.
+Scheduled runs do not take the shared operation lock, so they never delay
+deployment or backups; `up` and `down` stop the timer first. A manual run takes
+the lock like other operator commands.
+
+```sh
+./ops archive-prune              # preview now
+./ops archive-prune --apply      # one batch now; only when set to apply
+./ops logs archive-retention --since today
+```
+
+Enable it in two approved steps:
+
+1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its per-batch
+   counts and bytes for responses to delete and mark in the deployment report.
+2. Only after #122/#129 prove the seven-day-old restore above and that report
+   is approved, set `apply` and run `./ops up`.
+
+Throughput is unmeasured. At an assumed 50 ms per deletion, deleting 1,000
+objects takes 50 seconds. With the 30-second gap, that is a theoretical
+1.08 million deletions a day before marking, database waits and container startup,
+against about 553,000 new objects a day on October 2. After switching on deletion,
+total `deleted_objects` across a full day and compare it with new arrivals.
+If cleanup cannot keep up, the backlog and the bill keep growing.
+
+A run with any failed object exits unsuccessfully, which marks the service
+failed. Logs record its report and each failed object's location and error type.
+The next run retries.
 
 ## Status and logs
 

@@ -17,6 +17,9 @@ from pathlib import Path
 import pytest
 
 OPS = Path(__file__).resolve().parents[2] / "ops"
+# A full ops command makes over 100 calls to the Python Podman stand-in below, each starting
+# Python, so it takes about 3 seconds locally and over 15 on slow CI runners.
+OPS_TIMEOUT = 60
 MODE_CONFIG = r"""
 source "$1" help >/dev/null
 MODE=$TEST_MODE
@@ -181,7 +184,7 @@ def run_ops(runtime, rows, *args, upload_exit=0):
         env=dict(env, BACKUPS=json.dumps(rows), UPLOAD_EXIT=str(upload_exit)),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=OPS_TIMEOUT,
         check=False,
     )
 
@@ -629,7 +632,7 @@ def test_scheduled_backup_waits_for_operation_lock(runtime):
             time.sleep(0.2)
             assert process.poll() is None
             fcntl.flock(lock, fcntl.LOCK_UN)
-            stdout, stderr = process.communicate(timeout=60)
+            stdout, stderr = process.communicate(timeout=OPS_TIMEOUT)
         except BaseException:
             process.kill()
             process.communicate()
@@ -651,7 +654,7 @@ def test_changed_checkout_is_rejected_before_remote_activity(runtime, tmp_path):
         env=dict(env, BACKUPS=json.dumps([backup_row(1, 1)])),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=OPS_TIMEOUT,
         check=False,
     )
 
@@ -706,7 +709,7 @@ def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
             env=dict(env, LC_ALL=language),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=OPS_TIMEOUT,
             check=False,
         )
         assert result.returncode == 0, result.stderr
@@ -720,9 +723,150 @@ def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
         env=dict(env, LC_ALL=english),
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=OPS_TIMEOUT,
         check=False,
     )
     assert result.returncode != 0
     assert "release inputs changed after deployment" in result.stderr
     assert not activity.exists()
+
+
+def _raw_cleanup_config(mode_config, tmp_path, setting):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(f"CLASHLENS_ARCHIVE_RETENTION={setting}\n")
+        config.write("CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD=" + "r" * 32 + "\n")
+    for name in ("access", "secret"):
+        key = tmp_path / "secrets" / f"clashlens-archive-operator-{name}-key"
+        key.write_text("operator-key\n")
+        key.chmod(0o600)
+
+
+def test_raw_cleanup_database_secret_uses_its_own_role(tmp_path, mode_config):
+    _raw_cleanup_config(mode_config, tmp_path, "apply")
+    store = tmp_path / "podman-secrets"
+    store.mkdir()
+    podman = tmp_path / "podman"
+    podman.write_text(FAKE_SECRET_STORE)
+    podman.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + "prepare_secrets\n", "cleanup-secret-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production", PODMAN_BIN=str(podman), SECRET_STORE=str(store)),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (store / "clashlens-archive-operator-database-url").read_text() == (
+        "postgresql://clashlens_archive_retention:" + "r" * 32
+        + "@127.0.0.1:5432/clashlens?sslmode=disable"
+    )
+    assert not (store / "clashlens-init-database-url").exists()
+
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write("CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD=short\n")
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG, "cleanup-secret-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD must be 32-128" in result.stderr
+
+
+def _systemd_unit(path):
+    """systemd semantics: comments ignored, repeated keys and words accumulate."""
+    sections, section = {}, None
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("["):
+            section = sections.setdefault(line.strip("[]"), {})
+        elif line and line[0] not in "#;":
+            key, value = line.split("=", 1)
+            section.setdefault(key.strip(), []).extend(value.split())
+    return sections
+
+
+@pytest.mark.parametrize("setting", ["off", "preview", "apply"])
+def test_raw_cleanup_timer_is_installed_only_when_deletion_is_on(tmp_path, mode_config, setting):
+    units = tmp_path / "config" / "systemd" / "user"
+    units.mkdir(parents=True, exist_ok=True)
+    # A unit left by an earlier apply setting is removed when deletion is off.
+    for name in ("service", "timer"):
+        (units / f"clashlens-archive-retention.{name}").write_text("# Managed by Clash Lens ./ops.\n")
+    _raw_cleanup_config(mode_config, tmp_path, setting)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            MODE_CONFIG
+            + "RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)\nrender_units\n",
+            "unit-rendering-test",
+            str(OPS),
+        ],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    target = _systemd_unit(units / "clashlens.target")
+    enabled = setting == "apply"
+    assert ("clashlens-archive-retention.timer" in target["Unit"].get("Wants", [])) is enabled
+    assert (units / "clashlens-archive-retention.timer").exists() is enabled
+    assert (units / "clashlens-archive-retention.service").exists() is enabled
+    if enabled:
+        service = _systemd_unit(units / "clashlens-archive-retention.service")
+        assert service["Service"]["ExecStart"] == [str(OPS), "archive-prune", "--scheduled"]
+
+
+@pytest.mark.parametrize("setting", ["preview", "apply"])
+def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
+    runtime, mode_config, tmp_path, setting
+):
+    env, _ = runtime
+    _raw_cleanup_config(mode_config, tmp_path, setting)
+    deletes = setting == "apply"
+    runs = tmp_path / "runs"
+    podman = tmp_path / "recording-podman"
+    podman.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "if sys.argv[1] == 'run':\n"
+        f"    open({str(runs)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "    sys.exit(0)\n"
+        f"os.execv({env['PODMAN_BIN']!r}, [{env['PODMAN_BIN']!r}, *sys.argv[1:]])\n"
+    )
+    podman.chmod(0o700)
+    env = dict(mode_config, **{k: env[k] for k in ("SYSTEMCTL_BIN", "PATH")}, PODMAN_BIN=str(podman))
+    lock_path = tmp_path / "state" / "clashlens" / "ops.lock"
+    with lock_path.open("w") as lock:
+        # A deployment or backup holding the operation lock does not delay cleanup.
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        scheduled = subprocess.run(
+            ["bash", str(OPS), "archive-prune", "--scheduled"],
+            env=env, capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
+        )
+    assert (scheduled.returncode == 0) is deletes, scheduled.stderr
+    if deletes:
+        command = runs.read_text()
+        assert "prune-archive --max-objects 1000" in command
+        assert command.rstrip().endswith("--apply")
+        assert "clashlens-archive-operator-secret-key" in command
+    else:
+        assert not runs.exists()
+        preview = subprocess.run(
+            ["bash", str(OPS), "archive-prune"],
+            env=env, capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
+        )
+        assert preview.returncode == 0, preview.stderr
+        assert not runs.read_text().rstrip().endswith("--apply")
+    manual = subprocess.run(
+        ["bash", str(OPS), "archive-prune", "--apply"],
+        env=env, capture_output=True, text=True, timeout=OPS_TIMEOUT, check=False,
+    )
+    assert (manual.returncode == 0) is deletes, manual.stderr

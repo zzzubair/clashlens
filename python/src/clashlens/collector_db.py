@@ -1144,18 +1144,17 @@ class CollectorDatabase:
         ).fetchone()
         if retained is None:
             return False
-        # A shared body sighted under 10 minutes ago this season is not locked or
-        # updated: that time only sets retention deadlines (so retention cannot
-        # take its rows now) and spool cleanup order; no metric reads it.
+        # A shared body sighted under 10 minutes ago is not locked or updated: that
+        # time only orders spool cleanup and sets a retention deadline at most 10
+        # minutes early, never one due now; no metric reads it. Marked ones never pass.
         fresh = not saved and connection.execute(
             """SELECT EXISTS (SELECT FROM collector_response_uploads
-            WHERE response_hash = %(h)s AND latest_sighting_at > %(at)s - interval '10 minutes'
-              AND clashlens_season_retire_after(latest_sighting_at) >= clashlens_season_retire_after(%(at)s))""",
+            WHERE response_hash = %(h)s AND latest_sighting_at > %(at)s - interval '10 minutes')""",
             {"h": retained[0], "at": handoff.response_completed_at},
         ).fetchone()[0]
         if retained[1] is not None:
             availability = connection.execute(
-                """SELECT availability, retire_after >= clashlens_season_retire_after(%s)
+                """SELECT availability, retire_after > clashlens_season_retire_after(%s) - interval '10 minutes'
                 FROM archive_catalogue WHERE response_hash = %s AND archive_reference = %s"""
                 + ("" if fresh else " FOR UPDATE" + skip),
                 (handoff.response_completed_at, *retained),
@@ -1177,13 +1176,14 @@ class CollectorDatabase:
             return False
         self._upsert_response_state(connection, handoff, state[2], saved)
         self._record_intent_endpoint(connection, handoff, state[2])
-        # A body still returned in a later season keeps that season's deadline.
-        connection.execute(
-            """UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after(%s)
-            WHERE response_hash = %s AND archive_reference = %s AND availability = 'verified'
-              AND retire_after < clashlens_season_retire_after(%s)""",
-            (handoff.response_completed_at, *retained, handoff.response_completed_at),
-        )
+        # Ignored duplicates still extend the deadline: retention follows raw sightings.
+        if not fresh:
+            connection.execute(
+                """UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after(%s)
+                WHERE response_hash = %s AND archive_reference = %s AND availability = 'verified'
+                  AND retire_after < clashlens_season_retire_after(%s)""",
+                (handoff.response_completed_at, *retained, handoff.response_completed_at),
+            )
         return True
 
     def _record_response(
