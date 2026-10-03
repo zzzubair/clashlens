@@ -64,6 +64,9 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
         assert before["failed_uploads"] == 0
         assert before["last_success_age_seconds"] >= 1
         assert before["oldest_pending_processing_age_seconds"] < 600
+        assert before["oldest_pending_upload_age_seconds"] < 600
+        assert "newest_failed_processing_age_seconds" not in before
+        assert "newest_failed_upload_age_seconds" not in before
         with psycopg.connect(connection_info) as connection:
             connection.execute(
                 """
@@ -71,6 +74,9 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
                 SET created_at = created_at - CASE WHEN http_status = 200
                     THEN interval '40 minutes' ELSE interval '20 minutes' END
                 """
+            )
+            connection.execute(
+                "UPDATE collector_response_uploads SET created_at = created_at - interval '2 hours'"
             )
         for status in ("pending", "waiting_retry", "waiting_dependency", "leased"):
             with psycopg.connect(connection_info) as connection:
@@ -87,6 +93,7 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
             waiting = database.health_metrics()
             assert waiting["pending_processing"] == 2
             assert waiting["oldest_pending_processing_age_seconds"] >= 2400
+            assert waiting["oldest_pending_upload_age_seconds"] >= 7200
         for status in ("complete", "failed", "cancelled"):
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
@@ -100,6 +107,8 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
             finished = database.health_metrics()
             assert finished["pending_processing"] == 0
             assert finished["oldest_pending_processing_age_seconds"] == 0
+            if status == "failed":
+                assert finished["newest_failed_processing_age_seconds"] < 600
 
         claim = claim_upload(database, owner="metrics-test")
         assert claim is not None
@@ -128,6 +137,8 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
         reopened.close()
         assert after["pending_uploads"] == 1
         assert after["failed_uploads"] == 1
+        assert after["newest_failed_upload_age_seconds"] < 600
+        assert after["oldest_pending_upload_age_seconds"] >= 7200
         assert after["last_success_age_seconds"] >= before["last_success_age_seconds"]
 
 

@@ -822,6 +822,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         player_discovery_enabled=not getattr(
             arguments, "disable_player_discovery", False
         ),
+        statement_timeout_seconds=_db.WORKER_STATEMENT_TIMEOUT_SECONDS,
     )
     assert_contract_version = getattr(database, "assert_contract_version", None)
     if callable(assert_contract_version):

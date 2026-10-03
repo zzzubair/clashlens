@@ -889,10 +889,12 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
         max_size: int,
         expected_contract_version: int,
         player_discovery_enabled: bool,
+        statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version
         recorded["player_discovery_enabled"] = player_discovery_enabled
+        recorded["statement_timeout_seconds"] = statement_timeout_seconds
         database = PoolRecordingDatabase(_url, max_size=max_size)
         recorded["database"] = database
         return database
@@ -911,6 +913,7 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
     assert recorded["database_max_size"] == 4
     assert recorded["expected_contract_version"] == 5
     assert recorded["player_discovery_enabled"] is True
+    assert recorded["statement_timeout_seconds"] == 900
     assert recorded["archive_pool_size"] == 4
     assert recorded["process_until_idle"]["owner"] == "cli-worker"
     assert recorded["process_until_idle"]["max_jobs"] == 3
@@ -937,6 +940,7 @@ def test_run_worker_disables_player_discovery_when_flagged(monkeypatch) -> None:
         max_size: int,
         expected_contract_version: int,
         player_discovery_enabled: bool,
+        statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["player_discovery_enabled"] = player_discovery_enabled
         return PoolRecordingDatabase(_url, max_size=max_size)
@@ -967,6 +971,7 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         max_size: int,
         expected_contract_version: int,
         player_discovery_enabled: bool,
+        statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version
@@ -1030,6 +1035,7 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
         max_size: int,
         expected_contract_version: int,
         player_discovery_enabled: bool,
+        statement_timeout_seconds: int,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version

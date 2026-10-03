@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import fcntl
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -48,6 +49,27 @@ CONDITIONS = {
     "leaderboard": (
         "A Live Leaderboard player was last updated over ten minutes ago",
         "./ops queue-status",
+    ),
+    "failures": (
+        "A processing job or raw-response upload failed permanently in the last 24 hours",
+        "./ops failed-items",
+    ),
+    "processing": (
+        "Saved work has waited over an hour to be processed",
+        "./ops logs worker",
+    ),
+    "uploads": (
+        "A raw response has waited over an hour to be uploaded to the archive",
+        "./ops logs collector",
+    ),
+    "publication": (
+        "A Reset's frozen leaderboard or army results are over an hour past their publication time",
+        "./ops logs worker",
+    ),
+    # Checked from outside the server by --uptime, not by alert-check.
+    "site": (
+        "The Clash Lens website or its health check stopped answering, checked from outside the server",
+        "ssh fedora, then ./ops status",
     ),
 }
 
@@ -168,6 +190,43 @@ def leaderboard_freshness_probe(now: datetime | None = None) -> None:
     print(board["source_observations"]["stale_count"], board["total_entries"])
 
 
+def publication_probe() -> None:
+    """Run inside the API container; prints how many Resets are unpublished.
+
+    A Reset counts when no generation of it has published both its frozen
+    leaderboard and its army results an hour after its target time, or when
+    a Reset since the first one has no generation at all 70 minutes after it.
+    """
+    from clashlens.api_db import ApiDatabase
+
+    url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
+    database = ApiDatabase(url, max_size=1)
+    try:
+        print(
+            database.scalar(
+                """
+                WITH resets AS (
+                    SELECT boundary_at, min(target_at) AS target_at,
+                           bool_or(snapshot_state IN ('published', 'superseded'))
+                           AND bool_or(army_state IN ('published', 'superseded')) AS done
+                    FROM boundary_publication_generations GROUP BY boundary_at
+                ), expected AS (
+                    SELECT generate_series(
+                        (SELECT min(boundary_at) FROM resets),
+                        clock_timestamp() - interval '70 minutes', interval '24 hours'
+                    ) AS boundary_at
+                )
+                SELECT (SELECT count(*) FROM resets WHERE NOT done
+                          AND target_at < clock_timestamp() - interval '1 hour')
+                     + (SELECT count(*) FROM expected
+                        WHERE boundary_at NOT IN (SELECT boundary_at FROM resets))
+                """
+            )
+        )
+    finally:
+        database.close()
+
+
 def elapsed_without_reset(start: float, end: float) -> float:
     # More than a day is already far over the ten-minute threshold.
     start = max(start, end - 86400)
@@ -278,6 +337,7 @@ def observe(
     errors = []
     podman = os.environ.get("PODMAN_BIN", "podman")
     metrics = {}
+    metrics_read = False
     try:
         body = request(
             f"http://127.0.0.1:{int(config['health_port'])}/metrics"
@@ -294,6 +354,7 @@ def observe(
             state["last_success"] = now - age
         elif "clashlens_collector_active_players" not in metrics:
             raise ValueError
+        metrics_read = "clashlens_collector_pending_processing" in metrics
     except (OSError, ValueError, subprocess.SubprocessError):
         errors.append(
             "Collector metrics unavailable; fetch-gap clock continues and spool usage is unknown"
@@ -305,6 +366,15 @@ def observe(
     reset_terminal = metrics.get("clashlens_collector_reset_terminal")
     if overdue is not None and reset_total is not None and reset_terminal == reset_total:
         findings["collection"] = overdue >= 600
+    if metrics_read:
+        prefix = "clashlens_collector_"
+        findings["failures"] = any(
+            metrics.get(f"{prefix}newest_failed_{kind}_age_seconds", math.inf) < 86400
+            for kind in ("processing", "upload")
+        )
+        for name, kind in (("processing", "processing"), ("uploads", "upload")):
+            age = metrics.get(f"{prefix}oldest_pending_{kind}_age_seconds")
+            findings[name] = None if age is None else age >= 3600
 
     names = (
         ("clashlens_spool_bytes", "max_bytes"),
@@ -403,29 +473,39 @@ def observe(
         findings["reads"] = command(probe, 25).returncode != 0
     except (OSError, subprocess.SubprocessError):
         findings["reads"] = True
-    try:
-        result = command(
-            [
-                podman,
-                "exec",
-                "clashlens-python-api",
-                "python",
-                "-m",
-                "clashlens.alerts",
-                "--leaderboard",
-            ],
-            25,
-        )
-        stale, _ = (int(value) for value in result.stdout.split())
-        if result.returncode:
-            raise ValueError
-        findings["leaderboard"] = stale > 0
-    except (OSError, ValueError, subprocess.SubprocessError):
-        errors.append("Live Leaderboard freshness unavailable; run ./ops logs api")
+    for name, flag, count, unavailable in (
+        ("leaderboard", "--leaderboard", 2, "Live Leaderboard freshness"),
+        ("publication", "--publication", 1, "Reset publication status"),
+    ):
+        try:
+            result = command(probe[:-1] + [flag], 25)
+            values = [int(value) for value in result.stdout.split()]
+            if result.returncode or len(values) != count:
+                raise ValueError
+            findings[name] = values[0] > 0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            errors.append(f"{unavailable} unavailable; run ./ops logs api")
+    findings.pop("site")
     return findings, errors
 
 
-def run(config: dict, state_dir: Path, root: Path) -> int:
+def observe_site(
+    config: dict, state: dict, now: float, _root: Path | None
+) -> tuple[dict, list[str]]:
+    """Alert once the site has failed every check for two minutes."""
+    try:
+        for url in config["urls"]:
+            request(url)
+    except (OSError, ValueError, CheckError, http.client.HTTPException):
+        since = state.setdefault("site_failing_since", now)
+        return {"site": True if now - since >= 120 else None}, [
+            "Website or health check did not answer"
+        ]
+    state.pop("site_failing_since", None)
+    return {"site": False}, []
+
+
+def run(config: dict, state_dir: Path, root: Path | None, check=observe) -> int:
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     with os.fdopen(
         os.open(
@@ -448,7 +528,7 @@ def run(config: dict, state_dir: Path, root: Path) -> int:
         intent = state_dir / "alert-intent"
         if intent.exists():
             state["resumed_at"] = intent.stat().st_mtime
-        findings, errors = observe(config, state, now, root)
+        findings, errors = check(config, state, now, root)
         save_state(path, state)
         delivered = deliver(state, findings, now, path, webhook)
         for error in errors:
@@ -464,6 +544,17 @@ def main() -> int:
         if sys.argv[1:] == ["--leaderboard"]:
             leaderboard_freshness_probe()
             return 0
+        if sys.argv[1:] == ["--publication"]:
+            publication_probe()
+            return 0
+        if sys.argv[1:2] == ["--uptime"] and len(sys.argv) > 4:
+            state_dir, webhook, *urls = sys.argv[2:]
+            return run(
+                {"webhook_file": webhook, "urls": urls},
+                Path(state_dir),
+                None,
+                observe_site,
+            )
         state_dir, root, webhook, health, spool, max_bytes, max_objects = sys.argv[1:]
         return run(
             {

@@ -202,8 +202,9 @@ Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
 to interpret messages. Confirm both the measurements below and the recovery
 message in the private operator channel. `./ops alert-check` can run the check
 immediately, but **sends real Discord messages** and saves alert state.
-A successful exit means the check and delivery worked, not that all seven
-conditions are healthy.
+A successful exit means the check and delivery worked, not that all eleven
+conditions are healthy. The website-unreachable alert comes from the
+[outside check](deployment.md#outside-availability-check) on the Paris relay.
 
 ### Tracker stopped
 
@@ -327,6 +328,9 @@ the worker logs a `late_battle_sweep` line with status `complete` once every
 player's correction for a Reset has succeeded, `retrying` after a
 `player_failed` line, or `failed` if the check itself errored; after either
 of those it tries again 10 minutes later.
+
+A waiting upload with `oldest_pending_upload_age_seconds` over an hour points
+at the archive: look for upload errors in `./ops logs collector`.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
@@ -459,6 +463,39 @@ by hand. `./ops history-prune` runs one batch now.
 
 **Recovered:** the service's latest run succeeded, and while older finished
 jobs remain, batches report `deleted_python_processing_jobs` above zero.
+
+### Work failed permanently
+
+**First checks:** `./ops failed-items --limit 20` lists failed processing jobs
+and uploads with their failure category.
+
+**Fix or escalate:** retry a failed upload with `--upload-hash` and `--apply`
+once its cause is fixed. Failed processing jobs have no retry command; see
+[failed work](deployment.md#failed-work) and escalate.
+
+**Recovered:** 24 hours after the newest permanent failure.
+
+### Reset publication missing
+
+**First checks:** `./ops logs worker --since '2 hours ago' --no-pager`, then:
+
+```sh
+podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
+  "SELECT boundary_at, generation, snapshot_state, army_state FROM boundary_publication_generations ORDER BY 1, 2"
+```
+
+**Fix or escalate:** escalate; repairing a publication needs an approved change.
+
+**Recovered:** every Reset since the first one has published its frozen
+leaderboard and army results.
+
+### Website unreachable from outside
+
+**First checks:** `ssh fedora`, then `./ops status` and
+`curl --max-time 10 http://127.0.0.1:3000/healthz`. If rogue does not answer
+SSH, it is powered off or offline.
+
+**Recovered:** the relay's check answers again and posts its recovery.
 
 ### When alerts themselves fail
 

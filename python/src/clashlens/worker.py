@@ -7,7 +7,7 @@ from threading import Event, Lock
 from time import monotonic
 from typing import Any
 
-from psycopg.errors import DeadlockDetected, SerializationFailure
+from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
 
 from . import (
     army_ingestion,
@@ -370,6 +370,16 @@ class ObservationProcessor:
                 return self._process_claim_once(claim, lease_seconds=lease_seconds)
             except (DeadlockDetected, SerializationFailure):
                 continue
+            except QueryCanceled:
+                # The worker's statement deadline cancelled stuck work and its
+                # transaction rolled back. Give the attempt back so queue
+                # maintenance requeues the job once its lease expires, rather
+                # than failing it if this was its last attempt.
+                try:
+                    self.database.refund_claim_attempt(claim)
+                except (LeaseLost, QueryCanceled):
+                    return ProcessResult(claim.job_id, "lease_lost")
+                return ProcessResult(claim.job_id, "retrying", "database_timeout")
         try:
             return self._fail(claim, "database_deadlock", retryable=True)
         except (DeadlockDetected, SerializationFailure):

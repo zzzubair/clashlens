@@ -31,6 +31,9 @@ def runtime(tmp_path, monkeypatch):
             "clashlens_collector_oldest_due_age_seconds": 120,
             "clashlens_collector_reset_total": 0,
             "clashlens_collector_reset_terminal": 0,
+            "clashlens_collector_pending_processing": 0,
+            "clashlens_collector_oldest_pending_processing_age_seconds": 0,
+            "clashlens_collector_oldest_pending_upload_age_seconds": 0,
         },
         posts=[],
         attempts=[],
@@ -43,6 +46,8 @@ def runtime(tmp_path, monkeypatch):
         backup_error=None,
         reads_failed=False,
         leaderboard="0 13000",
+        publication="0",
+        site_status=200,
         disk_used=10,
         volume_failed=False,
         read_requests=[],
@@ -78,6 +83,8 @@ def runtime(tmp_path, monkeypatch):
                 status = rt.metrics_status
             elif self.path == "/readyz":
                 body, status = b'{"ready":true}', 200
+            elif self.path == "/healthz":
+                body, status = b'{"status":"ok"}', rt.site_status
             else:
                 proof = verify_proof(
                     headers=[
@@ -129,6 +136,8 @@ def runtime(tmp_path, monkeypatch):
             code, output = int(rt.reads_failed), "private account output"
         elif "--leaderboard" in args:
             code, output = 0, rt.leaderboard
+        elif "--publication" in args:
+            code, output = 0, rt.publication
         else:
             assert f"MESSAGE_ID={alerts.RESTART_MESSAGE}" in args
             code, output = (
@@ -177,6 +186,15 @@ def trigger(rt, condition, value=True):
         rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
     elif condition == "leaderboard":
         rt.leaderboard = "1 13000" if value else "0 13000"
+    elif condition == "failures":
+        rt.metrics["clashlens_collector_newest_failed_upload_age_seconds"] = (
+            86399 if value else 86400
+        )
+    elif condition in ("processing", "upload"):
+        name = f"clashlens_collector_oldest_pending_{condition}_age_seconds"
+        rt.metrics[name] = 3600 if value else 3599
+    elif condition == "publication":
+        rt.publication = "1" if value else "0"
 
 
 @pytest.mark.parametrize(
@@ -190,6 +208,10 @@ def trigger(rt, condition, value=True):
         "reads",
         "collection",
         "leaderboard",
+        "failures",
+        "processing",
+        "upload",
+        "publication",
     ],
 )
 def test_alert_and_recovery_once_across_separate_runs(runtime, condition, capsys):
@@ -385,6 +407,111 @@ def test_empty_leaderboard_is_healthy_and_recovers_an_open_alert(runtime):
     assert rt.run() == 0
     assert len(rt.posts) == 2
     assert "recovered" in rt.posts[-1]["content"]
+
+
+def test_saved_work_alerts_clear_only_when_their_own_problem_clears(runtime):
+    rt = runtime
+    for condition in ("failures", "processing", "upload", "publication"):
+        trigger(rt, condition)
+    assert rt.run() == 0
+    assert len(rt.posts) == 4
+    rt.metrics_status = 503
+    rt.publication = ""
+    assert rt.run() == 1
+    assert len(rt.posts) == 4
+    # Finished work and a fresh Live Leaderboard leave a missing Reset
+    # publication open.
+    rt.metrics_status = 200
+    for condition in ("failures", "processing", "upload"):
+        trigger(rt, condition, False)
+    rt.publication = "1"
+    assert rt.run() == 0
+    assert len(rt.posts) == 7
+    assert all("recovered" in post["content"] for post in rt.posts[4:])
+    assert not any("publication time" in post["content"] for post in rt.posts[4:])
+    state = json.loads((rt.state_dir / "alerts.json").read_text())
+    assert "site" not in state["incidents"]
+
+
+def test_outside_check_alerts_after_two_minutes_down_and_again_on_recovery(runtime):
+    rt = runtime
+    state_dir = rt.state_dir.parent / "uptime"
+    config = {
+        "webhook_file": rt.config["webhook_file"],
+        "urls": [rt.origin + "/readyz", rt.origin + "/healthz"],
+    }
+
+    def check(status=None, minutes=1):
+        if status is not None:
+            rt.site_status = status
+        rt.now += 60 * minutes
+        return alerts.run(config, state_dir, None, alerts.observe_site)
+
+    assert check() == 0
+    # A one-minute blip is not an outage.
+    assert check(503) == 1
+    assert check(200) == 0
+    assert check(503) == 1
+    assert check() == 1
+    assert not rt.posts
+    assert check() == 1
+    assert len(rt.posts) == 1
+    assert "outside the server" in rt.posts[0]["content"]
+    assert check() == 1
+    assert check(200) == 0
+    assert len(rt.posts) == 2
+    assert "recovered" in rt.posts[1]["content"]
+    state = json.loads((state_dir / "alerts.json").read_text())
+    assert set(state["incidents"]) == {"site"}
+
+
+def test_publication_probe_counts_resets_missing_their_publication(
+    database_url, tmp_path, monkeypatch, capsys
+):
+    from datetime import timedelta
+
+    import psycopg
+    from domain_test_support import as_api_role, domain_database
+
+    latest = datetime.now(UTC) - timedelta(minutes=70)
+    if latest.hour < 5:
+        latest -= timedelta(days=1)
+    latest = latest.replace(hour=5, minute=0, second=0, microsecond=0)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        url_file = tmp_path / "database-url"
+        url_file.write_text(as_api_role(connection_info))
+        monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
+
+        def unpublished(*generations):
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("DELETE FROM boundary_publication_generations")
+                for days_ago, generation, snapshot, army in generations:
+                    boundary = latest - timedelta(days=days_ago)
+                    connection.execute(
+                        """
+                        INSERT INTO boundary_publication_generations (
+                            boundary_at, generation, ordering_rule_version,
+                            freshness_rule_version, expected_population_count,
+                            expected_population_hash, snapshot_state, army_state,
+                            target_at
+                        ) VALUES (%s, %s, 'order', 'freshness', 0, %s, %s, %s, %s)
+                        """,
+                        (boundary, generation, "0" * 64, snapshot, army,
+                         boundary + timedelta(minutes=5)),
+                    )
+            capsys.readouterr()
+            alerts.publication_probe()
+            return int(capsys.readouterr().out)
+
+        assert unpublished() == 0
+        published = [(2, 1, "published", "published"), (1, 1, "superseded", "superseded"),
+                     (1, 2, "pending", "pending")]
+        assert unpublished(*published, (0, 1, "published", "published")) == 0
+        # The frozen leaderboard published but the army results never did.
+        assert unpublished(*published, (0, 1, "published", "pending")) == 1
+        # A Reset with no publication record at all also counts.
+        assert unpublished(*published[:1], (0, 1, "published", "published")) == 1
+        assert unpublished(*published) == 1
 
 
 def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
