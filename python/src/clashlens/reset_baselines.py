@@ -44,6 +44,7 @@ def _refresh_reset_baseline_evidence(
         failure_category=failure_category,
         failure_retryable=failure_retryable,
     )
+    reset_settlement.refresh_for_observation(database, connection, claim.observation_id)
 
 
 def repair_current_season_reset_baselines(
@@ -583,6 +584,7 @@ def _evaluate_reset_baseline(
         early_state=state,
         reasons=reasons,
     )
+    reset_settlement.refresh_boundary(database, connection, int(player_id), boundary_at)
     if state in {"complete", "failed"} and ends_day:
         _record_boundary_baseline(database, 
             connection,

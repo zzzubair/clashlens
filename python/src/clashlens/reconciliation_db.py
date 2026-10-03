@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair, boundary, domain, reset_baselines
+from . import battle_day_repair, boundary, domain, ranked_day_inputs, reset_baselines
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -26,9 +26,6 @@ from .domain import (
 from .profile import normalize_player_tag
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
-    BattleContribution,
-    CoverageObservation,
-    PreviousRankedDay,
     ReconciliationInput,
     ReconciliationResult,
     reconcile_ranked_day,
@@ -90,19 +87,6 @@ def recalculate_ranked_day(
 ) -> None:
     """Recalculate and publish one player-day in the caller's transaction."""
     ranked_day = ranked_day_for(day_start)
-    content_dedup = getattr(database, "_supports_content_dedup", False)
-    source_rows_relation = (
-        "battle_log_observation_source_rows" if content_dedup else "battle_source_rows"
-    )
-    source_row_id_column = "source_row_id" if content_dedup else "id"
-    evidence_join = (
-        "be.id = sr.evidence_id"
-        if getattr(database, "_supports_compact_battles", False) else
-        "(sr.observation_row_id IS NOT NULL AND be.observation_row_id = sr.observation_row_id)"
-        " OR (sr.observation_row_id IS NULL AND be.source_row_id = sr.source_row_id)"
-        if content_dedup
-        else "be.source_row_id = sr.id"
-    )
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
     # allowing unrelated player-days to reconcile concurrently.
@@ -174,261 +158,18 @@ def recalculate_ranked_day(
         is not None
         else None
     )
-    coverage_rows = connection.execute(
-        f"""
-        SELECT
-            blo.observation_id,
-            blo.observed_at,
-            blo.row_count,
-            blo.has_row_gap,
-            COALESCE(evidence.battle_identities, ARRAY[]::text[]),
-            COALESCE(evidence.source_row_ids, ARRAY[]::bigint[]),
-            COALESCE(row_flags.malformed_count, 0),
-            COALESCE(row_flags.unclassified_count, 0),
-            COALESCE(processing.outcome = 'processed', false),
-            observed.response_hash,
-            blo.parser_version,
-            processing.processing_version
-        FROM battle_log_observations AS blo
-        JOIN collector_observations AS observed
-          ON observed.id = blo.observation_id
-        LEFT JOIN observation_processing_outcomes AS processing
-          ON processing.observation_id = blo.observation_id
-         AND processing.parser_version = blo.parser_version
-        LEFT JOIN LATERAL (
-            SELECT
-                array_agg(be.battle_id::text ORDER BY be.id)
-                    FILTER (WHERE be.battle_id IS NOT NULL)
-                    AS battle_identities,
-                array_agg(sr.{source_row_id_column} ORDER BY sr.{source_row_id_column})
-                    FILTER (WHERE sr.{source_row_id_column} IS NOT NULL)
-                    AS source_row_ids
-            FROM {source_rows_relation} AS sr
-            LEFT JOIN battle_evidence AS be
-              ON {evidence_join}
-            WHERE sr.battle_log_observation_id = blo.id
-        ) AS evidence ON true
-        LEFT JOIN LATERAL (
-            SELECT
-                count(*) FILTER (
-                    WHERE sr.outcome = 'malformed_legend_row'
-                       OR sr.failure_category LIKE 'malformed%%'
-                       OR sr.failure_category LIKE 'unsupported%%'
-                       OR sr.failure_category LIKE 'identity%%'
-                ) AS malformed_count,
-                count(*) FILTER (
-                    WHERE sr.failure_category LIKE 'unclassified%%'
-                ) AS unclassified_count
-            FROM {source_rows_relation} AS sr
-            WHERE sr.battle_log_observation_id = blo.id
-        ) AS row_flags ON true
-        WHERE blo.player_id = %s
-          AND blo.observed_at >= COALESCE(
-              (SELECT start_blo.observed_at
-                 FROM battle_log_observations AS start_blo
-                WHERE start_blo.observation_id = %s),
-              %s
-          )
-          AND blo.observed_at <= COALESCE(
-              (SELECT end_blo.observed_at
-                 FROM battle_log_observations AS end_blo
-                WHERE end_blo.observation_id = %s),
-              %s
-          )
-        ORDER BY blo.observed_at, blo.id
-        """,
-        (
-            player_id,
-            start_battle_log_observation_id,
-            ranked_day.start,
-            end_battle_log_observation_id,
-            ranked_day.end,
-        ),
-    ).fetchall()
-    if start_battle_log_observation_id is not None:
-        start_index = next(
-            (
-                index
-                for index, row in enumerate(coverage_rows)
-                if int(row[0]) == start_battle_log_observation_id
-            ),
-            None,
-        )
-        if start_index is not None:
-            coverage_rows = coverage_rows[start_index:]
-    if end_battle_log_observation_id is not None:
-        end_index = next(
-            (
-                index
-                for index, row in enumerate(coverage_rows)
-                if int(row[0]) == end_battle_log_observation_id
-            ),
-            None,
-        )
-        if end_index is not None:
-            coverage_rows = coverage_rows[: end_index + 1]
-    if getattr(database, "_supports_compact_battles", False):
-        # Keep both ends of identical runs. Interior duplicate polls
-        # add no overlap/quality evidence, and their later expiry
-        # must not manufacture a new ranked-day publication.
-        coverage_rows = [
-            row for index, row in enumerate(coverage_rows)
-            if index in (0, len(coverage_rows) - 1)
-            or row[2:] != coverage_rows[index - 1][2:]
-            or row[2:] != coverage_rows[index + 1][2:]
-        ]
-    coverage = tuple(
-        CoverageObservation(
-            observation_id=int(row[0]),
-            observed_at=row[1],
-            row_count=int(row[2]),
-            has_row_gap=bool(row[3]),
-            battle_identities=tuple(str(value) for value in row[4]),
-            source_row_ids=tuple(int(value) for value in row[5]),
-            malformed_row_count=int(row[6]),
-            unclassified_row_count=int(row[7]),
-            valid=bool(row[8]),
-            response_hash=_text_value(row[9]),
-            parser_version=_text_value(row[10]),
-            processing_version=(
-                _text_value(row[11]) if row[11] is not None else None
-            ),
-        )
-        for row in coverage_rows
+    coverage = ranked_day_inputs.load_coverage(
+        database,
+        connection,
+        player_id,
+        ranked_day,
+        start_battle_log_observation_id,
+        end_battle_log_observation_id,
     )
-    contribution_rows = connection.execute(
-        """
-        SELECT
-            b.id,
-            p.perspective,
-            e.id,
-            e.source_row_id,
-            e.observation_id,
-            e.source_observed_at,
-            e.battle_timestamp,
-            e.stars,
-            e.destruction_percentage,
-            e.army_share_code,
-            e.attacker_gain,
-            e.defender_loss,
-            e.trophy_rule_version,
-            b.disagreement_state,
-            source_row.outcome,
-            source_row.failure_category,
-            CASE e.parser_version
-                WHEN 'supercell-source-parser-v1'
-                    THEN source_row.source_json -> 'opponent' ->> 'tag'
-                ELSE source_row.source_json ->> 'opponentPlayerTag'
-            END,
-            CASE e.parser_version
-                WHEN 'supercell-source-parser-v1'
-                    THEN source_row.source_json -> 'opponent' ->> 'name'
-                ELSE source_row.source_json ->> 'opponentName'
-            END
-        FROM legend_battles AS b
-        JOIN battle_perspectives AS p ON p.battle_id = b.id
-        JOIN battle_evidence AS e ON e.id = p.evidence_id
-        JOIN battle_source_rows AS source_row
-          ON source_row.id = e.source_row_id
-        WHERE e.battle_timestamp >= %s
-          AND e.battle_timestamp < %s
-          AND (
-              (p.perspective = 'attacker' AND b.attacker_player_id = %s)
-              OR
-              (p.perspective = 'defender' AND b.defender_player_id = %s)
-          )
-        ORDER BY b.id, p.perspective
-        """,
-        (*domain.battle_window(ranked_day.start), player_id, player_id),
-    ).fetchall()
-    contributions = tuple(
-        BattleContribution(
-            battle_identity=str(row[0]),
-            lens=(
-                "offense"
-                if _text_value(row[1]) == "attacker"
-                else "defense"
-            ),
-            trophy_amount=int(
-                row[10] if _text_value(row[1]) == "attacker" else row[11]
-            ),
-            source_rule_version=_text_value(row[12]),
-            valid=_text_value(row[14]) == "valid_legend",
-            failure_reason=(
-                _text_value(row[15]) if row[15] is not None else None
-            ),
-            disagreement=_text_value(row[13]) == "disagreement",
-            source_observation_id=int(row[4]),
-            source_evidence_id=int(row[2]),
-            source_row_id=int(row[3]),
-            source_observed_at=row[5],
-            battle_timestamp=row[6],
-            stars=int(row[7]),
-            destruction_percentage=int(row[8]),
-            army_share_code=_text_value(row[9]),
-            attacker_gain=int(row[10]),
-            defender_loss=int(row[11]),
-            opponent_tag=(
-                _text_value(row[16]) if row[16] is not None else None
-            ),
-            opponent_name=(
-                _text_value(row[17]) if row[17] is not None else None
-            ),
-        )
-        for row in contribution_rows
+    contributions = ranked_day_inputs.load_contributions(
+        connection, player_id, ranked_day
     )
-    previous_row = connection.execute(
-        """
-        SELECT
-            id,
-            state,
-            confidence,
-            defense_count,
-            observed_defense_loss,
-            coverage_complete,
-            shield_state,
-            shield_duration_days,
-            input_hash
-        FROM ranked_day_versions
-        WHERE player_id = %s AND ranked_day_start = %s
-          AND reconciliation_rule_version = %s
-        ORDER BY version DESC, id DESC
-        LIMIT 1
-        """,
-        (
-            player_id,
-            ranked_day.start - timedelta(days=1),
-            RECONCILIATION_RULE_VERSION,
-        ),
-    ).fetchone()
-    previous = (
-        PreviousRankedDay(
-            complete=(
-                _text_value(previous_row[1]) == "Complete"
-                and bool(previous_row[5])
-            ),
-            observed_defense_count=int(previous_row[3]),
-            observed_defense_loss=int(previous_row[4]),
-            shield_run_length=(
-                int(previous_row[7] or 0)
-                if _text_value(previous_row[6]) == "inferred_shielded"
-                else 0
-            ),
-            coverage_complete=bool(previous_row[5]),
-            shield_state=_text_value(previous_row[6]),
-            version_id=int(previous_row[0]),
-            ranked_day_start=ranked_day.start - timedelta(days=1),
-            state=_text_value(previous_row[1]),
-            confidence=_text_value(previous_row[2]),
-            input_hash=(
-                _text_value(previous_row[8])
-                if previous_row[8] is not None
-                else None
-            ),
-        )
-        if previous_row is not None
-        else None
-    )
+    previous = ranked_day_inputs.load_previous_day(connection, player_id, ranked_day)
     anchor, season_day = _anchored_day(connection, ranked_day.start)
     # Days before the anchor's previous Season stay an anchor conflict.
     anchor_valid = season_day is not None and ranked_day.start >= anchor[3]
