@@ -316,8 +316,8 @@ as missing, so a few failing players cannot hold ordinary collection. The
 count is kept in collector memory, so a restart allows three more. Reset
 work fetches the profile, then the battle log, then any league history, one
 after another. A retry fetches only the responses that have no usable answer
-yet, so a profile saved before the player's first battle is kept; a retried
-profile always brings a new battle log after it. Nothing retries past 04:55
+yet, so a profile saved before the player's first battle is kept; a battle
+log saved before the profile is fetched again, even after a restart. Nothing retries past 04:55
 UTC, when the Legend day it belongs to ends. HTTP 401 or 403 still fails it at
 once. Raw responses that will be kept are published
 to the local spool before their compact database handoff; restart recovery
@@ -328,8 +328,9 @@ answer between them, start a provider-outage pause for every key. Requests
 wait instead of starting. After 5 seconds one request goes out as a recovery
 probe. Each failed probe doubles the wait, up to 60 seconds; any other answer
 ends the pause and the waiting requests start under the normal key limits.
-A request waits at most 60 seconds, then fails as retryable, so waiting
-regular checks drain before a Reset. HTTP 429 and 401/403 keep their per-key handling and never start the pause, so
+A request that cannot start within its 20-second request timeout, while
+waiting for a key, a connection or the pause, fails as retryable. Regular
+checks do not start during a pause; they wait as paused work. HTTP 429 and 401/403 keep their per-key handling and never start the pause, so
 an outage neither pauses nor disables a key. Shutdown releases waiting requests
 as retryable failures.
 
@@ -355,8 +356,9 @@ At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
 profile/battle work row per member. Regular work stays blocked until all Reset
 work is terminal; unfinished older Reset work also blocks the next boundary.
-Regular checks paused by a full spool do not count as admitted work, so they
-never delay the sweep; once admission closes they wait for their next pass.
+Regular checks paused by a full spool or a provider-outage pause do not count
+as admitted work, so they never delay the sweep; once admission closes they
+wait for their next pass.
 A Reset outage therefore holds ordinary collection while the provider-outage
 pause lasts, plus at most three more failed runs of each Reset work row.
 

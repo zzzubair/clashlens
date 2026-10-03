@@ -349,9 +349,7 @@ class ProviderOutage:
     When the pause ends one request goes out as a recovery probe: a server
     error or transport failure doubles the pause up to ``max_delay``; any other
     answer, including a rate limit or a rejected key, ends the outage. Key
-    health is untouched, so an outage never disables or pauses a key. A
-    request waits at most ``max_wait`` seconds, then fails as retryable, so
-    waiting work drains instead of holding a Reset.
+    health is untouched, so an outage never disables or pauses a key.
     """
 
     def __init__(
@@ -360,10 +358,8 @@ class ProviderOutage:
         threshold: int = 10,
         base_delay: float = 5.0,
         max_delay: float = 60.0,
-        max_wait: float = 60.0,
     ) -> None:
         self.threshold = threshold
-        self.max_wait = max_wait
         self.base_delay = base_delay
         self.max_delay = max_delay
         self.failures = 0
@@ -377,22 +373,24 @@ class ProviderOutage:
     def active(self) -> bool:
         return self.delay > 0
 
+    @property
+    def paused(self) -> bool:
+        """Whether requests now wait; false once a recovery probe is due."""
+        return self.delay > 0 and monotonic() < self.paused_until
+
     async def admit(self) -> bool:
         """Wait out a pause; return whether this request is the recovery probe."""
-        give_up_at = monotonic() + self.max_wait
         while self.delay:
-            now = monotonic()
-            if self._stopped or now >= give_up_at:
+            if self._stopped:
                 raise ProviderFailure("provider_outage", retryable=True)
-            remaining = self.paused_until - now
+            remaining = self.paused_until - monotonic()
             if remaining <= 0 and not self._probing:
                 self._probing = True
                 return True
             changed = self._changed
             try:
                 await asyncio.wait_for(
-                    changed.wait(),
-                    min(remaining, give_up_at - now) if remaining > 0 else give_up_at - now,
+                    changed.wait(), remaining if remaining > 0 else None
                 )
             except TimeoutError:
                 pass
@@ -678,6 +676,9 @@ class OfficialApiClient:
     async def _fetch(self, pool: KeyPool, endpoint: str, url: str) -> FetchedResponse:
         outage = self.provider_outage
         probe = False
+        # A request that cannot start within the request timeout, waiting for
+        # a key, a connection or an outage pause, gives up so its work drains.
+        waiting = asyncio.timeout(self._total_timeout_seconds)
 
         async def start_when_provider_answers(start_request: StartRequest) -> None:
             # Check again after waiting for a start slot: the outage may have
@@ -691,6 +692,7 @@ class OfficialApiClient:
                 probe = await outage.admit()
                 await start_request()
                 if probe or not outage.active:
+                    waiting.reschedule(None)
                     return
 
         async def request(key: ApiKey, start_request: StartRequest) -> FetchedResponse:
@@ -715,10 +717,16 @@ class OfficialApiClient:
                     self._executor_slots.release()
 
         try:
-            response = await pool.run(request)
+            async with waiting:
+                response = await pool.run(request)
         except ProviderFailure as error:
             outage.record(failed=True if error.retryable else None, probe=probe)
             raise
+        except TimeoutError as error:
+            outage.record(failed=None, probe=probe)
+            if not waiting.expired():
+                raise
+            raise ProviderFailure("timeout", retryable=True) from error
         except BaseException:
             outage.record(failed=None, probe=probe)
             raise

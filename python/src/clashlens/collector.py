@@ -157,7 +157,9 @@ class Collector:
         lane: str,
         endpoints: tuple[str, ...] = ("profile", "battle_log"),
     ) -> list[str]:
-        if not await self._spool_available():
+        outage = getattr(self.client, "provider_outage", None)
+        # Regular checks wait out an outage pause as paused work, not in flight.
+        if not await self._spool_available() or (lane == "ordinary" and outage is not None and outage.paused):
             return ["capacity_paused"] * len(endpoints)
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
         regular_check = lane == "ordinary" and endpoints == ("profile", "battle_log")

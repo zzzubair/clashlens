@@ -195,22 +195,34 @@ def test_network_failures_pause_and_shutdown_releases_waiting_requests() -> None
     assert pool.health() == {"configured": 1, "healthy": 1, "paused": 0}
 
 
-def test_a_request_waits_out_an_outage_for_a_bounded_time() -> None:
-    # Nothing listens on this port, so every request fails to connect.
-    client = OfficialApiClient("http://127.0.0.1:9", allow_insecure_test_origin=True)
-    client.provider_outage = ProviderOutage(threshold=1, base_delay=30, max_wait=0.2)
-    pool = _pool()
+def test_regular_checks_admitted_just_before_the_reset_drain_during_an_outage() -> None:
+    # 256 regular checks admitted at 04:54:59 share six keys of six requests
+    # each, and the provider stops answering: nothing listens on this port.
+    spool = _Spool()
+    client = OfficialApiClient(
+        "http://127.0.0.1:9", allow_insecure_test_origin=True, total_timeout_seconds=0.5
+    )
+    client.provider_outage = ProviderOutage(base_delay=30)
+    collector = _collector(spool, _Store(spool), client)
+    collector.regular_keys = KeyPool(
+        [ApiKey(f"regular-{index}", "secret") for index in range(6)],
+        starts_per_second=25,
+        concurrency_per_key=6,
+    )
+    checks = [CollectorWork(index, f"#{index}", datetime.now(UTC)) for index in range(256)]
 
     async def run() -> None:
-        with pytest.raises(ProviderFailure):
-            await client.fetch_player(pool, "#2PP", "profile")
-        assert client.provider_outage.active
-        # The pause lasts 30 seconds; the waiting request gives up first, so
-        # regular checks drain before a Reset instead of holding it.
-        with pytest.raises(ProviderFailure) as failure:
-            await asyncio.wait_for(client.fetch_player(pool, "#2PP", "profile"), 2)
-        assert failure.value.category == "provider_outage"
-        assert failure.value.retryable
+        admitted = asyncio.gather(
+            *(collector.collect_player(work, lane="ordinary") for work in checks)
+        )
+        # Queued checks give up within the request timeout instead of
+        # waiting out the 30-second pause, so none is in flight at 05:00.
+        outcomes = await asyncio.wait_for(admitted, 10)
+        assert client.provider_outage.paused
+        assert not any("recorded" in outcome for outcome in outcomes)
+        # A check after the pause began waits as paused work, not in flight.
+        later = collector.collect_player(checks[0], lane="ordinary")
+        assert await asyncio.wait_for(later, 1) == ["capacity_paused"] * 2
 
     asyncio.run(run())
 

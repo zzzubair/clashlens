@@ -237,6 +237,41 @@ def test_retried_reset_profile_brings_a_battle_log_collected_after_it(
         assert battle_log_at >= profile_at
 
 
+def test_interrupted_reset_retry_fetches_the_battle_log_again_after_restart(
+    database_url: str, tmp_path
+) -> None:
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before the retry could be checked")
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, _sweep_id = _reset_work(connection_info, boundary)
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        _Provider.mode = "profile_unavailable"
+        assert _collect_reset(collector, database) == "retrying"
+        early_battle_log = _work(connection_info)[2]
+
+        # The retry saves a good profile, then stops before its battle log.
+        _Provider.mode = "answer"
+        (intent,) = database.pending_intents(
+            limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+        )
+        work = CollectorWork(
+            intent.player_id, TAG, intent.due_at, collector_work_id=intent.work_id
+        )
+        assert asyncio.run(
+            collector.collect_player(work, lane="reset", endpoints=("profile",))
+        ) == ["recorded"]
+
+        # After a restart the older battle log is still fetched again.
+        (resumed,) = database.pending_intents(
+            limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+        )
+        assert not resumed.profile_required and resumed.battle_log_required
+        assert asyncio.run(_collector(origin, database, collector.spool).collect_intent(resumed)) == "complete"
+        assert _work(connection_info)[2] not in (None, early_battle_log)
+
+
 def test_reset_server_error_is_not_final_while_the_collector_retries(
     database_url: str, tmp_path
 ) -> None:
