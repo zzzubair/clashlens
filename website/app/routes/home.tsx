@@ -128,8 +128,7 @@ export default function Home() {
     <main id="main-content" tabIndex={-1} className="page-shell home-page">
       {logoutUnrecorded ? (
         <div className="status-banner status-banner-warning" role="status">
-          You are logged out on this browser, but Clash Lens could not record it. On a
-          shared device, sign in and log out again later.
+          You are logged out on this browser, but Clash Lens could not record it.
         </div>
       ) : null}
       <section className="home-overview" aria-labelledby="search-title">

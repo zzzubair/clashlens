@@ -76,6 +76,7 @@ it("formats the tracked total and explains a logout the server could not record"
   expect(html).toContain(
     "You are logged out on this browser, but Clash Lens could not record it.",
   );
+  expect(html).not.toContain("log out again");
 });
 
 describe("home search loading", () => {
