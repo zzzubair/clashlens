@@ -25,6 +25,6 @@ If a number can't be confirmed from the game, we say so instead of guessing. You
 
 Clash Lens is in preview and gets better every week based on what you want. [Join the Discord](https://discord.gg/792KJQTtRf) to see what's coming next.
 
-## Thanks
+## Acknowledgement
 
-Clash Lens is built on public data from Supercell's Clash of Clans API.
+Clash Lens is built on public data from Supercell's Clash of Clans API. And thanks to [ClashKing](https://clashk.ing) for their API.

@@ -37,7 +37,8 @@ it("renders the about page from its Markdown file", async () => {
 
   expect(html).toContain("<h1>About Clash Lens</h1>");
   expect(html).toContain("<h2>Data for everyone</h2>");
-  expect(html).toContain("<h2>Thanks</h2>");
+  expect(html).toContain("<h2>Acknowledgement</h2>");
+  expect(html).toContain('<a href="https://clashk.ing">ClashKing</a>');
   expect(text(html)).toContain(
     "Clash Lens puts Legend League data in everyone's hands, and makes it easy to understand and use.",
   );
