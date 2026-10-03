@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -107,9 +108,11 @@ async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
 async def _finish(
     collector: Collector, operation: Any, *args: Any, **kwargs: Any
 ) -> Any:
-    """Update the work row, retrying while a worker's lock holds it."""
-    while True:
+    """Update the work row, retrying while a worker's lock holds it, until stopping."""
+    while not collector._stopping.is_set():
         try:
             return await collector._database_call(operation, *args, **kwargs)
         except psycopg.errors.LockNotAvailable:
-            await asyncio.sleep(2.0)
+            with suppress(TimeoutError):
+                await asyncio.wait_for(collector._stopping.wait(), 2.0)
+    return None

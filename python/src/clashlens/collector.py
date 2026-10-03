@@ -129,6 +129,7 @@ class Collector:
         self._handoff_turns: dict[asyncio.Lock, collector_commits.Turn] = {}
         self._later_commits: dict[asyncio.Task[None], int | None] = {}
         self._unrecovered: list[tuple[str, ResponseHandoff, bool]] = []
+        self._stopping = asyncio.Event()
         # Newest committed (seen time, field fingerprint) per scope, identity
         # and endpoint, from this process only; empty after a restart.
         self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
@@ -539,7 +540,9 @@ class Collector:
                     finally:
                         turn.set_result(later)
                     if later is not None and work.collector_work_id is not None:
-                        await asyncio.shield(later)
+                        await asyncio.wait({later})
+                        if not cancelled and (later.cancelled() or later.exception()):
+                            return "capacity_paused"
                 if cancelled:
                     raise asyncio.CancelledError
                 self._count("recorded")
@@ -886,6 +889,7 @@ class Collector:
         idle_seconds: float = 0.1,
     ) -> None:
         """Run admissions, intent work, uploads, cleanup, and health together."""
+        self._stopping = stop_requested
         await _drain_to_thread(self.recover_handoffs)
         collector_commits.commit_unrecovered(self, self._unrecovered)
         await _drain_to_thread(self.spool.cleanup_stale, 60.0)

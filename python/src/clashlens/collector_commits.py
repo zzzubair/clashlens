@@ -8,6 +8,7 @@ background, so no check or collection slot waits for the worker.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 import psycopg
@@ -65,12 +66,16 @@ async def _retry(
 ) -> None:
     if behind is not None:
         await asyncio.wait({behind})
-    while not collector._handoff_recovery_required:
+        if behind.cancelled() or behind.exception() is not None:
+            raise RuntimeError("an earlier saved response did not commit")
+    while not (collector._handoff_recovery_required or collector._stopping.is_set()):
         try:
             await collector._commit_saved(handoff, name, serialized)
             return
         except psycopg.errors.LockNotAvailable:
-            await asyncio.sleep(_RETRY_SECONDS)
+            with suppress(TimeoutError):
+                await asyncio.wait_for(collector._stopping.wait(), _RETRY_SECONDS)
         except BaseException:
             collector._handoff_recovery_required = True
             raise
+    raise RuntimeError("saved response left for restart recovery")

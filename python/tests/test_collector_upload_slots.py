@@ -390,3 +390,80 @@ def test_restart_recovery_leaves_held_saves_to_commit_later_and_holds_their_work
     assert store.completed == [7]
     assert spool.handoffs == {}
     assert not collector._handoff_recovery_required
+
+
+def test_work_behind_a_save_that_failed_is_not_reported_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(collector_commits, "_RETRY_SECONDS", 0.01)
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    broken = threading.Event()
+
+    def record(_handoff: object) -> object:
+        if broken.is_set():
+            raise psycopg.OperationalError("the database went away")
+        raise psycopg.errors.LockNotAvailable("the worker holds the player")
+
+    store.record_response = record  # type: ignore[method-assign]
+    now = datetime.now(UTC)
+
+    async def scenario() -> None:
+        regular = CollectorWork(1, "#2PP", now)
+        check = collector.collect_player(regular, lane="ordinary", endpoints=("profile",))
+        assert await check == ["recorded"]
+        refresh = asyncio.create_task(
+            collector.collect_player(
+                CollectorWork(1, "#2PP", now, collector_work_id=7),
+                lane="interactive",
+                endpoints=("profile",),
+            )
+        )
+        await asyncio.sleep(0.1)
+        assert not refresh.done()
+        broken.set()
+        # The Refresh's save waited behind the regular one, which failed.
+        assert await asyncio.wait_for(refresh, 5) == ["capacity_paused"]
+
+    asyncio.run(scenario())
+
+    assert collector._handoff_recovery_required
+    assert store.handoffs == []
+    assert len(spool.handoffs) == 2
+
+
+@pytest.mark.parametrize("held", ["save", "completion"])
+def test_stopping_ends_lock_retries_and_keeps_the_saved_response(held: str) -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    client = _Client(spool)
+    collector = _collector(spool, store, client)
+    if held == "save":
+        _held_saves(store)
+    else:
+
+        def complete_intent(_work_id: int) -> bool:
+            raise psycopg.errors.LockNotAvailable("the worker holds the work")
+
+        store.complete_intent = complete_intent  # type: ignore[method-assign]
+    intent = CollectorIntent(
+        "live_refresh", datetime.now(UTC), 1, "#2PP", work_id=7, battle_log_required=False
+    )
+
+    async def scenario() -> str:
+        refresh = asyncio.create_task(collector.collect_intent(intent))
+        await asyncio.sleep(0.3)
+        assert not refresh.done()
+        collector._stopping.set()
+        return await asyncio.wait_for(refresh, 5)
+
+    outcome = asyncio.run(scenario())
+
+    if held == "save":
+        assert outcome == "capacity_paused"
+        assert len(spool.handoffs) == 1
+        assert store.handoffs == []
+    else:
+        assert outcome == "incomplete"
+    assert client.fetch_count == 1
