@@ -322,14 +322,18 @@ describe("server-only Python account client", () => {
       .fn()
       .mockResolvedValueOnce(
         jsonResponse({
-          groups: [{ group_id: GROUP_ID, name: "Favorites", tags: ["#2PP"] }],
+          groups: [
+            {
+              group_id: GROUP_ID,
+              name: "Favorites",
+              tags: ["#2PP"],
+              players: [{ tag: "#2PP", name: "Nova", trophies: 5400, state: "tracking" }],
+            },
+          ],
         }),
       )
       .mockResolvedValueOnce(
-        jsonResponse(
-          { group_id: GROUP_ID, name: "Favorites", tags: ["#2PP", "#2QQ"] },
-          201,
-        ),
+        jsonResponse({ group_id: GROUP_ID, name: "Favorites", tags: [] }, 201),
       )
       .mockResolvedValueOnce(
         jsonResponse({ group_id: GROUP_ID, name: "Favorites", tags: ["#2PP"] }),
@@ -339,13 +343,18 @@ describe("server-only Python account client", () => {
     const client = await importClient();
 
     await expect(client.listGroups()).resolves.toEqual([
-      { groupId: GROUP_ID, name: "Favorites", tags: ["#2PP"] },
+      {
+        groupId: GROUP_ID,
+        name: "Favorites",
+        tags: ["#2PP"],
+        players: [{ tag: "#2PP", name: "Nova", trophies: 5400, state: "tracking" }],
+      },
     ]);
     await expect(
-      client.createGroup({ name: "Favorites", tags: ["2QQ", "2PP"] }, IDEMPOTENCY_KEY),
+      client.createGroup({ name: "Favorites" }, IDEMPOTENCY_KEY),
     ).resolves.toMatchObject({ groupId: GROUP_ID });
     await expect(
-      client.updateGroup(GROUP_ID, { name: "Favorites", tags: ["2PP"] }, IDEMPOTENCY_KEY),
+      client.updateGroup(GROUP_ID, { name: "Favorites" }, IDEMPOTENCY_KEY),
     ).resolves.toMatchObject({ groupId: GROUP_ID });
     await expect(client.deleteGroup(GROUP_ID, IDEMPOTENCY_KEY)).resolves.toEqual({
       groupId: GROUP_ID,
@@ -357,13 +366,14 @@ describe("server-only Python account client", () => {
       new URL("/v1/account/groups", "http://python-fixture.test/"),
     );
     expect(createInit.method).toBe("POST");
-    expect(decodeBody(createInit)).toBe('{"name":"Favorites","tags":["#2PP","#2QQ"]}');
+    // Players join one at a time, so neither call sends or replaces them.
+    expect(decodeBody(createInit)).toBe('{"name":"Favorites"}');
     const [updateUrl, updateInit] = fetchMock.mock.calls[2] as [URL, RequestInit];
     expect(updateUrl).toEqual(
       new URL(`/v1/account/groups/${GROUP_ID}`, "http://python-fixture.test/"),
     );
     expect(updateInit.method).toBe("PATCH");
-    expect(decodeBody(updateInit)).toBe('{"name":"Favorites","tags":["#2PP"]}');
+    expect(decodeBody(updateInit)).toBe('{"name":"Favorites"}');
     const [deleteUrl, deleteInit] = fetchMock.mock.calls[3] as [URL, RequestInit];
     expect(deleteUrl).toEqual(
       new URL(`/v1/account/groups/${GROUP_ID}`, "http://python-fixture.test/"),
@@ -383,12 +393,51 @@ describe("server-only Python account client", () => {
       },
     );
     await expect(
-      client.createGroup({ name: " ", tags: [] }, IDEMPOTENCY_KEY),
-    ).rejects.toMatchObject({ status: 422, payload: { error: "invalid_request" } });
-    await expect(
-      client.createGroup({ name: "Favorites", tags: ["!!!"] }, IDEMPOTENCY_KEY),
+      client.createGroup({ name: " " }, IDEMPOTENCY_KEY),
     ).rejects.toMatchObject({ status: 422, payload: { error: "invalid_request" } });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("adds and removes one group player and checks a tag through the player lookup", async () => {
+    const added = { tag: "#2PP", name: "Nova", trophies: 5400, state: "tracking" };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ group_id: GROUP_ID, ...added }))
+      .mockResolvedValueOnce(
+        jsonResponse({ group_id: GROUP_ID, tag: "#2PP", removed: true }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ tag: "#2QQ", state: "unknown" }))
+      .mockResolvedValueOnce(jsonResponse({ tag: "#2QQ", state: "checking" }))
+      .mockResolvedValueOnce(jsonResponse({ tag: "#2QQ", state: "not_found" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const players = await import("../../app/services/group-players.server");
+
+    await expect(
+      players.addGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY),
+    ).resolves.toEqual(added);
+    await players.removeGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY);
+    const sleep = vi.fn(async () => undefined);
+    await expect(players.checkPlayerTag("203.0.113.9", "#2QQ", sleep)).resolves.toEqual({
+      tag: "#2QQ",
+      state: "not_found",
+    });
+
+    const calls = fetchMock.mock.calls as [URL, RequestInit][];
+    expect(calls[0][0]).toEqual(
+      new URL(`/v1/account/groups/${GROUP_ID}/players`, "http://python-fixture.test/"),
+    );
+    expect(calls[0][1].method).toBe("POST");
+    expect(decodeBody(calls[0][1])).toBe('{"tag":"#2PP"}');
+    expect(calls[1][0]).toEqual(
+      new URL(
+        `/v1/account/groups/${GROUP_ID}/players/%232PP`,
+        "http://python-fixture.test/",
+      ),
+    );
+    expect(calls[1][1].method).toBe("DELETE");
+    // An unchecked tag starts one lookup, then waits for the answer.
+    expect(calls.slice(2).map(([, init]) => init.method)).toEqual(["GET", "POST", "GET"]);
+    expect(sleep).toHaveBeenCalledTimes(1);
   });
 
   it("reads the account summary", async () => {

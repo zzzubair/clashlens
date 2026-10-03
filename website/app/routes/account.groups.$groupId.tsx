@@ -143,7 +143,10 @@ export default function GroupCompareRoute() {
     <main id="main-content" tabIndex={-1} className="page-shell compare-page">
       <section className="compare-head" aria-labelledby="compare-title">
         <p className="eyebrow">
-          <a href="/account/groups">Private groups</a>
+          <a href="/account/groups">Private groups</a> ·{" "}
+          <a href={`/account/groups#group-${comparison.groupId}`}>
+            Add or remove players
+          </a>
         </p>
         <h1 id="compare-title">{comparison.name}</h1>
         <p className="lede">

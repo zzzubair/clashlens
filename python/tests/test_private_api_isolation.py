@@ -100,9 +100,11 @@ def assert_private_state(client, owner):
     assert call(client, owner, "GET", "/v1/account/saved-tags").json() == {
         "players": [{"tag": owner["tag"], "name": None}],
     }
-    assert call(client, owner, "GET", "/v1/account/groups").json() == {
-        "groups": [owner["group"]],
-    }
+    groups = call(client, owner, "GET", "/v1/account/groups").json()["groups"]
+    assert [
+        {key: group[key] for key in ("group_id", "name", "tags")} for group in groups
+    ] == [owner["group"]]
+    assert [player["tag"] for player in groups[0]["players"]] == owner["group"]["tags"]
 
 
 def test_direct_reads_ignore_guessed_owner_and_do_not_publish_membership(accounts):
@@ -176,6 +178,16 @@ def test_guessed_group_ids_and_replayed_requests_cannot_read_or_change_other_acc
                 == responses[1].status_code
                 == (405 if method == "GET" else 404)
             )
+            assert responses[0].json() == responses[1].json()
+        for method, suffix, body in (
+            ("POST", "/players", {"tag": owner["tag"]}),
+            ("DELETE", f"/players/{quote(other['tag'])}", None),
+        ):
+            responses = [
+                call(client, owner, method, f"/v1/account/groups/{group_id}{suffix}", body)
+                for group_id in (other["group"]["group_id"], unknown_id)
+            ]
+            assert responses[0].status_code == responses[1].status_code == 404
             assert responses[0].json() == responses[1].json()
         replay = call(
             client,
@@ -321,6 +333,8 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
             ("POST", "/v1/account/groups", {"name": "Intruder", "tags": []}),
             ("PATCH", group_path, {"name": "Intruder", "tags": []}),
             ("DELETE", group_path, None),
+            ("POST", f"{group_path}/players", {"tag": other["tag"]}),
+            ("DELETE", f"{group_path}/players/{quote(other['tag'])}", None),
             ("GET", f"{group_path}/comparison", None),
             ("POST", "/v1/account/exports", {"format": "google_sheets_scaffold"}),
             ("GET", f"/v1/account/exports/{uuid4()}", None),

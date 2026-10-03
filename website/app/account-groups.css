@@ -1,0 +1,86 @@
+/* Private groups list: members with names, one-tag add, and tucked-away settings. */
+.group-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.group-card .player-action-name {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.group-card .player-action-name a {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.group-member-detail {
+  flex-basis: 100%;
+  color: var(--cl-muted);
+  font-size: 0.86rem;
+}
+
+.add-player-form {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.add-player-form label {
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.add-player-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.add-player-row input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  min-height: 3rem;
+  padding: 0.6rem 0.75rem;
+  color: var(--cl-ink);
+  background: var(--cl-paper);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  font: inherit;
+  text-transform: uppercase;
+}
+
+.add-player-row input::placeholder {
+  color: var(--cl-muted);
+  opacity: 1;
+  text-transform: none;
+}
+
+.add-player-row input[aria-invalid="true"] {
+  border-color: #b3261e;
+}
+
+.add-player-row .button {
+  min-height: 3rem;
+}
+
+.add-player-done {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.group-settings summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.group-settings[open] summary {
+  margin-bottom: 0.9rem;
+}

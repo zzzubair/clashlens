@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import psycopg
 from psycopg.types.json import Jsonb
 
-from . import api_db, api_player_lookup
+from . import api_db, api_groups, api_player_lookup
 from .api_db import (
     AccountContext,
     ApiDatabase,
@@ -842,7 +842,7 @@ def update_group(
     group_id: str,
     name: str,
     normalized_name: str,
-    normalized_tags: list[str],
+    normalized_tags: list[str] | None,
 ) -> OperationResult:
     with database.pool.connection() as connection:
         with connection.transaction():
@@ -861,7 +861,7 @@ def update_group(
                         """,
                         (name, normalized_name, group_id, binding.account_id),
                     ).fetchone()
-                    if group is not None:
+                    if group is not None and normalized_tags is not None:
                         _replace_group_players(database, 
                             connection, int(group[0]), normalized_tags
                         )
@@ -877,7 +877,11 @@ def update_group(
                     {
                         "group_id": group_id,
                         "name": name,
-                        "tags": sorted(set(normalized_tags)),
+                        "tags": sorted(set(normalized_tags))
+                        if normalized_tags is not None
+                        else [player["tag"] for player in _group_players(
+                            connection, int(group[0])
+                        )],
                     },
                 )
             api_db._complete_request(connection, binding.request_id, result)
@@ -912,30 +916,118 @@ def delete_group(
             return result
 
 
+def add_group_player(
+    database: ApiDatabase,
+    binding: RequestBinding,
+    *,
+    group_id: str,
+    normalized_tag: str,
+) -> OperationResult:
+    """Add one player the game has already confirmed exists."""
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_db._reserve_request(database, connection, binding)
+            if existing is not None:
+                return existing
+            group = _lock_group(connection, binding, group_id)
+            if group is None:
+                result = OperationResult(404, {"error": "group_not_found"})
+            else:
+                # Same order as saving a whole group: the group row, then the tag.
+                api_player_lookup.lock_tag(connection, normalized_tag)
+                members = [player["tag"] for player in _group_players(connection, group)]
+                state = api_player_lookup._lookup(connection, normalized_tag)["state"]
+                if normalized_tag in members:
+                    result = OperationResult(409, {"error": "group_player_exists"})
+                elif len(members) >= api_groups.MAX_COMPARED_MEMBERS:
+                    result = OperationResult(422, {"error": "group_full"})
+                elif state == "not_found":
+                    result = OperationResult(422, {"error": "player_not_found"})
+                elif state not in _CONFIRMED_PLAYER_STATES:
+                    # Unchecked, still checking or a failed check: the caller
+                    # starts or waits for the player lookup and tries again.
+                    result = OperationResult(
+                        409, {"error": "player_not_checked", "state": state}
+                    )
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO account_group_players (group_id, player_id)
+                        SELECT %s, id FROM players WHERE normalized_tag = %s
+                        """,
+                        (group, normalized_tag),
+                    )
+                    [player] = [
+                        player
+                        for player in _group_players(connection, group)
+                        if player["tag"] == normalized_tag
+                    ]
+                    result = OperationResult(200, {"group_id": group_id, **player})
+            api_db._complete_request(connection, binding.request_id, result)
+            return result
+
+
+def remove_group_player(
+    database: ApiDatabase,
+    binding: RequestBinding,
+    *,
+    group_id: str,
+    normalized_tag: str,
+) -> OperationResult:
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            existing = api_db._reserve_request(database, connection, binding)
+            if existing is not None:
+                return existing
+            group = _lock_group(connection, binding, group_id)
+            if group is None:
+                result = OperationResult(404, {"error": "group_not_found"})
+            else:
+                removed = connection.execute(
+                    """
+                    DELETE FROM account_group_players AS member
+                    USING players AS player
+                    WHERE member.group_id = %s
+                      AND member.player_id = player.id
+                      AND player.normalized_tag = %s
+                    """,
+                    (group, normalized_tag),
+                )
+                result = OperationResult(
+                    200,
+                    {
+                        "group_id": group_id,
+                        "tag": normalized_tag,
+                        "removed": removed.rowcount == 1,
+                    },
+                )
+            api_db._complete_request(connection, binding.request_id, result)
+            return result
+
+
 def list_groups(database: ApiDatabase, account_id: int) -> list[dict[str, Any]]:
     with database.pool.connection() as connection:
         rows = connection.execute(
             """
-            SELECT group_row.public_id, group_row.name, player.normalized_tag
-            FROM account_groups AS group_row
-            LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
-            LEFT JOIN players AS player ON player.id = member.player_id
-            WHERE group_row.account_id = %s
-            ORDER BY group_row.normalized_name, group_row.public_id, player.normalized_tag
-            LIMIT 10000
+            SELECT public_id, name, id FROM account_groups
+            WHERE account_id = %s
+            ORDER BY normalized_name, public_id
+            LIMIT 500
             """,
             (account_id,),
         ).fetchall()
-        groups: dict[str, dict[str, Any]] = {}
+        groups = []
         for row in rows:
-            public_id = str(row[0])
-            group = groups.setdefault(
-                public_id,
-                {"group_id": public_id, "name": _text(row[1]), "tags": []},
+            players = _group_players(connection, int(row[2]))
+            groups.append(
+                {
+                    "group_id": str(row[0]),
+                    "name": _text(row[1]),
+                    "tags": [player["tag"] for player in players],
+                    "players": players,
+                }
             )
-            if row[2] is not None:
-                group["tags"].append(_text(row[2]))
-        return list(groups.values())
+        return groups
 
 
 def search_public_users(
@@ -1063,6 +1155,52 @@ def _replace_group_players(
     ).fetchall()
     for (normalized_tag,) in unchecked:
         api_player_lookup.admit(connection, _text(normalized_tag))
+
+
+# Players the game confirmed exist; only these can be added to a group.
+_CONFIRMED_PLAYER_STATES = frozenset({"tracking", "not_in_legend", "uncertain"})
+
+
+def _lock_group(connection: Any, binding: RequestBinding, group_id: str) -> int | None:
+    # Filtering by the account means another account's group reads as missing.
+    row = connection.execute(
+        """
+        SELECT id FROM account_groups
+        WHERE public_id = %s AND account_id = %s
+        FOR UPDATE
+        """,
+        (group_id, binding.account_id),
+    ).fetchone()
+    return None if row is None else int(row[0])
+
+
+def _group_players(connection: Any, group_id: int) -> list[dict[str, Any]]:
+    """Each member's tag with the stored in-game name and trophies, when known."""
+    rows = connection.execute(
+        """
+        SELECT player.normalized_tag, player.active, profile.name, profile.trophies
+        FROM account_group_players AS member
+        JOIN players AS player ON player.id = member.player_id
+        LEFT JOIN player_profile_versions AS profile
+            ON profile.id = player.current_profile_version_id
+           AND profile.source_contract_state = 'accepted'
+        WHERE member.group_id = %s
+        ORDER BY player.normalized_tag
+        LIMIT 101
+        """,
+        (group_id,),
+    ).fetchall()
+    return [
+        {
+            "tag": _text(row[0]),
+            "name": None if row[2] is None else _text(row[2]),
+            "trophies": None if row[3] is None else int(row[3]),
+            "state": "tracking"
+            if row[1]
+            else api_player_lookup._lookup(connection, _text(row[0]))["state"],
+        }
+        for row in rows
+    ]
 
 
 def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:

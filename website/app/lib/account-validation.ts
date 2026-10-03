@@ -159,21 +159,3 @@ export function isInappropriateName(value: string): boolean {
   if (normalized.length === 0) return false;
   return INAPPROPRIATE_TERMS.some((term) => normalized.includes(term));
 }
-
-/**
- * Normalize a submitted player-tag list: canonical tags, unique, bounded.
- * Returns null when any tag is invalid or the list exceeds the group limit.
- */
-export function normalizeTagList(
-  values: string[],
-  limit = MAX_GROUP_TAGS,
-): string[] | null {
-  if (values.length > limit) return null;
-  const tags = new Set<string>();
-  for (const value of values) {
-    const normalized = normalizeSubmittedPlayerTag(value);
-    if (normalized === null) return null;
-    tags.add(normalized);
-  }
-  return [...tags].sort();
-}

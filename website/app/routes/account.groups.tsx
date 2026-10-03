@@ -1,99 +1,113 @@
+import { useEffect, useRef } from "react";
 import {
   data,
   Form,
   redirect,
   useActionData,
+  useFetcher,
   useLoaderData,
   useNavigation,
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import type { PrivateGroup } from "../lib/account-contracts";
+import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
 import {
   isInappropriateName,
   MAX_GROUP_TAGS,
   normalizeGroupName,
-  normalizeTagList,
+  normalizeSubmittedPlayerTag,
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
-import { canonicalPlayerPath } from "../lib/player-tag";
+import { canonicalPlayerPath, MAX_PLAYER_TAG_INPUT_LENGTH } from "../lib/player-tag";
 import { isCanonicalUuid } from "../lib/validation";
 import type { Route } from "./+types/account.groups";
+import "../account-groups.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
+const ACTIONS = ["create", "update", "delete", "add-player", "remove-player"] as const;
+type GroupAction = (typeof ACTIONS)[number];
 
 export interface GroupsLoaderData {
-  groups: PrivateGroup[];
+  groups: ListedGroup[];
   /** Fresh idempotency key for the create form. */
   createIdempotencyKey: string;
-  /** Fresh per-group idempotency keys for the update forms. */
+  /** Fresh per-group idempotency keys for the rename forms. */
   updateIdempotencyKeys: Record<string, string>;
   /** Fresh per-group idempotency keys for the delete forms. */
   deleteIdempotencyKeys: Record<string, string>;
+  /** Fresh per-group idempotency keys for the add-player forms. */
+  addIdempotencyKeys: Record<string, string>;
+  /** Fresh idempotency keys for each member's remove button, by group then tag. */
+  removeIdempotencyKeys: Record<string, Record<string, string>>;
   error: WebsiteErrorResponse | null;
 }
 
 export interface GroupsActionData {
-  action: "create" | "update" | "delete";
-  /** The group the fresh group key belongs to (update/delete only). */
+  action: GroupAction;
+  /** The group the fresh group keys belong to (all but create). */
   groupId: string | null;
   /** Fresh idempotency key for the next create attempt. */
   createIdempotencyKey: string;
-  /** Fresh idempotency key for the next update attempt on `groupId`. */
+  /** Fresh idempotency key for the next rename attempt on `groupId`. */
   updateIdempotencyKey: string;
   /** Fresh idempotency key for the next delete attempt on `groupId`. */
   deleteIdempotencyKey: string;
-  fieldErrors: { name?: string; tags?: string; confirm?: string };
+  /** Fresh idempotency key for the next add or remove on `groupId`. */
+  playerIdempotencyKey: string;
+  fieldErrors: { name?: string; tag?: string; confirm?: string };
+  /** What happened to the player just added or removed. */
+  notice: string | null;
   generalError: WebsiteErrorResponse | null;
-  values: { name: string; tags: string; action: string; groupId: string };
+  values: { name: string; tag: string; action: string; groupId: string };
 }
 
 /**
  * GET /account/groups — list only the signed-in account's private groups with
- * explicit create, update, and confirmed-delete forms, each bound to its own
- * idempotency key.
+ * explicit create, rename, add-player, remove-player and confirmed-delete
+ * forms, each bound to its own idempotency key.
  */
 export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoaderData> {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
+  const empty = {
+    groups: [],
+    createIdempotencyKey: freshIdempotencyKey(),
+    updateIdempotencyKeys: {},
+    deleteIdempotencyKeys: {},
+    addIdempotencyKeys: {},
+    removeIdempotencyKeys: {},
+    error: null,
+  };
   try {
     const { createPythonClient } = await import("../services/python.server");
     const groups = await createPythonClient(identity).listGroups();
-    const updateIdempotencyKeys: Record<string, string> = {};
-    const deleteIdempotencyKeys: Record<string, string> = {};
+    const loaded: GroupsLoaderData = { ...empty, groups };
     for (const group of groups) {
-      updateIdempotencyKeys[group.groupId] = freshIdempotencyKey();
-      deleteIdempotencyKeys[group.groupId] = freshIdempotencyKey();
+      loaded.updateIdempotencyKeys[group.groupId] = freshIdempotencyKey();
+      loaded.deleteIdempotencyKeys[group.groupId] = freshIdempotencyKey();
+      loaded.addIdempotencyKeys[group.groupId] = freshIdempotencyKey();
+      loaded.removeIdempotencyKeys[group.groupId] = Object.fromEntries(
+        group.players.map((player) => [player.tag, freshIdempotencyKey()]),
+      );
     }
-    return {
-      groups,
-      createIdempotencyKey: freshIdempotencyKey(),
-      updateIdempotencyKeys,
-      deleteIdempotencyKeys,
-      error: null,
-    };
+    return loaded;
   } catch (cause) {
     const { isAccountNotFoundError } = await import("../server/actions.server");
     if (isAccountNotFoundError(cause)) throw redirect("/account/setup");
     const { safeWebsiteError } = await import("../server/errors.server");
-    return {
-      groups: [],
-      createIdempotencyKey: freshIdempotencyKey(),
-      updateIdempotencyKeys: {},
-      deleteIdempotencyKeys: {},
-      error: safeWebsiteError(cause),
-    };
+    return { ...empty, error: safeWebsiteError(cause) };
   }
 }
 
 /**
- * POST /account/groups — create, update (rename and replace membership), or
- * delete a private group. The action and group ID are explicit, deletion
- * requires a confirmation checkbox, and every mutation is same-origin with a
- * canonical idempotency UUID.
+ * POST /account/groups — create, rename, or delete a private group, or add or
+ * remove one player. The action and group ID are explicit, deletion requires
+ * a confirmation checkbox, and every mutation is same-origin with a
+ * canonical idempotency UUID. A player joins only after the game confirms
+ * the tag belongs to a real player.
  */
-export async function action({ request }: Route.ActionArgs) {
+export async function action({ request, context }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
@@ -101,7 +115,7 @@ export async function action({ request }: Route.ActionArgs) {
 
   const config = getWebsiteConfig();
   if (!actions.isSameOrigin(request, config.publicOrigin)) {
-    return errorResponse("create", null, 403, {
+    return errorResponse(403, {
       error: { code: "forbidden", message: "This action is not allowed." },
     });
   }
@@ -110,197 +124,227 @@ export async function action({ request }: Route.ActionArgs) {
   const idempotencyKey = form["idempotencyKey"] ?? "";
   if (!actions.isIdempotencyKey(idempotencyKey)) return invalidFormResponse();
 
-  const actionMode = form["action"] ?? "";
+  const actionMode = (form["action"] ?? "") as GroupAction;
   const groupId = form["groupId"] ?? "";
-  if (actionMode !== "create" && actionMode !== "update" && actionMode !== "delete") {
-    return invalidFormResponse();
-  }
+  if (!ACTIONS.includes(actionMode)) return invalidFormResponse();
   if (actionMode !== "create" && !isCanonicalUuid(groupId)) {
     return invalidFormResponse();
   }
-  if (actionMode === "delete" && form["confirm"] !== "on") {
-    return data<GroupsActionData>(
-      {
-        action: "delete",
-        groupId,
-        createIdempotencyKey: actions.freshIdempotencyKey(),
-        updateIdempotencyKey: actions.freshIdempotencyKey(),
-        deleteIdempotencyKey: actions.freshIdempotencyKey(),
-        fieldErrors: { confirm: "Confirm the deletion to continue." },
-        generalError: null,
-        values: { name: "", tags: "", action: "delete", groupId },
-      },
-      { status: 400, headers: NO_STORE },
-    );
-  }
-
   const values = {
     name: form["name"] ?? "",
-    tags: form["tags"] ?? "",
+    tag: form["tag"] ?? "",
     action: actionMode,
     groupId,
   };
-  const fieldErrors: { name?: string; tags?: string } = {};
-  const normalizedName = actionMode === "delete" ? null : normalizeGroupName(values.name);
-  const normalizedTags =
-    actionMode === "delete" ? null : normalizeTagList(splitTags(values.tags));
-  if (actionMode !== "delete") {
-    if (normalizedName === null) {
-      fieldErrors.name =
-        "Group name must be 1–80 characters and must not contain control characters.";
-    } else if (isInappropriateName(values.name)) {
-      fieldErrors.name = "Choose a different group name.";
-    }
-    if (splitTags(values.tags).length > MAX_GROUP_TAGS) {
-      fieldErrors.tags = `A group can hold up to ${MAX_GROUP_TAGS} player tags.`;
-    } else if (normalizedTags === null) {
-      fieldErrors.tags =
-        "Enter at least one valid player tag, separated by commas or new lines.";
-    }
-  }
-  if (fieldErrors.name || fieldErrors.tags) {
-    return data<GroupsActionData>(
+  const reply = (status: number, outcome: Partial<GroupsActionData>) =>
+    data<GroupsActionData>(
       {
-        action: actionMode as "create" | "update" | "delete",
+        action: actionMode,
         groupId,
         createIdempotencyKey: actions.freshIdempotencyKey(),
         updateIdempotencyKey: actions.freshIdempotencyKey(),
         deleteIdempotencyKey: actions.freshIdempotencyKey(),
-        fieldErrors,
+        playerIdempotencyKey: actions.freshIdempotencyKey(),
+        fieldErrors: {},
+        notice: null,
         generalError: null,
         values,
+        ...outcome,
       },
-      { status: 400, headers: NO_STORE },
+      { status, headers: NO_STORE },
     );
+  if (actionMode === "delete" && form["confirm"] !== "on") {
+    return reply(400, { fieldErrors: { confirm: "Confirm the deletion to continue." } });
+  }
+
+  const normalizedName = normalizeGroupName(values.name);
+  if (actionMode === "create" || actionMode === "update") {
+    if (normalizedName === null) {
+      return reply(400, {
+        fieldErrors: {
+          name: "Group name must be 1–80 characters and must not contain control characters.",
+        },
+      });
+    }
+    if (isInappropriateName(values.name)) {
+      return reply(400, { fieldErrors: { name: "Choose a different group name." } });
+    }
+  }
+  const tag = normalizeSubmittedPlayerTag(values.tag);
+  if ((actionMode === "add-player" || actionMode === "remove-player") && tag === null) {
+    return reply(400, { fieldErrors: { tag: INVALID_TAG } });
   }
 
   try {
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient(identity);
+    const players = await import("../services/group-players.server");
     if (actionMode === "create") {
-      await client.createGroup(
-        { name: normalizedName as string, tags: normalizedTags as string[] },
+      const created = await client.createGroup(
+        { name: normalizedName as string },
         idempotencyKey,
       );
+      throw redirect(`/account/groups#group-${created.groupId}`);
     } else if (actionMode === "update") {
       await client.updateGroup(
         groupId,
-        { name: normalizedName as string, tags: normalizedTags as string[] },
+        { name: normalizedName as string },
         idempotencyKey,
       );
-    } else {
+    } else if (actionMode === "delete") {
       await client.deleteGroup(groupId, idempotencyKey);
+    } else if (actionMode === "remove-player") {
+      await players.removeGroupPlayer(identity, groupId, tag as string, idempotencyKey);
+      return reply(200, { notice: `Removed ${tag} from the group.` });
+    } else {
+      // Refuse duplicates and a full group before spending a player lookup.
+      const group = (await client.listGroups()).find((row) => row.groupId === groupId);
+      if (group === undefined) return reply(404, { generalError: GROUP_GONE });
+      if (group.tags.includes(tag as string)) {
+        return reply(409, { fieldErrors: { tag: `${tag} is already in this group.` } });
+      }
+      if (group.tags.length >= MAX_GROUP_TAGS) {
+        return reply(422, { fieldErrors: { tag: GROUP_FULL } });
+      }
+      const { clientAddressContext } = await import("../server/client-address.server");
+      const lookup = await players.checkPlayerTag(
+        context?.get(clientAddressContext),
+        tag as string,
+      );
+      if (lookup.state === "not_found") {
+        return reply(422, { fieldErrors: { tag: notFound(tag as string) } });
+      }
+      if (lookup.state === "checking") {
+        return reply(409, { fieldErrors: { tag: stillChecking(tag as string) } });
+      }
+      if (lookup.state === "failed" || lookup.state === "unknown") {
+        return reply(503, {
+          fieldErrors: {
+            tag: `Clash of Clans could not be reached to check ${tag}. Try again in a minute.`,
+          },
+        });
+      }
+      const added = await players.addGroupPlayer(
+        identity,
+        groupId,
+        tag as string,
+        idempotencyKey,
+      );
+      return reply(200, { notice: addedNotice(added) });
     }
   } catch (cause) {
+    if (cause instanceof Response) throw cause;
     if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
     const pythonError = cause as { status?: number; payload?: unknown };
-    const payload = isRecord(pythonError.payload) ? pythonError.payload : {};
-    if (pythonError.status === 409 && payload.error === "group_name_conflict") {
-      return data<GroupsActionData>(
-        {
-          action: actionMode as "create" | "update" | "delete",
-          groupId,
-          createIdempotencyKey: actions.freshIdempotencyKey(),
-          updateIdempotencyKey: actions.freshIdempotencyKey(),
-          deleteIdempotencyKey: actions.freshIdempotencyKey(),
-          fieldErrors: { name: "A group with this name already exists." },
-          generalError: null,
-          values,
-        },
-        { status: 409, headers: NO_STORE },
-      );
+    const code = isRecord(pythonError.payload) ? pythonError.payload.error : undefined;
+    const tagError: Record<string, string> = {
+      group_player_exists: `${tag} is already in this group.`,
+      group_full: GROUP_FULL,
+      player_not_found: notFound(tag ?? ""),
+      player_not_checked: stillChecking(tag ?? ""),
+      rate_limited:
+        "Too many player checks from your connection. Wait a minute and try again.",
+      invalid_tag: INVALID_TAG,
+    };
+    if (typeof code === "string" && code in tagError) {
+      return reply(pythonError.status ?? 422, { fieldErrors: { tag: tagError[code] } });
     }
-    if (pythonError.status === 422) {
-      return data<GroupsActionData>(
-        {
-          action: actionMode as "create" | "update" | "delete",
-          groupId,
-          createIdempotencyKey: actions.freshIdempotencyKey(),
-          updateIdempotencyKey: actions.freshIdempotencyKey(),
-          deleteIdempotencyKey: actions.freshIdempotencyKey(),
-          fieldErrors: {
-            name: "This group was not accepted. Choose a different name.",
-            tags: "Enter at least one valid player tag, separated by commas or new lines.",
-          },
-          generalError: null,
-          values,
-        },
-        { status: 422, headers: NO_STORE },
-      );
+    if (pythonError.status === 409 && code === "group_name_conflict") {
+      return reply(409, {
+        fieldErrors: { name: "A group with this name already exists." },
+      });
+    }
+    if (
+      pythonError.status === 422 &&
+      (actionMode === "create" || actionMode === "update")
+    ) {
+      return reply(422, {
+        fieldErrors: { name: "This group was not accepted. Choose a different name." },
+      });
     }
     const { safeWebsiteError } = await import("../server/errors.server");
     const safeError = safeWebsiteError(cause);
-    const generalError: WebsiteErrorResponse =
-      pythonError.status === 404 && payload.error === "group_not_found"
-        ? {
-            error: {
-              code: "conflict",
-              message: "The group no longer exists. Refresh the page.",
-            },
-          }
-        : actionMode === "create" &&
-            (safeError.error.code === "unavailable" ||
-              safeError.error.code === "malformed")
-          ? {
-              error: {
-                code: safeError.error.code,
-                message:
-                  "Could not confirm the group was created. Refresh the page before trying again.",
-              },
-            }
-          : safeError;
-    return data<GroupsActionData>(
-      {
-        action: actionMode as "create" | "update" | "delete",
-        groupId,
-        createIdempotencyKey: actions.freshIdempotencyKey(),
-        updateIdempotencyKey: actions.freshIdempotencyKey(),
-        deleteIdempotencyKey: actions.freshIdempotencyKey(),
-        fieldErrors: {},
-        generalError,
-        values,
-      },
-      { status: 422, headers: NO_STORE },
-    );
+    return reply(422, {
+      generalError:
+        pythonError.status === 404 && code === "group_not_found"
+          ? GROUP_GONE
+          : actionMode === "create" &&
+              (safeError.error.code === "unavailable" ||
+                safeError.error.code === "malformed")
+            ? {
+                error: {
+                  code: safeError.error.code,
+                  message:
+                    "Could not confirm the group was created. Refresh the page before trying again.",
+                },
+              }
+            : safeError,
+    });
   }
   throw redirect("/account/groups");
 }
 
-function splitTags(value: string): string[] {
-  return value
-    .split(/[\n,]+/)
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
+const INVALID_TAG =
+  "Enter one valid player tag, like #2PY0LQ. Tags use only 0, 2, 8, 9 and the letters P Y L Q G R J C U V.";
+const GROUP_FULL = `This group already has ${MAX_GROUP_TAGS} players, the most a comparison shows. Remove a player to add another.`;
+const GROUP_GONE: WebsiteErrorResponse = {
+  error: { code: "conflict", message: "The group no longer exists. Refresh the page." },
+};
+
+function notFound(tag: string): string {
+  return `Clash of Clans has no player with the tag ${tag}. Check the tag and try again.`;
 }
+
+function stillChecking(tag: string): string {
+  return `Still checking ${tag} with Clash of Clans. Press Add player again in a few seconds.`;
+}
+
+function addedNotice(player: GroupPlayer): string {
+  const who = player.name === null ? player.tag : `${player.name} (${player.tag})`;
+  if (player.state === "tracking") {
+    return player.trophies === null
+      ? `Added ${who}.`
+      : `Added ${who}, ${player.trophies.toLocaleString("en")} trophies.`;
+  }
+  return `Added ${who}. ${STATE_LABELS[player.state]}.`;
+}
+
+/** What a member row says when the player is not tracked in Legend League. */
+const STATE_LABELS: Record<GroupPlayer["state"], string> = {
+  tracking: "",
+  not_in_legend: "Not in Legend League, no data",
+  uncertain: "Not confirmed in Legend League yet, no data",
+  checking: "Looking up this player…",
+  unknown: "Not looked up yet",
+  not_found: "Tag not found in Clash of Clans",
+  failed: "Lookup failed; open the player to retry",
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-async function errorResponse(
-  action: "create" | "update" | "delete",
-  groupId: string | null,
-  status: number,
-  generalError: WebsiteErrorResponse,
-) {
+async function errorResponse(status: number, generalError: WebsiteErrorResponse) {
   const { freshIdempotencyKey } = await import("../server/actions.server");
   return data<GroupsActionData>(
     {
-      action,
-      groupId,
+      action: "create",
+      groupId: null,
       createIdempotencyKey: freshIdempotencyKey(),
       updateIdempotencyKey: freshIdempotencyKey(),
       deleteIdempotencyKey: freshIdempotencyKey(),
+      playerIdempotencyKey: freshIdempotencyKey(),
       fieldErrors: {},
+      notice: null,
       generalError,
-      values: { name: "", tags: "", action, groupId: groupId ?? "" },
+      values: { name: "", tag: "", action: "create", groupId: "" },
     },
     { status, headers: NO_STORE },
   );
 }
 
 async function invalidFormResponse() {
-  return errorResponse("create", null, 400, {
+  return errorResponse(400, {
     error: {
       code: "invalid_input",
       message: "Check the submitted value and try again.",
@@ -323,6 +367,7 @@ export default function GroupsRoute() {
     actionData && actionData.action === "create"
       ? actionData.createIdempotencyKey
       : loaderData.createIdempotencyKey;
+  const createErrors = actionData?.action === "create" ? actionData.fieldErrors : {};
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -342,14 +387,11 @@ export default function GroupsRoute() {
         <Form key={createKey} method="post" action="." className="stack-form">
           <input type="hidden" name="action" value="create" />
           <input type="hidden" name="idempotencyKey" value={createKey} />
-          <GroupFields
-            nameValue={actionData?.action === "create" ? actionData.values.name : ""}
-            tagsValue={actionData?.action === "create" ? actionData.values.tags : ""}
-            fieldErrors={
-              actionData?.action === "create" ? actionData.fieldErrors : undefined
-            }
-            nameId="group-create-name"
-            tagsId="group-create-tags"
+          <NameField
+            id="group-create-name"
+            value={actionData?.action === "create" ? actionData.values.name : ""}
+            error={createErrors.name}
+            help="You add players one at a time once the group exists."
           />
           <button type="submit" className="button button-primary" disabled={creating}>
             {creating ? "Creating group…" : "Create group"}
@@ -361,97 +403,16 @@ export default function GroupsRoute() {
         <h2 id="group-list-title">Your groups</h2>
         {loaderData.groups.length > 0 ? (
           <ul className="group-card-list">
-            {loaderData.groups.map((group) => {
-              const updateKey =
-                actionData?.action === "update" && actionData.groupId === group.groupId
-                  ? actionData.updateIdempotencyKey
-                  : loaderData.updateIdempotencyKeys[group.groupId];
-              const deleteKey =
-                actionData?.action === "delete" && actionData.groupId === group.groupId
-                  ? actionData.deleteIdempotencyKey
-                  : loaderData.deleteIdempotencyKeys[group.groupId];
-              return (
-                <li key={group.groupId} className="group-card">
-                  <h3>{group.name}</h3>
-                  <a
-                    className="button button-primary"
-                    href={`/account/groups/${group.groupId}`}
-                  >
-                    Compare players
-                  </a>
-                  {group.tags.length > 0 ? (
-                    <ul className="player-link-list">
-                      {group.tags.map((tag) => (
-                        <li key={tag}>
-                          <a href={canonicalPlayerPath(tag)}>{tag}</a>
-                          <span className="player-tag">{tag}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="muted">No player tags in this group.</p>
-                  )}
-                  <form method="post" className="stack-form">
-                    <fieldset className="form-fieldset">
-                      <legend>Edit group</legend>
-                      <input type="hidden" name="action" value="update" />
-                      <input type="hidden" name="groupId" value={group.groupId} />
-                      <input type="hidden" name="idempotencyKey" value={updateKey} />
-                      <GroupFields
-                        nameValue={
-                          actionData?.action === "update" &&
-                          actionData.groupId === group.groupId
-                            ? actionData.values.name
-                            : group.name
-                        }
-                        tagsValue={
-                          actionData?.action === "update" &&
-                          actionData.groupId === group.groupId
-                            ? actionData.values.tags
-                            : group.tags.join(", ")
-                        }
-                        fieldErrors={
-                          actionData?.action === "update" &&
-                          actionData.groupId === group.groupId
-                            ? actionData.fieldErrors
-                            : undefined
-                        }
-                        nameId={`group-update-name-${group.groupId}`}
-                        tagsId={`group-update-tags-${group.groupId}`}
-                      />
-                      <button type="submit" className="button button-secondary">
-                        Save changes
-                      </button>
-                    </fieldset>
-                  </form>
-                  <form method="post" className="stack-form danger-form">
-                    <fieldset className="form-fieldset">
-                      <legend>Delete group</legend>
-                      <input type="hidden" name="action" value="delete" />
-                      <input type="hidden" name="groupId" value={group.groupId} />
-                      <input type="hidden" name="idempotencyKey" value={deleteKey} />
-                      <label className="confirm-line">
-                        <input type="checkbox" name="confirm" required />I understand this
-                        group and its membership will be deleted.
-                      </label>
-                      {actionData?.action === "delete" &&
-                      actionData.groupId === group.groupId &&
-                      actionData.fieldErrors.confirm ? (
-                        <p className="field-error" role="alert">
-                          {actionData.fieldErrors.confirm}
-                        </p>
-                      ) : null}
-                      <button
-                        type="submit"
-                        className="button button-secondary danger-button"
-                      >
-                        Delete group
-                      </button>
-                    </fieldset>
-                  </form>
-                </li>
-              );
-            })}
+            {loaderData.groups.map((group) => (
+              <GroupCard
+                key={group.groupId}
+                group={group}
+                loaderData={loaderData}
+                actionData={
+                  actionData?.groupId === group.groupId ? actionData : undefined
+                }
+              />
+            ))}
           </ul>
         ) : (
           <div className="empty-state">
@@ -464,61 +425,248 @@ export default function GroupsRoute() {
   );
 }
 
-function GroupFields({
-  nameValue,
-  tagsValue,
-  fieldErrors,
-  nameId,
-  tagsId,
+function GroupCard({
+  group,
+  loaderData,
+  actionData,
 }: {
-  nameValue: string;
-  tagsValue: string;
-  fieldErrors: { name?: string; tags?: string } | undefined;
-  nameId: string;
-  tagsId: string;
+  group: ListedGroup;
+  loaderData: GroupsLoaderData;
+  /** A no-JavaScript form result for this group, if any. */
+  actionData: GroupsActionData | undefined;
 }) {
+  const id = group.groupId;
+  const add = useFetcher<GroupsActionData>();
+  const addForm = useRef<HTMLFormElement>(null);
+  const addResult =
+    add.data ?? (actionData?.action === "add-player" ? actionData : undefined);
+  const adding = add.state !== "idle";
+  const tagError = addResult?.fieldErrors.tag;
+  useEffect(() => {
+    if (add.state === "idle" && add.data?.notice) addForm.current?.reset();
+  }, [add.state, add.data]);
+  const updateKey =
+    actionData?.action === "update"
+      ? actionData.updateIdempotencyKey
+      : loaderData.updateIdempotencyKeys[id];
+  const deleteKey =
+    actionData?.action === "delete"
+      ? actionData.deleteIdempotencyKey
+      : loaderData.deleteIdempotencyKeys[id];
+  const count = group.players.length;
+
   return (
-    <>
-      <div className="form-field">
-        <label htmlFor={nameId}>Group name</label>
-        <input
-          id={nameId}
-          name="name"
-          type="text"
-          autoComplete="off"
-          defaultValue={nameValue}
-          aria-invalid={fieldErrors?.name ? true : undefined}
-          aria-describedby={fieldErrors?.name ? `${nameId}-error` : undefined}
-        />
-        {fieldErrors?.name ? (
-          <p id={`${nameId}-error`} className="field-error" role="alert">
-            {fieldErrors.name}
-          </p>
-        ) : null}
+    <li id={`group-${id}`} className="group-card">
+      <div className="group-card-head">
+        <h3>{group.name}</h3>
+        <a className="button button-primary" href={`/account/groups/${id}`}>
+          Compare players
+        </a>
       </div>
-      <div className="form-field">
-        <label htmlFor={tagsId}>Player tags</label>
-        <textarea
-          id={tagsId}
-          name="tags"
-          rows={3}
-          autoComplete="off"
-          autoCapitalize="characters"
-          spellCheck={false}
-          defaultValue={tagsValue}
-          aria-invalid={fieldErrors?.tags ? true : undefined}
-          aria-describedby={fieldErrors?.tags ? `${tagsId}-error` : undefined}
+      {count > 0 ? (
+        <ul className="player-action-list" aria-label={`Players in ${group.name}`}>
+          {group.players.map((player) => (
+            <MemberRow
+              key={player.tag}
+              groupId={id}
+              groupName={group.name}
+              player={player}
+              removeKey={loaderData.removeIdempotencyKeys[id]?.[player.tag] ?? ""}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">No players yet. Add the first one below.</p>
+      )}
+      {actionData?.action === "remove-player" && actionData.notice ? (
+        <p className="form-help" role="status">
+          {actionData.notice}
+        </p>
+      ) : null}
+
+      <add.Form method="post" className="add-player-form" ref={addForm}>
+        <input type="hidden" name="action" value="add-player" />
+        <input type="hidden" name="groupId" value={id} />
+        <input
+          type="hidden"
+          name="idempotencyKey"
+          value={addResult?.playerIdempotencyKey ?? loaderData.addIdempotencyKeys[id]}
         />
-        {fieldErrors?.tags ? (
-          <p id={`${tagsId}-error`} className="field-error" role="alert">
-            {fieldErrors.tags}
+        <label htmlFor={`group-add-${id}`}>Add player</label>
+        <div className="add-player-row">
+          <input
+            id={`group-add-${id}`}
+            name="tag"
+            type="text"
+            placeholder="#2PY0LQ"
+            required
+            maxLength={MAX_PLAYER_TAG_INPUT_LENGTH}
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            defaultValue={tagError ? addResult?.values.tag : ""}
+            aria-invalid={tagError ? true : undefined}
+            aria-describedby={`group-add-${id}-message`}
+          />
+          <button type="submit" className="button button-primary" disabled={adding}>
+            {adding ? "Checking…" : "Add player"}
+          </button>
+        </div>
+        {adding ? (
+          <p id={`group-add-${id}-message`} className="form-help" role="status">
+            Checking the tag with Clash of Clans…
+          </p>
+        ) : tagError ? (
+          <p id={`group-add-${id}-message`} className="field-error" role="alert">
+            {tagError}
+          </p>
+        ) : addResult?.notice ? (
+          <p id={`group-add-${id}-message`} className="add-player-done" role="status">
+            {addResult.notice}
           </p>
         ) : (
-          <p className="form-help">
-            Up to {MAX_GROUP_TAGS} tags. Separate them with commas or new lines.
+          <p id={`group-add-${id}-message`} className="form-help">
+            {count} of {MAX_GROUP_TAGS} players. Each tag is checked with Clash of Clans
+            before it joins.
           </p>
         )}
-      </div>
-    </>
+        {addResult?.generalError ? <ErrorNotice error={addResult.generalError} /> : null}
+      </add.Form>
+
+      <details
+        className="group-settings"
+        open={actionData?.action === "update" || actionData?.action === "delete"}
+      >
+        <summary>Rename or delete group</summary>
+        <form method="post" className="stack-form">
+          <input type="hidden" name="action" value="update" />
+          <input type="hidden" name="groupId" value={id} />
+          <input type="hidden" name="idempotencyKey" value={updateKey} />
+          <NameField
+            id={`group-update-name-${id}`}
+            value={actionData?.action === "update" ? actionData.values.name : group.name}
+            error={
+              actionData?.action === "update" ? actionData.fieldErrors.name : undefined
+            }
+          />
+          <button type="submit" className="button button-secondary">
+            Save name
+          </button>
+        </form>
+        <form method="post" className="stack-form danger-form">
+          <fieldset className="form-fieldset">
+            <legend>Delete group</legend>
+            <input type="hidden" name="action" value="delete" />
+            <input type="hidden" name="groupId" value={id} />
+            <input type="hidden" name="idempotencyKey" value={deleteKey} />
+            <label className="confirm-line">
+              <input type="checkbox" name="confirm" required />I understand this group and
+              its membership will be deleted.
+            </label>
+            {actionData?.action === "delete" && actionData.fieldErrors.confirm ? (
+              <p className="field-error" role="alert">
+                {actionData.fieldErrors.confirm}
+              </p>
+            ) : null}
+            <button type="submit" className="button button-secondary danger-button">
+              Delete group
+            </button>
+          </fieldset>
+        </form>
+      </details>
+    </li>
+  );
+}
+
+function MemberRow({
+  groupId,
+  groupName,
+  player,
+  removeKey,
+}: {
+  groupId: string;
+  groupName: string;
+  player: GroupPlayer;
+  removeKey: string;
+}) {
+  const remove = useFetcher<GroupsActionData>();
+  const removing = remove.state !== "idle";
+  const label = player.name ?? player.tag;
+  return (
+    <li>
+      <span className="player-action-name">
+        <a href={canonicalPlayerPath(player.tag)}>{label}</a>
+        {player.name === null ? null : <span className="player-tag">{player.tag}</span>}
+        <span className="group-member-detail">
+          {player.state === "tracking"
+            ? player.trophies === null
+              ? "Legend League"
+              : `${player.trophies.toLocaleString("en")} trophies`
+            : STATE_LABELS[player.state]}
+        </span>
+      </span>
+      <remove.Form method="post" className="inline-form">
+        <input type="hidden" name="action" value="remove-player" />
+        <input type="hidden" name="groupId" value={groupId} />
+        <input type="hidden" name="tag" value={player.tag} />
+        <input
+          type="hidden"
+          name="idempotencyKey"
+          value={remove.data?.playerIdempotencyKey ?? removeKey}
+        />
+        <button
+          type="submit"
+          className="button button-secondary"
+          disabled={removing}
+          aria-label={`Remove ${label} from ${groupName}`}
+        >
+          {removing ? "Removing…" : "Remove"}
+        </button>
+      </remove.Form>
+      {remove.data?.fieldErrors.tag ? (
+        <p className="field-error" role="alert">
+          {remove.data.fieldErrors.tag}
+        </p>
+      ) : null}
+      {remove.data?.generalError ? (
+        <ErrorNotice error={remove.data.generalError} />
+      ) : null}
+    </li>
+  );
+}
+
+function NameField({
+  id,
+  value,
+  error,
+  help,
+}: {
+  id: string;
+  value: string;
+  error: string | undefined;
+  help?: string;
+}) {
+  return (
+    <div className="form-field">
+      <label htmlFor={id}>Group name</label>
+      <input
+        id={id}
+        name="name"
+        type="text"
+        autoComplete="off"
+        defaultValue={value}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error || help ? `${id}-message` : undefined}
+      />
+      {error ? (
+        <p id={`${id}-message`} className="field-error" role="alert">
+          {error}
+        </p>
+      ) : help ? (
+        <p id={`${id}-message`} className="form-help">
+          {help}
+        </p>
+      ) : null}
+    </div>
   );
 }

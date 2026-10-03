@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from itertools import islice, product
 from uuid import uuid4
 
 import psycopg
 import pytest
+from test_api_db_public_ops import seed_profile
 from test_api_db_verification import NOW, verification_binding
 from test_api_migration import migrated_production_database
 
@@ -102,6 +104,10 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
                     "group_id": group_id,
                     "name": "My Accounts",
                     "tags": ["#2PP", "#8PY"],
+                    "players": [
+                        {"tag": "#2PP", "name": None, "trophies": None, "state": "checking"},
+                        {"tag": "#8PY", "name": None, "trophies": None, "state": "checking"},
+                    ],
                 }
             ]
             assert api_accounts.get_public_user(database, "groupowner") == {
@@ -398,4 +404,140 @@ def test_group_creation_does_not_queue_behind_a_worker_transaction(
             )) == ["Alts", "Main"]
         finally:
             worker.close()
+            database.close()
+
+
+def add_player(database: ApiDatabase, account_id: int, group_id: str, tag: str, **kw):
+    return api_accounts.add_group_player(database,
+        account_binding(
+            account_id,
+            "groups.add_player",
+            f"/v1/account/groups/{group_id}/players",
+            {"group_id": group_id, "tag": tag},
+            **kw,
+        ),
+        group_id=group_id,
+        normalized_tag=tag,
+    )
+
+
+def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            owner_id = create_owner(database)
+            group_id = api_accounts.create_group(database,
+                account_binding(
+                    owner_id, "groups.create", "/v1/account/groups",
+                    {"name": "Main", "tags": []},
+                ),
+                name="Main",
+                normalized_name="main",
+                normalized_tags=[],
+            ).payload["group_id"]
+            seed_profile(database, "#2PP", 5400)
+            seed_profile(database, "#8PY", 4100)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE players SET active = false, eligibility_state = 'ineligible'
+                    WHERE normalized_tag = '#8PY'
+                    """
+                )
+                # The game answered that this tag belongs to no player.
+                api_player_lookup.admit(connection, "#9PY")
+                connection.execute(
+                    """
+                    UPDATE collector_work
+                    SET status = 'failed', failure_category = 'player_not_found'
+                    WHERE normalized_tag = '#9PY'
+                    """
+                )
+
+            tracked = add_player(database, owner_id, group_id, "#2PP")
+            again = add_player(database, owner_id, group_id, "#2PP")
+            outside_legend = add_player(database, owner_id, group_id, "#8PY")
+            missing = add_player(database, owner_id, group_id, "#9PY")
+            unchecked = add_player(database, owner_id, group_id, "#QQQ")
+
+            assert tracked.status_code == 200
+            assert tracked.payload == {
+                "group_id": group_id,
+                "tag": "#2PP",
+                "name": "Player #2PP",
+                "trophies": 5400,
+                "state": "tracking",
+            }
+            assert again.status_code == 409
+            assert again.payload == {"error": "group_player_exists"}
+            assert outside_legend.payload["state"] == "not_in_legend"
+            assert missing.status_code == 422
+            assert missing.payload == {"error": "player_not_found"}
+            assert unchecked.status_code == 409
+            assert unchecked.payload == {"error": "player_not_checked", "state": "unknown"}
+            [group] = api_accounts.list_groups(database, owner_id)
+            assert group["players"] == [
+                {"tag": "#2PP", "name": "Player #2PP", "trophies": 5400, "state": "tracking"},
+                {
+                    "tag": "#8PY",
+                    "name": "Player #8PY",
+                    "trophies": 4100,
+                    "state": "not_in_legend",
+                },
+            ]
+
+            removed = api_accounts.remove_group_player(database,
+                account_binding(
+                    owner_id,
+                    "groups.remove_player",
+                    f"/v1/account/groups/{group_id}/players/%232PP",
+                    {"group_id": group_id, "tag": "#2PP"},
+                    method="DELETE",
+                ),
+                group_id=group_id,
+                normalized_tag="#2PP",
+            )
+            assert removed.payload == {"group_id": group_id, "tag": "#2PP", "removed": True}
+            assert api_accounts.list_groups(database, owner_id)[0]["tags"] == ["#8PY"]
+
+            # Another account's group reads as missing, and nothing joins it.
+            assert add_player(
+                database, owner_id + 1, group_id, "#2PP", subject="other-subject"
+            ).payload == {"error": "group_not_found"}
+            assert api_accounts.list_groups(database, owner_id)[0]["tags"] == ["#8PY"]
+        finally:
+            database.close()
+
+
+def test_a_full_group_refuses_the_twenty_first_player(database_url: str) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            owner_id = create_owner(database)
+            tags = [
+                "#" + "".join(chars) for chars in islice(product("289LYQ", repeat=3), 20)
+            ]
+            group_id = api_accounts.create_group(database,
+                account_binding(
+                    owner_id, "groups.create", "/v1/account/groups",
+                    {"name": "Clan", "tags": tags},
+                ),
+                name="Clan",
+                normalized_name="clan",
+                normalized_tags=tags,
+            ).payload["group_id"]
+            seed_profile(database, "#2PP", 5400)
+
+            full = add_player(database, owner_id, group_id, "#2PP")
+
+            assert full.status_code == 422
+            assert full.payload == {"error": "group_full"}
+            assert "#2PP" not in api_accounts.list_groups(database, owner_id)[0]["tags"]
+        finally:
             database.close()

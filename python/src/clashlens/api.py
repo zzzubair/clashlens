@@ -109,8 +109,12 @@ class SavedTagBody(StrictBody):
 
 class GroupBody(StrictBody):
     name: str = Field(min_length=1, max_length=80)
-    # A group holds no more players than its comparison can show.
-    tags: list[str] = Field(max_length=api_groups.MAX_COMPARED_MEMBERS)
+    # A group holds no more players than its comparison can show. Leaving
+    # tags out keeps a group's players; the website adds and removes them one
+    # at a time.
+    tags: list[str] | None = Field(
+        default=None, max_length=api_groups.MAX_COMPARED_MEMBERS
+    )
 
 
 class ProviderLinkBody(StrictBody):
@@ -772,6 +776,7 @@ def create_app(
         context = _authorize(request, "groups.write", production_database)
         assert production_database is not None
         name, normalized_name, tags = _group_values(body)
+        tags = tags or []
         result = api_accounts.create_group(production_database,
             _binding(
                 request,
@@ -813,6 +818,41 @@ def create_app(
         result = api_accounts.delete_group(production_database,
             _binding(request, context, "groups.delete", {"group_id": group_id}),
             group_id=group_id,
+        )
+        return _operation_response(result)
+
+    @app.post("/v1/account/groups/{group_id}/players")
+    def add_group_player(
+        group_id: str, body: SavedTagBody, request: Request
+    ) -> JSONResponse:
+        context = _authorize(request, "groups.write", production_database)
+        assert production_database is not None
+        _safe_uuid(group_id)
+        tag = _safe_tag(body.tag)
+        result = api_accounts.add_group_player(production_database,
+            _binding(
+                request, context, "groups.add_player", {"group_id": group_id, "tag": tag}
+            ),
+            group_id=group_id,
+            normalized_tag=tag,
+        )
+        return _operation_response(result)
+
+    @app.delete("/v1/account/groups/{group_id}/players/{tag}")
+    def remove_group_player(group_id: str, tag: str, request: Request) -> JSONResponse:
+        context = _authorize(request, "groups.write", production_database)
+        assert production_database is not None
+        _safe_uuid(group_id)
+        normalized_tag = _safe_tag(tag)
+        result = api_accounts.remove_group_player(production_database,
+            _binding(
+                request,
+                context,
+                "groups.remove_player",
+                {"group_id": group_id, "tag": normalized_tag},
+            ),
+            group_id=group_id,
+            normalized_tag=normalized_tag,
         )
         return _operation_response(result)
 
@@ -1101,10 +1141,10 @@ def _operation_response(result: OperationResult) -> JSONResponse:
     )
 
 
-def _group_values(body: GroupBody) -> tuple[str, str, list[str]]:
+def _group_values(body: GroupBody) -> tuple[str, str, list[str] | None]:
     try:
         name = normalize_group_name(body.name)
-        tags = sorted({_safe_tag(tag) for tag in body.tags})
+        tags = None if body.tags is None else sorted({_safe_tag(tag) for tag in body.tags})
     except ValueError as error:
         raise ApiError(422, "invalid_request") from error
     return name, name.casefold(), tags

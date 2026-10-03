@@ -124,9 +124,17 @@ describe("Python account response mappers", () => {
       name: "Push team",
       tags: ["#2PP", "#2PL"],
     };
-    expect(mapGroups({ groups: [group] })).toEqual([
-      { groupId: group.group_id, name: "Push team", tags: ["#2PP", "#2PL"] },
+    const players = [
+      { tag: "#2PP", name: "Nova", trophies: 5400, state: "tracking" },
+      { tag: "#2PL", name: null, trophies: null, state: "not_in_legend" },
+    ];
+    expect(mapGroups({ groups: [{ ...group, players }] })).toEqual([
+      { groupId: group.group_id, name: "Push team", tags: ["#2PP", "#2PL"], players },
     ]);
+    expect(mapGroups({ groups: [group] })).toBeNull();
+    expect(
+      mapGroups({ groups: [{ ...group, players: [{ ...players[0], state: "gone" }] }] }),
+    ).toBeNull();
     expect(mapGroupResult(group)).toEqual({
       groupId: group.group_id,
       name: "Push team",
@@ -136,8 +144,10 @@ describe("Python account response mappers", () => {
       deleted: true,
       groupId: group.group_id,
     });
-    expect(mapGroups({ groups: [{ ...group, group_id: "not-a-uuid" }] })).toBeNull();
-    expect(mapGroups({ groups: [{ ...group, tags: ["#bad"] }] })).toBeNull();
+    expect(
+      mapGroups({ groups: [{ ...group, players, group_id: "not-a-uuid" }] }),
+    ).toBeNull();
+    expect(mapGroups({ groups: [{ ...group, players, tags: ["#bad"] }] })).toBeNull();
     expect(mapGroups({ groups: "x" })).toBeNull();
     expect(mapGroupResult({ ...group, name: "" })).toBeNull();
     expect(mapGroupDeleteResult({ deleted: true, group_id: "x" })).toBeNull();

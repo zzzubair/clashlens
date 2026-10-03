@@ -732,7 +732,14 @@ describe("account routes", () => {
   describe("account.groups", () => {
     it("loads groups with fresh per-group update and delete keys", async () => {
       client.listGroups = vi.fn(async () => [
-        { groupId: GROUP_ID, name: "Clanmates", tags: [TAG] },
+        {
+          groupId: GROUP_ID,
+          name: "Clanmates",
+          tags: [TAG],
+          players: [
+            { tag: TAG, name: "Nova", trophies: 5400, state: "tracking" as const },
+          ],
+        },
       ]);
       const result = await groupsLoader({
         request: new Request(`${ORIGIN}/account/groups`),
@@ -754,19 +761,18 @@ describe("account routes", () => {
       ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
     });
 
-    it("creates and updates groups through Python, then redirects", async () => {
+    it("creates and renames groups through Python, then redirects", async () => {
       await expect(
         groupsAction({
           request: formRequest("/account/groups", {
             action: "create",
             name: " Clanmates ",
-            tags: "p0lq2y8, #G2Y8P0LQ",
             idempotencyKey: IDEMPOTENCY_KEY,
           }),
         } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/groups"));
+      ).rejects.toSatisfy(expectRedirectTo(`/account/groups#group-${GROUP_ID}`));
       expect(client.createGroup).toHaveBeenCalledWith(
-        { name: "Clanmates", tags: [TAG2, TAG] },
+        { name: "Clanmates" },
         IDEMPOTENCY_KEY,
       );
 
@@ -776,14 +782,13 @@ describe("account routes", () => {
             action: "update",
             groupId: GROUP_ID,
             name: "Clanmates",
-            tags: "p0lq2y8",
             idempotencyKey: IDEMPOTENCY_KEY,
           }),
         } as never),
       ).rejects.toSatisfy(expectRedirectTo("/account/groups"));
       expect(client.updateGroup).toHaveBeenCalledWith(
         GROUP_ID,
-        { name: "Clanmates", tags: [TAG] },
+        { name: "Clanmates" },
         IDEMPOTENCY_KEY,
       );
     });
@@ -830,9 +835,9 @@ describe("account routes", () => {
 
       const badTags = await groupsAction({
         request: formRequest("/account/groups", {
-          action: "create",
-          name: "Clanmates",
-          tags: "not a tag",
+          action: "add-player",
+          groupId: GROUP_ID,
+          tag: "not a tag",
           idempotencyKey: IDEMPOTENCY_KEY,
         }),
       } as never);
@@ -864,6 +869,7 @@ describe("account routes", () => {
       expect(client.createGroup).not.toHaveBeenCalled();
       expect(client.updateGroup).not.toHaveBeenCalled();
       expect(client.deleteGroup).not.toHaveBeenCalled();
+      expect(client.listGroups).not.toHaveBeenCalled();
     });
 
     it("rejects cross-origin requests before any mutation", async () => {
