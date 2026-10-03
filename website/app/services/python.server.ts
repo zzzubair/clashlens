@@ -429,8 +429,9 @@ async function requestJsonRaw(
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
-    throw new PythonApiError(503, { error: "unavailable" });
+  } catch (cause) {
+    const timedOut = cause instanceof DOMException && cause.name === "TimeoutError";
+    throw new PythonApiError(503, { error: timedOut ? "timeout" : "unavailable" });
   }
   let payload: unknown;
   try {

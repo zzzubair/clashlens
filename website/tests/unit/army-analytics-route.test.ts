@@ -582,6 +582,58 @@ describe("army analytics player groups", () => {
     );
   });
 
+  it("keeps the picker and explains a request that hits the 5-second limit", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../app/services/python.server")
+    >("../../app/services/python.server");
+    const saved = {
+      url: process.env.CLASHLENS_PYTHON_API_URL,
+      secret: process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64,
+    };
+    process.env.CLASHLENS_PYTHON_API_URL = "http://python-fixture.test/";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 =
+      "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    mocks.createPythonClient.mockImplementation(actual.createPythonClient);
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    const limit = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(1));
+    vi.stubGlobal(
+      "fetch",
+      (_url: URL, init: RequestInit) =>
+        new Promise((_resolve, reject) =>
+          init.signal!.addEventListener("abort", () => reject(init.signal!.reason)),
+        ),
+    );
+    try {
+      const html = await renderArmyRoute("season=current&population=trophies-3800-6100");
+      expect(limit).toHaveBeenCalledWith(5_000);
+      const text = renderedText(html);
+      expect(text).toContain(
+        "This trophy range is too wide to load right now. Try a narrower range.",
+      );
+      expect(text).not.toContain("live service is unavailable");
+      expect(html).not.toContain("<table");
+      expect(html).toMatch(/<option value="trophies" selected="">/);
+      expect(html).toContain('value="top-10000"');
+      expect(html).toMatch(/name="trophy_min"[^>]*value="3800"/);
+      expect(html).toMatch(/name="trophy_max"[^>]*value="6100"/);
+      const top = renderedText(
+        await renderArmyRoute("season=current&population=top-10000"),
+      );
+      expect(top).toContain("This player group took too long to load right now.");
+      expect(top).not.toContain("trophy range is too wide");
+    } finally {
+      limit.mockRestore();
+      vi.unstubAllGlobals();
+      for (const [name, value] of [
+        ["CLASHLENS_PYTHON_API_URL", saved.url],
+        ["CLASHLENS_PYTHON_HMAC_SECRET_B64", saved.secret],
+      ] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   it.each([
     ["population=trophies&trophy_min=6000&trophy_max=5000", "can’t be above"],
     ["population=trophies-6000-5000", "can’t be above"],

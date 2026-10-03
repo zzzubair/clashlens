@@ -217,10 +217,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
         { status: pythonError.status },
       );
     }
+    const timedOut =
+      season === "current" &&
+      cause instanceof python.PythonApiError &&
+      (cause.payload as { error?: unknown } | null)?.error === "timeout";
     return {
       recentAvailable,
       analytics: null,
-      error: safeWebsiteError(cause),
+      error: timedOut
+        ? ({
+            error: {
+              code: "unavailable",
+              message: source.get("population")?.startsWith("trophies")
+                ? "This trophy range is too wide to load right now. Try a narrower range."
+                : "This player group took too long to load right now. Try a smaller group or fewer Legend days.",
+            },
+          } satisfies WebsiteErrorResponse)
+        : safeWebsiteError(cause),
       seasonEmpty: null,
       historicalSummary: false,
       requestedSeason: season,
@@ -643,6 +656,12 @@ export default function ArmyAnalyticsRoute() {
           ) {
             setCustomTrophies(event.target.value === "trophies");
             setTrophyProblem(null);
+            for (const name of ["trophy_min", "trophy_max"]) {
+              const field = form.elements.namedItem(name);
+              if (field instanceof HTMLInputElement) {
+                field.disabled = event.target.value !== "trophies";
+              }
+            }
           }
           const apply = () => {
             pendingChange.current = null;
@@ -940,7 +959,7 @@ export default function ArmyAnalyticsRoute() {
           )}
         </div>
         <noscript>
-          <button type="submit" className="button button-secondary">
+          <button type="submit" formNoValidate className="button button-secondary">
             Apply filters
           </button>
         </noscript>
