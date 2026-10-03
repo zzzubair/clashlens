@@ -106,7 +106,11 @@ def runtime(tmp_path, monkeypatch):
             self.wfile.write(body)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # A short poll interval lets shutdown() return in milliseconds instead of
+    # the 0.5-second default; requests still go through this real server.
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     thread.start()
     rt.origin = f"http://127.0.0.1:{server.server_port}"
     real_request = alerts.request
