@@ -475,7 +475,8 @@ once its cause is fixed. Failed processing jobs have no retry command; see
 
 **Recovered:** 24 hours after the newest permanent failure. The alert means a
 new permanent failure in the last 24 hours; its recovery means no new one for
-24 hours, not that anything was repaired.
+24 hours, not that anything was repaired. A manual retry of a failed item
+clears the alert early; a repeat failure raises a fresh alert.
 
 ### Reset publication missing
 

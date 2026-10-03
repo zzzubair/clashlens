@@ -753,6 +753,8 @@ use the [operating notes](operating.md#respond-to-alerts).
   those present at deployment, do not alert. A missing age counts as unknown
   unless the matching `failed_processing` or `failed_uploads` count is zero.
   Seeing a failed upload's bytes again does not restart its 24 hours.
+  A manual retry of a failed item clears the alert early; a repeat failure
+  raises a fresh alert.
 - **Saved work waiting at least one hour**: a job waiting to be processed,
   from `oldest_pending_processing_age_seconds`, or a raw response waiting to
   be uploaded to the archive, from `oldest_pending_upload_age_seconds`. An
