@@ -44,16 +44,19 @@ def _eight_defenses() -> bytes:
 
 
 def _reset_work(connection_info, archive_server, boundary, *, profile=None,
-                log=None, profile_status=200, status="complete") -> list[int]:
+                log=None, profile_status=200, status="complete",
+                profile_at=None, log_at=None) -> list[int]:
     """Save a Reset sweep's responses for one player; return their jobs."""
     ids, jobs = {}, []
-    for endpoint, body, http_status in (("profile", profile, profile_status),
-                                        ("battle_log", log, 200)):
+    for endpoint, body, http_status, observed_at in (
+        ("profile", profile, profile_status, profile_at or boundary),
+        ("battle_log", log, 200, log_at or boundary),
+    ):
         if body is not None:
             ids[endpoint], job = store_observation(
                 connection_info, archive_server,
                 occurrence_key=f"{boundary.isoformat()}-{endpoint}",
-                endpoint=endpoint, body=body, observed_at=boundary,
+                endpoint=endpoint, body=body, observed_at=observed_at,
                 normalized_tag=TAG, http_status=http_status,
             )
             jobs.append(job)
@@ -348,3 +351,176 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
     # The raw reading is kept, and no Reset is settled from it.
     assert evidence == [("complete", True)]
     assert settlements == {("provisional", None)}
+
+
+def _conflicting_profile(kind: str) -> bytes:
+    payload = json.loads(_profile(5000))
+    if kind == "season_zero":  # As the game sometimes sends with 5,000.
+        payload["currentLeagueSeasonId"] = 0
+    else:  # A tier name we do not recognise, under a valid Season.
+        payload["leagueTier"]["name"] = "Legend One"
+    return json.dumps(payload).encode()
+
+
+CURRENT_PROFILE = """
+    SELECT profile.trophies, profile.source_contract_state
+    FROM players AS player
+    JOIN player_profile_versions AS profile
+      ON profile.id = player.current_profile_version_id"""
+
+
+@pytest.mark.parametrize("kind,conflict", [
+    ("ordinary", "season_zero"),
+    ("season", "season_zero"),
+    ("ordinary", "tier_name"),
+])
+def test_rejected_reset_profile_gives_no_start(
+    database_url: str, archive_server, kind: str, conflict: str
+) -> None:
+    boundary = BOUNDARIES[kind]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           boundary - timedelta(days=1), profile=_profile(6400),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_conflicting_profile(conflict),
+                            log=_battle_log(empty=True))
+        _process(connection_info, archive_server, jobs)
+        # Both days are otherwise reconciled when their battles arrive.
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for day_start in (boundary - timedelta(days=1), boundary):
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start,
+                    now=boundary, request_key=day_start.isoformat(),
+                )
+                assert processor.process_job(job, owner="day") is not None
+        finally:
+            database.close()
+        days = _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   start_trophies, next_start_trophies,
+                   input_evidence -> 'start_baseline_evidence',
+                   input_evidence -> 'end_baseline_evidence'
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")
+        kept = _rows(connection_info, """
+            SELECT profile.source_contract_state, profile.trophies
+            FROM reset_baseline_evidence AS evidence
+            JOIN player_profile_effects AS effect
+              ON effect.observation_id = evidence.profile_observation_id
+            JOIN player_profile_versions AS profile
+              ON profile.id = effect.profile_version_id
+            WHERE evidence.boundary_at = (
+                SELECT max(boundary_at) FROM reset_baseline_evidence)""")
+        current = _rows(connection_info, CURRENT_PROFILE)
+    by_start = {row[0]: row[1:] for row in days}
+    ended, opened = by_start[boundary - timedelta(days=1)], by_start[boundary]
+    # Neither day uses the rejected 5,000, and its Season is unknown rather
+    # than waiting for this player's Season reset.
+    assert ended[1] is None and opened[0] is None
+    assert "season_reset_pending" not in ended[3]
+    assert "season_reset_pending" not in opened[2]
+    assert opened[2]["profile"]["trophies"] == 5000
+    # The rejected reading itself stays saved as evidence, but the player's
+    # current profile is still the earlier trusted one.
+    assert set(kept) == {("conflict", 5000)}
+    assert current == [(6400, "accepted")]
+
+
+def test_reset_profile_read_after_the_first_battle_gives_no_start(
+    database_url: str, archive_server
+) -> None:
+    # Eight attacks (+320) and eight defenses (-280) from 05:06 come before
+    # a delayed 05:30 Reset profile of 6,040.
+    log = json.loads(_battle_log())
+    template = log["items"][0]
+    log["items"] = [
+        {**template, "attack": index < 8,
+         "stars": 0 if index == 15 else 3,
+         "destructionPercentage": 0 if index == 15 else 100,
+         "opponentPlayerTag": f"#{tag}P{'Y' if index < 8 else 'L'}",
+         "battleTimestamp": (DAY_END + timedelta(minutes=6 + index)).strftime(
+             "%Y%m%dT%H%M%S.000Z")}
+        for index, tag in enumerate("89QGRJCU" * 2)
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           DAY_END - timedelta(days=1), profile=_profile(6000),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, DAY_END,
+                            profile=_profile(6040), log=json.dumps(log).encode(),
+                            profile_at=DAY_END + timedelta(minutes=30),
+                            log_at=DAY_END + timedelta(minutes=31))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for day_start in (DAY_END - timedelta(days=1), DAY_END):
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start,
+                    now=DAY_END + timedelta(hours=1),
+                    request_key=day_start.isoformat(),
+                )
+                assert processor.process_job(job, owner="day") is not None
+        finally:
+            database.close()
+        days = {row[0]: row[1:] for row in _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   start_trophies, next_start_trophies, attack_count,
+                   defense_count, attack_gain, observed_defense_loss
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+        evidence = _rows(connection_info, f"""
+            SELECT evidence.profile_valid, evidence.failure_reasons,
+                   profile.source_contract_state, profile.trophies
+            FROM reset_baseline_evidence AS evidence
+            JOIN player_profile_effects AS effect
+              ON effect.observation_id = evidence.profile_observation_id
+            JOIN player_profile_versions AS profile
+              ON profile.id = effect.profile_version_id
+            WHERE evidence.boundary_at = '{DAY_END.isoformat()}'
+            ORDER BY evidence.version DESC, evidence.id DESC LIMIT 1""")
+        current = _rows(connection_info, CURRENT_PROFILE)
+    # The accepted 6,040 is kept as evidence but starts neither day. It is
+    # still the current profile, so the player page can calculate a 6,000
+    # start from it and the sixteen recorded battles.
+    assert evidence == [
+        (False, ["profile_after_first_event"], "accepted", 6040)
+    ]
+    assert days[DAY_END - timedelta(days=1)][:2] == (6000, None)
+    assert days[DAY_END][0] is None
+    assert days[DAY_END][2:] == (8, 8, 320, 280)
+    assert current == [(6040, "accepted")]
+
+
+def test_legend_ii_reset_profile_is_current_but_gives_no_start(
+    database_url: str, archive_server
+) -> None:
+    # A demoted player's Legend II profile, under a valid Season.
+    payload = json.loads(_profile(4900))
+    payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           DAY_END - timedelta(days=1), profile=_profile(6000),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, DAY_END,
+                            profile=json.dumps(payload).encode(),
+                            log=_battle_log(empty=True))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for day_start in (DAY_END - timedelta(days=1), DAY_END):
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start,
+                    now=DAY_END + timedelta(hours=1),
+                    request_key=day_start.isoformat(),
+                )
+                assert processor.process_job(job, owner="day") is not None
+        finally:
+            database.close()
+        days = {row[0]: row[1:] for row in _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   start_trophies, next_start_trophies
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+        current = _rows(connection_info, CURRENT_PROFILE)
+    assert days[DAY_END - timedelta(days=1)] == (6000, None)
+    assert days[DAY_END][0] is None
+    assert current == [(4900, "accepted")]
