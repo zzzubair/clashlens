@@ -786,9 +786,12 @@ write_environment() {
     "CLASHLENS_SPOOL_MAX_BYTES=$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "CLASHLENS_SPOOL_MAX_OBJECTS=$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
     "CLASHLENS_SPOOL_FREE_SPACE_FLOOR=$(setting CLASHLENS_SPOOL_FREE_SPACE_FLOOR 1073741824)" "CLASHLENS_SPOOL_FREE_INODE_FLOOR=$(setting CLASHLENS_SPOOL_FREE_INODE_FLOOR 10000)"
     "CLASHLENS_MAX_BODY_BYTES=$(setting CLASHLENS_MAX_BODY_BYTES 4194304)")
-  local collector_proxy=()
-  [[ -z "$official_proxy" ]] || collector_proxy+=("CLASHLENS_OFFICIAL_API_PROXY_URL=$official_proxy")
-  write_env collector.env "${common[@]}" "${collector_proxy[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
+  local collector_optional=() regular_parallelism
+  [[ -z "$official_proxy" ]] || collector_optional+=("CLASHLENS_OFFICIAL_API_PROXY_URL=$official_proxy")
+  regular_parallelism=$(setting CLASHLENS_REGULAR_PARALLELISM '')
+  [[ -z "$regular_parallelism" || ( "$regular_parallelism" =~ ^[1-9][0-9]{0,3}$ && "$regular_parallelism" -le 2048 ) ]] || die "CLASHLENS_REGULAR_PARALLELISM must be a whole number from 1 to 2048"
+  [[ -z "$regular_parallelism" ]] || collector_optional+=("CLASHLENS_REGULAR_PARALLELISM=$regular_parallelism")
+  write_env collector.env "${common[@]}" "${collector_optional[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key \
     "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" \
     "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY false)" \

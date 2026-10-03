@@ -150,8 +150,8 @@ requests, and the same keys allowed one check every ~177 seconds.
 A check fetches the profile, saves it, and only then fetches the battle log if
 needed, so it holds at most one request at a time. The collector keeps two
 seconds of its regular keys' request starts in flight as checks, at least 256:
-392 with seven keys at 28 a second. `CLASHLENS_REGULAR_PARALLELISM` (or
-`--regular-parallelism`, 1 to 2,048) overrides it. The collector has a save
+392 with seven keys at 28 a second. `CLASHLENS_REGULAR_PARALLELISM` in
+`app.env` (or `--regular-parallelism`, 1 to 2,048) overrides it. The collector has a save
 thread for each slot. Its database connections stay at 32 whatever the slot
 count, so more slots cannot use more of PostgreSQL's 100 connections
 (production used 52 on 2026-10-03).

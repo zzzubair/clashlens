@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import subprocess
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -92,7 +93,9 @@ def test_collector_sizes_checks_in_flight_from_its_keys(
     arguments = build_parser().parse_args(
         ["collector", "--starts-per-second-per-key", str(rate)]
     )
-    arguments.regular_api_keys = ",".join(f"regular-{i}=fixture-{i}" for i in range(keys))
+    arguments.regular_api_keys = ",".join(
+        f"regular-{i}=fixture-{i}" for i in range(keys)
+    )
     arguments.interactive_api_keys = "interactive-1=fixture-interactive"
 
     class Sized(Exception):
@@ -114,6 +117,54 @@ def test_collector_sizes_checks_in_flight_from_its_keys(
     with pytest.raises(Sized) as sized:
         _run_collector(arguments)
     assert sized.value.args == (in_flight,)
+
+
+@pytest.mark.parametrize(
+    ("setting", "forwarded"),
+    [
+        (None, None),
+        ("300", "300"),
+        ("2048", "2048"),
+        ("0", None),
+        ("2049", None),
+        ("3x", None),
+    ],
+)
+def test_ops_forwards_a_valid_check_limit_to_the_collector_only_when_set(
+    tmp_path: Path, setting: str | None, forwarded: str | None
+) -> None:
+    ops = Path(__file__).resolve().parents[2] / "ops"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$1" help >/dev/null
+STATE_DIR="$2"
+load_fixture_config
+MODE=fixture
+[[ -z "$3" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$3
+write_environment
+""",
+            "test-ops-environment",
+            str(ops),
+            str(tmp_path),
+            setting or "",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if setting is not None and forwarded is None:
+        assert result.returncode != 0
+        assert "CLASHLENS_REGULAR_PARALLELISM must be a whole number" in result.stderr
+        return
+    assert result.returncode == 0, result.stderr
+    collector = dict(
+        line.split("=", 1)
+        for line in (tmp_path / "env/collector.env").read_text().splitlines()
+    )
+    assert collector.get("CLASHLENS_REGULAR_PARALLELISM") == forwarded
 
 
 def test_cli_loads_current_and_previous_hmac_keys_from_files(tmp_path: Path) -> None:
@@ -328,8 +379,7 @@ def test_worker_pool_size_flags_accept_valid_bounds() -> None:
 def test_worker_discovery_defaults_enabled_and_disables_explicitly() -> None:
     assert _worker_arguments().disable_player_discovery is False
     assert (
-        _worker_arguments("--disable-player-discovery").disable_player_discovery
-        is True
+        _worker_arguments("--disable-player-discovery").disable_player_discovery is True
     )
 
 
