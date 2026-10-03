@@ -47,8 +47,9 @@ test("a Clasher can sign in and use account features against the real backend", 
   await page.goto("/account/verify-player");
   await page.getByLabel("Player tag").fill("#2PP");
   await page.getByLabel("API token", { exact: true }).fill("VERIFY-2PP");
-  await page.getByRole("button", { name: "Link account" }).click();
-  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
+  await page.getByRole("button", { name: "Link player" }).click();
+  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+\?linked=%232PP$/);
+  await expect(page.getByText("Linked #2PP", { exact: true })).toBeVisible();
   const linkedAccounts = page.getByRole("region", { name: "Linked accounts" });
   await expect(linkedAccounts.getByText("#2PP", { exact: true })).toBeVisible();
 

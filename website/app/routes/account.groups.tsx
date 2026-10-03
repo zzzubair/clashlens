@@ -4,6 +4,7 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import type { PrivateGroup } from "../lib/account-contracts";
 import {
   isInappropriateName,
+  MAX_GROUP_TAGS,
   normalizeGroupName,
   normalizeTagList,
 } from "../lib/account-validation";
@@ -143,7 +144,9 @@ export async function action({ request }: Route.ActionArgs) {
     } else if (isInappropriateName(values.name)) {
       fieldErrors.name = "Choose a different group name.";
     }
-    if (normalizedTags === null) {
+    if (splitTags(values.tags).length > MAX_GROUP_TAGS) {
+      fieldErrors.tags = `A group can hold up to ${MAX_GROUP_TAGS} player tags.`;
+    } else if (normalizedTags === null) {
       fieldErrors.tags =
         "Enter at least one valid player tag, separated by commas or new lines.";
     }
@@ -432,7 +435,7 @@ export default function GroupsRoute() {
         ) : (
           <div className="empty-state">
             <h3>No private groups yet</h3>
-            <p>Create a group above to organize your saved players.</p>
+            <p>Create a group above to compare players by their tags.</p>
           </div>
         )}
       </section>
@@ -490,7 +493,9 @@ function GroupFields({
             {fieldErrors.tags}
           </p>
         ) : (
-          <p className="form-help">Separate tags with commas or new lines.</p>
+          <p className="form-help">
+            Up to {MAX_GROUP_TAGS} tags. Separate them with commas or new lines.
+          </p>
         )}
       </div>
     </>

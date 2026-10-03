@@ -125,6 +125,20 @@ it.each([
   },
 );
 
+it("formats large ranks and explains why some tracked players are not listed", async () => {
+  mocks.getTrackedLeaderboard.mockResolvedValue({
+    ...structuredClone(board),
+    entries: [{ ...board.entries[0], rank: 11801 }],
+    totalTracked: 13263,
+    totalEntries: 11854,
+  });
+  const { html } = await render();
+  expect(html).toContain("Ranks 11,801–11,801 · 11,854 listed · 13,263 tracked players");
+  expect(html).toContain(
+    "Tracked players are listed once Clash Lens confirms their current profile.",
+  );
+});
+
 it("shows an empty message without a table or impossible pagination", async () => {
   mocks.getTrackedLeaderboard.mockResolvedValue({
     ...board,

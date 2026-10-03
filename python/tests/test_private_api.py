@@ -8,13 +8,16 @@ from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from test_api_db_public_ops import seed_league_history, seed_profile
 from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_analytics, api_verification
-from clashlens.api import create_app
+from clashlens.api import GroupBody, create_app
 from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_groups import MAX_COMPARED_MEMBERS
 from clashlens.army_analytics import ArmyAnalyticsUnavailable, CurrentSeasonEmpty
 from clashlens.hmac_proof import SigningInput, sign
 from clashlens.verification import OfficialVerificationResponse
@@ -839,3 +842,9 @@ def test_leaderboard_rejects_misaligned_selectors_and_missing_pages(
                 )
         finally:
             database.close()
+
+
+def test_saving_a_group_refuses_more_players_than_a_comparison_shows() -> None:
+    GroupBody(name="Main", tags=["#2PP"] * MAX_COMPARED_MEMBERS)
+    with pytest.raises(ValidationError):
+        GroupBody(name="Main", tags=["#2PP"] * (MAX_COMPARED_MEMBERS + 1))

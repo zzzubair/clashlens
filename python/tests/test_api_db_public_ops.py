@@ -275,25 +275,36 @@ def test_known_player_name_search_uses_current_profiles_and_escapes_wildcards(
         try:
             seed_profile(database, "#8PY", 6100)
             seed_profile(database, "#2PP", 6000)
+            seed_profile(database, "#9PY", 5900)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE player_profile_versions SET name = 'player'
+                    WHERE normalized_tag = '#9PY'
+                    """
+                )
 
-            assert api_players.search_known_players(
+            # An exact name match comes first, then the most trophies.
+            results = api_players.search_known_players(
                 database, "Player", now=NOW, freshness_seconds=900
-            ) == [
+            )
+            assert [result["tag"] for result in results] == ["#9PY", "#8PY", "#2PP"]
+            assert results[1:] == [
                 {
-                    "tag": "#2PP",
-                    "name": "Player #2PP",
+                    "tag": "#8PY",
+                    "name": "Player #8PY",
                     "clan": None,
-                    "trophies": 6000,
+                    "trophies": 6100,
                     "freshness": "fresh",
                     "age_seconds": 0,
                     "observed_at": "2026-08-06T12:00:00+00:00",
                     "public_confidence": "high",
                 },
                 {
-                    "tag": "#8PY",
-                    "name": "Player #8PY",
+                    "tag": "#2PP",
+                    "name": "Player #2PP",
                     "clan": None,
-                    "trophies": 6100,
+                    "trophies": 6000,
                     "freshness": "fresh",
                     "age_seconds": 0,
                     "observed_at": "2026-08-06T12:00:00+00:00",

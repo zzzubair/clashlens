@@ -29,35 +29,54 @@ const search = {
   knownOnly: true,
 };
 
-it("keeps the exact player tag link when another player's name matches the tag", async () => {
+async function renderHome(data: unknown, search: string) {
   const handler = createStaticHandler([
-    {
-      path: "/",
-      Component: Home,
-      loader: () => ({
-        leaderboard: null,
-        query: "#2PP",
-        error: null,
-        search: {
-          exactTag: "#2PP",
-          users: [],
-          results: [{ tag: "#2PY", name: "#2PP", clan: "Test clan", trophies: 5000 }],
-        },
-      }),
-    },
+    { path: "/", Component: Home, loader: () => data },
   ]);
-  const context = await handler.query(new Request("https://clashlens.example/?q=%232PP"));
+  const context = await handler.query(new Request(`https://clashlens.example/${search}`));
   if (context instanceof Response) throw new Error("unexpected response");
-  const html = renderToString(
+  return renderToString(
     createElement(StaticRouterProvider, {
       router: createStaticRouter(handler.dataRoutes, context),
       context,
       hydrate: false,
     }),
+  ).replaceAll("<!-- -->", "");
+}
+
+it("keeps the exact player tag link when another player's name matches the tag", async () => {
+  const html = await renderHome(
+    {
+      leaderboard: null,
+      query: "#2PP",
+      error: null,
+      search: {
+        exactTag: "#2PP",
+        users: [],
+        results: [{ tag: "#2PY", name: "#2PP", clan: "Test clan", trophies: 5000 }],
+      },
+    },
+    "?q=%232PP",
   );
   expect(html).toContain('href="/players/%232PP"');
   expect(html).toContain("Open player profile");
   expect(html).not.toContain('href="/players/%232PY"');
+});
+
+it("formats the tracked total and explains a logout the server could not record", async () => {
+  const data = {
+    leaderboard: { entries: [], totalTracked: 13263 },
+    query: "",
+    error: null,
+    search: null,
+  };
+  expect(await renderHome(data, "")).not.toContain("could not record it");
+  const html = await renderHome(data, "?logout=unrecorded");
+  expect(html).toContain("Top 0 of 13,263 tracked players");
+  expect(html).toContain(
+    "You are logged out on this browser, but Clash Lens could not record it.",
+  );
+  expect(html).not.toContain("log out again");
 });
 
 describe("home search loading", () => {

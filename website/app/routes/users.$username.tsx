@@ -1,4 +1,11 @@
-import { Link, data, redirect, useLoaderData, useRouteLoaderData } from "react-router";
+import {
+  Link,
+  data,
+  redirect,
+  useLoaderData,
+  useRouteLoaderData,
+  useSearchParams,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { PublicUser } from "../lib/account-contracts";
@@ -67,6 +74,12 @@ export default function UserRoute() {
   const isOwnProfile = Boolean(
     data.user && navigation?.accountUsername === data.user.username,
   );
+  // Set by a successful link on /account/verify-player.
+  const [searchParams] = useSearchParams();
+  const linkedTag = searchParams.get("linked");
+  const justLinked = data.user?.verifiedPlayers.find(
+    (player) => player.tag === linkedTag,
+  );
   if (data.notFound) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -94,6 +107,11 @@ export default function UserRoute() {
         ) : null}
       </section>
 
+      {justLinked ? (
+        <div className="status-banner status-banner-success" role="status">
+          Linked {justLinked.tag}
+        </div>
+      ) : null}
       {data.error ? <ErrorNotice error={data.error} /> : null}
 
       <section className="data-section" aria-labelledby="user-players-title">
@@ -101,7 +119,7 @@ export default function UserRoute() {
           <h2 id="user-players-title">Linked accounts</h2>
           {isOwnProfile ? (
             <Link className="button button-secondary" to="/account/verify-player">
-              Link account
+              Link your Clash player
             </Link>
           ) : null}
         </div>

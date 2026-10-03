@@ -838,6 +838,19 @@ describe("account routes", () => {
       } as never);
       expect(dataOf(badTags).status).toBe(400);
 
+      const tooManyTags = await groupsAction({
+        request: formRequest("/account/groups", {
+          action: "create",
+          name: "Clanmates",
+          tags: Array.from({ length: 21 }, () => "#2PP").join(","),
+          idempotencyKey: IDEMPOTENCY_KEY,
+        }),
+      } as never);
+      expect(dataOf<{ fieldErrors: { tags: string } }>(tooManyTags)).toMatchObject({
+        status: 400,
+        data: { fieldErrors: { tags: "A group can hold up to 20 player tags." } },
+      });
+
       const badGroupId = await groupsAction({
         request: formRequest("/account/groups", {
           action: "update",
@@ -976,7 +989,7 @@ describe("account routes", () => {
     });
 
     it.each(["linked", "already_linked"] as const)(
-      "returns to the account overview after %s without exposing the token",
+      "returns to the account overview with the linked tag after %s without exposing the token",
       async (status) => {
         client.verifyPlayerToken = vi.fn(async () => ({ status, tag: TAG }));
         const result = await verifyPlayerAction({
@@ -989,7 +1002,9 @@ describe("account routes", () => {
         expect(result).toBeInstanceOf(Response);
         const response = result as Response;
         expect(response.status).toBe(303);
-        expect(response.headers.get("Location")).toBe("/account");
+        expect(response.headers.get("Location")).toBe(
+          `/account?linked=${encodeURIComponent(TAG)}`,
+        );
         expect(response.headers.get("Cache-Control")).toBe("no-store");
         const serialized =
           JSON.stringify([...response.headers]) + (await response.text());
@@ -1158,6 +1173,22 @@ describe("account routes", () => {
       await expect(
         accountLoader({
           request: new Request(`${ORIGIN}/account`),
+        } as never),
+      ).rejects.toSatisfy(expectRedirectTo("/users/nova88"));
+    });
+
+    it("passes only a valid linked player tag on to the profile", async () => {
+      client.getAccountSummary = vi.fn(async () => SUMMARY);
+      await expect(
+        accountLoader({
+          request: new Request(`${ORIGIN}/account?linked=${encodeURIComponent(TAG)}`),
+        } as never),
+      ).rejects.toSatisfy(
+        expectRedirectTo(`/users/nova88?linked=${encodeURIComponent(TAG)}`),
+      );
+      await expect(
+        accountLoader({
+          request: new Request(`${ORIGIN}/account?linked=not-a-tag`),
         } as never),
       ).rejects.toSatisfy(expectRedirectTo("/users/nova88"));
     });

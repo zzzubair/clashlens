@@ -5,6 +5,7 @@ import {
   redirect,
   useFetcher,
   useLoaderData,
+  useSearchParams,
   type LoaderFunctionArgs,
 } from "react-router";
 
@@ -71,6 +72,9 @@ export function headers() {
 
 export default function Home() {
   const data = useLoaderData<typeof loader>();
+  // Set by /logout when this browser logged out but the server could not record it.
+  const [searchParams] = useSearchParams();
+  const logoutUnrecorded = searchParams.get("logout") === "unrecorded";
   const searchFetcher = useFetcher<PlayerSearchLoaderData>();
   const [searchQuery, setSearchQuery] = useState(data.query);
   const [requestedQuery, setRequestedQuery] = useState("");
@@ -122,6 +126,11 @@ export default function Home() {
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell home-page">
+      {logoutUnrecorded ? (
+        <div className="status-banner status-banner-warning" role="status">
+          You are logged out on this browser, but Clash Lens could not record it.
+        </div>
+      ) : null}
       <section className="home-overview" aria-labelledby="search-title">
         <div className="home-intro">
           <img
@@ -222,8 +231,8 @@ export default function Home() {
             {leaderboard ? (
               <p className="standings-context">
                 <span>
-                  Top {leaderboard.entries.length} of {leaderboard.totalTracked} tracked
-                  players
+                  Top {leaderboard.entries.length} of{" "}
+                  {leaderboard.totalTracked.toLocaleString()} tracked players
                 </span>
                 {latestObservedAt ? (
                   <span>

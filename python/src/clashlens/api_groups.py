@@ -17,8 +17,9 @@ from .api_db import ApiDatabase, _screen_daily_log, _screen_events, _text
 from .domain import ranked_day_for
 from .season_retirement import retired_day_ranges
 
-# A comparison is for a group of 10-20 players. Larger groups stay valid lists
-# but are refused here, so one request reads a bounded number of players.
+# A comparison is for a group of 10-20 players. Saving refuses larger groups;
+# older ones saved before that limit are refused here, so one request reads a
+# bounded number of players.
 MAX_COMPARED_MEMBERS = 20
 COMPARISON_DAYS = (3, 7, 14)
 

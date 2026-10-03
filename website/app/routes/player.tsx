@@ -416,7 +416,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           <h1>Player data unavailable</h1>
           {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
           {data.error ? <ErrorNotice error={data.error} /> : null}
-          <p>Try refreshing the page in a moment.</p>
+          <p>Check the tag and try again.</p>
         </main>
       );
     }
@@ -432,7 +432,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           </p>
         )}
         {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
-        {data.error ? <ErrorNotice error={data.error} /> : null}
+        {/* The lookup notice already explains why an untracked player has no data. */}
+        {data.error && !(lookup && data.error.error.code === "missing") ? (
+          <ErrorNotice error={data.error} />
+        ) : null}
         <SeasonNav
           tag={data.requestedTag}
           seasons={data.seasons}
@@ -593,9 +596,9 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
     not_found:
       "Player not found. Clash of Clans did not find this tag. Check the tag and try again.",
     not_in_legend:
-      "This player is not in Legend I. We have kept the tag and any saved history.",
+      "This player is not in Legend I. Clash Lens tracks Legend League players only. We have kept the tag and any saved history.",
     uncertain:
-      "This player exists, but we could not confirm their Legend I eligibility. Any saved history is still available.",
+      "Clash Lens tracks Legend League players only. This player exists, but we could not confirm they are in Legend I. Any saved history is still available.",
     failed:
       "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
   };
