@@ -613,7 +613,10 @@ class SpoolFirstReader:
         if bucket != self.archive.bucket:
             raise ArchiveReadError("archive_reference_mismatch", "archive reference bucket does not match configured bucket", retryable=False)
         verify_started = time.monotonic()
-        local = self.spool.verify(expected_hash)
+        try:
+            local = self.spool.verify(expected_hash)
+        except (OSError, SpoolError) as error:
+            raise ArchiveReadError("spool_io_failed", "local evidence read failed", retryable=True) from error
         self._record_stage("python_archive_local_verify", verify_started)
         if local is not None:
             self._counters["local_hits"] += 1
@@ -645,7 +648,7 @@ class SpoolFirstReader:
             self._record_stage("python_archive_repair", repair_started)
             self._counters["repairs"] += 1
             return remote
-        except SpoolError as error:
+        except (OSError, SpoolError) as error:
             raise ArchiveReadError("spool_io_failed", "local evidence repair failed", retryable=True) from error
 
 

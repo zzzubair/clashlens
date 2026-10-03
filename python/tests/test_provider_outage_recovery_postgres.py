@@ -328,7 +328,7 @@ def test_collection_resumes_after_an_outage_with_the_newest_response_first(
         collector = _collector(
             origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
         )
-        outage = ProviderOutage(threshold=2, base_delay=0.2, max_delay=0.2)
+        outage = ProviderOutage(threshold=2, base_delay=1.0, max_delay=1.0)
         collector.client.provider_outage = outage
         work = CollectorWork(player_id, TAG, datetime.now(UTC))
         _Provider.mode = "unavailable"
@@ -337,11 +337,11 @@ def test_collection_resumes_after_an_outage_with_the_newest_response_first(
             for _ in range(2):
                 await collector.collect_player(work, lane="ordinary")
             assert outage.active
-            waiting = asyncio.create_task(collector.collect_player(work, lane="ordinary"))
-            await asyncio.sleep(0.1)
-            assert not waiting.done()
+            # A regular check during the pause waits as paused work.
+            assert await collector.collect_player(work, lane="ordinary") == ["capacity_paused"] * 2
             _Provider.mode = "answer"
-            return await asyncio.wait_for(waiting, 5)
+            await asyncio.sleep(1.1)
+            return await asyncio.wait_for(collector.collect_player(work, lane="ordinary"), 5)
 
         assert asyncio.run(run())[0] == "recorded"
         assert not outage.active

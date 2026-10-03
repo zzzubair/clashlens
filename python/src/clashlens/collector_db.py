@@ -559,8 +559,8 @@ class CollectorDatabase:
                     (intent_time, interactive, interactive, interactive, limit),
                 ).fetchall()
 
-                # A retry fetches again only what has no usable answer yet, and
-                # a battle log older than the profile it must cover.
+                # A Reset retry fetches again only what has no usable answer yet,
+                # and a battle log older than the profile it must cover.
                 def unanswered(status: int | None) -> bool:
                     return status is None or not (200 <= status < 300 or status == 404)
 
@@ -574,9 +574,9 @@ class CollectorDatabase:
                         due_at=row[2],
                         status=str(row[6]),
                         sweep_id=None if row[5] is None else int(row[5]),
-                        league_history_required=str(row[7]) != "not_applicable" and unanswered(row[10]),
-                        profile_required=unanswered(row[8]),
-                        battle_log_required=unanswered(row[8]) or unanswered(row[9]) or bool(row[11]),
+                        league_history_required=(str(row[7]) != "not_applicable" and unanswered(row[10])) if row[1] == "reset_baseline" else str(row[7]) == "pending",
+                        profile_required=row[1] not in {"reset_baseline", "discovery_profile"} or unanswered(row[8]),
+                        battle_log_required=row[1] != "reset_baseline" or unanswered(row[8]) or unanswered(row[9]) or bool(row[11]),
                     )
                     for row in rows
                 ]

@@ -315,10 +315,10 @@ answering again, the work gets three more failed runs, then fails and settles
 as missing, so a few failing players cannot hold ordinary collection. The
 count is kept in collector memory, so a restart allows three more. Reset
 work fetches the profile, then the battle log, then any league history, one
-after another. A retry fetches only the responses that have no usable answer
-yet, so a profile saved before the player's first battle is kept; a battle
-log saved before the profile is fetched again, even after a restart. Nothing retries past 04:55
-UTC, when the Legend day it belongs to ends. HTTP 401 or 403 still fails it at
+after another. A Reset retry fetches only the responses that have no usable
+answer yet, so a profile saved before the player's first battle is kept; a
+battle log saved before the profile is fetched again, even after a restart.
+Nothing retries past 04:55 UTC, when the Legend day it belongs to ends. HTTP 401 or 403 still fails it at
 once. Raw responses that will be kept are published
 to the local spool before their compact database handoff; restart recovery
 finishes either half without creating another observation or processing job.
