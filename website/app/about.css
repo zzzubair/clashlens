@@ -1,0 +1,20 @@
+.about-page h2 {
+  margin-top: 2.2rem;
+}
+
+.about-page h3 {
+  margin-top: 1.6rem;
+}
+
+.about-page p,
+.about-page li {
+  max-width: 68ch;
+}
+
+.about-page ul {
+  padding-left: 1.2rem;
+}
+
+.about-page li + li {
+  margin-top: 0.4rem;
+}

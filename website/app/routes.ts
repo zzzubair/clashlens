@@ -23,5 +23,6 @@ export default [
   route("account/groups", "routes/account.groups.tsx"),
   route("account/groups/:groupId", "routes/account.groups.$groupId.tsx"),
   route("users/:username", "routes/users.$username.tsx"),
+  route("about", "routes/about.tsx"),
   route("healthz", "routes/healthz.ts"),
 ] satisfies RouteConfig;
