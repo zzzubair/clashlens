@@ -65,7 +65,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
--- A live recalculation locks its day's newest copy, which a batch may update.
+-- A live recalculation locks its day's newest copy, which a batch locks too.
 -- Give up quickly instead of holding the worker; the next batch retries.
 SET lock_timeout = '2s'
 AS $$
@@ -124,6 +124,22 @@ BEGIN
         ORDER BY player.id
         LIMIT player_limit
     ) AS player;
+
+    -- Wait for any recalculation of these player-days to finish, so the
+    -- choice below sees a copy it saved; oldest day first, as a recalculation
+    -- locks them.
+    PERFORM 1 FROM ranked_day_versions AS version
+    WHERE version.id IN (
+        SELECT DISTINCT ON (newest.player_id, newest.ranked_day_start,
+                            newest.reconciliation_rule_version) newest.id
+        FROM ranked_day_versions AS newest
+        WHERE newest.player_id = ANY(batch_players)
+          AND newest.ranked_day_start IN (target_day - interval '24 hours', target_day)
+        ORDER BY newest.player_id, newest.ranked_day_start,
+                 newest.reconciliation_rule_version, newest.version DESC
+    )
+    ORDER BY version.ranked_day_start, version.player_id
+    FOR UPDATE OF version;
 
     WITH saved AS (
         SELECT version.id, version.player_id, version.ranked_day_start,
