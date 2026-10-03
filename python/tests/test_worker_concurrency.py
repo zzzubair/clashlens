@@ -464,3 +464,39 @@ def test_lanes_stop_claiming_when_the_spool_fails_during_slow_maintenance() -> N
         stop.set()
         thread.join(10)
     assert not thread.is_alive()
+
+
+def test_no_job_or_maintenance_starts_after_stop_during_a_slow_ready_check() -> None:
+    stop = Event()
+    release_checks = Event()
+    lock = threading.Lock()
+    waiting_checks = 0
+    all_checks_waiting = Event()
+    maintained: list[bool] = []
+
+    def claims_ready() -> bool:
+        nonlocal waiting_checks
+        with lock:
+            waiting_checks += 1
+            if waiting_checks == 4:
+                all_checks_waiting.set()
+        assert release_checks.wait(10), "test release gate was not opened"
+        return True
+
+    processor = RecordingProcessor()
+    thread = _run_until_stopped(
+        processor,
+        stop_requested=stop,
+        claims_ready=claims_ready,
+        maintain=lambda: maintained.append(True),
+    )
+    try:
+        assert all_checks_waiting.wait(5), "three lanes and the timer must check"
+        stop.set()
+    finally:
+        release_checks.set()
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert processor.calls == []
+    assert maintained == []

@@ -323,7 +323,7 @@ def process_until_stopped(
 
     def maintenance_timer() -> None:
         while not stop_requested.is_set():
-            if claims_ready():
+            if claims_ready() and not stop_requested.is_set():
                 try:
                     maintain()
                 except Exception as error:  # noqa: BLE001 - retried next tick
@@ -340,13 +340,19 @@ def process_until_stopped(
             stop_requested.wait(idle_seconds)
 
     def claim_loop(lane_index: int, stop_claiming: Event) -> None:
-        while not stop_claiming.is_set() and not stop_requested.is_set():
+        def stopped() -> bool:
+            return stop_claiming.is_set() or stop_requested.is_set()
+
+        while not stopped():
+            ready = claims_ready()
+            if stopped():
+                return
             result = (
                 processor.process_once(
                     owner=lane_owner(owner, lane_index),
                     lease_seconds=lease_seconds,
                 )
-                if claims_ready()
+                if ready
                 else None
             )
             if result is None:
