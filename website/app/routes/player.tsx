@@ -241,17 +241,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         Date.parse(data.player.profile.freshness.observedAt))
       ? refreshedPlayer
       : data.player;
-  const trackedPlayer = player?.trackingState === "tracking" ? player : null;
-  const lookup: PlayerLookup | null = player
-    ? { tag: player.tag, state: player.trackingState }
-    : data.lookup;
+  // A newest profile we cannot use is explained, even over saved results.
+  const explained =
+    data.lookup?.state === "tracking" && (data.lookup.reason ?? "pending") !== "pending";
+  const trackedPlayer =
+    player?.trackingState === "tracking" && !explained ? player : null;
+  const lookup: PlayerLookup | null =
+    player && !explained ? { tag: player.tag, state: player.trackingState } : data.lookup;
   const history = selectPlayerHistory(player);
-  // A tracked player whose rejected profile is explained is not being prepared.
   const isChecking =
     lookup?.state === "checking" ||
-    (lookup?.state === "tracking" &&
-      player === null &&
-      (lookup.reason ?? "pending") === "pending");
+    (lookup?.state === "tracking" && player === null && !explained);
   useEffect(() => {
     if (!isChecking || lookupTimedOut) return;
     const timer = setInterval(() => {
@@ -260,6 +260,14 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     }, 1000);
     return () => clearInterval(timer);
   }, [isChecking, lookupTimedOut, revalidator]);
+  // An explained page rereads saved data once a minute while it is visible.
+  useEffect(() => {
+    if (!explained) return;
+    const timer = setInterval(() => {
+      if (!document.hidden && revalidator.state === "idle") revalidator.revalidate();
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [explained, revalidator]);
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;

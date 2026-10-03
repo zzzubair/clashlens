@@ -239,7 +239,7 @@ class Collector:
         self, work: CollectorWork, pool: KeyPool, reservation: Any
     ) -> list[str]:
         """Fetch the profile, then the battle log only when it can have changed."""
-        if work.no_accepted_profile and not self.battle_logs.profile_due(
+        if not self.battle_logs.profile_due(
             work.normalized_tag, now=datetime.now(UTC)
         ):
             # The game still reports Season 0: only the battle log can be due.

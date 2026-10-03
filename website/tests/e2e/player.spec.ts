@@ -432,8 +432,8 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   await page.goto("/players/%23LQQC");
   await expect(lookup).toContainText(headline, { timeout: 30_000 });
 
-  // A later visit shows it at once, then reads no saved data again and never
-  // calls the check slow.
+  // A later visit shows it at once, never reads saved data every second or
+  // calls the check slow, but rereads it about once a minute.
   const reloads: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("/players/%23LQQC.data")) reloads.push(request.url());
@@ -442,10 +442,12 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   await page.goto("/players/%23LQQC");
   await expect(lookup).toContainText(headline);
   await expect(lookup).toContainText("Taking part in Legend League battles is optional.");
-  await page.clock.runFor(61_000);
+  await page.clock.runFor(10_000);
+  expect(reloads).toEqual([]);
+  await page.clock.runFor(51_000);
+  await expect.poll(() => reloads.length).toBeGreaterThan(0);
   await expect(lookup).toContainText(headline);
   await expect(lookup).not.toContainText("taking longer");
-  expect(reloads).toEqual([]);
   await expect(
     page.getByRole("heading", { name: "Lookup Season 0 Clasher" }),
   ).toBeVisible();

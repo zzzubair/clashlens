@@ -510,8 +510,8 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
                     "name": "Synthetic Legend I", "clan": "Synthetic Clan", "trophies": 5000,
                 },
             }
-            # Collection continues, with the profile checked less often.
-            assert [work.no_accepted_profile for work in _claim(info)] == [True]
+            # Collection continues.
+            assert [work.normalized_tag for work in _claim(info)] == ["#2PP"]
             # Its trophies reach no page, search, board or group total.
             assert api_players.get_player_page(
                 database, "#2PP", now=NOW, freshness_seconds=900
@@ -548,15 +548,21 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
                 database, "#2PP", now=NOW, freshness_seconds=900
             )
             assert page is not None and page["trophies"] == 5040
-            assert [work.no_accepted_profile for work in _claim(info)] == [False]
 
-            # A later Season 0 profile never hides the accepted one.
+            # A later Season 0 profile is explained, but keeps the accepted
+            # history and never becomes current.
             _process_profile(
                 info, archive_server, processor, "season-0-again",
                 trophies=5000, currentLeagueSeasonId=0,
+                previousLeagueSeasonId=1783918800,
             )
             assert api_player_lookup.get_lookup(database, "#2PP") == {
-                "tag": "#2PP", "state": "tracking",
+                "tag": "#2PP",
+                "state": "tracking",
+                "reason": "season_unconfirmed",
+                "profile": {
+                    "name": "Synthetic Legend I", "clan": "Synthetic Clan", "trophies": 5000,
+                },
             }
             assert api_players.get_player_page(
                 database, "#2PP", now=NOW, freshness_seconds=900

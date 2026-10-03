@@ -24,12 +24,10 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
     if row is not None:
         player_id, active, eligibility, confirmed, no_current_profile = row
         if active:
-            if no_current_profile:
-                return {
-                    "tag": tag,
-                    "state": "tracking",
-                    **_why_no_results(connection, player_id),
-                }
+            why = _why_no_results(connection, player_id)
+            # A newest Season 0 profile is explained even after accepted ones.
+            if no_current_profile or "profile" in why:
+                return {"tag": tag, "state": "tracking", **why}
             state = "tracking"
         elif confirmed:
             state = (
@@ -82,11 +80,12 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
 
 
 def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
-    """Explain a tracked player with no accepted current profile.
+    """Explain why a tracked player's newest processed profile gives no
+    current results.
 
-    Reads the newest processed profile without accepting it. Only a Legend I
-    profile whose Season ID is 0 shows its name, clan and trophies, and only
-    on the player's own page.
+    Reads that profile without accepting it. Only a Legend I profile whose
+    Season ID is 0 shows its name, clan and trophies, and only on the
+    player's own page.
     """
     row = connection.execute(
         """

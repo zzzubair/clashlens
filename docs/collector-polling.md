@@ -444,27 +444,34 @@ logs held only other battle types. Each profile request returned the same
 unusable answer about every 154 seconds, about 761,000 requests a day for the
 group.
 
-A regular check of a player with no accepted profile, whose last profile from
-this collector reported Legend I with Season ID 0, fetches the profile only
-when that profile is at least 15 minutes old. The worker's own profile rules
-decide what counts as Season 0, so an empty, malformed or non-Legend profile
-does not wait. The battle log keeps every rule above; without a fresh profile
-the check simply has no profile change to act on. The first profile with a
-valid Season, from any check, Refresh or Reset, ends the wait at once, before
-the worker even accepts it. A failed profile request is no evidence, so the
-next check retries it. Reset, settlement and Refresh requests are unchanged.
-A player with an accepted profile whose newest profile says Season 0 keeps its
-ordinary checks. The wait lives in collector memory, so a restart costs one
-profile and one battle log per waiting player.
+A regular check of a player whose last profile from this collector reported
+Legend I with Season ID 0, with the same trophies, attackWins, defenseWins and
+Unbreakable count as the profile before it, fetches the profile only when that
+profile is at least 15 minutes old. This includes a player whose older,
+accepted profile is still their current one; it stays current and the Season 0
+profile's trophies are never used. The worker's own profile rules decide what
+counts as Season 0, so an empty, malformed or non-Legend profile does not wait.
+The battle log keeps every rule above, but sees a profile change only at the
+15-minute recheck, so a battle can wait up to about 15 minutes; the game keeps
+recent battles in the log, so none is lost. A Season 0 profile with changed
+counts, or the first profile with a valid Season, from any check, Refresh or
+Reset, ends the wait at once: that check fetches the battle log, and the next
+check fetches the profile as usual, before the worker even accepts it. The
+wait starts again only at a Season 0 profile with unchanged counts. A failed
+profile request is no evidence, so the next check retries it. Reset,
+settlement and Refresh requests are unchanged. The wait lives in collector
+memory, so a restart costs one profile and one battle log per waiting player.
 
 In the fake-game check model (`tests/test_battle_log_schedule.py`), a day of
-checks 91 seconds apart fetches the profile 96 times instead of 960 and the
-battle log 97 times either way. A defense the profile alone would have shown
-on the next check is saved by the 15-minute profile recheck or the safety
-fetch, about 12 minutes later in the measured case and never more than about
-15; a battle already in a tracked opponent's saved log is still fetched on the
-next check. At the measured rate this saves about 631,000 of the group's
-761,000 daily profile requests (83%).
+checks 91 seconds apart fetches a quiet player's profile 96 times instead of
+960 and the battle log 97 times either way. A defense that changes the profile
+is saved at the 15-minute recheck, about 12 minutes later in the measured case
+instead of on the next check; a battle already in a tracked opponent's saved
+log is still fetched on the next check. The 1,357 players measured had no
+Legend battle this Season, so their profiles stay quiet: at the measured rate
+this saves about 631,000 of the group's 761,000 daily profile requests (83%),
+and more for any player with accepted history whose newest profile says
+Season 0.
 
 ### Settlement check, 20 minutes after Reset
 

@@ -906,6 +906,33 @@ describe("automatic tag lookup", () => {
     expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
   });
 
+  it("explains a newest Season 0 profile over saved results and keeps saved history", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockResolvedValue({ ...PLAYER, seasonDays: [SAVED_DAY] }),
+      getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+      getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+    });
+    mocks.getPlayerLookup.mockResolvedValue({
+      tag: TAG,
+      state: "tracking",
+      reason: "no_legend_battles",
+      profile: { name: "Nova", clan: "Example", trophies: 5000 },
+    });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result, "");
+    expect(html).toContain(
+      "Nova is in Legend League but hasn&#x27;t played a Legend League battle this Season.",
+    );
+    expect(html).toContain("5,000");
+    expect(html).not.toContain("Current trophies");
+    expect(html).not.toContain('class="player-refresh-form"');
+    expect(html).toContain("Saved Legend history");
+    expect(html).toContain("Saved opponent");
+  });
+
   it.each([
     ["season_unconfirmed", "has not confirmed this player&#x27;s Season yet"],
     ["unknown_tier", "a league we do not recognize"],
