@@ -18,12 +18,7 @@ from .db import (
     Database,
     _text_value,
 )
-from .domain import (
-    SEASON_ANCHOR_RULE_VERSION,
-    battle_window,
-    is_season_boundary,
-    ranked_day_for,
-)
+from .domain import SEASON_ANCHOR_RULE_VERSION, battle_window, season_is_current
 
 # Reset work stops collecting at 04:55 UTC the next day, as in the collector.
 RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
@@ -991,13 +986,11 @@ def _load_reset_baseline(
     profile_accepted = row[15] is not None and _text_value(row[18]) == "accepted"
     profile_eligible = _text_value(row[17]) == "eligible"
     battle_log_valid_evidence = row[20] is not None and not bool(row[22])
-    # A profile read after a Season-opening Reset that still names the
-    # previous Season shows trophies from before that player's Season reset.
-    # It stays evidence, but never becomes the new Season's starting total.
-    season_reset_pending = (
-        row[15] is not None
-        and is_season_boundary(row[14])
-        and _text_value(row[25]) != ranked_day_for(row[14]).official_season_id
+    # A profile read after any Reset that names another Season than the
+    # Reset's own shows trophies from before that player's Season reset.
+    # It stays evidence, but never becomes that Season's starting total.
+    season_reset_pending = row[15] is not None and not season_is_current(
+        _text_value(row[25]), row[14]
     )
     complete = bool(
         not season_reset_pending

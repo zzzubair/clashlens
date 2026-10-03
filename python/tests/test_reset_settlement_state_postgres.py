@@ -31,6 +31,7 @@ BOUNDARIES = {
     "ordinary": DAY_END,
     "monday": datetime(2026, 8, 3, 5, tzinfo=UTC),
     "season": datetime(2026, 8, 10, 5, tzinfo=UTC),
+    "season_day_2": datetime(2026, 8, 11, 5, tzinfo=UTC),
 }
 
 
@@ -297,9 +298,10 @@ OLD_SEASON, NEW_SEASON = 1783918800, 1786338000  # Seasons around August 10.
 @pytest.mark.parametrize("kind,season_id,accepted", [
     ("season", OLD_SEASON, False),
     ("season", NEW_SEASON, True),
+    ("season_day_2", OLD_SEASON, False),
     ("monday", OLD_SEASON, True),
 ])
-def test_season_opening_start_needs_a_profile_naming_the_new_season(
+def test_reset_start_needs_a_profile_naming_the_resets_season(
     database_url: str, archive_server, kind: str, season_id: int, accepted: bool
 ) -> None:
     boundary = BOUNDARIES[kind]

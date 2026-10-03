@@ -110,7 +110,8 @@ export interface KnownPlayerResult {
   tag: string;
   name: string;
   clan: string;
-  trophies: number;
+  /** Null while the latest profile is from before this player's Season reset. */
+  trophies: number | null;
   freshness: Freshness;
   state: "available" | "stale" | "uncertain";
   context: string;

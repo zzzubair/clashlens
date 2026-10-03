@@ -259,7 +259,9 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
                         "tag": "#2PP",
                         "name": "Player #2PP",
                         "clan": None,
-                        "trophies": 6000,
+                        # The August 2026 profile names an earlier Season.
+                        "trophies": None,
+                        "season_reset_pending": True,
                         "freshness": "stale",
                         "age_seconds": 20_982_400,
                         "observed_at": "2026-08-06T12:00:00+00:00",

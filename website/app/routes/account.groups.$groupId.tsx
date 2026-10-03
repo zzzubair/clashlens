@@ -302,7 +302,9 @@ function PlayerRow({
         ) : null}
       </th>
       <td data-label="Trophies now">
-        {player.trophies === null ? (
+        {player.seasonResetPending ? (
+          <span className="compare-sub">Waiting for this player&apos;s Season reset</span>
+        ) : player.trophies === null ? (
           <Empty />
         ) : (
           <>

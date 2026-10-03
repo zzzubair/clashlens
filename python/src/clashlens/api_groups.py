@@ -14,7 +14,7 @@ from typing import Any
 
 from . import api_player_lookup
 from .api_db import ApiDatabase, _screen_daily_log, _screen_events, _text
-from .domain import ranked_day_for
+from .domain import ranked_day_for, season_is_current
 from .season_retirement import retired_day_ranges
 
 # A comparison is for a group of 10-20 players. Saving refuses larger groups;
@@ -87,7 +87,8 @@ def get_group_comparison(
             for row in connection.execute(
                 """
                 SELECT player.id, player.active, profile.name, profile.trophies,
-                       player.current_observed_at, player.current_profile_confirmed_at
+                       player.current_observed_at, player.current_profile_confirmed_at,
+                       profile.current_league_season_id
                 FROM players AS player
                 LEFT JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id
@@ -160,15 +161,18 @@ def _current(profile: Any, now: datetime, freshness_seconds: int) -> dict[str, A
             if profile is None or profile[2] is None
             else _text(profile[2]),
             "trophies": None,
+            "season_reset_pending": False,
             "observed_at": None,
             "age_seconds": None,
             "freshness": None,
         }
     observed_at = max(profile[4], profile[5] or profile[4]).astimezone(UTC)
     age_seconds = max(0, int((now - observed_at).total_seconds()))
+    pending = not season_is_current(_text(profile[6]), now)
     return {
         "name": _text(profile[2]),
-        "trophies": int(profile[3]),
+        "trophies": None if pending else int(profile[3]),
+        "season_reset_pending": pending,
         "observed_at": observed_at.isoformat(),
         "age_seconds": age_seconds,
         "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",

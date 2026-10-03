@@ -760,7 +760,7 @@ function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
       !isRecord(item) ||
       !isCanonicalPlayerTag(item.tag) ||
       !isString(item.name) ||
-      !isInteger(item.trophies) ||
+      !(isInteger(item.trophies) || item.trophies === null) ||
       !isOneOf(item.freshness, ["fresh", "stale"] as const) ||
       !isFiniteNumber(item.age_seconds) ||
       !isString(item.observed_at) ||

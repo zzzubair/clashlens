@@ -32,6 +32,8 @@ export interface ComparedPlayer {
   inGroup: boolean;
   status: MemberStatus;
   trophies: number | null;
+  /** The latest profile is from before this player's Season reset; trophies stay null. */
+  seasonResetPending: boolean;
   observedAt: string | null;
   ageSeconds: number | null;
   freshness: "fresh" | "stale" | null;
@@ -202,6 +204,7 @@ function mapPlayer(value: unknown, dayCount: number): ComparedPlayer | null {
     inGroup: value.in_group,
     status: value.status as MemberStatus,
     trophies: value.trophies,
+    seasonResetPending: value.season_reset_pending === true,
     observedAt: value.observed_at,
     ageSeconds: value.age_seconds,
     freshness: value.freshness,

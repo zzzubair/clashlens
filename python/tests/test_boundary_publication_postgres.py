@@ -250,10 +250,10 @@ def test_snapshot_publication_uses_only_frozen_manifest_profile(
                             endpoint_version, schema_version, parser_version,
                             observed_at, source_http_status, name, trophies,
                             league_tier_id, league_tier_name, eligibility_state,
-                            profile_json
+                            current_league_season_id, profile_json
                         ) VALUES (%s, %s, '#P2', 'endpoint-v1',
                                   'schema-v1', 'parser-v1', %s, 200, 'Manifest',
-                                  %s, 1, 'Legend I', %s, %s)
+                                  %s, 1, 'Legend I', %s, '1783918800', %s)
                         """,
                         (
                             player_id,

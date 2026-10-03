@@ -1132,3 +1132,62 @@ def test_snapshot_quality_counts_and_reader_ignore_building_candidate(
                 assert text(conflict_state) == "conflict"
         finally:
             database.close()
+
+
+OLD_SEASON, NEW_SEASON = 1783918800, 1786338000  # Seasons around August 10.
+
+
+@pytest.mark.parametrize("boundary_at,season_id,included", [
+    # The last day of a Season keeps its pre-Reset values.
+    (datetime(2026, 8, 10, 5, tzinfo=UTC), OLD_SEASON, True),
+    # Day 1 of the new Season never shows the old Season's trophies.
+    (datetime(2026, 8, 11, 5, tzinfo=UTC), OLD_SEASON, False),
+    (datetime(2026, 8, 11, 5, tzinfo=UTC), NEW_SEASON, True),
+])
+def test_daily_snapshot_leaves_out_profiles_naming_another_season(
+    database_url: str, archive_server, boundary_at, season_id, included
+) -> None:
+    payload = json.loads(_profile_body(trophies=6400))
+    payload["currentLeagueSeasonId"] = season_id
+    payload["previousLeagueSeasonId"] = season_id - 28 * 24 * 60 * 60
+    with domain_database(database_url) as connection_info:
+        _observation_id, job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="snapshot-season",
+            endpoint="profile",
+            body=json.dumps(payload).encode(),
+            observed_at=boundary_at - timedelta(hours=1),
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(job_id, owner="snapshot-season") is not None
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+            snapshot_job_id = _seed_snapshot_job(
+                connection_info, player_id=player_id, boundary_at=boundary_at
+            )
+            result = processor.process_job(snapshot_job_id, owner="snapshot-season")
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                entries = connection.execute(
+                    """
+                    SELECT e.trophies
+                    FROM leaderboard_snapshot_entries AS e
+                    JOIN leaderboard_snapshots AS s ON s.id = e.snapshot_id
+                    WHERE s.snapshot_kind = 'frozen'
+                    """
+                ).fetchall()
+                quality = connection.execute(
+                    """
+                    SELECT input_identity->>'snapshot_quality'
+                    FROM boundary_publication_manifest_rows
+                    """
+                ).fetchall()
+        finally:
+            database.close()
+    assert entries == ([(6400,)] if included else [])
+    assert quality == [("eligible" if included else "season_reset_pending",)]
