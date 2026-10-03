@@ -44,16 +44,19 @@ def _eight_defenses() -> bytes:
 
 
 def _reset_work(connection_info, archive_server, boundary, *, profile=None,
-                log=None, profile_status=200, status="complete") -> list[int]:
+                log=None, profile_status=200, status="complete",
+                profile_at=None, log_at=None) -> list[int]:
     """Save a Reset sweep's responses for one player; return their jobs."""
     ids, jobs = {}, []
-    for endpoint, body, http_status in (("profile", profile, profile_status),
-                                        ("battle_log", log, 200)):
+    for endpoint, body, http_status, observed_at in (
+        ("profile", profile, profile_status, profile_at or boundary),
+        ("battle_log", log, 200, log_at or boundary),
+    ):
         if body is not None:
             ids[endpoint], job = store_observation(
                 connection_info, archive_server,
                 occurrence_key=f"{boundary.isoformat()}-{endpoint}",
-                endpoint=endpoint, body=body, observed_at=boundary,
+                endpoint=endpoint, body=body, observed_at=observed_at,
                 normalized_tag=TAG, http_status=http_status,
             )
             jobs.append(job)
@@ -412,3 +415,52 @@ def test_rejected_reset_profile_gives_no_start(
     assert opened[2]["profile"]["trophies"] == 5000
     # The rejected reading itself stays saved as evidence.
     assert set(kept) == {("conflict", 5000)}
+
+
+def test_reset_profile_read_after_the_first_battle_gives_no_start(
+    database_url: str, archive_server
+) -> None:
+    # A 05:06 attack comes before a delayed 05:10 Reset profile of 6,040.
+    attack_at = DAY_END + timedelta(minutes=6)
+    log = json.loads(_battle_log())
+    log["items"][0]["battleTimestamp"] = attack_at.strftime("%Y%m%dT%H%M%S.000Z")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           DAY_END - timedelta(days=1), profile=_profile(6000),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, DAY_END,
+                            profile=_profile(6040), log=json.dumps(log).encode(),
+                            profile_at=DAY_END + timedelta(minutes=10),
+                            log_at=DAY_END + timedelta(minutes=11))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for day_start in (DAY_END - timedelta(days=1), DAY_END):
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start,
+                    now=DAY_END + timedelta(hours=1),
+                    request_key=day_start.isoformat(),
+                )
+                assert processor.process_job(job, owner="day") is not None
+        finally:
+            database.close()
+        days = {row[0]: row[1:] for row in _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   start_trophies, next_start_trophies
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+        evidence = _rows(connection_info, f"""
+            SELECT evidence.profile_valid, evidence.failure_reasons,
+                   profile.source_contract_state, profile.trophies
+            FROM reset_baseline_evidence AS evidence
+            JOIN player_profile_effects AS effect
+              ON effect.observation_id = evidence.profile_observation_id
+            JOIN player_profile_versions AS profile
+              ON profile.id = effect.profile_version_id
+            WHERE evidence.boundary_at = '{DAY_END.isoformat()}'
+            ORDER BY evidence.version DESC, evidence.id DESC LIMIT 1""")
+    # The accepted 6,040 is kept as evidence but starts neither day.
+    assert evidence == [
+        (False, ["profile_after_first_event"], "accepted", 6040)
+    ]
+    assert days[DAY_END - timedelta(days=1)] == (6000, None)
+    assert days[DAY_END][0] is None

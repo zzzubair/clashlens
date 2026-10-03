@@ -986,8 +986,9 @@ def _load_reset_baseline(
     profile_accepted = row[15] is not None and _text_value(row[18]) == "accepted"
     profile_eligible = _text_value(row[17]) == "eligible"
     battle_log_valid_evidence = row[20] is not None and not bool(row[22])
-    # Only an accepted profile's trophies can start a day. A rejected one,
-    # such as one reporting Season ID 0, stays evidence with its Season unknown.
+    # Only an accepted profile that passed the Reset checks can start a day.
+    # Any other stays evidence; a rejected one, such as one reporting Season
+    # ID 0, also leaves its Season unknown.
     # An accepted profile read after any Reset that names another Season than
     # the Reset's own shows trophies from before that player's Season reset.
     # It stays evidence, but never becomes that Season's starting total.
@@ -1058,6 +1059,7 @@ def _load_reset_baseline(
         "trophies": (
             int(row[16])
             if row[16] is not None
+            and profile_valid
             and profile_accepted
             and not season_reset_pending
             else None
