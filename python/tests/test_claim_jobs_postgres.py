@@ -337,7 +337,7 @@ def test_rejected_job_write_fails_only_that_job(
             occurrence_key="rejected-write",
             endpoint="profile",
             body=body,
-            observed_at=datetime(2026, 8, 3, 19, 35, 1, tzinfo=UTC),
+            observed_at=datetime(2026, 8, 3, 19, 36, 1, tzinfo=UTC),
             normalized_tag="#2PP",
         )
         _, other_job = store_observation(
@@ -346,7 +346,7 @@ def test_rejected_job_write_fails_only_that_job(
             occurrence_key="other-write",
             endpoint="profile",
             body=body,
-            observed_at=datetime(2026, 8, 3, 19, 36, 1, tzinfo=UTC),
+            observed_at=datetime(2026, 8, 3, 19, 35, 1, tzinfo=UTC),
             normalized_tag="#2PP",
         )
         database = Database(connection_info)
