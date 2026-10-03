@@ -180,11 +180,11 @@ function explainsNoResults(lookup: PlayerLookup | null): boolean {
   return lookup?.state === "tracking" && (lookup.reason ?? "pending") !== "pending";
 }
 
-// What a visit shows and how often it rereads saved data. Saved results show
-// as current only when the lookup, if it succeeded, says tracking too. On a
-// fresh visit either read saying "not tracking" wins. Once explained, only the
-// lookup counts: the visit rereads once a minute, through failed or partial
-// reads, until a successful lookup gives a normal page or a final answer.
+// What a visit shows and how often it rereads saved data. A successful lookup
+// alone decides the state; saved results show as current only when it says
+// tracking too. Once explained, the visit rereads once a minute, through failed
+// or partial reads, until a successful lookup gives a normal page or a final
+// answer.
 export function playerLookupView(
   player: PlayerPage | null,
   fetched: PlayerLookup | null,
@@ -196,9 +196,8 @@ export function playerLookupView(
       : fetched.state === "tracking" && !explainsNoResults(fetched);
   const trackedPlayer = current && player?.trackingState === "tracking" ? player : null;
   const lookup: PlayerLookup | null =
-    player && current && !explainedVisit
-      ? { tag: player.tag, state: player.trackingState }
-      : fetched;
+    fetched ??
+    (player && !explainedVisit ? { tag: player.tag, state: player.trackingState } : null);
   const minuteChecks =
     explainedVisit &&
     trackedPlayer === null &&

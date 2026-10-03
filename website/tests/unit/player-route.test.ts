@@ -562,7 +562,7 @@ describe("automatic tag lookup", () => {
   );
 
   it.each(["profile", "refresh"])(
-    "uses the %s response when an older lookup still says tracking",
+    "lets a tracking lookup decide over a departed %s response",
     async (source) => {
       const departed = {
         ...PLAYER,
@@ -585,8 +585,10 @@ describe("automatic tag lookup", () => {
         params: { tag: TAG },
       } as never);
       const html = await renderRoute(result);
-      expect(html).toContain("not in Legend I");
-      expect(html).not.toContain("Now tracking");
+      expect(html).toContain(
+        "Now tracking in Legend I. The first results are being prepared.",
+      );
+      expect(html).not.toContain("not in Legend I");
       expect(html).not.toContain("Current trophies");
       expect(html).not.toContain("player-refresh-form");
     },
@@ -1009,6 +1011,31 @@ describe("automatic tag lookup", () => {
     expect(playerLookupView(older, { tag: TAG, state: "tracking" }, true)).toMatchObject({
       trackedPlayer: null,
       lookup: { state: "tracking" },
+      minuteChecks: true,
+      isChecking: false,
+    });
+  });
+
+  it("lets a tracking lookup outrank an older inactive page on a fresh visit", () => {
+    const older = { ...PLAYER, trackingState: "not_in_legend" } as PlayerPage;
+    expect(playerLookupView(older, { tag: TAG, state: "tracking" }, false)).toMatchObject(
+      {
+        trackedPlayer: null,
+        lookup: { state: "tracking" },
+        isChecking: true,
+      },
+    );
+  });
+
+  it("lets an explanation outrank an accepted saved page ", () => {
+    const lookup = {
+      tag: TAG,
+      state: "tracking",
+      reason: "no_legend_battles",
+    } as PlayerLookup;
+    expect(playerLookupView(PLAYER, lookup, true)).toMatchObject({
+      trackedPlayer: null,
+      lookup,
       minuteChecks: true,
       isChecking: false,
     });
