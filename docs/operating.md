@@ -57,7 +57,7 @@ The private probe should exit successfully; its
 [private-read condition](deployment.md#alert-conditions) explains what it checks.
 The alert timer should be active with recent successful runs matching the
 [configured schedule](deployment.md#private-discord-alerts).
-The alert, backup and raw-response cleanup services run once per timer firing, so `inactive (dead)`
+The alert, backup, raw-response cleanup and ranked-day copy cleanup services run once per timer firing, so `inactive (dead)`
 between successful runs is normal. `failed`, missing units, delivery failures or
 unavailable measurements need investigation.
 
