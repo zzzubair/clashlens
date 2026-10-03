@@ -27,8 +27,9 @@ $$;
 
 -- The UPDATE below writes a new copy of all 1.15 million rows on production
 -- on 2026-10-03, adding an entry to every index for each. The old deadline
--- index is replaced below, and the current-hash index is rebuilt unchanged
--- after the UPDATE, which is faster than updating it row by row.
+-- index is replaced below. The current-hash index is not rebuilt: 0051 drops
+-- it, and the unique (response_hash, archive_reference) index serves the same
+-- lookups.
 DROP INDEX IF EXISTS archive_catalogue_retention;
 DROP INDEX IF EXISTS archive_catalogue_current_hash;
 
@@ -59,9 +60,6 @@ LEFT JOIN collector_response_uploads AS upload USING (response_hash)
 LEFT JOIN by_state USING (response_hash)
 WHERE latest.archive_reference = catalogue.archive_reference
   AND latest.availability IN ('verified', 'retiring');
-CREATE INDEX archive_catalogue_current_hash
-    ON archive_catalogue (response_hash, first_verified_at DESC, archive_reference)
-    WHERE availability = 'verified';
 
 -- Pending uploads take the same rule at completion; the old season floor goes.
 ALTER TABLE collector_response_uploads DROP COLUMN minimum_retire_after;
