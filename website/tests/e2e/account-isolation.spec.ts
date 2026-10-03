@@ -22,7 +22,8 @@ test("two signed-in accounts keep saved players and groups private through direc
       await signIn(page);
       await ensureAccount(page, `privacyowner${index}`, `Privacy Owner ${index}`);
       const origin = new URL(page.url()).origin;
-      const tag = index === 0 ? "#2PP" : "#8PY";
+      // Both tags are fake Clash API players: adding one to a group checks it exists.
+      const tag = index === 0 ? "#2PP" : "#Q0002";
       const groupName = `Private plan ${index}`;
       const saved = await context.request.post(`${origin}/account/saved-players`, {
         headers: { Origin: origin },
