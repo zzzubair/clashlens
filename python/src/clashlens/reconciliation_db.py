@@ -641,7 +641,6 @@ def recalculate_ranked_day(
         ).encode("utf-8")
     ).hexdigest()
     input_evidence = result.input_evidence
-    coverage_evidence = input_evidence.get("coverage_observations", [])
     contribution_evidence = input_evidence.get("contributions", [])
     previous_version = connection.execute(
         """
@@ -726,8 +725,7 @@ def recalculate_ranked_day(
                 observed_trophy_change, boundary_adjustment,
                 boundary_adjustment_type, observed_boundary_adjustment,
                 unexplained_residual, formula_components,
-                input_evidence, coverage_evidence,
-                contribution_evidence, shield_evidence,
+                input_evidence, shield_evidence,
                 evidence_complete, coverage_complete, reconciled,
                 shield_state, shield_duration_days,
                 start_baseline_id, end_baseline_id
@@ -736,7 +734,7 @@ def recalculate_ranked_day(
                 %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s
             ) RETURNING id
             """,
             (
@@ -779,8 +777,6 @@ def recalculate_ranked_day(
                 result.unexplained_residual,
                 Jsonb(result.formula_components),
                 Jsonb(input_evidence),
-                Jsonb(coverage_evidence),
-                Jsonb(contribution_evidence),
                 Jsonb(result.shield_evidence),
                 evidence_complete,
                 result.coverage_complete,

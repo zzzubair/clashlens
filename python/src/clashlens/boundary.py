@@ -396,8 +396,9 @@ def _freeze_boundary_manifest(
         if artifact_kind == "army" and version_id is not None:
             ranked_identity = connection.execute(
                 """
-                SELECT input_evidence, coverage_evidence, start_baseline_id,
-                       end_baseline_id
+                SELECT input_evidence,
+                       coalesce(input_evidence -> 'coverage_observations', '[]'::jsonb),
+                       start_baseline_id, end_baseline_id
                 FROM ranked_day_versions WHERE id = %s
                 """,
                 (version_id,),

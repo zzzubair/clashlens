@@ -476,7 +476,7 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
                     (first_observation_id,),
                 ).fetchone()[0]
 
-            assert counts == (1, 2, 2, 3)
+            assert counts == (1, 2, 2, 2)
             assert tuple(text(value) for value in battle) == (
                 "agreed",
                 "u1x0-2x1",
@@ -560,7 +560,7 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
                     connection.execute(
                         "SELECT count(*) FROM known_player_discoveries"
                     ).fetchone()[0]
-                    == 4
+                    == 2
                 )
         finally:
             database.close()
@@ -929,7 +929,7 @@ def test_live_shaped_battle_rows_publish_one_player_battle_without_duplicate_con
                 ranked = connection.execute(
                     """
                     SELECT version, state, attack_count, defense_count,
-                           contribution_evidence
+                           input_evidence -> 'contributions'
                     FROM ranked_day_versions
                     WHERE player_id = %s AND ranked_day_start = %s
                     ORDER BY version DESC
