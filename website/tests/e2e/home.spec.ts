@@ -41,10 +41,10 @@ test("header and footer About links open the About page", async ({ page }) => {
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "About Clash Lens" })).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Clash of Clans API", exact: true }),
-  ).toHaveAttribute("href", "https://developer.clashofclans.com/");
-  await expect(page.getByRole("main")).toContainText(
-    "This material is unofficial and is not endorsed by Supercell.",
+    page.getByRole("link", { name: "Join the Discord", exact: true }),
+  ).toHaveAttribute("href", "https://discord.gg/792KJQTtRf");
+  await expect(page.getByRole("contentinfo").locator("p")).toHaveText(
+    "This material is unofficial and is not endorsed by Supercell. For more information see Supercell's Fan Content Policy: www.supercell.com/fan-content-policy.",
   );
 
   await page.goto("/leaderboards/tracked");
