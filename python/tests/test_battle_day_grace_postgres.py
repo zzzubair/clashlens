@@ -12,6 +12,7 @@ from pathlib import Path
 
 import psycopg
 from domain_test_support import domain_database, store_observation
+from psycopg.types.json import Jsonb
 from test_domain_processing_postgres import (
     LIVE_BATTLE_PARSER_VERSION,
     _live_battle_row,
@@ -19,7 +20,13 @@ from test_domain_processing_postgres import (
     _seed_battle_anchor,
 )
 
-from clashlens import battle, domain, reconciliation_db
+from clashlens import battle, battle_day_repair, domain, reconciliation_db
+from clashlens.db import (
+    ANALYTICS_RULE_VERSION,
+    DEFAULT_PARSER_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+)
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for
 
 MIGRATION = (
@@ -63,14 +70,21 @@ def _player_log() -> list[dict]:
     return rows
 
 
-def _save(connection_info, archive_server, processor, tag: str, rows: list) -> None:
+def _save(
+    connection_info,
+    archive_server,
+    processor,
+    tag: str,
+    rows: list,
+    observed_at: datetime = NEXT + timedelta(hours=9),
+) -> None:
     job_id = store_observation(
         connection_info,
         archive_server,
-        occurrence_key=f"log-{tag}",
+        occurrence_key=f"log-{tag}-{observed_at.isoformat()}",
         endpoint="battle_log",
         body=json.dumps({"items": rows}).encode(),
-        observed_at=NEXT + timedelta(hours=9),
+        observed_at=observed_at,
         normalized_tag=tag,
         parser_version=LIVE_BATTLE_PARSER_VERSION,
     )[1]
@@ -127,6 +141,61 @@ def _player_id(connection_info: str) -> int:
         return connection.execute(
             "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
         ).fetchone()[0]
+
+
+def _add_job(database, input_json: dict) -> int:
+    with database.pool.connection() as connection:
+        return connection.execute(
+            """
+            INSERT INTO python_processing_jobs_worker (
+                observation_id, work_type, deduplication_key, input_json,
+                state, due_at, parser_version, processing_version,
+                domain_rule_version, analytics_rule_version
+            ) VALUES (
+                NULL, 'reconcile_ranked_day', 'test:active', %s, 'pending',
+                clock_timestamp(), %s, %s, %s, %s
+            ) RETURNING id
+            """,
+            (
+                Jsonb(input_json),
+                DEFAULT_PARSER_VERSION,
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
+            ),
+        ).fetchone()[0]
+
+
+def _drain(connection_info: str, processor) -> None:
+    with psycopg.connect(connection_info) as connection:
+        job_ids = [
+            row[0]
+            for row in connection.execute(
+                "SELECT id FROM python_processing_jobs_worker"
+                " WHERE state = 'pending' AND work_type = 'reconcile_ranked_day'"
+                " ORDER BY id"
+            ).fetchall()
+        ]
+    for job_id in job_ids:
+        assert processor.process_job(job_id, owner="drain") is not None
+
+
+def _rebuild_jobs(connection_info: str) -> int:
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT count(*) FROM python_processing_jobs "
+            "WHERE deduplication_key LIKE 'reconcile:battle-day:%%'"
+        ).fetchone()[0]
+
+
+def _v_battle(connection_info: str) -> tuple:
+    """The state and sides of #8PP's attack on V reported at NEXT's Reset."""
+    (row,) = [
+        row
+        for row in _battles(connection_info)
+        if row[0] == DAY and row[2] == "#2VV"
+    ]
+    return row[3], row[4], row[5]
 
 
 def _apply_migration(connection_info: str) -> None:
@@ -203,6 +272,31 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
                     "SELECT count(*) FROM battle_day_repairs"
                 ).fetchone()[0] == 4
 
+            # A Season rebuild queued from the unpublished day before DAY also
+            # recalculates DAY and NEXT, so the battle-day rebuild waits. V's
+            # battle compares its two reports even so.
+            with psycopg.connect(connection_info) as connection:
+                season = connection.execute(
+                    "SELECT official_season_id FROM api_player_daily_logs"
+                    " LIMIT 1"
+                ).fetchone()[0]
+            active = _add_job(
+                database,
+                {
+                    "player_id": _player_id(connection_info),
+                    "ranked_day_start": "2026-08-03T05:00:00Z",
+                    "last_ranked_day_start": "2026-08-03T05:00:00Z",
+                    "recalculate_season": season,
+                },
+            )
+            waiting = battle_day_repair.enqueue_rebuilds(database, max_jobs=10)
+            assert waiting["job_ids"] == [] and waiting["failed_blockers"] == []
+            assert _v_battle(connection_info)[:2] == (
+                "agreed",
+                ["attacker", "defender"],
+            )
+            _sql(connection_info, _DELETE_JOBS, [active])
+
             failed = reconciliation_db.enqueue_current_season_republication(
                 database, max_jobs=10
             )
@@ -226,6 +320,7 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
                     "failure_category": "invalid_work_input",
                 }
             ]
+            assert _rebuild_jobs(connection_info) == 1
             _sql(connection_info, _DELETE_JOBS, failed["job_ids"])
             report = reconciliation_db.enqueue_current_season_republication(
                 database, max_jobs=10
@@ -238,10 +333,6 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
             # its attacks fall from eight to seven: the eighth was the day
             # before's. The unpublished day before DAY is not created.
             assert _counts(connection_info) == {DAY: (6, 8), NEXT: (7, 8)}
-            assert ("agreed", ["attacker", "defender"]) in [
-                (row[3], row[4]) for row in _battles(connection_info)
-                if row[0] == DAY and row[2] == "#2VV"
-            ]
             again = reconciliation_db.enqueue_current_season_republication(
                 database, max_jobs=10
             )
@@ -254,11 +345,37 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
             reconciliation_db.enqueue_current_season_republication(
                 database, max_jobs=10
             )
-            with psycopg.connect(connection_info) as connection:
-                assert connection.execute(
-                    "SELECT count(*) FROM python_processing_jobs "
-                    "WHERE deduplication_key LIKE 'reconcile:battle-day:%%'"
-                ).fetchone()[0] == 0
+            assert _rebuild_jobs(connection_info) == 0
+
+            # A later corrected report of the moved attack replaces it; the
+            # day showing the correction is done too.
+            moved_report = _v_battle(connection_info)[2]
+            _save(
+                connection_info,
+                archive_server,
+                processor,
+                TAG,
+                [
+                    _live_battle_row(
+                        attack=True,
+                        battle_timestamp=NEXT + timedelta(seconds=26),
+                        opponent_tag="#2VV",
+                        opponent_name="corrected",
+                    )
+                ],
+                observed_at=NEXT + timedelta(hours=10),
+            )
+            assert _v_battle(connection_info)[2] != moved_report
+            job_id = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=DAY, now=DAY, request_key="fix"
+            )
+            assert processor.process_job(job_id, owner="fix") is not None
+            _drain(connection_info, processor)
+            assert _counts(connection_info) == {DAY: (6, 8), NEXT: (7, 8)}
+            assert battle_day_repair.enqueue_rebuilds(
+                database, max_jobs=10
+            )["job_ids"] == []
+            assert _rebuild_jobs(connection_info) == 0
         finally:
             database.close()
 
