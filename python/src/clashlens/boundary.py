@@ -29,7 +29,9 @@ def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
     taken oldest first. Every path that locks or updates a generation row
     takes this lock first: a build that locked the row and then waited here,
     while a day-result rebuild held this lock and waited for the row,
-    deadlocked.
+    deadlocked. A rebuild locks its latest day result before this lock, so
+    reconciliation_db.recalculate_ranked_day uses FOR NO KEY UPDATE: reference
+    checks that publication paths run under this lock do not wait for it.
     """
     connection.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
