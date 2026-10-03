@@ -4,10 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
+# A newer pull request push cancels the older run. Main pushes and manual runs
+# get one group per commit and never cancel, so every main commit finishes.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -140,7 +143,7 @@ jobs:
 
   packaged-python-tests:
     name: Packaged Python tests, group ${{ matrix.group }}
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -182,7 +185,7 @@ jobs:
 
   packaged-python:
     name: Packaged Python tests
-    if: always() && github.event_name == 'push'
+    if: always() && github.event_name != 'pull_request'
     needs: packaged-python-tests
     runs-on: ubuntu-latest
     steps:
@@ -193,7 +196,7 @@ jobs:
 
   container-runtime:
     name: Full development container checks
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

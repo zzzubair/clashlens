@@ -201,7 +201,7 @@ def test_native_python_failure_stops_before_development_tests(
             "packaged-python",
             "packaged-python-tests",
             "Packaged Python tests",
-            "always() && github.event_name == 'push'",
+            "always() && github.event_name != 'pull_request'",
         ),
     ],
 )
@@ -546,8 +546,8 @@ def test_packaged_python_test_failure_fails_the_group(command_workspace) -> None
     assert _run_step(step, command_workspace).returncode == 23
 
 
-@pytest.mark.parametrize("event", ["pull_request", "push"])
-def test_full_container_runtime_runs_only_on_main_pushes(
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+def test_full_container_runtime_runs_only_on_main_pushes_and_manual_runs(
     command_workspace, event
 ) -> None:
     workflow = _workflow()
@@ -555,9 +555,16 @@ def test_full_container_runtime_runs_only_on_main_pushes(
     assert workflow[True] == {
         "push": {"branches": ["main"]},
         "pull_request": None,
+        "workflow_dispatch": None,
+    }
+    # Only pull request runs share a cancelling group; main commits never do.
+    assert workflow["concurrency"] == {
+        "group": "ci-${{ github.event_name == 'pull_request' && github.ref"
+        " || github.sha }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     }
     job = workflow["jobs"]["container-runtime"]
-    assert job["if"] == "github.event_name == 'push'"
+    assert job["if"] == "github.event_name != 'pull_request'"
     assert workflow["jobs"]["packaged-python-tests"]["if"] == job["if"]
     assert "needs" not in job
     condition = job["if"].replace("github.event_name", '"$GITHUB_EVENT_NAME"')
@@ -569,7 +576,7 @@ def test_full_container_runtime_runs_only_on_main_pushes(
         ).returncode
         == 0
     )
-    assert selected == (event == "push")
+    assert selected == (event != "pull_request")
     if selected:
         for step in job["steps"]:
             if "run" in step:
