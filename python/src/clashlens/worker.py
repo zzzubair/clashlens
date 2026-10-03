@@ -18,6 +18,7 @@ from psycopg.errors import (
     RaiseException,
     SerializationFailure,
 )
+from psycopg_pool import PoolTimeout, TooManyRequests
 
 from . import (
     army_ingestion,
@@ -183,6 +184,10 @@ def lane_owner(owner: str, lane_index: int) -> str:
 # check, a constraint or a bad value. Lost connections are not among them.
 DATABASE_REJECTIONS = (RaiseException, IntegrityError, DataError)
 
+# The shared connection pool had no free connection in time. Only the lane
+# that waited is affected: it retries its claim, or its job, later.
+POOL_BUSY = (PoolTimeout, TooManyRequests)
+
 # Connections for the maintenance timer, kept apart from the lanes' pool so a
 # slow round never holds a connection a lane is waiting for.
 MAINTENANCE_POOL_SIZE = 2
@@ -336,10 +341,15 @@ def process_concurrently(
                 if jobs_remaining == 0:
                     return
                 jobs_remaining -= 1
-            result = processor.process_once(
-                owner=lane_owner(owner, lane_index),
-                lease_seconds=lease_seconds,
-            )
+            try:
+                result = processor.process_once(
+                    owner=lane_owner(owner, lane_index),
+                    lease_seconds=lease_seconds,
+                )
+            except POOL_BUSY:
+                # No connection for this claim: end this lane's batch as if
+                # the queue were empty; the next batch claims again.
+                return
             if result is None:
                 return
             with results_lock:
@@ -363,12 +373,12 @@ def process_until_stopped(
 ) -> None:
     """Keep ``concurrency`` lanes claiming until ``stop_requested`` is set.
 
-    There is no batch: a lane that finds the queue empty, or
-    ``claims_ready`` false, waits ``idle_seconds`` and claims again, so one
-    long job never leaves the other lanes idle. Queue maintenance runs on its
-    own timer thread, calling ``maintain`` every ``idle_seconds`` while
-    ``claims_ready`` holds, so it never waits for a lane and no lane waits for
-    it. A maintenance failure is reported by type only, never its message,
+    There is no batch: a lane that finds the queue empty, ``claims_ready``
+    false, or no free database connection, waits ``idle_seconds`` and claims
+    again, so one long job never leaves the other lanes idle. Queue
+    maintenance runs on its own timer thread, calling ``maintain`` every
+    ``idle_seconds`` while ``claims_ready`` holds, so it never waits for a
+    lane and no lane waits for it. A maintenance failure is reported by type only, never its message,
     and a later tick tries again. Each result goes to ``on_result`` as its
     job finishes, one at a time. Lane failures are isolated as in
     ``_run_lanes``, and the call returns once every lane and the timer have
@@ -424,6 +434,20 @@ def process_until_stopped(
                     )
                     if result is not None:
                         break
+            except POOL_BUSY as error:
+                # No connection for this lane's claim. It waits like an empty
+                # queue and claims again; the other lanes keep working.
+                print(
+                    json.dumps(
+                        {
+                            "event": "worker_claim",
+                            "status": "pool_busy",
+                            "lane": lane_index,
+                            "error": type(error).__name__,
+                        }
+                    ),
+                    flush=True,
+                )
             finally:
                 if takes_turns:
                     derived_turns.release()
@@ -579,11 +603,16 @@ class ObservationProcessor:
             # The worker's statement deadline cancelled stuck work and its
             # transaction rolled back.
             reason = "database_timeout"
+        except POOL_BUSY:
+            # No pool connection came free in time, so this job's next write
+            # never started.
+            reason = "database_pool_timeout"
         # The failed or cancelled transaction recorded no outcome. Restore its
         # retry slot so queue maintenance can recover it later, rather than
         # failing it if this was its last attempt, even if conflicts outlast
-        # the lease. Only report retrying once the refund commits; it is lost
-        # only if another worker or maintenance took the job.
+        # the lease. Report retrying once the refund commits, or once the pool
+        # has no connection for it; it is lost only if another worker or
+        # maintenance took the job.
         while True:
             try:
                 self.database.refund_claim_attempt(claim)
@@ -592,6 +621,10 @@ class ObservationProcessor:
                 return ProcessResult(claim.job_id, "lease_lost")
             except (DeadlockDetected, SerializationFailure, QueryCanceled):
                 continue
+            except POOL_BUSY:
+                # Leave the lease to run out so queue maintenance retries the
+                # job or fails its last try.
+                break
         return ProcessResult(claim.job_id, "retrying", reason)
 
     def _process_claim_once(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
@@ -914,6 +947,7 @@ class ObservationProcessor:
             DeadlockDetected,
             SerializationFailure,
             QueryCanceled,
+            *POOL_BUSY,
         ):
             # Recording the failure was refused, conflicted or timed out too.
             # Leave the lease to run out so queue maintenance retries the job
@@ -969,7 +1003,10 @@ class ObservationProcessor:
         for _ in range(max_jobs):
             if stop_requested is not None and stop_requested.is_set():
                 break
-            result = self.process_once(owner=owner, lease_seconds=lease_seconds)
+            try:
+                result = self.process_once(owner=owner, lease_seconds=lease_seconds)
+            except POOL_BUSY:
+                break
             if result is None:
                 break
             results.append(result)

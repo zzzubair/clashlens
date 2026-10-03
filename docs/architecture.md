@@ -174,7 +174,12 @@ for a turn. This worker checks Reset publications on its timer's first tick
 rather than before its threads start.
 
 All threads still share one `--database-pool-size` pool; giving response and
-derived threads separate connection limits is deferred.
+derived threads separate connection limits is deferred. A thread that waits
+30 seconds without getting a connection from that pool affects only itself.
+If it was claiming, it logs `worker_claim` with `pool_busy`, waits
+`--poll-interval-seconds` and claims again. If it was running a job, that job
+returns `retrying` with `database_pool_timeout`, as described in
+[Failed work](deployment.md#failed-work).
 
 A job holds a lock on its queue row from the start of its work until it
 commits. Claims and maintenance skip locked rows, so the
