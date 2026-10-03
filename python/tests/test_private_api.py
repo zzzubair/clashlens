@@ -788,6 +788,23 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
                 "previous_season_id": "2026-07",
             }
 
+            def cancelled(setting: str):
+                def read(_database, _selection, now=None):
+                    with database.pool.connection() as connection:
+                        with connection.transaction():
+                            connection.execute(f"SET LOCAL {setting} = '50ms'")
+                            connection.execute("SELECT pg_sleep(1)")
+
+                return read
+
+            for setting in ("statement_timeout", "transaction_timeout"):
+                monkeypatch.setattr(
+                    api_analytics, "get_army_analytics", cancelled(setting)
+                )
+                timed_out = client.get(target, headers=signed_headers(target))
+                assert timed_out.status_code == 503, setting
+                assert timed_out.json() == {"error": "timeout"}, setting
+
 
 def test_public_player_read_p95_is_below_200_milliseconds(
     database_url: str,

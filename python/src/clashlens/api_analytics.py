@@ -570,7 +570,7 @@ def get_army_analytics(
                     day_markers=dict(completed_day_signature),
                 )
             if banded is not None:
-                # Same numbers as counting the facts, from at most 28 x 14
+                # Same numbers as counting the facts, from at most 28 x 17
                 # saved rows.
                 result, band_digest = finish_army_result(banded[0], resolved), banded[1]
             elif resolved.category == "troops":

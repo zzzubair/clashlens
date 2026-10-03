@@ -1,3 +1,5 @@
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -499,5 +501,189 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("Records included 1,591");
     expect(text).toContain("Records excluded 2");
     expect(text).toContain("1 other battle record had no opponent and was excluded");
+  });
+});
+
+describe("army analytics player groups", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
+  });
+
+  it("offers the larger tops, rank ranges and a custom trophy range", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-10000", [23], 0)),
+    });
+    const html = await renderArmyRoute("season=current&population=top-10000");
+    for (const population of [
+      "top-1000",
+      "top-2000",
+      "top-5000",
+      "top-10000",
+      "band-1-100",
+      "band-901-1000",
+      "band-1001-2000",
+      "band-2001-5000",
+      "band-5001-10000",
+      "trophies",
+    ]) {
+      expect(html).toContain(`value="${population}"`);
+    }
+    expect(html).not.toContain("Selected player group");
+    expect(html).not.toContain('name="trophy_min"');
+    // An empty group still shows the page, with zero records and no rows.
+    const text = renderedText(html);
+    expect(text).toContain("by top-10,000 players");
+    expect(text).toContain("Battle records 0 Recorded in this selection");
+    expect(text).toContain("No recognized components in this selection.");
+  });
+
+  it.each([
+    "top-2000",
+    "top-5000",
+    "top-10000",
+    "band-1-100",
+    "band-1001-2000",
+    "band-5001-10000",
+    "trophies-3800-4999",
+  ])("asks the API for %s", async (population) => {
+    const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    await armyLoader({
+      request: requestFor(`season=current&population=${population}`),
+      params: {},
+    } as never);
+    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
+    expect(query.get("population")).toBe(population);
+  });
+
+  it("turns the custom trophy fields into one shareable range", async () => {
+    const result = await armyLoader({
+      request: requestFor(
+        "season=current&population=trophies&trophy_min=3800&trophy_max=05200&lens=defense",
+      ),
+      params: {},
+    } as never);
+    expect((result as Response).status).toBe(302);
+    expect((result as Response).headers.get("location")).toBe(
+      "/analytics/armies?season=current&population=trophies-3800-5200&lens=defense",
+    );
+  });
+
+  it("shows a chosen trophy range in its fields", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi
+        .fn()
+        .mockResolvedValue(currentAnalytics("trophies-3800-5200", [23], 0)),
+    });
+    const html = await renderArmyRoute("season=current&population=trophies-3800-5200");
+    expect(html).toMatch(/<option value="trophies" selected="">/);
+    expect(html).toMatch(/name="trophy_min"[^>]*value="3800"/);
+    expect(html).toMatch(/name="trophy_max"[^>]*value="5200"/);
+    expect(renderedText(html)).toContain(
+      "by players with 3,800 to 5,200 trophies at battle time",
+    );
+  });
+
+  it("keeps the picker and explains a request that hits the 5-second limit", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../app/services/python.server")
+    >("../../app/services/python.server");
+    let reply: (response: ServerResponse) => void = () => {};
+    const server = createServer((_request, response) => reply(response));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const saved = {
+      url: process.env.CLASHLENS_PYTHON_API_URL,
+      secret: process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64,
+    };
+    process.env.CLASHLENS_PYTHON_API_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 =
+      "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    mocks.createPythonClient.mockImplementation(actual.createPythonClient);
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    const limit = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => timeout(100));
+    const tooWide =
+      "This trophy range is too wide to load right now. Try a narrower range.";
+    const json = { "content-type": "application/json" };
+    try {
+      for (const [when, send, message] of [
+        ["waiting for the reply", () => {}, tooWide],
+        [
+          "reading the reply",
+          (response: ServerResponse) => {
+            response.writeHead(200, json);
+            response.write('{"kind":');
+          },
+          tooWide,
+        ],
+        [
+          "the database cancels",
+          (response: ServerResponse) =>
+            response.writeHead(503, json).end('{"error":"timeout"}'),
+          tooWide,
+        ],
+        [
+          "the service fails another way",
+          (response: ServerResponse) =>
+            response.writeHead(503, json).end('{"error":"service_unavailable"}'),
+          "the live service is unavailable",
+        ],
+      ] as const) {
+        reply = send;
+        const html = await renderArmyRoute(
+          "season=current&population=trophies-3800-6100",
+        );
+        const text = renderedText(html);
+        expect(text, when).toContain(message);
+        expect(text, when).not.toContain("malformed");
+        expect(html).not.toContain("<table");
+        expect(html).toMatch(/<option value="trophies" selected="">/);
+        expect(html).toContain('value="top-10000"');
+        expect(html).toMatch(/name="trophy_min"[^>]*value="3800"/);
+        expect(html).toMatch(/name="trophy_max"[^>]*value="6100"/);
+      }
+      expect(limit).toHaveBeenCalledWith(5_000);
+      reply = () => {};
+      const top = renderedText(
+        await renderArmyRoute("season=current&population=top-10000"),
+      );
+      expect(top).toContain("This player group took too long to load right now.");
+      expect(top).not.toContain("trophy range is too wide");
+    } finally {
+      limit.mockRestore();
+      server.closeAllConnections();
+      server.close();
+      for (const [name, value] of [
+        ["CLASHLENS_PYTHON_API_URL", saved.url],
+        ["CLASHLENS_PYTHON_HMAC_SECRET_B64", saved.secret],
+      ] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it.each([
+    ["population=trophies&trophy_min=6000&trophy_max=5000", "can’t be above"],
+    ["population=trophies-6000-5000", "can’t be above"],
+    ["population=trophies&trophy_min=&trophy_max=5000", "whole numbers"],
+    ["population=trophies&trophy_min=-1&trophy_max=5000", "whole numbers"],
+    ["population=trophies&trophy_min=12.5&trophy_max=5000", "whole numbers"],
+    ["population=trophies-5000-100000", "whole numbers"],
+    ["population=trophies-abc", "whole numbers"],
+  ])("rejects the trophy range %s before asking the API", async (query, message) => {
+    const getArmyAnalytics = vi.fn();
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    const result = await armyLoader({
+      request: requestFor(`season=current&${query}`),
+      params: {},
+    } as never);
+    expect(getArmyAnalytics).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      init: { status: 422 },
+      data: { analytics: null, error: { error: { code: "invalid_input" } } },
+    });
+    const error = (result as { data: { error: { error: { message: string } } } }).data
+      .error.error.message;
+    expect(error).toContain(message);
   });
 });

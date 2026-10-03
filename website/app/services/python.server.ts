@@ -417,7 +417,8 @@ async function requestJsonRaw(
     requestId,
     lifetimeSeconds: 10,
   });
-  let response: Response;
+  let response: Response | undefined;
+  let payload: unknown;
   try {
     response = await fetch(new URL(target, config.baseUrl), {
       method,
@@ -429,14 +430,14 @@ async function requestJsonRaw(
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
-    throw new PythonApiError(503, { error: "unavailable" });
-  }
-  let payload: unknown;
-  try {
     payload = await readPayload(response);
-  } catch {
-    throw new PythonApiError(502, { error: "malformed" });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "TimeoutError") {
+      throw new PythonApiError(503, { error: "timeout" });
+    }
+    throw response === undefined
+      ? new PythonApiError(503, { error: "unavailable" })
+      : new PythonApiError(502, { error: "malformed" });
   }
   return { status: response.status, payload };
 }

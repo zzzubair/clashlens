@@ -14,6 +14,7 @@ import {
 import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
 import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
+import { TROPHY_RANGE_LIMITS, trophyRangeProblem } from "../lib/validation";
 
 const allowed = {
   lens: ["offense", "defense"],
@@ -34,11 +35,45 @@ const allowed = {
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const source = new URL(request.url).searchParams;
+  const recentAvailable =
+    import.meta.env.DEV || process.env.CLASHLENS_ARMY_PREVIEW === "true";
+  // Without JavaScript a custom trophy range arrives as two form fields.
+  // Check it against the API's rule and keep one shareable value in the URL.
+  const population = source.get("population") ?? "";
+  if (
+    population.startsWith("trophies") &&
+    (source.get("season") ?? "current") === "current"
+  ) {
+    const [minimum, maximum] =
+      population === "trophies"
+        ? [source.get("trophy_min") ?? "", source.get("trophy_max") ?? ""]
+        : (/^trophies-(\d+)-(\d+)$/.exec(population)?.slice(1) ?? ["", ""]);
+    const problem = trophyRangeProblem(minimum, maximum);
+    if (problem !== null) {
+      return data(
+        {
+          recentAvailable,
+          analytics: null,
+          error: {
+            error: { code: "invalid_input", message: problem },
+          } satisfies WebsiteErrorResponse,
+          seasonEmpty: null,
+          historicalSummary: false,
+          requestedSeason: "current",
+        },
+        { status: 422 },
+      );
+    }
+    if (population === "trophies") {
+      source.set("population", `trophies-${Number(minimum)}-${Number(maximum)}`);
+      source.delete("trophy_min");
+      source.delete("trophy_max");
+      return redirect(`${new URL(request.url).pathname}?${source}`);
+    }
+  }
   if ((source.get("category") ?? "troops") === "troops" && source.get("cc") === "1") {
     source.set("category", "cc-troops");
   }
-  const recentAvailable =
-    import.meta.env.DEV || process.env.CLASHLENS_ARMY_PREVIEW === "true";
   if (
     recentAvailable &&
     source.get("saved") !== "1" &&
@@ -182,10 +217,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
         { status: pythonError.status },
       );
     }
+    const timedOut =
+      season === "current" &&
+      cause instanceof python.PythonApiError &&
+      (cause.payload as { error?: unknown } | null)?.error === "timeout";
     return {
       recentAvailable,
       analytics: null,
-      error: safeWebsiteError(cause),
+      error: timedOut
+        ? ({
+            error: {
+              code: "unavailable",
+              message: source.get("population")?.startsWith("trophies")
+                ? "This trophy range is too wide to load right now. Try a narrower range."
+                : "This player group took too long to load right now. Try a smaller group or fewer Legend days.",
+            },
+          } satisfies WebsiteErrorResponse)
+        : safeWebsiteError(cause),
       seasonEmpty: null,
       historicalSummary: false,
       requestedSeason: season,
@@ -210,7 +258,16 @@ const filterLabels: Record<string, string> = {
   "hero-equipment": "Hero and equipment",
   "cc-composition": "Clan Castle army",
 };
-const topPlayers = [5, 10, 20, 50, 100, 200, 500, 1000];
+const topPlayers = [5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+// Consistent top reads every member's battles, so it stops at Top 1,000.
+const consistentLimit = 1000;
+// Each 100 ranks to 1,000, then the steps between the larger tops.
+const rankRanges = [
+  ...Array.from({ length: 10 }, (_, index) => [index * 100 + 1, (index + 1) * 100]),
+  [1001, 2000],
+  [2001, 5000],
+  [5001, 10000],
+];
 const usageLabels: Record<string, string> = {
   troops: "Troop",
   spells: "Spell",
@@ -226,7 +283,8 @@ const usageLabels: Record<string, string> = {
 };
 
 function populationDescription(population: string) {
-  const [kind, start, end] = population.split("-");
+  const [kind, ...numbers] = population.split("-");
+  const [start, end] = numbers.map((value) => Number(value).toLocaleString());
   if (kind === "all") return "all players";
   if (kind === "top") return `top-${start} players`;
   if (kind === "streak") return `players in the top ${end} on every selected day`;
@@ -422,6 +480,11 @@ export default function ArmyAnalyticsRoute() {
     : [];
   const lens = selected?.lens ?? params.get("lens") ?? "offense";
   const population = selected?.population ?? params.get("population") ?? "top-100";
+  // A custom trophy range shows as one choice plus its two number fields.
+  const trophyRange = /^trophies-(\d+)-(\d+)$/.exec(population)?.slice(1);
+  const playerGroup = population.startsWith("trophies") ? "trophies" : population;
+  const [customTrophies, setCustomTrophies] = useState(playerGroup === "trophies");
+  const [trophyProblem, setTrophyProblem] = useState<string | null>(null);
   const category =
     selected?.category ??
     ((params.get("category") ?? "troops") === "troops" && params.get("cc") === "1"
@@ -512,9 +575,13 @@ export default function ArmyAnalyticsRoute() {
       pendingChange.current !== null
     )
       return;
+    setCustomTrophies(playerGroup === "trophies");
+    setTrophyProblem(null);
     const values = {
       lens,
-      population: isHistorical ? "all" : population,
+      population: isHistorical ? "all" : playerGroup,
+      trophy_min: trophyRange?.[0] ?? params.get("trophy_min") ?? "",
+      trophy_max: trophyRange?.[1] ?? params.get("trophy_max") ?? "",
       category: showCategory,
       sort: selected?.sort ?? params.get("sort") ?? "usage-rate",
       season: requestedSeason,
@@ -583,12 +650,42 @@ export default function ArmyAnalyticsRoute() {
             const ccToggle = form.elements.namedItem("cc");
             if (ccToggle instanceof HTMLInputElement) ccToggle.checked = false;
           }
+          if (
+            event.target instanceof HTMLSelectElement &&
+            event.target.name === "population"
+          ) {
+            setCustomTrophies(event.target.value === "trophies");
+            setTrophyProblem(null);
+            for (const name of ["trophy_min", "trophy_max"]) {
+              const field = form.elements.namedItem(name);
+              if (field instanceof HTMLInputElement) {
+                field.disabled = event.target.value !== "trophies";
+              }
+            }
+          }
           const apply = () => {
             pendingChange.current = null;
-            if (!form.checkValidity()) return;
             const values = new FormData(form);
+            if (values.get("population") === "trophies") {
+              const minimum = String(values.get("trophy_min") ?? "");
+              const maximum = String(values.get("trophy_max") ?? "");
+              // Wait for both fields before saying anything is wrong.
+              if (!minimum || !maximum) return;
+              const problem = trophyRangeProblem(minimum, maximum);
+              setTrophyProblem(problem);
+              if (problem !== null) return;
+              // Send the one shareable value the loader would redirect to.
+              values.set("population", `trophies-${Number(minimum)}-${Number(maximum)}`);
+              values.delete("trophy_min");
+              values.delete("trophy_max");
+            }
+            if (!form.checkValidity()) return;
             if (Number(values.get("start_day")) > Number(values.get("end_day"))) return;
-            void submit(form, { replace: true, preventScrollReset: true });
+            void submit(values, {
+              method: "get",
+              replace: true,
+              preventScrollReset: true,
+            });
           };
           if (
             event.target instanceof HTMLInputElement &&
@@ -690,42 +787,108 @@ export default function ArmyAnalyticsRoute() {
               </>
             ) : null}
           </div>
-          <label className="filter-field">
-            Players
-            <select
-              name="population"
-              defaultValue={isHistorical ? "all" : population}
-              disabled={isHistorical}
-            >
-              {isHistorical ? <option value="all">All players</option> : null}
-              {!isHistorical &&
-              !topPlayers.some(
-                (count) =>
-                  population === `top-${count}` ||
-                  (showConsistent && population === `streak-top-${count}`),
-              ) ? (
-                <option value={population}>Selected player group</option>
-              ) : null}
-              <optgroup label="Leaderboard position">
-                {topPlayers
-                  .filter((count) => !snapshot || count <= snapshot.playerCount)
-                  .map((count) => (
-                    <option key={count} value={`top-${count}`}>
-                      Top {count.toLocaleString()}
-                    </option>
-                  ))}
-              </optgroup>
-              {showConsistent ? (
-                <optgroup label="Top players on every selected day">
-                  {topPlayers.map((count) => (
-                    <option key={count} value={`streak-top-${count}`}>
-                      Consistent top {count.toLocaleString()}
-                    </option>
-                  ))}
+          <div className="analytics-show-filter">
+            <label className="filter-field">
+              Players
+              <select
+                name="population"
+                defaultValue={isHistorical ? "all" : playerGroup}
+                disabled={isHistorical}
+              >
+                {isHistorical ? <option value="all">All players</option> : null}
+                {!isHistorical &&
+                playerGroup !== "trophies" &&
+                !topPlayers.some(
+                  (count) =>
+                    population === `top-${count}` ||
+                    (showConsistent &&
+                      count <= consistentLimit &&
+                      population === `streak-top-${count}`),
+                ) &&
+                !rankRanges.some(([from, to]) => population === `band-${from}-${to}`) ? (
+                  <option value={population}>Selected player group</option>
+                ) : null}
+                <optgroup label="Leaderboard position">
+                  {topPlayers
+                    .filter((count) => !snapshot || count <= snapshot.playerCount)
+                    .map((count) => (
+                      <option key={count} value={`top-${count}`}>
+                        Top {count.toLocaleString()}
+                      </option>
+                    ))}
                 </optgroup>
-              ) : null}
-            </select>
-          </label>
+                {showConsistent ? (
+                  <optgroup label="Top players on every selected day">
+                    {topPlayers
+                      .filter((count) => count <= consistentLimit)
+                      .map((count) => (
+                        <option key={count} value={`streak-top-${count}`}>
+                          Consistent top {count.toLocaleString()}
+                        </option>
+                      ))}
+                  </optgroup>
+                ) : null}
+                {snapshot ? null : (
+                  <>
+                    <optgroup label="Rank range">
+                      {rankRanges.map(([from, to]) => (
+                        <option key={from} value={`band-${from}-${to}`}>
+                          Ranks {from.toLocaleString()}–{to.toLocaleString()}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Trophies at battle time">
+                      <option value="trophies">Custom trophy range</option>
+                    </optgroup>
+                  </>
+                )}
+              </select>
+            </label>
+            {customTrophies && !isHistorical && !snapshot ? (
+              <>
+                <div className="analytics-trophy-range">
+                  <label className="filter-field">
+                    Min trophies
+                    <input
+                      name="trophy_min"
+                      type="number"
+                      inputMode="numeric"
+                      required
+                      min={TROPHY_RANGE_LIMITS[0]}
+                      max={TROPHY_RANGE_LIMITS[1]}
+                      step="1"
+                      defaultValue={trophyRange?.[0] ?? params.get("trophy_min") ?? ""}
+                      aria-invalid={trophyProblem !== null}
+                      aria-describedby="trophy-range-help"
+                    />
+                  </label>
+                  <label className="filter-field">
+                    Max trophies
+                    <input
+                      name="trophy_max"
+                      type="number"
+                      inputMode="numeric"
+                      required
+                      min={TROPHY_RANGE_LIMITS[0]}
+                      max={TROPHY_RANGE_LIMITS[1]}
+                      step="1"
+                      defaultValue={trophyRange?.[1] ?? params.get("trophy_max") ?? ""}
+                      aria-invalid={trophyProblem !== null}
+                      aria-describedby="trophy-range-help"
+                    />
+                  </label>
+                </div>
+                <p
+                  id="trophy-range-help"
+                  className={trophyProblem ? "field-error" : "form-help"}
+                  role={trophyProblem ? "alert" : undefined}
+                >
+                  {trophyProblem ??
+                    "Each battle counts if the player’s trophies at that moment fall in this range."}
+                </p>
+              </>
+            ) : null}
+          </div>
         </div>
         {!showConsistent && !snapshot && !isHistorical && trackedRun.length > 0 ? (
           <p className="form-help">
@@ -796,7 +959,7 @@ export default function ArmyAnalyticsRoute() {
           )}
         </div>
         <noscript>
-          <button type="submit" className="button button-secondary">
+          <button type="submit" formNoValidate className="button button-secondary">
             Apply filters
           </button>
         </noscript>
