@@ -6,7 +6,7 @@ test("fan content notice is exact, linked and readable on phones in both themes"
   await page.setViewportSize({ width: 320, height: 812 });
   await page.goto("/");
   const footer = page.getByRole("contentinfo");
-  await expect(footer).toHaveText(
+  await expect(footer.locator("p")).toHaveText(
     "This material is unofficial and is not endorsed by Supercell. For more information see Supercell's Fan Content Policy: www.supercell.com/fan-content-policy.",
   );
   await expect(
@@ -30,6 +30,31 @@ test("fan content notice is exact, linked and readable on phones in both themes"
       await footer.evaluate((element) => parseFloat(getComputedStyle(element).fontSize)),
     ).toBeGreaterThanOrEqual(12);
   }
+});
+
+test("header and footer About links open the About page", async ({ page }) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Main navigation" })
+    .getByRole("link", { name: "About" })
+    .click();
+  await expect(page).toHaveURL(/\/about$/);
+  await expect(page.getByRole("heading", { name: "About Clash Lens" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Clash of Clans API", exact: true }),
+  ).toHaveAttribute("href", "https://developer.clashofclans.com/");
+  await expect(page.getByRole("main")).toContainText(
+    "This material is unofficial and is not endorsed by Supercell.",
+  );
+
+  await page.goto("/leaderboards/tracked");
+  await page
+    .getByRole("contentinfo")
+    .getByRole("navigation", { name: "Site information" })
+    .getByRole("link", { name: "About" })
+    .click();
+  await expect(page).toHaveURL(/\/about$/);
+  await expect(page.getByRole("heading", { name: "About Clash Lens" })).toBeVisible();
 });
 
 test("home and the full leaderboard show collected synthetic players", async ({

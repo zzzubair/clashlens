@@ -7,6 +7,7 @@ for (const [name, path, heading] of [
   ["player", "/players/%232PP", "Synthetic Clasher 001"],
   ["leaderboard", "/leaderboards/tracked", "Live Leaderboard"],
   ["login", "/login", "Sign in"],
+  ["about", "/about", "About Clash Lens"],
 ] as const) {
   test(`${name} has no serious or critical accessibility violations`, async ({
     page,

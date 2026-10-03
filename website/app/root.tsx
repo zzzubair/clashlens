@@ -87,6 +87,9 @@ export function Layout({ children }: { children: ReactNode }) {
             </a>
             .
           </p>
+          <nav aria-label="Site information">
+            <a href="/about">About</a>
+          </nav>
         </footer>
         <ScrollRestoration />
         <Scripts />
@@ -139,6 +142,7 @@ export default function App() {
           <NavLink to="/analytics/armies">Armies</NavLink>
           <NavLink to="/account/saved-players">Saved players</NavLink>
           <NavLink to="/account/groups">Groups</NavLink>
+          <NavLink to="/about">About</NavLink>
         </nav>
         <nav className="site-nav" aria-label="Account and appearance">
           <ThemeToggle />
