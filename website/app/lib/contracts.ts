@@ -186,6 +186,7 @@ export interface ArmyAnalytics {
   perspectiveDisagreementCount: number;
   missingTrophyMembershipEvidence: number;
   cohortEvidence: {
+    cohortPlayers: number;
     staleOrUncertainCohortMembers: number;
     streakExcludedPlayers: number;
     shieldedPlayerDays: number;

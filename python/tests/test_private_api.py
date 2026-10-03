@@ -702,6 +702,7 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
             "perspective_disagreement_count": 0,
             "missing_trophy_membership_evidence": 0,
             "cohort_evidence": {
+                "cohort_players": 1,
                 "stale_or_uncertain_cohort_members": 0,
                 "streak_excluded_players": 0,
                 "shielded_player_days": 0,

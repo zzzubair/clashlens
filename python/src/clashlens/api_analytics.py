@@ -124,6 +124,7 @@ def get_army_season_summary(
             "perspective_disagreement_count": int(row[9]),
             "missing_trophy_membership_evidence": int(row[10]),
             "cohort_evidence": {
+                "cohort_players": 0,
                 "stale_or_uncertain_cohort_members": 0,
                 "streak_excluded_players": 0,
                 "shielded_player_days": 0,
@@ -163,6 +164,26 @@ def _army_troop_admission(database: ApiDatabase, selection: ArmyAnalyticsSelecti
         yield
     finally:
         database._army_troop_slots.release()
+
+
+def consistent_top_members(
+    connection, snapshot_ids: list[int], limit: int
+) -> list[int]:
+    """Players numbered within the top ``limit`` on every given saved board.
+
+    Each board is the leaderboard saved just before a Reset from the last
+    trophy counts seen. Old or uncertain counts still count; nobody below
+    the cutoff moves up to fill a gap.
+    """
+    rows = connection.execute(
+        """
+        SELECT player_id FROM leaderboard_snapshot_entries
+        WHERE snapshot_id=ANY(%s::bigint[]) AND position<=%s
+        GROUP BY player_id HAVING count(DISTINCT snapshot_id)=%s
+        """,
+        (snapshot_ids, limit, len(snapshot_ids)),
+    ).fetchall()
+    return sorted(int(row[0]) for row in rows)
 
 
 def get_army_analytics(
@@ -350,15 +371,9 @@ def get_army_analytics(
                 ]
                 if streak:
                     limit = int(population.removeprefix("streak-top-"))
-                    members = connection.execute(
-                        """
-                        SELECT player_id FROM leaderboard_snapshot_entries
-                        WHERE snapshot_id=ANY(%s::bigint[]) AND position<=%s
-                          AND freshness='fresh' AND confidence='confirmed'
-                        GROUP BY player_id HAVING count(DISTINCT snapshot_id)=%s
-                        """,
-                        (snapshot_ids, limit, len(snapshot_ids)),
-                    ).fetchall()
+                    member_ids = consistent_top_members(
+                        connection, snapshot_ids, limit
+                    )
                 else:
                     if population.startswith("top-"):
                         low, high = 1, int(population.removeprefix("top-"))
@@ -376,15 +391,12 @@ def get_army_analytics(
                     band_by_player = {
                         int(row[0]): band_of(int(row[1])) for row in members
                     }
-                member_ids = sorted({int(row[0]) for row in members})
+                    member_ids = sorted({int(row[0]) for row in members})
                 excluded_players = 0
                 shielded_player_days = 0
                 if population.startswith("streak-top-"):
                     # Excluded streak players appear in the selected Top-N
-                    # in at least one selected snapshot but fail confirmed
-                    # fresh membership in every one: missing snapshot
-                    # membership or stale/uncertain entries both block a
-                    # confirmed streak.
+                    # on at least one saved board but miss it on another.
                     any_snapshot_ids = {
                         int(row[0])
                         for row in connection.execute(
@@ -398,7 +410,7 @@ def get_army_analytics(
                         ).fetchall()
                     }
                     excluded_players = len(any_snapshot_ids - set(member_ids))
-                    # Shielded-day evidence for confirmed streak members:
+                    # Shielded-day evidence for streak members:
                     # one row per member-day whose current ranked-day
                     # version inferred a shield.
                     if member_ids is not None:
@@ -447,6 +459,9 @@ def get_army_analytics(
                         assert version_row is not None
                         shielded_player_days = int(version_row[0])
                         streak_version_digest = _text(version_row[1])
+                    # Members whose saved trophy count was old or
+                    # uncertain on at least one day stay in the group;
+                    # this only says how many there are.
                     stale_or_uncertain_members = int(
                         connection.execute(
                             """
@@ -460,7 +475,7 @@ def get_army_analytics(
                                    AND bool_or(
                                        NOT (freshness = 'fresh'
                                             AND confidence = 'confirmed'))
-                            ) AS excluded
+                            ) AS weak_members
                             """,
                             (snapshot_ids, limit, len(snapshot_ids)),
                         ).fetchone()[0]
@@ -484,6 +499,7 @@ def get_army_analytics(
                         ).fetchone()[0]
                     )
                 cohort_evidence = {
+                    "cohort_players": len(member_ids),
                     "stale_or_uncertain_cohort_members": stale_or_uncertain_members,
                     "streak_excluded_players": excluded_players,
                     "shielded_player_days": shielded_player_days,
@@ -673,6 +689,7 @@ def get_army_analytics(
             }
             if cohort_evidence is None:
                 cohort_evidence = {
+                    "cohort_players": 0,
                     "stale_or_uncertain_cohort_members": 0,
                     "streak_excluded_players": 0,
                     "shielded_player_days": 0,

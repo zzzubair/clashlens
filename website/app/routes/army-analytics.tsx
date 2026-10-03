@@ -432,6 +432,27 @@ export default function ArmyAnalyticsRoute() {
   const clanCastle = category === "cc-troops";
   const unavailable = "selectionUnavailable" in result && result.selectionUnavailable;
   const snapshot = "snapshot" in result ? result.snapshot : null;
+  const streakTop = population.startsWith("streak-top-")
+    ? Number(population.slice(11)).toLocaleString()
+    : null;
+  // Consistent top needs a saved board and army data on every selected day,
+  // so offer it only once the loaded range has no missing days.
+  const showConsistent =
+    !snapshot &&
+    !isHistorical &&
+    (streakTop !== null || (coveredDays.length > 0 && untrackedDays.length === 0));
+  let trackedRunStart = coveredDays.length - 1;
+  while (
+    trackedRunStart > 0 &&
+    coveredDays[trackedRunStart - 1] === coveredDays[trackedRunStart] - 1
+  )
+    trackedRunStart -= 1;
+  const trackedRun = coveredDays.slice(Math.max(trackedRunStart, 0));
+  const trackedRunQuery = new URLSearchParams(params);
+  trackedRunQuery.set("start_day", String(trackedRun[0]));
+  trackedRunQuery.set("end_day", String(trackedRun[trackedRun.length - 1]));
+  const cohortPlayers = analytics?.cohortEvidence.cohortPlayers ?? 0;
+  const oldTrophyPlayers = analytics?.cohortEvidence.staleOrUncertainCohortMembers ?? 0;
   const unreadableArmyRecords = analytics
     ? analytics.totalAttacks - analytics.usableArmySample
     : 0;
@@ -678,7 +699,11 @@ export default function ArmyAnalyticsRoute() {
             >
               {isHistorical ? <option value="all">All players</option> : null}
               {!isHistorical &&
-              !topPlayers.some((count) => population === `top-${count}`) ? (
+              !topPlayers.some(
+                (count) =>
+                  population === `top-${count}` ||
+                  (showConsistent && population === `streak-top-${count}`),
+              ) ? (
                 <option value={population}>Selected player group</option>
               ) : null}
               <optgroup label="Leaderboard position">
@@ -690,9 +715,26 @@ export default function ArmyAnalyticsRoute() {
                     </option>
                   ))}
               </optgroup>
+              {showConsistent ? (
+                <optgroup label="Top players on every selected day">
+                  {topPlayers.map((count) => (
+                    <option key={count} value={`streak-top-${count}`}>
+                      Consistent top {count.toLocaleString()}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </select>
           </label>
         </div>
+        {!showConsistent && !snapshot && !isHistorical && trackedRun.length > 0 ? (
+          <p className="form-help">
+            Consistent top needs every selected day tracked.{" "}
+            <Link to={`?${trackedRunQuery}`} preventScrollReset replace>
+              Use {dayRange(trackedRun)}
+            </Link>
+          </p>
+        ) : null}
         <div className="filter-footer">
           {snapshot ? (
             <p className="form-help">
@@ -799,6 +841,20 @@ export default function ArmyAnalyticsRoute() {
             <strong>{lens === "defense" ? "against" : "by"}</strong>{" "}
             {populationDescription(population)}.
           </p>
+          {streakTop !== null ? (
+            <p className="section-note analytics-coverage-note">
+              {cohortPlayers === 0
+                ? `No player was in the top ${streakTop} on every selected day.`
+                : `${cohortPlayers.toLocaleString()} ${cohortPlayers === 1 ? "player was" : "players were"} in the top ${streakTop} on every selected day.`}{" "}
+              Top {streakTop} on a day means the top {streakTop} of the leaderboard saved
+              just before that day’s Reset (05:00 UTC), ranked by the last trophy count we
+              saw for each player.
+              {oldTrophyPlayers > 0
+                ? ` ${oldTrophyPlayers.toLocaleString()} of these players had a trophy count over 10 minutes old at Reset on at least one day.`
+                : ""}{" "}
+              Comparison with settled end-of-day ranks: not available yet.
+            </p>
+          ) : null}
           <div className="analytics-kpis" aria-label="Battle coverage">
             <article className="analytics-kpi analytics-kpi-primary">
               <span>Battle records</span>
@@ -970,6 +1026,12 @@ function seasonName(seasonId: string) {
         year: "numeric",
         timeZone: "UTC",
       });
+}
+
+function dayRange(days: number[]) {
+  const first = days[0];
+  const last = days[days.length - 1];
+  return first === last ? `day ${first}` : `days ${first}–${last}`;
 }
 
 function dayList(days: number[]) {

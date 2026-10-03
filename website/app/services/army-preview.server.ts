@@ -67,6 +67,7 @@ export function recentArmyAnalytics(source: URLSearchParams) {
       sort,
     },
     cohortEvidence: {
+      cohortPlayers: 0,
       staleOrUncertainCohortMembers: 0,
       streakExcludedPlayers: 0,
       shieldedPlayerDays: 0,

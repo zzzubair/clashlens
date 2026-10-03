@@ -107,6 +107,87 @@ def test_default_top_100_keeps_partial_army_day_recovery(monkeypatch, lens) -> N
     assert result["collection_coverage"]["covered_days"] == [23, 25]
 
 
+def test_consistent_top_follows_saved_positions_on_every_day(
+    database_url: str, archive_server
+) -> None:
+    # Positions on the boards saved before two Resets. Tags P1-P6; P5 is
+    # missing from day 2. Old or uncertain entries still count.
+    boards = (
+        {"#P1": (1, "fresh", "confirmed"), "#P2": (2, "stale", "confirmed"),
+         "#P3": (3, "fresh", "uncertain"), "#P4": (4, "fresh", "confirmed"),
+         "#P5": (5, "fresh", "confirmed"), "#P6": (6, "fresh", "confirmed")},
+        {"#P2": (1, "stale", "confirmed"), "#P1": (2, "fresh", "confirmed"),
+         "#P4": (3, "fresh", "confirmed"), "#P3": (4, "stale", "uncertain"),
+         "#P6": (5, "fresh", "confirmed")},
+    )
+    with domain_database(database_url) as connection_info:
+        observation_id, _job = store_observation(
+            connection_info, archive_server, occurrence_key="consistent-top",
+            endpoint="profile", body=b"{}", observed_at=DAY_START,
+            normalized_tag="#P1",
+        )
+        with psycopg.connect(connection_info) as connection:
+            players = {
+                tag: int(connection.execute(
+                    """
+                    INSERT INTO players (normalized_tag, active, next_due_at)
+                    VALUES (%s, false, NULL)
+                    ON CONFLICT (normalized_tag) DO UPDATE
+                        SET normalized_tag = EXCLUDED.normalized_tag
+                    RETURNING id
+                    """,
+                    (tag,),
+                ).fetchone()[0])
+                for tag in ("#P1", "#P2", "#P3", "#P4", "#P5", "#P6")
+            }
+            snapshot_ids = []
+            for day, board in enumerate(boards, start=1):
+                boundary = DAY_START + timedelta(days=day)
+                snapshot_id = connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshots (
+                        snapshot_kind, boundary_at, version, ordering_rule_version,
+                        freshness_rule_version, state, measured_coverage,
+                        stale_entry_count
+                    ) VALUES ('frozen', %s, 1, 'ordering-v1', 'freshness-v1',
+                              'published', 1.0, 0)
+                    RETURNING id
+                    """,
+                    (boundary,),
+                ).fetchone()[0]
+                snapshot_ids.append(int(snapshot_id))
+                for tag, (position, freshness, confidence) in board.items():
+                    connection.execute(
+                        """
+                        INSERT INTO leaderboard_snapshot_entries (
+                            snapshot_id, position, player_id, trophies,
+                            trophy_observation_id, trophy_observed_at,
+                            observation_age_seconds, freshness, confidence,
+                            tie_hash
+                        ) VALUES (%s, %s, %s, 6000, %s, %s, 10, %s, %s,
+                                  repeat('c', 64))
+                        """,
+                        (snapshot_id, position, players[tag], observation_id,
+                         boundary, freshness, confidence),
+                    )
+
+            def members(limit: int) -> set[str]:
+                ids = api_analytics.consistent_top_members(
+                    connection, snapshot_ids, limit
+                )
+                return {tag for tag, player_id in players.items() if player_id in ids}
+
+            # A different leader each day: nobody is top 1 on both.
+            assert members(1) == set()
+            assert members(2) == {"#P1", "#P2"}
+            # P3 and P4 each miss the top 3 on one day; nobody moves up.
+            assert members(3) == {"#P1", "#P2"}
+            assert members(4) == {"#P1", "#P2", "#P3", "#P4"}
+            # P5 has no day-2 entry; P6 is sixth on day 1.
+            assert members(5) == {"#P1", "#P2", "#P3", "#P4"}
+            assert members(10) == {"#P1", "#P2", "#P3", "#P4", "#P6"}
+
+
 def _processor(connection_info: str, archive_server, monkeypatch):
     database = Database(connection_info)
     database._supports_army_season_summaries = False

@@ -811,6 +811,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     !isInteger(payload.perspective_disagreement_count) ||
     !isInteger(payload.missing_trophy_membership_evidence) ||
     !isRecord(payload.cohort_evidence) ||
+    !isInteger(payload.cohort_evidence.cohort_players) ||
     !isInteger(payload.cohort_evidence.stale_or_uncertain_cohort_members) ||
     !isInteger(payload.cohort_evidence.streak_excluded_players) ||
     !isInteger(payload.cohort_evidence.shielded_player_days) ||
@@ -938,6 +939,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     perspectiveDisagreementCount: payload.perspective_disagreement_count,
     missingTrophyMembershipEvidence: payload.missing_trophy_membership_evidence,
     cohortEvidence: {
+      cohortPlayers: payload.cohort_evidence.cohort_players,
       staleOrUncertainCohortMembers:
         payload.cohort_evidence.stale_or_uncertain_cohort_members,
       streakExcludedPlayers: payload.cohort_evidence.streak_excluded_players,

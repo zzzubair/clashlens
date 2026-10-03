@@ -483,6 +483,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 expected = build_army_result(expected_facts, selection)
                 expected["collection_coverage"]["covered_days"] = [DAY_NUMBER]
                 expected["cohort_evidence"] = {
+                    "cohort_players": 0,
                     "stale_or_uncertain_cohort_members": 0,
                     "streak_excluded_players": 0,
                     "shielded_player_days": 0,
@@ -1758,8 +1759,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
                     (defender8_id, 2, "stale", "uncertain"),
                 ],
             )
-            # A corrected current version infers a shield for the confirmed
-            # member on day 23 and for the excluded defender on day 24.
+            # Corrected current versions infer a shield for each member.
             _mark_shielded(database, "#2PP", DAY_START, 23)
             _mark_shielded(database, "#8PP", day2_start, 24)
 
@@ -1768,15 +1768,14 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             )
             assert streak is not None
             evidence = streak["cohort_evidence"]
-            # Only the attacker keeps fresh confirmed Top-5 membership in both
-            # snapshots; stale membership and missing membership both exclude.
+            # Saved positions decide membership: the stale, uncertain defender
+            # stays in; #9PP, missing from S2, is the only one excluded.
             assert streak["total_attacks"] == 2
-            assert evidence["streak_excluded_players"] == 2
-            # The defender was present in every snapshot but not always fresh
-            # and confirmed; that weakness stays separately visible.
+            assert evidence["cohort_players"] == 2
+            assert evidence["streak_excluded_players"] == 1
+            # The defender's weak S2 entry stays visible as a count.
             assert evidence["stale_or_uncertain_cohort_members"] == 1
-            # Shielded-day evidence counts only confirmed members' member-days.
-            assert evidence["shielded_player_days"] == 1
+            assert evidence["shielded_player_days"] == 2
             cached_streak = api_analytics.get_army_analytics(api,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
