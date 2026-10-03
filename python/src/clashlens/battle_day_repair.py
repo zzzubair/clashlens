@@ -35,6 +35,8 @@ def merged_battles(
 ) -> tuple[dict[tuple[int, str], int], list[int]]:
     """Map each listed (battle, lens) that 0057 moved to its new battle.
 
+    A side with a listed report still saved on its listed battle stays there.
+
     A Reset's frozen inputs name the battle a report was saved under then;
     0057 may since have moved that report, its decode and facts to another
     battle row and deleted the old one. A Reset frozen after the move, from a
@@ -52,16 +54,20 @@ def merged_battles(
                repair.evidence_id,
                EXISTS (
                    SELECT 1 FROM battle_evidence AS evidence
-                   WHERE evidence.battle_id IN (
-                           repair.from_battle_id, repair.to_battle_id
-                         )
+                   WHERE evidence.battle_id = repair.to_battle_id
                      AND evidence.perspective = repair.perspective
                      AND evidence.id = ANY(%s::bigint[])
                )
         FROM battle_day_repairs AS repair
         WHERE repair.from_battle_id = ANY(%s::bigint[])
+          AND NOT EXISTS (
+              SELECT 1 FROM battle_evidence AS evidence
+              WHERE evidence.battle_id = repair.from_battle_id
+                AND evidence.perspective = repair.perspective
+                AND evidence.id = ANY(%s::bigint[])
+          )
         """,
-        (evidence_ids, battle_ids),
+        (evidence_ids, battle_ids, evidence_ids),
     ).fetchall():
         lens = "offense" if _text_value(perspective) == "attacker" else "defense"
         moved[(int(from_id), lens)] = int(to_id)

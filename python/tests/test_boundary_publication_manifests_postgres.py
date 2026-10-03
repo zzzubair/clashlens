@@ -785,3 +785,66 @@ def test_army_frozen_after_a_merge_reads_the_moved_report(
                     )
         finally:
             database.close()
+
+
+def test_frozen_army_build_keeps_a_report_still_on_its_battle(
+    database_url: str, archive_server
+) -> None:
+    # 0057 moved another report of this side to the day before, but the
+    # frozen report is still saved on the frozen battle: it is read there.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                [(frozen,)] = connection.execute(
+                    "SELECT input_identity FROM boundary_publication_manifest_rows"
+                    " WHERE manifest_id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
+                [battle] = frozen["battle_ids"]
+                connection.execute(
+                    """
+                    WITH target AS (
+                        INSERT INTO legend_battles
+                            (ranked_day_start, attacker_player_id, defender_player_id)
+                        SELECT ranked_day_start - interval '1 day',
+                               attacker_player_id, defender_player_id
+                        FROM legend_battles WHERE id = %s
+                        RETURNING id, ranked_day_start
+                    )
+                    INSERT INTO battle_day_repairs (
+                        from_battle_id, to_battle_id, perspective, evidence_id,
+                        attacker_player_id, defender_player_id, from_day, to_day
+                    )
+                    SELECT battle.id, target.id, evidence.perspective,
+                           -evidence.id, battle.attacker_player_id,
+                           battle.defender_player_id, battle.ranked_day_start,
+                           target.ranked_day_start
+                    FROM legend_battles AS battle
+                    JOIN battle_evidence AS evidence ON evidence.id = %s
+                    CROSS JOIN target
+                    WHERE battle.id = %s
+                    """,
+                    (battle, frozen["evidence_ids"][0], battle),
+                )
+                assert (
+                    not boundary_publication._boundary_army_manifest_needs_correction(
+                        database,
+                        connection,
+                        manifest_id=army_input["manifest_id"],
+                        player_ids=[frozen["player_id"]],
+                    )
+                )
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT battle_id, evidence_id, decode_id"
+                    " FROM army_analytics_battle_facts WHERE is_current"
+                ).fetchall() == [
+                    (battle, frozen["evidence_ids"][0], frozen["decode_ids"][0])
+                ]
+        finally:
+            database.close()
