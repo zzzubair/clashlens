@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -19,6 +21,22 @@ def _workflow() -> dict:
     parsed = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
     assert isinstance(parsed, dict)
     return parsed
+
+
+def _expand(text: str, **github: str) -> str:
+    """Expand GitHub ${{ }} expressions using only the operators ci.yml uses."""
+
+    def value(match: re.Match) -> str:
+        python = match[1].replace("&&", " and ").replace("||", " or ").strip()
+        names = {"always": lambda: True, "github": SimpleNamespace(**github)}
+        result = eval(python, {"__builtins__": {}, **names})
+        return str(result).lower() if isinstance(result, bool) else str(result)
+
+    return re.sub(r"\$\{\{(.*?)\}\}", value, text)
+
+
+def _runs(condition: str, event: str) -> bool:
+    return _expand(f"${{{{ {condition} }}}}", event_name=event) == "true"
 
 
 def _python_job() -> dict:
@@ -189,29 +207,25 @@ def test_native_python_failure_stops_before_development_tests(
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize(
-    ("required", "groups", "name", "condition"),
+    ("required", "groups", "name", "on_pull_requests"),
     [
         (
             "python",
             "python-tests",
             "Python lint, compile, and PostgreSQL tests",
-            "always()",
+            True,
         ),
-        (
-            "packaged-python",
-            "packaged-python-tests",
-            "Packaged Python tests",
-            "always() && github.event_name == 'push'",
-        ),
+        ("packaged-python", "packaged-python-tests", "Packaged Python tests", False),
     ],
 )
 def test_required_python_result_rejects_failed_cancelled_or_skipped_groups(
-    command_workspace, result, required, groups, name, condition
+    command_workspace, result, required, groups, name, on_pull_requests
 ) -> None:
     job = _workflow()["jobs"][required]
     assert job["name"] == name
     assert job["needs"] == groups
-    assert job["if"] == condition
+    assert _runs(job["if"], "pull_request") == on_pull_requests
+    assert _runs(job["if"], "push") and _runs(job["if"], "workflow_dispatch")
     step = job["steps"][0]
     assert step["env"]["RESULT"] == f"${{{{ needs.{groups}.result }}}}"
     step = {**step, "env": {"RESULT": result}}
@@ -546,8 +560,8 @@ def test_packaged_python_test_failure_fails_the_group(command_workspace) -> None
     assert _run_step(step, command_workspace).returncode == 23
 
 
-@pytest.mark.parametrize("event", ["pull_request", "push"])
-def test_full_container_runtime_runs_only_on_main_pushes(
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+def test_full_container_runtime_runs_only_on_main_pushes_and_manual_runs(
     command_workspace, event
 ) -> None:
     workflow = _workflow()
@@ -555,21 +569,13 @@ def test_full_container_runtime_runs_only_on_main_pushes(
     assert workflow[True] == {
         "push": {"branches": ["main"]},
         "pull_request": None,
+        "workflow_dispatch": None,
     }
     job = workflow["jobs"]["container-runtime"]
-    assert job["if"] == "github.event_name == 'push'"
-    assert workflow["jobs"]["packaged-python-tests"]["if"] == job["if"]
     assert "needs" not in job
-    condition = job["if"].replace("github.event_name", '"$GITHUB_EVENT_NAME"')
-    selected = (
-        subprocess.run(
-            ["bash", "-c", f"[[ {condition} ]]"],
-            env={**os.environ, "GITHUB_EVENT_NAME": event},
-            check=False,
-        ).returncode
-        == 0
-    )
-    assert selected == (event == "push")
+    selected = _runs(job["if"], event)
+    assert selected == (event != "pull_request")
+    assert _runs(workflow["jobs"]["packaged-python-tests"]["if"], event) == selected
     if selected:
         for step in job["steps"]:
             if "run" in step:
@@ -578,6 +584,31 @@ def test_full_container_runtime_runs_only_on_main_pushes(
         assert _calls(command_workspace)[-1]["args"] == ["check"]
     else:
         assert _calls(command_workspace) == []
+
+
+def test_only_newer_pull_request_runs_cancel_older_ones() -> None:
+    settings = _workflow()["concurrency"]
+
+    def run(event, ref, sha):
+        github = {"event_name": event, "ref": ref, "sha": sha}
+        return (
+            _expand(settings["group"], **github),
+            _expand(settings["cancel-in-progress"], **github),
+        )
+
+    main_runs = [
+        run("push", "refs/heads/main", "a" * 40),
+        run("push", "refs/heads/main", "b" * 40),
+        run("workflow_dispatch", "refs/heads/main", "c" * 40),
+    ]
+    pull_request_runs = [
+        run("pull_request", "refs/pull/7/merge", "d" * 40),
+        run("pull_request", "refs/pull/7/merge", "e" * 40),
+    ]
+    assert len({group for group, _ in main_runs + pull_request_runs[:1]}) == 4
+    assert {cancel for _, cancel in main_runs} == {"false"}
+    assert pull_request_runs[0] == pull_request_runs[1]
+    assert pull_request_runs[0][1] == "true"
 
 
 @pytest.mark.parametrize("exists", [True, False])
