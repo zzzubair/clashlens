@@ -341,7 +341,7 @@ condition's Discord recovery message arrives.
 ### Armies page empty
 
 The Armies page reads only finished Legend days. Each day passes through
-these steps, all run by the worker without a timer:
+these steps, all run by the worker:
 
 1. At Reset the collector saves each tracked player's profile and battle log,
    called the Reset pair. Once both are processed, the pair's latest row in
