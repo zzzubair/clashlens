@@ -993,6 +993,27 @@ describe("automatic tag lookup", () => {
     });
   });
 
+  it("lets a final lookup outrank an older tracked page on a fresh visit", () => {
+    expect(
+      playerLookupView(PLAYER, { tag: TAG, state: "not_in_legend" }, false),
+    ).toMatchObject({
+      trackedPlayer: null,
+      lookup: { state: "not_in_legend" },
+      minuteChecks: false,
+      isChecking: false,
+    });
+  });
+
+  it("keeps rereading once a minute when a tracking lookup meets an older inactive page", () => {
+    const older = { ...PLAYER, trackingState: "not_in_legend" } as PlayerPage;
+    expect(playerLookupView(older, { tag: TAG, state: "tracking" }, true)).toMatchObject({
+      trackedPlayer: null,
+      lookup: { state: "tracking" },
+      minuteChecks: true,
+      isChecking: false,
+    });
+  });
+
   it("keeps the one-second check for a first-time lookup", () => {
     expect(playerLookupView(null, { tag: TAG, state: "tracking" }, false)).toMatchObject({
       minuteChecks: false,

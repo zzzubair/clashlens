@@ -180,28 +180,33 @@ function explainsNoResults(lookup: PlayerLookup | null): boolean {
   return lookup?.state === "tracking" && (lookup.reason ?? "pending") !== "pending";
 }
 
-// What a visit shows and how often it rereads saved data. Once explained, it
-// rereads once a minute, through failed or partial reads, until a successful
-// lookup gives a normal page or a final answer.
+// What a visit shows and how often it rereads saved data. Saved results show
+// as current only when the lookup, if it succeeded, says tracking too. On a
+// fresh visit either read saying "not tracking" wins. Once explained, only the
+// lookup counts: the visit rereads once a minute, through failed or partial
+// reads, until a successful lookup gives a normal page or a final answer.
 export function playerLookupView(
   player: PlayerPage | null,
   fetched: PlayerLookup | null,
   explainedVisit: boolean,
 ) {
-  const saved =
-    player !== null &&
-    !explainsNoResults(fetched) &&
-    (!explainedVisit || fetched?.state === "tracking");
-  const trackedPlayer = saved && player?.trackingState === "tracking" ? player : null;
+  const current =
+    fetched === null
+      ? !explainedVisit
+      : fetched.state === "tracking" && !explainsNoResults(fetched);
+  const trackedPlayer = current && player?.trackingState === "tracking" ? player : null;
   const lookup: PlayerLookup | null =
-    saved && player ? { tag: player.tag, state: player.trackingState } : fetched;
+    player && current && !explainedVisit
+      ? { tag: player.tag, state: player.trackingState }
+      : fetched;
   const minuteChecks =
     explainedVisit &&
     trackedPlayer === null &&
     (lookup === null || lookup.state === "checking" || lookup.state === "tracking");
   const isChecking =
     !explainedVisit &&
-    (lookup?.state === "checking" || (lookup?.state === "tracking" && player === null));
+    (lookup?.state === "checking" ||
+      (lookup?.state === "tracking" && trackedPlayer === null));
   return { trackedPlayer, lookup, minuteChecks, isChecking };
 }
 
