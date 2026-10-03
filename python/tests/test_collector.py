@@ -742,6 +742,10 @@ def test_intent_lane_refills_around_active_rows_without_overadmitting(
         ) -> None:
             return None
 
+        @staticmethod
+        def expire_settlement_checks(_now: datetime) -> int:
+            return 0
+
     store = IntentStore()
     collector = _collector(spool, store, _Client(spool))
     oldest_release = asyncio.Event()

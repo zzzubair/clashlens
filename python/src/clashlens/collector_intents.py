@@ -40,6 +40,7 @@ async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
             intent.due_at or intent.cycle_at,
             collector_work_id=intent.work_id,
             eligibility_recheck=intent.eligibility_recheck,
+            collect_before=intent.collect_before,
         )
         endpoints = tuple(
             endpoint
@@ -65,6 +66,8 @@ async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
     outcomes = await collector.collect_player(work, lane=lane, endpoints=endpoints)
     if "capacity_paused" in outcomes:
         return "capacity_paused"
+    if "window_closed" in outcomes:
+        return "window_closed"
     if outcomes != ["recorded"] * len(endpoints):
         # A provider outage must not become a permanent player failure,
         # but once the API answers again a few retries are enough.

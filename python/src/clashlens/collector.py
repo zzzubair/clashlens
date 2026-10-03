@@ -16,7 +16,7 @@ from uuid import uuid4
 import psycopg
 from psycopg_pool import PoolTimeout
 
-from . import collector_intents, collector_uploads, weekly_eligibility
+from . import collector_intents, collector_reset, collector_uploads, weekly_eligibility
 from .archive import ArchiveReadError, S3ArchiveReader
 from .battle_log_schedule import BattleLogSchedule
 from .collector_db import (
@@ -28,6 +28,7 @@ from .collector_db import (
 )
 from .collector_http import (
     SAFE_RESPONSE_HEADERS,
+    CollectionWindowClosed,
     FetchedResponse,
     KeyPool,
     OfficialApiClient,
@@ -340,7 +341,14 @@ class Collector:
                             response = await self.client.fetch_rankings(pool)
                         else:
                             response = await self.client.fetch_player(
-                                pool, work.normalized_tag, endpoint
+                                pool,
+                                work.normalized_tag,
+                                endpoint,
+                                **(
+                                    {}
+                                    if work.collect_before is None
+                                    else {"start_before": work.collect_before}
+                                ),
                             )
                     except asyncio.CancelledError as cancelled:
                         # Only cancelling this task stops it; a request's own
@@ -348,6 +356,8 @@ class Collector:
                         if asyncio.current_task().cancelling():
                             raise
                         raise ProviderFailure("request_cancelled", retryable=True) from cancelled
+                except CollectionWindowClosed:
+                    return "window_closed"
                 except ProviderFailure as error:
                     await self._database_call(
                         self.database.record_transport_failure,
@@ -996,6 +1006,7 @@ class Collector:
         active: dict[int, tuple[bool, asyncio.Task[str]]] = {}
         scheduled_boundary: datetime | None = None
         next_rankings_at = datetime.min.replace(tzinfo=UTC)
+        next_expiry_at = next_rankings_at
         graceful = False
         try:
             while not stop_requested.is_set():
@@ -1006,6 +1017,13 @@ class Collector:
                     )
                     next_rankings_at = _next_five_minute_cycle(now)
                 boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
+                if now >= next_expiry_at:
+                    expired = await self._database_call(
+                        self.database.expire_settlement_checks, now
+                    )
+                    if expired < collector_reset.EXPIRY_BATCH:
+                        closes = boundary - timedelta(days=1) + collector_reset.COLLECTION_WINDOW
+                        next_expiry_at = closes if closes > now else closes + timedelta(days=1)
                 if now >= boundary and boundary != scheduled_boundary:
                     async with self._regular_admission_lock:
                         if self.regular_inflight == 0:

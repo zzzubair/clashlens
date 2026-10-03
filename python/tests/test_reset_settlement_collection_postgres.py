@@ -9,6 +9,7 @@ Reset trophies settled.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import threading
 import time
 from contextlib import contextmanager
@@ -23,7 +24,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_collector_db_postgres import _handoff, _hash
 from test_reconciliation_postgres import DAY_END, _battle_log, _processor, _profile
 
-from clashlens import late_battle_sweep
+from clashlens import collector_reset, late_battle_sweep
 from clashlens.collector import Collector
 from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderOutage
@@ -41,6 +42,7 @@ class _Provider(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     status: ClassVar[dict[str, int]] = {}
     requests: ClassVar[list[tuple[str, float]]] = []
+    profile_delay: ClassVar[float] = 0.0
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -49,6 +51,8 @@ class _Provider(BaseHTTPRequestHandler):
         endpoint = self.path.rsplit("/", 1)[-1]
         endpoint = endpoint if endpoint in {"battlelog", "leaguehistory"} else "profile"
         type(self).requests.append((endpoint, time.time()))
+        if endpoint == "profile":
+            time.sleep(type(self).profile_delay)
         status = type(self).status[endpoint]
         body = (b'{"items":[]}' if endpoint != "profile" else b'{"tag":"#2PP"}')
         body = body if status == 200 else b"{}"
@@ -63,6 +67,7 @@ class _Provider(BaseHTTPRequestHandler):
 def _provider():
     _Provider.status = {"profile": 200, "battlelog": 200, "leaguehistory": 200}
     _Provider.requests = []
+    _Provider.profile_delay = 0.0
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -491,8 +496,12 @@ def test_stalled_0520_pass_uses_actual_times_and_expires_without_new_requests(
         assert saved == ["recorded"]
         requests = len(_Provider.requests)
 
-        _finish_reset_pairs(connection_info)
-        assert database.begin_reset(WEDNESDAY_RESET + timedelta(days=1)) is not None
+        # The scheduling loop expires closed windows in bounded batches.
+        assert database.expire_settlement_checks(deadline - timedelta(seconds=1)) == 0
+        with psycopg.connect(connection_info) as connection:
+            assert collector_reset.expire_settlement_checks(connection, deadline, batch=1) == 1
+        assert database.expire_settlement_checks(deadline) == 1
+        assert database.expire_settlement_checks(deadline) == 0
         assert len(_Provider.requests) == requests
         with psycopg.connect(connection_info) as connection:
             rows = connection.execute(
@@ -514,6 +523,33 @@ def test_stalled_0520_pass_uses_actual_times_and_expires_without_new_requests(
         assert (status, reason, queued) == ("failed", "settlement_expired", True)
         assert started > WEDNESDAY_RESET + timedelta(days=1)
         assert unanswered == ("failed", "settlement_expired", None, False)
+
+
+def test_no_request_starts_after_the_cutoff_once_a_check_is_running(
+    database_url: str, tmp_path
+) -> None:
+    boundary = _current_reset(datetime.now(UTC))
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
+        _players(connection_info, TAG)
+        database = CollectorDatabase(connection_info)
+        database.begin_reset(boundary)
+        (intent,) = _settlement_intents(database, boundary + timedelta(minutes=21))
+        assert intent.collect_before == boundary + timedelta(hours=23, minutes=55)
+        # Selected just before the cutoff, its profile arrives just after it.
+        intent = dataclasses.replace(
+            intent, collect_before=datetime.now(UTC) + timedelta(seconds=0.3)
+        )
+        _Provider.profile_delay = 0.6
+        collector = _collector(origin, database, tmp_path)
+        assert asyncio.run(collector.collect_intent(intent)) == "window_closed"
+        assert asyncio.run(collector.collect_intent(intent)) == "window_closed"
+        assert [endpoint for endpoint, _at in _Provider.requests] == ["profile"]
+        # The saved profile stays referenced; the row waits for expiry.
+        status, profile_id, log_id, profile_status, *_ = _work(connection_info)
+        assert (status, profile_status, log_id) == ("pending", 200, None) and profile_id
 
 
 def test_pending_settlement_does_not_block_regular_or_next_reset(

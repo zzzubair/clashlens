@@ -391,10 +391,13 @@ responses instead of skipping them. Season Resets fetch no league history.
 The checks run in the 32 ordinary intent slots behind any unfinished Reset
 work, with the same retries as Reset work. They never block regular
 admission, the next Reset or the 05:30 late-battle check. No request starts
-23 hours 55 minutes after their Reset; when the next sweep is captured,
-unfinished checks fail as `settlement_expired` without a request, and
-responses already saved are still processed. Nothing reads the pair yet;
-every published result is unchanged.
+23 hours 55 minutes after their Reset: the HTTP client checks the cutoff right
+before each request and retry goes out, after any wait for a key or an
+outage pause, and a check past it stops without changing its work row. From
+04:55 the collector's scheduling loop fails unfinished checks as
+`settlement_expired` without a request, 1,000 rows per transaction until
+none remain, before the next Reset. Responses already saved are still
+processed. Nothing reads the pair yet; every published result is unchanged.
 
 Budget at 13,263 members (October 3, 2026): 26,526 extra requests per Reset.
 Six regular keys at 25 starts per second take at least 177 seconds, but the

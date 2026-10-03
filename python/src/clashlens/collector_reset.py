@@ -17,6 +17,7 @@ from .domain import is_season_boundary
 
 SETTLEMENT_DELAY = timedelta(minutes=20)
 COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
+EXPIRY_BATCH = 1000
 
 
 def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
@@ -169,38 +170,35 @@ def reset_ready(connection: Any, sweep_id: int) -> bool:
 
 
 def expire_settlement_checks(
-    connection: Any, boundary_at: datetime, *, batch: int = 1000
+    connection: Any, now: datetime, *, batch: int = EXPIRY_BATCH
 ) -> int:
-    """Fail unfinished checks of earlier Resets, ``batch`` rows per transaction.
+    """Fail up to ``batch`` unfinished checks whose window closed by ``now``.
 
-    Their collection window closed at 04:55, so this makes no request.
-    Responses already saved keep their work reference and are still processed.
+    The collector's scheduling loop calls this from 04:55 until fewer than
+    ``batch`` rows expire, so each Reset's checks expire before the next
+    Reset without a request. Responses already saved keep their work
+    reference and are still processed.
     """
-    expired = 0
-    while True:
-        with connection.transaction():
-            count = connection.execute(
-                """
-                UPDATE collector_work AS work
-                SET status = 'failed', failure_category = 'settlement_expired',
-                    failure_detail = 'no complete check within 23h55m of the Reset',
-                    updated_at = clock_timestamp()
-                WHERE work.id IN (
-                    SELECT unfinished.id
-                    FROM collector_work AS unfinished
-                    JOIN collector_reset_sweeps AS sweep
-                      ON sweep.id = unfinished.sweep_id
-                    WHERE unfinished.lane = 'ordinary'
-                      AND unfinished.status IN ('pending', 'waiting_retry')
-                      AND unfinished.kind = 'reset_settlement'
-                      AND sweep.boundary_at + %s <= %s
-                    ORDER BY unfinished.id
-                    LIMIT %s
-                    FOR UPDATE OF unfinished SKIP LOCKED
-                )
-                """,
-                (COLLECTION_WINDOW, boundary_at, batch),
-            ).rowcount
-        expired += count
-        if count < batch:
-            return expired
+    with connection.transaction():
+        return connection.execute(
+            """
+            UPDATE collector_work AS work
+            SET status = 'failed', failure_category = 'settlement_expired',
+                failure_detail = 'no complete check within 23h55m of the Reset',
+                updated_at = clock_timestamp()
+            WHERE work.id IN (
+                SELECT unfinished.id
+                FROM collector_work AS unfinished
+                JOIN collector_reset_sweeps AS sweep
+                  ON sweep.id = unfinished.sweep_id
+                WHERE unfinished.lane = 'ordinary'
+                  AND unfinished.status IN ('pending', 'waiting_retry')
+                  AND unfinished.kind = 'reset_settlement'
+                  AND sweep.boundary_at + %s <= %s
+                ORDER BY unfinished.id
+                LIMIT %s
+                FOR UPDATE OF unfinished SKIP LOCKED
+            )
+            """,
+            (COLLECTION_WINDOW, now, batch),
+        ).rowcount
