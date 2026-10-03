@@ -474,8 +474,10 @@ activate` refuses until every repair stage is installed; an active campaign
 holds its listed Reset publications until each is done.
 Every campaign write for a Season is refused from its end plus seven days
 (September 2026: from 2026-10-12 05:00 UTC). On 2026-10-03 a September
-preview read 590 reports, 102,381 battles needing decodes in 4,653 batches,
-2,032 player days and 10 Resets, about 1.7 MB of rows, in 31 seconds.
+preview on commit cd6d0f4, before later changes narrowed which days and Resets
+a campaign lists, read 590 reports, 102,381 battles needing decodes in 4,653
+batches, 2,032 player days and 10 Resets, about 1.7 MB of rows, in 31 seconds.
+Re-measure with `--campaign preview` before activation.
 
 ### Raw-response cleanup failed
 

@@ -10,9 +10,8 @@
 -- campaign is 'active' or 'paused', each of its unfinished publication items
 -- holds that Reset's publication rebuilds and corrections.
 --
--- Finite bookkeeping, never grown by collection: on 2026-10-03 a September
--- 2026 preview listed 590 reports, 4,653 decode batches (102,381 battles),
--- 2,032 player days and 10 Resets, about 1.7 MB of rows before indexes.
+-- Finite bookkeeping, never grown by collection: preview counts are
+-- recorded at registration time.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS domain_repair_campaigns (
