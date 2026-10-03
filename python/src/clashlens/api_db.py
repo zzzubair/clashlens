@@ -24,6 +24,10 @@ ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS = 5.0
 ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS = 0.1
 ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 0.1
 ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
+# A request that waits this long for a row or advisory lock fails with a
+# retryable 503 instead of holding a pool connection behind a long worker
+# transaction until every other page times out too.
+API_LOCK_TIMEOUT = "2s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,12 +93,18 @@ class ApiDatabase:
         self._army_cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
         self._army_cache_lock = Lock()
         self._army_troop_slots = BoundedSemaphore(max(1, max_size // 2))
+
+        def configure(connection: Any) -> None:
+            connection.execute(f"SET lock_timeout = '{API_LOCK_TIMEOUT}'")
+            connection.commit()
+
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=min_size,
             max_size=max_size,
             timeout=timeout_seconds,
             open=True,
+            configure=configure,
         )
         self._supports_content_dedup: bool | None = None
 
@@ -378,16 +388,21 @@ def _complete_request(
 
 
 def _ensure_player(connection: Any, normalized_tag: str) -> int:
-    row = connection.execute(
-        """
-        INSERT INTO players (normalized_tag, active)
-        VALUES (%s, false)
-        ON CONFLICT (normalized_tag) DO UPDATE
-            SET normalized_tag = EXCLUDED.normalized_tag
-        RETURNING id
-        """,
-        (normalized_tag,),
-    ).fetchone()
+    # Read an existing player without locking it. An upsert that updates the
+    # row takes its strongest lock, which waits for every worker transaction
+    # that saved anything referencing this player.
+    query = "SELECT id FROM players WHERE normalized_tag = %s"
+    row = connection.execute(query, (normalized_tag,)).fetchone()
+    if row is None:
+        connection.execute(
+            """
+            INSERT INTO players (normalized_tag, active)
+            VALUES (%s, false)
+            ON CONFLICT (normalized_tag) DO NOTHING
+            """,
+            (normalized_tag,),
+        )
+        row = connection.execute(query, (normalized_tag,)).fetchone()
     assert row is not None
     return int(row[0])
 

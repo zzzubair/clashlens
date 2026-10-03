@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+import psycopg
+import pytest
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts
+from clashlens import api_accounts, job_outcomes
 from clashlens.api_db import ApiDatabase, RequestBinding
 
 
@@ -239,4 +243,77 @@ def test_group_update_and_delete_require_the_owning_account(
             assert deleted.payload == {"deleted": True, "group_id": group_id}
             assert api_accounts.list_groups(database, owner_id) == []
         finally:
+            database.close()
+
+
+def test_group_creation_does_not_queue_behind_a_worker_transaction(
+    database_url: str,
+) -> None:
+    # On 2026-10-03 a worker rebuild kept one transaction open for minutes.
+    # Every Create group click waited on its player row locks until all API
+    # connections were stuck and every page timed out.
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        worker = psycopg.connect(connection_info)
+        try:
+            owner_id = create_owner(database)
+            job_outcomes._upsert_player(worker, "#2PP", active=True)
+            job_outcomes._upsert_player(worker, "#8PY", active=False)
+            worker.commit()
+            # The worker updates one player and saves a row referencing the
+            # other, which locks it the way a foreign key check does.
+            job_outcomes._upsert_player(worker, "#2PP", active=True)
+            worker.execute(
+                "SELECT 1 FROM players WHERE normalized_tag = '#8PY' FOR KEY SHARE"
+            )
+
+            def create(name: str, binding: RequestBinding | None = None):
+                binding = binding or account_binding(
+                    owner_id,
+                    "groups.create",
+                    "/v1/account/groups",
+                    {"name": name, "tags": ["#2PP", "#8PY"]},
+                )
+                return binding, api_accounts.create_group(database,
+                    binding,
+                    name=name,
+                    normalized_name=name.lower(),
+                    normalized_tags=["#2PP", "#8PY"],
+                )
+
+            # A wait here would block forever, so give up after 10 seconds.
+            executor = ThreadPoolExecutor(max_workers=1)
+            try:
+                _, created = executor.submit(create, "Main").result(timeout=10)
+            finally:
+                executor.shutdown(wait=False)
+            assert created.status_code == 201
+
+            # A lock the API really must wait for, such as the per-tag check
+            # lock, fails the request quickly instead of holding a connection.
+            worker.execute("SELECT pg_advisory_xact_lock(hashtextextended('#2PP', 0))")
+            binding = account_binding(
+                owner_id,
+                "groups.create",
+                "/v1/account/groups",
+                {"name": "Alts", "tags": ["#2PP", "#8PY"]},
+            )
+            started = time.monotonic()
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                create("Alts", binding)
+            assert time.monotonic() - started < 4
+            assert [group["name"] for group in api_accounts.list_groups(
+                database, owner_id
+            )] == ["Main"]
+
+            worker.commit()
+            _, retried = create("Alts", binding)
+            assert retried.status_code == 201
+            assert sorted(group["name"] for group in api_accounts.list_groups(
+                database, owner_id
+            )) == ["Alts", "Main"]
+        finally:
+            worker.close()
             database.close()

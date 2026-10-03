@@ -949,10 +949,13 @@ describe("account routes", () => {
         }),
       } as never);
       const { data, status, headers } = dataOf<{
-        generalError: { error: { code: string } };
+        generalError: { error: { code: string; message: string } };
       }>(unavailable);
       expect(status).toBe(422);
       expect(data.generalError.error.code).toBe("unavailable");
+      expect(data.generalError.error.message).toBe(
+        "Could not create the group. Try again.",
+      );
       assertNoStoreHeaders(headers);
       assertNoProviderData(data);
     });
