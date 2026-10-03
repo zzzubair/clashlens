@@ -487,9 +487,9 @@ def test_republication_retries_failed_reset_repair_left_live(
                 )
                 connection.commit()
 
-            def repair() -> dict:
+            def repair(max_jobs: int = 100) -> dict:
                 return reconciliation_db.enqueue_current_season_republication(
-                    database, max_jobs=100
+                    database, max_jobs=max_jobs
                 )
 
             def jobs(ids: list[int]) -> list[tuple]:
@@ -523,68 +523,111 @@ def test_republication_retries_failed_reset_repair_left_live(
                         (status, category, status, ids),
                     )
 
-            first = repair()
-            assert first["evaluated_count"] == 2 and len(first["job_ids"]) == 2
-            set_status(first["job_ids"], "failed", "lease_expired_max_attempts")
-            assert day_state() == "Live"
-            failed = jobs(first["job_ids"])
+            def add_job(key: str, input_json: dict) -> int:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        "INSERT INTO python_processing_jobs_worker (observation_id,"
+                        " work_type, deduplication_key, input_json, state, due_at,"
+                        " parser_version, processing_version, domain_rule_version,"
+                        " analytics_rule_version) VALUES (NULL, 'reconcile_ranked_day',"
+                        " %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)"
+                        " RETURNING id",
+                        (
+                            key,
+                            Jsonb(input_json),
+                            DEFAULT_PARSER_VERSION,
+                            PROCESSING_VERSION,
+                            DOMAIN_RULE_VERSION,
+                            ANALYTICS_RULE_VERSION,
+                        ),
+                    ).fetchone()[0]
 
-            # Other work already rebuilding that day is left to finish.
+            def iso(moment) -> str:
+                return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
             with database.pool.connection() as connection:
-                active = connection.execute(
-                    "INSERT INTO python_processing_jobs_worker (observation_id,"
-                    " work_type, deduplication_key, input_json, state, due_at,"
-                    " parser_version, processing_version, domain_rule_version,"
-                    " analytics_rule_version) VALUES (NULL, 'reconcile_ranked_day',"
-                    " 'test:active', %s, 'pending', clock_timestamp(), %s, %s, %s, %s)"
-                    " RETURNING id",
-                    (
-                        Jsonb(failed[-1][3]),
-                        DEFAULT_PARSER_VERSION,
-                        PROCESSING_VERSION,
-                        DOMAIN_RULE_VERSION,
-                        ANALYTICS_RULE_VERSION,
-                    ),
-                ).fetchone()[0]
-            assert repair()["job_ids"] == []
-            set_status([active], "cancelled")
-
-            # Both repairs touch the Live day, so both are queued again with
-            # their original inputs; the failed jobs keep their history and a
-            # repeat queues nothing more.
-            second = repair()
-            assert second["evaluated_count"] == 2
-            recoveries = jobs(second["job_ids"])
-            assert [row[1:] for row in recoveries] == [
-                (
-                    "pending",
-                    f"reconcile:reset-recovery:{row[0]}",
-                    {**row[3], "recovers_job_id": row[0]},
+                season = text(
+                    connection.execute(
+                        "SELECT current_league_season_id FROM legend_season_anchors"
+                        " WHERE state = 'confirmed'"
+                    ).fetchone()[0]
                 )
-                for row in failed
-            ]
-            assert [row[1] for row in jobs(first["job_ids"])] == ["failed", "failed"]
-            assert repair() == {
+            earlier_day = DAY_START - timedelta(days=2)
+            # This rebuilds its own day and every later saved day of the
+            # Season, so it reaches the Live day although it starts earlier.
+            season_rebuild = {
+                "player_id": player_id,
+                "ranked_day_start": iso(earlier_day),
+                "last_ranked_day_start": iso(earlier_day),
+                "recalculate_season": season,
+            }
+            idle = {
                 "job_ids": [],
                 "evaluated_count": 0,
                 "failure_reasons": {},
                 "failed_blockers": [],
             }
 
-            # A recovery that fails too is reported, not queued again.
+            # An older failed repair that needs investigating.
+            blocker = add_job("reconcile:reset-baseline:investigate", season_rebuild)
+            set_status([blocker], "failed", "invalid_work_input")
+            reported_blocker = {
+                "job_id": blocker,
+                "player_id": player_id,
+                "ranked_day_start": iso(earlier_day),
+                "failure_category": "invalid_work_input",
+            }
+
+            first = repair()
+            assert first["evaluated_count"] == 2 and len(first["job_ids"]) == 2
+            set_status(first["job_ids"], "failed", "lease_expired_max_attempts")
+            assert day_state() == "Live"
+            failed = jobs(first["job_ids"])
+
+            # Other work whose rebuild reaches that day is left to finish.
+            active = add_job("test:active", season_rebuild)
+            assert repair() == idle
+            set_status([active], "cancelled")
+
+            # Both failed repairs rebuild the Live day, so one batch queues
+            # only the first again, with its original inputs; the failed jobs
+            # keep their history and a repeat queues nothing more.
+            second = repair(max_jobs=3)
+            assert second["evaluated_count"] == 1
+            assert second["failed_blockers"] == [reported_blocker]
+            recoveries = jobs(second["job_ids"])
+            assert [row[1:] for row in recoveries] == [
+                (
+                    "pending",
+                    f"reconcile:reset-recovery:{failed[0][0]}",
+                    {**failed[0][3], "recovers_job_id": failed[0][0]},
+                )
+            ]
+            assert [row[1] for row in jobs(first["job_ids"])] == ["failed", "failed"]
+            assert repair() == idle
+
+            # Older blockers do not use up the batch: the other failed repair
+            # is still queued once the first recovery has failed too.
             set_status([recoveries[0][0]], "failed", "lease_expired_max_attempts")
-            set_status([recoveries[1][0]], "cancelled")
+            third = repair(max_jobs=1)
+            assert third["evaluated_count"] == 1
+            assert third["failed_blockers"] == [reported_blocker]
+            assert [row[2] for row in jobs(third["job_ids"])] == [
+                f"reconcile:reset-recovery:{failed[1][0]}"
+            ]
+
+            # A recovery that fails too is reported, not queued again.
+            set_status(third["job_ids"], "cancelled")
             assert repair() == {
-                "job_ids": [],
-                "evaluated_count": 0,
-                "failure_reasons": {},
+                **idle,
                 "failed_blockers": [
+                    reported_blocker,
                     {
                         "job_id": recoveries[0][0],
                         "player_id": player_id,
                         "ranked_day_start": failed[0][3]["ranked_day_start"],
                         "failure_category": "lease_expired_max_attempts",
-                    }
+                    },
                 ],
             }
             set_status([recoveries[0][0]], "pending")
@@ -593,6 +636,6 @@ def test_republication_retries_failed_reset_repair_left_live(
                 == "processed"
             )
             assert day_state() != "Live"
-            assert repair()["failed_blockers"] == []
+            assert repair() == idle
         finally:
             database.close()
