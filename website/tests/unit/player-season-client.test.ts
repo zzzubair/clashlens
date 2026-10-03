@@ -197,24 +197,30 @@ describe("historical player-season client boundary", () => {
   );
 
   it.each([
-    [false, 5000],
-    [true, null],
+    // October day 1 after the player's Season reset.
+    ["2026-10-05", 1, "1791176400", false, "2026-10-05T20:00:00Z", 5000],
+    // October day 1 still read from a September profile.
+    ["2026-10-05", 1, "1788757200", true, "2026-10-05T20:00:00Z", null],
+    // September day 28 read from a September profile, seen at October 5 05:10.
+    ["2026-10-04", 28, "1788757200", true, "2026-10-04T23:00:00Z", 5000],
   ])(
-    "uses an in-day profile as a day 1 total only after the Season reset: pending=%s",
-    async (pending, expected) => {
-      // Day 1 with all sixteen battles, read before any stored starting total.
+    "uses an in-day profile as a day total only for its own Season: %s day %s",
+    async (date, dayNumber, seasonId, pending, observedAt, expected) => {
+      // A day with all sixteen battles, read before any stored starting total.
       const event = (id: string, change: number) => ({
         battle_id: id,
-        battle_timestamp: "2026-10-05T13:00:00Z",
+        battle_timestamp: `${date}T13:00:00Z`,
         opponent: { tag: "#2PY", name: "Opponent" },
         stars: 3,
         destruction_percentage: 100,
         trophy_change: change,
       });
       const day = {
-        ranked_day_start: "2026-10-05T05:00:00Z",
-        ranked_day_end: "2026-10-06T05:00:00Z",
-        season_day_number: 1,
+        ranked_day_start: `${date}T05:00:00Z`,
+        ranked_day_end: new Date(Date.parse(`${date}T05:00:00Z`) + 86_400_000)
+          .toISOString()
+          .replace(".000Z", "Z"),
+        season_day_number: dayNumber,
         state: "Live",
         confidence: "partial",
         completeness: { state: "partial", reason: "No saved reset total." },
@@ -236,7 +242,8 @@ describe("historical player-season client boundary", () => {
         name: "Nova",
         trophies: 5000,
         season_reset_pending: pending,
-        observed_at: "2026-10-05T20:00:00Z",
+        current_league_season_id: seasonId,
+        observed_at: observedAt,
         screen_ready: {
           current_day: day,
           recent_days: [day],
@@ -245,7 +252,7 @@ describe("historical player-season client boundary", () => {
           data_quality: [],
           provenance: {
             source: "test",
-            observed_at: "2026-10-05T20:00:00Z",
+            observed_at: observedAt,
             freshness: "fresh",
             confidence: "partial",
             coverage: "partial",

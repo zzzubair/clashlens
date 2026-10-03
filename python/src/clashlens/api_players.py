@@ -371,6 +371,7 @@ def get_player_page(
             "name": _text(row[3]),
             "trophies": int(row[4]),
             "season_reset_pending": season_reset_pending,
+            "current_league_season_id": _text(row[12]),
             "eligibility": _text(row[2]),
             "active": bool(row[1]),
             "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",

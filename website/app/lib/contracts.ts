@@ -133,6 +133,8 @@ export interface PlayerProfile {
   trophies: number;
   /** The profile still names an earlier Season, so `trophies` predates this player's Season reset. */
   seasonResetPending?: boolean;
+  /** The Season the profile names; its trophies count only for that Season's days. */
+  currentLeagueSeasonId?: string | null;
   freshness: Freshness;
   battleHistoryUpdatedAt?: string | null;
   confidence: ConfidenceState;

@@ -175,6 +175,7 @@ describe("server-only Python client response boundary", () => {
         tag: "#2PP",
         name: "Angela",
         trophies,
+        current_league_season_id: "1788757200",
         observed_at: observedAt,
         screen_ready: {
           current_day: day,
