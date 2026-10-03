@@ -258,7 +258,7 @@ def test_concurrent_provisional_recording_and_replay_preserve_verdict(
                 reset_settlement.record_provisional_boundary(
                     connection, player_id=player, boundary_at=DAY_END,
                     sweep_id=sweep, early_baseline_id=baseline,
-                    early_state="complete", reasons=[],
+                    early_state="complete", reasons=[], observation_id=None,
                 )
 
         writers = [threading.Thread(target=record) for _ in range(2)]
