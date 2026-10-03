@@ -177,11 +177,11 @@ existing eligibility processing locally; live import and capacity are pending.
   transcript retention and support staffing. Alert thresholds, including
   job/upload stalls and missed Reset publication, are defined in
   [alert conditions](deployment.md#alert-conditions).
-- [#61](https://github.com/zzzubair/clashlens/issues/61) stays post-launch. Its
-  14-day cross-season comparison needs a retention review: compact history does
-  not retain all requested daily destruction/star data, and seven-day detail
-  retirement can remove part of that window. Do not promise those comparisons
-  or extend storage silently as part of launch.
+- [#61](https://github.com/zzzubair/clashlens/issues/61) group comparison was
+  brought forward without extending storage; see the accounts row above for
+  how cleaned-up days are shown. Compact history still does not retain all
+  daily destruction/star data, so do not promise full 14-day cross-season
+  detail or extend storage silently.
 - Jev remains a later experiment for comparing named army types by usage and
   three-star rate. One main type per army, uncertain results unclassified,
   current season only. A labeled evaluation, reusable classifications and

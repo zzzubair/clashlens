@@ -155,7 +155,9 @@ def get_group_comparison(
 def _current(profile: Any, now: datetime, freshness_seconds: int) -> dict[str, Any]:
     if profile is None or profile[3] is None or profile[4] is None:
         return {
-            "name": None if profile is None or profile[2] is None else _text(profile[2]),
+            "name": None
+            if profile is None or profile[2] is None
+            else _text(profile[2]),
             "trophies": None,
             "observed_at": None,
             "age_seconds": None,

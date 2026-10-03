@@ -269,7 +269,10 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
             )
             assert other.status_code == 201
             other_id = api_accounts.resolve_account(database, "google", "other-subject")
-            assert compare(database, other_id.internal_id, group.payload["group_id"]) is None
+            assert (
+                compare(database, other_id.internal_id, group.payload["group_id"])
+                is None
+            )
 
             tags = sorted({f"#P{a}{b}" for a in "0289PYLQ" for b in "GRJ"})[:21]
             large = create_group(database, account_id, tags, name="Clan")

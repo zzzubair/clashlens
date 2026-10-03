@@ -260,7 +260,11 @@ def test_group_comparison_reads_only_the_owning_accounts_group(accounts):
                 f"/v1/account/groups/{group_id}/comparison?days=7&account_id=1",
                 headers={"X-Account-Id": "1", "X-User-Id": other["username"]},
             )
-            for group_id in (other["watch_id"], other["group"]["group_id"], str(uuid4()))
+            for group_id in (
+                other["watch_id"],
+                other["group"]["group_id"],
+                str(uuid4()),
+            )
         ]
         assert {response.status_code for response in responses} == {404}
         assert all(
