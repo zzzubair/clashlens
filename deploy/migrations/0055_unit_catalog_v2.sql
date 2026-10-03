@@ -27,32 +27,38 @@ ON CONFLICT (version) DO NOTHING;
 -- record are skipped: re-decoding them would queue statistics work the
 -- publication guard rejects, rolling back the whole batch. Those historical
 -- days are not repaired here; repairing them is a possible follow-up.
-WITH numbered AS (
-    SELECT id, (row_number() OVER (ORDER BY id) - 1) / 100 AS batch
-    FROM legend_battles AS battle
+-- Each condition depends only on the battle's day, so it is checked once per
+-- day: checked per battle it took 12 minutes 41 seconds on production on
+-- 2026-10-03.
+WITH days AS (
+    SELECT day.ranked_day_start
+    FROM (SELECT DISTINCT ranked_day_start FROM legend_battles) AS day
     WHERE EXISTS (
         SELECT 1 FROM ranked_day_versions AS ranked
-        WHERE ranked.ranked_day_start = battle.ranked_day_start
+        WHERE ranked.ranked_day_start = day.ranked_day_start
     )
     AND NOT EXISTS (
         SELECT 1 FROM ranked_day_versions AS ranked
         JOIN season_detail_retirements AS retirement
           ON retirement.official_season_id = ranked.official_season_id
-        WHERE ranked.ranked_day_start = battle.ranked_day_start
+        WHERE ranked.ranked_day_start = day.ranked_day_start
           AND retirement.status IN ('finalized', 'retired')
     )
     AND NOT EXISTS (
         SELECT 1 FROM ranked_day_versions AS ranked
-        WHERE ranked.ranked_day_start = battle.ranked_day_start
+        WHERE ranked.ranked_day_start = day.ranked_day_start
           AND ranked.state = 'Complete'
           AND ranked.coverage_complete
           AND NOT EXISTS (
               SELECT 1 FROM boundary_publication_generations AS generation
-              WHERE generation.boundary_at = battle.ranked_day_start + interval '24 hours'
+              WHERE generation.boundary_at = day.ranked_day_start + interval '24 hours'
                 AND generation.snapshot_state <> 'superseded'
                 AND generation.army_state <> 'superseded'
           )
     )
+), numbered AS (
+    SELECT id, (row_number() OVER (ORDER BY id) - 1) / 100 AS batch
+    FROM legend_battles AS battle JOIN days USING (ranked_day_start)
 ), batches AS (
     SELECT batch, jsonb_agg(id ORDER BY id) AS battle_ids,
            min(id) AS first_id, max(id) AS last_id
