@@ -8,7 +8,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary
+from . import boundary, reset_settlement
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -574,6 +574,15 @@ def _evaluate_reset_baseline(
         assert inserted is not None
         evidence_id = int(inserted[0])
 
+    reset_settlement.record_provisional_boundary(
+        connection,
+        player_id=int(player_id),
+        boundary_at=boundary_at,
+        sweep_id=int(sweep_id),
+        early_baseline_id=evidence_id,
+        early_state=state,
+        reasons=reasons,
+    )
     if state in {"complete", "failed"} and ends_day:
         _record_boundary_baseline(database, 
             connection,
