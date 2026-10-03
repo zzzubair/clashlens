@@ -13,7 +13,8 @@ the moved one. Every battle that gained or lost a side compares its two
 reports again on each run, whoever is rebuilt.
 
 The ``republish-current-season`` command queues these rebuilds first, then
-the other current-Season repairs and republications.
+the other current-Season repairs and republications. With ``--campaign`` it
+instead previews, registers or activates a Season's repair campaign.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import reset_baselines
+from . import domain_repair, reset_baselines
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -301,18 +302,37 @@ def add_republish_command(
         type=bounded_int("republication batch size", 1, 1000),
         default=100,
     )
+    # With --campaign, run one action of a Season's repair campaign instead
+    # of queueing a batch; see domain_repair.
+    republish_current_season.add_argument("--campaign", choices=domain_repair.ACTIONS)
+    republish_current_season.add_argument("--season", type=_season_id)
 
 
-def run_republish_command(database_url: str, max_jobs: int) -> int:
-    """Queue one batch and print its report as the CLI command."""
+def _season_id(value: str) -> str:
+    if not value.isdigit():
+        raise argparse.ArgumentTypeError("season must be an official Season ID")
+    return value
+
+
+def run_republish_command(database_url: str, arguments: argparse.Namespace) -> int:
+    """Queue one batch, or run one campaign action, and print its report."""
+    if (arguments.campaign is None) != (arguments.season is None):
+        raise SystemExit("--campaign and --season go together")
     database = Database(database_url)
     try:
-        report = enqueue_current_season_republication(database, max_jobs=max_jobs)
-        report["enqueued_count"] = len(report["job_ids"])
-        print(json.dumps(report, sort_keys=True))
+        if arguments.campaign is not None:
+            report = domain_repair.run_campaign_command(
+                database, arguments.campaign, arguments.season
+            )
+        else:
+            report = enqueue_current_season_republication(
+                database, max_jobs=arguments.max_jobs
+            )
+            report["enqueued_count"] = len(report["job_ids"])
+        print(json.dumps(report, sort_keys=True, default=str))
     finally:
         database.close()
-    return 0
+    return 0 if "refused" not in report else 1
 
 
 def enqueue_current_season_republication(

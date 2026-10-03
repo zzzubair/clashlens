@@ -461,6 +461,19 @@ for Top 100 and 0.93 s for all tracked players.
 Check the Armies page against the
 [current-season coverage and population rules](domain.md#population-filters-and-lenses).
 
+**Repair campaign:** `--campaign preview --season <Season ID>` lists, without
+writing anything, every report, decode, player day and Reset publication of
+that Season that the 2-star/55% payout, five-minute day move, catalogue v2
+decodes and accepted Reset settlements change, and which are excluded (raw
+response gone, Season finalized, correction window closed). `--campaign
+register` saves that list as a dormant campaign that holds nothing and queues
+nothing. `--campaign activate` refuses until every repair stage is installed;
+an active campaign holds its listed Reset publications until each is done.
+Every campaign write for a Season is refused from its end plus seven days
+(September 2026: from 2026-10-12 05:00 UTC). On 2026-10-03 a September
+preview read 590 reports, 102,381 battles needing decodes in 4,653 batches,
+2,032 player days and 10 Resets, about 1.7 MB of rows, in 31 seconds.
+
 ### Raw-response cleanup failed
 
 Cleanup deletes old raw responses on its own timer; see

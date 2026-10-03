@@ -529,7 +529,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if arguments.command == "republish-current-season":
             return battle_day_repair.run_republish_command(
-                _database_url(arguments), arguments.max_jobs
+                _database_url(arguments), arguments
             )
         if arguments.command == "materialize-season-summaries":
             import psycopg
