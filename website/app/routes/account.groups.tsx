@@ -349,6 +349,12 @@ export default function GroupsRoute() {
               return (
                 <li key={group.groupId} className="group-card">
                   <h3>{group.name}</h3>
+                  <a
+                    className="button button-primary"
+                    href={`/account/groups/${group.groupId}`}
+                  >
+                    Compare players
+                  </a>
                   {group.tags.length > 0 ? (
                     <ul className="player-link-list">
                       {group.tags.map((tag) => (

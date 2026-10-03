@@ -1371,6 +1371,10 @@ h3 {
   margin: 0;
 }
 
+.group-card > .button {
+  justify-self: start;
+}
+
 .inline-form {
   margin: 0;
 }

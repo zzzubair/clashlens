@@ -1,0 +1,294 @@
+/* Private group comparison: one row per player, cards on a phone. */
+.compare-page {
+  width: min(100% - 2rem, 84rem);
+}
+
+.compare-head h1 {
+  margin: 0.2rem 0 0.4rem;
+}
+
+.compare-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 1rem;
+}
+
+.compare-notice {
+  margin: 1rem 0 0;
+  padding: 0.7rem 0.9rem;
+  border-left: 3px solid var(--cl-action);
+  background: var(--cl-panel);
+}
+
+.compare-board {
+  margin-top: 1.25rem;
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  background: var(--cl-surface);
+  box-shadow: var(--cl-shadow);
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.compare-table thead th {
+  padding: 0.7rem 0.8rem;
+  color: var(--cl-muted);
+  background: var(--cl-panel);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  vertical-align: bottom;
+}
+
+.compare-table tbody :is(th, td) {
+  padding: 0.8rem;
+  border-top: 1px solid var(--cl-border);
+  font-weight: 400;
+  vertical-align: top;
+}
+
+.compare-table tbody tr.compare-you {
+  background: color-mix(in srgb, var(--cl-action) 7%, var(--cl-surface));
+}
+
+.compare-table tbody tr.compare-you th {
+  box-shadow: inset 3px 0 0 var(--cl-action);
+}
+
+.compare-name {
+  display: block;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.compare-tag {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.4rem;
+  align-items: center;
+  color: var(--cl-muted);
+  font-family: var(--cl-font-mono);
+  font-size: 0.78rem;
+}
+
+.compare-badge {
+  padding: 0 0.35rem;
+  color: var(--cl-on-action);
+  background: var(--cl-action);
+  font-family: var(--cl-font);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.compare-badge-note,
+.compare-status {
+  font-family: var(--cl-font);
+  font-size: 0.78rem;
+}
+
+.compare-status {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--cl-action-text);
+}
+
+.compare-number {
+  display: block;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.compare-up {
+  color: var(--cl-positive);
+}
+
+.compare-down {
+  color: var(--cl-negative);
+}
+
+.compare-sub {
+  display: block;
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+}
+
+.compare-stale {
+  color: var(--cl-action-text);
+  font-weight: 600;
+}
+
+.compare-empty {
+  display: block;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.star-split {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0 0.45rem;
+}
+
+.trend {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  width: min(100%, 9rem);
+  height: 2.4rem;
+  margin-top: 0.4rem;
+  background: linear-gradient(var(--cl-outline), var(--cl-outline)) center / 100% 1px
+    no-repeat;
+}
+
+.trend-day {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 3px;
+}
+
+.trend-day .day-bar {
+  position: absolute;
+  inset-inline: 0;
+}
+
+.trend-up .day-bar {
+  bottom: 50%;
+}
+
+.trend-down .day-bar {
+  top: 50%;
+}
+
+.trend-day .day-missing {
+  top: calc(50% - 3px);
+  height: 6px;
+}
+
+.day-bar {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  vertical-align: -0.1rem;
+  background: var(--cl-positive);
+}
+
+.trend-down .day-complete,
+.trend-down .day-correcting {
+  background: var(--cl-negative);
+}
+
+.trend-day .day-bar {
+  width: auto;
+}
+
+.day-correcting {
+  opacity: 0.55;
+  outline: 1px dashed currentcolor;
+  outline-offset: -1px;
+}
+
+.day-partial {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--cl-muted) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+.trend .day-partial {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--cl-muted) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+.day-missing {
+  border: 1px dotted var(--cl-muted);
+  background: transparent;
+}
+
+.compare-key {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 0.8rem 1.5rem;
+  margin: 1.5rem 0 0;
+}
+
+.compare-key dt {
+  font-weight: 700;
+}
+
+.compare-key dd {
+  margin: 0.15rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.88rem;
+}
+
+/* On a phone each player becomes a card with labelled values. */
+@media (max-width: 52rem) {
+  .compare-page {
+    width: min(100% - 2rem, 84rem);
+  }
+
+  .compare-board {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .compare-table,
+  .compare-table tbody {
+    display: block;
+  }
+
+  .compare-table thead {
+    display: none;
+  }
+
+  .compare-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-bottom: 0.9rem;
+    border: 1px solid var(--cl-border);
+    background: var(--cl-surface);
+    box-shadow: var(--cl-raise);
+  }
+
+  .compare-table tbody :is(th, td) {
+    min-width: 0;
+    padding: 0.6rem 0.75rem;
+    border-top: 1px solid var(--cl-border);
+  }
+
+  .compare-table tbody th {
+    grid-column: 1 / -1;
+    border-top: 0;
+    background: var(--cl-panel);
+  }
+
+  .compare-table tbody td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.15rem;
+    color: var(--cl-muted);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .compare-table tbody td:nth-child(4),
+  .compare-table tbody td:last-child {
+    grid-column: 1 / -1;
+  }
+}

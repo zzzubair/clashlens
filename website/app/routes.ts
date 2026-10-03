@@ -21,6 +21,7 @@ export default [
   route("account/saved-players", "routes/account.saved-players.tsx"),
   route("account/verify-player", "routes/account.verify-player.tsx"),
   route("account/groups", "routes/account.groups.tsx"),
+  route("account/groups/:groupId", "routes/account.groups.$groupId.tsx"),
   route("users/:username", "routes/users.$username.tsx"),
   route("healthz", "routes/healthz.ts"),
 ] satisfies RouteConfig;

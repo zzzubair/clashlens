@@ -227,6 +227,52 @@ def test_guessed_group_ids_and_replayed_requests_cannot_read_or_change_other_acc
         assert_private_state(client, other)
 
 
+def test_group_comparison_reads_only_the_owning_accounts_group(accounts):
+    client, owners = accounts
+    shared = [f"#2Y{a}{b}" for a in "0289P" for b in "QGR"]
+    assert len(shared) == 15
+    for owner in owners:
+        created = call(
+            client,
+            owner,
+            "POST",
+            "/v1/account/groups",
+            {"name": f"Watch {owner['username']}", "tags": [*shared, owner["tag"]]},
+        )
+        assert created.status_code == 201
+        owner["watch_id"] = created.json()["group_id"]
+    for owner, other in (owners, owners[::-1]):
+        own = call(
+            client, owner, "GET", f"/v1/account/groups/{owner['watch_id']}/comparison"
+        )
+        assert own.status_code == 200
+        assert own.json()["name"] == f"Watch {owner['username']}"
+        assert sorted(player["tag"] for player in own.json()["players"]) == sorted(
+            [*shared, owner["tag"]]
+        )
+        # Another account's group ID reads exactly like an ID nobody has, even
+        # with forged account hints or a shared set of public player tags.
+        responses = [
+            call(
+                client,
+                owner,
+                "GET",
+                f"/v1/account/groups/{group_id}/comparison?days=7&account_id=1",
+                headers={"X-Account-Id": "1", "X-User-Id": other["username"]},
+            )
+            for group_id in (other["watch_id"], other["group"]["group_id"], str(uuid4()))
+        ]
+        assert {response.status_code for response in responses} == {404}
+        assert all(
+            response.json() == {"error": "group_not_found"} for response in responses
+        )
+        assert other["username"] not in own.text
+        theirs = call(
+            client, other, "GET", f"/v1/account/groups/{other['watch_id']}/comparison"
+        )
+        assert theirs.json()["name"] == f"Watch {other['username']}"
+
+
 def test_saved_tag_mutations_cannot_reveal_or_change_other_account(accounts):
     client, owners = accounts
     for owner, other in (owners, owners[::-1]):
@@ -271,6 +317,7 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
             ("POST", "/v1/account/groups", {"name": "Intruder", "tags": []}),
             ("PATCH", group_path, {"name": "Intruder", "tags": []}),
             ("DELETE", group_path, None),
+            ("GET", f"{group_path}/comparison", None),
             ("POST", "/v1/account/exports", {"format": "google_sheets_scaffold"}),
             ("GET", f"/v1/account/exports/{uuid4()}", None),
         ]
