@@ -61,7 +61,24 @@ python -m clashlens.cli retire-season-detail --season-id 1785714000 --max-rows 5
 python -m clashlens.cli retire-season-detail --season-id 1785714000 --max-rows 500 --apply
 ```
 
-The default is preview only. Finalization verifies the season ended
+The default is preview only. Both commands refuse until seven days after
+the exact Season end, the end of its 28th Legend day at the 05:00 UTC
+Reset; September's Season `1788757200` ends October 5 and can close
+from October 12 at 05:00 UTC. The refusal reports `status: blocked`,
+`reason: season_close_wait`, `eligible_at` and `applied: false`, and
+writes nothing. Apply reruns every check rather than trusting a preview.
+Retirement rechecks the stored window and the wait on every run, using
+the database clock, so a `finalized` record written early by older code
+cannot start deletion. The exact window comes from the confirmed current
+and previous Season, and for older Seasons from the same 28-day calendar
+counted back from them. A Season whose window cannot be established, or
+a stored window that is missing or disagrees with it, blocks; every
+blocked result carries `eligible_at` whenever the window is known. Player
+and army summaries still build and refresh as soon as the Season ends;
+only closing waits. The wait is a clock check only: it does not yet
+prove that every late battle, replay or correction has been processed.
+
+Finalization verifies the season ended
 under the same completed-season gate, every required player summary and
 every army lens/category matches its current projection (complete or
 explicitly partial summaries are accepted; missing rows, stale digests,

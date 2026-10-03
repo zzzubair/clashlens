@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,9 @@ TERMINAL_JOB_STATUSES = ("complete", "failed", "cancelled")
 TERMINAL_REPLAY_STATUSES = ("complete", "failed", "cancelled")
 TERMINAL_CORRECTION_STATES = ("finalized", "terminal")
 ACTIVE_GENERATION_STATES = ("pending", "ready", "building")
+# Late battles, replays and corrections land for a week after the Season
+# ends; finalization stops corrections and retirement deletes detail.
+SEASON_CLOSE_WAIT = timedelta(days=7)
 
 _MIGRATION_RELATIONS = ("clash_lens_schema_migrations",)
 _RETIREMENT_GATE = "clashlens:season-retirement-global"
@@ -174,6 +177,38 @@ def filter_live_rows(rows: list[Any], day_of: Any, ranges: list[tuple[Any, Any]]
     return kept
 
 
+def _aware_utc(now: datetime) -> datetime:
+    if not isinstance(now, datetime) or now.utcoffset() is None:
+        raise ValueError("season close time must be timezone-aware")
+    return now.astimezone(UTC)
+
+
+def season_close_block(
+    canonical: tuple[datetime, datetime] | None, stored: Any, now: datetime
+) -> tuple[dict[str, str], str | None]:
+    """Return the known eligible time and why a Season cannot close yet.
+
+    ``canonical`` is the exact Season window from confirmed timing, or
+    None when it cannot be established. ``stored`` is the window a record
+    holds, which older code may have written early; it must match exactly,
+    and a finalized record is not evidence that the wait passed. Closing
+    waits until seven days after the Season end, equality included. This
+    is the clock check only: every other check still applies.
+    """
+    now_utc = _aware_utc(now)
+    if canonical is None:
+        return {}, "unknown_season_boundary"
+    eligible_at = canonical[1].astimezone(UTC) + SEASON_CLOSE_WAIT
+    eligible = {"eligible_at": eligible_at.isoformat()}
+    if None in tuple(stored):
+        return eligible, "unknown_season_boundary"
+    if tuple(stored) != tuple(canonical):
+        return eligible, "conflicting_season_boundary"
+    if now_utc < eligible_at:
+        return eligible, "season_close_wait"
+    return eligible, None
+
+
 def _digest_pairs(pairs: list[tuple[str, str]]) -> str:
     canonical = "\n".join(f"{key}:{digest}" for key, digest in sorted(pairs))
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -185,9 +220,10 @@ def finalize_season_detail(
     """Verify a completed season and persist the retirement fence.
 
     Preview (``apply=False``) runs every check without writing. Apply
-    inserts the ``finalized`` record that fences writers; detail deletion
-    happens separately in :func:`retire_season_detail` so a crash between
-    the two is restart-safe.
+    reruns them and inserts the ``finalized`` record that fences writers;
+    detail deletion happens separately in :func:`retire_season_detail` so
+    a crash between the two is restart-safe. Both wait for
+    :data:`SEASON_CLOSE_WAIT` after the Season end.
     """
     from .army_history import HISTORY_CATEGORIES
     from .army_season_summaries import LENSES, _project_lens
@@ -196,7 +232,7 @@ def finalize_season_detail(
     from .season_summaries import _project, _season_completed
 
     season_id = _check_season_id(season_id)
-    now_utc = now.astimezone(UTC)
+    now_utc = _aware_utc(now)
     acquire_retirement_writer(connection)
     _lock_season(connection, season_id)
     if _table_exists(connection, "season_detail_retirements"):
@@ -210,6 +246,19 @@ def finalize_season_detail(
             (season_id,),
         ).fetchone()
         if existing is not None:
+            close_at, reason = season_close_block(
+                _canonical_season_bounds(connection, season_id), existing[1:3], now_utc
+            )
+            if reason is not None:
+                return {
+                    "season_id": season_id,
+                    "status": "blocked",
+                    "reason": reason,
+                    **close_at,
+                    "existing_status": _text(existing[0]),
+                    "already_finalized": True,
+                    "applied": False,
+                }
             return {
                 "season_id": season_id,
                 "status": _text(existing[0]),
@@ -223,24 +272,28 @@ def finalize_season_detail(
             "already_finalized": False,
             "applied": False,
         }
+    bounds = _canonical_season_bounds(connection, season_id)
+    close_at, close_reason = season_close_block(bounds, bounds, now_utc)
     completed, reason = _season_completed(connection, season_id, now_utc)
     if not completed:
         return {
             "season_id": season_id,
             "status": "not_completed",
             "reason": reason,
+            **close_at,
             "already_finalized": False,
             "applied": False,
         }
-    season_start, season_end = _canonical_season_bounds(connection, season_id, now_utc)
-    if season_start is None or season_end is None or not season_end <= now_utc:
+    if close_reason is not None:
         return {
             "season_id": season_id,
             "status": "blocked",
-            "reason": "unknown_season_boundary",
+            "reason": close_reason,
+            **close_at,
             "already_finalized": False,
             "applied": False,
         }
+    season_start, season_end = bounds
     player_ids = [
         int(row[0])
         for row in connection.execute(
@@ -256,6 +309,7 @@ def finalize_season_detail(
             "season_id": season_id,
             "status": "blocked",
             "reason": "no_history",
+            **close_at,
             "already_finalized": False,
             "applied": False,
         }
@@ -327,6 +381,7 @@ def finalize_season_detail(
             "season_id": season_id,
             "status": "blocked",
             "reason": "verification_failed",
+            **close_at,
             "missing_player_summaries": missing_players[:50],
             "missing_player_count": len(missing_players),
             "stale_player_summaries": stale_players[:50],
@@ -379,11 +434,19 @@ def finalize_season_detail(
     }
 
 
-def _canonical_season_bounds(
-    connection: Any, season_id: str, now: datetime
-) -> tuple[Any, Any]:
-    """Return the exact 28-day window, never the observed log envelope."""
-    from .domain import SEASON_ANCHOR_RULE_VERSION, SEASON_DURATION
+def _canonical_season_bounds(connection: Any, season_id: str) -> tuple[datetime, datetime] | None:
+    """Return the exact 28-day window, never the observed log envelope.
+
+    The confirmed anchor gives the current and previous Season; an older
+    Season's canonical id is its start on the same 28-day calendar. A
+    later, misaligned or noncanonical id is unknown.
+    """
+    from .domain import (
+        SEASON_ANCHOR_RULE_VERSION,
+        SEASON_DURATION,
+        DomainRuleError,
+        _canonical_season_start,
+    )
 
     anchor = connection.execute(
         """
@@ -391,17 +454,22 @@ def _canonical_season_bounds(
                current_start, previous_start
         FROM legend_season_anchors
         WHERE state = 'confirmed' AND anchor_rule_version = %s
-          AND (current_league_season_id = %s OR previous_league_season_id = %s)
         ORDER BY current_start DESC LIMIT 1
         """,
-        (SEASON_ANCHOR_RULE_VERSION, season_id, season_id),
+        (SEASON_ANCHOR_RULE_VERSION,),
     ).fetchone()
     if anchor is None:
-        return None, None
+        return None
     for anchored_id, start in ((anchor[0], anchor[2]), (anchor[1], anchor[3])):
-        if _text(anchored_id) == season_id and start is not None:
+        if _text(anchored_id) == season_id:
             return start, start + SEASON_DURATION
-    return None, None
+    try:
+        start = _canonical_season_start(season_id)
+    except DomainRuleError:
+        return None
+    if start >= anchor[3] or (anchor[3] - start) % SEASON_DURATION:
+        return None
+    return start, start + SEASON_DURATION
 
 
 def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -> dict[str, int]:
@@ -520,7 +588,12 @@ def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -
 
 
 def retire_season_detail(
-    connection: Any, season_id: str, *, max_rows: int = 500, apply: bool = False
+    connection: Any,
+    season_id: str,
+    *,
+    max_rows: int = 500,
+    apply: bool = False,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Delete finalized-season detail in bounded, restartable batches.
 
@@ -528,11 +601,16 @@ def retire_season_detail(
     Apply deletes daily logs, army facts, then exclusively-retired battle
     detail, updates progress, and marks the season ``retired`` once every
     counter reaches zero. Summaries and protected records are never
-    deleted here.
+    deleted here. Every call rechecks the stored window and the close
+    wait against ``now``, the database clock by default.
     """
     season_id = _check_season_id(season_id)
     max_rows = _check_batch(max_rows, "retirement batch size")
+    if now is not None:
+        now = _aware_utc(now)
     _lock_season(connection, season_id)
+    if now is None:
+        now = _aware_utc(connection.execute("SELECT clock_timestamp()").fetchone()[0])
     if not _table_exists(connection, "season_detail_retirements"):
         return {"season_id": season_id, "status": "not_finalized", "applied": False}
     record = connection.execute(
@@ -546,11 +624,16 @@ def retire_season_detail(
     if record is None:
         return {"season_id": season_id, "status": "not_finalized", "applied": False}
     status, season_start, season_end = _text(record[0]), record[1], record[2]
-    if season_start is None or season_end is None:
+    close_at, reason = season_close_block(
+        _canonical_season_bounds(connection, season_id), (season_start, season_end), now
+    )
+    if reason is not None:
         return {
             "season_id": season_id,
             "status": "blocked",
-            "reason": "unknown_season_boundary",
+            "reason": reason,
+            **close_at,
+            "existing_status": status,
             "applied": False,
         }
     summary_check = _verify_stored_summaries(
@@ -561,6 +644,7 @@ def retire_season_detail(
             "season_id": season_id,
             "status": "blocked",
             "reason": summary_check["reason"],
+            **close_at,
             "applied": False,
         }
     eligible = _eligible_counts(connection, season_id, season_start, season_end, max_rows)
