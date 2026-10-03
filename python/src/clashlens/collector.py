@@ -318,15 +318,17 @@ class Collector:
                 intent.due_at or intent.cycle_at,
                 collector_work_id=intent.work_id,
                 eligibility_recheck=intent.eligibility_recheck,
+                expires_at=intent.expires_at,
             )
-            endpoints = (
-                (["profile"] if intent.profile_required else [])
-                if intent.kind == "discovery_profile"
-                else ["profile", "battle_log"]
+            endpoints = tuple(
+                endpoint
+                for endpoint, required in (
+                    ("profile", intent.profile_required),
+                    ("battle_log", intent.battle_log_required and intent.kind != "discovery_profile"),
+                    ("league_history", intent.league_history_required),
+                )
+                if required
             )
-            if intent.league_history_required:
-                endpoints.append("league_history")
-            endpoints = tuple(endpoints)
             lane = (
                 "reset"
                 if intent.kind == "reset_baseline"
@@ -336,10 +338,15 @@ class Collector:
                     else "ordinary"
                 )
             )
-        outcomes = await self.collect_player(work, lane=lane, endpoints=endpoints)
+        def expired() -> bool:
+            return work.expires_at is not None and datetime.now(UTC) >= work.expires_at
+
+        outcomes = ["failed"] if expired() else (
+            await self.collect_player(work, lane=lane, endpoints=endpoints)
+        )
         if "capacity_paused" in outcomes:
             return "capacity_paused"
-        if outcomes != ["recorded"] * len(endpoints):
+        if outcomes != ["recorded"] * len(endpoints) or expired():
             # A provider outage must not become a permanent player failure,
             # but once the API answers again a few retries are enough.
             retryable = "failed" not in outcomes and intent.kind in _RETRIED_INTENTS
@@ -401,13 +408,24 @@ class Collector:
                 if owned_reservation:
                     current_reservation.__enter__()
                 started_at = datetime.now(UTC)
+                expiry = asyncio.timeout(
+                    None
+                    if work.expires_at is None
+                    else (work.expires_at - started_at).total_seconds()
+                )
                 try:
-                    if endpoint == "global_player_rankings":
-                        response = await self.client.fetch_rankings(pool)
-                    else:
-                        response = await self.client.fetch_player(
-                            pool, work.normalized_tag, endpoint
-                        )
+                    try:
+                        async with expiry:
+                            if endpoint == "global_player_rankings":
+                                response = await self.client.fetch_rankings(pool)
+                            else:
+                                response = await self.client.fetch_player(
+                                    pool, work.normalized_tag, endpoint
+                                )
+                    except TimeoutError as timeout:
+                        if not expiry.expired():
+                            raise
+                        raise ProviderFailure("work_expired", retryable=False) from timeout
                 except ProviderFailure as error:
                     await self._database_call(
                         self.database.record_transport_failure,

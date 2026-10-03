@@ -21,6 +21,7 @@ class _Provider(BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.1"
     status = 503
+    redirect = False
     requests = 0
     lock = threading.Lock()
 
@@ -30,6 +31,12 @@ class _Provider(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         with type(self).lock:
             type(self).requests += 1
+        if type(self).redirect and not self.path.endswith("?hop"):
+            self.send_response(307)
+            self.send_header("Location", self.path + "?hop")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         status = type(self).status
         body = json.dumps({"tag": "#2PP"}).encode() if status == 200 else b"{}"
         self.send_response(status)
@@ -42,6 +49,7 @@ class _Provider(BaseHTTPRequestHandler):
 @pytest.fixture()
 def provider():
     _Provider.status = 503
+    _Provider.redirect = False
     _Provider.requests = 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -108,6 +116,27 @@ def test_recovery_probe_resumes_every_waiting_request(provider: str) -> None:
     assert set(statuses) <= {200, 503}
     assert not client.provider_outage.active
     assert pool.health() == {"configured": 1, "healthy": 1, "paused": 0}
+
+
+def test_recovery_probe_follows_its_own_redirect(provider: str) -> None:
+    client = OfficialApiClient(provider, allow_insecure_test_origin=True)
+    client.provider_outage = ProviderOutage(threshold=1, base_delay=0.1, max_delay=0.1)
+    pool = _pool()
+
+    async def run() -> int:
+        await client.fetch_player(pool, "#2PP", "profile")
+        assert client.provider_outage.active
+        # The provider is back but answers the probe through a redirect.
+        _Provider.status = 200
+        _Provider.redirect = True
+        response = await asyncio.wait_for(
+            client.fetch_player(pool, "#2PP", "profile"), 5
+        )
+        return response.http_status
+
+    assert asyncio.run(run()) == 200
+    assert not client.provider_outage.active
+    assert _Provider.requests == 3
 
 
 @pytest.mark.parametrize("status", [401, 403, 429])

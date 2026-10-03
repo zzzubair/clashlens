@@ -45,6 +45,7 @@ class CollectorWork:
     profile_fresh_until: datetime | None = None
     first_battle_pending: bool = False
     eligibility_recheck: bool = False
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,9 @@ class CollectorIntent:
     league_history_required: bool = False
     eligibility_recheck: bool = False
     profile_required: bool = True
+    battle_log_required: bool = True
+    # Reset requests stop when its Legend day ends; later answers prove nothing.
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,9 +554,14 @@ class CollectorDatabase:
             with connection.transaction():
                 connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (intent_time,))
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, work.kind <> 'discovery_profile' OR NOT EXISTS (SELECT 1 FROM collector_observations AS observation WHERE observation.id = work.profile_observation_id AND (observation.http_status BETWEEN 200 AND 299 OR observation.http_status = 404)) FROM collector_work AS work WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, sweep.boundary_at + interval '23 hours 55 minutes' FROM collector_work AS work LEFT JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
                     (intent_time, interactive, interactive, interactive, limit),
                 ).fetchall()
+
+                # A retry fetches again only what has no usable answer yet.
+                def unanswered(status: int | None) -> bool:
+                    return status is None or not (200 <= status < 300 or status == 404)
+
                 intents = [
                     CollectorIntent(
                         str(row[1]),
@@ -563,8 +572,10 @@ class CollectorDatabase:
                         due_at=row[2],
                         status=str(row[6]),
                         sweep_id=None if row[5] is None else int(row[5]),
-                        league_history_required=str(row[7]) == "pending",
-                        profile_required=bool(row[8]),
+                        league_history_required=str(row[7]) != "not_applicable" and unanswered(row[10]),
+                        profile_required=unanswered(row[8]),
+                        battle_log_required=unanswered(row[9]),
+                        expires_at=row[11],
                     )
                     for row in rows
                 ]

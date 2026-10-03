@@ -20,6 +20,9 @@ from .db import (
 )
 from .domain import SEASON_ANCHOR_RULE_VERSION
 
+# Reset work stops collecting at 04:55 UTC the next day, as in the collector.
+RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
+
 
 def _refresh_reset_baseline_evidence(
     database: Database,
@@ -351,9 +354,10 @@ def settle_failed_reset_work(database: Database, *, max_works: int = 100) -> int
     Work that failed before any response arrived has no processing job, and
     work whose last response was processed while it was still retrying holds
     only partial evidence. Either would hold its publication forever. This
-    re-checks such work from the newest two Resets, so a worker restart picks
-    it up again. Missing or failed responses make the evidence ``failed``; a
-    response collected later is never used in place of the missed one.
+    re-checks such work from every Reset, at most ``max_works`` at a time, so
+    a worker restart picks it up again however long it was stopped. Missing
+    or failed responses make the evidence ``failed``; a response collected
+    later is never used in place of the missed one.
     """
 
     with database.pool.connection() as connection:
@@ -365,8 +369,7 @@ def settle_failed_reset_work(database: Database, *, max_works: int = 100) -> int
                     SELECT work.id
                     FROM collector_reset_sweeps AS sweep
                     JOIN collector_work AS work ON work.sweep_id = sweep.id
-                    WHERE sweep.boundary_at > clock_timestamp() - interval '2 days'
-                      AND work.kind = 'reset_baseline'
+                    WHERE work.kind = 'reset_baseline'
                       AND work.status = 'failed'
                       AND COALESCE((
                           SELECT evidence.state
@@ -807,6 +810,9 @@ def _load_reset_endpoint_evidence(
             hard_failure = True
         if row[4] is None or row[4] < boundary_at:
             reasons.append(f"{endpoint}_stale")
+            hard_failure = True
+        elif row[4] >= boundary_at + RESET_COLLECTION_WINDOW:
+            reasons.append(f"{endpoint}_late")
             hard_failure = True
         if processing_outcome is None:
             missing = True

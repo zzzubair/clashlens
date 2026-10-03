@@ -677,7 +677,11 @@ class OfficialApiClient:
         async def start_when_provider_answers(start_request: StartRequest) -> None:
             # Check again after waiting for a start slot: the outage may have
             # begun meanwhile, and a request must not go out during the pause.
+            # The recovery probe's own redirect hops follow it without waiting.
             nonlocal probe
+            if probe:
+                await start_request()
+                return
             while True:
                 probe = await outage.admit()
                 await start_request()

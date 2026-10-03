@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -37,7 +38,10 @@ class _Provider(BaseHTTPRequestHandler):
             self.close_connection = True
             self.connection.shutdown(2)
             return
-        status = 503 if type(self).mode == "unavailable" else 200
+        unavailable = type(self).mode == "unavailable" or (
+            type(self).mode == "battle_log_unavailable" and "/battlelog" in self.path
+        )
+        status = 503 if unavailable else 200
         body = b'{"tag":"#2PP"}' if status == 200 else b"{}"
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -133,11 +137,13 @@ def test_reset_outage_stays_retryable_and_collects_once_the_api_returns(
         assert status == "complete" and profile_id and battle_log_id
 
 
+@pytest.mark.parametrize("days_ago", [1, 3])
 def test_reset_given_up_without_any_response_still_settles_its_publication(
-    database_url: str, tmp_path
+    database_url: str, tmp_path, days_ago: int
 ) -> None:
-    # The previous Reset: retrying stopped when its Legend day ended.
-    boundary = _latest_reset(datetime.now(UTC)) - timedelta(days=1)
+    # An earlier Reset: retrying stopped when its Legend day ended. However
+    # long the worker was stopped, its (re)start still settles the work.
+    boundary = _latest_reset(datetime.now(UTC)) - timedelta(days=days_ago)
     with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
         database, _sweep_id = _reset_work(connection_info, boundary)
         collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
@@ -170,6 +176,63 @@ def test_reset_given_up_without_any_response_still_settles_its_publication(
             ("failed", ["missing_profile_observation", "missing_battle_log_observation"])
         ]
         assert members == [("unavailable", "unavailable")]
+
+
+def test_reset_retry_keeps_the_profile_that_already_answered(
+    database_url: str, tmp_path
+) -> None:
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before the retry could be checked")
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, _sweep_id = _reset_work(connection_info, boundary)
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        _Provider.mode = "battle_log_unavailable"
+
+        assert _collect_reset(collector, database) == "retrying"
+        status, early_profile, failed_battle_log = _work(connection_info)
+        assert status == "waiting_retry" and early_profile and failed_battle_log
+
+        # The retry fetches only the battle log, so the profile collected
+        # closest to the Reset stays the one the work proves it with.
+        _Provider.mode = "answer"
+        assert _collect_reset(collector, database) == "complete"
+        status, profile_id, battle_log_id = _work(connection_info)
+        assert status == "complete"
+        assert profile_id == early_profile
+        assert battle_log_id not in (None, failed_battle_log)
+
+
+def test_reset_retry_waiting_out_a_pause_stops_when_its_legend_day_ends(
+    database_url: str, tmp_path
+) -> None:
+    now = datetime.now(UTC)
+    boundary = _latest_reset(now)
+    if now - boundary > timedelta(hours=23, minutes=50):
+        pytest.skip("this Legend day ends before the retry could be checked")
+    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+        database, _sweep_id = _reset_work(connection_info, boundary)
+        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector.client.provider_outage = ProviderOutage(
+            threshold=1, base_delay=1.0, max_delay=1.0
+        )
+        (intent,) = database.pending_intents(
+            limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+        )
+        # Stand-in for 04:55 UTC: the Legend day ends while requests wait.
+        intent = replace(intent, expires_at=datetime.now(UTC) + timedelta(seconds=0.5))
+
+        async def run() -> str:
+            collecting = asyncio.create_task(collector.collect_intent(intent))
+            await asyncio.sleep(0.7)
+            # The API answers again only after the Legend day ended.
+            _Provider.mode = "answer"
+            return await asyncio.wait_for(collecting, 5)
+
+        assert asyncio.run(run()) == "failed"
+        # No later answer is saved as if it were the Reset.
+        assert _work(connection_info) == ("failed", None, None)
 
 
 def test_reset_server_error_is_not_final_while_the_collector_retries(

@@ -639,3 +639,41 @@ def test_republication_retries_failed_reset_repair_left_live(
             assert repair() == idle
         finally:
             database.close()
+
+
+@pytest.mark.parametrize(
+    ("collected_at", "state"),
+    [
+        (DAY_START + timedelta(minutes=10), "complete"),
+        # After the next Reset: no battles recorded for the day it belongs to
+        # cannot show this profile came before the first one.
+        (DAY_END + timedelta(minutes=10), "failed"),
+    ],
+)
+def test_reset_pair_collected_after_its_legend_day_is_not_reset_proof(
+    database_url: str, archive_server, collected_at, state
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        *_observations, profile_job, battle_job = _store_baseline_pair(
+            connection_info,
+            archive_server,
+            key="late",
+            boundary=DAY_START,
+            trophies=6000,
+            empty_battle_log=True,
+            observed_at=collected_at,
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for job_id in (profile_job, battle_job):
+                assert processor.process_job(job_id, owner=f"late-{job_id}") is not None
+        finally:
+            database.close()
+        with psycopg.connect(connection_info) as connection:
+            evidence = connection.execute(
+                "SELECT state, failure_reasons FROM reset_baseline_evidence"
+                " ORDER BY version DESC, id DESC LIMIT 1"
+            ).fetchone()
+    assert evidence[0] == state
+    if state == "failed":
+        assert {"profile_late", "battle_log_late"} <= set(evidence[1])

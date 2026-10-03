@@ -313,8 +313,11 @@ the work waits five seconds and runs again instead of failing. Runs that fail
 during a provider-outage pause (below) are not counted. Once the API is
 answering again, the work gets three more failed runs, then fails and settles
 as missing, so a few failing players cannot hold ordinary collection. The
-count is kept in collector memory, so a restart allows three more. Nothing
-retries past 04:55 UTC, when the Legend day it belongs to ends. HTTP 401 or
+count is kept in collector memory, so a restart allows three more. A retry
+fetches only the responses that have no usable answer yet, so a profile saved
+before the player's first battle is kept. Nothing retries past 04:55 UTC, when
+the Legend day it belongs to ends: a request still waiting then, including one
+held by a provider-outage pause, is dropped and the work fails. HTTP 401 or
 403 still fails it at once. Raw responses that will be kept are published
 to the local spool before their compact database handoff; restart recovery
 finishes either half without creating another observation or processing job.
@@ -330,14 +333,15 @@ as retryable failures. `/metrics` reports `clashlens_collector_provider_outage`
 (1 while paused) and `clashlens_collector_provider_outage_pauses_total`.
 
 Reset work that fails with no response has no processing job. The worker
-checks every 10 seconds, and at start, for failed Reset work from the last two
-days without final evidence. It records the missing or failed responses as
+checks every 10 seconds, and at start, for failed Reset work of any age without
+final evidence, up to 100 rows per check. It records the missing or failed responses as
 `failed` evidence, and that player's Reset publication becomes unavailable
 instead of waiting forever. A Reset HTTP 429 or 5xx response counts as failed
 only after its work fails; while the work is retrying it stays `partial`. A
 retried profile proves the Reset only if it was collected before the player's
 first battle of the new Legend day, so a later profile is never used as the
-exact Reset value.
+exact Reset value. A profile or battle log collected after 04:55 UTC the next
+day is rejected as late.
 
 Refresh and initial collection use the separate interactive key. Refreshes
 coalesce while active, have a 30-second cooldown, and never change the regular
