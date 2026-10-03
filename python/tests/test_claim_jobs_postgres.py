@@ -15,7 +15,7 @@ from psycopg.conninfo import make_conninfo
 from clashlens import ingestion, reconciliation_db, reset_baselines
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database, LeaseLost
-from clashlens.worker import ObservationProcessor, ProcessResult
+from clashlens.worker import ObservationProcessor, ProcessResult, process_concurrently
 
 PARSER_VERSION = "supercell-source-parser-v1"
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
@@ -306,6 +306,117 @@ def test_final_attempt_failure_write_conflict_recovers_after_expiry(
                     )
                     == "database_deadlock"
                 )
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        "job_write",
+        "job_and_failure_write",
+        "failure_write_deadlock",
+        "connection_lost",
+    ],
+)
+def test_rejected_job_write_fails_only_that_job(
+    database_url: str, archive_server, monkeypatch, rejection
+) -> None:
+    # On 2026-10-03 PostgreSQL refused one job's Reset evidence and the whole
+    # worker exited. A refused write now fails or retries only its own job.
+    from pathlib import Path
+
+    body = (
+        Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json"
+    ).read_bytes()
+    message = "reset evidence does not match paired Reset observations"
+    with domain_database(database_url) as connection_info:
+        _, rejected_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="rejected-write",
+            endpoint="profile",
+            body=body,
+            observed_at=datetime(2026, 8, 3, 19, 36, 1, tzinfo=UTC),
+            normalized_tag="#2PP",
+        )
+        _, other_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="other-write",
+            endpoint="profile",
+            body=body,
+            observed_at=datetime(2026, 8, 3, 19, 35, 1, tzinfo=UTC),
+            normalized_tag="#2PP",
+        )
+        database = Database(connection_info)
+        try:
+            complete_profile = ingestion.complete_profile
+            refresh_evidence = reset_baselines._refresh_reset_baseline_evidence
+
+            def reject(*_args, **_kwargs):
+                if rejection == "connection_lost":
+                    raise psycopg.OperationalError("connection lost")
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        f"DO $$ BEGIN RAISE EXCEPTION '{message}'; END $$"
+                    )
+
+            def complete_or_reject(database_, claim, profile):
+                if claim.job_id == rejected_job:
+                    reject()
+                complete_profile(database_, claim, profile)
+
+            def refresh_or_reject(database_, connection, claim, **kwargs):
+                if claim.job_id == rejected_job:
+                    if rejection == "failure_write_deadlock":
+                        raise psycopg.errors.DeadlockDetected("deadlock detected")
+                    reject()
+                refresh_evidence(database_, connection, claim, **kwargs)
+
+            monkeypatch.setattr(ingestion, "complete_profile", complete_or_reject)
+            if rejection in {"job_and_failure_write", "failure_write_deadlock"}:
+                monkeypatch.setattr(
+                    reset_baselines,
+                    "_refresh_reset_baseline_evidence",
+                    refresh_or_reject,
+                )
+
+            def run():
+                return process_concurrently(
+                    _processor(database, archive_server),
+                    concurrency=2,
+                    owner="worker",
+                    max_jobs=10,
+                )
+
+            if rejection == "connection_lost":
+                # Losing the database still stops the worker for a restart.
+                with pytest.raises(RuntimeError):
+                    run()
+                return
+            results = run()
+
+            def job(column: str, job_id: int):
+                return database.scalar(
+                    f"SELECT {column} FROM python_processing_jobs WHERE id = %s",
+                    (job_id,),
+                )
+
+            assert (
+                ProcessResult(rejected_job, "retrying", "database_rejected") in results
+            )
+            assert job("status", other_job) == "complete"
+            if rejection == "job_write":
+                assert job("status", rejected_job) == "waiting_retry"
+                assert job("failure_category", rejected_job) == "database_rejected"
+                assert job("failure_detail", rejected_job) == message
+            else:
+                # The lease runs out and queue maintenance retries the job.
+                assert job("status", rejected_job) == "leased"
+                database.expire_lease(rejected_job)
+                assert database.maintain_queue(max_jobs=1) == 1
+                assert job("status", rejected_job) == "pending"
         finally:
             database.close()
 

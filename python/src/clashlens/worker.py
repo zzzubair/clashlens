@@ -9,7 +9,15 @@ from threading import Event, Lock
 from time import monotonic
 from typing import Any
 
-from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
+from psycopg.errors import (
+    DataError,
+    DeadlockDetected,
+    Error,
+    IntegrityError,
+    QueryCanceled,
+    RaiseException,
+    SerializationFailure,
+)
 
 from . import (
     army_ingestion,
@@ -158,6 +166,10 @@ def lane_owner(owner: str, lane_index: int) -> str:
         raise ValueError("lane index must be positive")
     return f"{owner}.lane-{lane_index}"
 
+
+# Errors PostgreSQL raises when it refuses one job's writes: a trigger's
+# check, a constraint or a bad value. Lost connections are not among them.
+DATABASE_REJECTIONS = (RaiseException, IntegrityError, DataError)
 
 # Connections for the maintenance timer, kept apart from the lanes' pool so a
 # slow round never holds a connection a lane is waiting for.
@@ -483,6 +495,8 @@ class ObservationProcessor:
             return self._fail(claim, "database_deadlock", retryable=True)
         except (DeadlockDetected, SerializationFailure):
             pass
+        except DATABASE_REJECTIONS as error:
+            return self._fail_rejected(claim, error)
         except QueryCanceled:
             # The worker's statement deadline cancelled stuck work and its
             # transaction rolled back.
@@ -809,6 +823,24 @@ class ObservationProcessor:
             reference=claim.archive_reference or "",
             sha256=claim.response_hash or "",
         )
+
+    def _fail_rejected(self, claim: Claim, error: Error) -> ProcessResult:
+        # PostgreSQL refused this job's writes, such as a Reset evidence row
+        # its check rejects. Fail only this job, retrying it within its
+        # attempts, and record the database's reason without the row values.
+        detail = error.diag.message_primary or type(error).__name__
+        try:
+            return self._fail(claim, "database_rejected", detail=detail, retryable=True)
+        except (
+            *DATABASE_REJECTIONS,
+            DeadlockDetected,
+            SerializationFailure,
+            QueryCanceled,
+        ):
+            # Recording the failure was refused, conflicted or timed out too.
+            # Leave the lease to run out so queue maintenance retries the job
+            # or fails its last try.
+            return ProcessResult(claim.job_id, "retrying", "database_rejected")
 
     def _complete_retired(self, claim: Claim, error: DomainRuleError) -> ProcessResult:
         if error.category != "season_detail_retired":

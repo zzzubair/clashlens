@@ -1307,6 +1307,12 @@ class CollectorDatabase:
     ) -> None:
         if handoff.collector_work_id is None:
             return
+        # A worker saving this pair's Reset evidence holds this lock, and the
+        # database checks that evidence against the pair: swap after it commits.
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"reset-baseline:{handoff.collector_work_id}",),
+        )
         status_column = {
             "profile": "profile_status",
             "battle_log": "battle_log_status",

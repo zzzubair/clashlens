@@ -23,7 +23,8 @@ from test_reconciliation_postgres import (
 )
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
-from clashlens import reconciliation_db
+from clashlens import reconciliation_db, reset_baselines
+from clashlens.collector_db import CollectorDatabase
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -709,3 +710,99 @@ def test_reset_pair_proves_the_reset_only_when_collected_in_time_and_order(
             ).fetchone()
     assert evidence[0] == state
     assert reasons <= set(evidence[1])
+
+
+def test_reset_evidence_holds_its_pair_while_the_collector_saves_a_retry(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # 2026-10-03 05:01: a 504 profile's evidence was being saved when the
+    # collector saved the pair's retried battle log. The evidence check then
+    # saw a different pair, refused the row, and the worker exited.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        observed = {}
+        jobs = {}
+        for key, endpoint, body, minutes in (
+            ("profile", "profile", _profile(6040), 1),
+            ("first_log", "battle_log", _battle_log(empty=True), 1),
+            ("retried_log", "battle_log", _battle_log(empty=True), 2),
+        ):
+            observed[key], jobs[key] = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key=f"race-{key}",
+                endpoint=endpoint,
+                body=body,
+                observed_at=DAY_START + timedelta(minutes=minutes),
+                normalized_tag="#2PP",
+                parser_version=PROFILE_PARSER_VERSION
+                if endpoint == "profile"
+                else None,
+            )
+        _seed_reset_collection_identity(
+            connection_info,
+            key="race",
+            boundary=DAY_START,
+            profile_observation_id=observed["profile"],
+            battle_observation_id=observed["first_log"],
+        )
+        saved = threading.Event()
+        collector_pid = []
+
+        def collector_saves_retry() -> None:
+            with psycopg.connect(connection_info) as connection:
+                collector_pid.append(connection.info.backend_pid)
+                work_id = connection.execute(
+                    "SELECT id FROM collector_work WHERE kind = 'reset_baseline'"
+                ).fetchone()[0]
+                CollectorDatabase._record_intent_endpoint(
+                    connection,
+                    SimpleNamespace(
+                        collector_work_id=work_id, endpoint="battle_log", http_status=200
+                    ),
+                    observed["retried_log"],
+                )
+            saved.set()
+
+        collector = threading.Thread(target=collector_saves_retry)
+        load_endpoint = reset_baselines._load_reset_endpoint_evidence
+
+        def save_retry_after_reading(*args, **kwargs):
+            result = load_endpoint(*args, **kwargs)
+            if kwargs["endpoint"] == "battle_log" and collector.ident is None:
+                collector.start()
+                with psycopg.connect(connection_info, autocommit=True) as watcher:
+                    deadline = time.monotonic() + 10
+                    while not saved.is_set() and time.monotonic() < deadline:
+                        if collector_pid and watcher.execute(
+                            "SELECT EXISTS (SELECT 1 FROM pg_locks"
+                            " WHERE pid = %s AND NOT granted)",
+                            (collector_pid[0],),
+                        ).fetchone()[0]:
+                            break
+                        time.sleep(0.01)
+            return result
+
+        monkeypatch.setattr(
+            reset_baselines,
+            "_load_reset_endpoint_evidence",
+            save_retry_after_reading,
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            result = processor.process_job(jobs["profile"], owner="race")
+        finally:
+            database.close()
+        collector.join(timeout=10)
+        assert result is not None and result.outcome == "processed"
+        assert saved.is_set()
+        with psycopg.connect(connection_info) as connection:
+            evidence = connection.execute(
+                "SELECT battle_log_observation_id FROM reset_baseline_evidence"
+            ).fetchall()
+            work = connection.execute(
+                "SELECT battle_log_observation_id FROM collector_work"
+                " WHERE kind = 'reset_baseline'"
+            ).fetchone()
+    # The evidence names the pair it read; the retry lands after it.
+    assert evidence == [(observed["first_log"],)]
+    assert work == (observed["retried_log"],)

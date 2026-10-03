@@ -452,11 +452,19 @@ def test_enqueue_failure_rolls_back_discovery_provenance(
             connection.commit()
         database, processor = _processor(connection_info, archive_server)
         try:
-            with pytest.raises(psycopg.Error, match="forced enqueue failure"):
-                processor.process_once(owner="discovery-rollback")
+            result = processor.process_once(owner="discovery-rollback")
+            assert result is not None
+            assert (result.outcome, result.category) == (
+                "retrying",
+                "database_rejected",
+            )
             with database.pool.connection() as connection:
                 assert connection.execute(
                     "SELECT count(*) FROM known_player_discoveries"
                 ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT failure_detail FROM python_processing_jobs WHERE id = %s",
+                    (result.job_id,),
+                ).fetchone()[0] == "forced enqueue failure"
         finally:
             database.close()
