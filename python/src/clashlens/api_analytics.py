@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from time import monotonic
 from typing import Any
 
@@ -28,9 +30,16 @@ from .army_analytics import (
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
     build_army_result,
+    finish_army_result,
 )
 from .army_decoder import DECODER_VERSION
 from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
+from .army_rank_bands import (
+    band_of,
+    fact_rank_band_digest,
+    rank_band_digest,
+    read_rank_band_totals,
+)
 from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
 from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
@@ -271,6 +280,7 @@ def get_army_analytics(
             snapshot_ids: list[int] = []
             missing_trophies = 0
             member_ids: list[int] | None = None
+            band_by_player: dict[int, int] | None = None
             streak_version_digest: str | None = None
             cohort_evidence: dict[str, int] | None = None
             minimum: int | None = None
@@ -358,11 +368,14 @@ def get_army_analytics(
                         )
                     members = connection.execute(
                         """
-                        SELECT player_id FROM leaderboard_snapshot_entries
+                        SELECT player_id, position FROM leaderboard_snapshot_entries
                         WHERE snapshot_id=%s AND position BETWEEN %s AND %s
                         """,
                         (snapshot_ids[0], low, high),
                     ).fetchall()
+                    band_by_player = {
+                        int(row[0]): band_of(int(row[1])) for row in members
+                    }
                 member_ids = sorted({int(row[0]) for row in members})
                 excluded_players = 0
                 shielded_player_days = 0
@@ -523,7 +536,22 @@ def get_army_analytics(
             else:
                 fact_filters.append("population_player_id = ANY(%s::bigint[])")
                 fact_params.append(member_ids)
-            if resolved.category == "troops":
+            banded = None
+            band_digest: str | None = None
+            if band_by_player is not None:
+                banded = read_rank_band_totals(
+                    connection,
+                    snapshot_ids[0],
+                    lens=resolved.lens,
+                    category=resolved.category,
+                    population=population,
+                    day_markers=dict(completed_day_signature),
+                )
+            if banded is not None:
+                # Same numbers as counting the facts, from at most 28 x 14
+                # saved rows.
+                result, band_digest = finish_army_result(banded[0], resolved), banded[1]
+            elif resolved.category == "troops":
                 result, source_hash = _query_troops_aggregates(
                     connection,
                     fact_filters=fact_filters,
@@ -533,6 +561,20 @@ def get_army_analytics(
                     selection=resolved,
                     pool=database.pool,
                     deadline=deadline,
+                    source_hash=None
+                    if band_by_player is None
+                    else lambda source_connection: _rank_band_source_hash(
+                        fact_rank_band_digest(
+                            source_connection,
+                            season_id=resolved.season,
+                            lens=resolved.lens,
+                            population=population,
+                            days=covered_days,
+                            band_by_player=band_by_player,
+                        ),
+                        requested,
+                        snapshot_ids,
+                    ),
                 )
             else:
                 facts_rows = connection.execute(
@@ -542,7 +584,8 @@ def get_army_analytics(
                            army_state, failure_reason,
                            {component_column} AS component_payload,
                            unresolved_components, perspective_disagreement,
-                           input_hash, source_ranked_day_version_id
+                           input_hash, source_ranked_day_version_id,
+                           season_day_number
                     FROM army_analytics_battle_facts_with_armies
                     WHERE {" AND ".join(fact_filters)}
                     ORDER BY battle_id
@@ -551,6 +594,7 @@ def get_army_analytics(
                 ).fetchall()
                 source_digest = hashlib.sha256()
                 source_digest.update(b'{"facts":[')
+                band_facts: dict[tuple[int, int], list[str]] = {}
 
                 def selected_facts():
                     separator = b""
@@ -560,6 +604,10 @@ def get_army_analytics(
                         source_digest.update(separator)
                         source_digest.update(f'[{fact_id},"{input_hash}"]'.encode())
                         separator = b","
+                        if band_by_player is not None:
+                            band_facts.setdefault(
+                                (int(row[13]), band_by_player[int(row[2])]), []
+                            ).append(f"{fact_id}:{input_hash}")
                         components = {
                             "home_troops": [],
                             "spells": [],
@@ -602,6 +650,21 @@ def get_army_analytics(
                 source_digest.update(b"}")
                 source_hash = source_digest.hexdigest()
                 del facts_rows
+                if band_by_player is not None:
+                    band_digest = rank_band_digest(
+                        population,
+                        covered_days,
+                        {
+                            key: hashlib.sha256(",".join(facts).encode()).hexdigest()
+                            for key, facts in band_facts.items()
+                        },
+                    )
+            if band_digest is not None:
+                # Saved totals and fact reads give a Top N or rank-band view
+                # the same evidence hash for the same facts.
+                source_hash = _rank_band_source_hash(
+                    band_digest, requested, snapshot_ids
+                )
             result["missing_trophy_membership_evidence"] = missing_trophies
             result["collection_coverage"] = {
                 **result["collection_coverage"],
@@ -865,6 +928,22 @@ def _selected_source_hash(
 
 
 
+def _rank_band_source_hash(
+    band_digest: str, requested: dict[str, str | int], snapshot_ids: list[int]
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "rank_band_facts": band_digest,
+                "selection": requested,
+                "snapshots": snapshot_ids,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
 def _query_troops_aggregates(
     connection: Any,
     *,
@@ -875,8 +954,21 @@ def _query_troops_aggregates(
     selection: ArmyAnalyticsSelection,
     pool: ConnectionPool | None = None,
     deadline: float | None = None,
+    source_hash: Callable[[Any], str] | None = None,
 ) -> tuple[dict[str, Any], str]:
-    """Aggregate the troops projection and source identity inside PostgreSQL."""
+    """Aggregate the troops projection and source identity inside PostgreSQL.
+
+    ``source_hash`` computes the source identity on a given connection; it
+    defaults to ``_selected_source_hash`` over the selected facts.
+    """
+    if source_hash is None:
+        source_hash = partial(
+            _selected_source_hash,
+            fact_filters=fact_filters,
+            fact_params=fact_params,
+            requested=requested,
+            snapshot_ids=snapshot_ids,
+        )
     fact_where = " AND ".join(fact_filters)
     state_rows = connection.execute(
         f"""
@@ -960,14 +1052,7 @@ def _query_troops_aggregates(
                     f"SET LOCAL work_mem = '{ARMY_ANALYTICS_QUERY_WORK_MEM}'"
                 )
                 with ThreadPoolExecutor(max_workers=1) as executor:
-                    source_future = executor.submit(
-                        _selected_source_hash,
-                        source_connection,
-                        fact_filters=fact_filters,
-                        fact_params=fact_params,
-                        requested=requested,
-                        snapshot_ids=snapshot_ids,
-                    )
+                    source_future = executor.submit(source_hash, source_connection)
                     aggregate_rows = connection.execute(
                         component_query, tuple(fact_params)
                     ).fetchall()
@@ -976,13 +1061,7 @@ def _query_troops_aggregates(
         aggregate_rows = connection.execute(
             component_query, tuple(fact_params)
         ).fetchall()
-        source_hash_value = _selected_source_hash(
-            connection,
-            fact_filters=fact_filters,
-            fact_params=fact_params,
-            requested=requested,
-            snapshot_ids=snapshot_ids,
-        )
+        source_hash_value = source_hash(connection)
     state_counts = {_text(row[0]): int(row[1]) for row in state_rows}
     summary = (
         sum(state_counts.values()),

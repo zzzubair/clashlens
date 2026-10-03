@@ -87,7 +87,8 @@ publication-generation, and correction work is terminal. Unknown fails
 closed. The applied `finalized` record fences writers atomically before
 any deletion. Retirement then deletes all `api_player_daily_logs` for
 the season, its `army_analytics_battle_facts`, redundant
-`army_analytics_completed_days` markers and their `army_analytics_day_totals`,
+`army_analytics_completed_days` markers and their `army_analytics_day_totals`
+and `army_analytics_rank_band_totals`,
 and battle detail
 (decodes, perspectives, evidence, source reports, payload membership,
 battles) only where no retained, live, shared, or protected dependency
