@@ -362,6 +362,13 @@ def _conflicting_profile(kind: str) -> bytes:
     return json.dumps(payload).encode()
 
 
+CURRENT_PROFILE = """
+    SELECT profile.trophies, profile.source_contract_state
+    FROM players AS player
+    JOIN player_profile_versions AS profile
+      ON profile.id = player.current_profile_version_id"""
+
+
 @pytest.mark.parametrize("kind,conflict", [
     ("ordinary", "season_zero"),
     ("season", "season_zero"),
@@ -405,6 +412,7 @@ def test_rejected_reset_profile_gives_no_start(
               ON profile.id = effect.profile_version_id
             WHERE evidence.boundary_at = (
                 SELECT max(boundary_at) FROM reset_baseline_evidence)""")
+        current = _rows(connection_info, CURRENT_PROFILE)
     by_start = {row[0]: row[1:] for row in days}
     ended, opened = by_start[boundary - timedelta(days=1)], by_start[boundary]
     # Neither day uses the rejected 5,000, and its Season is unknown rather
@@ -413,8 +421,10 @@ def test_rejected_reset_profile_gives_no_start(
     assert "season_reset_pending" not in ended[3]
     assert "season_reset_pending" not in opened[2]
     assert opened[2]["profile"]["trophies"] == 5000
-    # The rejected reading itself stays saved as evidence.
+    # The rejected reading itself stays saved as evidence, but the player's
+    # current profile is still the earlier trusted one.
     assert set(kept) == {("conflict", 5000)}
+    assert current == [(6400, "accepted")]
 
 
 def test_reset_profile_read_after_the_first_battle_gives_no_start(
@@ -458,9 +468,12 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
               ON profile.id = effect.profile_version_id
             WHERE evidence.boundary_at = '{DAY_END.isoformat()}'
             ORDER BY evidence.version DESC, evidence.id DESC LIMIT 1""")
-    # The accepted 6,040 is kept as evidence but starts neither day.
+        current = _rows(connection_info, CURRENT_PROFILE)
+    # The accepted 6,040 is kept as evidence but starts neither day. It is
+    # still the current profile, which the player page can calculate from.
     assert evidence == [
         (False, ["profile_after_first_event"], "accepted", 6040)
     ]
     assert days[DAY_END - timedelta(days=1)] == (6000, None)
     assert days[DAY_END][0] is None
+    assert current == [(6040, "accepted")]
