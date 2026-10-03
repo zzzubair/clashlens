@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from itertools import islice, product
 from pathlib import Path
 from uuid import uuid4
@@ -614,6 +615,22 @@ def test_a_confirmed_player_without_legend_details_joins_with_their_name(
             }
             assert added.status_code == 200
             assert added.payload == {"group_id": group_id, **player}
+            assert api_accounts.list_groups(database, owner_id)[0]["players"] == [player]
+
+            # Renamed and renamed back: the reused first profile is still the latest.
+            for minutes, name in ((1, "Orion"), (2, "Synthetic Legend I")):
+                store_observation(
+                    info,
+                    archive_server,
+                    occurrence_key=f"rename-{minutes}",
+                    endpoint="profile",
+                    body=json.dumps({**body, "name": name}).encode(),
+                    observed_at=NOW + timedelta(minutes=minutes),
+                    normalized_tag="#2PP",
+                    parser_version=PROFILE_PARSER_VERSION,
+                )
+                result = processor.process_once(owner="group-test")
+                assert result is not None and result.outcome == "processed"
             assert api_accounts.list_groups(database, owner_id)[0]["players"] == [player]
         finally:
             worker.close()

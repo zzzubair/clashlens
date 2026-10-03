@@ -1187,10 +1187,15 @@ _MEMBER_JOINS = """
         ON accepted.id = player.current_profile_version_id
        AND accepted.source_contract_state = 'accepted'
     LEFT JOIN LATERAL (
-        SELECT name, player_id FROM player_profile_versions
-        WHERE normalized_tag = player.normalized_tag
-        ORDER BY observed_at DESC, id DESC LIMIT 1
-    ) AS profile ON profile.player_id = player.id
+        SELECT version.name
+        FROM player_profile_versions AS version
+        LEFT JOIN player_profile_effects AS effect
+          ON effect.profile_version_id = version.id
+        WHERE version.player_id = player.id
+        ORDER BY COALESCE(effect.observed_at, version.observed_at) DESC,
+                 COALESCE(effect.id, version.id) DESC
+        LIMIT 1
+    ) AS profile ON true
 """
 
 
