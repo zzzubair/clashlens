@@ -348,3 +348,67 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
     # The raw reading is kept, and no Reset is settled from it.
     assert evidence == [("complete", True)]
     assert settlements == {("provisional", None)}
+
+
+def _conflicting_profile(kind: str) -> bytes:
+    payload = json.loads(_profile(5000))
+    if kind == "season_zero":  # As the game sometimes sends with 5,000.
+        payload["currentLeagueSeasonId"] = 0
+    else:  # A tier name we do not recognise, under a valid Season.
+        payload["leagueTier"]["name"] = "Legend One"
+    return json.dumps(payload).encode()
+
+
+@pytest.mark.parametrize("kind,conflict", [
+    ("ordinary", "season_zero"),
+    ("season", "season_zero"),
+    ("ordinary", "tier_name"),
+])
+def test_rejected_reset_profile_gives_no_start(
+    database_url: str, archive_server, kind: str, conflict: str
+) -> None:
+    boundary = BOUNDARIES[kind]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           boundary - timedelta(days=1), profile=_profile(6400),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_conflicting_profile(conflict),
+                            log=_battle_log(empty=True))
+        _process(connection_info, archive_server, jobs)
+        # Both days are otherwise reconciled when their battles arrive.
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for day_start in (boundary - timedelta(days=1), boundary):
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start,
+                    now=boundary, request_key=day_start.isoformat(),
+                )
+                assert processor.process_job(job, owner="day") is not None
+        finally:
+            database.close()
+        days = _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   start_trophies, next_start_trophies,
+                   input_evidence -> 'start_baseline_evidence',
+                   input_evidence -> 'end_baseline_evidence'
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")
+        kept = _rows(connection_info, """
+            SELECT profile.source_contract_state, profile.trophies
+            FROM reset_baseline_evidence AS evidence
+            JOIN player_profile_effects AS effect
+              ON effect.observation_id = evidence.profile_observation_id
+            JOIN player_profile_versions AS profile
+              ON profile.id = effect.profile_version_id
+            WHERE evidence.boundary_at = (
+                SELECT max(boundary_at) FROM reset_baseline_evidence)""")
+    by_start = {row[0]: row[1:] for row in days}
+    ended, opened = by_start[boundary - timedelta(days=1)], by_start[boundary]
+    # Neither day uses the rejected 5,000, and its Season is unknown rather
+    # than waiting for this player's Season reset.
+    assert ended[1] is None and opened[0] is None
+    assert "season_reset_pending" not in ended[3]
+    assert "season_reset_pending" not in opened[2]
+    assert opened[2]["profile"]["trophies"] == 5000
+    # The rejected reading itself stays saved as evidence.
+    assert set(kept) == {("conflict", 5000)}

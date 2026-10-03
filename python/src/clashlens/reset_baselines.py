@@ -986,10 +986,12 @@ def _load_reset_baseline(
     profile_accepted = row[15] is not None and _text_value(row[18]) == "accepted"
     profile_eligible = _text_value(row[17]) == "eligible"
     battle_log_valid_evidence = row[20] is not None and not bool(row[22])
-    # A profile read after any Reset that names another Season than the
-    # Reset's own shows trophies from before that player's Season reset.
+    # Only an accepted profile's trophies can start a day. A rejected one,
+    # such as one reporting Season ID 0, stays evidence with its Season unknown.
+    # An accepted profile read after any Reset that names another Season than
+    # the Reset's own shows trophies from before that player's Season reset.
     # It stays evidence, but never becomes that Season's starting total.
-    season_reset_pending = row[15] is not None and not season_is_current(
+    season_reset_pending = profile_accepted and not season_is_current(
         _text_value(row[25]), row[14]
     )
     complete = bool(
@@ -1055,7 +1057,9 @@ def _load_reset_baseline(
         "complete": complete,
         "trophies": (
             int(row[16])
-            if row[16] is not None and not season_reset_pending
+            if row[16] is not None
+            and profile_accepted
+            and not season_reset_pending
             else None
         ),
         "eligibility_state": (
