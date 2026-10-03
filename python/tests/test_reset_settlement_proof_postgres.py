@@ -231,6 +231,46 @@ def test_a_battle_log_rechecks_an_unusable_battle_report(
             database.close()
 
 
+def test_a_report_rechecks_the_reset_just_before_it_only_within_the_grace(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            with psycopg.connect(connection_info) as connection:
+                log_id = connection.execute(
+                    "SELECT id FROM collector_observations WHERE response_completed_at = %s",
+                    (RESET + timedelta(seconds=33),),
+                ).fetchone()[0]
+                # A 05:01 report counts on the day the 05:00 Reset ended; one
+                # past the 5-minute grace, or from 04:54 the next morning,
+                # belongs to a later day.
+                for reported_at, rechecked in ((RESET + MINUTE, True),
+                                               (RESET + 6 * MINUTE, False),
+                                               (RESET + DAY - 6 * MINUTE, False)):
+                    connection.execute(
+                        "UPDATE reset_boundary_settlements SET state = 'unresolved',"
+                        " selected_trophies = NULL, proof_kind = NULL,"
+                        " reasons = '[\"battle_report_unusable\"]' WHERE boundary_at = %s",
+                        (RESET,),
+                    )
+                    connection.execute(
+                        "UPDATE battle_evidence SET battle_timestamp = %s WHERE battle_id IN"
+                        " (SELECT battle_id FROM battle_evidence WHERE observation_id = %s)",
+                        (reported_at, log_id),
+                    )
+                    reset_settlement.refresh_for_observation(database, connection, log_id)
+                    reasons = connection.execute(VERDICT, (RESET,)).fetchone()[2]
+                    assert (reasons != ["battle_report_unusable"]) is rechecked, reported_at
+                    connection.rollback()
+        finally:
+            database.close()
+
+
 def test_switch_off_keeps_the_candidate_and_never_suppresses_invalidation(
     database_url: str, archive_server, monkeypatch
 ) -> None:
