@@ -331,19 +331,18 @@ def test_campaign_registration_drops_finished_work_until_activated(
             first = _report(connection, player, opponent, START, destruction=56, code="u1x0-2x1")
             for boundary_at in (START + DAY, START + 2 * DAY):
                 _population(connection, boundary_at, player, opponent)
+        _decoded(connection_info, first, catalog="unit-catalog-v1")
         assert domain_repair.register(worker, SEASON, now=NOW)["items"] == {
             "decode_batch": 1, "publication": 1
         }
         # The decode queued before the campaign saves its result and queues
         # the Reset's correction: the Reset stays listed until that publishes.
+        # Corrections from a late battle on another day are not campaign work.
         _decoded(connection_info, first)
-        with _owner(connection_info) as connection:
-            connection.execute(
-                "INSERT INTO boundary_publication_corrections (boundary_at,"
-                " source_generation_id, affected_artifacts, pending_inputs)"
-                " VALUES (%s, 0, ARRAY['army'], %s)",
-                (START + DAY, Jsonb([{"kind": "decode"}])),
-            )
+        for boundary_at, pending in ((START + DAY, {"kind": "decode"}),
+                                     (START + 2 * DAY, {"kind": "decode"}),
+                                     (START + 2 * DAY, {"player_id": opponent})):
+            _unpublished_correction(connection_info, boundary_at, pending)
         assert domain_repair.register(worker, SEASON, now=NOW)["items"] == {"publication": 1}
         assert [row[:2] for row in _items(connection_info, "publication")] == [
             (_key("boundary", START + DAY), ["catalogue"])
@@ -365,17 +364,27 @@ def test_campaign_registration_drops_finished_work_until_activated(
         assert [row[2] for row in _items(connection_info, "publication")] == ["pending"]
 
 
-def _decoded(connection_info: str, evidence_id: int) -> None:
+def _unpublished_correction(connection_info: str, boundary_at: datetime, pending: dict) -> None:
+    with _owner(connection_info) as connection:
+        connection.execute(
+            "INSERT INTO boundary_publication_corrections (boundary_at,"
+            " source_generation_id, pending_inputs) VALUES (%s, 0, %s)",
+            (boundary_at, Jsonb([pending])),
+        )
+
+
+def _decoded(connection_info: str, evidence_id: int, catalog: str = CATALOG_VERSION) -> None:
+    """Save a decode; one under an older catalogue is no longer active."""
     with _owner(connection_info) as connection:
         connection.execute(
             """
             INSERT INTO battle_army_decodes (
                 battle_id, evidence_id, perspective, decoder_version,
-                catalog_version, catalog_hash, status, failure_category
-            ) SELECT battle_id, id, 'attacker', %s, %s, %s, 'failed', 'undecodable'
+                catalog_version, catalog_hash, status, failure_category, is_active
+            ) SELECT battle_id, id, 'attacker', %s, %s, %s, 'failed', 'undecodable', %s
             FROM battle_evidence WHERE id = %s
             """,
-            (DECODER_VERSION, CATALOG_VERSION, "a" * 64, evidence_id),
+            (DECODER_VERSION, catalog, "a" * 64, catalog == CATALOG_VERSION, evidence_id),
         )
 
 
@@ -520,7 +529,11 @@ def test_campaign_keeps_days_a_finished_fix_left_stale(database_url: str) -> Non
             _report(connection, paid, opponent, day2, rule=TROPHY_ALLOCATION_RULE_VERSION)
             _saved_day(connection, paid, day2)
             for boundary_at in (day3, day4, day5, day5 + DAY):
-                _population(connection, boundary_at, moved, paid)
+                _population(connection, boundary_at, moved, paid, opponent)
+        # A correction carrying a moved player's changed day is held; one
+        # carrying only an unaffected player's late battle is not.
+        _unpublished_correction(connection_info, day4, {"player_id": moved})
+        _unpublished_correction(connection_info, day2, {"player_id": opponent})
         report = domain_repair.register(worker, SEASON, now=NOW)
         assert _items(connection_info, "source") == []
         assert [row[:2] for row in _items(connection_info, "day")] == sorted([
@@ -528,10 +541,13 @@ def test_campaign_keeps_days_a_finished_fix_left_stale(database_url: str) -> Non
             (_key("day", moved, day5), ["dependency"]),
             (_key("day", paid, day2), ["payout"]),
         ])
-        assert [row[0] for row in _items(connection_info, "publication")] == [
-            _key("boundary", day) for day in (day3, day5, day5 + DAY)
+        assert [row[:2] for row in _items(connection_info, "publication")] == [
+            (_key("boundary", day3), ["payout"]),
+            (_key("boundary", day4), ["moved"]),
+            (_key("boundary", day5), ["dependency"]),
+            (_key("boundary", day5 + DAY), ["dependency"]),
         ]
-        assert report["items"] == {"day": 3, "publication": 3}
+        assert report["items"] == {"day": 3, "publication": 4}
 
 
 def test_campaign_saves_nothing_once_the_window_closes_mid_write(

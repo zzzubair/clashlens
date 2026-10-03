@@ -20,7 +20,8 @@ campaign lists everything they change once, for one coordinated rebuild:
   and lists any further day whose result changes.
 - ``publication``: one Reset whose captured population includes a player
   with a listed day or a battle needing a decode on its day, or whose
-  correction is not yet published.
+  unpublished correction carries a changed day of a player these fixes
+  change, or a member's decode replacing an older catalogue one.
 
 A payout report whose raw response is gone, or an item in a finalized Season
 or past its own Season's correction window, is excluded, never done.
@@ -150,15 +151,16 @@ WITH selected AS (
     WHERE state = 'settled' AND boundary_at > %(start)s AND boundary_at <= %(end)s
 ), affected AS (
     -- Players whose saved days these fixes change, repaired yet or not.
-    SELECT player_id FROM selected WHERE stars = 2 AND destruction_percentage = 55
+    SELECT player_id, 'payout' AS reason
+    FROM selected WHERE stars = 2 AND destruction_percentage = 55
     UNION
     SELECT CASE perspective WHEN 'attacker' THEN attacker_player_id
-                            ELSE defender_player_id END
+                            ELSE defender_player_id END, 'moved'
     FROM battle_day_repairs
     WHERE from_day >= %(start)s AND from_day < %(end)s
        OR to_day >= %(start)s AND to_day < %(end)s
     UNION
-    SELECT player_id FROM settled
+    SELECT player_id, 'settlement' FROM settled
 ), newest AS (
     SELECT DISTINCT ON (player_id, ranked_day_start) player_id, ranked_day_start, id
     FROM ranked_day_versions
@@ -210,6 +212,11 @@ WITH selected AS (
     FROM collector_reset_sweeps AS sweep, unnest(sweep.member_ids) AS member(player_id)
     WHERE sweep.boundary_at >= %(start)s
       AND sweep.boundary_at <= %(end)s + interval '1 day'
+), unpublished AS (
+    SELECT boundary_at, pending_inputs
+    FROM boundary_publication_corrections
+    WHERE state NOT IN ('finalized', 'terminal')
+      AND boundary_at > %(start)s AND boundary_at <= %(end)s
 )
 SELECT 'source', 'evidence:' || evidence_id,
        reasons || CASE WHEN evidence_id IN (SELECT evidence_id FROM needs_decode)
@@ -250,14 +257,29 @@ FROM (
     WHERE population.player_id = player.id
       AND population.boundary_at = needs_decode.ranked_day_start + interval '1 day'
     UNION ALL
-    -- A correction not yet published, such as one a decode already queued.
-    SELECT boundary_at,
-           CASE WHEN pending_inputs @> '[{{"kind": "decode"}}]'
-                  OR affected_artifacts = ARRAY['army']::text[]
-                THEN 'catalogue' ELSE 'dependency' END
-    FROM boundary_publication_corrections
-    WHERE state NOT IN ('finalized', 'terminal')
-      AND boundary_at > %(start)s AND boundary_at <= %(end)s
+    -- A correction not yet published that carries a changed day of a player
+    -- these fixes change.
+    SELECT correction.boundary_at, affected.reason
+    FROM unpublished AS correction,
+         jsonb_array_elements(correction.pending_inputs) AS input, affected
+    WHERE affected.player_id = (input ->> 'player_id')::bigint
+    UNION ALL
+    -- A decode correction not yet published for a member's report that had
+    -- an older catalogue decode.
+    SELECT DISTINCT correction.boundary_at, 'catalogue'
+    FROM unpublished AS correction
+    JOIN selected
+      ON selected.ranked_day_start = correction.boundary_at - interval '1 day'
+    JOIN population
+      ON population.boundary_at = correction.boundary_at
+     AND population.player_id = selected.player_id
+    WHERE correction.pending_inputs @> '[{{"kind": "decode"}}]'
+      AND EXISTS (
+          SELECT 1 FROM battle_army_decodes AS d
+          WHERE d.evidence_id = selected.evidence_id
+            AND (d.decoder_version, d.catalog_version)
+                <> (%(decoder)s, %(catalog)s)
+      )
 ) AS publication
 GROUP BY boundary_at
 """
