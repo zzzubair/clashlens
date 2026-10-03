@@ -548,12 +548,15 @@ def test_retried_alert_still_waits_fifteen_clear_minutes_to_recover(
     for _ in range(15):
         rt.now += 60
         assert rt.run() == 1
+    # The 12:16 check takes 90 seconds before Discord accepts the alert.
     rt.now += 60
     rt.post_status = 204
+    monkeypatch.setattr(alerts.time, "time", lambda: rt.now + 90 * len(rt.posts))
     assert rt.run() == 0
+    monkeypatch.setattr(alerts.time, "time", lambda: rt.now)
     assert len(rt.posts) == 1
     assert "recovered" not in rt.posts[0]["content"]
-    rt.now += 899
+    rt.now += 90 + 899
     assert rt.run() == 0
     assert len(rt.posts) == 1
     rt.now += 1

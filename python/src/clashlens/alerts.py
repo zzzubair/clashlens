@@ -363,7 +363,7 @@ def deliver(
                 break
             incident["active"] = pending["active"]
             if pending["active"]:
-                incident["alerted_at"] = now
+                incident["alerted_at"] = time.time()
             del incident["pending"]
             save_state(path, state)
     return not failed
