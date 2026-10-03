@@ -95,7 +95,12 @@ def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
                EXISTS (SELECT 1 FROM api_player_daily_logs AS day
                        WHERE day.player_id = profile.player_id
                          AND day.ranked_day_start >= %s
-                         AND jsonb_array_length(day.battles) > 0)
+                         AND jsonb_array_length(day.battles) > 0
+                         AND NOT EXISTS (
+                             SELECT 1 FROM api_player_daily_logs AS newer
+                             WHERE newer.player_id = day.player_id
+                               AND newer.ranked_day_start = day.ranked_day_start
+                               AND newer.version > day.version))
         FROM player_profile_versions AS profile
         CROSS JOIN LATERAL (
             SELECT max(observed_at) AS observed_at FROM player_profile_effects

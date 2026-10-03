@@ -523,21 +523,24 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
             assert "#2PP" not in json.dumps(board)
             assert submit(database)["reason"] == "no_legend_battles"
 
-            # A recorded Legend battle this Season means the Season is the problem.
-            with database.pool.connection() as connection:
-                connection.execute(
-                    """
-                    INSERT INTO api_player_daily_logs (
-                        player_id, ranked_day_start, version, state, coverage, battles
+            def publish_day(version: int, battles: str) -> str:
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        """
+                        INSERT INTO api_player_daily_logs (
+                            player_id, ranked_day_start, version, state, coverage, battles
+                        )
+                        SELECT id, %s, %s, 'Live', 'partial', %s FROM players
+                        """,
+                        (ranked_day_for(datetime.now(UTC)).season_start, version, battles),
                     )
-                    SELECT id, %s, 1, 'Live', 'partial', '[{}]' FROM players
-                    """,
-                    (ranked_day_for(datetime.now(UTC)).season_start,),
-                )
-            assert (
-                api_player_lookup.get_lookup(database, "#2PP")["reason"]
-                == "season_unconfirmed"
-            )
+                return api_player_lookup.get_lookup(database, "#2PP")["reason"]
+
+            # A battle a newer result moved out of this Season does not count.
+            assert publish_day(1, "[{}]") == "season_unconfirmed"
+            assert publish_day(2, "[]") == "no_legend_battles"
+            # A recorded Legend battle this Season means the Season is the problem.
+            assert publish_day(3, "[{}]") == "season_unconfirmed"
 
             _process_profile(info, archive_server, processor, "valid", trophies=5040)
 

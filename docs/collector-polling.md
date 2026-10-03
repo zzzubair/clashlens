@@ -460,12 +460,14 @@ fetches the profile as usual for the rest of that Legend day, before the
 worker even accepts it. The wait starts again only after the next Reset, at a
 Season 0 profile with unchanged counts. A failed profile request is no
 evidence, so the next check retries it. Reset, settlement and Refresh requests
-are unchanged. The wait lives in collector memory, so a restart costs one
-profile and one battle log per waiting player.
+are unchanged. The wait lives in collector memory and a restarted collector
+cannot tell who played, so it checks every Season 0 player as usual until the
+next Reset. Restarts are rare, so this costs little.
 
 In the fake-game check model (`tests/test_battle_log_schedule.py`), a day of
-checks 91 seconds apart fetches a quiet player's profile 96 times instead of
-960 and the battle log 97 times either way. A defense that changes the profile
+checks 91 seconds apart, after a Reset the collector was running through,
+fetches a quiet player's profile 96 times instead of 960 and the battle log 96
+times, through its 15-minute safety fetch. A defense that changes the profile
 is saved at the 15-minute recheck, about 12 minutes later in the measured case
 instead of on the next check, and that player's later checks that Legend day
 fetch the profile every time. A battle already in a tracked opponent's saved

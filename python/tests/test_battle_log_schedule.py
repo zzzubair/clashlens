@@ -797,6 +797,13 @@ def _season_zero(game: SimpleNamespace, tag: str = TAG) -> dict[str, Any]:
     return body
 
 
+def _waiting(game: SimpleNamespace) -> dict[str, Any]:
+    """A Season 0 player first checked at 04:59 UTC, so it waits after Reset."""
+    profile = _season_zero(game)
+    game.check(after=timedelta(hours=16, minutes=59))
+    return profile
+
+
 def _requests(checks: list[list[str]]) -> tuple[int, int]:
     return (
         sum(check.count("profile") for check in checks),
@@ -807,15 +814,14 @@ def _requests(checks: list[list[str]]) -> tuple[int, int]:
 def test_season_zero_profile_is_rechecked_every_15_minutes(
     game: SimpleNamespace,
 ) -> None:
-    _season_zero(game)
+    _waiting(game)
 
     checks = [game.check() for _ in range(960)]
 
     # A day of checks 91 seconds apart: the profile every 15 minutes (96 a day
-    # instead of 960), while the battle log keeps its own rules.
-    assert _requests(checks) == (96, 97)
-    log = ["battle_log"]
-    assert checks[:12] == [BOTH, log] + [[]] * 8 + [PROFILE, log]
+    # instead of 960), and the battle log with its 15-minute safety fetch.
+    assert _requests(checks) == (96, 96)
+    assert checks[:11] == [BOTH] + [[]] * 9 + [BOTH]
 
 
 def test_season_zero_after_a_valid_profile_waits_from_the_next_reset(
@@ -840,7 +846,7 @@ def test_season_zero_after_a_valid_profile_waits_from_the_next_reset(
 def test_valid_season_ends_the_wait_at_the_next_profile(
     game: SimpleNamespace,
 ) -> None:
-    profile = _season_zero(game)
+    profile = _waiting(game)
     assert game.check() == BOTH
     profile["currentLeagueSeasonId"] = 1788757200
 
@@ -856,7 +862,7 @@ def test_valid_season_ends_the_wait_at_the_next_profile(
 def test_refresh_with_a_valid_season_ends_the_wait_at_once(
     game: SimpleNamespace,
 ) -> None:
-    profile = _season_zero(game)
+    profile = _waiting(game)
     game.check()
     profile["currentLeagueSeasonId"] = 1788757200
 
@@ -868,7 +874,7 @@ def test_refresh_with_a_valid_season_ends_the_wait_at_once(
 def test_waiting_player_battle_is_found_by_the_recheck_within_15_minutes(
     game: SimpleNamespace,
 ) -> None:
-    profile = _season_zero(game)
+    profile = _waiting(game)
     game.check()
     game.check()
     battle_at = game.clock[0] + timedelta(seconds=30)
@@ -890,7 +896,7 @@ def test_waiting_player_battle_is_found_by_the_recheck_within_15_minutes(
 def test_changed_counts_from_refresh_or_reset_end_the_wait_for_the_day(
     game: SimpleNamespace, lane: str
 ) -> None:
-    profile = _season_zero(game)
+    profile = _waiting(game)
     game.check()
     profile["attackWins"] += 1
 
@@ -902,7 +908,7 @@ def test_changed_counts_from_refresh_or_reset_end_the_wait_for_the_day(
 def test_tracked_opponents_log_still_fetches_a_waiting_players_log(
     game: SimpleNamespace,
 ) -> None:
-    _season_zero(game)
+    _waiting(game)
     game.check()
     game.check()
     game.settle(OPPONENT)
@@ -918,7 +924,7 @@ def test_tracked_opponents_log_still_fetches_a_waiting_players_log(
 def test_failed_season_zero_recheck_is_retried_on_the_next_check(
     game: SimpleNamespace,
 ) -> None:
-    _season_zero(game)
+    _waiting(game)
     assert [game.check() for _ in range(10)][-1] == []
     game.client.profile_fails = True
 
@@ -934,21 +940,26 @@ def test_failed_season_zero_recheck_is_retried_on_the_next_check(
 def test_reset_and_refresh_still_fetch_both_while_waiting(
     game: SimpleNamespace, lane: str
 ) -> None:
-    _season_zero(game)
+    _waiting(game)
     game.check()
 
     assert [game.check(lane=lane) for _ in range(3)] == [BOTH] * 3
 
 
-def test_restart_forgets_the_wait_and_checks_both_once(
+def test_restart_keeps_ordinary_checks_until_the_next_reset(
     game: SimpleNamespace,
 ) -> None:
-    _season_zero(game)
-    game.check()
-    assert game.check() == ["battle_log"]
-
+    profile = _waiting(game)
+    game.check(after=timedelta(hours=7))
+    # Trophies change at 12:00 UTC, then the collector restarts at 12:05.
+    profile["trophies"] -= 32
+    assert game.check(lane="interactive", after=timedelta(minutes=1)) == BOTH
     game.collector.battle_logs = BattleLogSchedule()
+    game.clock[0] += timedelta(minutes=5)
 
-    assert game.check() == BOTH
-    assert game.check() == ["battle_log"]
-    assert game.check() == []
+    # It cannot know about the battle, so it checks as usual until Reset.
+    assert all("profile" in game.check() for _ in range(20))
+
+    # From the next Reset an unchanged Season 0 profile waits again.
+    game.check(after=timedelta(hours=17))
+    assert [game.check() for _ in range(5)] == [[]] * 5

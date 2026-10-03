@@ -7,8 +7,8 @@ battle log only when it can have changed. See
 docs/collector-polling.md#battle-log-only-when-it-can-have-changed.
 
 A player whose last profile reported Legend I with Season ID 0 and unchanged
-counts, with no valid Season or changed counts since the last Reset, needs the
-profile only every 15 minutes; its battle log keeps the rules above, seeing
+counts, seen by this collector before the last Reset and with no valid Season
+or changed counts since, needs the profile only every 15 minutes; its battle log keeps the rules above, seeing
 profile changes only then. See
 docs/collector-polling.md#season-0-profiles.
 
@@ -140,8 +140,9 @@ class BattleLogSchedule:
                         # A valid Season counts as a change, so the log is fetched.
                         player.signals = None
                     _check_until_reset(player, completed_at)
-                elif player.signals not in (None, signals):
-                    # Changed counts mean battles.
+                elif player.signals != signals:
+                    # Changed counts mean battles; a restarted collector
+                    # cannot tell, so it assumes they did.
                     _check_until_reset(player, completed_at)
                 elif player.ordinary_until is None or completed_at >= player.ordinary_until:
                     player.season_zero_at = completed_at

@@ -175,6 +175,36 @@ export function headers() {
   return { "Cache-Control": "no-store" };
 }
 
+// A newest profile we cannot use is explained, even over saved results.
+function explainsNoResults(lookup: PlayerLookup | null): boolean {
+  return lookup?.state === "tracking" && (lookup.reason ?? "pending") !== "pending";
+}
+
+// What a visit shows and how often it rereads saved data. Once explained, it
+// rereads once a minute, through failed or partial reads, until a successful
+// lookup gives a normal page or a final answer.
+export function playerLookupView(
+  player: PlayerPage | null,
+  fetched: PlayerLookup | null,
+  explainedVisit: boolean,
+) {
+  const saved =
+    player !== null &&
+    !explainsNoResults(fetched) &&
+    !(explainedVisit && fetched === null);
+  const trackedPlayer = saved && player?.trackingState === "tracking" ? player : null;
+  const lookup: PlayerLookup | null =
+    saved && player ? { tag: player.tag, state: player.trackingState } : fetched;
+  const minuteChecks =
+    explainedVisit &&
+    trackedPlayer === null &&
+    (lookup === null || lookup.state === "checking" || lookup.state === "tracking");
+  const isChecking =
+    !explainedVisit &&
+    (lookup?.state === "checking" || (lookup?.state === "tracking" && player === null));
+  return { trackedPlayer, lookup, minuteChecks, isChecking };
+}
+
 // Effects never run during SSR. This client-document guard also prevents a
 // later SPA visit/back navigation from replaying the original reload event.
 let documentReloadHandled = false;
@@ -241,25 +271,15 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         Date.parse(data.player.profile.freshness.observedAt))
       ? refreshedPlayer
       : data.player;
-  // A newest profile we cannot use is explained, even over saved results.
-  const explained =
-    data.lookup?.state === "tracking" && (data.lookup.reason ?? "pending") !== "pending";
-  const trackedPlayer =
-    player?.trackingState === "tracking" && !explained ? player : null;
-  const lookup: PlayerLookup | null =
-    player && !explained ? { tag: player.tag, state: player.trackingState } : data.lookup;
-  const history = selectPlayerHistory(player);
-  // Once explained, this visit rereads once a minute, through failed or
-  // partial reads, until it gets a normal page or a final answer.
+  const explained = explainsNoResults(data.lookup);
   const [explainedVisit, setExplainedVisit] = useState(explained);
   if (explained && !explainedVisit) setExplainedVisit(true);
-  const minuteChecks =
-    explainedVisit &&
-    trackedPlayer === null &&
-    (lookup === null || lookup.state === "checking" || lookup.state === "tracking");
-  const isChecking =
-    !explainedVisit &&
-    (lookup?.state === "checking" || (lookup?.state === "tracking" && player === null));
+  const { trackedPlayer, lookup, minuteChecks, isChecking } = playerLookupView(
+    player,
+    data.lookup,
+    explainedVisit,
+  );
+  const history = selectPlayerHistory(player);
   useEffect(() => {
     if (!isChecking || lookupTimedOut) return;
     const timer = setInterval(() => {

@@ -38,13 +38,17 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import type {
   HistoricalSeasonSummary,
+  PlayerLookup,
   PlayerPage,
   RankedDaySummary,
   RefreshStatus,
   SummarizedSeasonRef,
 } from "../../app/lib/contracts";
 import { PythonApiError } from "../../app/services/python.server";
-import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
+import PlayerRoute, {
+  loader as playerLoader,
+  playerLookupView,
+} from "../../app/routes/player";
 import { isRefreshStatusPayload } from "../../app/lib/validation";
 import { createClientAddressContext } from "../../app/server/client-address.server";
 
@@ -931,6 +935,59 @@ describe("automatic tag lookup", () => {
     expect(html).not.toContain('class="player-refresh-form"');
     expect(html).toContain("Saved Legend history");
     expect(html).toContain("Saved opponent");
+  });
+
+  it.each([
+    "no_legend_battles",
+    "season_unconfirmed",
+    "unknown_tier",
+    "profile_rejected",
+  ])("rereads an explained %s page once a minute, never once a second", (reason) => {
+    const view = playerLookupView(
+      PLAYER,
+      { tag: TAG, state: "tracking", reason } as PlayerLookup,
+      true,
+    );
+    expect(view).toMatchObject({
+      trackedPlayer: null,
+      minuteChecks: true,
+      isChecking: false,
+    });
+  });
+
+  it("keeps rereading once a minute after a failed lookup, without showing older results", () => {
+    expect(playerLookupView(PLAYER, null, true)).toMatchObject({
+      trackedPlayer: null,
+      lookup: null,
+      minuteChecks: true,
+      isChecking: false,
+    });
+    // Before any explanation a failed lookup still shows the saved page.
+    expect(playerLookupView(PLAYER, null, false).trackedPlayer).toBe(PLAYER);
+  });
+
+  it("keeps rereading once a minute when the profile is accepted between the two reads", () => {
+    expect(playerLookupView(null, { tag: TAG, state: "tracking" }, true)).toMatchObject({
+      minuteChecks: true,
+      isChecking: false,
+    });
+  });
+
+  it.each([
+    [PLAYER, { tag: TAG, state: "tracking" }],
+    [null, { tag: TAG, state: "not_in_legend" }],
+  ] as const)(
+    "stops rereading after a successful lookup gives an answer",
+    (player, lookup) => {
+      expect(playerLookupView(player, lookup, true).minuteChecks).toBe(false);
+    },
+  );
+
+  it("keeps the one-second check for a first-time lookup", () => {
+    expect(playerLookupView(null, { tag: TAG, state: "tracking" }, false)).toMatchObject({
+      minuteChecks: false,
+      isChecking: true,
+    });
   });
 
   it.each([
