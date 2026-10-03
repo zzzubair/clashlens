@@ -508,6 +508,17 @@ class CollectorDatabase:
             for row in rows
         ]
 
+    def defer_regular_check(self, player_id: int, until: datetime) -> None:
+        """Make an active player's next regular check due no earlier than `until`."""
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE players SET next_due_at = %s
+                WHERE id = %s AND active = true AND next_due_at < %s
+                """,
+                (until, player_id, until),
+            )
+
     def regular_admission_open(self, now: datetime) -> bool:
         with self._connection() as connection:
             return self._regular_admission_open(connection, now)

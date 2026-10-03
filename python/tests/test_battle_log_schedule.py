@@ -655,3 +655,115 @@ def test_opponent_mark_during_a_profile_change_outlasts_its_follow_up() -> None:
 
     state.log(OPPONENT, now + timedelta(seconds=91), _battle(TAG, now, attack=False))
     assert not state.due(OPPONENT, now + timedelta(seconds=93))
+
+
+NEXT_RESET = datetime(2026, 10, 3, 5, tzinfo=UTC)
+# Untracked opponents, one per battle.
+OPPONENTS = [f"#{first}{second}V" for first in "PYLQG" for second in "GRJC"]
+
+
+def _day(
+    last_at: datetime, *, attacks: int = 8, defenses: int = 8
+) -> list[dict[str, Any]]:
+    """A Legend day's battles, a minute apart, the last one at `last_at`."""
+    sides = [True] * attacks + [False] * defenses
+    return [
+        _battle(OPPONENTS[index], last_at - timedelta(minutes=index), attack=attack)
+        for index, attack in enumerate(sides)
+    ]
+
+
+def _recheck_at(state: _Schedule, at: datetime) -> datetime | None:
+    return state.schedule.finished_recheck_at(TAG, profile_usable=True, now=at)
+
+
+def _finish(state: _Schedule, *battles: dict[str, Any]) -> datetime:
+    """Save a log of `battles` and an unchanged profile; returns the check time."""
+    now = state.settle(TAG)
+    state.log(TAG, now, *battles)
+    state.profile(TAG, now)
+    return now
+
+
+def test_finished_player_gets_only_a_profile_check_every_8_minutes() -> None:
+    state = _Schedule()
+    now = _finish(state, *_day(START + timedelta(minutes=2) - timedelta(minutes=15)))
+
+    assert _recheck_at(state, now) == now + timedelta(minutes=8)
+    # No battle can change the log, so even the 15-minute safety fetch stops.
+    assert not state.due(TAG, now + timedelta(minutes=20))
+    # The last check before the Reset waits only for the Reset.
+    before_reset = NEXT_RESET - timedelta(minutes=3)
+    assert _recheck_at(state, before_reset) == NEXT_RESET
+    # The Reset sweep's log starts the new day with no battles.
+    after_reset = NEXT_RESET + timedelta(minutes=20)
+    assert _recheck_at(state, after_reset) is None
+    assert state.due(TAG, after_reset)
+
+
+@pytest.mark.parametrize(("attacks", "defenses"), [(7, 8), (8, 7), (9, 8), (8, 9)])
+def test_player_without_exactly_8_of_each_keeps_being_checked(
+    attacks: int, defenses: int
+) -> None:
+    state = _Schedule()
+    last_at = START - timedelta(minutes=30)
+    now = _finish(state, *_day(last_at, attacks=attacks, defenses=defenses))
+
+    assert _recheck_at(state, now) is None
+
+
+def test_finished_player_is_checked_until_the_last_battle_is_15_minutes_old() -> None:
+    state = _Schedule()
+    now = _finish(state, *_day(START - timedelta(minutes=12)))
+
+    # The attacker's profile can still show the last attack late.
+    assert _recheck_at(state, now) is None
+    later = START + timedelta(minutes=3)
+    state.profile(TAG, later)
+    assert _recheck_at(state, later) == later + timedelta(minutes=8)
+
+
+def test_finished_player_whose_profile_just_changed_keeps_being_checked() -> None:
+    state = _Schedule()
+    now = _finish(state, *_day(START - timedelta(minutes=30)))
+    state.profile(TAG, now + timedelta(seconds=90), trophies=5_040)
+
+    assert _recheck_at(state, now + timedelta(seconds=90)) is None
+    assert state.due(TAG, now + timedelta(seconds=90))
+    assert not state.schedule.finished_recheck_at(
+        TAG, profile_usable=False, now=now + timedelta(seconds=90)
+    )
+
+
+def test_log_with_a_malformed_row_never_counts_as_finished() -> None:
+    state = _Schedule()
+    battles = _day(START - timedelta(minutes=30))
+    unreadable = battles[0] | {"stars": "three"}
+
+    now = _finish(state, *battles, unreadable)
+
+    assert _recheck_at(state, now) is None
+
+
+def test_finished_player_is_checked_every_8_minutes_with_the_profile_only(
+    game: SimpleNamespace,
+) -> None:
+    deferred: list[tuple[int, datetime]] = []
+    game.collector.database.defer_regular_check = lambda player_id, until: (
+        deferred.append((player_id, until))
+    )
+    game.settle()
+    # The 16th battle shows in the log as the profile catches up with it.
+    game.client.logs[TAG] = _day(START - timedelta(minutes=30))
+    game.client.profile()["trophies"] = 5_040
+    assert game.check() == BOTH
+    assert deferred == []
+
+    # The follow-up log confirms the profile settled.
+    assert game.check() == BOTH
+    assert deferred == [(1, game.clock[0] + timedelta(minutes=8))]
+
+    # Later checks skip the battle log, even past the 15-minute safety fetch.
+    assert game.check(after=timedelta(minutes=8)) == PROFILE
+    assert game.check(after=timedelta(minutes=8)) == PROFILE
+    assert deferred[-1] == (1, game.clock[0] + timedelta(minutes=8))

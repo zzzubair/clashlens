@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row
+from .domain import RANKED_DAY_DURATION, battle_day_for, ranked_day_for
+from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 # Read from each valid profile. A defender's profile shows a battle at once;
 # an attacker's often shows an attack many minutes late.
@@ -43,6 +45,15 @@ ATTACK_WATCH = timedelta(minutes=10)
 # The two players' logs time the same battle differently: the attacker's
 # battleTimestamp was 108-211 s after the defender's on 2026-10-02.
 SAME_BATTLE_GAP = timedelta(minutes=5)
+# A Clasher with 8 attacks and 8 defenses on the current Legend day can battle
+# no more until the next Reset. The attacker's profile can still show the last
+# attack late: from September 29 to October 3, 2026, trophies changed more than
+# 15 minutes after the 16th battle on 177 of 40,743 such days (0.43%).
+FINISHED_SETTLE = timedelta(minutes=15)
+# Until that Reset a finished Clasher's profile is still checked this often,
+# without the battle log, so their page and Live Leaderboard entry, stale after
+# 10 minutes, stay fresh even when a check starts a minute or two late.
+FINISHED_RECHECK = timedelta(minutes=8)
 # Players whose tag's SHA-256 starts with a byte below this (13/256, about 5%)
 # fetch both responses on every check. Comparing them with everyone else
 # measures how much later battle details appear. The same group in SQL:
@@ -78,6 +89,9 @@ class _Player:
     battles: bytes = b""
     # Digests of the malformed rows of the last log, each of its own content.
     malformed: bytes = b""
+    # The Legend day on which the last log showed exactly 8 valid attacks and
+    # 8 valid defenses, with no malformed rows.
+    finished_day: datetime | None = None
 
 
 class BattleLogSchedule:
@@ -111,6 +125,7 @@ class BattleLogSchedule:
             # a corrected copy. Live logs keep rows with no opponent for days.
             complete = _row_digests(malformed) <= _row_digests(player.malformed)
             player.malformed = malformed
+            player.finished_day = None if malformed else _finished_day(battles)
             if complete:
                 _note_complete_log(player, started_at, completed_at)
             else:
@@ -169,8 +184,60 @@ class BattleLogSchedule:
             or in_control_group(normalized_tag)
             or player.owed > 0
             or player.battle_log_at is None
-            or now - player.battle_log_at >= SAFETY_INTERVAL
+            or (
+                now - player.battle_log_at >= SAFETY_INTERVAL
+                and _next_reset(player, now) is None
+            )
         )
+
+    def finished_recheck_at(
+        self,
+        normalized_tag: str,
+        *,
+        profile_usable: bool,
+        now: datetime,
+    ) -> datetime | None:
+        """When a Clasher who finished the Legend day needs the next check.
+
+        That is FINISHED_RECHECK later, or the next Reset if sooner, when the
+        last saved battle log shows exactly 8 valid attacks and 8 valid
+        defenses on the Legend day of `now`, with no malformed rows; this
+        check's profile was usable; no battle-log fetch is owed, so the profile
+        did not change since the previous check; and the last battle is at
+        least FINISHED_SETTLE old.
+        """
+        player = self._players.get(normalized_tag)
+        if not profile_usable or player is None or player.owed > 0:
+            return None
+        reset = _next_reset(player, now)
+        return None if reset is None else min(now + FINISHED_RECHECK, reset)
+
+
+def _next_reset(player: _Player, now: datetime) -> datetime | None:
+    """The next Reset, when the player finished the Legend day of `now`."""
+    if (
+        player.finished_day is None
+        or player.latest_battle_at is None
+        or now - player.latest_battle_at < FINISHED_SETTLE
+        or ranked_day_for(now).start != player.finished_day
+    ):
+        return None
+    return player.finished_day + RANKED_DAY_DURATION
+
+
+def _finished_day(battles: list[tuple[datetime, str, bool]]) -> datetime | None:
+    """The log's newest Legend day, when it has every attack and defense."""
+    days = [battle_day_for(battle_at).start for battle_at, _tag, _attack in battles]
+    if not days:
+        return None
+    day = max(days)
+    attacks = sum(
+        1 for (_at, _tag, attack), on in zip(battles, days) if attack and on == day
+    )
+    defenses = days.count(day) - attacks
+    if attacks == MAX_DAILY_ATTACKS and defenses == MAX_DAILY_DEFENSES:
+        return day
+    return None
 
 
 def _has_battle(
