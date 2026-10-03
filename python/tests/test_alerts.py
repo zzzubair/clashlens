@@ -268,7 +268,8 @@ def test_retry_keeps_original_incident_even_if_it_recovers(runtime, status, caps
     trigger(rt, "reads", False)
     rt.post_status = 204
     assert rt.run() == 0
-    assert rt.posts[0] == first
+    assert rt.posts == [first]
+    assert rt.run() == 0
     assert len(rt.posts) == 2
     assert "recovered" in rt.posts[1]["content"]
     assert rt.run() == 0
@@ -537,15 +538,21 @@ def test_retried_alert_still_waits_fifteen_clear_minutes_to_recover(
     rt = runtime
     for name, value in rt.holds.items():
         monkeypatch.setattr(alerts, name, value)
+    # Rejected at 12:00, clear from 12:01, still rejected until 12:16.
+    rt.now = datetime(2026, 9, 28, 12, 0, tzinfo=UTC).timestamp()
     trigger(rt, "reads")
     rt.post_status = 500
     assert rt.run() == 1
-    rt.now += 60
-    cleared = rt.now
     trigger(rt, "reads", False)
+    cleared = rt.now + 60
+    for _ in range(15):
+        rt.now += 60
+        assert rt.run() == 1
+    rt.now += 60
     rt.post_status = 204
     assert rt.run() == 0
     assert len(rt.posts) == 1
+    assert "recovered" not in rt.posts[0]["content"]
     rt.now += 899
     assert rt.run() == 0
     assert len(rt.posts) == 1
@@ -1344,6 +1351,7 @@ def test_delayed_backup_delivery_retry_keeps_first_observed_time(runtime):
     rt.backup_error = None
     rt.post_status = 204
     assert rt.run() == 0
+    assert rt.posts == [first]
+    assert rt.run() == 0
     assert len(rt.posts) == 2
-    assert rt.posts[0] == first
     assert f"Incident first observed {started}." in rt.posts[1]["content"]

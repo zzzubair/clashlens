@@ -300,13 +300,17 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def hold_recoveries(state: dict, findings: dict[str, bool | None], now: float) -> None:
-    """Keep an alerted incident open until RECOVERY_HOLD seconds of clear checks."""
+    """Keep an alerted incident open until RECOVERY_HOLD seconds of clear checks
+    after its alert was delivered."""
     for name, active in findings.items():
         incident = state.setdefault("incidents", {}).setdefault(name, {"active": False})
         if incident.get("clear_since", now) < state.get("resumed_at", 0):
             del incident["clear_since"]  # Stopped time is not clear time.
         if active is False and incident.get("pending", incident)["active"]:
-            if now - incident.setdefault("clear_since", now) < RECOVERY_HOLD:
+            start = max(
+                incident.setdefault("clear_since", now), incident.get("alerted_at", 0)
+            )
+            if incident.get("pending") or now - start < RECOVERY_HOLD:
                 findings[name] = None
         else:
             incident.pop("clear_since", None)
@@ -358,6 +362,8 @@ def deliver(
                 failed = True
                 break
             incident["active"] = pending["active"]
+            if pending["active"]:
+                incident["alerted_at"] = now
             del incident["pending"]
             save_state(path, state)
     return not failed

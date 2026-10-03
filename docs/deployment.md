@@ -819,6 +819,8 @@ Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.
 A recovery is sent only after **15 minutes** (900 seconds) of checks that all
 show the condition clear, and it reports when the condition first cleared.
+The 15 minutes count only from when Discord accepted the alert, so an alert
+delivered late on retry is never followed straight away by its recovery.
 If the problem returns sooner, the open incident continues with no new
 message, so several short incidents become one alert and one recovery.
 An unavailable measurement or an intentional stop restarts the 15 minutes,
@@ -828,8 +830,9 @@ Missing disk measurements or restart history never clear an existing alert.
 `alerts.json` and `alerts.lock` live under the existing private ops state
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
 replaced with mode 600 and contains eleven condition records with at most one
-pending transition and one first-clear time each, plus when backup check
-timeouts or errors and Live Leaderboard staleness began, normally under 4 KiB.
+pending transition, one first-clear time and one last alert delivery time
+each, plus when backup check timeouts or errors and Live Leaderboard staleness
+began, normally under 4 KiB.
 It keeps no growing event history, keys, URLs, player lists or account data.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
