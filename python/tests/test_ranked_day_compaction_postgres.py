@@ -209,6 +209,32 @@ def test_extra_copies_go_once_the_reset_is_done_and_what_players_see_stays(
             database.close()
 
 
+def _published_agreeing_days(connection_info, archive_server, database, processor):
+    """Publish DAY and the day after with a late defense both players agree on."""
+    _seed_battle_anchor(connection_info, ANCHOR)
+    battle_time = DAY + timedelta(days=1, seconds=-10)
+    _process(processor, store_observation(
+        connection_info, archive_server,
+        occurrence_key="attacker-log", endpoint="battle_log",
+        body=json.dumps({"items": [_live_battle_row(
+            attack=True, battle_timestamp=battle_time, opponent_tag=TAG,
+            opponent_name="Defender", stars=0, destruction_percentage=49,
+        )]}).encode(),
+        observed_at=battle_time + timedelta(seconds=5),
+        normalized_tag=OPPONENT,
+        parser_version=LIVE_BATTLE_PARSER_VERSION,
+    )[1])
+    agreeing = {**_late_defense(), "armyShareCode": "u1x0-2x1"}
+    _save_log(connection_info, archive_server, processor, key="agreeing-log",
+              rows=[agreeing], observed_at=battle_time + timedelta(seconds=5))
+    for day in (DAY, DAY + timedelta(days=1)):
+        _process(processor, reconciliation_db.enqueue_reconciliation(
+            database, player_tag=OPPONENT, day_start=day, now=day,
+            request_key=f"published-{day.isoformat()}",
+        ))
+    return agreeing
+
+
 def test_late_corrections_after_cleanup_save_the_same_results(
     database_url: str, archive_server
 ) -> None:
@@ -218,28 +244,10 @@ def test_late_corrections_after_cleanup_save_the_same_results(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _sweep_processor(connection_info, archive_server)
         try:
-            _seed_battle_anchor(connection_info, ANCHOR)
-            battle_time = DAY + timedelta(days=1, seconds=-10)
-            _process(processor, store_observation(
-                connection_info, archive_server,
-                occurrence_key="attacker-log", endpoint="battle_log",
-                body=json.dumps({"items": [_live_battle_row(
-                    attack=True, battle_timestamp=battle_time, opponent_tag=TAG,
-                    opponent_name="Defender", stars=0, destruction_percentage=49,
-                )]}).encode(),
-                observed_at=battle_time + timedelta(seconds=5),
-                normalized_tag=OPPONENT,
-                parser_version=LIVE_BATTLE_PARSER_VERSION,
-            )[1])
-            agreeing = {**_late_defense(), "armyShareCode": "u1x0-2x1"}
-            _save_log(connection_info, archive_server, processor, key="agreeing-log",
-                      rows=[agreeing], observed_at=battle_time + timedelta(seconds=5))
+            agreeing = _published_agreeing_days(
+                connection_info, archive_server, database, processor
+            )
             next_day = DAY + timedelta(days=1)
-            for day in (DAY, next_day):
-                _process(processor, reconciliation_db.enqueue_reconciliation(
-                    database, player_tag=OPPONENT, day_start=day, now=day,
-                    request_key=f"published-{day.isoformat()}",
-                ))
             first = _published(connection_info, DAY, OPPONENT)[1]
             with psycopg.connect(connection_info) as connection:
                 first_input = connection.execute(
@@ -290,5 +298,66 @@ def test_late_corrections_after_cleanup_save_the_same_results(
                 assert len(_copies(connection, OPPONENT, next_day)) == 1
             assert _published(connection_info, DAY, OPPONENT)[1] == restored
             assert _previous_day_version(connection_info, next_day, OPPONENT) == restored
+        finally:
+            database.close()
+
+
+def test_a_result_made_current_again_before_cleanup_stays_unchanged_after_it(
+    database_url: str, archive_server
+) -> None:
+    # The day's result goes A, B, then back to A before any cleanup, so the
+    # last copy is saved as A made current again over B. After the day and
+    # the day after it are cleaned, recalculating with the same inputs must
+    # find that result unchanged.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _sweep_processor(connection_info, archive_server)
+        try:
+            agreeing = _published_agreeing_days(
+                connection_info, archive_server, database, processor
+            )
+            next_day = DAY + timedelta(days=1)
+            first = _published(connection_info, DAY, OPPONENT)[1]
+            boundary = DAY + timedelta(days=2)
+            _finish_reset_sweep(connection_info, boundary)
+            _save_log(connection_info, archive_server, processor,
+                      key="disagreeing-log",
+                      rows=[{**agreeing, "armyShareCode": "u3x0-2x1"}],
+                      observed_at=DAY + timedelta(days=1, minutes=20))
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=31)
+            ) == (1, 0)
+            disputed = _published(connection_info, DAY, OPPONENT)[1]
+            _save_log(connection_info, archive_server, processor,
+                      key="agreeing-again-log", rows=[agreeing],
+                      observed_at=DAY + timedelta(days=1, minutes=40))
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=41)
+            ) == (1, 0)
+            restored = _published(connection_info, DAY, OPPONENT)[1]
+            assert len({first, disputed, restored}) == 3
+
+            assert _compact(
+                connection_info, boundary + timedelta(minutes=52)
+            )["deleted_versions"] >= 1
+            with psycopg.connect(connection_info) as connection:
+                kept = _copies(connection, OPPONENT, DAY)
+                assert [row[0] for row in kept] == [first, disputed, restored]
+                assert kept[-1][1] == disputed
+                next_day_copies = _copies(connection, OPPONENT, next_day)
+                corrections = connection.execute(
+                    "SELECT count(*) FROM boundary_publication_corrections"
+                ).fetchone()[0]
+
+            _process(processor, reconciliation_db.enqueue_reconciliation(
+                database, player_tag=OPPONENT, day_start=DAY,
+                now=boundary + timedelta(minutes=53), request_key="late-same-inputs",
+            ))
+            with psycopg.connect(connection_info) as connection:
+                assert _copies(connection, OPPONENT, DAY) == kept
+                assert _copies(connection, OPPONENT, next_day) == next_day_copies
+                assert connection.execute(
+                    "SELECT count(*) FROM boundary_publication_corrections"
+                ).fetchone()[0] == corrections
+            assert _published(connection_info, DAY, OPPONENT)[1] == restored
         finally:
             database.close()

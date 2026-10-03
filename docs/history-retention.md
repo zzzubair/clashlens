@@ -200,7 +200,11 @@ adjustments. It keeps:
 - every copy a publication generation, publication manifest, frozen
   leaderboard, analytics summary, army fact or queued publication correction
   points at;
-- the copy the following day's newest copy was built from.
+- the copy the following day's newest copy was built from;
+- for a kept copy that made an earlier result current again, the copy it
+  replaced and the copy holding that earlier result. Its hash is built from
+  both: recalculation needs the replaced copy to find the result unchanged,
+  and later cleanup passes need the earlier result to recognise the hash.
 
 A kept copy that named a deleted copy as the one it replaced names the
 nearest older kept copy instead, or none. Each batch covers 200 players of the

@@ -4,9 +4,13 @@
 -- and only the newest is shown. A copy is kept when it is the newest, when
 -- the newest daily log of its day points at it, when a publication, analytics
 -- row or queued publication correction points at it, or when the following
--- day's newest copy was built from it. Every other copy of an ended day goes,
--- with its daily log and adjustments. A kept copy that named a deleted copy
--- as the one it replaced names the nearest older kept copy instead, or none.
+-- day's newest copy was built from it. A kept copy that made an earlier
+-- result current again has a hash built from that result and the copy it
+-- replaced: recalculation needs the replaced copy to find the result
+-- unchanged, and later passes need the earlier result to recognise the hash,
+-- so both stay. Every other copy of an ended day goes, with its daily log and
+-- adjustments. A kept copy that named a deleted copy as the one it replaced
+-- names the nearest older kept copy instead, or none.
 --
 -- clashlens_compact_ranked_days does one bounded batch: up to player_limit
 -- players of the oldest day that has copies no finished pass has covered,
@@ -123,7 +127,8 @@ BEGIN
 
     WITH saved AS (
         SELECT version.id, version.player_id, version.ranked_day_start,
-               version.reconciliation_rule_version,
+               version.reconciliation_rule_version, version.result_hash,
+               version.replaces_version_id,
                version.version < max(version.version) OVER (
                    PARTITION BY version.player_id, version.ranked_day_start,
                                 version.reconciliation_rule_version
@@ -131,58 +136,79 @@ BEGIN
         FROM ranked_day_versions AS version
         WHERE version.player_id = ANY(batch_players)
           AND version.ranked_day_start IN (target_day - interval '24 hours', target_day)
+    ), unneeded AS (
+        SELECT saved.id FROM saved
+        WHERE saved.superseded
+          AND NOT EXISTS (
+              SELECT 1 FROM (
+                  SELECT log.ranked_day_version_id
+                  FROM api_player_daily_logs AS log
+                  WHERE log.player_id = saved.player_id
+                    AND log.ranked_day_start = saved.ranked_day_start
+                  ORDER BY log.version DESC
+                  LIMIT 1
+              ) AS newest_log
+              WHERE newest_log.ranked_day_version_id = saved.id
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM (
+                  SELECT later.input_evidence -> 'previous_day' ->> 'version_id' AS built_from
+                  FROM ranked_day_versions AS later
+                  WHERE later.player_id = saved.player_id
+                    AND later.ranked_day_start = saved.ranked_day_start + interval '24 hours'
+                    AND later.reconciliation_rule_version = saved.reconciliation_rule_version
+                  ORDER BY later.version DESC
+                  LIMIT 1
+              ) AS next_day
+              WHERE next_day.built_from = saved.id::text
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM boundary_publication_generation_members AS member
+              WHERE member.ranked_day_version_id = saved.id
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM boundary_publication_manifest_rows AS manifest_row
+              WHERE manifest_row.ranked_day_version_id = saved.id
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM boundary_publication_corrections AS correction
+              CROSS JOIN LATERAL jsonb_array_elements(correction.pending_inputs) AS pending(input)
+              WHERE pending.input ->> 'ranked_day_version_id' = saved.id::text
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM leaderboard_snapshots AS snapshot
+              WHERE snapshot.source_ranked_day_version_id = saved.id
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM analytics_summaries AS summary
+              WHERE summary.source_ranked_day_version_id = saved.id
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM army_analytics_battle_facts AS fact
+              WHERE fact.source_ranked_day_version_id = saved.id
+          )
+    ), restored AS (
+        -- Kept copies that made an earlier result current again, with the
+        -- copy each replaced and the copy holding that earlier result.
+        SELECT restoring.replaces_version_id, original.id AS original_id
+        FROM saved AS restoring
+        JOIN ranked_day_versions AS original
+          ON original.player_id = restoring.player_id
+         AND original.ranked_day_start = restoring.ranked_day_start
+         AND original.reconciliation_rule_version = restoring.reconciliation_rule_version
+        WHERE restoring.replaces_version_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM unneeded WHERE unneeded.id = restoring.id)
+          AND restoring.result_hash = encode(sha256(convert_to(
+              original.result_hash || ':restores-over:' || restoring.replaces_version_id,
+              'UTF8'
+          )), 'hex')
     )
-    SELECT coalesce(array_agg(saved.id), '{}') INTO doomed
-    FROM saved
-    WHERE saved.superseded
-      AND NOT EXISTS (
-          SELECT 1 FROM (
-              SELECT log.ranked_day_version_id
-              FROM api_player_daily_logs AS log
-              WHERE log.player_id = saved.player_id
-                AND log.ranked_day_start = saved.ranked_day_start
-              ORDER BY log.version DESC
-              LIMIT 1
-          ) AS newest_log
-          WHERE newest_log.ranked_day_version_id = saved.id
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM (
-              SELECT later.input_evidence -> 'previous_day' ->> 'version_id' AS built_from
-              FROM ranked_day_versions AS later
-              WHERE later.player_id = saved.player_id
-                AND later.ranked_day_start = saved.ranked_day_start + interval '24 hours'
-                AND later.reconciliation_rule_version = saved.reconciliation_rule_version
-              ORDER BY later.version DESC
-              LIMIT 1
-          ) AS next_day
-          WHERE next_day.built_from = saved.id::text
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM boundary_publication_generation_members AS member
-          WHERE member.ranked_day_version_id = saved.id
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM boundary_publication_manifest_rows AS manifest_row
-          WHERE manifest_row.ranked_day_version_id = saved.id
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM boundary_publication_corrections AS correction
-          CROSS JOIN LATERAL jsonb_array_elements(correction.pending_inputs) AS pending(input)
-          WHERE pending.input ->> 'ranked_day_version_id' = saved.id::text
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM leaderboard_snapshots AS snapshot
-          WHERE snapshot.source_ranked_day_version_id = saved.id
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM analytics_summaries AS summary
-          WHERE summary.source_ranked_day_version_id = saved.id
-      )
-      AND NOT EXISTS (
-          SELECT 1 FROM army_analytics_battle_facts AS fact
-          WHERE fact.source_ranked_day_version_id = saved.id
-      );
+    SELECT coalesce(array_agg(unneeded.id), '{}') INTO doomed
+    FROM unneeded
+    WHERE NOT EXISTS (
+        SELECT 1 FROM restored
+        WHERE unneeded.id IN (restored.replaces_version_id, restored.original_id)
+    );
 
     deleted_versions := 0;
     deleted_logs := 0;
