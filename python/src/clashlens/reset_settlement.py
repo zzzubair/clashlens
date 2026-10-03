@@ -564,8 +564,9 @@ def refresh_terminal_work(database: Database, *, batch: int = 100) -> int:
     """Judge up to ``batch`` finished checks that no processed response will.
 
     A check that failed or expired before saving both responses has nothing
-    for the worker to process, so the maintenance timer judges it here. Only
-    Resets from the last two days are looked at. Returns how many it judged.
+    for the worker to process, so the maintenance timer judges it here.
+    Resets in a finalized Season keep their verdict and are skipped. Returns
+    how many it judged.
     """
     with database.pool.connection() as connection:
         if not _has_settlements(database, connection):
@@ -580,7 +581,11 @@ def refresh_terminal_work(database: Database, *, batch: int = 100) -> int:
             JOIN reset_boundary_settlements AS settlement
               ON settlement.player_id = work.player_id
              AND settlement.boundary_at = sweep.boundary_at
-            WHERE sweep.boundary_at > clock_timestamp() - interval '2 days'
+            WHERE NOT EXISTS (
+                    SELECT 1 FROM season_detail_retirements AS season
+                    WHERE season.status IN ('finalized', 'retired')
+                      AND season.season_start <= sweep.boundary_at - interval '1 day'
+                      AND season.season_end > sweep.boundary_at - interval '1 day')
               AND work.status IN ('complete', 'failed', 'cancelled')
               AND settlement.state = 'provisional'
               AND (settlement.reasons = '[]'::jsonb

@@ -18,7 +18,7 @@ from test_reconciliation_postgres import BATTLE_FIXTURE, DAY_END, _processor, _p
 
 from clashlens import reset_settlement
 from clashlens.collector_db import BATTLE_PARSER_VERSION, PROFILE_PARSER_VERSION
-from clashlens.domain import allocate_trophies
+from clashlens.domain import allocate_trophies, ranked_day_for
 from clashlens.season_finalization_guard import close_blockers
 
 TAG = "#2PP"
@@ -273,7 +273,7 @@ def test_terminal_work_refresh_and_fence_use_dependency_days(
                 ).fetchone()[0]
                 checks = {}
                 for boundary, status in ((recent, "failed"), (recent - DAY, "pending"),
-                                         (RESET, "failed")):
+                                         (recent - 3 * DAY, "failed"), (RESET, "failed")):
                     sweep = connection.execute(
                         "INSERT INTO collector_reset_sweeps (boundary_at, member_ids,"
                         " membership_captured_at) VALUES (%s, %s, %s) RETURNING id",
@@ -295,11 +295,19 @@ def test_terminal_work_refresh_and_fence_use_dependency_days(
                         " sweep_id, delayed_work_id) VALUES (%s, %s, %s, %s)",
                         (player, boundary, sweep, checks[boundary]),
                     )
+                ended = ranked_day_for(RESET - DAY)
+                connection.execute(
+                    "INSERT INTO season_detail_retirements (official_season_id,"
+                    " season_start, season_end) VALUES (%s, %s, %s)",
+                    (ended.official_season_id, ended.season_start, ended.season_end),
+                )
             # A check that failed before saving anything has no response to
-            # process: only the maintenance pass judges it, and only recent ones.
-            assert reset_settlement.refresh_terminal_work(database) == 1
-            assert _verdict(connection_info, recent)[:3] == (
-                "unresolved", None, ["settlement_profile_missing"])
+            # process: only the maintenance pass judges it, however old,
+            # unless its Season is finalized.
+            assert reset_settlement.refresh_terminal_work(database) == 2
+            for boundary in (recent, recent - 3 * DAY):
+                assert _verdict(connection_info, boundary)[:3] == (
+                    "unresolved", None, ["settlement_profile_missing"])
             assert _verdict(connection_info, RESET)[:3] == ("provisional", None, [])
             assert reset_settlement.refresh_terminal_work(database) == 0
 
@@ -313,11 +321,6 @@ def test_terminal_work_refresh_and_fence_use_dependency_days(
 
             # Finalizing the ended day's Season freezes the verdict.
             with psycopg.connect(connection_info) as connection:
-                from clashlens.domain import ranked_day_for
-                connection.execute(
-                    "INSERT INTO season_detail_retirements (official_season_id) VALUES (%s)",
-                    (ranked_day_for(RESET - DAY).official_season_id,),
-                )
                 reset_settlement.refresh_boundary(database, connection, player, RESET)
             assert _verdict(connection_info, RESET)[:3] == ("provisional", None, [])
         finally:
