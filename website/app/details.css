@@ -704,6 +704,61 @@
     border-left: 0;
     border-top: 1px solid var(--cl-border);
   }
+  /* Phones: flex rows let Usage and 3-star sit next to the pinned name. */
+  .analytics-page .analytics-results-table {
+    display: block;
+    width: max-content;
+    min-width: 0;
+  }
+  .analytics-page .analytics-results-table tbody {
+    display: block;
+  }
+  .analytics-page .analytics-results-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: block;
+  }
+  .analytics-page .analytics-results-table tr {
+    display: flex;
+  }
+  .analytics-page .analytics-results-table :is(th, td),
+  .analytics-page .analytics-results-table .analytics-sort-button {
+    padding-inline: 0.5rem;
+  }
+  .analytics-page .analytics-results-table :is(th, td) {
+    display: flex;
+    flex: 0 0 6rem;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    order: 3;
+  }
+  .analytics-page
+    .analytics-results-table
+    :is(.analytics-sort-button, .analytics-star-count) {
+    white-space: normal;
+  }
+  .analytics-page .analytics-results-table tr > th:first-child {
+    flex-basis: clamp(4.5rem, 100vw - 2rem - 2px - 12rem, 9rem);
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    order: 0;
+  }
+  .analytics-page .analytics-results-table [data-column="usage-rate"] {
+    order: 1;
+  }
+  .analytics-page .analytics-results-table [data-column="three-star-rate"] {
+    order: 2;
+  }
+  .analytics-page .analytics-results-table [data-column="usage-count"] {
+    flex-basis: 9rem;
+  }
+  .analytics-page .analytics-results-table td[colspan] {
+    flex: 1 0 auto;
+  }
 }
 @media (max-width: 34rem) {
   .player-page,
