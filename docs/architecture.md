@@ -153,7 +153,8 @@ The running worker with more than one thread has no batches and ignores
 finds the queue empty or the spool unreadable waits `--poll-interval-seconds`
 and tries again, so one long job never leaves the other threads idle. Queue
 maintenance and the Reset publication checks run on their own timer thread
-every 10 seconds, so they neither wait for a job nor hold the threads. A failed
+every 10 seconds, with their own two database connections, so they neither
+wait for a job or a connection nor hold one a thread needs. A failed
 round is logged as `worker_maintenance` with only its error type and retried
 10 seconds later. A single-thread worker still claims `--max-jobs` jobs per
 batch and runs maintenance between batches.

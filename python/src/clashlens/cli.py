@@ -18,7 +18,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
-from time import monotonic, time
+from time import time
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -28,8 +28,6 @@ import uvicorn
 from . import (
     api_accounts,
     api_verification,
-    boundary_publication,
-    late_battle_sweep,
     reconciliation_db,
 )
 from . import (
@@ -56,10 +54,12 @@ from .verification import (
     load_official_api_key_file,
 )
 from .worker import (
+    MAINTENANCE_POOL_SIZE,
     MAX_CONCURRENCY,
     ObservationProcessor,
     ProcessResult,
     StageMetrics,
+    TimedMaintenance,
     process_concurrently,
     process_until_stopped,
 )
@@ -816,15 +816,19 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         if arguments.archive_pool_size is not None
         else (max(4, concurrency) if concurrency > 1 else 4)
     )
-    database = Database(
-        _database_url(arguments),
-        max_size=database_pool_size,
-        expected_contract_version=CONTRACT_VERSION,
-        player_discovery_enabled=not getattr(
-            arguments, "disable_player_discovery", False
-        ),
-        statement_timeout_seconds=_db.WORKER_STATEMENT_TIMEOUT_SECONDS,
-    )
+
+    def open_database(max_size: int) -> Database:
+        return Database(
+            _database_url(arguments),
+            max_size=max_size,
+            expected_contract_version=CONTRACT_VERSION,
+            player_discovery_enabled=not getattr(
+                arguments, "disable_player_discovery", False
+            ),
+            statement_timeout_seconds=_db.WORKER_STATEMENT_TIMEOUT_SECONDS,
+        )
+
+    database = maintenance_database = open_database(database_pool_size)
     assert_contract_version = getattr(database, "assert_contract_version", None)
     if callable(assert_contract_version):
         assert_contract_version(CONTRACT_VERSION)
@@ -849,40 +853,20 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 )
             )
         processor = ObservationProcessor(database, archive)
-        reevaluate = lambda: (
-            boundary_publication.reevaluate_boundary_publications(database)
-            if isinstance(database, _db.Database)
-            else None
-        )
-        reevaluate()
+        if arguments.run_forever and concurrency > 1:
+            maintenance_database = open_database(MAINTENANCE_POOL_SIZE)
+        maintenance = TimedMaintenance(maintenance_database, stage_metrics)
+        maintenance.reevaluate()
         if isinstance(processor, ObservationProcessor):
             processor.stage_metrics = stage_metrics
             database.stage_metrics = stage_metrics
-        next_queue_maintenance_at = float("-inf")
-        next_publication_reevaluation_at = float("-inf")
-        late_battles = late_battle_sweep.LateBattleSweep(database)
-
-        def run_due_maintenance() -> None:
-            nonlocal next_queue_maintenance_at, next_publication_reevaluation_at
-            current_time = monotonic()
-            if current_time >= next_publication_reevaluation_at:
-                next_publication_reevaluation_at = current_time + 10
-                reevaluate()
-                late_battles.run_when_due()
-            if current_time >= next_queue_maintenance_at:
-                next_queue_maintenance_at = current_time + 10
-                maintenance_started_at = monotonic()
-                database.maintain_queue(max_jobs=100)
-                stage_metrics.record(
-                    "python_queue_maintenance", monotonic() - maintenance_started_at
-                )
 
         def process_batch() -> list[ProcessResult]:
             # Local spool and PostgreSQL own claim readiness. Remote marker
             # health is telemetry; known local duplicates remain processable.
             if not archive.check_ready():
                 return []
-            run_due_maintenance()
+            maintenance.run_due()
             if concurrency == 1:
                 return processor.process_until_idle(
                     owner=arguments.owner,
@@ -1002,7 +986,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     stop_requested=stop_requested,
                     idle_seconds=arguments.poll_interval_seconds,
                     claims_ready=archive.check_ready,
-                    maintain=run_due_maintenance,
+                    maintain=maintenance.run_due,
                     on_result=report_result,
                 )
             while not stop_requested.is_set():
@@ -1067,6 +1051,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         return 0
     finally:
         database.close()
+        if maintenance_database is not database:
+            maintenance_database.close()
 
 
 def _run_ready(arguments: argparse.Namespace) -> int:

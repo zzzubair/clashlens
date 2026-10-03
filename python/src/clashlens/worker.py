@@ -17,6 +17,7 @@ from . import (
     boundary_publication,
     ingestion,
     job_outcomes,
+    late_battle_sweep,
     reconciliation_db,
     snapshots,
 )
@@ -156,6 +157,40 @@ def lane_owner(owner: str, lane_index: int) -> str:
     if lane_index < 1:
         raise ValueError("lane index must be positive")
     return f"{owner}.lane-{lane_index}"
+
+
+# Connections for the maintenance timer, kept apart from the lanes' pool so a
+# slow round never holds a connection a lane is waiting for.
+MAINTENANCE_POOL_SIZE = 2
+
+
+class TimedMaintenance:
+    """Reset publication checks and queue maintenance, each every 10 seconds."""
+
+    def __init__(self, database: Database, stage_metrics: StageMetrics) -> None:
+        self.database = database
+        self.stage_metrics = stage_metrics
+        self.late_battles = late_battle_sweep.LateBattleSweep(database)
+        self.next_reevaluation_at = float("-inf")
+        self.next_queue_maintenance_at = float("-inf")
+
+    def reevaluate(self) -> None:
+        if isinstance(self.database, Database):
+            boundary_publication.reevaluate_boundary_publications(self.database)
+
+    def run_due(self) -> None:
+        current_time = monotonic()
+        if current_time >= self.next_reevaluation_at:
+            self.next_reevaluation_at = current_time + 10
+            self.reevaluate()
+            self.late_battles.run_when_due()
+        if current_time >= self.next_queue_maintenance_at:
+            self.next_queue_maintenance_at = current_time + 10
+            maintenance_started_at = monotonic()
+            self.database.maintain_queue(max_jobs=100)
+            self.stage_metrics.record(
+                "python_queue_maintenance", monotonic() - maintenance_started_at
+            )
 
 
 def _run_lanes(concurrency: int, claim_loop: Callable[[int, Event], None]) -> None:
