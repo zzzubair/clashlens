@@ -541,7 +541,9 @@ date -u +%FT%TZ
 
 If the first check fails, restore the API immediately before investigating. The
 service must be active before clearing the trap. If startup is not ready yet,
-repeat the recovery check once it is. Delivery prints no message receipt: record
+repeat the recovery check once it is. The recovered message follows only after
+[15 minutes of clear checks](deployment.md#alert-conditions), so expect it from
+the alert timer about 15 minutes later. Delivery prints no message receipt: record
 one problem message and its recovered message, timestamps and message links in
 the private Discord channel. The old September 27 test message does not count.
 Run `./ops alert-check` again and expect no unchanged-message duplicate. Observe

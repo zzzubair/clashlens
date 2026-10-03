@@ -743,9 +743,9 @@ use the [operating notes](operating.md#respond-to-alerts).
   row; an unavailable check restarts the count but keeps an open alert open).
   Exactly 5% or exactly 20 minutes does not count. It is neither raised nor
   cleared during the **04:55–05:00 UTC** Reset pause or while Reset work is
-  unfinished or unknown, measured as for the overdue-check alert, because both leave most players over ten
-  minutes old for a while; the five minutes start again afterwards.
-  Staleness uses the
+  unfinished or unknown, measured as for the overdue-check alert, because both
+  leave most players over ten minutes old for a while; the five minutes start
+  again afterwards. Staleness uses the
   [Live Leaderboard membership and freshness rules](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
   printing only the stale count, the entry count and the oldest entry's age in

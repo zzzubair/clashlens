@@ -208,17 +208,11 @@ A successful exit means the check and delivery worked, not that all eleven
 conditions are healthy. The website-unreachable alert comes from the
 [outside check](deployment.md#outside-availability-check) on the Paris relay.
 
-Two thresholds keep the channel quiet enough to read:
-
-- **Live Leaderboard:** alerts only when more than 5% of its players were last
-  updated over ten minutes ago, or one player over 20 minutes ago, on every
-  check for five minutes. The 04:55–05:00 UTC Reset pause and unfinished Reset
-  work are not counted. Up to about 3% of players a little past ten minutes is
-  normal near the official API request limit, such as after a deploy, and does
-  not alert.
-- **Every recovery:** sent only after 15 minutes of clear checks. A problem
-  that returns within those 15 minutes continues the same incident without a
-  new message, so the recovery can arrive up to 15 minutes after the fix.
+The Live Leaderboard alert and every recovery wait on purpose, as set out in
+the [alert conditions](deployment.md#alert-conditions). Expect a recovery up to
+15 minutes after the fix. A few percent of players a little past ten minutes,
+such as after a deploy, is normal near the official API request limit and does
+not alert.
 
 ### Tracker stopped
 
@@ -562,8 +556,8 @@ and uploads with their failure category.
 once its cause is fixed. Failed processing jobs have no retry command; see
 [failed work](deployment.md#failed-work) and escalate.
 
-**Recovered:** 24 hours after the newest permanent failure. The alert means a
-new permanent failure in the last 24 hours; its recovery means no new one for
+**Recovered:** 24 hours and 15 minutes after the newest permanent failure. The
+alert means a new permanent failure in the last 24 hours; its recovery means no new one for
 24 hours, not that anything was repaired. A manual retry of a failed item
 clears the alert early; a repeat failure raises a fresh alert.
 
