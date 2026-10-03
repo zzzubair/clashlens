@@ -28,9 +28,11 @@ from .army_analytics import (
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
     build_army_result,
+    finish_army_result,
 )
 from .army_decoder import DECODER_VERSION
 from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
+from .army_rank_bands import read_rank_band_totals
 from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
 from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
@@ -523,7 +525,32 @@ def get_army_analytics(
             else:
                 fact_filters.append("population_player_id = ANY(%s::bigint[])")
                 fact_params.append(member_ids)
-            if resolved.category == "troops":
+            banded = None
+            if member_ids is not None and not streak:
+                banded = read_rank_band_totals(
+                    connection,
+                    snapshot_ids[0],
+                    lens=resolved.lens,
+                    category=resolved.category,
+                    population=population,
+                    day_markers=dict(completed_day_signature),
+                )
+            if banded is not None:
+                # Same numbers as counting the facts, from at most 28 x 14
+                # saved rows; the evidence hash covers each band's fact list.
+                result = finish_army_result(banded[0], resolved)
+                source_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "rank_band_facts": banded[1],
+                            "selection": requested,
+                            "snapshots": snapshot_ids,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+            elif resolved.category == "troops":
                 result, source_hash = _query_troops_aggregates(
                     connection,
                     fact_filters=fact_filters,

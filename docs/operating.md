@@ -360,6 +360,13 @@ these steps, all run by the worker without a timer:
    publish, so `build_snapshot` and `build_analytics` do not wait for it.
    Facts keep each army in `battle_army_decodes`; read them through
    `army_analytics_battle_facts_with_armies`.
+4. Within 10 seconds of a day's facts and frozen leaderboard both being saved,
+   the worker's maintenance timer counts `army_analytics_rank_band_totals`:
+   each Legend day's totals for the 14 rank bands covering ranks 1-1000 of
+   that Season's newest leaderboard. Top N and rank-band views add these up.
+   Streak views, trophy ranges, ranges ending before the newest day, and any
+   day rebuilt since its totals were counted read facts instead. The worker
+   log shows each count as an `army_rank_band_totals` event.
 
 **First checks**, read-only:
 

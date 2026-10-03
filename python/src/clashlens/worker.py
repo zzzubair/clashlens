@@ -21,6 +21,7 @@ from psycopg.errors import (
 
 from . import (
     army_ingestion,
+    army_rank_bands,
     battle_ingestion,
     boundary_publication,
     ingestion,
@@ -212,6 +213,9 @@ def lane_work_types(
 class TimedMaintenance:
     """Reset publication checks and queue maintenance, each every 10 seconds.
 
+    The publication checks also count the newest leaderboard's army rank-band
+    totals once they are missing or stale.
+
     Given ``derived_turns``, the publication checks and correction sweep run
     only after taking a derived lane's turn, and stay due without one; queue
     maintenance does not wait for a turn.
@@ -237,6 +241,8 @@ class TimedMaintenance:
                 self.next_reevaluation_at = current_time + 10
                 self.reevaluate()
                 self.late_battles.run_when_due()
+                if isinstance(self.database, Database):
+                    army_rank_bands.refresh_rank_band_totals(self.database)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()
