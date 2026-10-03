@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from clashlens.domain import (
+    HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
     SEASON_ANCHOR_RULE_VERSION,
     TROPHY_ALLOCATION_RULE_VERSION,
     DomainRuleError,
@@ -17,13 +18,18 @@ from clashlens.domain import (
     validate_season_anchor,
 )
 
-ALLOCATION_TABLE = (
-    Path(__file__).parents[2] / "docs" / "data" / "legend-trophy-allocation-v1.csv"
+ALLOCATION_TABLES = Path(__file__).parents[2] / "docs" / "data"
+
+
+# Each table must match the version that reads it, including v1's wrong
+# 55% cell, which saved v1 results still depend on.
+@pytest.mark.parametrize(
+    "rule_version",
+    [HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION, TROPHY_ALLOCATION_RULE_VERSION],
 )
-
-
-def test_trophy_allocation_matches_every_version_1_table_boundary() -> None:
-    with ALLOCATION_TABLE.open(newline="", encoding="utf-8") as source:
+def test_trophy_allocation_matches_every_table_boundary(rule_version: str) -> None:
+    table = ALLOCATION_TABLES / f"{rule_version}.csv"
+    with table.open(newline="", encoding="utf-8") as source:
         rows = list(csv.DictReader(source))
 
     for row in rows:
@@ -33,11 +39,95 @@ def test_trophy_allocation_matches_every_version_1_table_boundary() -> None:
             if expected == "--":
                 continue
 
-            allocation = allocate_trophies(stars, destruction)
+            allocation = allocate_trophies(
+                stars, destruction, rule_version=rule_version
+            )
 
             assert allocation.attacker_gain == int(expected)
             assert allocation.defender_loss == (0 if stars == 0 else int(expected))
-            assert allocation.rule_version == TROPHY_ALLOCATION_RULE_VERSION
+            assert allocation.rule_version == rule_version
+
+
+def test_current_allocation_matches_published_formula_for_all_possible_results() -> (
+    None
+):
+    # Supercell's June 2019 Legend League formulas, independent of the table.
+    formulas = {
+        0: (range(50), lambda d: d // 10),
+        1: (range(1, 100), lambda d: 5 + (d - 1) // 9),
+        2: (range(50, 100), lambda d: 16 + (d - 50) // 3),
+        3: (range(100, 101), lambda d: 40),
+    }
+    cases = 0
+    for stars, (destructions, gain) in formulas.items():
+        for destruction in destructions:
+            allocation = allocate_trophies(stars, destruction)
+            assert (allocation.attacker_gain, allocation.defender_loss) == (
+                gain(destruction),
+                0 if stars == 0 else gain(destruction),
+            ), (stars, destruction)
+            cases += 1
+    assert cases == 200
+
+
+@pytest.mark.parametrize(
+    ("destruction", "trophies"),
+    [
+        (50, 16),
+        (52, 16),
+        (53, 17),
+        (54, 17),
+        (55, 17),
+        (56, 18),
+        (58, 18),
+        (59, 19),
+        (98, 32),
+        (99, 32),
+    ],
+)
+def test_two_star_threshold_uses_56_not_55(destruction: int, trophies: int) -> None:
+    allocation = allocate_trophies(2, destruction)
+
+    assert (allocation.attacker_gain, allocation.defender_loss) == (
+        trophies,
+        trophies,
+    )
+    assert allocation.rule_version == "legend-trophy-allocation-v2"
+
+
+def test_zero_star_defense_exception_is_preserved() -> None:
+    for destruction, gain in zip(
+        (0, 9, 10, 20, 30, 40, 48, 49), (0, 0, 1, 2, 3, 4, 4, 4), strict=True
+    ):
+        allocation = allocate_trophies(0, destruction)
+        assert (allocation.attacker_gain, allocation.defender_loss) == (gain, 0)
+    one_star = allocate_trophies(1, 1)
+    assert (one_star.attacker_gain, one_star.defender_loss) == (5, 5)
+
+
+def test_explicit_v1_keeps_its_historical_55_allocation() -> None:
+    # Saved v1 results recorded 18 here. Reading them back as v1 must give
+    # the number they were saved with; only a repair moves them to v2.
+    old = allocate_trophies(
+        2, 55, rule_version=HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION
+    )
+    assert (old.attacker_gain, old.defender_loss, old.rule_version) == (
+        18,
+        18,
+        "legend-trophy-allocation-v1",
+    )
+    for destruction in (54, 56):
+        assert (
+            allocate_trophies(
+                2, destruction, rule_version=HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION
+            ).attacker_gain
+            == allocate_trophies(2, destruction).attacker_gain
+        )
+
+
+def test_unknown_allocation_version_is_rejected() -> None:
+    with pytest.raises(DomainRuleError, match="unsupported_trophy_allocation_rule"):
+        allocate_trophies(2, 55, rule_version="legend-trophy-allocation-v3")
 
 
 def test_trophy_allocation_uses_last_boundary_not_greater_than_destruction() -> None:

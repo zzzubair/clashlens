@@ -10,6 +10,7 @@ from clashlens.battle import (
     BATTLE_LOG_SCHEMA_VERSION,
     LEGACY_SOURCE_PARSER_VERSION,
     LIVE_SOURCE_PARSER_VERSION,
+    PREVIOUS_LIVE_SOURCE_PARSER_VERSION,
     SOURCE_PARSER_VERSION,
     BattleLogParseError,
     parse_battle_log,
@@ -69,6 +70,59 @@ def test_defender_report_uses_the_same_canonical_identity() -> None:
     assert battle.defender_tag == "#8PP"
     assert battle.reporting_tag == "#8PP"
     assert battle.perspective == "defender"
+
+
+@pytest.mark.parametrize(
+    ("parser_version", "trophies", "rule_version"),
+    [
+        (SOURCE_PARSER_VERSION, 17, "legend-trophy-allocation-v2"),
+        (PREVIOUS_LIVE_SOURCE_PARSER_VERSION, 18, "legend-trophy-allocation-v1"),
+    ],
+)
+def test_two_star_55_percent_counts_17_only_under_the_corrected_parser(
+    parser_version: str, trophies: int, rule_version: str
+) -> None:
+    attack = json.loads(FIXTURE.read_bytes())["items"][0]
+    attack.update(stars=2, destructionPercentage=55)
+    defense = {
+        **attack,
+        "attack": False,
+        "opponentPlayerTag": "#2PP",
+        "opponentName": "Synthetic Attacker",
+    }
+    observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
+
+    for tag, row in (("#2PP", attack), ("#8PP", defense)):
+        parsed = parse_battle_log(
+            json.dumps({"items": [row]}).encode(),
+            expected_tag=tag,
+            observed_at=observed_at,
+            parser_version=parser_version,
+        )
+        battle = parsed.rows[0].battle
+        assert parsed.rows[0].source_json == row
+        assert battle is not None
+        assert (battle.attacker_tag, battle.defender_tag) == ("#2PP", "#8PP")
+        assert (battle.stars, battle.destruction_percentage) == (2, 55)
+        assert (battle.attacker_gain, battle.defender_loss) == (trophies, trophies)
+        assert battle.trophy_rule_version == rule_version
+
+
+def test_corrected_parser_keeps_zero_star_defense_and_counts_event() -> None:
+    row = json.loads(FIXTURE.read_bytes())["items"][0]
+    row.update(attack=False, stars=0, destructionPercentage=40)
+
+    parsed = parse_battle_log(
+        json.dumps({"items": [row]}).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 8, 4, 12, 5, tzinfo=UTC),
+    )
+
+    battle = parsed.rows[0].battle
+    assert parsed.rows[0].outcome == "valid_legend"
+    assert battle is not None
+    assert battle.perspective == "defender"
+    assert (battle.attacker_gain, battle.defender_loss) == (4, 0)
 
 
 def test_legacy_parser_replays_nested_opponent_shape() -> None:

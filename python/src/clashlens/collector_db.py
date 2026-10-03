@@ -23,6 +23,7 @@ DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"
 PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
+BATTLE_PARSER_VERSION = "supercell-battle-parser-v3"
 LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
 REVISIT_INTERVAL = timedelta(seconds=90)
 PROFILE_CACHE_WINDOW = timedelta(seconds=5)
@@ -321,7 +322,9 @@ class CollectorDatabase:
     def _parser_for(endpoint: str) -> str:
         if endpoint == "profile":
             return PROFILE_PARSER_VERSION
-        if endpoint in {"battle_log", "global_player_rankings"}:
+        if endpoint == "battle_log":
+            return BATTLE_PARSER_VERSION
+        if endpoint == "global_player_rankings":
             return SOURCE_PARSER_VERSION
         if endpoint == "league_history":
             return LEAGUE_HISTORY_PARSER_VERSION

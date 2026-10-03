@@ -1260,3 +1260,89 @@ def test_duplicate_battles_and_rankings_reuse_source_rows(
                 ).fetchone()[0] == 0
         finally:
             database.close()
+
+
+def test_same_battle_bytes_reparsed_with_allocation_v2_keep_old_result(
+    database_url: str, archive_server
+) -> None:
+    # Two stars at 55%: saved parser-v2 reports say 18, corrected v3 says 17.
+    row = dict(
+        json.loads(BATTLE_FIXTURE.read_bytes())["items"][0],
+        stars=2,
+        destructionPercentage=55,
+    )
+    body = json.dumps({"items": [row]}).encode()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for index, parser_version in enumerate(
+                (
+                    "supercell-source-parser-v2",
+                    "supercell-battle-parser-v3",
+                    "supercell-battle-parser-v3",
+                )
+            ):
+                _, job = store_observation(
+                    connection_info,
+                    archive_server,
+                    occurrence_key=f"allocation-v2-{index}",
+                    endpoint="battle_log",
+                    body=body,
+                    normalized_tag="#2PP",
+                    observed_at=NOW + timedelta(minutes=index),
+                    parser_version=parser_version,
+                )
+                result = processor.process_job(job, owner="allocation-v2")
+                assert result is not None and result.outcome == "processed"
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    """
+                    SELECT parser_version, trophy_rule_version, attacker_gain,
+                           defender_loss
+                    FROM battle_evidence ORDER BY id
+                    """
+                ).fetchall() == [
+                    (
+                        "supercell-source-parser-v2",
+                        "legend-trophy-allocation-v1",
+                        18,
+                        18,
+                    ),
+                    (
+                        "supercell-battle-parser-v3",
+                        "legend-trophy-allocation-v2",
+                        17,
+                        17,
+                    ),
+                ]
+                assert connection.execute(
+                    """
+                    SELECT parser_version FROM parsed_source_payloads
+                    WHERE endpoint = 'battle_log' ORDER BY parser_version
+                    """
+                ).fetchall() == [
+                    ("supercell-battle-parser-v3",),
+                    ("supercell-source-parser-v2",),
+                ]
+                # One battle, now read through the corrected report.
+                assert connection.execute(
+                    """
+                    SELECT count(DISTINCT b.id), min(e.attacker_gain),
+                           max(e.trophy_rule_version)
+                    FROM legend_battles AS b
+                    JOIN battle_perspectives AS p ON p.battle_id = b.id
+                    JOIN battle_evidence AS e ON e.id = p.evidence_id
+                    """
+                ).fetchone() == (1, 17, "legend-trophy-allocation-v2")
+                assert (
+                    connection.execute(
+                        """
+                    SELECT count(*) FROM python_processing_jobs
+                    WHERE parser_version = 'supercell-battle-parser-v3'
+                      AND claim_compatibility_version <> 7
+                    """
+                    ).fetchone()[0]
+                    == 0
+                )
+        finally:
+            database.close()
