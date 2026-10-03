@@ -53,6 +53,7 @@ function currentAnalytics(
   coveredDays: number[],
   cohortPlayers: number,
   staleOrUncertainCohortMembers = 0,
+  streakGapDays: number[] = [],
 ) {
   return {
     kind: "army-analytics",
@@ -83,6 +84,7 @@ function currentAnalytics(
       state: "complete",
       completedDays: coveredDays.length,
       coveredDays,
+      streakGapDays,
     },
     freshness: { state: "frozen" },
     reproducibility: {
@@ -274,10 +276,14 @@ describe("army analytics route historical reads", () => {
   });
 
   it("names the finished days covered when current-season days are missing", async () => {
+    const untracked = Array.from({ length: 22 }, (_, index) => index + 1).concat(24);
     mocks.createPythonClient.mockReturnValue({
       getArmyAnalytics: vi
         .fn()
-        .mockResolvedValue(currentAnalytics("top-100", [23, 25, 26], 100)),
+        .mockResolvedValueOnce(
+          currentAnalytics("top-100", [23, 25, 26], 100, 0, untracked),
+        )
+        .mockResolvedValueOnce(currentAnalytics("top-100", [25, 26], 100)),
     });
     const html = await renderArmyRoute("season=current");
     expect(renderedText(html)).toContain(
@@ -297,6 +303,26 @@ describe("army analytics route historical reads", () => {
     expect(renderedText(chosen)).not.toContain("days not tracked");
     expect(chosen).toContain('value="streak-top-100"');
     expect(renderedText(chosen)).not.toContain("needs every selected day");
+  });
+
+  it("withholds Consistent top while a selected ended day lacks a saved board", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi
+        .fn()
+        .mockResolvedValueOnce(
+          currentAnalytics("top-100", [23, 24, 25, 26], 100, 0, [24]),
+        )
+        .mockResolvedValueOnce(currentAnalytics("top-100", [23, 24], 100, 0, [25, 26])),
+    });
+    const middle = await renderArmyRoute("season=current&start_day=23&end_day=26");
+    expect(middle).not.toContain("streak-top-");
+    expect(renderedText(middle)).toContain(
+      "Consistent top needs every selected day tracked. Use days 25–26",
+    );
+    expect(middle).toMatch(/href="[^"]*start_day=25&amp;end_day=26/);
+    const trailing = await renderArmyRoute("season=current&start_day=23&end_day=26");
+    expect(trailing).not.toContain("streak-top-");
+    expect(trailing).toMatch(/href="[^"]*start_day=23&amp;end_day=24/);
   });
 
   it("explains how Consistent top is decided, including an empty group", async () => {

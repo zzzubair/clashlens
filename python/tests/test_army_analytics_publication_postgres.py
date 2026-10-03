@@ -481,7 +481,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     for row in selected_rows
                 ]
                 expected = build_army_result(expected_facts, selection)
-                expected["collection_coverage"]["covered_days"] = [DAY_NUMBER]
+                expected["collection_coverage"].update(covered_days=[DAY_NUMBER], streak_gap_days=[DAY_NUMBER])
                 expected["cohort_evidence"] = {
                     "cohort_players": 0,
                     "stale_or_uncertain_cohort_members": 0,

@@ -107,6 +107,24 @@ def test_default_top_100_keeps_partial_army_day_recovery(monkeypatch, lens) -> N
     assert result["collection_coverage"]["covered_days"] == [23, 25]
 
 
+@pytest.mark.parametrize("missing_kind", ["day", "army", "snapshot"])
+@pytest.mark.parametrize("missing_day", [23, 24, 25])
+def test_top_n_names_ended_days_consistent_top_cannot_use(
+    monkeypatch, missing_kind, missing_day
+) -> None:
+    database = _army_range_database(
+        monkeypatch, missing_kind=missing_kind, missing_day=missing_day
+    )
+    selection = ArmyAnalyticsSelection.parse(
+        lens="offense", season="current", start_day=23, end_day=28,
+        population="top-100", category="troops", sort="usage-rate",
+    )
+    result = api_analytics.get_army_analytics(
+        database, selection, now=DAY_START + timedelta(days=3)
+    )
+    assert result["collection_coverage"]["streak_gap_days"] == [missing_day]
+
+
 def test_consistent_top_follows_saved_positions_on_every_day(
     database_url: str, archive_server
 ) -> None:

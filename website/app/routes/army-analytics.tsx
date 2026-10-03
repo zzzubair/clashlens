@@ -435,19 +435,19 @@ export default function ArmyAnalyticsRoute() {
   const streakTop = population.startsWith("streak-top-")
     ? Number(population.slice(11)).toLocaleString()
     : null;
-  // Consistent top needs a saved board and army data on every selected day,
-  // so offer it only once the loaded range has no missing days.
+  // Consistent top needs a saved board and army data on every selected ended
+  // day, so offer it only when the API reports no such day missing.
+  const streakGapDays = analytics?.collectionCoverage.streakGapDays;
   const showConsistent =
-    !snapshot &&
-    !isHistorical &&
-    (streakTop !== null || (coveredDays.length > 0 && untrackedDays.length === 0));
-  let trackedRunStart = coveredDays.length - 1;
+    !snapshot && !isHistorical && (streakTop !== null || streakGapDays?.length === 0);
+  const rankedDays = coveredDays.filter((day) => !streakGapDays?.includes(day));
+  let trackedRunStart = rankedDays.length - 1;
   while (
     trackedRunStart > 0 &&
-    coveredDays[trackedRunStart - 1] === coveredDays[trackedRunStart] - 1
+    rankedDays[trackedRunStart - 1] === rankedDays[trackedRunStart] - 1
   )
     trackedRunStart -= 1;
-  const trackedRun = coveredDays.slice(Math.max(trackedRunStart, 0));
+  const trackedRun = rankedDays.slice(Math.max(trackedRunStart, 0));
   const trackedRunQuery = new URLSearchParams(params);
   trackedRunQuery.set("start_day", String(trackedRun[0]));
   trackedRunQuery.set("end_day", String(trackedRun[trackedRun.length - 1]));

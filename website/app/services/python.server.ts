@@ -821,6 +821,9 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     (payload.collection_coverage.covered_days !== undefined &&
       (!Array.isArray(payload.collection_coverage.covered_days) ||
         !payload.collection_coverage.covered_days.every(isInteger))) ||
+    (payload.collection_coverage.streak_gap_days !== undefined &&
+      (!Array.isArray(payload.collection_coverage.streak_gap_days) ||
+        !payload.collection_coverage.streak_gap_days.every(isInteger))) ||
     !isRecord(payload.freshness) ||
     !isString(payload.freshness.state) ||
     !isRecord(payload.reproducibility) ||
@@ -848,6 +851,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     !isString(payload.versions.analytics)
   )
     throw new PythonApiError(502, { error: "malformed" });
+  const usageOnly = payload.history_usage_only === true;
   const rows = payload.rows.map((row) => {
     if (!isRecord(row)) throw new PythonApiError(502, { error: "malformed" });
     if (
@@ -856,7 +860,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       !isInteger(row.usage_count) ||
       !isInteger(row.usage_denominator) ||
       !isFiniteNumber(row.usage_rate) ||
-      (payload.history_usage_only === true
+      (usageOnly
         ? !isInteger(row.quantity) ||
           !isInteger(row.one_star_count) ||
           !isInteger(row.two_star_count) ||
@@ -879,16 +883,10 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       usageCount: row.usage_count,
       usageDenominator: row.usage_denominator,
       usageRate: row.usage_rate,
-      quantity:
-        payload.history_usage_only === true ? (row.quantity as number) : undefined,
-      oneStarCount:
-        payload.history_usage_only === true ? (row.one_star_count as number) : undefined,
-      twoStarCount:
-        payload.history_usage_only === true ? (row.two_star_count as number) : undefined,
-      threeStarCount:
-        payload.history_usage_only === true
-          ? (row.three_star_count as number)
-          : undefined,
+      quantity: usageOnly ? (row.quantity as number) : undefined,
+      oneStarCount: usageOnly ? (row.one_star_count as number) : undefined,
+      twoStarCount: usageOnly ? (row.two_star_count as number) : undefined,
+      threeStarCount: usageOnly ? (row.three_star_count as number) : undefined,
       starCounts: row.star_counts as [number, number, number, number] | undefined,
       starRates: row.star_rates as [number, number, number, number] | undefined,
       threeStarRate: row.three_star_rate as number | undefined,
@@ -949,6 +947,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       state: payload.collection_coverage.state,
       completedDays: payload.collection_coverage.completed_days,
       coveredDays: payload.collection_coverage.covered_days as number[] | undefined,
+      streakGapDays: payload.collection_coverage.streak_gap_days as number[] | undefined,
     },
     freshness: { state: payload.freshness.state },
     reproducibility: {

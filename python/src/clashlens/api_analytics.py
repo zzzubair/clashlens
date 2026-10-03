@@ -309,33 +309,38 @@ def get_army_analytics(
             boundary_by_day = {
                 day: day_starts[day] + timedelta(days=1) for day in covered_days
             }
-            by_boundary: dict[Any, tuple[int, int]] = {}
-            if not population.startswith("trophies-"):
-                snapshots = connection.execute(
-                    """
-                    SELECT DISTINCT ON (boundary_at)
-                           boundary_at, id, version
-                    FROM leaderboard_snapshots
-                    WHERE snapshot_kind='frozen' AND state='published'
-                      AND boundary_at = ANY(%s::timestamptz[])
-                    ORDER BY boundary_at, version DESC
-                    """,
-                    (list(boundary_by_day.values()),),
-                ).fetchall()
-                by_boundary = {
-                    row[0]: (int(row[1]), int(row[2])) for row in snapshots
-                }
-                if selection.season == "current" and not streak:
-                    ranked_days = [
-                        day
-                        for day in covered_days
-                        if boundary_by_day[day] in by_boundary
-                    ]
-                    covered_days = [
-                        day
-                        for day in covered_days
-                        if ranked_days and day <= ranked_days[-1]
-                    ]
+            snapshots = connection.execute(
+                """
+                SELECT DISTINCT ON (boundary_at)
+                       boundary_at, id, version
+                FROM leaderboard_snapshots
+                WHERE snapshot_kind='frozen' AND state='published'
+                  AND boundary_at = ANY(%s::timestamptz[])
+                ORDER BY boundary_at, version DESC
+                """,
+                (list(boundary_by_day.values()),),
+            ).fetchall()
+            by_boundary = {row[0]: (int(row[1]), int(row[2])) for row in snapshots}
+            # Ended requested days a Consistent top view cannot use: no
+            # completed army data or no published saved board.
+            streak_gap_days = [
+                day
+                for day in requested_days
+                if day not in covered_days or boundary_by_day[day] not in by_boundary
+            ]
+            if (
+                selection.season == "current"
+                and not streak
+                and not population.startswith("trophies-")
+            ):
+                ranked_days = [
+                    day for day in covered_days if day not in streak_gap_days
+                ]
+                covered_days = [
+                    day
+                    for day in covered_days
+                    if ranked_days and day <= ranked_days[-1]
+                ]
             if not covered_days:
                 raise ArmyAnalyticsUnavailable(requested_days)
             if selection.season == "current" and not streak:
@@ -515,6 +520,7 @@ def get_army_analytics(
                 tuple(member_ids) if member_ids is not None else None,
                 tuple(zip(snapshot_ids, snapshot_versions)),
                 streak_version_digest,
+                tuple(streak_gap_days),
             )
             cached = database._army_cache_get(cache_key)
             if cached is not None:
@@ -686,6 +692,7 @@ def get_army_analytics(
                 **result["collection_coverage"],
                 "completed_days": len(covered_days),
                 "covered_days": covered_days,
+                "streak_gap_days": streak_gap_days,
             }
             if cohort_evidence is None:
                 cohort_evidence = {
