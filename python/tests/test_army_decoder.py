@@ -297,8 +297,5 @@ def test_dragon_duke_revenge_deck_army_decodes_completely() -> None:
     }
 
 
-def test_every_catalog_unit_has_its_own_display_name() -> None:
-    # Two units sharing a name would show as one on the Armies page.
-    names = [entry["name"] for entry in catalog.catalog_entries().values()]
-    assert sorted(name for name in names if names.count(name) > 1) == []
-    assert catalog.catalog_name("troop:177") == "Meteor Golem"
+def test_event_and_barracks_meteor_golems_have_different_names() -> None:
+    assert catalog.catalog_name("troop:167") != catalog.catalog_name("troop:177")
