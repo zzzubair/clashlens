@@ -130,10 +130,12 @@ def test_collector_sizes_checks_in_flight_from_its_keys(
         ("3x", None),
     ],
 )
-def test_ops_forwards_a_valid_check_limit_to_the_collector_only_when_set(
+def test_ops_rejects_a_bad_check_limit_before_stopping_and_forwards_a_good_one(
     tmp_path: Path, setting: str | None, forwarded: str | None
 ) -> None:
     ops = Path(__file__).resolve().parents[2] / "ops"
+    # `./ops up` runs with host checks stubbed; stopping the running services
+    # is recorded, then the environment is written in its place.
     result = subprocess.run(
         [
             "bash",
@@ -141,10 +143,15 @@ def test_ops_forwards_a_valid_check_limit_to_the_collector_only_when_set(
             """
 source "$1" help >/dev/null
 STATE_DIR="$2"
-load_fixture_config
 MODE=fixture
 [[ -z "$3" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$3
-write_environment
+for step in require_host load_release guard_generated_units guard_existing_resources \
+    guard_trusted_proxy_ip guard_network_subnet cleanup_stale_admin_state ensure_linger \
+    migrate_legacy_units guard_systemd_units write_alert_intent; do
+  eval "$step() { :; }"
+done
+stop_units() { touch "$STATE_DIR/stopped"; write_environment; exit 0; }
+up_stack
 """,
             "test-ops-environment",
             str(ops),
@@ -158,8 +165,10 @@ write_environment
     if setting is not None and forwarded is None:
         assert result.returncode != 0
         assert "CLASHLENS_REGULAR_PARALLELISM must be a whole number" in result.stderr
+        assert not (tmp_path / "stopped").exists()
         return
     assert result.returncode == 0, result.stderr
+    assert (tmp_path / "stopped").exists()
     collector = dict(
         line.split("=", 1)
         for line in (tmp_path / "env/collector.env").read_text().splitlines()

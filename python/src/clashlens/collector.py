@@ -10,13 +10,20 @@ import time
 from contextlib import ExitStack, suppress
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
 import psycopg
 from psycopg_pool import PoolTimeout
 
-from . import collector_intents, collector_reset, collector_uploads, weekly_eligibility
+from . import (
+    collector_commits,
+    collector_intents,
+    collector_reset,
+    collector_uploads,
+    weekly_eligibility,
+)
 from .archive import ArchiveReadError, S3ArchiveReader
 from .battle_log_schedule import BattleLogSchedule
 from .collector_db import (
@@ -119,8 +126,9 @@ class Collector:
         # Each stripe's newest saved response; it resolves once that response
         # has committed or failed, so the next one commits after it, or to the
         # task committing it later when a worker's lock held it up.
-        self._handoff_turns: dict[asyncio.Lock, asyncio.Future[asyncio.Task[None] | None]] = {}
+        self._handoff_turns: dict[asyncio.Lock, collector_commits.Turn] = {}
         self._later_commits: set[asyncio.Task[None]] = set()
+        self._unrecovered: list[tuple[str, ResponseHandoff, bool]] = []
         # Newest committed (seen time, field fingerprint) per scope, identity
         # and endpoint, from this process only; empty after a restart.
         self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
@@ -456,7 +464,7 @@ class Collector:
                     and committed is not None
                     and committed[1] == handoff.content_fingerprint
                     and not lock.locked()
-                    and _settled(pending)
+                    and collector_commits.settled(pending)
                     and not self._handoff_recovery_required
                 ):
                     check = asyncio.ensure_future(
@@ -516,15 +524,10 @@ class Collector:
                         committed_now = False
                         if behind is None or behind.done():
                             with suppress(psycopg.errors.LockNotAvailable):
-                                await self._commit_saved(handoff, name, seen)
+                                await self._commit_saved(handoff, name)
                                 committed_now = True
                         if not committed_now:
-                            self._count("commit_deferred")
-                            later = asyncio.create_task(
-                                self._commit_later(behind, handoff, name, seen)
-                            )
-                            self._later_commits.add(later)
-                            later.add_done_callback(self._later_commits.discard)
+                            later = collector_commits.commit_later(self, behind, handoff, name)
                     except BaseException as error:
                         if published or self._sidecar_exists(name):
                             self._handoff_recovery_required = True
@@ -535,6 +538,8 @@ class Collector:
                         raise
                     finally:
                         turn.set_result(later)
+                    if later is not None and work.collector_work_id is not None:
+                        await asyncio.shield(later)
                 if cancelled:
                     raise asyncio.CancelledError
                 self._count("recorded")
@@ -594,31 +599,16 @@ class Collector:
         raise AssertionError("unreachable collector retry loop")
 
     async def _commit_saved(
-        self, handoff: ResponseHandoff, name: str, seen: tuple[datetime, str]
+        self, handoff: ResponseHandoff, name: str, serialized: bool | None = None
     ) -> None:
-        await _drain_awaitable(self._database_call(self.database.record_response, handoff))
+        record = self.database.record_response if serialized is None else partial(
+            self.database.record_recovered_response, serialized=serialized
+        )
+        await _drain_awaitable(self._database_call(record, handoff))
         identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
+        seen = (handoff.response_completed_at, handoff.content_fingerprint)
         self._committed[identity] = max(seen, self._committed.get(identity) or seen)
         await _drain_to_thread(self.spool.remove_handoff, name)
-
-    async def _commit_later(
-        self, behind: asyncio.Task[None] | None, handoff: ResponseHandoff,
-        name: str, seen: tuple[datetime, str],
-    ) -> None:
-        """Retry a saved response a lock held up, after its stripe's earlier ones."""
-        if behind is not None:
-            await asyncio.wait({behind})
-        attempt = 0
-        while not self._handoff_recovery_required:
-            try:
-                await self._commit_saved(handoff, name, seen)
-                return
-            except psycopg.errors.LockNotAvailable:
-                await asyncio.sleep(_retry_delay(attempt))
-                attempt += 1
-            except BaseException:
-                self._handoff_recovery_required = True
-                raise
 
     def _make_handoff(
         self,
@@ -725,11 +715,16 @@ class Collector:
                 record[1].response_completed_at,
             )
         )
-        recovered = 0
-        for name, handoff, serialized in records:
+        for _name, handoff, _serialized in records:
             if self.spool.verify(handoff.response_hash, handoff.byte_size) is None:
                 raise SpoolError("handoff raw response is missing or corrupt")
-            self.database.record_recovered_response(handoff, serialized=serialized)
+        recovered = 0
+        for index, (name, handoff, serialized) in enumerate(records):
+            try:
+                self.database.record_recovered_response(handoff, serialized=serialized)
+            except psycopg.errors.LockNotAvailable:
+                self._unrecovered = records[index:]
+                break
             self.spool.remove_handoff(name)
             recovered += 1
         self.spool.remove_unreferenced(self.database.referenced_spool_hashes)
@@ -888,6 +883,7 @@ class Collector:
     ) -> None:
         """Run admissions, intent work, uploads, cleanup, and health together."""
         await _drain_to_thread(self.recover_handoffs)
+        collector_commits.commit_unrecovered(self, self._unrecovered)
         await _drain_to_thread(self.spool.cleanup_stale, 60.0)
         server = await asyncio.start_server(
             self._handle_health, health_host, health_port
@@ -1445,10 +1441,6 @@ class Collector:
 
 def _retry_delay(attempt: int) -> float:
     return min(5.0, 0.25 * 2**attempt) + random.uniform(0.0, 0.1)
-
-
-def _settled(turn: asyncio.Future[asyncio.Task[None] | None] | None) -> bool:
-    return turn is None or (turn.done() and (turn.result() is None or turn.result().done()))
 
 
 async def _drain_to_thread(operation: Any, *args: Any, **kwargs: Any) -> Any:

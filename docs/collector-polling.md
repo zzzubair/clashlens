@@ -527,7 +527,12 @@ built a Reset publication, and saving waited behind it for 4 minutes. A saved
 response's database update waits at most 3 seconds for a lock the worker holds,
 such as its player. It then stays saved on disk and the collector moves on,
 retrying the update in the background after any earlier saved response in its
-group, until it lands or the collector restarts and replays it. A shared body already sighted within the last 10 minutes
+group, until it lands or the collector restarts and replays it. Work such as a
+Refresh or a Reset check waits for its own saved responses to land instead of
+fetching them again. Restart replay, the update that checks a Clasher who
+finished the Legend day less often, and marking work finished wait the same 3
+seconds: replay leaves the rest to the background, the Clasher keeps the normal
+check cadence, and finishing is retried. A shared body already sighted within the last 10 minutes
 keeps its earlier latest sighting time, which only orders spool cleanup and
 starts the archive retention clock, so its deletion can come up to 10 minutes
 early. A body already marked for deletion is never recorded this way; it is

@@ -34,6 +34,9 @@ _ENDPOINTS = {
     "league_history",
 }
 _PLAYER_ENDPOINTS = {"profile", "battle_log", "league_history"}
+# A worker can hold a player or its work for minutes; these writes give up and
+# are retried later instead of holding collection behind it.
+_WORKER_LOCK_WAIT = "SET LOCAL lock_timeout = '3s'"
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,6 +514,7 @@ class CollectorDatabase:
     def defer_regular_check(self, player_id: int, until: datetime) -> None:
         """Make an active player's next regular check due no earlier than `until`."""
         with self._connection() as connection:
+            connection.execute(_WORKER_LOCK_WAIT)
             connection.execute(
                 """
                 UPDATE players SET next_due_at = %s
@@ -650,6 +654,7 @@ class CollectorDatabase:
             raise ValueError("intent job ID must be positive")
         with self._connection() as connection:
             with connection.transaction():
+                connection.execute(_WORKER_LOCK_WAIT)
                 work = connection.execute(
                     "SELECT kind, profile_status, battle_log_status, profile_observation_id, battle_log_observation_id, league_history_status, league_history_observation_id FROM collector_work WHERE id = %s AND status IN ('pending', 'waiting_retry') FOR UPDATE",
                     (job_id,),
@@ -692,6 +697,7 @@ class CollectorDatabase:
         # Retry until 23h55m after the Reset, or after creation for other work; unfinished Reset work blocks the next Reset.
         with self._connection() as connection:
             with connection.transaction():
+                connection.execute(_WORKER_LOCK_WAIT)
                 row = connection.execute(
                     "UPDATE collector_work AS work SET status = CASE WHEN decision.retry THEN 'waiting_retry' ELSE 'failed' END, due_at = CASE WHEN decision.retry THEN clock_timestamp() + interval '5 seconds' ELSE work.due_at END, failure_category = left(%s, 128), failure_detail = left(%s, 1024), updated_at = clock_timestamp() FROM (SELECT %s AND clock_timestamp() < COALESCE((SELECT sweep.boundary_at FROM collector_reset_sweeps AS sweep WHERE sweep.id = current.sweep_id), current.created_at) + interval '23 hours 55 minutes' AS retry FROM collector_work AS current WHERE current.id = %s) AS decision WHERE work.id = %s AND work.status NOT IN ('complete', 'failed', 'cancelled') RETURNING work.status",
                     (category, detail or "", retryable, job_id, job_id),
@@ -1142,14 +1148,13 @@ class CollectorDatabase:
         parser_version = self._parser_for(handoff.endpoint)
         with self._connection() as connection:
             with connection.transaction():
+                connection.execute(_WORKER_LOCK_WAIT)
                 if recovering:
                     recorded = self._recorded_observation(
                         connection, handoff, parser_version
                     )
                     if recorded is not None:
                         return recorded
-                else:
-                    connection.execute("SET LOCAL lock_timeout = '3s'")
                 work_kind = self._validate_work_identity(connection, handoff)
                 state = self._lock_response_state(connection, handoff)
                 if state is not None and state[5] == handoff.occurrence_key:

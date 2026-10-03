@@ -246,6 +246,44 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
             spool.close()
 
 
+def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
+    database_url: str, tmp_path: Path
+) -> None:
+    # A Clasher who finished the Legend day is checked less often; that
+    # scheduling update must not wait for the worker either.
+    with domain_database(database_url) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
+        collector = _collector(spool, database, _Profiles([_profile(1), _profile(2)]))  # type: ignore[arg-type]
+        work = CollectorWork(player_id, "#2PP", datetime.now(UTC))
+
+        async def scenario() -> None:
+            first = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+            assert await first == ["recorded"]
+            schedule = collector.battle_logs
+            schedule.due = lambda *_args, **_kwargs: False  # type: ignore[method-assign]
+            schedule.finished_recheck_at = (  # type: ignore[method-assign]
+                lambda *_args, **_kwargs: datetime.now(UTC) + timedelta(hours=1)
+            )
+            with psycopg.connect(connection_info) as holder:
+                holder.execute("SELECT 1 FROM players FOR NO KEY UPDATE")
+                started = time.monotonic()
+                check = collector.collect_player(work, lane="ordinary")
+                assert await asyncio.wait_for(check, 15) == ["recorded"]
+                assert time.monotonic() - started < 9
+            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 15)
+
+        try:
+            asyncio.run(scenario())
+            assert collector.outcomes["commit_deferred"] == 1
+            assert _sightings(connection_info)[0] == 2
+            assert spool.iter_handoffs() == []
+        finally:
+            database.close()
+            spool.close()
+
+
 @pytest.mark.parametrize(
     ("first_at", "again_at", "recorded_while_held"),
     [

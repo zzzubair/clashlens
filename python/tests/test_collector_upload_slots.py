@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hashlib
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
 from test_collector import _Client, _collector, _Spool, _Store
 
 import clashlens.collector as collector_module
-from clashlens.collector_db import CollectorWork
+from clashlens import collector_commits
+from clashlens.collector_db import CollectorIntent, CollectorWork
+from clashlens.collector_http import FetchedResponse
 from clashlens.collector_uploads import UploadClaim
 
 
@@ -235,16 +239,7 @@ def test_saves_a_held_lock_blocks_land_later_in_order_without_holding_checks() -
     spool = _Spool()
     store = _Store(spool)
     collector = _collector(spool, store, _Client(spool))
-    held = threading.Event()
-    held.set()
-    record = store.record_response
-
-    def locked(handoff: object) -> object:
-        if held.is_set():
-            raise psycopg.errors.LockNotAvailable("the worker holds the player")
-        return record(handoff)
-
-    store.record_response = locked  # type: ignore[method-assign]
+    held = _held_saves(store)
     work = CollectorWork(1, "#2PP", datetime.now(UTC))
 
     async def scenario() -> None:
@@ -262,4 +257,93 @@ def test_saves_a_held_lock_blocks_land_later_in_order_without_holding_checks() -
 
     assert spool.handoffs == {}
     assert collector.outcomes["commit_deferred"] == 2
+    assert not collector._handoff_recovery_required
+
+
+def _held_saves(store: _Store) -> threading.Event:
+    held = threading.Event()
+    held.set()
+    record = store.record_response
+
+    def locked(handoff: object) -> object:
+        if held.is_set():
+            raise psycopg.errors.LockNotAvailable("the worker holds the player")
+        return record(handoff)
+
+    store.record_response = locked  # type: ignore[method-assign]
+    return held
+
+
+def test_work_waits_for_its_held_save_instead_of_fetching_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(collector_commits, "_RETRY_SECONDS", 0.01)
+    spool = _Spool()
+    store = _Store(spool)
+    client = _Client(spool)
+    collector = _collector(spool, store, client)
+    held = _held_saves(store)
+    completions: list[int] = []
+
+    def complete_intent(work_id: int) -> bool:
+        completions.append(work_id)
+        if len(completions) == 1:
+            raise psycopg.errors.LockNotAvailable("the worker holds the work")
+        return bool(store.handoffs)
+
+    store.complete_intent = complete_intent  # type: ignore[method-assign]
+    intent = CollectorIntent(
+        "live_refresh", datetime.now(UTC), 1, "#2PP", work_id=7, battle_log_required=False
+    )
+
+    async def scenario() -> None:
+        refresh = asyncio.create_task(collector.collect_intent(intent))
+        await asyncio.sleep(0.2)
+        assert not refresh.done()
+        assert completions == []
+        held.clear()
+        assert await asyncio.wait_for(refresh, 5) == "complete"
+
+    asyncio.run(scenario())
+
+    assert client.fetch_count == 1
+    assert completions == [7, 7]
+    assert not collector._handoff_recovery_required
+
+
+def test_restart_recovery_leaves_held_saves_to_commit_later_in_order() -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    held = _held_saves(store)
+    now = datetime.now(UTC)
+    body = b"profile"
+    first = collector._make_handoff(
+        CollectorWork(1, "#2PP", now),
+        FetchedResponse("profile", body, 200, now, now, "regular-1", {}),
+        hashlib.sha256(body).hexdigest(),
+    )
+    second = replace(
+        first, occurrence_key="second", response_completed_at=now + timedelta(seconds=1)
+    )
+    for handoff in (second, first):
+        name, payload = collector.serialize_handoff(handoff)
+        spool.handoffs[name] = payload
+
+    assert collector.recover_handoffs() == 0
+
+    async def scenario() -> None:
+        collector_commits.commit_unrecovered(collector, collector._unrecovered)
+        await asyncio.sleep(0.05)
+        assert store.handoffs == []
+        held.clear()
+        await asyncio.wait_for(asyncio.gather(*collector._later_commits), 5)
+
+    asyncio.run(scenario())
+
+    assert [handoff.occurrence_key for handoff in store.handoffs] == [
+        first.occurrence_key,
+        "second",
+    ]
+    assert spool.handoffs == {}
     assert not collector._handoff_recovery_required
