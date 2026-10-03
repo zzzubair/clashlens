@@ -8,7 +8,8 @@ import psycopg
 from domain_test_support import domain_database
 
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
-from clashlens.collector_uploads import claim_upload, fail_upload
+from clashlens.collector_uploads import claim_upload, complete_upload, fail_upload
+from clashlens.operator_recovery import retry_failed_item
 
 
 def test_health_metrics_survive_restart_and_separate_failed_uploads(
@@ -196,5 +197,111 @@ def test_metrics_include_jobs_without_observations_or_successful_fetches(
             metrics = database.health_metrics()
             assert metrics["pending_processing"] == 0
             assert metrics["oldest_pending_processing_age_seconds"] == 0
+        finally:
+            database.close()
+
+
+def test_upload_clocks_ignore_repeat_sightings_and_restart_for_fresh_uploads(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "INSERT INTO players (normalized_tag) VALUES ('#2PP') RETURNING id"
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO archive_instances (
+                    instance_id, endpoint, region, bucket, marker_key,
+                    marker_hash, marker_payload_version
+                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                          'evidence', 'clashlens/archive-instance.json',
+                          repeat('f', 64), 'v1')
+                ON CONFLICT (instance_id) DO NOTHING
+                """
+            )
+        response_hash = hashlib.sha256(b"clock body").hexdigest()
+        database = CollectorDatabase(connection_info)
+
+        def sight(label: str) -> None:
+            completed_at = datetime.now(UTC)
+            fingerprint = hashlib.sha256(label.encode()).hexdigest()
+            database.record_response(
+                ResponseHandoff(
+                    occurrence_key=label,
+                    scope="player",
+                    identity_key="#2PP",
+                    endpoint="profile",
+                    player_id=int(player_id),
+                    normalized_tag="#2PP",
+                    request_started_at=completed_at - timedelta(seconds=1),
+                    response_completed_at=completed_at,
+                    http_status=200,
+                    response_hash=response_hash,
+                    content_fingerprint=fingerprint,
+                    byte_size=10,
+                    spool_key=f"sha256/{response_hash[:2]}/{response_hash}",
+                    collector_version="metrics-test",
+                    key_label="regular-a",
+                    evidence_headers={"content-type": "application/json"},
+                )
+            )
+
+        def backdate(column: str, days: int) -> None:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    f"UPDATE collector_response_uploads SET {column} = "
+                    f"{column} - %s * interval '1 day'",
+                    (days,),
+                )
+
+        try:
+            sight("clock-first")
+            claim = claim_upload(database, owner="clock-test")
+            assert claim is not None
+            fail_upload(
+                database,
+                claim,
+                category="archive_unavailable",
+                detail="offline",
+                retryable=False,
+            )
+            backdate("updated_at", 2)
+            backdate("created_at", 2)
+            # Seeing a two-day-old failure's bytes again is not a new failure.
+            sight("clock-failed-again")
+            metrics = database.health_metrics()
+            assert metrics["failed_uploads"] == 1
+            assert metrics["newest_failed_upload_age_seconds"] >= 86400
+
+            # An operator retry starts a fresh wait.
+            with psycopg.connect(connection_info) as connection:
+                retried = retry_failed_item(
+                    connection, upload_hash=response_hash, apply=True
+                )
+            assert retried["outcome"] == "requeued"
+            metrics = database.health_metrics()
+            assert metrics["pending_uploads"] == 1
+            assert metrics["oldest_pending_upload_age_seconds"] < 600
+
+            # Bytes first saved 96 days ago return after their archive copy
+            # retired; the fresh upload has not waited 96 days.
+            claim = claim_upload(database, owner="clock-test")
+            assert claim is not None
+            complete_upload(
+                database,
+                claim,
+                archive_reference="s3://evidence/clock",
+                archive_instance_id="fixture-instance",
+            )
+            backdate("created_at", 96)
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE archive_catalogue SET availability = 'expired'"
+                )
+            sight("clock-retired")
+            metrics = database.health_metrics()
+            assert metrics["pending_uploads"] == 1
+            assert metrics["oldest_pending_upload_age_seconds"] < 600
         finally:
             database.close()

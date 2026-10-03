@@ -207,7 +207,7 @@ def _retry_upload(connection: Any, *, upload_hash: str, apply: bool) -> dict[str
         """
         UPDATE collector_response_uploads
         SET state = 'pending', next_attempt_at = clock_timestamp(),
-            updated_at = clock_timestamp()
+            created_at = clock_timestamp(), updated_at = clock_timestamp()
         WHERE response_hash = %s AND state = 'failed'
           AND lease_owner IS NULL AND lease_token IS NULL
           AND lease_expires_at IS NULL
