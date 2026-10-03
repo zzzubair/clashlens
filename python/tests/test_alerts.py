@@ -531,6 +531,89 @@ def test_stopped_time_counts_toward_neither_hold(runtime, monkeypatch):
     assert "recovered" in rt.posts[2]["content"]
 
 
+def test_retried_alert_still_waits_fifteen_clear_minutes_to_recover(
+    runtime, monkeypatch
+):
+    rt = runtime
+    for name, value in rt.holds.items():
+        monkeypatch.setattr(alerts, name, value)
+    trigger(rt, "reads")
+    rt.post_status = 500
+    assert rt.run() == 1
+    rt.now += 60
+    cleared = rt.now
+    trigger(rt, "reads", False)
+    rt.post_status = 204
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.now += 899
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.now += 1
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    first_cleared = datetime.fromtimestamp(cleared, UTC).isoformat()
+    assert f"recovered at {first_cleared}" in rt.posts[1]["content"]
+
+
+def test_unavailable_leaderboard_check_restarts_the_five_minutes(
+    runtime, monkeypatch
+):
+    rt = runtime
+    for name, value in rt.holds.items():
+        monkeypatch.setattr(alerts, name, value)
+    rt.now = datetime(2026, 9, 28, 4, 50, tzinfo=UTC).timestamp()
+    rt.leaderboard = "1 13000 1201"
+    assert rt.run() == 0
+    # Unavailable from 04:54, through the Reset pause, until 05:04.
+    rt.now += 240
+    rt.leaderboard = ""
+    for _ in range(10):
+        assert rt.run() == 1
+        rt.now += 60
+    rt.leaderboard = "1 13000 1201"
+    for _ in range(5):
+        assert rt.run() == 0
+        rt.now += 60
+    assert not rt.posts
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    # An open alert stays open through an unavailable check.
+    rt.leaderboard = ""
+    rt.now += 60
+    assert rt.run() == 1
+    assert len(rt.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["clashlens_collector_reset_total", "clashlens_collector_reset_terminal", None],
+)
+def test_unknown_reset_progress_neither_raises_nor_clears_the_leaderboard(
+    runtime, missing
+):
+    rt = runtime
+    known = dict(rt.metrics)
+
+    def hide_reset_progress():
+        if missing is None:
+            rt.metrics_status = 503
+        else:
+            del rt.metrics[missing]
+
+    hide_reset_progress()
+    rt.leaderboard = "9000 13000 1801"
+    rt.run()
+    assert not rt.posts
+    rt.metrics, rt.metrics_status = dict(known), 200
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    hide_reset_progress()
+    rt.leaderboard = "0 13000 0"
+    rt.run()
+    assert len(rt.posts) == 1
+
+
 def test_saved_work_alerts_clear_only_when_their_own_problem_clears(runtime):
     rt = runtime
     for condition in ("failures", "processing", "upload", "publication"):

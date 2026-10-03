@@ -740,10 +740,10 @@ use the [operating notes](operating.md#respond-to-alerts).
 - **A widely or badly stale Live Leaderboard for five minutes**: more than
   **5%** of entries last updated over ten minutes ago, or any one entry over
   **20 minutes** ago, on every check for **300 seconds** (six checks in a
-  row; an unavailable check does not restart the count). Exactly 5% or exactly
-  20 minutes does not count. It is neither raised nor cleared during the
-  **04:55–05:00 UTC** Reset pause or while Reset work is unfinished, measured
-  as for the overdue-check alert, because both leave most players over ten
+  row; an unavailable check restarts the count but keeps an open alert open).
+  Exactly 5% or exactly 20 minutes does not count. It is neither raised nor
+  cleared during the **04:55–05:00 UTC** Reset pause or while Reset work is
+  unfinished or unknown, measured as for the overdue-check alert, because both leave most players over ten
   minutes old for a while; the five minutes start again afterwards.
   Staleness uses the
   [Live Leaderboard membership and freshness rules](domain.md#live-leaderboard-ordering). The check
@@ -774,8 +774,10 @@ use the [operating notes](operating.md#respond-to-alerts).
   21:20 UTC deploy restarted the stack, 100 to 380 entries (0.9% to 3.2%) were
   over ten minutes old in every sample from 21:25 to 21:36, and the oldest
   peaked at 15 minutes. That is normal near the request limit, so 5% and
-  20 minutes leave room above it. A stopped collector still passes 20 minutes
-  about 8 minutes after it stops, so it alerts about 13 minutes after.
+  20 minutes leave room above it. A collector that stops fetching but still
+  reports its measurements passes 20 minutes about 8 minutes after it stops,
+  so it alerts about 13 minutes after. One that stops reporting them leaves
+  Reset progress unknown, so the fetch-gap alert reports it instead.
   Use the [collection and processing measurements](operating.md#collection-or-processing-behind)
   to distinguish delayed collection from delayed processing.
 - **A new permanent failure of a processing job or raw-response upload in

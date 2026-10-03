@@ -305,7 +305,7 @@ def hold_recoveries(state: dict, findings: dict[str, bool | None], now: float) -
         incident = state.setdefault("incidents", {}).setdefault(name, {"active": False})
         if incident.get("clear_since", now) < state.get("resumed_at", 0):
             del incident["clear_since"]  # Stopped time is not clear time.
-        if active is False and incident["active"] and not incident.get("pending"):
+        if active is False and incident.get("pending", incident)["active"]:
             if now - incident.setdefault("clear_since", now) < RECOVERY_HOLD:
                 findings[name] = None
         else:
@@ -399,6 +399,11 @@ def observe(
     reset_terminal = metrics.get("clashlens_collector_reset_terminal")
     if overdue is not None and reset_total is not None and reset_terminal == reset_total:
         findings["collection"] = overdue >= 600
+    # The Reset pause and sweep leave most players stale for a while.
+    clock = datetime.fromtimestamp(now, UTC).strftime("%H:%M")
+    resetting = (
+        "04:55" <= clock < "05:00" or reset_total is None or reset_terminal != reset_total
+    )
     if metrics_read:
         prefix = "clashlens_collector_"
         recent = []
@@ -523,29 +528,21 @@ def observe(
                 raise ValueError
         except (OSError, ValueError, subprocess.SubprocessError):
             errors.append(f"{unavailable} unavailable; run ./ops logs api")
-            continue
+            values = None
         if name == "publication":
-            findings[name] = values[0] > 0
-        else:
-            stale, total, oldest = values
-            # The Reset pause and sweep leave most players stale for a while.
-            clock = datetime.fromtimestamp(now, UTC).strftime("%H:%M")
-            resetting = "04:55" <= clock < "05:00" or (
-                reset_total is not None and reset_terminal != reset_total
+            if values is not None:
+                findings[name] = values[0] > 0
+        elif values is None or resetting:
+            state.pop("leaderboard_stale_since", None)
+        elif values[2] > LEADERBOARD_OLDEST or values[0] > LEADERBOARD_STALE_SHARE * values[1]:
+            since = max(
+                state.setdefault("leaderboard_stale_since", now),
+                state.get("resumed_at", 0),
             )
-            over = oldest > LEADERBOARD_OLDEST or stale > LEADERBOARD_STALE_SHARE * total
-            if resetting:
-                state.pop("leaderboard_stale_since", None)
-                findings[name] = None
-            elif over:
-                since = max(
-                    state.setdefault("leaderboard_stale_since", now),
-                    state.get("resumed_at", 0),
-                )
-                findings[name] = True if now - since >= LEADERBOARD_HOLD else None
-            else:
-                state.pop("leaderboard_stale_since", None)
-                findings[name] = False
+            findings[name] = True if now - since >= LEADERBOARD_HOLD else None
+        else:
+            state.pop("leaderboard_stale_since", None)
+            findings[name] = False
     findings.pop("site")
     return findings, errors
 
