@@ -181,6 +181,11 @@
   align-items: center;
   gap: 0.75rem;
 }
+.player-page .legend-day-status {
+  border-color: var(--cl-border);
+  color: var(--cl-muted);
+  background: var(--cl-surface);
+}
 .player-page .legend-day-date small,
 .player-page .legend-day-stat small,
 .player-page .legend-day-stat > span {

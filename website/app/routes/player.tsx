@@ -447,6 +447,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 key={legendDayKey(day.period)}
                 day={day}
                 inSeason={inSeason}
+                isCurrentDay={isCurrentDay(player, day)}
                 selectedDay={selectedDay}
               />
             ))}
@@ -556,12 +557,14 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               No saved Legend log for {legendDayDate(selectedDay)}.
             </p>
           ) : null}
-          {trackedPlayer.dataQuality.length > 0 ? (
-            <p className="section-note">
-              Recent battles from Clash of Clans. Some daily totals are unavailable
-              because tracking started partway through the season.
+          {trackedPlayer.dataQuality.map((warning) => (
+            <p className="section-note" key={`${warning.code}-${warning.label}`}>
+              <strong>{warning.label}:</strong>{" "}
+              {/^[a-z0-9_:]+(; [a-z0-9_:]+)*$/.test(warning.detail)
+                ? dayReasons(warning.detail.split("; "), true).join(" ")
+                : warning.detail}
             </p>
-          ) : null}
+          ))}
           {history.some(
             ({ day }) => day.startTrophiesCalculation || day.startTrophies == null,
           ) ? (
@@ -576,6 +579,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 key={legendDayKey(day.period)}
                 day={day}
                 inSeason={inSeason}
+                isCurrentDay={isCurrentDay(player, day)}
                 selectedDay={selectedDay}
               />
             ))}
@@ -868,29 +872,113 @@ function selectPlayerHistory(player: PlayerPage | null) {
     }));
 }
 
+function isCurrentDay(player: PlayerPage | null, day: RankedDaySummary): boolean {
+  return (
+    player?.currentDay != null &&
+    legendDayKey(player.currentDay.period) === legendDayKey(day.period)
+  );
+}
+
+// Only Python's calendar check makes a day current; a saved "Live" state can
+// outlast its day. No saved result proves the Reset settled yet, so a finished
+// day with a number is still provisional.
+function dayStatus(day: RankedDaySummary, isCurrentDay: boolean): string {
+  if (isCurrentDay) return "In progress";
+  if (day.trophyChange === null) return "Result unknown";
+  if (day.state !== "Complete" || day.completeness.state !== "complete")
+    return "Incomplete";
+  return "Provisional result";
+}
+
+const REASON_TEXT: Record<string, string> = {
+  missing_start_battle_log_baseline:
+    "The battle log was not checked at the start of this day.",
+  missing_end_battle_log_baseline: "The battle log was not checked after this day ended.",
+  missing_start_baseline: "Trophies at the start of this day were not recorded.",
+  start_baseline_incomplete: "The start-of-day trophy reading is incomplete.",
+  missing_end_baseline: "Trophies at the end of this day were not recorded.",
+  end_baseline_incomplete: "The end-of-day trophy reading is incomplete.",
+  battle_log_stale_window:
+    "The battle log was not checked often enough to be sure every battle was seen.",
+  battle_log_overlap_gap: "Some battles may be missing between two battle log checks.",
+  battle_log_row_gap: "Part of a battle log reply could not be read.",
+  battle_log_row_count_exceeds_fifty: "Part of a battle log reply could not be read.",
+  duplicate_battle_identity_in_observation:
+    "Part of a battle log reply could not be read.",
+  unclassified_rows: "Some battles in the log could not be identified.",
+  perspective_disagreement: "The two players' battle logs disagree about a result.",
+  duplicate_contribution_disagreement:
+    "The two players' battle logs disagree about a result.",
+  trophy_equation_mismatch:
+    "Recorded battles do not add up to the change between trophy readings.",
+  automatic_defense_basis_unavailable:
+    "The automatic defense loss at Reset could not be calculated.",
+  season_anchor_conflict: "The Season start date could not be confirmed.",
+  player_not_eligible: "The player was not in Legend I for all of this day.",
+  shield_sequence_longer_than_two_days:
+    "A shield period was longer than expected and could not be explained.",
+  malformed_evidence: "Some saved evidence for this day could not be read.",
+  malformed_contribution: "Some saved evidence for this day could not be read.",
+  "ranked_day_state:Inconsistent": "The evidence for this day conflicts.",
+  "ranked_day_state:Malformed": "Some saved evidence for this day could not be read.",
+  battle_event_projection_incomplete: "Not every recorded battle is listed for this day.",
+};
+const ENDING_REASONS = new Set([
+  "missing_end_battle_log_baseline",
+  "missing_end_baseline",
+  "end_baseline_incomplete",
+]);
+
+// Plain words for Python's reason codes. Counts over eight have their own note.
+function dayReasons(codes: string[], isCurrentDay: boolean): string[] {
+  const reasons = codes
+    .filter((code) => !code.endsWith("_count_exceeds_eight"))
+    .map((code) =>
+      isCurrentDay && ENDING_REASONS.has(code)
+        ? "Ending evidence arrives after Reset."
+        : (REASON_TEXT[code] ?? "Some daily evidence is unavailable."),
+    );
+  return [...new Set(reasons)];
+}
+
 function LegendDay({
   day,
   inSeason,
+  isCurrentDay,
   selectedDay,
 }: {
   day: RankedDaySummary;
   inSeason: boolean;
+  isCurrentDay: boolean;
   selectedDay: string | null;
 }) {
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
+  const status = dayStatus(day, isCurrentDay);
+  const reasons = dayReasons(day.uncertainty, isCurrentDay);
+  if (day.uncertainty.length === 0 && status === "Incomplete")
+    reasons.push(
+      day.state === "Live"
+        ? "Final evidence for this day has not been processed yet."
+        : "Some daily evidence is unavailable.",
+    );
+  const battleNet = battleTrophyChange(day);
   return (
     <details
       className="legend-day"
       id={`legend-day-${dayKey}`}
-      open={selectedDay ? selectedDay === dayKey : day.state === "Live"}
+      open={selectedDay ? selectedDay === dayKey : isCurrentDay}
     >
       <summary>
         <span className="legend-day-date">
           <strong>{dayLabel}</strong>
           <span className="legend-day-meta">
             <small>{inSeason ? <>Day {day.dayNumber ?? "—"}</> : "Date only"}</small>
-            {day.state === "Live" ? <LiveBadge /> : null}
+            {isCurrentDay ? (
+              <LiveBadge />
+            ) : (
+              <span className="legend-day-live legend-day-status">{status}</span>
+            )}
           </span>
         </span>
         <span className="legend-day-stat legend-day-start">
@@ -916,7 +1004,7 @@ function LegendDay({
           <strong className={valueTone(day.offense.trophyGain)}>
             {formatSigned(day.offense.trophyGain)}
           </strong>
-          <span>{formatCount(day.offense.attacks)} used</span>
+          <span>{formatCount(day.offense.attacks)} recorded</span>
         </span>
         <span className="legend-day-stat legend-day-defense">
           <small>Defenses</small>
@@ -929,15 +1017,23 @@ function LegendDay({
               day.defense.trophyLoss === null ? null : -day.defense.trophyLoss,
             )}
           </strong>
-          <span>{formatCount(day.defense.defenses)} taken</span>
+          <span>{formatCount(day.defense.defenses)} recorded</span>
         </span>
         <span className="legend-day-stat legend-day-net">
           <small>Net</small>
-          <strong className={valueTone(day.trophyChange ?? battleTrophyChange(day))}>
-            {formatSigned(day.trophyChange ?? battleTrophyChange(day))}
+          <strong className={valueTone(day.trophyChange)}>
+            {formatSigned(day.trophyChange)}
           </strong>
         </span>
       </summary>
+      {reasons.map((reason) => (
+        <p className="section-note" key={reason}>
+          {reason}
+        </p>
+      ))}
+      <p className="section-note">
+        {`Recorded battle net ${formatSigned(battleNet)}: recorded attacks minus recorded defenses, without the automatic defense loss at Reset.`}
+      </p>
       {day.uncertainty.includes("attack_count_exceeds_eight") ? (
         <p className="section-note">{excessNote(day.offenseEvents.length, "attacks")}</p>
       ) : null}
@@ -975,9 +1071,9 @@ function LiveBadge() {
     return () => cancelAnimationFrame(frame);
   }, []);
   return (
-    <span className="legend-day-live" aria-label="Today's live Legend log">
+    <span className="legend-day-live" aria-label="Today's Legend day, in progress">
       <span className="legend-live-dot" ref={dot} aria-hidden="true" />
-      Live
+      In progress
     </span>
   );
 }
@@ -1056,7 +1152,7 @@ function BattleColumn({
             </li>
           ) : (
             <li
-              aria-label={`Empty ${title.toLowerCase().slice(0, -1)} slot ${index + 1}`}
+              aria-label={`${title.slice(0, -1)} ${index + 1} not recorded`}
               className="battle-slot battle-slot-empty"
               key={`empty-${index}`}
             />

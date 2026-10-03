@@ -810,3 +810,139 @@ describe("automatic tag lookup", () => {
     expect(await renderRoute(result)).toContain("Waiting to check");
   });
 });
+
+describe("player day honesty", () => {
+  const ENDED_DAY: RankedDaySummary = {
+    ...SAVED_DAY,
+    dayNumber: 3,
+    period: "2026-10-02T05:00:00Z – 2026-10-03T05:00:00Z",
+    state: "Partial",
+    offense: { attacks: 8, threeStars: 6, trophyGain: 310 },
+    defense: { defenses: 8, threeStarsAgainst: 2, trophyLoss: 284 },
+    trophyChange: null,
+    offenseEvents: [],
+    defenseEvents: [],
+    completeness: { state: "partial", reason: "missing_end_baseline" },
+    uncertainty: ["missing_end_baseline"],
+  };
+  const TODAY: RankedDaySummary = {
+    ...ENDED_DAY,
+    dayNumber: 4,
+    period: "2026-10-03T05:00:00Z – 2026-10-04T05:00:00Z",
+    state: "Live",
+    offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
+    defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
+    uncertainty: ["missing_end_battle_log_baseline", "missing_start_baseline"],
+  };
+
+  function page(days: RankedDaySummary[], extra: Partial<PlayerPage> = {}) {
+    return renderRoute(
+      {
+        requestedTag: TAG,
+        player: { ...PLAYER, recentDays: days, seasonDays: days, ...extra },
+        error: null,
+        refreshStatus: null,
+        refreshError: null,
+        noJsIdempotencyKey: "test-idempotency-key",
+        lookup: { tag: TAG, state: "tracking" },
+        lookupError: null,
+        seasons: [],
+        selectedSeason: null,
+        historical: null,
+        historicalError: null,
+      },
+      "",
+    ).then((html) => html.split("<script>")[0].replaceAll("<!-- -->", ""));
+  }
+
+  function dayHtml(html: string, key: string) {
+    return html.split(`id="legend-day-${key}"`)[1].split("</details>")[0];
+  }
+
+  const net = (value: string) =>
+    new RegExp(`<small>Net</small><strong class="[^"]+">${value}</strong>`);
+
+  it("keeps an unknown daily net unknown while showing recorded battle net", async () => {
+    const zero = { ...ENDED_DAY, period: SAVED_DAY.period, trophyChange: 0 };
+    const html = await page([ENDED_DAY, zero]);
+    const ended = dayHtml(html, "2026-10-02");
+    expect(ended).toMatch(net("Unknown"));
+    expect(ended).toContain("Result unknown");
+    expect(ended).toContain("Recorded battle net +26");
+    expect(ended).toContain("Trophies at the end of this day were not recorded.");
+    expect(ended).toContain("8 recorded");
+    expect(ended).not.toContain("missing_end_baseline");
+    expect(dayHtml(html, "2026-09-07")).toMatch(net("0"));
+  });
+
+  it("does not invent net zero for a current day with no recorded battles", async () => {
+    const html = await page([TODAY], { currentDay: TODAY });
+    const today = dayHtml(html, "2026-10-03");
+    expect(today).toContain("In progress");
+    expect(today).toMatch(net("Unknown"));
+    expect(today).toContain("Recorded battle net 0");
+    expect(today).toContain("Ending evidence arrives after Reset.");
+    expect(today).toContain("Trophies at the start of this day were not recorded.");
+    expect(today).toContain('aria-label="Attack 1 not recorded"');
+    expect(html).toContain('id="legend-day-2026-10-03" open=""');
+
+    const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };
+    expect(
+      dayHtml(await page([missingDefense], { currentDay: missingDefense }), "2026-10-03"),
+    ).toContain("Recorded battle net Unknown");
+  });
+
+  it("does not label an ended saved Live row as today's result", async () => {
+    const ended = { ...TODAY, trophyChange: 12, uncertainty: [] };
+    for (const currentDay of [null, ENDED_DAY]) {
+      const html = await page([ended, ENDED_DAY], { currentDay });
+      const row = dayHtml(html, "2026-10-03");
+      expect(row).not.toContain("In progress");
+      expect(row).toContain("Incomplete");
+      expect(row).toContain("Final evidence for this day has not been processed yet.");
+      expect(html).not.toContain('id="legend-day-2026-10-03" open=""');
+    }
+    const html = await page([ENDED_DAY], { currentDay: ENDED_DAY });
+    expect(dayHtml(html, "2026-10-02")).toContain("In progress");
+    expect(dayHtml(html, "2026-10-02")).toContain("Ending evidence arrives after Reset.");
+  });
+
+  it("keeps a legacy complete day provisional", async () => {
+    const complete = {
+      ...ENDED_DAY,
+      state: "Complete" as const,
+      trophyChange: 26,
+      completeness: { state: "complete" as const, reason: "Complete" },
+      uncertainty: [],
+    };
+    const row = dayHtml(await page([complete]), "2026-10-02");
+    expect(row).toContain("Provisional result");
+    expect(row).toMatch(net("\\+26"));
+  });
+
+  it("shows the received warnings instead of a late-tracking explanation", async () => {
+    const html = await page([ENDED_DAY], {
+      dataQuality: [
+        {
+          code: "stale",
+          label: "Stale saved profile",
+          detail:
+            "The collector has not confirmed this player profile within the current freshness limit.",
+        },
+        {
+          code: "partial",
+          label: "Incomplete ranked-day data",
+          detail: "missing_end_battle_log_baseline; new_unknown_code",
+        },
+      ],
+    });
+    expect(html).not.toContain("tracking started partway");
+    expect(html).toContain(
+      "The collector has not confirmed this player profile within the current freshness limit.",
+    );
+    expect(html).toContain(
+      "Ending evidence arrives after Reset. Some daily evidence is unavailable.",
+    );
+    expect(html).not.toContain("new_unknown_code");
+  });
+});
