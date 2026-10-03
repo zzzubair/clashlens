@@ -460,7 +460,7 @@ def test_campaign_registration_drops_finished_work_until_activated(
         assert _items(connection_info, "publication") == []
 
         with _owner(connection_info) as connection:
-            second = _report(connection, player, opponent, START, destruction=56, code="u1x0-2x1")
+            second = _report(connection, player, opponent, START + DAY, destruction=56, code="u1x0-2x1")
         domain_repair.register(worker, SEASON, now=NOW)
         monkeypatch.setattr(domain_repair, "HANDLERS", dict.fromkeys(domain_repair.REQUIRED_STAGES))
         domain_repair.activate(worker, SEASON, now=NOW)
