@@ -386,6 +386,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         trophyLoss: value.defense_loss as number | null,
       },
       trophyChange: value.net_trophy_change as number | null,
+      battlesComplete: value.battles_complete === true,
       offenseEvents: value.offense_events.map((event) => mapEvent(event, "offense")),
       defenseEvents: value.defense_events.map((event) => mapEvent(event, "defense")),
       completeness: {
