@@ -554,7 +554,9 @@ def test_campaign_saves_nothing_once_the_window_closes_mid_write(
     closing = "1999999999"
     with _campaign_database(database_url) as (connection_info, worker):
         with _owner(connection_info) as connection:
-            # A Season whose correction window closes two seconds from now.
+            # A Season whose correction window closes two seconds from now,
+            # replacing September as the one confirmed start.
+            connection.execute("UPDATE legend_season_anchors SET state = 'superseded'")
             connection.execute(
                 """
                 INSERT INTO legend_season_anchors (
