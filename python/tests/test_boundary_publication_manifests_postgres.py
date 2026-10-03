@@ -666,6 +666,35 @@ def test_frozen_army_build_follows_a_battle_merged_after_the_freeze(
                 ).fetchall()
                 [old] = frozen["battle_ids"]
                 target = _merge_into_day_before(connection, old)
+                # 0057 moved an older report of the frozen side; the frozen
+                # one is still read, never mixed with it.
+                connection.execute(
+                    """
+                    WITH older AS (
+                        INSERT INTO battle_evidence (
+                            battle_id, source_row_id, observation_id,
+                            reporting_player_id, perspective, battle_timestamp,
+                            stars, destruction_percentage, army_share_code,
+                            reporter_trophies, opponent_trophies, attacker_gain,
+                            defender_loss, trophy_rule_version,
+                            source_observed_at, parser_version
+                        )
+                        SELECT battle_id, source_row_id, observation_id,
+                               reporting_player_id, perspective,
+                               battle_timestamp, stars, destruction_percentage,
+                               army_share_code, reporter_trophies,
+                               opponent_trophies, attacker_gain, defender_loss,
+                               trophy_rule_version,
+                               source_observed_at - interval '1 hour',
+                               parser_version || '-older'
+                        FROM battle_evidence WHERE id = %s
+                        RETURNING id, perspective
+                    )
+                    UPDATE battle_day_repairs AS repair SET evidence_id = older.id
+                    FROM older WHERE repair.perspective = older.perspective
+                    """,
+                    (frozen["evidence_ids"][0],),
+                )
                 # The moved decode is still the frozen one: no correction.
                 assert (
                     not boundary_publication._boundary_army_manifest_needs_correction(

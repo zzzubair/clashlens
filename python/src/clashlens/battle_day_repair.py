@@ -40,28 +40,33 @@ def merged_battles(
     battle row and deleted the old one. A Reset frozen after the move, from a
     day not yet rebuilt, names the old battle but no report for the moved
     side, as its row was gone. The second value lists the reports 0057 moved
-    for such sides, to read in place of the missing frozen ones.
+    for sides with no listed report, to read in place of the missing ones.
     """
     if not battle_ids:
         return {}, []
     moved: dict[tuple[int, str], int] = {}
     unlisted: list[int] = []
-    for from_id, perspective, to_id, reports in connection.execute(
+    for from_id, perspective, to_id, report, listed in connection.execute(
         """
-        SELECT from_battle_id, perspective, to_battle_id,
-               CASE WHEN bool_or(evidence_id = ANY(%s::bigint[]))
-                    THEN '{}'::bigint[]
-                    ELSE array_agg(evidence_id ORDER BY evidence_id)
-               END
-        FROM battle_day_repairs
-        WHERE from_battle_id = ANY(%s::bigint[])
-        GROUP BY from_battle_id, perspective, to_battle_id
+        SELECT repair.from_battle_id, repair.perspective, repair.to_battle_id,
+               repair.evidence_id,
+               EXISTS (
+                   SELECT 1 FROM battle_evidence AS evidence
+                   WHERE evidence.battle_id IN (
+                           repair.from_battle_id, repair.to_battle_id
+                         )
+                     AND evidence.perspective = repair.perspective
+                     AND evidence.id = ANY(%s::bigint[])
+               )
+        FROM battle_day_repairs AS repair
+        WHERE repair.from_battle_id = ANY(%s::bigint[])
         """,
         (evidence_ids, battle_ids),
     ).fetchall():
         lens = "offense" if _text_value(perspective) == "attacker" else "defense"
         moved[(int(from_id), lens)] = int(to_id)
-        unlisted.extend(int(report) for report in reports)
+        if not listed:
+            unlisted.append(int(report))
     return moved, unlisted
 
 
