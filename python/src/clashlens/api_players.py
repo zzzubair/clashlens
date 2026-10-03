@@ -470,7 +470,11 @@ def list_player_seasons(
 def get_player_season_summary(
     database, normalized_tag: str, official_season_id: str
 ) -> dict[str, Any] | None:
-    """Read tracked detail when retained, with honest official fallback."""
+    """Read tracked detail when retained, with honest official fallback.
+
+    A summary stored before EOD movement was kept reports that movement
+    and its evidence states as unknown.
+    """
     with database.pool.connection() as connection:
         cursor = connection.execute(
             """
@@ -491,6 +495,9 @@ def get_player_season_summary(
             columns = [d.name for d in cursor.description]
             record = dict(zip(columns, row))
             result = _historical_season_summary(record)
+            for entry in result["daily_entries"]:
+                for key in ("eod_state", "eod_change", "eod_change_state"):
+                    entry.setdefault(key, None)
             result["source"] = "tracked_summary"
             result["official_history"] = (
                 None if history is None else _official_history_payload(history)

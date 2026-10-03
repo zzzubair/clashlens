@@ -43,7 +43,10 @@ def _player(connection, tag="#2PP"):
     ).fetchone()[0]
 
 
-def _ranked(connection, player_id, day_number, start, end, *, season=SEASON, version=1):
+def _ranked(
+    connection, player_id, day_number, start, end, *, season=SEASON, version=1, trophies=None
+):
+    begin, eod = trophies or (6000 + (day_number - 1) * 10, 6000 + day_number * 10)
     return connection.execute(
         """
         INSERT INTO ranked_day_versions (
@@ -66,11 +69,11 @@ def _ranked(connection, player_id, day_number, start, end, *, season=SEASON, ver
             end,
             season,
             day_number,
-            f"{day_number:064x}",
+            f"{version:032x}{day_number:032x}",
             version,
-            6000 + (day_number - 1) * 10,
-            6000 + day_number * 10,
-            6000 + day_number * 10,
+            begin,
+            eod,
+            eod,
             2,
             1,
             30,
@@ -159,6 +162,140 @@ def _summary(connection, player_id, season=SEASON):
     assert row is not None
     columns = [d.name for d in cursor.description]
     return dict(zip(columns, row))
+
+
+def _days(connection, player_id, eods, *, version=1):
+    """Store each listed day ending on its EOD, starting where the previous one ended."""
+    for day, (begin, eod) in eods.items():
+        start = DAY0 + timedelta(days=day - 1)
+        ranked = _ranked(
+            connection, player_id, day, start, start + timedelta(days=1),
+            version=version, trophies=(begin, eod),
+        )
+        _log(connection, player_id, day, ranked, start, version=version)
+
+
+def _settle(connection, player_id, day, trophies):
+    connection.execute(
+        """
+        INSERT INTO reset_boundary_settlements (
+            player_id, boundary_at, state, selected_trophies, proof_kind,
+            proof_rule_version, proof_fingerprint, proof_json
+        ) VALUES (%s, %s, 'settled', %s, 'observed_adjustment', 'test', 'f', '{"t": 1}')
+        """,
+        (player_id, DAY0 + timedelta(days=day), trophies),
+    )
+
+
+def _movement(connection, player_id):
+    materialize_player_season(connection, player_id, SEASON)
+    connection.commit()
+    return {
+        entry["season_day_number"]: (
+            entry["eod_change"], entry["eod_change_state"], entry["eod_state"], entry["net_change"]
+        )
+        for entry in _summary(connection, player_id)["daily_entries"]
+    }
+
+
+def test_eod_change_uses_previous_day_and_day_one_5000(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection, "#2PP")
+                _days(connection, player_id, {1: (5000, 5050), 2: (5050, 4950), 3: (4950, 5000)})
+                connection.commit()
+                # Unsettled Resets keep known movement provisional; the
+                # battle-result net stays the recorded 10 on every day.
+                assert _movement(connection, player_id) == {
+                    1: (50, "provisional", "provisional", 10),
+                    2: (-100, "provisional", "provisional", 10),
+                    3: (50, "provisional", "provisional", 10),
+                }
+                _settle(connection, player_id, 1, 5050)
+                _settle(connection, player_id, 2, 4950)
+                _settle(connection, player_id, 3, 4990)  # not the trophies day 3 used
+                assert _movement(connection, player_id) == {
+                    1: (50, "accepted", "accepted", 10),
+                    2: (-100, "accepted", "accepted", 10),
+                    3: (50, "provisional", "provisional", 10),
+                }
+            page = api_players.get_player_season_summary(database, "#2PP", SEASON)
+            assert [day["eod_change"] for day in page["daily_entries"]] == [50, -100, 50]
+            # A summary stored in the older format stays listed and readable,
+            # with movement and its evidence states unknown, never zero.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE player_season_summaries
+                    SET projection_version = 'player-season-summary-v1',
+                        daily_entries = (
+                            SELECT jsonb_agg(
+                                entry - 'eod_change' - 'eod_state' - 'eod_change_state'
+                                ORDER BY position
+                            )
+                            FROM jsonb_array_elements(daily_entries)
+                                WITH ORDINALITY AS item(entry, position)
+                        )
+                    """
+                )
+                connection.commit()
+            older = api_players.get_player_season_summary(database, "#2PP", SEASON)
+            assert older["source"] == "tracked_summary"
+            assert [
+                (day["end_trophies"], day["eod_change"], day["eod_state"], day["eod_change_state"])
+                for day in older["daily_entries"]
+            ] == [(5050, None, None, None), (4950, None, None, None), (5000, None, None, None)]
+            assert [
+                (season["official_season_id"], season["source"])
+                for season in api_players.list_player_seasons(database, "#2PP")
+            ] == [(SEASON, "tracked_summary")]
+        finally:
+            database.close()
+
+
+def test_missing_previous_eod_and_late_start_stay_unknown(database_url: str) -> None:
+    """Partial history: tracking began on day 25, day 26 is missing and
+    day 27's EOD is unknown, while the final trophies are known."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _days(connection, player_id, {25: (5300, 5310), 28: (5330, 5340)})
+                _log(connection, player_id, 27, None, DAY0 + timedelta(days=26))
+                connection.commit()
+                assert _movement(connection, player_id) == {
+                    25: (None, None, "provisional", 10),
+                    27: (None, None, None, 10),
+                    28: (None, None, "provisional", 10),
+                }
+                summary = _summary(connection, player_id)
+            assert summary["start_trophies"] is None
+            assert summary["end_trophies"] == 5340
+            assert summary["missing_days"] == [*range(1, 25), 26]
+        finally:
+            database.close()
+
+
+def test_day28_and_boundary_adjustment_keep_battle_net_separate(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                # Day 27 ended on 4,980 and the weekly raise started day 28
+                # on 5,000, so day 28 moved 30 although its battles net 10.
+                _days(connection, player_id, {27: (4970, 4980), 28: (5000, 5010)})
+                connection.commit()
+                assert _movement(connection, player_id)[28] == (30, "provisional", "provisional", 10)
+                # A corrected day 27 changes day 28's movement, not its net.
+                _days(connection, player_id, {27: (4970, 4990)}, version=2)
+                connection.commit()
+                assert _movement(connection, player_id)[28] == (20, "provisional", "provisional", 10)
+        finally:
+            database.close()
 
 
 def test_migration_is_reentrant(database_url: str) -> None:
