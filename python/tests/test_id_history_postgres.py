@@ -28,7 +28,8 @@ from test_army_season_summaries_postgres import _seed
 from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 from test_reconciliation_postgres import _processor as _real_processor
 from test_reconciliation_postgres import _store_baseline_pair
-from test_season_detail_retirement_postgres import (
+from test_season_detail_retirement_postgres import (  # noqa: F401 - autouse history substitution
+    _assume_expanded_history,
     _ensure_canonical_anchor,
     _full_season,
     _player,

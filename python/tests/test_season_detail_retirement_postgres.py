@@ -20,7 +20,13 @@ import psycopg
 import pytest
 from domain_test_support import domain_database
 
-from clashlens import api_analytics, api_players, battle_ingestion, reconciliation_db
+from clashlens import (
+    api_analytics,
+    api_players,
+    battle_ingestion,
+    reconciliation_db,
+    season_finalization_guard,
+)
 from clashlens.api_db import ApiDatabase
 from clashlens.army_season_summaries import materialize_completed_army_season
 from clashlens.db import Database
@@ -43,6 +49,14 @@ SEASON_END = DAY0 + timedelta(days=28)
 AFTER_SEASON = SEASON_END + timedelta(hours=1)
 CLOSE_AT = SEASON_END + timedelta(days=7, hours=1)
 LIVE_DAY0 = SEASON_END
+
+
+@pytest.fixture(autouse=True)
+def _assume_expanded_history(monkeypatch):
+    """Substitution: no check for the expanded history exists yet, so these
+    deletion regressions assume it passes. The guard tests prove the real
+    default refuses finalization and retirement."""
+    monkeypatch.setattr(season_finalization_guard, "promised_history_gap", lambda *_: None)
 
 
 def _player(connection, tag="#2PP"):
@@ -447,7 +461,7 @@ def test_deep_decode_chain_progresses_without_fk_rollback(database_url: str) -> 
             database.close()
 
 
-def test_observationless_army_work_uses_half_open_season_scope(
+def test_observationless_work_scope_includes_the_closing_reset(
     database_url: str,
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -524,7 +538,11 @@ def test_observationless_army_work_uses_half_open_season_scope(
                     )
                 blocked = finalize_season_detail(connection, SEASON, CLOSE_AT)
                 assert blocked["status"] == "blocked"
-                assert blocked["blocking_work"]["observationless_army_jobs"] == 2
+                # The closing Reset build counts; the October battle does not.
+                assert {key for (key,) in connection.execute(
+                    "SELECT deduplication_key FROM python_processing_jobs WHERE id = ANY(%s)",
+                    (blocked["blocking_work"]["processing_jobs"],),
+                )} == {"retirement-army-season", "retirement-redecode-season", "retirement-army-next-season"}
                 connection.execute(
                     "UPDATE python_processing_jobs SET status = 'complete',"
                     " outcome = 'processed', completed_at = clock_timestamp()"
@@ -681,8 +699,8 @@ def test_finalize_blocks_stale_summaries_and_pending_work(
                 )
                 blocked = finalize_season_detail(connection, SEASON, CLOSE_AT, apply=True)
                 assert blocked["status"] == "blocked"
-                assert blocked["blocking_work"].get("processing_jobs") == 1
-                assert blocked["blocking_work"].get("observationless_army_jobs") == 1
+                assert len(blocked["blocking_work"]["processing_jobs"]) == 2
+                assert len(blocked["blocking_work"]["unproven_observations"]) == 1
                 connection.rollback()
         finally:
             database.close()

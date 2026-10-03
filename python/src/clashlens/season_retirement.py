@@ -16,12 +16,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .season_finalization_guard import close_blockers
+
 RETIREMENT_VERSION = "season-detail-retirement-v1"
 SEASON_DETAIL_RETIRED = "season_detail_retired"
-TERMINAL_JOB_STATUSES = ("complete", "failed", "cancelled")
-TERMINAL_REPLAY_STATUSES = ("complete", "failed", "cancelled")
-TERMINAL_CORRECTION_STATES = ("finalized", "terminal")
-ACTIVE_GENERATION_STATES = ("pending", "ready", "building")
 # Late battles, replays and corrections land for a week after the Season
 # ends; finalization stops corrections and retirement deletes detail.
 SEASON_CLOSE_WAIT = timedelta(days=7)
@@ -223,7 +221,8 @@ def finalize_season_detail(
     reruns them and inserts the ``finalized`` record that fences writers;
     detail deletion happens separately in :func:`retire_season_detail` so
     a crash between the two is restart-safe. Both wait for
-    :data:`SEASON_CLOSE_WAIT` after the Season end.
+    :data:`SEASON_CLOSE_WAIT` after the Season end and refuse while the
+    close guard finds blocking work or missing promised history.
     """
     from .army_history import HISTORY_CATEGORIES
     from .army_season_summaries import LENSES, _project_lens
@@ -249,12 +248,16 @@ def finalize_season_detail(
             close_at, reason = season_close_block(
                 _canonical_season_bounds(connection, season_id), existing[1:3], now_utc
             )
-            if reason is not None:
+            blocking_work = (
+                {} if reason else close_blockers(connection, season_id, *existing[1:3])
+            )
+            if reason is not None or blocking_work:
                 return {
                     "season_id": season_id,
                     "status": "blocked",
-                    "reason": reason,
+                    "reason": reason or "verification_failed",
                     **close_at,
+                    **({"blocking_work": blocking_work} if blocking_work else {}),
                     "existing_status": _text(existing[0]),
                     "already_finalized": True,
                     "applied": False,
@@ -375,7 +378,7 @@ def finalize_season_detail(
                 missing_army.append(key)
             elif stored_army[(lens, category)] != digest:
                 stale_army.append(key)
-    blocking_work = _blocking_season_work(connection, season_start, season_end)
+    blocking_work = close_blockers(connection, season_id, season_start, season_end)
     if missing_players or stale_players or missing_army or stale_army or failures or blocking_work:
         return {
             "season_id": season_id,
@@ -472,121 +475,6 @@ def _canonical_season_bounds(connection: Any, season_id: str) -> tuple[datetime,
     return start, start + SEASON_DURATION
 
 
-def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -> dict[str, int]:
-    """Count non-terminal work scoped to the half-open season interval."""
-    blocking: dict[str, int] = {}
-    if _table_exists(connection, "python_processing_jobs") and _table_exists(
-        connection, "collector_observations"
-    ):
-        row = connection.execute(
-            """
-            SELECT count(*) FROM python_processing_jobs AS job
-            JOIN collector_observations AS observation
-              ON observation.id = COALESCE(job.observation_id, job.replay_observation_id)
-            WHERE job.status <> ALL(%s::text[])
-              AND observation.response_completed_at >= %s
-              AND observation.response_completed_at < %s
-            """,
-            (list(TERMINAL_JOB_STATUSES), season_start, season_end),
-        ).fetchone()
-        if row and int(row[0]):
-            blocking["processing_jobs"] = int(row[0])
-    if _table_exists(connection, "python_processing_jobs_worker") and _table_exists(
-        connection, "legend_battles"
-    ):
-        row = connection.execute(
-            """
-            SELECT count(*) FROM python_processing_jobs_worker AS job
-            WHERE job.state <> ALL(%s::text[])
-              AND job.observation_id IS NULL
-              AND job.replay_observation_id IS NULL
-              AND (
-                  (job.work_type = 'build_army_analytics' AND (
-                      (job.input_json ->> 'ranked_day_start')::timestamptz >= %s
-                      AND (job.input_json ->> 'ranked_day_start')::timestamptz < %s
-                      OR (job.input_json ->> 'boundary_at')::timestamptz >= %s
-                      AND (job.input_json ->> 'boundary_at')::timestamptz < %s
-                  ))
-                  OR (job.work_type = 'redecode_army' AND EXISTS (
-                      SELECT 1
-                      FROM jsonb_array_elements_text(
-                          CASE
-                              WHEN jsonb_typeof(job.input_json -> 'battle_ids') = 'array'
-                                  THEN job.input_json -> 'battle_ids'
-                              WHEN jsonb_typeof(job.input_json -> 'battle_id') = 'number'
-                                  THEN jsonb_build_array(job.input_json -> 'battle_id')
-                              ELSE '[]'::jsonb
-                          END
-                      ) AS requested(battle_id)
-                      JOIN legend_battles AS battle
-                        ON battle.id = requested.battle_id::bigint
-                      WHERE battle.ranked_day_start >= %s
-                        AND battle.ranked_day_start < %s
-                  ))
-                  OR (job.work_type = 'reconcile_ranked_day' AND (
-                      ((job.input_json ->> 'ranked_day_start')::timestamptz >= %s
-                       AND (job.input_json ->> 'ranked_day_start')::timestamptz < %s)
-                      OR ((job.input_json ->> 'boundary_at')::timestamptz >= %s
-                       AND (job.input_json ->> 'boundary_at')::timestamptz < %s)
-                  ))
-              )
-            """,
-            (
-                list(TERMINAL_JOB_STATUSES),
-                season_start,
-                season_end,
-                season_start,
-                season_end,
-                season_start,
-                season_end,
-                season_start,
-                season_end,
-                season_start,
-                season_end,
-            ),
-        ).fetchone()
-        if row and int(row[0]):
-            blocking["observationless_army_jobs"] = int(row[0])
-    if _table_exists(connection, "python_replay_requests"):
-        row = connection.execute(
-            """
-            SELECT count(*) FROM python_replay_requests AS request
-            JOIN collector_observations AS observation
-              ON observation.id = request.observation_id
-            WHERE request.status <> ALL(%s::text[])
-              AND observation.response_completed_at >= %s
-              AND observation.response_completed_at < %s
-            """,
-            (list(TERMINAL_REPLAY_STATUSES), season_start, season_end),
-        ).fetchone()
-        if row and int(row[0]):
-            blocking["replay_requests"] = int(row[0])
-    if _table_exists(connection, "boundary_publication_generations"):
-        row = connection.execute(
-            """
-            SELECT count(*) FROM boundary_publication_generations
-            WHERE boundary_at >= %s AND boundary_at < %s
-              AND (snapshot_state = ANY(%s::text[])
-                   OR army_state = ANY(%s::text[]))
-            """,
-            (season_start, season_end, list(ACTIVE_GENERATION_STATES), list(ACTIVE_GENERATION_STATES)),
-        ).fetchone()
-        if row and int(row[0]):
-            blocking["boundary_generations"] = int(row[0])
-    if _table_exists(connection, "boundary_publication_corrections"):
-        row = connection.execute(
-            """
-            SELECT count(*) FROM boundary_publication_corrections
-            WHERE boundary_at >= %s AND boundary_at < %s
-              AND state <> ALL(%s::text[])
-            """,
-            (season_start, season_end, list(TERMINAL_CORRECTION_STATES)),
-        ).fetchone()
-        if row and int(row[0]):
-            blocking["boundary_corrections"] = int(row[0])
-    return blocking
-
-
 def retire_season_detail(
     connection: Any,
     season_id: str,
@@ -602,7 +490,8 @@ def retire_season_detail(
     detail, updates progress, and marks the season ``retired`` once every
     counter reaches zero. Summaries and protected records are never
     deleted here. Every call rechecks the stored window and the close
-    wait against ``now``, the database clock by default.
+    wait against ``now``, the database clock by default, and the close
+    guard, so a ``finalized`` record is never enough on its own.
     """
     season_id = _check_season_id(season_id)
     max_rows = _check_batch(max_rows, "retirement batch size")
@@ -645,6 +534,17 @@ def retire_season_detail(
             "status": "blocked",
             "reason": summary_check["reason"],
             **close_at,
+            "applied": False,
+        }
+    blocking_work = close_blockers(connection, season_id, season_start, season_end)
+    if blocking_work:
+        return {
+            "season_id": season_id,
+            "status": "blocked",
+            "reason": "verification_failed",
+            **close_at,
+            "blocking_work": blocking_work,
+            "existing_status": status,
             "applied": False,
         }
     eligible = _eligible_counts(connection, season_id, season_start, season_end, max_rows)
