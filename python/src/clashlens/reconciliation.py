@@ -252,6 +252,10 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     observed_boundary_adjustment: int | None = None
     expected_next: int | None = None
     residual: int | None = None
+    # A Season reset, or the weekly raise for a total at or below 5,000, makes
+    # the next start 5,000 whatever the day ended on, so that reading cannot
+    # prove the end-of-day total or the automatic defense loss.
+    end_hidden_by_reset = False
 
     automatic_value_known = not (1 <= defense_count <= 7) or automatic_loss is not None
     if start_available and automatic_value_known:
@@ -268,6 +272,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         ):
             boundary_adjustment = 5000 - final_trophies
             boundary_type = f"{data.boundary_kind}_reset"
+        end_hidden_by_reset = data.boundary_kind == "season" or (
+            data.boundary_kind == "weekly" and final_trophies <= 5000
+        )
         expected_next = final_trophies + boundary_adjustment
 
         if end_available and data.next_start_trophies is not None:
@@ -275,7 +282,11 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             residual = data.next_start_trophies - expected_next
             if abs(residual) > TROPHY_RECONCILIATION_TOLERANCE:
                 failures.append("trophy_equation_mismatch")
-            elif automatic_loss is not None and automatic_state == "calculated":
+            elif (
+                automatic_loss is not None
+                and automatic_state == "calculated"
+                and not end_hidden_by_reset
+            ):
                 # The paired baselines isolate the calculated settlement loss.
                 automatic_state = "confirmed"
 
@@ -369,7 +380,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         "uncertain_sequence",
     }:
         confidence = "uncertain"
-    if state == "Complete" and shield_state == "inferred_shielded":
+    if state == "Complete" and (
+        shield_state == "inferred_shielded" or end_hidden_by_reset
+    ):
         confidence = "inferred"
 
     return _result(

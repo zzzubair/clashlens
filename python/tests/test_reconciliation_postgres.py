@@ -1379,3 +1379,75 @@ def test_completion_binds_coverage_chain_to_sweep_battle_log_observation_ids(
             )
         finally:
             database.close()
+
+
+@pytest.mark.parametrize("start_trophies", [5200, 4800])
+def test_season_end_days_use_the_28_day_phase_while_the_anchor_is_old(
+    database_url: str, archive_server, start_trophies: int
+) -> None:
+    # The fixture profiles still report the July 13 Season, like Monday's
+    # first reads still reporting the ending Season. August 9 is its day 28;
+    # the August 10 Reset ends it.
+    season_end = datetime(2026, 8, 10, 5, tzinfo=UTC)
+    last_day = season_end - timedelta(days=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = []
+        for key, boundary, trophies in (
+            ("season-last-day", last_day, start_trophies),
+            ("season-end", season_end, 5000),
+            ("season-first-day-end", season_end + timedelta(days=1), 5000),
+        ):
+            jobs.extend(
+                _store_baseline_pair(
+                    connection_info,
+                    archive_server,
+                    key=key,
+                    boundary=boundary,
+                    trophies=trophies,
+                    empty_battle_log=True,
+                )[2:]
+            )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for job_id in jobs:
+                result = processor.process_job(job_id, owner=f"season-{job_id}")
+                assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                anchor = connection.execute(
+                    "SELECT current_league_season_id FROM legend_season_anchors"
+                    " WHERE state = 'confirmed'"
+                ).fetchone()
+                reconcile_jobs = connection.execute(
+                    """
+                    SELECT id FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                    ORDER BY input_json->>'ranked_day_start', id
+                    """
+                ).fetchall()
+            assert text(anchor[0]) == "1783918800"
+            for (job_id,) in reconcile_jobs:
+                result = processor.process_job(int(job_id), owner=f"day-{job_id}")
+                assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                days = {
+                    row[0]: row[1:]
+                    for row in connection.execute(
+                        """
+                        SELECT DISTINCT ON (ranked_day_start)
+                               ranked_day_start, official_season_id,
+                               season_day_number, boundary_adjustment_type,
+                               boundary_adjustment, state, confidence
+                        FROM ranked_day_versions
+                        ORDER BY ranked_day_start, version DESC
+                        """
+                    ).fetchall()
+                }
+        finally:
+            database.close()
+    season_day, season_identity = days[last_day], days[season_end]
+    assert (text(season_day[0]), season_day[1]) == ("1783918800", 28)
+    assert text(season_day[2]) == "season_reset"
+    assert season_day[3] == 5000 - start_trophies
+    # The 5,000 start after a Season reset cannot prove the day's final total.
+    assert (text(season_day[4]), text(season_day[5])) == ("Complete", "inferred")
+    assert (text(season_identity[0]), season_identity[1]) == ("1786338000", 1)

@@ -11,6 +11,7 @@ from clashlens.domain import (
     TROPHY_ALLOCATION_RULE_VERSION,
     DomainRuleError,
     allocate_trophies,
+    anchored_ranked_day,
     ranked_day_for,
     validate_legend_season_start,
     validate_season_anchor,
@@ -103,3 +104,27 @@ def test_league_history_anchor_accepts_old_legend_seasons_on_the_28_day_phase() 
     ):
         with pytest.raises(DomainRuleError, match="invalid_season_anchor"):
             validate_legend_season_start(invalid, observed_at=observed_at)
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [("1788757200", "1786338000"), ("1791176400", "1788757200")],
+    ids=["september-anchor", "october-anchor"],
+)
+def test_october_5_season_end_uses_the_phase_whichever_anchor_is_confirmed(
+    anchor: tuple[str, str],
+) -> None:
+    sunday = anchored_ranked_day(datetime(2026, 10, 4, 12, tzinfo=UTC), *anchor)
+    monday = anchored_ranked_day(datetime(2026, 10, 5, 5, tzinfo=UTC), *anchor)
+
+    assert (sunday.official_season_id, sunday.day_number) == ("1788757200", 28)
+    assert sunday.season_end == monday.start == datetime(2026, 10, 5, 5, tzinfo=UTC)
+    assert (monday.official_season_id, monday.day_number) == ("1791176400", 1)
+
+
+def test_season_anchor_off_the_28_day_phase_is_refused() -> None:
+    # Adjacent Monday 05:00 boundaries, but one week off the Legend phase.
+    with pytest.raises(DomainRuleError, match="invalid_season_anchor"):
+        anchored_ranked_day(
+            datetime(2026, 10, 5, 5, tzinfo=UTC), "1789362000", "1786942800"
+        )

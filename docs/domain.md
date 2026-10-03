@@ -372,6 +372,7 @@ Use the same confidence meanings on every applicable surface.
 - An **inferred shielded day** is a derived ranked-day state supported by complete observations; it is not an official shield confirmation or an exact battle event.
 - A **reconciled ranked day** satisfies `final trophies before a weekly or season boundary reset = start trophies + attack gain - defense loss`, including any automatic defense adjustment. A separate boundary adjustment explains any change to the next ranked day's starting trophies.
 - A **complete ranked day** is reconciled, has complete evidence coverage, and has no unresolved event, eligibility, or settlement-adjustment input. Otherwise it is partial with a machine-readable reason.
+- A Season reset, or a weekly raise of a total at or below 5,000, makes the next starting trophies 5,000 whatever the day ended on, so that 5,000 cannot prove the final total. Such a day can still be complete, but its confidence is inferred, not exact, and its automatic defense adjustment stays calculated.
 - Timestamps allow exact event attribution, but timestamps alone do not prove that a ranked day is complete.
 - If Clash Lens cannot prove completeness, mark the ranked day as partial or uncertain and preserve the reason.
 - Player-profile trophies and battle-log events may become visible at different times. Preserve both observations and require eventual reconciliation rather than assuming paired responses are atomic.

@@ -196,6 +196,21 @@ def validate_legend_season_start(season_id: str, *, observed_at: datetime) -> da
     return start
 
 
+def anchored_ranked_day(
+    timestamp: datetime, current_id: str, previous_id: str
+) -> RankedDay:
+    """The Legend day with its Season counted in 28-day steps from a confirmed
+    anchor, so days after an anchor's Season ends get the next Season even
+    before a profile reports it. Refuses an anchor off the 28-day phase."""
+    day = ranked_day_for(timestamp, anchor=validate_season_anchor(current_id, previous_id))
+    if day.season_start != ranked_day_for(timestamp).season_start:
+        raise DomainRuleError(
+            "invalid_season_anchor",
+            "confirmed season anchor is not on the 28-day Legend phase",
+        )
+    return day
+
+
 def is_season_boundary(boundary: datetime) -> bool:
     """True when a 05:00 UTC Reset boundary also opens a new season."""
     return ranked_day_for(boundary).season_start == boundary.astimezone(UTC)
