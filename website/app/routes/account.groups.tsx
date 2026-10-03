@@ -337,7 +337,7 @@ export default function GroupsRoute() {
 
       <section className="form-panel" aria-label="Create a group">
         <h2>Create a group</h2>
-        <Form method="post" className="stack-form">
+        <Form key={createKey} method="post" className="stack-form">
           <input type="hidden" name="action" value="create" />
           <input type="hidden" name="idempotencyKey" value={createKey} />
           <GroupFields

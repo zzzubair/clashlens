@@ -41,6 +41,9 @@ test("a Clasher can sign in and use account features against the real backend", 
     await page.getByLabel("Group name").first().fill("War plan");
     await page.getByLabel("Player tags").first().fill("#2PP");
     await page.getByRole("button", { name: "Create group" }).click();
+    await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
+    await expect(page.getByLabel("Group name").first()).toHaveValue("");
+    await expect(page.getByLabel("Player tags").first()).toHaveValue("");
   }
   await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
 
