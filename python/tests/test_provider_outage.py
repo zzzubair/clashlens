@@ -66,7 +66,9 @@ def provider():
 
 
 def _pool(label: str = "regular-1") -> KeyPool:
-    return KeyPool([ApiKey(label, "secret")], starts_per_second=25, concurrency_per_key=6)
+    return KeyPool(
+        [ApiKey(label, "secret")], starts_per_second=25, concurrency_per_key=6
+    )
 
 
 def test_fast_server_errors_pause_requests_instead_of_keeping_the_normal_rate(
@@ -209,7 +211,9 @@ def test_regular_checks_admitted_just_before_the_reset_drain_during_an_outage() 
         starts_per_second=25,
         concurrency_per_key=6,
     )
-    checks = [CollectorWork(index, f"#{index}", datetime.now(UTC)) for index in range(256)]
+    checks = [
+        CollectorWork(index, f"#{index}", datetime.now(UTC)) for index in range(256)
+    ]
 
     async def run() -> None:
         admitted = asyncio.gather(
@@ -247,10 +251,14 @@ def test_a_cancelled_request_is_a_retryable_failure_not_a_collector_stop() -> No
     )
 
     assert outcomes == ["transient"]
-    assert [failure.failure_category for failure in store.failures] == ["request_cancelled"]
+    assert [failure.failure_category for failure in store.failures] == [
+        "request_cancelled"
+    ]
 
 
-def test_paused_regular_work_does_not_hold_a_reset_or_run_once_admission_closes() -> None:
+def test_paused_regular_work_does_not_hold_a_reset_or_run_once_admission_closes() -> (
+    None
+):
     spool = _Spool()
     store = _Store(spool)
     collector = _collector(spool, store, _Client(spool))

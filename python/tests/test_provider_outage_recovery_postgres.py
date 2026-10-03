@@ -39,8 +39,14 @@ class _Provider(BaseHTTPRequestHandler):
             return
         unavailable = (
             type(self).mode == "unavailable"
-            or (type(self).mode == "battle_log_unavailable" and "/battlelog" in self.path)
-            or (type(self).mode == "profile_unavailable" and "/battlelog" not in self.path)
+            or (
+                type(self).mode == "battle_log_unavailable"
+                and "/battlelog" in self.path
+            )
+            or (
+                type(self).mode == "profile_unavailable"
+                and "/battlelog" not in self.path
+            )
         )
         status = 503 if unavailable else 200
         body = b'{"tag":"#2PP"}' if status == 200 else b"{}"
@@ -72,13 +78,17 @@ def _latest_reset(now: datetime) -> datetime:
 
 def _collector(origin: str, database: CollectorDatabase, spool: Spool) -> Collector:
     def keys(label: str) -> KeyPool:
-        return KeyPool([ApiKey(label, "secret")], starts_per_second=25, concurrency_per_key=6)
+        return KeyPool(
+            [ApiKey(label, "secret")], starts_per_second=25, concurrency_per_key=6
+        )
 
     return Collector(
         database=database,
         spool=spool,
         archive=None,
-        client=OfficialApiClient(origin, allow_insecure_test_origin=True, max_body_bytes=4096),
+        client=OfficialApiClient(
+            origin, allow_insecure_test_origin=True, max_body_bytes=4096
+        ),
         regular_keys=keys("regular-1"),
         interactive_keys=keys("interactive-1"),
         archive_instance_id="fixture",
@@ -123,9 +133,14 @@ def test_reset_outage_stays_retryable_and_collects_once_the_api_returns(
     boundary = _latest_reset(now)
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         database, sweep_id = _reset_work(connection_info, boundary)
-        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector = _collector(
+            origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
+        )
 
         assert _collect_reset(collector, database) == "retrying"
         assert _work(connection_info)[0] == "waiting_retry"
@@ -145,9 +160,14 @@ def test_reset_given_up_without_any_response_still_settles_its_publication(
     # An earlier Reset: retrying stopped when its Legend day ended. However
     # long the worker was stopped, its (re)start still settles the work.
     boundary = _latest_reset(datetime.now(UTC)) - timedelta(days=days_ago)
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         database, _sweep_id = _reset_work(connection_info, boundary)
-        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector = _collector(
+            origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
+        )
 
         assert _collect_reset(collector, database) == "failed"
         assert _work(connection_info) == ("failed", None, None)
@@ -174,7 +194,10 @@ def test_reset_given_up_without_any_response_still_settles_its_publication(
                 (boundary,),
             ).fetchall()
         assert evidence == [
-            ("failed", ["missing_profile_observation", "missing_battle_log_observation"])
+            (
+                "failed",
+                ["missing_profile_observation", "missing_battle_log_observation"],
+            )
         ]
         assert members == [("unavailable", "unavailable")]
 
@@ -186,7 +209,10 @@ def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
     boundary = _latest_reset(now)
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before its responses could be collected")
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         with psycopg.connect(connection_info) as connection:
             for tag in (TAG, "#8QV"):
                 connection.execute(
@@ -195,10 +221,14 @@ def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
                 )
         database = CollectorDatabase(connection_info)
         assert database.begin_reset(boundary) is not None
-        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector = _collector(
+            origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
+        )
         first, later = sorted(
             database.pending_intents(
-                limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+                limit=10,
+                now=datetime.now(UTC) + timedelta(minutes=1),
+                interactive=False,
             ),
             key=lambda intent: intent.work_id,
         )
@@ -210,7 +240,10 @@ def test_reset_recovery_reaches_later_work_past_rows_waiting_on_processing(
         _Provider.mode = "drop"
         assert asyncio.run(collector.collect_intent(later)) == "retrying"
         for intent in (first, later):
-            assert database.fail_intent(intent.work_id, category="provider_failure") == "failed"
+            assert (
+                database.fail_intent(intent.work_id, category="provider_failure")
+                == "failed"
+            )
 
         worker = Database(connection_info)
         try:
@@ -234,9 +267,14 @@ def test_reset_retry_keeps_the_profile_that_already_answered(
     boundary = _latest_reset(now)
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         database, _sweep_id = _reset_work(connection_info, boundary)
-        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector = _collector(
+            origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
+        )
         _Provider.mode = "battle_log_unavailable"
 
         assert _collect_reset(collector, database) == "retrying"
@@ -260,9 +298,14 @@ def test_retried_reset_profile_brings_a_battle_log_collected_after_it(
     boundary = _latest_reset(now)
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         database, _sweep_id = _reset_work(connection_info, boundary)
-        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector = _collector(
+            origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
+        )
         _Provider.mode = "profile_unavailable"
 
         assert _collect_reset(collector, database) == "retrying"
@@ -292,9 +335,14 @@ def test_interrupted_reset_retry_fetches_the_battle_log_again_after_restart(
     boundary = _latest_reset(now)
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         database, _sweep_id = _reset_work(connection_info, boundary)
-        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector = _collector(
+            origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
+        )
         _Provider.mode = "profile_unavailable"
         assert _collect_reset(collector, database) == "retrying"
         early_battle_log = _work(connection_info)[2]
@@ -316,7 +364,12 @@ def test_interrupted_reset_retry_fetches_the_battle_log_again_after_restart(
             limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
         )
         assert not resumed.profile_required and resumed.battle_log_required
-        assert asyncio.run(_collector(origin, database, collector.spool).collect_intent(resumed)) == "complete"
+        assert (
+            asyncio.run(
+                _collector(origin, database, collector.spool).collect_intent(resumed)
+            )
+            == "complete"
+        )
         assert _work(connection_info)[2] not in (None, early_battle_log)
 
 
@@ -327,7 +380,10 @@ def test_reset_server_error_is_not_final_while_the_collector_retries(
     boundary = _latest_reset(now)
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         database, _sweep_id = _reset_work(connection_info, boundary)
         spool = Spool(tmp_path / "spool", max_body_bytes=4096)
         collector = _collector(origin, database, spool)
@@ -365,7 +421,10 @@ def test_reset_server_error_is_not_final_while_the_collector_retries(
 def test_collection_resumes_after_an_outage_with_the_newest_response_first(
     database_url: str, tmp_path
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         with psycopg.connect(connection_info) as connection:
             player_id = connection.execute(
                 "INSERT INTO players (normalized_tag, active, next_due_at)"
@@ -386,10 +445,15 @@ def test_collection_resumes_after_an_outage_with_the_newest_response_first(
                 await collector.collect_player(work, lane="ordinary")
             assert outage.active
             # A regular check during the pause waits as paused work.
-            assert await collector.collect_player(work, lane="ordinary") == ["capacity_paused"] * 2
+            assert (
+                await collector.collect_player(work, lane="ordinary")
+                == ["capacity_paused"] * 2
+            )
             _Provider.mode = "answer"
             await asyncio.sleep(1.1)
-            return await asyncio.wait_for(collector.collect_player(work, lane="ordinary"), 5)
+            return await asyncio.wait_for(
+                collector.collect_player(work, lane="ordinary"), 5
+            )
 
         assert asyncio.run(run())[0] == "recorded"
         assert not outage.active
@@ -418,13 +482,20 @@ def test_reset_failing_while_the_api_answers_settles_after_three_retries(
     boundary = _latest_reset(now)
     if now - boundary > timedelta(hours=23, minutes=50):
         pytest.skip("this Legend day ends before the retry could be checked")
-    with domain_database(database_url, include_coordinator=True) as connection_info, _provider() as origin:
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        _provider() as origin,
+    ):
         database, _sweep_id = _reset_work(connection_info, boundary)
-        collector = _collector(origin, database, Spool(tmp_path / "spool", max_body_bytes=4096))
+        collector = _collector(
+            origin, database, Spool(tmp_path / "spool", max_body_bytes=4096)
+        )
 
         async def collect() -> str:
             (intent,) = database.pending_intents(
-                limit=10, now=datetime.now(UTC) + timedelta(minutes=1), interactive=False
+                limit=10,
+                now=datetime.now(UTC) + timedelta(minutes=1),
+                interactive=False,
             )
             return await collector.collect_intent(intent)
 
@@ -455,4 +526,6 @@ def test_reset_failing_while_the_api_answers_settles_after_three_retries(
             assert connection.execute(
                 "SELECT state FROM reset_baseline_evidence"
             ).fetchall() == [("failed",)]
-        assert [work.normalized_tag for work in database.claim_due_players(limit=10)] == [TAG]
+        assert [
+            work.normalized_tag for work in database.claim_due_players(limit=10)
+        ] == [TAG]

@@ -109,9 +109,12 @@ def test_full_spool_drains_once_the_archive_returns(
             **{key: value for key, value in limits.items() if key != "max_body_bytes"},
         )
         monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
-        assert cli._run_worker(
-            _worker_namespace(database_url=connection_info, max_jobs=10)
-        ) == 0
+        assert (
+            cli._run_worker(
+                _worker_namespace(database_url=connection_info, max_jobs=10)
+            )
+            == 0
+        )
         results = json.loads(capsys.readouterr().out.splitlines()[-1])["results"]
         assert len(results) == len(TAGS)
         assert {result["outcome"] for result in results} <= {
@@ -150,9 +153,10 @@ def test_failed_spool_read_waits_instead_of_failing_the_job(
 
         monkeypatch.setattr(reader.spool, "verify", unreadable)
         monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
-        assert cli._run_worker(
-            _worker_namespace(database_url=connection_info, max_jobs=1)
-        ) == 0
+        assert (
+            cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
+            == 0
+        )
         capsys.readouterr()
         with psycopg.connect(connection_info) as connection:
             job = connection.execute(

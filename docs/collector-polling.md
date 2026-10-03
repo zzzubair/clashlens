@@ -339,9 +339,11 @@ as retryable failures.
 
 Reset work that fails with no response has no processing job. The worker
 checks every 10 seconds, and at start, for failed Reset work of any age without
-final evidence, up to 100 rows per check. It records the missing or failed
-responses as `failed` evidence, and that player's Reset publication becomes
-unavailable instead of waiting forever. A Reset HTTP 429 or 5xx response
+final evidence, up to 100 rows per check. It skips rows whose saved response
+is still waiting to be processed; that response's own job re-checks the row
+when it finishes, so stuck reads cannot fill the batch. It records the
+missing or failed responses as `failed` evidence, and that player's Reset
+publication becomes unavailable instead of waiting forever. A Reset HTTP 429 or 5xx response
 counts as failed only after its work fails; while the work is retrying it
 stays `partial`. A retried profile proves the Reset only if it was collected
 before the player's first battle of the new Legend day, so a later profile is
