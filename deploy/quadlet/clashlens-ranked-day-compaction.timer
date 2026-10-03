@@ -1,0 +1,11 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens cleanup schedule for extra saved Legend day copies
+PartOf=clashlens.target
+
+[Timer]
+# Each run deletes in batches for up to 2 minutes, then the next run starts
+# 5 minutes after it finishes.
+OnActiveSec=5min
+OnUnitInactiveSec=5min
+Unit=clashlens-ranked-day-compaction.service

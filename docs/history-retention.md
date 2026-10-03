@@ -77,8 +77,8 @@ still needs them; each table is limited to 1–1000 rows per invocation
 so runs are bounded, restartable, and idempotent. Summaries, players
 and accounts, raw lifecycle, reset baselines, frozen publication
 identities/entries, boundary generations/manifests, correction chains,
-and ranked-day versions are retained, and restrictive foreign keys are
-unchanged. Since migration 0051 a battle-log fetch lists its battles in one
+and the ranked-day versions left by the copy cleanup below are retained, and
+restrictive foreign keys are unchanged. Since migration 0051 a battle-log fetch lists its battles in one
 row instead of one row per battle; retirement empties a retired battle's place
 in that list, and a database trigger stands in for the foreign key a list
 cannot carry. Once finalized, targeted corrections, replays, and
@@ -182,6 +182,41 @@ bookkeeping. They do not delete existing history or remote objects. Follow the
 applying migrations and starting an updated release.
 Back up and rehearse restore before upgrading a populated database. Applying the
 migrations is not a production-cleanup authorization.
+
+## Extra ranked-day copies
+
+Every battle saves a complete new copy of the player's Legend day result and
+its daily log; on 2026-10-02 that was about 13 copies per player-day and
+1.5-2 GB a day. Since migration 0052, `./ops` runs
+`python -m clashlens.ranked_day_compaction` in the worker container from the
+`clashlens-ranked-day-compaction.timer`, 5 minutes after the previous run
+finished. Once a Legend day has ended and its Reset work is done (the Reset
+sweep has finished, every response fetched before then has been processed and
+at least 30 minutes have passed, the same check the late-battle sweep waits
+for), the run deletes that day's replaced copies with their daily logs and
+adjustments. It keeps:
+
+- the newest copy of each player-day, and the copy the newest daily log points at;
+- every copy a publication generation, publication manifest, frozen
+  leaderboard, analytics summary, army fact or queued publication correction
+  points at;
+- the copy the following day's newest copy was built from;
+- for a kept copy that made an earlier result current again, the copy it
+  replaced and the copy holding that earlier result. Its hash is built from
+  both: recalculation needs the replaced copy to find the result unchanged,
+  and later cleanup passes need the earlier result to recognise the hash.
+
+A kept copy that named a deleted copy as the one it replaced names the
+nearest older kept copy instead, or none. Each batch covers 200 players of the
+oldest day not yet cleaned, plus the day before it, in its own transaction, and
+each run stops after 2 minutes, so a backlog of many days is worked through
+over several runs. A newer copy saved later, such as a late correction, makes
+that day cleaned again. Nothing that runs later needs the deleted copies: late
+corrections and the next day's recalculation read only the newest copy, and an
+earlier result that becomes current again is saved as a new copy. The deleted
+copies are gone from the database; the raw responses they were calculated
+from stay under the raw-response rules. `./ops ranked-day-compaction` runs one
+pass by hand and `./ops logs ranked-day-compaction` shows each run's totals.
 
 ## What remains
 

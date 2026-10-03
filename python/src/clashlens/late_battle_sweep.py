@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from time import monotonic
+from typing import Any
 
 from . import reconciliation_db
 from .db import (
@@ -176,6 +177,40 @@ WHERE built_from.current IS NULL
 """
 
 
+def reset_work_finished(connection: Any, boundary: datetime) -> bool:
+    """Whether the Reset sweep at ``boundary`` has finished and every response
+    fetched before it finished has been processed."""
+    sweep = connection.execute(
+        """
+        SELECT GREATEST(sweep.created_at, max(work.updated_at)),
+               count(*) FILTER (WHERE work.status NOT IN (
+                   'complete', 'failed', 'cancelled'
+               ))
+        FROM collector_reset_sweeps AS sweep
+        LEFT JOIN collector_work AS work
+          ON work.sweep_id = sweep.id AND work.kind = 'reset_baseline'
+        WHERE sweep.boundary_at = %s
+        GROUP BY sweep.id
+        """,
+        (boundary,),
+    ).fetchone()
+    if sweep is None or sweep[1] > 0:
+        return False
+    return not connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM python_processing_jobs_worker
+            WHERE work_type IN ('process_observation', 'replay_observation')
+              AND state IN (
+                  'pending', 'leased', 'waiting_retry', 'waiting_dependency'
+              )
+              AND created_at <= %s
+        )
+        """,
+        (sweep[0],),
+    ).fetchone()[0]
+
+
 def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] | None:
     """Correct each selected player, or return None while the Reset is not ready.
 
@@ -187,36 +222,7 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
     if now < boundary + SWEEP_DELAY:
         return None
     with database.pool.connection() as connection, connection.transaction():
-        sweep = connection.execute(
-            """
-            SELECT GREATEST(sweep.created_at, max(work.updated_at)),
-                   count(*) FILTER (WHERE work.status NOT IN (
-                       'complete', 'failed', 'cancelled'
-                   ))
-            FROM collector_reset_sweeps AS sweep
-            LEFT JOIN collector_work AS work
-              ON work.sweep_id = sweep.id AND work.kind = 'reset_baseline'
-            WHERE sweep.boundary_at = %s
-            GROUP BY sweep.id
-            """,
-            (boundary,),
-        ).fetchone()
-        if sweep is None or sweep[1] > 0:
-            return None
-        responses_pending = connection.execute(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM python_processing_jobs_worker
-                WHERE work_type IN ('process_observation', 'replay_observation')
-                  AND state IN (
-                      'pending', 'leased', 'waiting_retry', 'waiting_dependency'
-                  )
-                  AND created_at <= %s
-            )
-            """,
-            (sweep[0],),
-        ).fetchone()[0]
-        if responses_pending:
+        if not reset_work_finished(connection, boundary):
             return None
         parameters = {
             "boundary": boundary,

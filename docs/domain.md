@@ -190,6 +190,7 @@ A domain change is complete only when every affected source observation, derived
 - Poll success percentage and elapsed time alone do not prove coverage. Use source-row continuity and boundary evidence.
 - A ranked day has **complete evidence coverage** only when its start and end sweep IDs each link a valid profile and battle-log response, it has continuous battle-log coverage between those responses, and it has valid applicable Legend I rows, established attack and defense counts, and known boundary adjustments. A legacy profile-only reset attempt cannot prove Complete.
 - Late evidence may close a coverage gap and create a corrected ranked-day version. Do not rewrite the previous version in place.
+- Once a ranked day has ended and its Reset work is done, at least 30 minutes after the Reset, its replaced versions and their daily logs are deleted unless a publication, analytics row, queued correction or the next day's newest version points at them. Players only ever see the newest version, and later corrections are calculated from it. See [history-retention.md](history-retention.md#extra-ranked-day-copies).
 
 ## 5. Derived ranked-day states and adjustments
 

@@ -20,7 +20,7 @@ declare -Ag RELEASE=()
 ADMIN_SECRET_ACTIVE=false
 UP_IN_PROGRESS=false
 OPS_LOCK_FD=
-TIMER_UNITS=(clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service clashlens-archive-retention.timer clashlens-archive-retention.service)
+TIMER_UNITS=(clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service clashlens-archive-retention.timer clashlens-archive-retention.service clashlens-ranked-day-compaction.timer clashlens-ranked-day-compaction.service)
 
 usage() {
   cat <<'EOF'
@@ -28,8 +28,8 @@ Usage: ./ops build [--fixture]
        ./ops up [--fixture]
        ./ops down
        ./ops status
-       ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention]
-       ./ops queue-status
+       ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention|ranked-day-compaction]
+       ./ops queue-status | ranked-day-compaction
        ./ops backup
        ./ops backup-status
        ./ops alert-check
@@ -749,9 +749,8 @@ render_units() {
   fi
   if [[ "$MODE" == production ]]; then
     [[ "$ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "alert service requires a checkout path without spaces or systemd specifiers"
-    alert_requires='Wants=clashlens-alert.timer'
-    render "$TEMPLATE_DIR/clashlens-alert.service" "$USER_UNIT_DIR/clashlens-alert.service" ROOT "$ROOT"
-    render "$TEMPLATE_DIR/clashlens-alert.timer" "$USER_UNIT_DIR/clashlens-alert.timer"
+    alert_requires='Wants=clashlens-alert.timer clashlens-ranked-day-compaction.timer'
+    for base in alert ranked-day-compaction; do render "$TEMPLATE_DIR/clashlens-$base.service" "$USER_UNIT_DIR/clashlens-$base.service" ROOT "$ROOT"; render "$TEMPLATE_DIR/clashlens-$base.timer" "$USER_UNIT_DIR/clashlens-$base.timer"; done
   fi
   if [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" == apply ]]; then
     backup_requires+=$'\nWants=clashlens-archive-retention.timer'
@@ -1281,7 +1280,7 @@ logs() {
     journalctl --user-unit clashlens.target --user-unit 'clashlens-*.service' --lines 200 --no-pager
     return
   fi
-  case "$service" in postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
+  case "$service" in postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention|ranked-day-compaction) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
   shift || true
   journalctl --user-unit "$unit" "$@"
 }
@@ -1473,6 +1472,7 @@ case "$command" in
   status) (($# == 0)) || die "status takes no arguments"; status ;;
   logs) logs "$@" ;;
   queue-status) (($# == 0)) || die "queue-status takes no arguments"; exec_service ;;
+  ranked-day-compaction) (($# == 0)) || die "ranked-day-compaction takes no arguments"; require_host; prepare_managed_runtime worker; "$PODMAN_BIN" exec "$(container_name "$MANAGED_PREFIX" worker)" python -m clashlens.ranked_day_compaction ;;
   backup)
     wait_for_lock=false
     if (($#)); then
