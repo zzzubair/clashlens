@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Manual runs of a branch include the main-only packaged and stack checks.
-  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -142,7 +140,7 @@ jobs:
 
   packaged-python-tests:
     name: Packaged Python tests, group ${{ matrix.group }}
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -184,7 +182,7 @@ jobs:
 
   packaged-python:
     name: Packaged Python tests
-    if: always() && github.event_name != 'pull_request'
+    if: always() && github.event_name == 'push'
     needs: packaged-python-tests
     runs-on: ubuntu-latest
     steps:
@@ -195,7 +193,7 @@ jobs:
 
   container-runtime:
     name: Full development container checks
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

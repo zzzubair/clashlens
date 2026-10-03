@@ -70,13 +70,13 @@ time totals differ by less than 10 percent. Refresh the timings when the
 groups' GitHub test times drift apart.
 
 Pull requests always build the Python check image and run its packaged backup
-and support tests. Pushes to main, and manual runs of a branch, also run the
-whole packaged suite in the check image as four more groups, each against its
-own PostgreSQL 18 Alpine service, the database image the development stack
-uses. Packaged group 1 also runs Ruff, compiles `src` and `../development`, and
-runs the fake-service tests. `Packaged Python tests` fails if any packaged group
-fails, is cancelled, or is skipped. The full development container check then
-only starts the stack and runs the website and browser checks against it.
+and support tests. Pushes to main also run the whole packaged suite in the
+check image as four more groups, each against its own PostgreSQL 18 Alpine
+service, the database image the development stack uses. Packaged group 1 also
+runs Ruff, compiles `src` and `../development`, and runs the fake-service tests.
+`Packaged Python tests` fails if any packaged group fails, is cancelled, or is
+skipped. The full development container check then only starts the stack and
+runs the website and browser checks against it.
 The existing check names stay unchanged; the Python result waits for all four
 groups and fails if any group fails, is cancelled, or is skipped.
 
