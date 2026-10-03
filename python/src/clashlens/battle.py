@@ -5,20 +5,31 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .domain import DomainRuleError, allocate_trophies, battle_day_for
+from .domain import (
+    HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
+    TROPHY_ALLOCATION_RULE_VERSION,
+    DomainRuleError,
+    allocate_trophies,
+    battle_day_for,
+)
 from .profile import ProfileParseError, normalize_player_tag
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 BATTLE_LOG_ENDPOINT_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.endpoint_version
 BATTLE_LOG_SCHEMA_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.schema_version
 LEGACY_SOURCE_PARSER_VERSION = "supercell-source-parser-v1"
+PREVIOUS_LIVE_SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
 LIVE_SOURCE_PARSER_VERSION = (
     BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.default_parser_version
 )
 # The endpoint envelope is unchanged, but the source row shape changed. Keep
-# the v1 parser available for replaying old observations and use v2 for new
-# live Legend I observations.
+# the v1 parser available for replaying old observations. v2 and v3 read the
+# same live row shape; v3 only switches to trophy allocation v2, so results
+# saved under v2 keep their recorded allocation v1 numbers.
 SOURCE_PARSER_VERSION = LIVE_SOURCE_PARSER_VERSION
+_LIVE_SHAPE_PARSER_VERSIONS = frozenset(
+    {PREVIOUS_LIVE_SOURCE_PARSER_VERSION, LIVE_SOURCE_PARSER_VERSION}
+)
 SUPPORTED_SOURCE_PARSER_VERSIONS = (
     BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
 )
@@ -163,7 +174,13 @@ def _parse_row(
             raise BattleLogParseError(
                 "identity_conflict", "reporting player and opponent must differ"
             )
-        allocation = allocate_trophies(stars, destruction)
+        allocation = allocate_trophies(
+            stars,
+            destruction,
+            rule_version=TROPHY_ALLOCATION_RULE_VERSION
+            if parser_version == LIVE_SOURCE_PARSER_VERSION
+            else HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
+        )
         attacker_tag, defender_tag = (
             (reporting_tag, opponent_tag)
             if is_attacker
@@ -209,12 +226,12 @@ def _parse_row(
 
 
 def _parse_direction(source: dict[str, Any], parser_version: str) -> bool:
-    if parser_version == LIVE_SOURCE_PARSER_VERSION:
+    if parser_version in _LIVE_SHAPE_PARSER_VERSIONS:
         direction = source.get("attack")
         if not isinstance(direction, bool):
             raise BattleLogParseError(
                 "unsupported_perspective",
-                "attack must be a boolean for battle-log parser v2",
+                "attack must be a boolean for the live battle-log parser",
             )
         return direction
     if parser_version == LEGACY_SOURCE_PARSER_VERSION:
@@ -233,7 +250,7 @@ def _parse_direction(source: dict[str, Any], parser_version: str) -> bool:
 def _parse_opponent(
     source: dict[str, Any], parser_version: str
 ) -> tuple[str, str | None, int | None]:
-    if parser_version == LIVE_SOURCE_PARSER_VERSION:
+    if parser_version in _LIVE_SHAPE_PARSER_VERSIONS:
         tag_value = source.get("opponentPlayerTag")
         name = source.get("opponentName")
         trophies = source.get("opponentTrophies")
@@ -272,7 +289,7 @@ def _parse_opponent(
 def _battle_timestamp_value(source: dict[str, Any], parser_version: str) -> Any:
     # Live responses use battleTimestamp for the date and battleTime for the
     # battle's duration in seconds. Older archived shapes used battleTime alone.
-    if parser_version == LIVE_SOURCE_PARSER_VERSION:
+    if parser_version in _LIVE_SHAPE_PARSER_VERSIONS:
         value = source.get("battleTimestamp")
         if value is None:
             value = source.get("battleTime")

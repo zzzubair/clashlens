@@ -30,7 +30,13 @@ from clashlens.source_observation_contract import (
             "battle_log",
             "battle-log-v1",
             "battle-log-schema-v1",
-            frozenset({"supercell-source-parser-v1", "supercell-source-parser-v2"}),
+            frozenset(
+                {
+                    "supercell-source-parser-v1",
+                    "supercell-source-parser-v2",
+                    "supercell-battle-parser-v3",
+                }
+            ),
         ),
         (
             "global_player_rankings",
@@ -61,6 +67,7 @@ def test_source_observation_contract_accepts_each_installed_endpoint(
     expected_default = {
         "profile": "supercell-profile-parser-v3",
         "league_history": "supercell-league-history-parser-v1",
+        "battle_log": "supercell-battle-parser-v3",
     }.get(endpoint, "supercell-source-parser-v2")
     assert contract.default_parser_version == expected_default
     assert contract.supported_parser_versions == parser_versions
@@ -120,6 +127,29 @@ def test_source_observation_contract_rejects_in_validation_order(
             endpoint, endpoint_version, schema_version, parser_version
         )
         == category
+    )
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "endpoint_version", "schema_version"),
+    [
+        ("profile", "profile-v1", "profile-schema-v1"),
+        (
+            "global_player_rankings",
+            "global-player-rankings-v1",
+            "global-player-rankings-schema-v1",
+        ),
+        ("league_history", "league-history-v1", "league-history-schema-v1"),
+    ],
+)
+def test_battle_parser_v3_is_rejected_outside_battle_logs(
+    endpoint: str, endpoint_version: str, schema_version: str
+) -> None:
+    assert (
+        validate_source_observation_contract(
+            endpoint, endpoint_version, schema_version, "supercell-battle-parser-v3"
+        )
+        == "unsupported_parser_version"
     )
 
 

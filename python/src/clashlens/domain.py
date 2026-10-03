@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-TROPHY_ALLOCATION_RULE_VERSION = "legend-trophy-allocation-v1"
+# v1 gave a 2-star attack at exactly 55% 18 trophies; Supercell's formula
+# gives 17. v1 stays for results already saved under it.
+HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION = "legend-trophy-allocation-v1"
+TROPHY_ALLOCATION_RULE_VERSION = "legend-trophy-allocation-v2"
 SEASON_ANCHOR_RULE_VERSION = "legend-season-anchor-v1"
 BOOTSTRAP_CURRENT_SEASON_ID = "1783918800"
 BOOTSTRAP_PREVIOUS_SEASON_ID = "1781499600"
@@ -34,7 +37,7 @@ _ALLOCATION_THRESHOLDS: dict[int, tuple[tuple[int, int], ...]] = {
     2: (
         (50, 16),
         (53, 17),
-        (55, 18),
+        (56, 18),
         (59, 19),
         (62, 20),
         (65, 21),
@@ -87,7 +90,20 @@ class RankedDay:
     anchor_rule_version: str = SEASON_ANCHOR_RULE_VERSION
 
 
-def allocate_trophies(stars: int, destruction: int) -> TrophyAllocation:
+def allocate_trophies(
+    stars: int,
+    destruction: int,
+    *,
+    rule_version: str = TROPHY_ALLOCATION_RULE_VERSION,
+) -> TrophyAllocation:
+    if rule_version not in {
+        TROPHY_ALLOCATION_RULE_VERSION,
+        HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
+    }:
+        raise DomainRuleError(
+            "unsupported_trophy_allocation_rule",
+            "trophy allocation rule version is not installed",
+        )
     if stars not in _ALLOCATION_THRESHOLDS or not 0 <= destruction <= 100:
         raise DomainRuleError(
             "impossible_trophy_allocation",
@@ -104,9 +120,14 @@ def allocate_trophies(stars: int, destruction: int) -> TrophyAllocation:
             "stars and destruction do not form a valid Legend I result",
         )
     gain = eligible[-1]
+    if (stars, destruction) == (2, 55) and (
+        rule_version == HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION
+    ):
+        gain = 18
     return TrophyAllocation(
         attacker_gain=gain,
         defender_loss=0 if stars == 0 else gain,
+        rule_version=rule_version,
     )
 
 

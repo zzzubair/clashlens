@@ -167,7 +167,8 @@ A domain change is complete only when every affected source observation, derived
 - Legend I battle rows include stars, destruction, flat
   `opponentPlayerTag`, `opponentName`, and `opponentTownHallLevel` fields, and
   `armyShareCode`.
-- Battle rows do not include the trophy change directly. Clash Lens derives it from stars and destruction using the versioned table in `docs/data/legend-trophy-allocation-v1.csv`.
+- Battle rows do not include the trophy change directly. Clash Lens derives it from stars and destruction using the versioned table in `docs/data/legend-trophy-allocation-v2.csv`, which follows Supercell's published formula: a 2-star attack at 55% destruction is worth 17 trophies, and 56% is worth 18.
+- `docs/data/legend-trophy-allocation-v1.csv` is the earlier table. It differs only in giving a 2-star attack at 55% 18 trophies. Battle parser `supercell-battle-parser-v3` reads the same live rows as `supercell-source-parser-v2` but uses table v2; results saved under parser v2 or v1 keep their table v1 numbers until a separate repair recalculates them.
 - For each star count, use the last trophy value whose minimum destruction percentage is not greater than the battle's destruction percentage. Reject impossible or out-of-range star and destruction combinations instead of guessing.
 - A 0-star attack at 0 through 9 percent destruction gives the attacker 0 trophies. Other 0-star attacks give the attacker the amount in the table, but the defender loses 0 trophies.
 - For 1-star, 2-star, and 3-star attacks, the attacker gains the table amount and the defender loses the same amount.

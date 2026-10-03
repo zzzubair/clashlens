@@ -316,14 +316,14 @@ def recalculate_ranked_day(
             source_row.outcome,
             source_row.failure_category,
             CASE e.parser_version
-                WHEN 'supercell-source-parser-v2'
-                    THEN source_row.source_json ->> 'opponentPlayerTag'
-                ELSE source_row.source_json -> 'opponent' ->> 'tag'
+                WHEN 'supercell-source-parser-v1'
+                    THEN source_row.source_json -> 'opponent' ->> 'tag'
+                ELSE source_row.source_json ->> 'opponentPlayerTag'
             END,
             CASE e.parser_version
-                WHEN 'supercell-source-parser-v2'
-                    THEN source_row.source_json ->> 'opponentName'
-                ELSE source_row.source_json -> 'opponent' ->> 'name'
+                WHEN 'supercell-source-parser-v1'
+                    THEN source_row.source_json -> 'opponent' ->> 'name'
+                ELSE source_row.source_json ->> 'opponentName'
             END
         FROM legend_battles AS b
         JOIN battle_perspectives AS p ON p.battle_id = b.id
@@ -1107,14 +1107,14 @@ def _enqueue_live_reconciliation(
             source_row.failure_category,
             jsonb_build_object(
                 'tag', CASE evidence.parser_version
-                    WHEN 'supercell-source-parser-v2'
-                        THEN source_row.source_json -> 'opponentPlayerTag'
-                    ELSE source_row.source_json -> 'opponent' -> 'tag'
+                    WHEN 'supercell-source-parser-v1'
+                        THEN source_row.source_json -> 'opponent' -> 'tag'
+                    ELSE source_row.source_json -> 'opponentPlayerTag'
                 END,
                 'name', CASE evidence.parser_version
-                    WHEN 'supercell-source-parser-v2'
-                        THEN source_row.source_json -> 'opponentName'
-                    ELSE source_row.source_json -> 'opponent' -> 'name'
+                    WHEN 'supercell-source-parser-v1'
+                        THEN source_row.source_json -> 'opponent' -> 'name'
+                    ELSE source_row.source_json -> 'opponentName'
                 END
             )
         FROM legend_battles AS battle

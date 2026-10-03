@@ -10,12 +10,14 @@ from uuid import uuid4
 
 from psycopg_pool import ConnectionPool
 
-from .battle import SOURCE_PARSER_VERSION
 from .operating import database_pool_health
 from .source_observation_contract import SOURCE_OBSERVATION_CONTRACTS
 
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
-DEFAULT_PARSER_VERSION = SOURCE_PARSER_VERSION
+# Label on reconcile, build and Reset-baseline work. It stays at
+# source-parser-v2 when the battle parser moves on, so those jobs keep the
+# claim class older workers already accept.
+DEFAULT_PARSER_VERSION = "supercell-source-parser-v2"
 DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"
 ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
@@ -257,7 +259,7 @@ def _supported_claim_filter(
     # Claim generations fence staggered upgrades so older worker images cannot
     # interpret newer source contracts. Retain earlier generations for queued
     # work and explicit replay.
-    claim_versions = "1, 2, 3, 4, 5, 6" if supports_coordinator else "1, 2, 3"
+    claim_versions = "1, 2, 3, 4, 5, 6, 7" if supports_coordinator else "1, 2, 3"
     return (
         f"""({alias}.claim_compatibility_version IN ({claim_versions}) AND (
             ({alias}.work_type = ANY(%(source_work_types)s::text[])

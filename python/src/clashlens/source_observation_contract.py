@@ -17,6 +17,9 @@ _PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 _SUPPORTED_PARSER_VERSIONS = frozenset(
     {"supercell-source-parser-v1", _DEFAULT_PARSER_VERSION}
 )
+# Same live battle rows as source-parser-v2, read with trophy allocation v2.
+# The new label keeps saved v2 interpretations of identical bytes apart.
+_BATTLE_PARSER_VERSION = "supercell-battle-parser-v3"
 
 PROFILE_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
     endpoint="profile",
@@ -31,8 +34,10 @@ BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
     endpoint="battle_log",
     endpoint_version="battle-log-v1",
     schema_version="battle-log-schema-v1",
-    default_parser_version=_DEFAULT_PARSER_VERSION,
-    supported_parser_versions=_SUPPORTED_PARSER_VERSIONS,
+    default_parser_version=_BATTLE_PARSER_VERSION,
+    supported_parser_versions=frozenset(
+        {*_SUPPORTED_PARSER_VERSIONS, _BATTLE_PARSER_VERSION}
+    ),
 )
 GLOBAL_PLAYER_RANKINGS_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
     endpoint="global_player_rankings",
