@@ -391,7 +391,8 @@ responses instead of skipping them. Season Resets fetch no league history.
 The checks run in the 32 ordinary intent slots behind any unfinished Reset
 work, with the same retries as Reset work. They never block regular
 admission, the next Reset or the 05:30 late-battle check, which does not wait
-for their responses' processing. No request starts 23 hours 55 minutes after
+for their responses' processing: every attempt's processing job, including
+one a retry replaced, has a `process-settlement:` key. No request starts 23 hours 55 minutes after
 their Reset: the HTTP client checks the cutoff right before each request,
 retry or redirect goes out, after any wait for a key or an outage pause, and
 a check past it stops without changing its work row. From 04:55 the

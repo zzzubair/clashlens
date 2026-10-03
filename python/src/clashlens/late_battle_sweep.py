@@ -207,14 +207,7 @@ def reset_work_finished(connection: Any, boundary: datetime) -> bool:
                   'pending', 'leased', 'waiting_retry', 'waiting_dependency'
               )
               AND created_at <= %s
-              AND NOT EXISTS (
-                  SELECT 1 FROM collector_work AS settlement
-                  WHERE settlement.kind = 'reset_settlement'
-                    AND observation_id IN (
-                        settlement.profile_observation_id,
-                        settlement.battle_log_observation_id
-                    )
-              )
+              AND deduplication_key NOT LIKE 'process-settlement:%%'
         )
         """,
         (sweep[0],),

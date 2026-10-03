@@ -598,15 +598,35 @@ def test_pending_settlement_does_not_block_regular_or_next_reset(
                 finished,
             )
 
-        # Its saved profile waits for processing; the late-battle check does not.
-        database.record_response(
-            _handoff(
-                occurrence_key="queued-settlement", response_hash=_hash("queued-settlement"),
-                player_id=player_id, tag=tag,
-                completed_at=WEDNESDAY_RESET + timedelta(minutes=21),
-                collector_work_id=work_id,
+        # Its 503 attempts, replaced by retries, and the kept pair all wait for
+        # processing; the late-battle check does not.
+        for minutes, endpoint, status in (
+            (20.5, "profile", 503), (21, "profile", 200),
+            (21.5, "battle_log", 503), (22, "battle_log", 200),
+        ):
+            database.record_response(
+                _handoff(
+                    occurrence_key=f"queued-{endpoint}-{status}",
+                    response_hash=_hash(f"queued-{endpoint}-{status}"),
+                    player_id=player_id, tag=tag, endpoint=endpoint, http_status=status,
+                    completed_at=WEDNESDAY_RESET + timedelta(minutes=minutes),
+                    collector_work_id=work_id,
+                )
             )
-        )
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                """
+                SELECT count(*) FILTER (WHERE job.observation_id IN (
+                           work.profile_observation_id, work.battle_log_observation_id)),
+                       count(*)
+                FROM python_processing_jobs AS job
+                JOIN collector_observations AS observation
+                  ON observation.id = job.observation_id
+                JOIN collector_work AS work ON work.id = %s
+                WHERE observation.occurrence_key LIKE 'queued-%%'
+                """,
+                (work_id,),
+            ).fetchone() == (2, 4)
 
         # Unfinished Reset pairs still hold everything, as before.
         assert open_and_ready() == (False, False, False)

@@ -830,8 +830,13 @@ class CollectorDatabase:
         handoff: ResponseHandoff,
         observation_id: int,
         parser_version: str,
+        work_kind: str | None,
     ) -> int:
-        deduplication_key = "process-response:" + handoff.occurrence_key
+        deduplication_key = (
+            "process-settlement:"
+            if work_kind == "reset_settlement"
+            else "process-response:"
+        ) + handoff.occurrence_key
         row = connection.execute(
             """
             INSERT INTO python_processing_jobs (
@@ -1202,7 +1207,7 @@ class CollectorDatabase:
                     archive_catalogue_hash,
                 )
                 processing_job_id = self._upsert_processing_job(
-                    connection, handoff, observation_id, parser_version
+                    connection, handoff, observation_id, parser_version, work_kind
                 )
                 self._upsert_response_state(connection, handoff, observation_id, True)
                 self._record_intent_endpoint(connection, handoff, observation_id)
