@@ -7,6 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from . import boundary
 from .analytics import (
     FRESHNESS_RULE_VERSION,
     PROFILE_FRESHNESS_SECONDS,
@@ -59,6 +60,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
             generation_row = None
             manifest_digest_value = None
             if generation_number is not None:
+                boundary.lock_boundary_publication(connection, boundary_at)
                 generation_row = connection.execute(
                     """
                     SELECT id, snapshot_state, expected_population_count,

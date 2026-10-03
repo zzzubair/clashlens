@@ -163,10 +163,7 @@ def _upsert_army_decodes(
         )
         boundaries.add(boundary_at.astimezone(UTC))
     for boundary_at in sorted(boundaries):
-        connection.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"boundary-publication:{boundary_at.isoformat()}",),
-        )
+        boundary.lock_boundary_publication(connection, boundary_at)
     current_evidence = {
         (int(battle_id), _text_value(perspective)): int(evidence_id)
         for battle_id, perspective, evidence_id in connection.execute(
@@ -522,6 +519,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 ranked_version_ids=manifest_versions,
             )
             if generation_row is not None:
+                boundary.lock_boundary_publication(connection, boundary_at)
                 marker = connection.execute(
                     """
                     SELECT fact_input_hash

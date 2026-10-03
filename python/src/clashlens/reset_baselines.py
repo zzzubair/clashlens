@@ -622,10 +622,7 @@ def _record_boundary_baseline(
 ) -> None:
     """Record one terminal reset result and reevaluate both artifacts."""
     boundary_at = boundary_at.astimezone(UTC)
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"boundary-publication:{boundary_at.isoformat()}",),
-    )
+    boundary.lock_boundary_publication(connection, boundary_at)
     sweep = connection.execute(
         """
         SELECT id, member_ids
