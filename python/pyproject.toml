@@ -10,13 +10,13 @@ dependencies = [
   "minio==7.2.20",
   "psycopg[binary,pool]==3.3.4",
   "pydantic==2.13.4",
-  "urllib3==2.7.0",
+  "urllib3==2.8.0",
   "uvicorn==0.52.1",
 ]
 
 [dependency-groups]
 dev = [
-  "httpx2==2.9.1",
+  "httpx2==2.12.0",
   "pytest==9.1.1",
   "pyyaml==6.0.3",
   "ruff==0.16.2",

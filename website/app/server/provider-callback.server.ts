@@ -26,6 +26,7 @@ import {
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
 } from "./auth-cookies.server";
+import { isLoginRevoked } from "./login-session.server";
 import { getWebsiteConfig } from "./config.server";
 import type { WebsiteConfig } from "./config.server";
 import { constantTimeEqual, OAuthCallbackError } from "./google-oidc.server";
@@ -110,8 +111,15 @@ export async function completeProviderCallback(
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   let session: LoginProviderIdentity | null = null;
+  const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
   if (transaction.intent !== "login") {
-    const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
+    const loginRequired: CallbackErrorView = {
+      kind: "error",
+      status: 400,
+      code: "login_required",
+      message: "Sign in to your Clash Lens account before changing sign-in connections.",
+      clearTransactionCookie,
+    };
     session = parseLoginCookieValue(rawLoginCookie, config.loginSecret, nowSeconds);
     if (
       session === null ||
@@ -122,14 +130,13 @@ export async function completeProviderCallback(
         createLoginSessionBinding(rawLoginCookie),
       )
     ) {
-      return {
-        kind: "error",
-        status: 400,
-        code: "login_required",
-        message:
-          "Sign in to your Clash Lens account before changing sign-in connections.",
-        clearTransactionCookie,
-      };
+      return loginRequired;
+    }
+    // The same login started this change, but it may have logged out since.
+    try {
+      if (await isLoginRevoked(session, rawLoginCookie)) return loginRequired;
+    } catch {
+      return unavailable(clearTransactionCookie);
     }
   }
 
@@ -231,8 +238,17 @@ export async function completeProviderCallback(
       clearTransactionCookie,
     };
   }
+  // Removing the provider that created this login also ends the login in the
+  // same API transaction, so a copied cookie cannot come back if that
+  // provider is linked again later.
+  const endsLogin = session.provider === provider && rawLoginCookie !== undefined;
   try {
-    await client.unlinkProvider(provider, validated.providerSubject, randomUUID());
+    await client.unlinkProvider(
+      provider,
+      validated.providerSubject,
+      randomUUID(),
+      endsLogin ? createLoginSessionBinding(rawLoginCookie) : undefined,
+    );
   } catch (error) {
     const code = pythonErrorCode(error);
     if (code === "final_provider") {
@@ -267,9 +283,8 @@ export async function completeProviderCallback(
     return unavailable(clearTransactionCookie);
   }
 
-  // If the unlinked provider created the current session, clear it and ask
-  // for login through the remaining provider.
-  if (session.provider === provider) {
+  // The login has ended; ask for login through the remaining provider.
+  if (endsLogin) {
     return {
       kind: "redirect",
       location: "/login",

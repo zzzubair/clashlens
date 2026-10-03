@@ -2,7 +2,7 @@ import { freshIdempotencyKey, readLoginIdentity } from "./actions.server";
 import { getWebsiteConfig } from "./config.server";
 import { createPythonClient } from "../services/python.server";
 
-const NAVIGATION_ACCOUNT_TIMEOUT_MS = 250;
+export const NAVIGATION_ACCOUNT_TIMEOUT_MS = 250;
 
 export interface RootNavigationData {
   loggedIn: boolean;
@@ -15,7 +15,11 @@ export async function loadRootNavigation(request: Request): Promise<RootNavigati
   try {
     const config = getWebsiteConfig();
     if (!config.loginEnabled) return loggedOutNavigation();
-    const identity = readLoginIdentity(request, config);
+    const identity = await readLoginIdentity(
+      request,
+      config,
+      NAVIGATION_ACCOUNT_TIMEOUT_MS,
+    );
     if (identity === null) return loggedOutNavigation();
 
     let accountLabel: string | null = null;

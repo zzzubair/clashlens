@@ -311,3 +311,20 @@ it("serves built assets with caching, compression and HEAD without exposing othe
     expect((await fetch(`${url}${path}`)).status).toBe(404);
   }
 });
+
+it("forbids framing on pages, route data, files, refusals and bad requests", async () => {
+  const url = `http://127.0.0.1:${port}`;
+  for (const path of [
+    "/players/%232PP",
+    "/players/%232PP.data",
+    "/assets/app.js",
+    "/.secret",
+    "/%E0",
+  ]) {
+    const response = await fetch(`${url}${path}`);
+    expect(response.headers.get("content-security-policy")).toBe(
+      "frame-ancestors 'none'",
+    );
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+  }
+});

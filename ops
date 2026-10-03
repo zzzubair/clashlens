@@ -150,7 +150,7 @@ validate_number() {
 load_production_config() {
   [[ "$ENV_FILE" == /* ]] || die "app.env path must be absolute"
   validate_directory_ancestry "${ENV_FILE%/*}"
-  [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || die "missing or unsafe app.env; copy app.env.example and chmod 600 app.env"
+  [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || die "missing or unsafe app.env; copy the private template named in docs/deployment.md and chmod 600 app.env"
   [[ "$(stat -c '%u' "$ENV_FILE")" == "$(id -u)" ]] || die "app.env must belong to the service account"
   [[ "$(stat -c '%a' "$ENV_FILE")" == 600 ]] || die "app.env must have mode 600"
   load_kv_file "$ENV_FILE" CONFIG
@@ -586,16 +586,11 @@ build_release() {
   collector_tag=localhost/clashlens-release-collector
   python_tag=localhost/clashlens-release-python
   website_tag=localhost/clashlens-release-website
-  postgres_tag=docker.io/library/postgres:18-alpine
+  postgres_tag=localhost/clashlens-release-postgres
   "$PODMAN_BIN" build --pull=missing --file "$ROOT/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$collector_tag" "$ROOT"
   "$PODMAN_BIN" build --pull=missing --file "$ROOT/python/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$python_tag" "$ROOT/python"
   "$PODMAN_BIN" build --pull=missing --file "$ROOT/website/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$website_tag" "$ROOT/website"
-  if [[ "$MODE" == production ]]; then
-    postgres_tag=localhost/clashlens-release-postgres
-    "$PODMAN_BIN" build --pull=missing --file "$ROOT/deploy/postgres/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$postgres_tag" "$ROOT/deploy/postgres"
-  else
-    "$PODMAN_BIN" pull "$postgres_tag" >/dev/null
-  fi
+  "$PODMAN_BIN" build --pull=missing --target "$MODE" --file "$ROOT/deploy/postgres/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$postgres_tag" "$ROOT/deploy/postgres"
   fixtures_tag=
   login_tag=
   if [[ "$MODE" == fixture ]]; then
@@ -974,7 +969,10 @@ prepare_secrets() {
 wait_postgres() {
   local attempt
   for attempt in $(seq 1 90); do
-    "$PODMAN_BIN" exec "$PREFIX-postgres" pg_isready -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1 && return
+    if "$PODMAN_BIN" exec "$PREFIX-postgres" pg_isready -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+      [[ "$(psql_exec --tuples-only --no-align --command 'SHOW hba_file')" == /etc/clashlens/pg_hba.conf ]] || die "PostgreSQL is not using deploy/postgres/pg_hba.conf"
+      return
+    fi
     sleep 1
   done
   die "PostgreSQL did not become ready; run ./ops logs postgres"

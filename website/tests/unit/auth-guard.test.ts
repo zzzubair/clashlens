@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
+  isLoginRevoked: vi.fn(),
+}));
+
+vi.mock("../../app/server/login-session.server", () => ({
+  isLoginRevoked: mocks.isLoginRevoked,
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -52,6 +57,8 @@ function expectLoginRedirect(thrown: unknown, expectedLocation: string): void {
 describe("requireLogin auth guard", () => {
   beforeEach(() => {
     mocks.getWebsiteConfig.mockReturnValue(testConfig());
+    mocks.isLoginRevoked.mockReset();
+    mocks.isLoginRevoked.mockResolvedValue(false);
   });
 
   it("returns the server identity for a valid signed login cookie", async () => {
@@ -106,6 +113,24 @@ describe("requireLogin auth guard", () => {
         return true;
       });
     }
+  });
+
+  it("redirects a logged-out login and answers 503 when the API cannot check it", async () => {
+    const config = testConfig();
+    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
+    const request = loginRequest("/account", `${LOGIN_COOKIE_NAME}=${cookie}`);
+    mocks.isLoginRevoked.mockResolvedValueOnce(true);
+    await expect(requireLogin(request)).rejects.toSatisfy((thrown: unknown) => {
+      expectLoginRedirect(thrown, "/login?returnPath=%2Faccount");
+      return true;
+    });
+    mocks.isLoginRevoked.mockRejectedValueOnce(new Error("unavailable"));
+    await expect(requireLogin(request)).rejects.toSatisfy((thrown: unknown) => {
+      expect(thrown).toBeInstanceOf(Response);
+      expect((thrown as Response).status).toBe(503);
+      expect((thrown as Response).headers.get("Cache-Control")).toBe("no-store");
+      return true;
+    });
   });
 
   it("redirects to plain /login when login is disabled", async () => {

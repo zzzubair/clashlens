@@ -20,7 +20,8 @@ import { safeReturnPath } from "./return-path.server";
 /**
  * Require a valid browser login. Throws a redirect Response to /login when
  * login is disabled, configuration is missing, or the login cookie is
- * missing, malformed, tampered, or expired.
+ * missing, malformed, tampered, expired, or logged out. Throws a 503 Response
+ * when the private API cannot say whether the login logged out.
  */
 export async function requireLogin(request: Request): Promise<LoginIdentity> {
   let config: WebsiteConfig;
@@ -30,7 +31,12 @@ export async function requireLogin(request: Request): Promise<LoginIdentity> {
     throw redirect("/login");
   }
   if (!config.loginEnabled) throw redirect("/login");
-  const identity = readLoginIdentity(request, config);
+  let identity: LoginIdentity | null;
+  try {
+    identity = await readLoginIdentity(request, config);
+  } catch {
+    throw new Response(null, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
   if (identity === null) {
     throw redirect(loginRedirectUrl(request, config));
   }

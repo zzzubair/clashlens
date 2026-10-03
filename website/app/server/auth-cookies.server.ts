@@ -5,19 +5,19 @@
  * Values are canonical JSON bound by an HMAC-SHA256 signature using the
  * exactly-32-byte login secret, so any tamper is detected by a constant-time
  * comparison and the value is rejected as null. Login cookies carry only the
- * immutable provider and provider subject with a fixed non-sliding 24-hour
- * lifetime. OAuth transaction cookies carry only the provider they belong
+ * immutable provider and provider subject, a random value that makes every
+ * login's cookie unique, and a fixed non-sliding 24-hour lifetime. OAuth transaction cookies carry only the provider they belong
  * to, the state, nonce, PKCE verifier and challenge, and same-origin return
  * path with a ten-minute lifetime. No Google tokens, email, or other personal data ever appears in a
  * cookie value, and every value stays far below the 4 KB cookie limit.
  *
  * The route layer composes Set-Cookie headers from these values; this module
- * stays pure (no request, response, or storage access) so tests are
- * deterministic and the callback route can consume the transaction cookie
+ * stays pure (no request, response, or storage access) so tests can call it
+ * directly and the callback route can consume the transaction cookie
  * later in the same login flow.
  */
 
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import {
   isPlausibleTransaction,
@@ -135,6 +135,7 @@ function canonicalLoginPayload(
       s: identity.providerSubject,
       i: issuedAt,
       e: expiresAt,
+      n: randomBytes(16).toString("base64url"),
     }),
     "utf8",
   );

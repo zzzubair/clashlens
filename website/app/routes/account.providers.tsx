@@ -88,7 +88,10 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
   const loginCookie = actions
     .parseCookieHeader(request.headers.get("cookie"))
     .get(cookies.LOGIN_COOKIE_NAME);
-  if (loginCookie === undefined || actions.readLoginIdentity(request, config) === null) {
+  if (
+    loginCookie === undefined ||
+    (await actions.readLoginIdentity(request, config)) === null
+  ) {
     throw redirect("/login");
   }
   const { startProviderAuthorization } = await import("../server/provider-start.server");

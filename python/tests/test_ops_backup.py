@@ -504,6 +504,36 @@ def test_existing_network_with_another_subnet_is_refused(
 
 @pytest.mark.parametrize("mode", ["production", "fixture"])
 @pytest.mark.parametrize(
+    ("hba_file", "accepted"),
+    [
+        ("/etc/clashlens/pg_hba.conf", True),
+        ("/var/lib/postgresql/data/pgdata/pg_hba.conf", False),
+        ("", False),
+    ],
+)
+def test_startup_refuses_database_without_password_rules(
+    tmp_path, mode_config, mode, hba_file, accepted
+):
+    podman = tmp_path / "podman"
+    podman.write_text(
+        '#!/usr/bin/env bash\n[[ " $* " == *" psql "* ]] && printf "%s\\n" "$TEST_HBA_FILE"\nexit 0\n'
+    )
+    podman.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + "wait_postgres\n", "hba-guard-test", str(OPS)],
+        env=dict(mode_config, PODMAN_BIN=str(podman), TEST_HBA_FILE=hba_file, TEST_MODE=mode),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr
+    if not accepted:
+        assert "not using deploy/postgres/pg_hba.conf" in result.stderr
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+@pytest.mark.parametrize(
     ("proxy_ip", "accepted"),
     [
         (None, True),

@@ -328,8 +328,10 @@ STATE_DIR="$2"
 load_fixture_config
 MODE="$3"
 if [[ "$MODE" == production ]]; then
-  load_kv_file "$ROOT/app.env.example" CONFIG
-  unset 'CONFIG[CLASHLENS_PUBLIC_ORIGIN]'
+  for name in ENDPOINT REGION BUCKET INSTANCE_ID MARKER_KEY MARKER_HASH MARKER_PAYLOAD_VERSION; do
+    CONFIG[CLASHLENS_ARCHIVE_$name]=CHANGE_ME
+  done
+  CONFIG[CLASHLENS_OFFICIAL_API_ORIGIN]=https://api.example
   CONFIG[CLASHLENS_OFFICIAL_API_PROXY_URL]=http://100.64.0.1:3128
 fi
 write_environment

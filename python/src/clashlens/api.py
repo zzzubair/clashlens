@@ -74,6 +74,8 @@ _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
         "providers.unlink",
         "saved_tags.read",
         "saved_tags.write",
+        "session.check",
+        "session.revoke",
         "summary.read",
     }
 )
@@ -109,6 +111,16 @@ class GroupBody(StrictBody):
 
 class ProviderLinkBody(StrictBody):
     provider_subject: str = Field(min_length=1, max_length=255)
+
+
+class LoginSessionBody(StrictBody):
+    # SHA-256 of one signed login cookie value, unpadded base64url.
+    session: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+
+
+class ProviderUnlinkBody(ProviderLinkBody):
+    # The login to end in the same transaction, when it used this provider.
+    session: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
 class ExportBody(StrictBody):
@@ -647,6 +659,26 @@ def create_app(
             raise ApiError(404, "account_not_found")
         return JSONResponse(status_code=200, content=result)
 
+    # The website asks before trusting a login cookie and records logouts, so
+    # a copied cookie stops working once its login has logged out.
+    @app.post("/v1/account/session/check")
+    def check_login_session(body: LoginSessionBody, request: Request) -> JSONResponse:
+        _authorize(
+            request, "session.check", production_database, allow_unresolved_identity=True
+        )
+        assert production_database is not None
+        revoked = api_accounts.login_session_revoked(production_database, body.session)
+        return JSONResponse(status_code=200, content={"revoked": revoked})
+
+    @app.post("/v1/account/session/revoke")
+    def revoke_login_session(body: LoginSessionBody, request: Request) -> JSONResponse:
+        _authorize(
+            request, "session.revoke", production_database, allow_unresolved_identity=True
+        )
+        assert production_database is not None
+        api_accounts.revoke_login_session(production_database, body.session)
+        return JSONResponse(status_code=200, content={"revoked": True})
+
     @app.patch("/v1/account")
     def update_account(body: AccountUpdateBody, request: Request) -> JSONResponse:
         context = _authorize(request, "account.update", production_database)
@@ -830,7 +862,7 @@ def create_app(
 
     @app.delete("/v1/account/providers/{provider}")
     def unlink_provider(
-        provider: str, body: ProviderLinkBody, request: Request
+        provider: str, body: ProviderUnlinkBody, request: Request
     ) -> JSONResponse:
         context = _authorize(request, "providers.unlink", production_database)
         assert production_database is not None and context.account is not None
@@ -841,11 +873,16 @@ def create_app(
                 request,
                 context,
                 "providers.unlink",
-                {"provider": provider, "provider_subject": body.provider_subject},
+                {
+                    "provider": provider,
+                    "provider_subject": body.provider_subject,
+                    "session": body.session,
+                },
             ),
             account_id=context.account.internal_id,
             provider=provider,
             provider_subject=body.provider_subject,
+            ended_session=body.session,
         )
         return _operation_response(result)
 

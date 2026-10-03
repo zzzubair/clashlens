@@ -125,11 +125,13 @@ target so it stays stopped after later reboots:
 
 ## Production configuration
 
-Copy `app.env.example` to `app.env`, replace every `CHANGE_ME`, and make it
-private:
+The settings template is not in this public repository. It is kept private on
+the server, next to the production settings, at
+`~/.config/clashlens/issue92/app.env.example`. Copy it to `app.env` in the
+checkout, replace every `CHANGE_ME`, and make it private:
 
 ```sh
-cp app.env.example app.env
+cp ~/.config/clashlens/issue92/app.env.example app.env
 chmod 600 app.env
 ```
 
@@ -176,6 +178,17 @@ The database also has separate collector, worker, and API roles, plus a
 [raw-response cleanup](#raw-response-cleanup) role. The admin database URL
 exists only as a short-lived Podman secret during fixture bootstrap or while an
 operator explicitly handles a failed item.
+Every container in the pod shares `127.0.0.1`, so the database image starts
+PostgreSQL with [`deploy/postgres/pg_hba.conf`](../deploy/postgres/pg_hba.conf):
+every network connection, the administrator's included, needs that role's
+password. Only the database container's own Unix socket, which `./ops`, health
+checks and backups use, skips the password. That socket lives in
+`/var/run/postgresql` on the database container's own filesystem; pod
+containers share the network, not files, and no unit or `./ops` command mounts
+that directory into any other container. The cluster's own `pg_hba.conf` is
+ignored, so a new or restored cluster cannot fall back to its password-free
+defaults. `./ops up` stops if the running database reports any other
+`hba_file`.
 
 ### Paris fixed-address relay
 
@@ -518,10 +531,12 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
 2. Run `wal-g --config /run/secrets/walg.json backup-fetch /var/lib/postgresql/data/pgdata BACKUP_NAME`
    against the new volume. Create `recovery.signal` in that directory.
 3. Start PostgreSQL with that volume and `PGDATA`, the read-only secret,
-   `archive_mode=off`, an empty `archive_command`,
+   `hba_file=/etc/clashlens/pg_hba.conf`, `archive_mode=off`, an empty
+   `archive_command`,
    `restore_command=wal-g --config /run/secrets/walg.json wal-fetch %f %p`,
    `recovery_target_time=CHOSEN_UTC_TIME`, and `recovery_target_action=pause`.
-4. Confirm both `pg_is_in_recovery()` and `pg_is_wal_replay_paused()` are true,
+4. Confirm `SHOW hba_file` returns `/etc/clashlens/pg_hba.conf`, and both
+   `pg_is_in_recovery()` and `pg_is_wal_replay_paused()` are true,
    and the log says recovery reached the chosen time. Merely accepting queries
    does not prove the target was reached. Compare expected accounts, saved-player
    links, player history, battle links and army summaries. Read every retained raw
