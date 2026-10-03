@@ -561,14 +561,48 @@ def test_a_full_group_refuses_the_twenty_first_player(database_url: str) -> None
             database.close()
 
 
-def test_a_confirmed_player_without_legend_details_joins_with_their_name(
-    database_url: str, archive_server
+@pytest.mark.parametrize(
+    ("tier", "player", "renamed_to"),
+    [
+        # No Legend tier: the newest saved profile's name still shows.
+        (
+            None,
+            {"tag": "#2PP", "name": "Synthetic Legend I", "trophies": None,
+             "state": "uncertain"},
+            "Orion",
+        ),
+        # A later profile without a Legend tier never replaces the accepted name.
+        (
+            {"id": 105000036, "name": "Legend I"},
+            {"tag": "#2PP", "name": "Synthetic Legend I", "trophies": 6123,
+             "state": "tracking"},
+            "Synthetic Legend I",
+        ),
+    ],
+)
+def test_confirmed_players_join_with_their_name(
+    database_url: str, archive_server, tier, player, renamed_to
 ) -> None:
     with migrated_production_database(
         database_url, include_compact_collector=True
     ) as info:
         database = ApiDatabase(info)
         worker, processor = _processor(info, archive_server)
+
+        def process(body: dict[str, object], key: str, observed_at) -> None:
+            store_observation(
+                info,
+                archive_server,
+                occurrence_key=key,
+                endpoint="profile",
+                body=json.dumps(body).encode(),
+                observed_at=observed_at,
+                normalized_tag="#2PP",
+                parser_version=PROFILE_PARSER_VERSION,
+            )
+            result = processor.process_once(owner="group-test")
+            assert result is not None and result.outcome == "processed"
+
         try:
             owner_id = create_owner(database)
             group_id = api_accounts.create_group(database,
@@ -590,48 +624,24 @@ def test_a_confirmed_player_without_legend_details_joins_with_their_name(
                     Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json"
                 ).read_bytes()
             )
-            body["leagueTier"] = None
+            body["leagueTier"] = tier
             body["townHallLevel"] = 1
-            store_observation(
-                info,
-                archive_server,
-                occurrence_key="lookup-profile",
-                endpoint="profile",
-                body=json.dumps(body).encode(),
-                observed_at=NOW,
-                normalized_tag="#2PP",
-                parser_version=PROFILE_PARSER_VERSION,
-            )
-            result = processor.process_once(owner="group-test")
-            assert result is not None and result.outcome == "processed"
+            process(body, "lookup-profile", NOW)
 
             added = add_player(database, owner_id, group_id, "#2PP")
 
-            player = {
-                "tag": "#2PP",
-                "name": "Synthetic Legend I",
-                "trophies": None,
-                "state": "uncertain",
-            }
             assert added.status_code == 200
             assert added.payload == {"group_id": group_id, **player}
             assert api_accounts.list_groups(database, owner_id)[0]["players"] == [player]
 
-            # Renamed and renamed back: the reused first profile is still the latest.
-            for minutes, name in ((1, "Orion"), (2, "Synthetic Legend I")):
-                store_observation(
-                    info,
-                    archive_server,
-                    occurrence_key=f"rename-{minutes}",
-                    endpoint="profile",
-                    body=json.dumps({**body, "name": name}).encode(),
-                    observed_at=NOW + timedelta(minutes=minutes),
-                    normalized_tag="#2PP",
-                    parser_version=PROFILE_PARSER_VERSION,
-                )
-                result = processor.process_once(owner="group-test")
-                assert result is not None and result.outcome == "processed"
-            assert api_accounts.list_groups(database, owner_id)[0]["players"] == [player]
+            process(
+                {**body, "leagueTier": None, "name": "Orion"},
+                "renamed-profile",
+                NOW + timedelta(minutes=1),
+            )
+            assert api_accounts.list_groups(database, owner_id)[0]["players"] == [
+                {**player, "name": renamed_to}
+            ]
         finally:
             worker.close()
             database.close()

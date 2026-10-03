@@ -1010,7 +1010,8 @@ def list_groups(database: ApiDatabase, account_id: int) -> list[dict[str, Any]]:
         rows = connection.execute(
             f"""
             SELECT group_row.public_id, group_row.name, player.normalized_tag,
-                   player.active, profile.name, accepted.trophies
+                   player.active, COALESCE(accepted.name, latest.name),
+                   accepted.trophies
             FROM account_groups AS group_row
             LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
             {_MEMBER_JOINS}
@@ -1178,24 +1179,19 @@ def _lock_group(connection: Any, binding: RequestBinding, group_id: str) -> int 
     return None if row is None else int(row[0])
 
 
-# Profile parsing validates the name separately from Legend season/tier
-# evidence, so the latest name shows even when those Legend details fail checks.
-# Trophies come only from accepted Legend statistics.
+# Trophies come only from accepted Legend statistics. The name comes from the
+# accepted current profile, or else from the newest saved profile, whose name
+# is validated separately from Legend season/tier evidence.
 _MEMBER_JOINS = """
     LEFT JOIN players AS player ON player.id = member.player_id
     LEFT JOIN player_profile_versions AS accepted
         ON accepted.id = player.current_profile_version_id
        AND accepted.source_contract_state = 'accepted'
     LEFT JOIN LATERAL (
-        SELECT version.name
-        FROM player_profile_versions AS version
-        LEFT JOIN player_profile_effects AS effect
-          ON effect.profile_version_id = version.id
-        WHERE version.player_id = player.id
-        ORDER BY COALESCE(effect.observed_at, version.observed_at) DESC,
-                 COALESCE(effect.id, version.id) DESC
-        LIMIT 1
-    ) AS profile ON true
+        SELECT name, player_id FROM player_profile_versions
+        WHERE accepted.id IS NULL AND normalized_tag = player.normalized_tag
+        ORDER BY observed_at DESC, id DESC LIMIT 1
+    ) AS latest ON latest.player_id = player.id
 """
 
 
@@ -1203,7 +1199,8 @@ def _group_players(connection: Any, group_id: int) -> list[dict[str, Any]]:
     """Each member's tag with the stored in-game name and trophies, when known."""
     rows = connection.execute(
         f"""
-        SELECT player.normalized_tag, player.active, profile.name, accepted.trophies
+        SELECT player.normalized_tag, player.active,
+               COALESCE(accepted.name, latest.name), accepted.trophies
         FROM account_group_players AS member
         {_MEMBER_JOINS}
         WHERE member.group_id = %s
