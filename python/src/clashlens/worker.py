@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import threading
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event, Lock
 from time import monotonic
@@ -15,6 +17,7 @@ from . import (
     boundary_publication,
     ingestion,
     job_outcomes,
+    late_battle_sweep,
     reconciliation_db,
     snapshots,
 )
@@ -156,96 +159,61 @@ def lane_owner(owner: str, lane_index: int) -> str:
     return f"{owner}.lane-{lane_index}"
 
 
-def process_concurrently(
-    processor: ObservationProcessor,
-    *,
-    concurrency: int,
-    owner: str,
-    max_jobs: int,
-    lease_seconds: int = 30,
-    stop_requested: Event | None = None,
-    fill_idle_lanes: bool = False,
-) -> list[ProcessResult]:
-    """Process up to ``max_jobs`` jobs across up to ``concurrency`` lanes.
+# Connections for the maintenance timer, kept apart from the lanes' pool so a
+# slow round never holds a connection a lane is waiting for.
+MAINTENANCE_POOL_SIZE = 2
 
-    Lanes are in-process threads that share the processor, the database pool,
-    and the archive pool. The database claim transaction (``FOR UPDATE SKIP
-    LOCKED`` plus lease owner/token fencing) and the archive pool bound the
-    work: at most ``concurrency`` jobs run at once and at most ``max_jobs``
-    jobs are claimed per call. When ``stop_requested`` is set, lanes finish
-    their current job and do not claim another; the call then waits for the
-    bounded in-flight set and returns its results.
 
-    The call cannot return before its slowest job finishes. With
-    ``fill_idle_lanes``, lanes that find ``max_jobs`` spent keep claiming
-    while any job that was running when it ran out is still running, so one
-    slow job does not leave the other lanes idle. Jobs claimed meanwhile do
-    not extend that wait, so the call still ends after the slowest of them.
+class TimedMaintenance:
+    """Reset publication checks and queue maintenance, each every 10 seconds."""
 
-    An unexpected exception escaping one lane is isolated: other lanes finish
-    their in-flight job, no further claims are made, and a sanitized
-    ``RuntimeError`` is raised after all lanes have stopped so no job details
-    or credentials cross this boundary.
+    def __init__(self, database: Database, stage_metrics: StageMetrics) -> None:
+        self.database = database
+        self.stage_metrics = stage_metrics
+        self.late_battles = late_battle_sweep.LateBattleSweep(database)
+        self.next_reevaluation_at = float("-inf")
+        self.next_queue_maintenance_at = float("-inf")
+
+    def reevaluate(self) -> None:
+        if isinstance(self.database, Database):
+            boundary_publication.reevaluate_boundary_publications(self.database)
+
+    def run_due(self) -> None:
+        current_time = monotonic()
+        if current_time >= self.next_reevaluation_at:
+            self.next_reevaluation_at = current_time + 10
+            self.reevaluate()
+            self.late_battles.run_when_due()
+        if current_time >= self.next_queue_maintenance_at:
+            self.next_queue_maintenance_at = current_time + 10
+            maintenance_started_at = monotonic()
+            self.database.maintain_queue(max_jobs=100)
+            self.stage_metrics.record(
+                "python_queue_maintenance", monotonic() - maintenance_started_at
+            )
+
+
+def _run_lanes(concurrency: int, claim_loop: Callable[[int, Event], None]) -> None:
+    """Run ``claim_loop(lane_index, stop_claiming)`` on ``concurrency`` threads.
+
+    An unexpected exception escaping one lane is isolated: ``stop_claiming``
+    is set so other lanes finish their in-flight job and make no further
+    claims, and a sanitized ``RuntimeError`` is raised after all lanes have
+    stopped so no job details or credentials cross this boundary.
     """
-    if concurrency < 1 or concurrency > MAX_CONCURRENCY:
-        raise ValueError(f"concurrency must be between 1 and {MAX_CONCURRENCY}")
-    if not owner:
-        raise ValueError("lease owner is required")
-    if max_jobs < 0:
-        raise ValueError("max jobs must not be negative")
-    if lease_seconds <= 0:
-        raise ValueError("lease duration must be positive")
-    if max_jobs == 0:
-        return []
-    results: list[ProcessResult] = []
-    results_lock = threading.Lock()
-    jobs_remaining = max_jobs
-    jobs_lock = threading.Lock()
-    busy_lanes: set[int] = set()
-    # Lanes still on the job they held when max_jobs ran out.
-    holdout_lanes: set[int] | None = None
     first_failure: Exception | None = None
     failure_lock = threading.Lock()
     stop_claiming = Event()
 
     def lane(lane_index: int) -> None:
-        nonlocal first_failure, jobs_remaining, holdout_lanes
-        while True:
-            if stop_claiming.is_set():
-                return
-            if stop_requested is not None and stop_requested.is_set():
-                return
-            with jobs_lock:
-                if jobs_remaining > 0:
-                    jobs_remaining -= 1
-                elif not fill_idle_lanes:
-                    return
-                else:
-                    if holdout_lanes is None:
-                        holdout_lanes = set(busy_lanes)
-                    if not holdout_lanes:
-                        return
-                busy_lanes.add(lane_index)
-            try:
-                result = processor.process_once(
-                    owner=lane_owner(owner, lane_index),
-                    lease_seconds=lease_seconds,
-                )
-            except Exception as error:  # noqa: BLE001 - lane isolation boundary
-                with failure_lock:
-                    if first_failure is None:
-                        first_failure = error
-                stop_claiming.set()
-                return
-            finally:
-                with jobs_lock:
-                    busy_lanes.discard(lane_index)
-                    if holdout_lanes is not None:
-                        holdout_lanes.discard(lane_index)
-            if result is None:
-                return
-            with results_lock:
-                results.append(result)
+        nonlocal first_failure
+        try:
+            claim_loop(lane_index, stop_claiming)
+        except Exception as error:  # noqa: BLE001 - lane isolation boundary
+            with failure_lock:
+                if first_failure is None:
+                    first_failure = error
+            stop_claiming.set()
 
     threads = [
         threading.Thread(
@@ -262,7 +230,146 @@ def process_concurrently(
         thread.join()
     if first_failure is not None:
         raise RuntimeError("worker lane failed; job details are not available")
+
+
+def _validate_lanes(concurrency: int, owner: str, lease_seconds: int) -> None:
+    if concurrency < 1 or concurrency > MAX_CONCURRENCY:
+        raise ValueError(f"concurrency must be between 1 and {MAX_CONCURRENCY}")
+    if not owner:
+        raise ValueError("lease owner is required")
+    if lease_seconds <= 0:
+        raise ValueError("lease duration must be positive")
+
+
+def process_concurrently(
+    processor: ObservationProcessor,
+    *,
+    concurrency: int,
+    owner: str,
+    max_jobs: int,
+    lease_seconds: int = 30,
+    stop_requested: Event | None = None,
+) -> list[ProcessResult]:
+    """Process up to ``max_jobs`` jobs across up to ``concurrency`` lanes.
+
+    Lanes are in-process threads that share the processor, the database pool,
+    and the archive pool. The database claim transaction (``FOR UPDATE SKIP
+    LOCKED`` plus lease owner/token fencing) and the archive pool bound the
+    work: at most ``concurrency`` jobs run at once and at most ``max_jobs``
+    jobs are claimed per call. A lane stops at the first empty claim. When
+    ``stop_requested`` is set, lanes finish their current job and do not
+    claim another; the call then waits for the bounded in-flight set and
+    returns its results. Lane failures are isolated as in ``_run_lanes``.
+    """
+    _validate_lanes(concurrency, owner, lease_seconds)
+    if max_jobs < 0:
+        raise ValueError("max jobs must not be negative")
+    if max_jobs == 0:
+        return []
+    results: list[ProcessResult] = []
+    results_lock = threading.Lock()
+    jobs_remaining = max_jobs
+    jobs_lock = threading.Lock()
+
+    def claim_loop(lane_index: int, stop_claiming: Event) -> None:
+        nonlocal jobs_remaining
+        while not stop_claiming.is_set():
+            if stop_requested is not None and stop_requested.is_set():
+                return
+            with jobs_lock:
+                if jobs_remaining == 0:
+                    return
+                jobs_remaining -= 1
+            result = processor.process_once(
+                owner=lane_owner(owner, lane_index),
+                lease_seconds=lease_seconds,
+            )
+            if result is None:
+                return
+            with results_lock:
+                results.append(result)
+
+    _run_lanes(concurrency, claim_loop)
     return results
+
+
+def process_until_stopped(
+    processor: ObservationProcessor,
+    *,
+    concurrency: int,
+    owner: str,
+    lease_seconds: int,
+    stop_requested: Event,
+    idle_seconds: float,
+    claims_ready: Callable[[], bool],
+    maintain: Callable[[], None],
+    on_result: Callable[[ProcessResult], None],
+) -> None:
+    """Keep ``concurrency`` lanes claiming until ``stop_requested`` is set.
+
+    There is no batch: a lane that finds the queue empty, or
+    ``claims_ready`` false, waits ``idle_seconds`` and claims again, so one
+    long job never leaves the other lanes idle. Queue maintenance runs on its
+    own timer thread, calling ``maintain`` every ``idle_seconds`` while
+    ``claims_ready`` holds, so it never waits for a lane and no lane waits for
+    it. A maintenance failure is reported by type only, never its message,
+    and a later tick tries again. Each result goes to ``on_result`` as its
+    job finishes, one at a time. Lane failures are isolated as in
+    ``_run_lanes``, and the call returns once every lane and the timer have
+    stopped.
+    """
+    _validate_lanes(concurrency, owner, lease_seconds)
+    report_lock = threading.Lock()
+
+    def maintenance_timer() -> None:
+        while not stop_requested.is_set():
+            if claims_ready() and not stop_requested.is_set():
+                try:
+                    maintain()
+                except Exception as error:  # noqa: BLE001 - retried next tick
+                    print(
+                        json.dumps(
+                            {
+                                "event": "worker_maintenance",
+                                "status": "failed",
+                                "error": type(error).__name__,
+                            }
+                        ),
+                        flush=True,
+                    )
+            stop_requested.wait(idle_seconds)
+
+    def claim_loop(lane_index: int, stop_claiming: Event) -> None:
+        def stopped() -> bool:
+            return stop_claiming.is_set() or stop_requested.is_set()
+
+        while not stopped():
+            ready = claims_ready()
+            if stopped():
+                return
+            result = (
+                processor.process_once(
+                    owner=lane_owner(owner, lane_index),
+                    lease_seconds=lease_seconds,
+                )
+                if ready
+                else None
+            )
+            if result is None:
+                stop_requested.wait(idle_seconds)
+                continue
+            with report_lock:
+                on_result(result)
+
+    timer = threading.Thread(
+        target=maintenance_timer, name="clashlens-worker-maintenance", daemon=True
+    )
+    timer.start()
+    try:
+        _run_lanes(concurrency, claim_loop)
+    finally:
+        stop_requested.set()
+        timer.join()
 
 
 class ObservationProcessor:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
 from argparse import Namespace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
 
-from clashlens import cli, ingestion, job_outcomes, reconciliation_db
+from clashlens import cli, ingestion, job_outcomes, reconciliation_db, worker
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION, LeaseLost
 from clashlens.domain import DomainRuleError
 from clashlens.league_history import (
@@ -733,6 +735,163 @@ def test_run_forever_rechecks_archive_and_resumes_after_outage(
     assert output[-1]["processed_count"] == 1
 
 
+def test_run_forever_keeps_lanes_claiming_and_maintaining_during_a_long_job(
+    monkeypatch, capsys
+) -> None:
+    # The 2026-10-03 Reset: one lane ran a 40-minute build, the queue was
+    # empty for a moment, and no other lane claimed until that build ended.
+    long_job_running = Event()
+    release_long_job = Event()
+    queued_jobs_done = Event()
+    maintained_during_long_job = Event()
+    queue_lock = threading.Lock()
+    queue = [1]
+    done: list[int] = []
+    stop: list[Event] = []
+
+    class FakeDatabase:
+        def close(self) -> None:
+            return
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            if long_job_running.is_set():
+                maintained_during_long_job.set()
+            return 0
+
+    class FakeArchive:
+        @staticmethod
+        def check_ready() -> bool:
+            return True
+
+    class LongJobProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return
+
+        def process_once(self, **_kwargs: object) -> ProcessResult | None:
+            with queue_lock:
+                if not queue:
+                    return None
+                job_id = queue.pop(0)
+            if job_id == 1:
+                long_job_running.set()
+                assert release_long_job.wait(10)
+            with queue_lock:
+                done.append(job_id)
+                if set(range(2, 12)) <= set(done):
+                    queued_jobs_done.set()
+            return ProcessResult(job_id, "processed")
+
+    clock = iter(range(0, 10**9, 5))
+    monkeypatch.setattr(worker, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(cli, "Database", lambda _url, **_kwargs: FakeDatabase())
+    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "ObservationProcessor", LongJobProcessor)
+    monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
+    worker_thread = threading.Thread(
+        target=cli._run_worker,
+        args=(_worker_namespace(run_forever=True, concurrency=3, max_jobs=3),),
+        daemon=True,
+    )
+    worker_thread.start()
+    try:
+        assert long_job_running.wait(5)
+        time.sleep(0.1)  # the other lanes find the queue empty
+        with queue_lock:
+            queue.extend(range(2, 12))
+        assert queued_jobs_done.wait(5), "lanes stopped claiming during a long job"
+        assert maintained_during_long_job.wait(5), "maintenance waited for the job"
+        assert 1 not in done
+    finally:
+        release_long_job.set()
+        stop[0].set()
+        worker_thread.join(10)
+    assert not worker_thread.is_alive()
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert output[-1]["processed_count"] == 11
+
+
+def test_maintenance_runs_while_every_lane_holds_a_connection(
+    monkeypatch, capsys
+) -> None:
+    # Production runs 12 lanes on a 12-connection pool. Maintenance must not
+    # wait for one of those connections, nor hold one a lane needs.
+    all_lanes_busy = Event()
+    maintained_while_busy = Event()
+    release_jobs = Event()
+    busy_lock = threading.Lock()
+    busy_lanes = 0
+    pools: list[PoolModelDatabase] = []
+    stop: list[Event] = []
+
+    class PoolModelDatabase:
+        def __init__(self, _url: str, *, max_size: int, **_kwargs: object) -> None:
+            self.max_size = max_size
+            self.connections = threading.BoundedSemaphore(max_size)
+            pools.append(self)
+
+        def take_connection(self) -> None:
+            if not self.connections.acquire(timeout=0.5):
+                raise TimeoutError("no free connection")
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            self.take_connection()
+            try:
+                if all_lanes_busy.is_set():
+                    maintained_while_busy.set()
+                return 0
+            finally:
+                self.connections.release()
+
+        def close(self) -> None:
+            return
+
+    class FakeArchive:
+        @staticmethod
+        def check_ready() -> bool:
+            return True
+
+    class ConnectionHoldingProcessor:
+        def __init__(self, database: PoolModelDatabase, _archive: object) -> None:
+            self.database = database
+
+        def process_once(self, **_kwargs: object) -> ProcessResult | None:
+            nonlocal busy_lanes
+            if release_jobs.is_set():
+                return None
+            self.database.take_connection()
+            try:
+                with busy_lock:
+                    busy_lanes += 1
+                    if busy_lanes == 3:
+                        all_lanes_busy.set()
+                assert release_jobs.wait(10)
+                return ProcessResult(busy_lanes, "processed")
+            finally:
+                self.database.connections.release()
+
+    clock = iter(range(0, 10**9, 5))
+    monkeypatch.setattr(worker, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(cli, "Database", PoolModelDatabase)
+    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "ObservationProcessor", ConnectionHoldingProcessor)
+    monkeypatch.setattr(cli, "_install_shutdown_handlers", stop.append)
+    arguments = _worker_namespace(run_forever=True, concurrency=3, database_pool_size=3)
+    worker_thread = threading.Thread(
+        target=cli._run_worker, args=(arguments,), daemon=True
+    )
+    worker_thread.start()
+    try:
+        assert all_lanes_busy.wait(5)
+        assert maintained_while_busy.wait(5), "maintenance had no connection"
+    finally:
+        release_jobs.set()
+        stop[0].set()
+        worker_thread.join(10)
+    assert not worker_thread.is_alive()
+    assert [pool.max_size for pool in pools] == [3, 2]
+    assert "worker_maintenance" not in capsys.readouterr().out
+
+
 def _worker_namespace(**overrides: object) -> Namespace:
     values: dict[str, object] = {
         "database_url": "postgresql://prototype@postgres/db",
@@ -1006,7 +1165,6 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         max_jobs: int,
         lease_seconds: int,
         stop_requested: object,
-        fill_idle_lanes: bool,
     ) -> list[ProcessResult]:
         recorded["concurrent_args"] = {
             "concurrency": concurrency,
