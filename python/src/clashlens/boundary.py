@@ -21,6 +21,22 @@ from .db import (
 )
 
 
+def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
+    """Take a Reset's publication lock for the rest of the transaction.
+
+    Lock order everywhere: a player-day lock, then this lock for the Reset
+    ending that day, then that Reset's generation rows; several Resets are
+    taken oldest first. Every path that locks or updates a generation row
+    takes this lock first: a build that locked the row and then waited here,
+    while a day-result rebuild held this lock and waited for the row,
+    deadlocked.
+    """
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"boundary-publication:{boundary_at.astimezone(UTC).isoformat()}",),
+    )
+
+
 def _create_boundary_generation(
     database: Database,
     connection: Any,
@@ -943,10 +959,7 @@ def _record_boundary_generation(
     coalesce into it.
     """
     boundary_at = boundary_at.astimezone(UTC)
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"boundary-publication:{boundary_at.isoformat()}",),
-    )
+    lock_boundary_publication(connection, boundary_at)
     sweep = connection.execute(
         "SELECT id, member_ids FROM collector_reset_sweeps WHERE boundary_at = %s",
         (boundary_at,),

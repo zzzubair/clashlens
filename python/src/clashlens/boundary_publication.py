@@ -40,15 +40,37 @@ def reevaluate_boundary_publications(database) -> int:
     reset_baselines.settle_failed_reset_work(database)
     with database.pool.connection() as connection:
         with connection.transaction():
+            boundaries = [
+                row[0]
+                for row in connection.execute(
+                    """
+                    SELECT boundary_at
+                    FROM boundary_publication_generations
+                    WHERE snapshot_state IN ('pending', 'ready')
+                       OR army_state IN ('pending', 'ready')
+                    UNION
+                    SELECT boundary_at
+                    FROM boundary_publication_corrections
+                    WHERE state IN ('queued', 'pending_inputs')
+                    ORDER BY 1
+                    """
+                ).fetchall()
+            ]
+            for boundary_at in boundaries:
+                boundary.lock_boundary_publication(connection, boundary_at)
+            # A Reset that needed work only after the read above waits for
+            # the next pass rather than take its lock out of order.
             generations = connection.execute(
                 """
                 SELECT id, boundary_at
                 FROM boundary_publication_generations
-                WHERE snapshot_state IN ('pending', 'ready')
-                   OR army_state IN ('pending', 'ready')
+                WHERE (snapshot_state IN ('pending', 'ready')
+                       OR army_state IN ('pending', 'ready'))
+                  AND boundary_at = ANY(%s::timestamptz[])
                 ORDER BY boundary_at, generation
                 FOR UPDATE
-                """
+                """,
+                (boundaries,),
             ).fetchall()
             for generation_id, boundary_at in generations:
                 boundary._try_enqueue_boundary_artifacts(
@@ -62,9 +84,11 @@ def reevaluate_boundary_publications(database) -> int:
                 SELECT source_generation_id
                 FROM boundary_publication_corrections
                 WHERE state IN ('queued', 'pending_inputs')
+                  AND boundary_at = ANY(%s::timestamptz[])
                 ORDER BY requested_at, id
                 FOR UPDATE SKIP LOCKED
-                """
+                """,
+                (boundaries,),
             ).fetchall()
             for (source_generation_id,) in corrections:
                 _maybe_emit_boundary_signal(
@@ -82,10 +106,7 @@ def _maybe_emit_boundary_signal(
     ).fetchone()
     if boundary_row is None:
         return
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"boundary-publication:{boundary_row[0].astimezone(UTC).isoformat()}",),
-    )
+    boundary.lock_boundary_publication(connection, boundary_row[0])
     row = connection.execute(
         """
         SELECT boundary_at, generation, snapshot_id,
@@ -419,6 +440,14 @@ def complete_analytics(database: Database, claim: Claim) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim)
+            # The Reset lock comes before this snapshot's and its
+            # generation's row locks; see boundary.lock_boundary_publication.
+            snapshot_boundary = connection.execute(
+                "SELECT boundary_at FROM leaderboard_snapshots WHERE id = %s",
+                (snapshot_id,),
+            ).fetchone()
+            if snapshot_boundary is not None:
+                boundary.lock_boundary_publication(connection, snapshot_boundary[0])
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 ("leaderboard-snapshot-v2:frozen:analytics:" + str(snapshot_id),),
@@ -1136,10 +1165,7 @@ def _enqueue_army_analytics(
     coordinator = None
     boundary_at = ranked_day_start + timedelta(days=1)
     if getattr(database, "_supports_coordinator_contract", False):
-        connection.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"boundary-publication:{boundary_at.isoformat()}",),
-        )
+        boundary.lock_boundary_publication(connection, boundary_at)
         coordinator = connection.execute(
             """
             SELECT id, generation, snapshot_state, army_state,
