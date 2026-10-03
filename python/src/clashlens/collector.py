@@ -57,14 +57,9 @@ _HANDOFF_PROTOCOL = 2
 _CLEANUP_BATCH_SIZE = 16
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
 # A check fetches its profile, saves it, then maybe its battle log, one after
-# the other. On 2026-10-02 production held 160 checks in flight at 76 checks/s:
-# 2.1 s each, almost all saving, while keys ran at 19 of 25 requests/s. 256
-# slots cover ~125 checks/s (150 requests/s at ~1.2 per check) at up to 2 s
-# each, and hold at most 256 requests at once, fewer than 160 paired checks did.
+# the other, so a check holds at most one request at a time. The collector
+# command sizes this from its keys; see docs/collector-polling.md.
 _REGULAR_PARALLELISM = 256
-# Cold discovery measured 21.21 players/s against 29.27 regular jobs/s.
-# A quarter of regular slots keeps overdue revisits moving until discovery drains.
-_REGULAR_REPEAT_MINIMUM = 64
 _ORDINARY_INTENT_PARALLELISM = 32
 
 
@@ -83,7 +78,10 @@ class Collector:
         max_body_bytes: int,
         interactive_fingerprint: str | None = None,
         weekly_eligibility_enabled: bool = False,
+        regular_parallelism: int = _REGULAR_PARALLELISM,
     ) -> None:
+        if regular_parallelism < 1:
+            raise ValueError("regular parallelism must be positive")
         self.database = database
         self.spool = spool
         self.archive = archive
@@ -95,6 +93,7 @@ class Collector:
         self.max_body_bytes = max_body_bytes
         self.interactive_fingerprint = interactive_fingerprint
         self.weekly_eligibility_enabled = weekly_eligibility_enabled
+        self.regular_parallelism = regular_parallelism
         self.battle_logs = BattleLogSchedule()
         self.outcomes: dict[str, int] = {}
         self.endpoint_outcomes: dict[tuple[str, str, str], int] = {}
@@ -961,13 +960,16 @@ class Collector:
                         self.regular_inflight += len(items)
 
                     claim_time = datetime.now(UTC)
-                    available = _REGULAR_PARALLELISM - len(pending)
+                    available = self.regular_parallelism - len(pending)
                     repeat_inflight = sum(
                         not item.first_battle_pending for item in pending.values()
                     )
+                    # Cold discovery measured 21.21 players/s against 29.27
+                    # regular jobs/s. A quarter of the slots keeps overdue
+                    # revisits moving until discovery drains.
                     repeat_limit = min(
                         available,
-                        max(0, _REGULAR_REPEAT_MINIMUM - repeat_inflight),
+                        max(0, self.regular_parallelism // 4 - repeat_inflight),
                     )
                     if repeat_limit > 0:
                         admit(

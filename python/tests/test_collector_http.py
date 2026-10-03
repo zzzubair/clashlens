@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import gzip
 import json
 import socket
@@ -14,6 +15,7 @@ from typing import ClassVar
 
 import pytest
 
+from clashlens import collector_http
 from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
 
 
@@ -80,6 +82,39 @@ def test_six_keys_each_start_at_most_the_configured_rate() -> None:
     )
     for key_starts in starts.values():
         assert all(later - earlier >= 0.039 for earlier, later in pairwise(key_starts))
+
+
+def test_late_wakeups_keep_a_key_at_its_rate_and_no_second_over_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Production woke each paced start ~20 ms late, and each start restarted
+    # its gap from then: keys set to 28 requests a second made 18.
+    clock = [1000.0]
+    starts: list[float] = []
+
+    async def late_sleep(delay: float) -> None:
+        # The 100th wait also stalls 0.6 s, so later starts must catch up.
+        clock[0] += delay + (0.6 if len(starts) == 100 else 0.02)
+
+    monkeypatch.setattr(collector_http, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(collector_http.asyncio, "sleep", late_sleep)
+    limiter = collector_http._StartLimiter(28)
+
+    async def start(count: int) -> None:
+        for _ in range(count):
+            await limiter.wait()
+            limiter.started()
+            starts.append(clock[0])
+
+    asyncio.run(start(280))
+    assert starts[-1] - starts[0] < 10.5
+    assert max(
+        bisect.bisect_left(starts, at + 1.0) - index for index, at in enumerate(starts)
+    ) <= 28
+    # After a key idles, its next starts are paced again, not caught up.
+    clock[0] += 5.0
+    asyncio.run(start(2))
+    assert starts[-1] - starts[-2] >= 1 / 28
 
 
 def test_shared_permit_is_taken_before_each_interactive_start() -> None:

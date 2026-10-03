@@ -11,6 +11,7 @@ import pytest
 from test_collector import _Client, _collector, _Spool, _Store
 
 import clashlens.collector as collector_module
+from clashlens.collector_db import CollectorWork
 from clashlens.collector_uploads import UploadClaim
 
 
@@ -185,3 +186,39 @@ def test_spool_failure_keeps_database_slots_until_cancelled_renewals_finish(
     assert collector.outcomes["spool_io_failure"] == 4
     assert queued_claim_started.is_set()
     assert peak == 4
+
+
+def test_regular_checks_in_flight_follow_the_configured_parallelism() -> None:
+    spool = _Spool()
+    collector = _collector(spool, _Store(spool), _Client(spool))
+    collector.regular_parallelism = 12
+    claims: list[tuple[int, bool | None]] = []
+    in_flight = 0
+    peak = 0
+    stop = asyncio.Event()
+
+    def claim_due_players(
+        limit: int, now: datetime, first_battle_pending: bool | None = None
+    ) -> list[CollectorWork]:
+        claims.append((limit, first_battle_pending))
+        return [CollectorWork(index, f"#P{index}", now) for index in range(limit)]
+
+    async def collect_player(_work: CollectorWork, *, lane: str) -> list[str]:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        if peak == 12:
+            stop.set()
+        await stop.wait()
+        in_flight -= 1
+        return ["recorded"]
+
+    collector.database.regular_admission_open = lambda _now: True  # type: ignore[attr-defined]
+    collector.database.claim_due_players = claim_due_players  # type: ignore[attr-defined]
+    collector.collect_player = collect_player  # type: ignore[method-assign]
+
+    asyncio.run(collector._regular_loop(stop, 0.01))
+
+    assert peak == 12
+    # A quarter of the slots go to overdue revisits first.
+    assert claims[:2] == [(3, False), (9, None)]

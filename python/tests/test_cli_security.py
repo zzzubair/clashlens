@@ -5,6 +5,7 @@ import base64
 import json
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,6 +76,44 @@ def test_collector_loads_four_to_seven_regular_keys(monkeypatch, count: int) -> 
     expected = KeysAccepted if 4 <= count <= 7 else ValueError
     with pytest.raises(expected):
         _run_collector(arguments)
+
+
+@pytest.mark.parametrize(
+    ("keys", "rate", "setting", "in_flight"),
+    [(7, 28, None, 392), (4, 25, None, 256), (7, 28, "300", 300)],
+)
+def test_collector_sizes_checks_in_flight_from_its_keys(
+    monkeypatch, keys: int, rate: int, setting: str | None, in_flight: int
+) -> None:
+    # Two seconds of key starts keeps the keys, not the slots, setting the pace.
+    monkeypatch.delenv("CLASHLENS_REGULAR_PARALLELISM", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("CLASHLENS_REGULAR_PARALLELISM", setting)
+    arguments = build_parser().parse_args(
+        ["collector", "--starts-per-second-per-key", str(rate)]
+    )
+    arguments.regular_api_keys = ",".join(f"regular-{i}=fixture-{i}" for i in range(keys))
+    arguments.interactive_api_keys = "interactive-1=fixture-interactive"
+
+    class Sized(Exception):
+        pass
+
+    def collector(**kwargs: object) -> None:
+        raise Sized(kwargs["regular_parallelism"])
+
+    database = SimpleNamespace(register_interactive_key=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("clashlens.cli._database_url", lambda _arguments: "")
+    monkeypatch.setattr("clashlens.cli.CollectorDatabase", lambda _url: database)
+    monkeypatch.setattr(
+        "clashlens.cli._archive",
+        lambda *_args, **_kwargs: SimpleNamespace(spool=None, archive=None),
+    )
+    monkeypatch.setattr("clashlens.cli.SpoolFirstReader", SimpleNamespace)
+    monkeypatch.setattr("clashlens.cli.Collector", collector)
+
+    with pytest.raises(Sized) as sized:
+        _run_collector(arguments)
+    assert sized.value.args == (in_flight,)
 
 
 def test_cli_loads_current_and_previous_hmac_keys_from_files(tmp_path: Path) -> None:

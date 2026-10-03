@@ -135,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=int(os.environ.get("CLASHLENS_CONCURRENCY_PER_KEY", "6")),
     )
     collector.add_argument(
+        "--regular-parallelism",
+        type=_bounded_int("regular parallelism", 1, 2048),
+        default=os.environ.get("CLASHLENS_REGULAR_PARALLELISM"),
+        help="regular checks in flight (default: two seconds of key starts, at least 256)",
+    )
+    collector.add_argument(
         "--health-listen",
         default=os.environ.get("CLASHLENS_HEALTH_LISTEN", "127.0.0.1:8081"),
     )
@@ -738,6 +744,9 @@ def _run_collector(arguments: argparse.Namespace) -> int:
     if not isinstance(archive_reader, SpoolFirstReader):
         raise TypeError("collector requires a local spool root")
     concurrency = arguments.concurrency_per_key
+    parallelism = arguments.regular_parallelism or max(
+        256, 2 * len(regular_keys) * arguments.starts_per_second_per_key
+    )
     collector = Collector(
         database=database,
         spool=archive_reader.spool,
@@ -765,14 +774,16 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         max_body_bytes=arguments.archive_max_body_bytes,
         interactive_fingerprint=interactive_fingerprint,
         weekly_eligibility_enabled=arguments.enable_weekly_eligibility,
+        regular_parallelism=parallelism,
     )
 
     async def serve() -> None:
         stop_requested = asyncio.Event()
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(
-            ThreadPoolExecutor(max_workers=256, thread_name_prefix="collector-io")
-        )
+        # A save thread for every regular check; intent and upload work share them.
+        loop.set_default_executor(ThreadPoolExecutor(
+            max_workers=max(256, parallelism), thread_name_prefix="collector-io"
+        ))
         for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(shutdown_signal, stop_requested.set)
         await collector.run(

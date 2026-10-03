@@ -137,7 +137,7 @@ the developer portal for the relay address, save it as a mode-600 file named
 release procedure. No code change is needed.
 
 `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY` caps how many requests each key may
-start per second across all callers, the interactive key included. It accepts
+start in any one second across all callers, the interactive key included. It accepts
 whole numbers from 1 to 29 and defaults to 25. `./ops`, the collector command
 and its request pacing refuse 30 or more. Six regular keys at the default allow
 at most 150 requests per second. A regular check fetches the profile and, only

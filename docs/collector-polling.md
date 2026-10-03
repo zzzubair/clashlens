@@ -132,7 +132,7 @@ timing and complete storage cost still require the population timing trial.
 
 ## Queue behavior
 
-The collector reserves 64 of its 256 regular slots for repeat checks when both
+The collector reserves a quarter of its regular slots for repeat checks when both
 repeat and first-battle checks are due, then fills remaining slots with
 first-battle checks before more repeats. Each group selects `players.next_due_at`
 oldest first, breaking ties by player ID; either can use spare slots.
@@ -148,19 +148,29 @@ allow at 25 each. So the keys set the pace: about one check per player every
 requests, and the same keys allowed one check every ~177 seconds.
 
 A check fetches the profile, saves it, and only then fetches the battle log if
-needed, so a check that needs both saves twice in a row. On 2026-10-02, with
-160 checks in flight, production made 76 checks a second: about 2.1 s per
-check, almost all of it saving to the spool and database (the Clash API
-answered in about 0.13 s), while the keys ran at 19 of their 25 requests a
-second. The collector now keeps up to 256 checks in flight with 256 save
-threads. Since a check makes its requests one after the other, that is at most
-256 requests at once, fewer than the 320 that 160 paired checks held before
-this change, and at up to 2 s per check it covers the ~125 checks a second the
-keys allow. This is arithmetic from that
-measurement; the 256-check figure has not run in production yet. When keys,
-slots, the spool or the database cannot keep up, players are checked later
-than 90 seconds, still oldest first within each group, and the due queue does
-not empty.
+needed, so it holds at most one request at a time. The collector keeps two
+seconds of its regular keys' request starts in flight as checks, at least 256:
+392 with seven keys at 28 a second. `CLASHLENS_REGULAR_PARALLELISM` (or
+`--regular-parallelism`, 1 to 2,048) overrides it. The collector has a save
+thread for each slot. Its database connections stay at 32 whatever the slot
+count, so more slots cannot use more of PostgreSQL's 100 connections
+(production used 52 on 2026-10-03).
+
+On 2026-10-03 production held 250 checks in flight at 66 checks a second,
+about 3.8 s each, with keys at 18 of their 28 requests a second. The Clash API
+answered in about 0.15 s, and of the collector's 32 database connections only
+about 10 were in a transaction at once. The checks were not saving: about 220
+were waiting for a key. Each key waited out its gap between starts and then
+started the next gap from when it actually woke, and the collector woke
+paced starts late (health checks answered in a median 6 ms, 38 ms at the 90th
+percentile). Every late wake added to the gap, so 28 a second became 18. Now a
+key that falls behind by under a second keeps its schedule and its next starts
+make up the time, while no second, measured from any instant, holds more starts than
+the rate. A replay of the pacing with that lateness made 20.5 starts a second
+per key before this change and 27.7 after; it is a model, not a production
+measurement. When keys, slots, the spool or the database cannot keep up,
+players are checked later than 90 seconds, still oldest first within each
+group, and the due queue does not empty.
 Per-key limits stay in force and regular work never uses the interactive key.
 
 ### Battle log only when it can have changed
@@ -510,8 +520,10 @@ its own database work. So is a known-unchanged one when the database does not
 accept it as unchanged, or when that one-attempt check fails, times out or is
 cancelled. Many players can share one body, such as the same not-found profile,
 so the check does not wait while another response updates that body's records,
-or while the worker holds that player or their last saved response; it saves
-the response instead. A shared body already sighted within the last 10 minutes
+or while the worker holds that player; it saves the response instead. Rows the
+worker adds that point at the last saved response never make a check wait:
+on 2026-10-03 one worker transaction kept such rows for 14 minutes while it
+built a Reset publication, and saving waited behind it for 4 minutes. A shared body already sighted within the last 10 minutes
 keeps its earlier latest sighting time, which only orders spool cleanup and
 starts the archive retention clock, so its deletion can come up to 10 minutes
 early. A body already marked for deletion is never recorded this way; it is

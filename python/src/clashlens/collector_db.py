@@ -1078,11 +1078,13 @@ class CollectorDatabase:
         ):
             return False
         # Unsaved, skip a row another transaction holds (a body players share,
-        # or the worker's observation or player): the caller saves, not waits.
+        # or the worker's player): the caller saves, not waits. The rows a
+        # worker inserts that point at this observation only key-share it, so
+        # NO KEY UPDATE never waits on them; it still blocks updates and deletes.
         skip = "" if saved else " SKIP LOCKED"
         retained = connection.execute(
             """SELECT response_hash, archive_reference
-            FROM collector_observations WHERE id = %s FOR UPDATE""" + skip,
+            FROM collector_observations WHERE id = %s FOR NO KEY UPDATE""" + skip,
             (state[2],),
         ).fetchone()
         if retained is None:
