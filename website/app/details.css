@@ -722,18 +722,23 @@
   .analytics-page .analytics-results-table tr {
     display: flex;
   }
+  .analytics-page .analytics-results-table :is(th, td),
+  .analytics-page .analytics-results-table .analytics-sort-button {
+    padding-inline: 0.5rem;
+  }
   .analytics-page .analytics-results-table :is(th, td) {
     display: flex;
-    flex: 0 0 6.5rem;
+    flex: 0 0 6rem;
     flex-direction: column;
     justify-content: center;
     order: 3;
   }
   .analytics-page .analytics-results-table tr > th:first-child {
-    flex-basis: 9rem;
+    flex-basis: clamp(4.5rem, 100vw - 2rem - 2px - 12rem, 9rem);
     width: auto;
     min-width: 0;
     max-width: none;
+    overflow-wrap: anywhere;
     order: 0;
   }
   .analytics-page .analytics-results-table [data-column="usage-rate"] {
