@@ -26,6 +26,7 @@ from . import ranked_day_inputs
 from .collector_reset import COLLECTION_WINDOW, SETTLEMENT_DELAY
 from .db import PROCESSING_VERSION, Database
 from .domain import (
+    BATTLE_DAY_GRACE,
     TROPHY_ALLOCATION_RULE_VERSION,
     battle_window,
     is_season_boundary,
@@ -495,7 +496,7 @@ def refresh_for_observation(
     Reset, re-judges only a finished check that is settled, passed every
     guard, or met a later profile that disagreed or was not processed. A
     battle log also re-judges a finished check with an unusable report at
-    either Reset that reads one of its battles' days. Later evidence can only
+    any Reset that can read one of its battles. Later evidence can only
     take proof away from the rest; they are re-judged in full when the
     previous Reset's verdict changes.
     """
@@ -516,8 +517,9 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
             SELECT id, player_id, endpoint, response_completed_at AS at
             FROM collector_observations WHERE id = %s
         ), touched AS (
-            SELECT battle.attacker_player_id AS attacker,
-                   battle.defender_player_id AS defender, battle.ranked_day_start AS day
+            SELECT battle.attacker_player_id AS attacker, battle.defender_player_id AS defender,
+                   (SELECT min(report.battle_timestamp) FROM battle_evidence AS report
+                    WHERE report.battle_id = battle.id) AS reported_at
             FROM observed
             JOIN battle_evidence AS evidence ON evidence.observation_id = observed.id
             JOIN legend_battles AS battle ON battle.id = evidence.battle_id
@@ -544,13 +546,14 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
         FROM touched
         JOIN reset_boundary_settlements AS settlement
           ON settlement.player_id IN (touched.attacker, touched.defender)
-         AND settlement.boundary_at IN (touched.day + interval '1 day', touched.day + interval '2 days')
+         AND settlement.boundary_at > touched.reported_at - %s
+         AND settlement.boundary_at <= touched.reported_at + interval '2 days'
         JOIN collector_work AS work ON work.id = settlement.delayed_work_id
         WHERE work.status IN ('complete', 'failed', 'cancelled')
           AND settlement.reasons ? 'battle_report_unusable'
         ORDER BY 2, 1
         """,
-        (observation_id,),
+        (observation_id, BATTLE_DAY_GRACE),
     ).fetchall()
     return [(int(player_id), boundary_at) for player_id, boundary_at in rows]
 
