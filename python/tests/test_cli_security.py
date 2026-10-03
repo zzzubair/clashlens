@@ -372,9 +372,9 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
         assert max_jobs == 7
         return {"job_ids": [41, 42], "evaluated_count": 0, "failure_reasons": {}}
 
-    monkeypatch.setattr("clashlens.cli.Database", FakeDatabase)
+    monkeypatch.setattr("clashlens.battle_day_repair.Database", FakeDatabase)
     monkeypatch.setattr(
-        "clashlens.reconciliation_db.enqueue_current_season_republication",
+        "clashlens.battle_day_repair.enqueue_current_season_republication",
         fake_enqueue,
     )
 

@@ -28,7 +28,7 @@ import uvicorn
 from . import (
     api_accounts,
     api_verification,
-    reconciliation_db,
+    battle_day_repair,
 )
 from . import (
     db as _db,
@@ -271,15 +271,8 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_population.add_argument("--run-id", required=True)
     bootstrap_population.add_argument("--result-file", required=True)
 
-    republish_current_season = subparsers.add_parser(
-        "republish-current-season",
-        help="queue a bounded batch of current-season ranked-day republications",
-    )
-    _database_argument(republish_current_season)
-    republish_current_season.add_argument(
-        "--max-jobs",
-        type=_bounded_int("republication batch size", 1, 1000),
-        default=100,
+    battle_day_repair.add_republish_command(
+        subparsers, _database_argument, _bounded_int
     )
 
     materialize_seasons = subparsers.add_parser(
@@ -535,16 +528,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(report, sort_keys=True))
             return 0
         if arguments.command == "republish-current-season":
-            database = Database(_database_url(arguments))
-            try:
-                report = reconciliation_db.enqueue_current_season_republication(
-                    database, max_jobs=arguments.max_jobs
-                )
-                report["enqueued_count"] = len(report["job_ids"])
-                print(json.dumps(report, sort_keys=True))
-            finally:
-                database.close()
-            return 0
+            return battle_day_repair.run_republish_command(
+                _database_url(arguments), arguments.max_jobs
+            )
         if arguments.command == "materialize-season-summaries":
             import psycopg
 
