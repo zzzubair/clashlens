@@ -77,9 +77,7 @@ export default function UserRoute() {
   // Set by a successful link on /account/verify-player.
   const [searchParams] = useSearchParams();
   const linkedTag = searchParams.get("linked");
-  const justLinked = isOwnProfile
-    ? data.user?.verifiedPlayers.find((player) => player.tag === linkedTag)
-    : undefined;
+  const justLinked = data.user?.verifiedPlayers.find((player) => player.tag === linkedTag);
   if (data.notFound) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
