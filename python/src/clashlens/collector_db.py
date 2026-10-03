@@ -666,7 +666,7 @@ class CollectorDatabase:
     ) -> str | None:
         if job_id < 1:
             raise ValueError("intent job ID must be positive")
-        # Retry only until the work's Legend day ends; unfinished Reset work blocks the next Reset.
+        # Retry until 23h55m after the Reset, or after creation for other work; unfinished Reset work blocks the next Reset.
         with self._connection() as connection:
             with connection.transaction():
                 row = connection.execute(
