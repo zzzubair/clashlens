@@ -604,25 +604,18 @@ def _stored_day(
     }
 
 
-def test_recorded_battles_give_a_finished_net_and_a_net_so_far() -> None:
+def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
     now = datetime(2026, 10, 3, 19, 0, tzinfo=UTC)
-    # Prodigi's Day 24: no start-of-day check, but all 8 attacks and defenses.
-    day_24 = _stored_day(
-        datetime(2026, 9, 30, 5, 0, tzinfo=UTC),
-        [40] * 7 + [20],
-        [-40] * 7 + [-31],
-        ["missing_start_battle_log_baseline", "missing_start_baseline"],
-    )
-    screen = _screen_daily_log_with_events(day_24, "high", now)
-    assert screen["battles_complete"] is True
-    assert screen["net_trophy_change"] == 300 - 311 == -11
-
     # Prodigi's Day 27, in progress: the net so far is left to the page.
     day_27 = _stored_day(
         datetime(2026, 10, 3, 5, 0, tzinfo=UTC),
         [40] * 7 + [15],
         [-40, -40, -40, -19],
-        ["missing_end_battle_log_baseline", "automatic_defense_basis_unavailable"],
+        [
+            "missing_end_battle_log_baseline",
+            "automatic_defense_basis_unavailable",
+            "player_not_eligible",
+        ],
     )
     screen = _screen_daily_log_with_events(day_27, "high", now)
     assert screen["battles_complete"] is True
@@ -630,33 +623,23 @@ def test_recorded_battles_give_a_finished_net_and_a_net_so_far() -> None:
     assert screen["net_trophy_change"] is None
 
     unknown = [
-        # Battles may be missing: a gap with fewer than 8 attacks.
-        {
-            **day_24,
-            "attack_count": 7,
-            "attack_gain": 260,
-            "battles": day_24["battles"][1:],
-        },
-        # Fewer than 8 defenses leave the automatic loss unknown.
-        {
-            **day_24,
-            "partial_reasons": ["missing_start_baseline"],
-            "defense_count": 7,
-            "defense_loss": 271,
-            "battles": day_24["battles"][:8] + day_24["battles"][9:],
-        },
+        # A gap today means battles so far may be missing, even with eight.
+        {**day_27, "partial_reasons": ["missing_start_battle_log_baseline"]},
         # The two players' battle logs disagree about a result.
-        {**day_24, "partial_reasons": ["perspective_disagreement"]},
+        {**day_27, "partial_reasons": ["perspective_disagreement"]},
         # The totals do not match the listed battles.
-        {**day_24, "defense_loss": 312},
+        {**day_27, "defense_loss": 140},
+        # A finished day's net comes only from its saved result.
+        _stored_day(
+            datetime(2026, 9, 30, 5, 0, tzinfo=UTC),
+            [40] * 7 + [20],
+            [-40] * 7 + [-31],
+            ["missing_start_baseline"],
+        ),
     ]
     screens = [_screen_daily_log_with_events(day, "high", now) for day in unknown]
-    assert [screen["net_trophy_change"] for screen in screens] == [None] * 4
-    assert not screens[0]["battles_complete"]
-    assert screens[1]["battles_complete"]
-    # A gap today means battles so far may be missing.
-    gap = {**day_27, "partial_reasons": ["missing_start_battle_log_baseline"]}
-    assert not _screen_daily_log_with_events(gap, "high", now)["battles_complete"]
+    assert [screen["battles_complete"] for screen in screens] == [False] * 4
+    assert screens[3]["net_trophy_change"] is None
 
 
 def test_player_screen_ready_limits_season_days_to_current_official_season(

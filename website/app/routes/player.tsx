@@ -966,22 +966,17 @@ interface DayEvidence {
   defenseLoss: number | null;
   attacks: number | null;
   defenses: number | null;
-  battlesComplete?: boolean;
 }
 
 // Only Python's calendar check makes a day current; a saved "Live" state can
 // outlast its day. No saved result proves the Reset settled yet, so a finished
-// day with a number is still provisional. Every battle recorded, with all 8
-// defenses and so no automatic loss, also settles the number.
+// day with a number is still provisional.
 function presentDay(day: DayEvidence, isCurrentDay: boolean) {
   const status = isCurrentDay
     ? "In progress"
     : day.net === null
       ? "Result unknown"
-      : (day.state !== "Complete" ||
-            day.coverage !== "complete" ||
-            day.codes.length > 0) &&
-          !(day.battlesComplete && day.defenses === 8)
+      : day.state !== "Complete" || day.coverage !== "complete" || day.codes.length > 0
         ? "Incomplete"
         : "Provisional result";
   const reasons = dayReasons(day.codes, isCurrentDay, day);
@@ -1089,7 +1084,6 @@ function LegendDay({
       defenseLoss: day.defense.trophyLoss,
       attacks: day.offenseEvents.length,
       defenses: day.defenseEvents.length,
-      battlesComplete: day.battlesComplete,
     },
     isCurrentDay,
   );

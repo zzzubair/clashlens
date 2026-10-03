@@ -264,7 +264,7 @@ export interface RankedDaySummary {
     trophyLoss: number | null;
   };
   trophyChange: number | null;
-  // Python found every battle of the day so far among the recorded ones.
+  // Python found every battle of the day in progress among the recorded ones.
   battlesComplete?: boolean;
   offenseEvents: RankedBattleEvent[];
   defenseEvents: RankedBattleEvent[];

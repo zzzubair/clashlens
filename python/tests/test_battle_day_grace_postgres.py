@@ -466,3 +466,51 @@ def test_a_battle_with_reports_from_two_days_stays_where_it_is(
                 ).fetchone() == (1, 2)
         finally:
             database.close()
+
+
+def test_a_read_after_the_grace_settles_a_day_of_eight_attacks_and_defenses(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _seed_battle_anchor(connection_info, ANCHOR)
+            # No Reset checks. The day before's attack shows the log reaches
+            # back past the start of DAY.
+            rows = [_row(True, DAY - timedelta(hours=1), _opponent(0))]
+            for hour in range(1, 9):
+                rows.append(_row(True, DAY + timedelta(hours=hour), _opponent(hour)))
+                rows.append(
+                    _row(False, DAY + timedelta(hours=hour, minutes=30), _opponent(10 + hour))
+                )
+
+            def published(observed_at: datetime) -> tuple:
+                _save(connection_info, archive_server, processor, TAG, rows, observed_at)
+                job_id = reconciliation_db.enqueue_reconciliation(
+                    database,
+                    player_tag=TAG,
+                    day_start=DAY,
+                    now=DAY,
+                    request_key=observed_at.isoformat(),
+                )
+                assert processor.process_job(job_id, owner="net") is not None
+                with psycopg.connect(connection_info) as connection:
+                    return connection.execute(
+                        """
+                        SELECT attack_count, defense_count, attack_gain,
+                               defense_loss, net_trophy_change
+                        FROM api_player_daily_logs
+                        WHERE ranked_day_start = %s
+                        ORDER BY version DESC LIMIT 1
+                        """,
+                        (DAY,),
+                    ).fetchone()
+
+            # Read 3 minutes after the Reset: a late battle may still come.
+            early = published(NEXT + timedelta(minutes=3))
+            assert early[:2] == (8, 8) and early[4] is None
+            late = published(NEXT + timedelta(minutes=6))
+            assert late[:4] == early[:4]
+            assert late[4] == late[2] - late[3]
+        finally:
+            database.close()

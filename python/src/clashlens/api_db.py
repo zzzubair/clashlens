@@ -549,66 +549,37 @@ def _screen_daily_log_with_events(
     screen_day["offense_events"] = offense_events
     screen_day["defense_events"] = defense_events
     end = day["ranked_day_end"]
-    ended = end is not None and datetime.fromisoformat(end) <= now
-    complete = _recorded_battles_complete(
-        screen_day, offense_events, defense_events, ended=ended
+    in_progress = end is not None and datetime.fromisoformat(end) > now
+    screen_day["battles_complete"] = in_progress and _battles_so_far_complete(
+        screen_day, offense_events, defense_events
     )
-    screen_day["battles_complete"] = complete
-    if (
-        ended
-        and complete
-        and screen_day["net_trophy_change"] is None
-        and len(defense_events) == MAX_DAILY_DEFENSES
-    ):
-        # Eight defenses leave no automatic defense loss at Reset, so the
-        # battles alone give the day's result without its starting trophies.
-        screen_day["net_trophy_change"] = day["attack_gain"] - day["defense_loss"]
     return screen_day
 
 
-# Battle log gaps that may hide battles. Eight attacks and eight defenses is
-# the daily maximum, so a day with both recorded cannot be missing any.
-_BATTLE_GAP_REASONS = frozenset(
-    {
-        "missing_start_battle_log_baseline",
-        "missing_end_battle_log_baseline",
-        "battle_log_stale_window",
-        "battle_log_overlap_gap",
-        "battle_log_row_gap",
-        "battle_log_row_count_exceeds_fifty",
-        "unclassified_rows",
-    }
-)
-# Missing trophy readings and the automatic defense loss do not change what
-# the recorded battles add up to.
+# Missing trophy and profile readings, the battle log check after Reset that
+# a day in progress cannot have yet, and the automatic defense loss do not
+# change what the recorded battles add up to.
 _BATTLE_SUM_NEUTRAL_REASONS = frozenset(
     {
         "missing_start_baseline",
         "start_baseline_incomplete",
         "missing_end_baseline",
         "end_baseline_incomplete",
+        "missing_end_battle_log_baseline",
         "automatic_defense_basis_unavailable",
+        "player_not_eligible",
     }
 )
 
 
-def _recorded_battles_complete(
+def _battles_so_far_complete(
     screen_day: dict[str, Any],
     offense: list[dict[str, Any]],
     defense: list[dict[str, Any]],
-    *,
-    ended: bool,
 ) -> bool:
     """Whether the listed battles are every battle of the day so far."""
-    reasons = set(screen_day["uncertainty_reasons"])
-    if not ended:
-        # A day in progress has no battle log check after its Reset yet.
-        reasons.discard("missing_end_battle_log_baseline")
-    allowed = _BATTLE_SUM_NEUTRAL_REASONS
-    if len(offense) == MAX_DAILY_ATTACKS and len(defense) == MAX_DAILY_DEFENSES:
-        allowed = allowed | _BATTLE_GAP_REASONS
     return (
-        reasons <= allowed
+        set(screen_day["uncertainty_reasons"]) <= _BATTLE_SUM_NEUTRAL_REASONS
         and screen_day["attack_count"] == len(offense) <= MAX_DAILY_ATTACKS
         and screen_day["defense_count"] == len(defense) <= MAX_DAILY_DEFENSES
         and screen_day["attack_gain"] == sum(item["trophy_change"] for item in offense)

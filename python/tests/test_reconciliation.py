@@ -628,3 +628,83 @@ def test_ranked_day_battle_events_can_be_empty() -> None:
         )
         == []
     )
+
+
+def test_a_finished_day_with_eight_attacks_and_defenses_is_settled_by_a_late_read() -> (
+    None
+):
+    battles = (
+        *(BattleContribution(f"a{n}", "offense", 40) for n in range(7)),
+        BattleContribution("a7", "offense", 20),
+        *(BattleContribution(f"d{n}", "defense", 40) for n in range(7)),
+        BattleContribution("d7", "defense", 31),
+    )
+    ninth = BattleContribution("a8", "offense", 10)
+
+    def read(**overrides) -> CoverageObservation:
+        values = {
+            "observed_at": DAY.end + timedelta(minutes=5),
+            "row_count": 18,
+            "battle_identities": ("older", *(b.battle_identity for b in battles)),
+            "has_row_gap": False,
+            "observation_id": 200,
+            "earliest_battle_at": DAY.start - timedelta(hours=1),
+        }
+        values.update(overrides)
+        return CoverageObservation(**values)
+
+    # Prodigi's Day 24: no Reset checks, so no trophy readings and no proof
+    # the player was in Legend I, and an unreadable row in another read.
+    day = {
+        "now": DAY.end + timedelta(hours=1),
+        "start_baseline_id": None,
+        "end_baseline_id": None,
+        "start_trophies": None,
+        "next_start_trophies": None,
+        "start_baseline_battle_log_observation_id": None,
+        "end_baseline_battle_log_observation_id": None,
+        "contributions": battles,
+        "player_eligible": False,
+        "malformed_evidence": True,
+        "day_end_battle_log": read(),
+    }
+    result = reconcile_ranked_day(_input(**day))
+    assert result.net_trophy_change == 300 - 311
+    assert result.state == "Malformed"
+    assert "player_not_eligible" in result.failure_reasons
+    assert result.input_evidence["battle_sum_observation_id"] == 200
+
+    # A ninth attack in the read counts too.
+    nine = reconcile_ranked_day(
+        _input(
+            **{
+                **day,
+                "contributions": (*battles, ninth),
+                "day_end_battle_log": read(
+                    battle_identities=(*read().battle_identities, "a8")
+                ),
+            }
+        )
+    )
+    assert nine.net_trophy_change == 310 - 311
+
+    unknown = [
+        # No read after the Reset plus the 5-minute grace.
+        {"day_end_battle_log": None},
+        {"day_end_battle_log": read(observed_at=DAY.end + timedelta(minutes=3))},
+        # The read does not reach back to the start of the day.
+        {"day_end_battle_log": read(earliest_battle_at=DAY.start + timedelta(minutes=9))},
+        {"day_end_battle_log": read(has_row_gap=True)},
+        {"day_end_battle_log": read(malformed_row_count=1)},
+        # A recorded battle is missing from the read.
+        {"contributions": (*battles, ninth)},
+        # Seven defenses leave the automatic defense loss unknown.
+        {"contributions": battles[:-1]},
+        {"perspective_disagreement": True},
+        # The day is still in progress.
+        {"now": DAY.end - timedelta(hours=1)},
+    ]
+    assert [
+        reconcile_ranked_day(_input(**{**day, **change})).net_trophy_change
+        for change in unknown
+    ] == [None] * len(unknown)

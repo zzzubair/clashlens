@@ -1000,7 +1000,8 @@ describe("player day honesty", () => {
       trophyChange,
     }));
 
-  // Prodigi's Day 24: no start-of-day check, but 8 attacks and 8 defenses.
+  // Prodigi's Day 24: no start-of-day check, but 8 attacks and 8 defenses,
+  // so Python saved the net the battles add up to.
   const DAY_24: RankedDaySummary = {
     ...ENDED_DAY,
     dayNumber: 24,
@@ -1008,7 +1009,6 @@ describe("player day honesty", () => {
     offense: { attacks: 8, threeStars: 7, trophyGain: 300 },
     defense: { defenses: 8, threeStarsAgainst: 3, trophyLoss: 311 },
     trophyChange: -11,
-    battlesComplete: true,
     offenseEvents: battles(
       "a24",
       "2026-09-30T05:00:00Z",
@@ -1022,19 +1022,12 @@ describe("player day honesty", () => {
     uncertainty: ["missing_start_battle_log_baseline", "missing_start_baseline"],
   };
 
-  it("calls a day with every battle and 8 defenses a provisional result", async () => {
+  it("shows a finished day's saved net with what is still missing", async () => {
     const row = dayHtml(await page([DAY_24]), "2026-09-30");
     expect(row).toMatch(net("-11"));
-    expect(row).toContain("Provisional result");
-    expect(row).not.toContain("Result unknown");
+    expect(row).toContain("Incomplete");
+    expect(row).not.toContain("so far");
     expect(row).toContain("The battle log was not checked at the start of this day.");
-
-    const sevenDefenses = {
-      ...DAY_24,
-      defense: { ...DAY_24.defense, defenses: 7 },
-      defenseEvents: DAY_24.defenseEvents.slice(1),
-    };
-    expect(dayHtml(await page([sevenDefenses]), "2026-09-30")).toContain("Incomplete");
   });
 
   it("shows today's net so far only when every battle so far is recorded", async () => {

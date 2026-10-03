@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from itertools import pairwise
 from typing import Any
 
-from .domain import RankedDay
+from .domain import RankedDay, battle_window
 from .profile import ProfileParseError, normalize_player_tag
 
 # Version 3 freezes the selected battle-event projection (including the source
@@ -38,6 +38,8 @@ class CoverageObservation:
     parser_version: str | None = None
     processing_version: str | None = None
     source_row_ids: tuple[int, ...] = ()
+    # Timestamp of the oldest battle in the read; None when no row has one.
+    earliest_battle_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +130,9 @@ class ReconciliationInput:
     perspective_disagreement: bool = False
     malformed_evidence: bool = False
     unclassified_evidence: bool = False
+    # The player's first battle-log read taken at or after the day's end plus
+    # the 5-minute grace, so it holds any late or ninth attack of the day.
+    day_end_battle_log: CoverageObservation | None = None
     start_baseline_evidence: dict[str, Any] = field(default_factory=dict)
     end_baseline_evidence: dict[str, Any] = field(default_factory=dict)
     parser_version: str | None = None
@@ -363,6 +368,23 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # useful to consumers that only inspect the shield evidence state.
         shield_evidence.setdefault("unknown_reason", "coverage_incomplete")
 
+    input_evidence = _input_evidence(
+        data,
+        coverage_evidence=coverage_evidence,
+        contribution_evidence=contribution_evidence,
+    )
+    if net_trophy_change is None and not inconsistent_evidence:
+        settling_read = _read_holding_every_battle(data, contributions)
+        if (
+            settling_read is not None
+            and attack_count >= MAX_DAILY_ATTACKS
+            and defense_count >= MAX_DAILY_DEFENSES
+        ):
+            # At least 8 defenses leave no automatic defense loss, so the
+            # recorded battles alone give the day's result.
+            net_trophy_change = attack_gain - defense_loss
+            input_evidence["battle_sum_observation_id"] = settling_read.observation_id
+
     unique_failures = tuple(dict.fromkeys(failures))
     state = "Partial"
     if malformed_evidence:
@@ -417,12 +439,34 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             residual=residual,
         ),
         shield_evidence=shield_evidence,
-        input_evidence=_input_evidence(
-            data,
-            coverage_evidence=coverage_evidence,
-            contribution_evidence=contribution_evidence,
-        ),
+        input_evidence=input_evidence,
     )
+
+
+def _read_holding_every_battle(
+    data: ReconciliationInput, contributions: tuple[BattleContribution, ...]
+) -> CoverageObservation | None:
+    """The day-end read, when it reaches back before the day and lists every
+    recorded battle, so no battle of the day can be missing from them."""
+    read = data.day_end_battle_log
+    day_start, day_end = battle_window(data.ranked_day.start)
+    if (
+        read is None
+        or read.observed_at < day_end
+        or not read.valid
+        or read.has_row_gap
+        or read.stale_window
+        or read.malformed_row_count
+        or read.unclassified_row_count
+        or read.earliest_battle_at is None
+        or read.earliest_battle_at >= day_start
+    ):
+        return None
+    if not {item.battle_identity for item in contributions} <= set(
+        read.battle_identities
+    ):
+        return None
+    return read
 
 
 def _result(
