@@ -353,6 +353,13 @@
   background: color-mix(in srgb, var(--cl-panel) 55%, transparent);
   border-left-color: var(--cl-border);
   border-style: dashed;
+  align-items: center;
+  color: var(--cl-muted);
+  font-size: 0.8125rem;
+}
+.player-page .table-note {
+  display: block;
+  color: var(--cl-muted);
 }
 /* Analytics query bar and results */
 .analytics-page .hero {

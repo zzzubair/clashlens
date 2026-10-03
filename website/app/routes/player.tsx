@@ -771,6 +771,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           <thead>
             <tr>
               <th scope="col">Day</th>
+              <th scope="col">Status</th>
               <th scope="col">Start</th>
               <th scope="col">Attack</th>
               <th scope="col">Defense</th>
@@ -782,21 +783,34 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
             </tr>
           </thead>
           <tbody>
-            {summary.dailyEntries.map((day) => (
-              <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
-                <td>{day.dayNumber ?? "Unknown"}</td>
-                <td>{formatCount(day.startTrophies)}</td>
-                <td>{formatSigned(day.attackGain)}</td>
-                <td>
-                  {day.defenseLoss === null ? "Unknown" : formatSigned(-day.defenseLoss)}
-                </td>
-                <td>{formatSigned(day.netChange)}</td>
-                <td>{formatCount(day.endTrophies)}</td>
-                <td>{formatCount(day.attacks)}</td>
-                <td>{formatCount(day.defenses)}</td>
-                <td>{formatAdjustment(day)}</td>
-              </tr>
-            ))}
+            {summary.dailyEntries.map((day) => {
+              const status = dayStatus(day.netChange, day.state, day.coverage, false);
+              return (
+                <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
+                  <td>{day.dayNumber ?? "Unknown"}</td>
+                  <td>
+                    {status}
+                    {dayNotes(day.flags, day.state, status, false).map((reason) => (
+                      <small className="table-note" key={reason}>
+                        {reason}
+                      </small>
+                    ))}
+                  </td>
+                  <td>{formatCount(day.startTrophies)}</td>
+                  <td>{formatSigned(day.attackGain)}</td>
+                  <td>
+                    {day.defenseLoss === null
+                      ? "Unknown"
+                      : formatSigned(-day.defenseLoss)}
+                  </td>
+                  <td>{formatSigned(day.netChange)}</td>
+                  <td>{formatCount(day.endTrophies)}</td>
+                  <td>{formatCount(day.attacks)}</td>
+                  <td>{formatCount(day.defenses)}</td>
+                  <td>{formatAdjustment(day)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -882,11 +896,15 @@ function isCurrentDay(player: PlayerPage | null, day: RankedDaySummary): boolean
 // Only Python's calendar check makes a day current; a saved "Live" state can
 // outlast its day. No saved result proves the Reset settled yet, so a finished
 // day with a number is still provisional.
-function dayStatus(day: RankedDaySummary, isCurrentDay: boolean): string {
+function dayStatus(
+  net: number | null,
+  state: string,
+  coverage: string,
+  isCurrentDay: boolean,
+): string {
   if (isCurrentDay) return "In progress";
-  if (day.trophyChange === null) return "Result unknown";
-  if (day.state !== "Complete" || day.completeness.state !== "complete")
-    return "Incomplete";
+  if (net === null) return "Result unknown";
+  if (state !== "Complete" || coverage !== "complete") return "Incomplete";
   return "Provisional result";
 }
 
@@ -922,6 +940,14 @@ const REASON_TEXT: Record<string, string> = {
   "ranked_day_state:Inconsistent": "The evidence for this day conflicts.",
   "ranked_day_state:Malformed": "Some saved evidence for this day could not be read.",
   battle_event_projection_incomplete: "Not every recorded battle is listed for this day.",
+  detailed_boundaries_unavailable:
+    "Detailed start and end readings for this day were not saved.",
+  ranked_version_missing: "Some saved evidence for this day could not be read.",
+  malformed_battle_entries: "Some saved evidence for this day could not be read.",
+  ranked_version_mismatch: "The evidence for this day conflicts.",
+  attack_star_total_mismatch: "Recorded attacks do not match the day's attack count.",
+  defense_star_total_mismatch: "Recorded defenses do not match the day's defense count.",
+  truncated_reasons: "More reasons were saved than can be shown.",
 };
 const ENDING_REASONS = new Set([
   "missing_end_battle_log_baseline",
@@ -941,6 +967,22 @@ function dayReasons(codes: string[], isCurrentDay: boolean): string[] {
   return [...new Set(reasons)];
 }
 
+function dayNotes(
+  codes: string[],
+  state: string,
+  status: string,
+  isCurrentDay: boolean,
+): string[] {
+  const reasons = dayReasons(codes, isCurrentDay);
+  if (codes.length === 0 && status === "Incomplete")
+    reasons.push(
+      state === "Live"
+        ? "Final evidence for this day has not been processed yet."
+        : "Some daily evidence is unavailable.",
+    );
+  return reasons;
+}
+
 function LegendDay({
   day,
   inSeason,
@@ -954,14 +996,13 @@ function LegendDay({
 }) {
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
-  const status = dayStatus(day, isCurrentDay);
-  const reasons = dayReasons(day.uncertainty, isCurrentDay);
-  if (day.uncertainty.length === 0 && status === "Incomplete")
-    reasons.push(
-      day.state === "Live"
-        ? "Final evidence for this day has not been processed yet."
-        : "Some daily evidence is unavailable.",
-    );
+  const status = dayStatus(
+    day.trophyChange,
+    day.state,
+    day.completeness.state,
+    isCurrentDay,
+  );
+  const reasons = dayNotes(day.uncertainty, day.state, status, isCurrentDay);
   const battleNet = battleTrophyChange(day);
   return (
     <details
@@ -1155,7 +1196,12 @@ function BattleColumn({
               aria-label={`${title.slice(0, -1)} ${index + 1} not recorded`}
               className="battle-slot battle-slot-empty"
               key={`empty-${index}`}
-            />
+            >
+              <span className="battle-number" aria-hidden="true">
+                {index + 1}
+              </span>
+              <span aria-hidden="true">Not recorded</span>
+            </li>
           );
         })}
       </ol>

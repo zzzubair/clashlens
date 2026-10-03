@@ -884,6 +884,8 @@ describe("player day honesty", () => {
     expect(today).toContain("Ending evidence arrives after Reset.");
     expect(today).toContain("Trophies at the start of this day were not recorded.");
     expect(today).toContain('aria-label="Attack 1 not recorded"');
+    expect(today).toContain('aria-hidden="true">Not recorded</span>');
+    expect(today.match(/>Not recorded</g)).toHaveLength(16);
     expect(html).toContain('id="legend-day-2026-10-03" open=""');
 
     const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };
@@ -918,6 +920,64 @@ describe("player day honesty", () => {
     const row = dayHtml(await page([complete]), "2026-10-02");
     expect(row).toContain("Provisional result");
     expect(row).toMatch(net("\\+26"));
+  });
+
+  it("labels saved-season days with the same statuses and plain reasons", async () => {
+    const entry = {
+      dayNumber: 1,
+      period: "2026-05-01T05:00:00Z – 2026-05-02T05:00:00Z",
+      startTrophies: 6000,
+      endTrophies: 6026,
+      attackGain: 310,
+      defenseLoss: 284,
+      netChange: 26,
+      attacks: 8,
+      defenses: 8,
+      state: "Complete",
+      coverage: "complete",
+      hasAdjustment: false,
+      adjustmentTotal: null,
+      flags: [],
+    };
+    const html = await renderRoute(
+      {
+        requestedTag: TAG,
+        player: PLAYER,
+        error: null,
+        refreshStatus: null,
+        refreshError: null,
+        noJsIdempotencyKey: "test-idempotency-key",
+        lookup: { tag: TAG, state: "tracking" },
+        lookupError: null,
+        seasons: SEASONS,
+        selectedSeason: SEASON,
+        historical: {
+          ...SUMMARY,
+          dailyEntries: [
+            entry,
+            {
+              ...entry,
+              dayNumber: 2,
+              state: "Partial",
+              coverage: "partial",
+              flags: ["missing_end_baseline", "attack_star_total_mismatch"],
+            },
+            { ...entry, dayNumber: 3, netChange: null, flags: [] },
+          ],
+        },
+        historicalError: null,
+      },
+      `?season=${SEASON}`,
+    ).then((value) => value.replaceAll("<!-- -->", ""));
+    const rows = html.split("<tbody>")[1].split("</tbody>")[0].split("</tr>");
+    expect(rows[0]).toContain("<td>Provisional result</td>");
+    expect(rows[1]).toContain("Incomplete");
+    expect(rows[1]).toContain("Trophies at the end of this day were not recorded.");
+    expect(rows[1]).toContain(
+      "Recorded attacks do not match the day&#x27;s attack count.",
+    );
+    expect(rows[1]).not.toContain("missing_end_baseline");
+    expect(rows[2]).toContain("Result unknown");
   });
 
   it("shows the received warnings instead of a late-tracking explanation", async () => {
