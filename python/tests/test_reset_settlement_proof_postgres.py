@@ -190,6 +190,41 @@ def test_dependency_arriving_last_and_newest_first_give_same_verdict(
     assert len(set(verdicts.values())) == 1
 
 
+def test_a_battle_log_rechecks_an_unusable_battle_report(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            with psycopg.connect(connection_info) as connection:
+                # The check was judged while a battle's reports still disagreed.
+                connection.execute(
+                    "UPDATE reset_boundary_settlements SET state = 'unresolved',"
+                    " selected_trophies = NULL, proof_kind = NULL,"
+                    " reasons = '[\"battle_report_unusable\"]' WHERE boundary_at = %s",
+                    (RESET,),
+                )
+                newer = dict(connection.execute(
+                    "SELECT endpoint, id FROM collector_observations"
+                    " WHERE response_completed_at IN (%s, %s)",
+                    (RESET + 36 * MINUTE, RESET + 40 * MINUTE),
+                ).fetchall())
+                # A profile cannot change a battle report; a battle log can.
+                reset_settlement.refresh_for_observation(database, connection, newer["profile"])
+                assert connection.execute(VERDICT, (RESET,)).fetchone()[2] == [
+                    "battle_report_unusable"]
+                reset_settlement.refresh_for_observation(
+                    database, connection, newer["battle_log"])
+                assert connection.execute(VERDICT, (RESET,)).fetchone()[:3] == (
+                    "settled", scenario["target"], [])
+        finally:
+            database.close()
+
+
 def test_switch_off_keeps_the_candidate_and_never_suppresses_invalidation(
     database_url: str, archive_server, monkeypatch
 ) -> None:
@@ -329,11 +364,17 @@ def test_terminal_work_refresh_and_fence_use_dependency_days(
                 assert len(blocking.get("reset_settlement_checks", [])) == 2
                 assert "reset_settlement_checks" not in close_blockers(
                     connection, "season", recent + DAY, recent + 2 * DAY)
-                # A finished check with nothing saved still holds its days
-                # until it is judged.
-                assert len(close_blockers(
-                    connection, "season", RESET - 2 * DAY, RESET - DAY + timedelta(seconds=1)
-                ).get("reset_settlement_checks", [])) == 1
+                # A finished check with nothing saved, or any other still
+                # provisional one, holds its days; a judged candidate does not.
+                for reasons, held in (([], 1), (["early_reading_pending"], 1),
+                                      (["new_reset_proofs_disabled"], 0)):
+                    connection.execute(
+                        "UPDATE reset_boundary_settlements SET reasons = %s::jsonb"
+                        " WHERE boundary_at = %s", (json.dumps(reasons), RESET))
+                    assert len(close_blockers(
+                        connection, "season", RESET - 2 * DAY, RESET - DAY + timedelta(seconds=1)
+                    ).get("reset_settlement_checks", [])) == held
+                connection.rollback()
 
             # Finalizing the ended day's Season freezes the verdict.
             with psycopg.connect(connection_info) as connection:
@@ -391,14 +432,18 @@ def test_reset_profile_waits_for_the_publication_lock_before_its_reset_lock(
     monkeypatch.setenv(SWITCH, "true")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         scenario = _scenario(connection_info, archive_server)
-        _process(connection_info, archive_server, [scenario["early_log"]])
-        database, _ = _processor(connection_info, archive_server)
+        database, processor = _processor(connection_info, archive_server)
+
+        def outcome(job: str) -> str:
+            result = processor.process_job(scenario[job], owner=job)
+            return result.outcome if result is not None else "unclaimed"
+
         try:
+            assert outcome("early_log") == "processed"
             with psycopg.connect(connection_info) as late_log, ThreadPoolExecutor(1) as pool:
                 # A late battle log's army refresh holds the Reset's publication lock.
                 lock_boundary_publication(late_log, RESET)
-                profile = pool.submit(_process, connection_info, archive_server,
-                                      [scenario["early_profile"]])
+                profile = pool.submit(outcome, "early_profile")
                 deadline = time.monotonic() + 30
                 while not late_log.execute(
                     "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
@@ -407,9 +452,13 @@ def test_reset_profile_waits_for_the_publication_lock_before_its_reset_lock(
                     time.sleep(0.05)
                 # The waiting Reset profile holds no Reset lock, so the late
                 # log can still re-judge the Reset instead of deadlocking.
+                assert late_log.execute(
+                    "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"reset-settlement:{scenario['player']}:{RESET.isoformat()}",),
+                ).fetchone()[0]
                 late_log.execute("SET LOCAL lock_timeout = '5s'")
                 reset_settlement.refresh_boundary(database, late_log, scenario["player"], RESET)
                 late_log.commit()
-                profile.result(timeout=60)
+                assert profile.result(timeout=60) == "processed"
         finally:
             database.close()

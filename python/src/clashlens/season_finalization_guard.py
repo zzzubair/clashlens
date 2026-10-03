@@ -138,8 +138,7 @@ _CHECKS = {
           AND settlement.boundary_at - interval '2 days' < %(season_end)s
           AND (work.status NOT IN ('complete', 'failed', 'cancelled')
                OR (settlement.state = 'provisional'
-                   AND (settlement.reasons = '[]'::jsonb
-                        OR settlement.reasons ? 'settlement_check_pending'))
+                   AND settlement.reasons <> '["new_reset_proofs_disabled"]'::jsonb)
                OR EXISTS (
                    SELECT 1 FROM collector_observations AS observed
                    WHERE observed.id IN (work.profile_observation_id,

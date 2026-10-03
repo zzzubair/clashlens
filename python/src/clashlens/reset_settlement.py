@@ -504,11 +504,11 @@ def refresh_for_observation(
 
     A named check's own responses always count. Any other response of the
     player, or of an opponent in its battles, from up to three days after a
-    Reset, re-judges only a Reset whose check finished and that is settled,
-    passed every guard, or met a later profile that disagreed or was not
-    processed: later evidence can
-    only take proof away from the rest, and they are re-judged in full when
-    the previous Reset's verdict changes.
+    Reset, re-judges only a finished check that is settled, passed every
+    guard, or met a later profile that disagreed or was not processed; a
+    battle log also re-judges one with an unusable report. Later evidence can only
+    take proof away from the rest; they are re-judged in full when the
+    previous Reset's verdict changes.
     """
     if not _has_settlements(database, connection):
         return
@@ -524,7 +524,7 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
     rows = connection.execute(
         """
         WITH observed AS (
-            SELECT id, player_id, response_completed_at AS at
+            SELECT id, player_id, endpoint, response_completed_at AS at
             FROM collector_observations WHERE id = %s
         ), affected AS (
             SELECT player_id FROM observed WHERE player_id IS NOT NULL
@@ -548,7 +548,9 @@ def _observation_resets(connection: Any, observation_id: int | None) -> list[tup
            OR (work.status IN ('complete', 'failed', 'cancelled') AND (
                   settlement.state = 'settled'
                   OR settlement.reasons <@ '["new_reset_proofs_disabled"]'::jsonb
-                  OR settlement.reasons ?| array['later_profile_contradicts', 'later_profile_unprocessed']))
+                  OR settlement.reasons ?| array['later_profile_contradicts', 'later_profile_unprocessed']
+                  OR (settlement.reasons ? 'battle_report_unusable'
+                      AND observed.endpoint = 'battle_log')))
         ORDER BY settlement.boundary_at, settlement.player_id
         """,
         (observation_id,),
