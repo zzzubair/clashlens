@@ -148,16 +148,17 @@ per second; threads still use the ordinary claim query when it has no candidate.
 That query measured about 4 ms when it found nothing, so idle claims stay per
 thread.
 
-The running worker with more than one thread has no batches and ignores
-`--max-jobs`. Each thread keeps claiming until the worker stops; a thread that
-finds the queue empty or the spool unreadable waits `--poll-interval-seconds`
-and tries again, so one long job never leaves the other threads idle. Queue
-maintenance and the Reset publication checks run on their own timer thread
-every 10 seconds, with their own two database connections, so they neither
+With `--run-forever` and more than one thread, the worker has no batches and
+ignores `--max-jobs`. Each thread keeps claiming until the worker stops; a
+thread that finds the queue empty or the spool unreadable waits
+`--poll-interval-seconds` and tries again, so one long job never leaves the
+other threads idle. Queue maintenance and the Reset publication checks run on
+their own timer thread every 10 seconds while the spool is readable, with
+their own two database connections, so they neither
 wait for a job or a connection nor hold one a thread needs. A failed
 round is logged as `worker_maintenance` with only its error type and retried
-10 seconds later. A single-thread worker still claims `--max-jobs` jobs per
-batch and runs maintenance between batches.
+10 seconds later. Any other worker still claims `--max-jobs` jobs per batch
+and runs maintenance between batches.
 
 A job holds a lock on its queue row from the start of its work until it
 commits. Claims and maintenance skip locked rows, so the
