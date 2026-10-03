@@ -54,6 +54,8 @@ FINISHED_SETTLE = timedelta(minutes=15)
 # without the battle log, so their page and Live Leaderboard entry, stale after
 # 10 minutes, stay fresh even when a check starts a minute or two late.
 FINISHED_RECHECK = timedelta(minutes=8)
+# Regular checks stop this long before each Reset, at 04:55 UTC.
+ADMISSION_CLOSE = timedelta(minutes=5)
 # Players whose tag's SHA-256 starts with a byte below this (13/256, about 5%)
 # fetch both responses on every check. Comparing them with everyone else
 # measures how much later battle details appear. The same group in SQL:
@@ -199,8 +201,8 @@ class BattleLogSchedule:
     ) -> datetime | None:
         """When a Clasher who finished the Legend day needs the next check.
 
-        That is FINISHED_RECHECK later, or the next Reset if sooner, when the
-        last saved battle log shows exactly 8 valid attacks and 8 valid
+        That is FINISHED_RECHECK later, unless that reaches the 04:55 close of
+        regular checks before the next Reset, when the last saved battle log shows exactly 8 valid attacks and 8 valid
         defenses on the Legend day of `now`, with no malformed rows; this
         check's profile was usable; no battle-log fetch is owed, so the profile
         did not change since the previous check; and the last battle is at
@@ -210,7 +212,10 @@ class BattleLogSchedule:
         if not profile_usable or player is None or player.owed > 0:
             return None
         reset = _next_reset(player, now)
-        return None if reset is None else min(now + FINISHED_RECHECK, reset)
+        until = now + FINISHED_RECHECK
+        if reset is None or until >= reset - ADMISSION_CLOSE:
+            return None
+        return until
 
 
 def _next_reset(player: _Player, now: datetime) -> datetime | None:

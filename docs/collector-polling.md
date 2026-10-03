@@ -379,8 +379,8 @@ pause lasts, plus at most three more failed runs of each Reset work row.
 
 A Clasher has at most 8 attacks and 8 defenses a Legend day, so after both
 their battles and trophies cannot change until the next Reset. Such a player's
-regular checks then fetch only the profile, once every 8 minutes, or at the
-next Reset if that is sooner, when all of these hold:
+regular checks then fetch only the profile, once every 8 minutes, when all
+of these hold:
 
 - the last saved battle log shows exactly 8 valid attacks and 8 valid defenses
   on the current Legend day (each battle on the day of its `battleTimestamp`
@@ -393,7 +393,11 @@ next Reset if that is sooner, when all of these hold:
   2026, trophies changed more than 15 minutes after the 16th battle on 177 of
   40,743 finished days (0.43%), and more than 10 minutes on 506 (1.2%).
 
-The 15-minute safety fetch of the battle log stops for these players. If a
+The 15-minute safety fetch of the battle log stops for these players.
+Players in the control group (about 5%, see above) still fetch the battle
+log on every check. An 8-minute wait that would reach 04:55, when regular
+checks stop, is not taken: the player keeps the 90-second cadence until then,
+so their Live Leaderboard entry does not go stale before the Reset. If a
 later profile does change, the usual battle-log fetches and 90-second
 cadence resume. Eight minutes keeps the player page (stale after 15 minutes)
 and the Live Leaderboard (stale after 10 minutes, with an alert on any stale

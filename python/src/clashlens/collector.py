@@ -280,8 +280,7 @@ class Collector:
                 self.database.defer_regular_check, work.player_id, until
             )
         except (psycopg.Error, PoolTimeout):
-            return  # The player keeps the normal cadence.
-        self._count("finished_for_day")
+            pass  # The player keeps the normal cadence.
 
     def _reserve_endpoints(
         self, endpoints: tuple[str, ...]

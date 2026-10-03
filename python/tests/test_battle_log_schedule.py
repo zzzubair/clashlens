@@ -692,13 +692,27 @@ def test_finished_player_gets_only_a_profile_check_every_8_minutes() -> None:
     assert _recheck_at(state, now) == now + timedelta(minutes=8)
     # No battle can change the log, so even the 15-minute safety fetch stops.
     assert not state.due(TAG, now + timedelta(minutes=20))
-    # The last check before the Reset waits only for the Reset.
-    before_reset = NEXT_RESET - timedelta(minutes=3)
-    assert _recheck_at(state, before_reset) == NEXT_RESET
+    # The last 8-minute wait ends just before regular checks stop at 04:55.
+    last_wait = NEXT_RESET - timedelta(minutes=13, seconds=1)
+    assert _recheck_at(state, last_wait) == last_wait + timedelta(minutes=8)
     # The Reset sweep's log starts the new day with no battles.
     after_reset = NEXT_RESET + timedelta(minutes=20)
     assert _recheck_at(state, after_reset) is None
     assert state.due(TAG, after_reset)
+
+
+@pytest.mark.parametrize("minutes_before_reset", [13, 10, 6])
+def test_finished_player_keeps_the_normal_cadence_until_04_55(
+    minutes_before_reset: int,
+) -> None:
+    state = _Schedule()
+    _finish(state, *_day(START - timedelta(minutes=30)))
+    at = NEXT_RESET - timedelta(minutes=minutes_before_reset)
+
+    # An 8-minute wait would pass 04:55, when regular checks stop, and leave
+    # the Live Leaderboard entry stale before the Reset.
+    assert _recheck_at(state, at) is None
+    assert not state.due(TAG, at)
 
 
 @pytest.mark.parametrize(("attacks", "defenses"), [(7, 8), (8, 7), (9, 8), (8, 9)])
