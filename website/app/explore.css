@@ -207,6 +207,30 @@
   background: var(--cl-paper);
 }
 
+/* Clash Lens profiles get a tint and a label so they never pass for game players. */
+.home-page :is(.search-suggestion-profile, .search-result-profile) {
+  background: var(--cl-panel);
+}
+
+.search-suggestion-profile .search-suggestion-player {
+  flex-wrap: wrap;
+  row-gap: 0.2rem;
+}
+
+.profile-badge {
+  display: inline-block;
+  flex-shrink: 0;
+  padding: 0 0.4rem;
+  color: var(--cl-action-text);
+  border: 1px solid var(--cl-action-border);
+  font-family: var(--cl-font);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.5;
+  vertical-align: 0.1em;
+  white-space: nowrap;
+}
+
 .home-page .search-context {
   color: var(--cl-muted);
 }

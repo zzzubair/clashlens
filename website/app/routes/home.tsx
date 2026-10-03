@@ -300,13 +300,14 @@ function SearchSuggestions({
           {users.map((user) => (
             <li key={`user:${user.username}`}>
               <Link
-                className="search-suggestion"
+                className="search-suggestion search-suggestion-profile"
                 data-testid="search-suggestion"
                 to={`/users/${encodeURIComponent(user.username)}`}
               >
                 <span className="search-suggestion-player">
                   <strong>{user.displayName}</strong>
-                  <small>@{user.username} · Clash Lens</small>
+                  <small>@{user.username}</small>
+                  <span className="profile-badge">Clash Lens profile</span>
                 </span>
                 <span className="search-suggestion-meta">
                   {user.linkedPlayerCount} linked{" "}
@@ -365,13 +366,14 @@ function SearchResults({ search }: { search: SearchResponse }) {
           <ul className="search-result-list">
             {users.map((user) => (
               <li key={user.username}>
-                <div className="search-result">
+                <div className="search-result search-result-profile">
                   <div>
                     <Link
                       className="player-name"
                       to={`/users/${encodeURIComponent(user.username)}`}
                     >
-                      {user.displayName}
+                      {user.displayName}{" "}
+                      <span className="profile-badge">Clash Lens profile</span>
                     </Link>
                     <span className="player-tag">@{user.username}</span>
                   </div>

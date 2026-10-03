@@ -63,6 +63,27 @@ it("keeps the exact player tag link when another player's name matches the tag",
   expect(html).not.toContain('href="/players/%232PY"');
 });
 
+it("labels Clash Lens profiles so they do not look like game players", async () => {
+  const html = await renderHome(
+    {
+      leaderboard: null,
+      query: "Nova",
+      error: null,
+      search: {
+        exactTag: null,
+        users: [{ username: "nova_star", displayName: "Nova", linkedPlayerCount: 2 }],
+        results: [{ tag: "#2PP", name: "Nova", clan: "Test clan", trophies: 5000 }],
+      },
+    },
+    "?q=Nova",
+  );
+  expect(html).toContain('class="search-result search-result-profile"');
+  expect(html).toMatch(
+    /href="\/users\/nova_star"[^>]*>Nova <span class="profile-badge">Clash Lens profile<\/span><\/a>/,
+  );
+  expect(html.match(/profile-badge/g)).toHaveLength(1);
+});
+
 it("formats the tracked total and explains a logout the server could not record", async () => {
   const data = {
     leaderboard: { entries: [], totalTracked: 13263 },
