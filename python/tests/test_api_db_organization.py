@@ -248,6 +248,39 @@ def test_group_update_and_delete_require_the_owning_account(
             database.close()
 
 
+def test_simultaneous_group_creates_naming_one_new_player_all_succeed(
+    database_url: str,
+) -> None:
+    # Failing at once on a busy player is for worker locks. Site requests about
+    # the same player at the same moment wait for each other instead.
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info, min_size=8, max_size=8)
+        try:
+            owner_id = create_owner(database)
+
+            def create(name: str):
+                return api_accounts.create_group(database,
+                    account_binding(
+                        owner_id,
+                        "groups.create",
+                        "/v1/account/groups",
+                        {"name": name, "tags": ["#9QQ"]},
+                    ),
+                    name=name,
+                    normalized_name=name.lower(),
+                    normalized_tags=["#9QQ"],
+                )
+
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                results = list(executor.map(create, [f"Group {n}" for n in range(6)]))
+            assert [result.status_code for result in results] == [201] * 6
+            assert len(api_accounts.list_groups(database, owner_id)) == 6
+        finally:
+            database.close()
+
+
 def test_group_creation_does_not_queue_behind_a_worker_transaction(
     database_url: str,
 ) -> None:

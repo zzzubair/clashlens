@@ -574,6 +574,7 @@ def submit_refresh(
                 return existing
             row = api_db._execute_without_waiting(
                 connection,
+                normalized_tag,
                 """
                 SELECT *
                 FROM clashlens_enqueue_interactive('live_refresh', %s, %s)

@@ -81,6 +81,7 @@ def lock_tag(connection: Any, normalized_tag: str) -> None:
     """Take the per-tag lock the existing enqueue function also takes."""
     api_db._execute_without_waiting(
         connection,
+        normalized_tag,
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
         (normalized_tag,),
     )
@@ -108,6 +109,7 @@ def admit(connection: Any, normalized_tag: str) -> dict[str, Any]:
         if recent is None:
             api_db._execute_without_waiting(
                 connection,
+                normalized_tag,
                 "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
                 (normalized_tag,),
             ).fetchone()

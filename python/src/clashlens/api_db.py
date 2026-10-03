@@ -396,6 +396,7 @@ def _ensure_player(connection: Any, normalized_tag: str) -> int:
     if row is None:
         _execute_without_waiting(
             connection,
+            normalized_tag,
             """
             INSERT INTO players (normalized_tag, active)
             VALUES (%s, false)
@@ -408,8 +409,23 @@ def _ensure_player(connection: Any, normalized_tag: str) -> int:
     return int(row[0])
 
 
-def _execute_without_waiting(connection: Any, query: str, params: Any) -> Any:
+def _lock_api_player(connection: Any, normalized_tag: str) -> None:
+    """Queue behind other site requests for this player, never behind a worker.
+
+    Workers never take this lock, so once it is held, any lock on the player
+    that is still busy belongs to a worker and a no-wait step fails at once.
+    """
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended('api-player:' || %s, 0))",
+        (normalized_tag,),
+    )
+
+
+def _execute_without_waiting(
+    connection: Any, normalized_tag: str, query: str, params: Any
+) -> Any:
     """Run one statement in a transaction, failing instead of waiting for a lock."""
+    _lock_api_player(connection, normalized_tag)
     connection.execute("SET LOCAL lock_timeout = '1ms'")
     cursor = connection.execute(query, params)
     connection.execute(f"SET LOCAL lock_timeout = '{API_LOCK_TIMEOUT}'")
