@@ -629,17 +629,26 @@ def test_recorded_battles_give_the_day_in_progress_a_net_so_far() -> None:
         {**day_27, "partial_reasons": ["perspective_disagreement"]},
         # The totals do not match the listed battles.
         {**day_27, "defense_loss": 140},
-        # A finished day's net comes only from its saved result.
-        _stored_day(
-            datetime(2026, 9, 30, 5, 0, tzinfo=UTC),
-            [40] * 7 + [20],
-            [-40] * 7 + [-31],
-            ["missing_start_baseline"],
-        ),
+        # A finished day without all 8 defenses may have lost later battles.
+        {**day_27, "ranked_day_end": "2026-10-03T06:00:00+00:00"},
     ]
     screens = [_screen_daily_log_with_events(day, "high", now) for day in unknown]
     assert [screen["battles_complete"] for screen in screens] == [False] * 4
-    assert screens[3]["net_trophy_change"] is None
+
+    # Prodigi's Day 24, finished: all 8 of each, so nothing is missing. Its
+    # net comes only from its saved result.
+    day_24 = _stored_day(
+        datetime(2026, 9, 30, 5, 0, tzinfo=UTC),
+        [40] * 7 + [20],
+        [-40] * 7 + [-31],
+        ["missing_start_battle_log_baseline", "missing_start_baseline"],
+    )
+    screen = _screen_daily_log_with_events(day_24, "high", now)
+    assert screen["battles_complete"] is True
+    assert screen["attack_gain"] - screen["defense_loss"] == 300 - 311 == -11
+    assert screen["net_trophy_change"] is None
+    mismatch = {**day_24, "partial_reasons": ["trophy_equation_mismatch"]}
+    assert not _screen_daily_log_with_events(mismatch, "high", now)["battles_complete"]
 
     # All 8 attacks and 8 defenses today: none can be missing, whatever
     # checks were missed, unless a battle is disputed.

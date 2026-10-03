@@ -966,17 +966,39 @@ interface DayEvidence {
   defenseLoss: number | null;
   attacks: number | null;
   defenses: number | null;
+  battlesComplete?: boolean;
 }
+
+// Codes that leave a day's 8 attacks and 8 defenses in doubt, or may hide such a code.
+const BATTLE_DOUBT_CODES = new Set([
+  "perspective_disagreement",
+  "duplicate_contribution_disagreement",
+  "trophy_equation_mismatch",
+  "ranked_version_mismatch",
+  "attack_star_total_mismatch",
+  "defense_star_total_mismatch",
+  "truncated_reasons",
+]);
 
 // Only Python's calendar check makes a day current; a saved "Live" state can
 // outlast its day. No saved result proves the Reset settled yet, so a finished
-// day with a number is still provisional.
+// day with a number is still provisional. A finished day with every battle
+// recorded (all 8 of each) has nothing missing from its number. Python marks
+// this for recent days; saved Season entries carry only their counts and codes.
 function presentDay(day: DayEvidence, isCurrentDay: boolean) {
+  const battlesComplete =
+    day.battlesComplete ??
+    (day.attacks === 8 &&
+      day.defenses === 8 &&
+      !day.codes.some((code) => BATTLE_DOUBT_CODES.has(code)));
   const status = isCurrentDay
     ? "In progress"
     : day.net === null
       ? "Result unknown"
-      : day.state !== "Complete" || day.coverage !== "complete" || day.codes.length > 0
+      : !battlesComplete &&
+          (day.state !== "Complete" ||
+            day.coverage !== "complete" ||
+            day.codes.length > 0)
         ? "Incomplete"
         : "Provisional result";
   const reasons = dayReasons(day.codes, isCurrentDay, day);
@@ -1084,6 +1106,7 @@ function LegendDay({
       defenseLoss: day.defense.trophyLoss,
       attacks: day.offenseEvents.length,
       defenses: day.defenseEvents.length,
+      battlesComplete: day.battlesComplete,
     },
     isCurrentDay,
   );

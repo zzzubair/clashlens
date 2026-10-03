@@ -550,8 +550,15 @@ def _screen_daily_log_with_events(
     screen_day["defense_events"] = defense_events
     end = day["ranked_day_end"]
     in_progress = end is not None and datetime.fromisoformat(end) > now
-    screen_day["battles_complete"] = in_progress and _battles_so_far_complete(
+    # A finished day may have lost battles after its last check unless it
+    # holds all 8 of each, and then its trophy readings must agree with them.
+    screen_day["battles_complete"] = _battles_so_far_complete(
         screen_day, offense_events, defense_events
+    ) and (
+        in_progress
+        or len(offense_events) == MAX_DAILY_ATTACKS
+        and len(defense_events) == MAX_DAILY_DEFENSES
+        and "trophy_equation_mismatch" not in screen_day["uncertainty_reasons"]
     )
     return screen_day
 
