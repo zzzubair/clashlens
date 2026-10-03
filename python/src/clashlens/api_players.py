@@ -17,7 +17,13 @@ from .api_db import (
 )
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
-from .domain import SEASON_DURATION, DomainRuleError, validate_legend_season_start
+from .domain import (
+    SEASON_DURATION,
+    DomainRuleError,
+    ranked_day_for,
+    season_is_current,
+    validate_legend_season_start,
+)
 
 _LEGEND_I_TIER_ID = 105000036
 
@@ -126,7 +132,8 @@ def get_player_page(
                    player.current_observed_at,
                    {metadata_columns},
                    profile.profile_json -> 'clan' ->> 'name',
-                   player.current_profile_confirmed_at
+                   player.current_profile_confirmed_at,
+                   profile.current_league_season_id
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -139,6 +146,9 @@ def get_player_page(
         if row is None:
             return None
         observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
+        # A profile naming an earlier Season shows trophies from before this
+        # player's Season reset, not their total in the current Season.
+        season_reset_pending = not season_is_current(_text(row[12]), now)
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
         daily_rows = connection.execute(
             """
@@ -340,6 +350,14 @@ def get_player_page(
                     "detail": current_day["completeness"]["reason"],
                 }
             )
+        if season_reset_pending:
+            data_quality.append(
+                {
+                    "code": "uncertain",
+                    "label": "Waiting for this player's Season reset",
+                    "detail": "The latest profile still shows trophies from the previous Season. The new total appears once the game reports this player's Season reset.",
+                }
+            )
         if season_anchor_conflict:
             data_quality.append(
                 {
@@ -352,6 +370,8 @@ def get_player_page(
             "tag": _text(row[0]),
             "name": _text(row[3]),
             "trophies": int(row[4]),
+            "season_reset_pending": season_reset_pending,
+            "current_league_season_id": _text(row[12]),
             "eligibility": _text(row[2]),
             "active": bool(row[1]),
             "freshness": "fresh" if age_seconds <= freshness_seconds else "stale",
@@ -558,10 +578,12 @@ def search_known_players(
                 SELECT player.id, player.normalized_tag, profile.name,
                        profile.trophies, player.current_observed_at,
                        player.eligibility_state, player.active,
-                       profile.profile_json -> 'clan' ->> 'name' AS clan
+                       profile.profile_json -> 'clan' ->> 'name' AS clan,
+                       profile.current_league_season_id
                 FROM players AS player
                 JOIN LATERAL (
-                    SELECT name, trophies, source_contract_state, profile_json
+                    SELECT name, trophies, source_contract_state, profile_json,
+                           current_league_season_id
                     FROM player_profile_versions
                     WHERE id = player.current_profile_version_id
                     -- Keep indexed current-profile reads as old versions grow.
@@ -572,7 +594,8 @@ def search_known_players(
                   AND profile.source_contract_state = 'accepted'
             )
             SELECT player.normalized_tag, player.name, player.trophies,
-                   player.current_observed_at, player.eligibility_state, player.clan
+                   player.current_observed_at, player.eligibility_state, player.clan,
+                   player.current_league_season_id
             FROM matches AS player
             -- Scalar subqueries stop after one row and cannot become a hashed
             -- EXISTS subplan that reads the entire history table.
@@ -587,11 +610,18 @@ def search_known_players(
                    OR (SELECT true FROM player_league_history_entries AS history
                        WHERE history.player_id = player.id LIMIT 1))
             -- An exact name match first, then the strongest players.
-            ORDER BY lower(player.name) = lower(%s) DESC, player.trophies DESC,
+            ORDER BY lower(player.name) = lower(%s) DESC,
+                     CASE WHEN player.current_league_season_id = %s
+                          THEN player.trophies END DESC NULLS LAST,
                      lower(player.name), player.normalized_tag
             LIMIT %s
             """,
-            (f"%{escaped_query}%", query, limit),
+            (
+                f"%{escaped_query}%",
+                query,
+                ranked_day_for(now).official_season_id,
+                limit,
+            ),
         ).fetchall()
         results = []
         for row in rows:
@@ -599,12 +629,14 @@ def search_known_players(
             age_seconds = max(
                 0, int((now.astimezone(UTC) - observed_at).total_seconds())
             )
+            pending = not season_is_current(_text(row[6]), now)
             results.append(
                 {
                     "tag": _text(row[0]),
                     "name": _text(row[1]),
                     "clan": None if row[5] is None else _text(row[5]),
-                    "trophies": int(row[2]),
+                    "trophies": None if pending else int(row[2]),
+                    "season_reset_pending": pending,
                     "freshness": (
                         "fresh" if age_seconds <= freshness_seconds else "stale"
                     ),

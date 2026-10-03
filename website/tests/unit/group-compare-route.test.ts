@@ -98,6 +98,17 @@ describe("group comparison", () => {
     expect(comparison?.players[0].vsGroup).toBeNull();
   });
 
+  it("keeps a player waiting for their Season reset without trophies", () => {
+    const waiting = player({ trophies: null, season_reset_pending: true });
+    const players = mapGroupComparison(
+      payload([waiting, player({ tag: "#8PY" })]),
+    )?.players;
+    expect(players?.map((p) => [p.trophies, p.seasonResetPending])).toEqual([
+      [null, true],
+      [5300, false],
+    ]);
+  });
+
   it("rejects a response whose days do not match the requested window", () => {
     expect(mapGroupComparison({ ...payload(), days: 7 })).toBeNull();
     expect(mapGroupComparison(payload([player({ day_results: [] })]))).toBeNull();

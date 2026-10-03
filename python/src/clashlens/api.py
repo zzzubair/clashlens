@@ -480,7 +480,9 @@ def create_app(
         if not q.strip():
             raise ApiError(422, "invalid_request")
         return JSONResponse(
-            content=api_leaderboard.search_live_leaderboard(production_database, q)
+            content=api_leaderboard.search_live_leaderboard(
+                production_database, q, now=current_time()
+            )
         )
 
     @app.get("/v1/leaderboards/{kind}")

@@ -18,7 +18,7 @@ from .db import (
     Database,
     _text_value,
 )
-from .domain import SEASON_ANCHOR_RULE_VERSION, battle_window
+from .domain import SEASON_ANCHOR_RULE_VERSION, battle_window, season_is_current
 
 # Reset work stops collecting at 04:55 UTC the next day, as in the collector.
 RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
@@ -951,7 +951,8 @@ def _load_reset_baseline(
                profile.source_contract_state, {profile_observed},
                battle_log.id, battle_log.row_count, battle_log.has_row_gap,
                profile_observation.response_hash,
-               battle_observation.response_hash
+               battle_observation.response_hash,
+               profile.current_league_season_id
         FROM reset_baseline_evidence AS evidence
         -- Each endpoint is read under the parser version that processed it.
         LEFT JOIN observation_processing_outcomes AS profile_processing
@@ -985,8 +986,15 @@ def _load_reset_baseline(
     profile_accepted = row[15] is not None and _text_value(row[18]) == "accepted"
     profile_eligible = _text_value(row[17]) == "eligible"
     battle_log_valid_evidence = row[20] is not None and not bool(row[22])
+    # A profile read after any Reset that names another Season than the
+    # Reset's own shows trophies from before that player's Season reset.
+    # It stays evidence, but never becomes that Season's starting total.
+    season_reset_pending = row[15] is not None and not season_is_current(
+        _text_value(row[25]), row[14]
+    )
     complete = bool(
-        state == "complete"
+        not season_reset_pending
+        and state == "complete"
         and row[4] is not None
         and profile_valid
         and battle_log_valid
@@ -1038,12 +1046,18 @@ def _load_reset_baseline(
         },
         "stored_evidence": stored_evidence,
     }
+    if season_reset_pending:
+        evidence["season_reset_pending"] = True
     return {
         "id": int(row[0]),
         "version": int(row[1]),
         "state": state,
         "complete": complete,
-        "trophies": int(row[16]) if row[16] is not None else None,
+        "trophies": (
+            int(row[16])
+            if row[16] is not None and not season_reset_pending
+            else None
+        ),
         "eligibility_state": (
             _text_value(row[17]) if row[17] is not None else None
         ),

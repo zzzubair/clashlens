@@ -327,7 +327,10 @@ function SearchSuggestions({
                   <small>{result.tag}</small>
                 </span>
                 <span className="search-suggestion-meta">
-                  {result.clan} · {result.trophies.toLocaleString()}
+                  {result.clan} ·{" "}
+                  {result.trophies === null
+                    ? "Waiting for Season reset"
+                    : result.trophies.toLocaleString()}
                 </span>
               </a>
             </li>
@@ -452,7 +455,11 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
       </div>
       <div className="search-context">
         <span>{result.clan}</span>
-        <span>{result.trophies.toLocaleString()} trophies</span>
+        <span>
+          {result.trophies === null
+            ? "Waiting for this player's Season reset"
+            : `${result.trophies.toLocaleString()} trophies`}
+        </span>
       </div>
     </div>
   );

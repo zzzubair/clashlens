@@ -413,6 +413,10 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       name: payload.name,
       clan: isString(payload.clan) ? payload.clan : "Unknown",
       trophies: payload.trophies,
+      seasonResetPending: payload.season_reset_pending === true,
+      currentLeagueSeasonId: isString(payload.current_league_season_id)
+        ? payload.current_league_season_id
+        : null,
       freshness: {
         state:
           payload.freshness === "fresh" || payload.freshness === "stale"
@@ -452,12 +456,14 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
 // A battle reported in the first 5 minutes after a Reset belongs to the day
 // before it, as BATTLE_DAY_GRACE in python/src/clashlens/domain.py.
 const BATTLE_DAY_GRACE_MS = 5 * 60 * 1000;
+const SEASON_MS = 28 * 24 * 60 * 60 * 1000;
 
 function calculateStartingTrophies(
   days: RankedDaySummary[],
   profile: PlayerPage["profile"],
 ) {
   const observedAt = Date.parse(profile.freshness.observedAt);
+  const profileSeasonStart = Number(profile.currentLeagueSeasonId ?? NaN) * 1000;
   const bounds = (day: RankedDaySummary) => day.period.split(" – ").map(Date.parse);
   const ordered = [...days].sort((a, b) => bounds(b)[0] - bounds(a)[0]);
   let nextDay: RankedDaySummary | undefined;
@@ -489,7 +495,10 @@ function calculateStartingTrophies(
       continue;
     const netChange = day.trophyChange ?? day.offense.trophyGain - day.defense.trophyLoss;
     let trophies: number | undefined;
+    // A profile naming another Season than this day's is not its day total.
     if (
+      start >= profileSeasonStart &&
+      start < profileSeasonStart + SEASON_MS &&
       observedAt >= start &&
       observedAt < end &&
       (day.completeness.state === "complete" ||

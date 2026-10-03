@@ -237,6 +237,13 @@ def is_season_boundary(boundary: datetime) -> bool:
     return ranked_day_for(boundary).season_start == boundary.astimezone(UTC)
 
 
+def season_is_current(profile_season_id: str | None, at: datetime) -> bool:
+    """True when a profile's current league Season is the calendar Season at
+    ``at``. Otherwise its trophies come from before that player's Season reset
+    and are never a total for the calendar Season."""
+    return profile_season_id == ranked_day_for(at).official_season_id
+
+
 def battle_day_for(timestamp: datetime) -> RankedDay:
     """The Legend day a battle report belongs to: reports stamped in the first
     ``BATTLE_DAY_GRACE`` after a Reset belong to the day before it."""

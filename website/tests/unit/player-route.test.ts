@@ -605,6 +605,32 @@ describe("automatic tag lookup", () => {
     expect(html).toContain(result.lookupError!.error.message);
   });
 
+  it.each([false, true])(
+    "shows a player still waiting for their Season reset without an old current total: %s",
+    async (pending) => {
+      const player = {
+        ...PLAYER,
+        profile: { ...PLAYER.profile, trophies: 6400, seasonResetPending: pending },
+      };
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue(player),
+        getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+        getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+      });
+      const result = await playerLoader({
+        request: requestFor(null),
+        params: { tag: TAG },
+      } as never);
+      const html = (await renderRoute(result)).replaceAll("<!-- -->", "");
+      const count = /<strong class="player-trophy-count[^"]*">(.*?)<\/strong>/.exec(html);
+      expect(count?.[1]).toContain(
+        pending ? "Waiting for this player&#x27;s Season reset" : "6,400",
+      );
+      expect(count?.[1].includes("6,400")).toBe(!pending);
+      expect(html.includes("Last saved before the reset: 6,400")).toBe(pending);
+    },
+  );
+
   it.each(
     ["recent", "current", "both"].flatMap((source) =>
       [false, true].map((lookupFailed) => ({ source, lookupFailed })),

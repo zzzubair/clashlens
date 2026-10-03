@@ -64,6 +64,8 @@ export interface TrackedLeaderboard {
   view: "live" | "daily";
   entries: TrackedPlayerEntry[];
   totalTracked: number;
+  /** Tracked players left off the Live board until their profile names this Season. */
+  seasonResetPending?: number;
   totalEntries: number;
   page: number;
   pageSize: number;
@@ -108,7 +110,8 @@ export interface KnownPlayerResult {
   tag: string;
   name: string;
   clan: string;
-  trophies: number;
+  /** Null while the latest profile is from before this player's Season reset. */
+  trophies: number | null;
   freshness: Freshness;
   state: "available" | "stale" | "uncertain";
   context: string;
@@ -128,6 +131,10 @@ export interface PlayerProfile {
   name: string;
   clan: string;
   trophies: number;
+  /** The profile still names an earlier Season, so `trophies` predates this player's Season reset. */
+  seasonResetPending?: boolean;
+  /** The Season the profile names; its trophies count only for that Season's days. */
+  currentLeagueSeasonId?: string | null;
   freshness: Freshness;
   battleHistoryUpdatedAt?: string | null;
   confidence: ConfidenceState;

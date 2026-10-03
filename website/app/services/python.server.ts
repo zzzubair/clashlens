@@ -725,6 +725,7 @@ function mapLeaderboard(
     view,
     entries: entries as TrackedLeaderboard["entries"],
     totalTracked: payload.tracked_population,
+    seasonResetPending: Number(payload.season_reset_pending) || 0,
     totalEntries: payload.total_entries,
     page: payload.page,
     pageSize: payload.page_size,
@@ -759,7 +760,7 @@ function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
       !isRecord(item) ||
       !isCanonicalPlayerTag(item.tag) ||
       !isString(item.name) ||
-      !isInteger(item.trophies) ||
+      !(isInteger(item.trophies) || item.trophies === null) ||
       !isOneOf(item.freshness, ["fresh", "stale"] as const) ||
       !isFiniteNumber(item.age_seconds) ||
       !isString(item.observed_at) ||

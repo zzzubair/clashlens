@@ -42,7 +42,7 @@ from .army_rank_bands import (
 )
 from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
-from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
+from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION, ranked_day_for
 
 
 def get_army_season_summary(
@@ -775,9 +775,11 @@ def get_basic_analytics(
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
+            -- Trophies from before a player's Season reset are left out.
             WHERE player.active = true
+              AND profile.current_league_season_id = %s
             """,
-            (now, freshness_seconds),
+            (now, freshness_seconds, ranked_day_for(now).official_season_id),
         ).fetchone()
         sample_size = int(row[0])
         fresh = int(row[2])

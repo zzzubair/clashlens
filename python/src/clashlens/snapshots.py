@@ -23,6 +23,7 @@ from .db import (
     Database,
     _text_value,
 )
+from .domain import RANKED_DAY_DURATION, ranked_day_for
 
 
 def complete_snapshot(database: Database, claim: Claim) -> None:
@@ -189,6 +190,11 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         "snapshot boundary does not match ranked-day boundary"
                     )
 
+            # A profile naming another Season than the ended day's shows
+            # trophies from before that player's Season reset.
+            ended_season_id = ranked_day_for(
+                boundary_at - RANKED_DAY_DURATION
+            ).official_season_id
             profile_version_ids: dict[int, int] = {}
             if generation_row is None:
                 # Direct snapshots use the newest accepted historical
@@ -200,7 +206,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         SELECT DISTINCT ON (v.player_id)
                                p.id, p.normalized_tag, v.trophies,
                                {profile_observation}, {profile_observed},
-                               v.eligibility_state
+                               v.eligibility_state, v.current_league_season_id
                         FROM player_profile_versions AS v
                         JOIN players AS p ON p.id = v.player_id
                         {profile_effect_join}
@@ -213,9 +219,10 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                            observed_at, eligibility_state
                     FROM accepted_profiles
                     WHERE eligibility_state = 'eligible'
+                      AND current_league_season_id = %s
                     ORDER BY id
                     """,
-                    (boundary_at,),
+                    (boundary_at, ended_season_id),
                 ).fetchall()
             else:
                 manifest_profiles = connection.execute(
@@ -356,7 +363,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 ), latest_accepted AS (
                     SELECT DISTINCT ON (v.player_id)
                            v.player_id, v.trophies, {profile_observed},
-                           v.eligibility_state
+                           v.eligibility_state, v.current_league_season_id
                     FROM player_profile_versions AS v
                     {profile_effect_join}
                     WHERE {profile_observed} <= %s
@@ -386,7 +393,12 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     SELECT k.id,
                            accepted.trophies,
                            accepted.observed_at,
-                           accepted.eligibility_state AS accepted_state,
+                           CASE WHEN accepted.eligibility_state = 'eligible'
+                                     AND accepted.current_league_season_id
+                                         IS DISTINCT FROM %s
+                                THEN 'season_reset_pending'
+                                ELSE accepted.eligibility_state
+                           END AS accepted_state,
                            any_profile.source_contract_state AS any_source_state,
                            job.failure_category
                     FROM known_players AS k
@@ -448,6 +460,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     boundary_at,
                     boundary_at,
                     boundary_at,
+                    ended_season_id,
                     boundary_at,
                     PROFILE_FRESHNESS_SECONDS,
                     boundary_at,

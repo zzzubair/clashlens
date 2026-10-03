@@ -196,6 +196,85 @@ describe("historical player-season client boundary", () => {
     },
   );
 
+  it.each([
+    // October day 1 after the player's Season reset.
+    ["2026-10-05", 1, "1791176400", false, "2026-10-05T20:00:00Z", 5000],
+    // October day 1 still read from a September profile.
+    ["2026-10-05", 1, "1788757200", true, "2026-10-05T20:00:00Z", null],
+    // September day 28 read from a September profile, seen at October 5 05:10.
+    ["2026-10-04", 28, "1788757200", true, "2026-10-04T23:00:00Z", 5000],
+  ])(
+    "uses an in-day profile as a day total only for its own Season: %s day %s",
+    async (date, dayNumber, seasonId, pending, observedAt, expected) => {
+      // A day with all sixteen battles, read before any stored starting total.
+      const event = (id: string, change: number) => ({
+        battle_id: id,
+        battle_timestamp: `${date}T13:00:00Z`,
+        opponent: { tag: "#2PY", name: "Opponent" },
+        stars: 3,
+        destruction_percentage: 100,
+        trophy_change: change,
+      });
+      const day = {
+        ranked_day_start: `${date}T05:00:00Z`,
+        ranked_day_end: new Date(Date.parse(`${date}T05:00:00Z`) + 86_400_000)
+          .toISOString()
+          .replace(".000Z", "Z"),
+        season_day_number: dayNumber,
+        state: "Live",
+        confidence: "partial",
+        completeness: { state: "partial", reason: "No saved reset total." },
+        public_confidence: "partial",
+        uncertainty_reasons: [],
+        start_trophies: null,
+        attack_count: 8,
+        attack_three_star_count: 8,
+        attack_gain: 320,
+        defense_count: 8,
+        defense_three_star_count: 8,
+        defense_loss: 320,
+        net_trophy_change: null,
+        offense_events: Array.from({ length: 8 }, (_, i) => event(`a${i}`, 40)),
+        defense_events: Array.from({ length: 8 }, (_, i) => event(`d${i}`, -40)),
+      };
+      const payload = {
+        tag: "#2PP",
+        name: "Nova",
+        trophies: 5000,
+        season_reset_pending: pending,
+        current_league_season_id: seasonId,
+        observed_at: observedAt,
+        screen_ready: {
+          current_day: day,
+          recent_days: [day],
+          season_days: [day],
+          season: null,
+          data_quality: [],
+          provenance: {
+            source: "test",
+            observed_at: observedAt,
+            freshness: "fresh",
+            confidence: "partial",
+            coverage: "partial",
+            version: "test",
+          },
+        },
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 })),
+      );
+      process.env.NODE_ENV = "test";
+      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+      const { createPythonClient } = await import("../../app/services/python.server");
+      const player = await createPythonClient().getPlayer("#2PP");
+      expect(player.profile.seasonResetPending).toBe(pending);
+      expect(player.currentDay?.startTrophies).toBe(expected);
+      expect(player.seasonDays[0].startTrophies).toBe(expected);
+      expect(player.recentDays[0].startTrophies).toBe(expected);
+    },
+  );
+
   it("maps summarized seasons and one compact season without battle drilldown", async () => {
     const fetchMock = vi
       .fn()

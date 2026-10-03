@@ -96,10 +96,12 @@ object. Its fields are `age_p50_seconds`, `age_p95_seconds`, `age_max_seconds`,
 `older_than_10_minutes`, `entries`, `age_missing_entries`, and
 `sample_timestamp_seconds`. These numbers cover every entry, regardless of
 page size, using the same membership and confirmation rule as the Live
-Leaderboard page. Inactive players, unaccepted or missing profiles, and players
-whose profile was last reported not found are excluded. Age starts at the later
-of the processed profile time and its last unchanged confirmation. Exactly
-600 seconds is fresh; more than 600 seconds contributes to the count.
+Leaderboard page. Inactive players, unaccepted or missing profiles, players
+whose profile was last reported not found, and players still
+[waiting for their Season reset](domain.md#live-leaderboard-ordering) are
+excluded. Age starts at the later of the processed profile time and its last
+unchanged confirmation. Exactly 600 seconds is fresh; more than 600 seconds
+contributes to the count.
 Empty populations have zero counts and null age values. The API samples on
 the first authorized request and at most once every 30 seconds thereafter;
 failed refreshes fail the request. Check the sample timestamp when using either

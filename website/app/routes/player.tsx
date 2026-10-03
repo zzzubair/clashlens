@@ -482,10 +482,22 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           <div className="player-trophy-card">
             <div>
               <span className="metric-label">Current trophies</span>
-              <strong className="player-trophy-count">
-                <span className="trophy-mark" aria-hidden="true" />
-                {trackedPlayer.profile.trophies.toLocaleString()}
-              </strong>
+              {trackedPlayer.profile.seasonResetPending ? (
+                <>
+                  <strong className="player-trophy-count player-reset-pending">
+                    Waiting for this player&apos;s Season reset
+                  </strong>
+                  <span className="player-update-age">
+                    Last saved before the reset:{" "}
+                    {trackedPlayer.profile.trophies.toLocaleString()}
+                  </span>
+                </>
+              ) : (
+                <strong className="player-trophy-count">
+                  <span className="trophy-mark" aria-hidden="true" />
+                  {trackedPlayer.profile.trophies.toLocaleString()}
+                </strong>
+              )}
             </div>
             <PlayerFreshness profile={trackedPlayer.profile} />
           </div>

@@ -217,3 +217,50 @@ it.each([
     } else expect(html).not.toContain("before Reset");
   },
 );
+
+it.each([
+  [13263, "13,263 tracked players are waiting for their Season reset"],
+  [1, "1 tracked player is waiting for their Season reset"],
+  [0, null],
+] as const)(
+  "says how many players wait off the Live board for their Season reset: %s",
+  async (seasonResetPending, text) => {
+    mocks.getTrackedLeaderboard.mockResolvedValue({
+      ...structuredClone(board),
+      entries: [],
+      totalEntries: 0,
+      page: 1,
+      pageCount: 0,
+      hasPrevious: false,
+      sourceObservations: null,
+      seasonResetPending,
+    });
+    const { html } = await render("view=live&page=1");
+    expect(html.includes("waiting for their Season reset")).toBe(text !== null);
+    if (text) expect(html).toContain(text);
+  },
+);
+
+it("describes Daily trophies as values saved before the Reset, even with recent inputs", async () => {
+  const fixture = structuredClone(board);
+  fixture.view = "daily";
+  fixture.seasonResetPending = 40;
+  fixture.daily = {
+    officialSeasonId: "1788757200",
+    dayNumber: 28,
+    resetAt: "2026-10-05T05:00:00Z",
+    seasonStartAt: "2026-09-07T05:00:00Z",
+    seasonEndAt: "2026-10-05T05:00:00Z",
+    previousSnapshot: null,
+    nextSnapshot: null,
+  };
+  fixture.provenance.observedAt = "2026-10-05T04:59:00Z";
+  mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+  const { html } = await render("view=daily&season=1788757200&day=28&page=1");
+  expect(html).toContain('id="leaderboard-title">Day 28 standings</h1>');
+  expect(html).toContain("last value saved before this Reset");
+  expect(html).toContain("7,211");
+  expect(html).not.toContain("These standings are incomplete.");
+  // The Live board's Season-reset rule never applies to a frozen day.
+  expect(html).not.toContain("waiting for their Season reset");
+});

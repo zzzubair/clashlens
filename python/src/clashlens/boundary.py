@@ -20,6 +20,7 @@ from .db import (
     Database,
     _text_value,
 )
+from .domain import RANKED_DAY_DURATION, season_is_current
 
 
 def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
@@ -328,7 +329,8 @@ def _freeze_boundary_manifest(
                        COALESCE(effect.observation_id, profile.observation_id),
                        COALESCE(effect.observed_at, profile.observed_at),
                        profile.profile_json, profile.normalized_tag,
-                       profile.name, profile.trophies, profile.eligibility_state
+                       profile.name, profile.trophies, profile.eligibility_state,
+                       profile.current_league_season_id
                 FROM player_profile_versions AS profile
                 LEFT JOIN player_profile_effects AS effect
                   ON effect.profile_version_id = profile.id
@@ -357,11 +359,16 @@ def _freeze_boundary_manifest(
                     "eligibility_state": _text_value(profile[7]),
                     "profile_json": profile[3],
                 }
-                identity["snapshot_quality"] = (
-                    "eligible"
-                    if _text_value(profile[7]) == "eligible"
-                    else "invalid"
-                )
+                if _text_value(profile[7]) != "eligible":
+                    identity["snapshot_quality"] = "invalid"
+                elif season_is_current(
+                    _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
+                ):
+                    identity["snapshot_quality"] = "eligible"
+                else:
+                    # Trophies from before this player's Season reset never
+                    # stand for the ended day's Season.
+                    identity["snapshot_quality"] = "season_reset_pending"
             else:
                 identity["profile_version_id"] = None
                 identity["profile_input_hash"] = None
