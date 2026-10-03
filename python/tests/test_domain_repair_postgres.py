@@ -115,7 +115,8 @@ def _report(
 
 
 def _saved_day(
-    connection, player_id: int, day: datetime, season: str = SEASON, version: int = 1
+    connection, player_id: int, day: datetime, season: str = SEASON, version: int = 1,
+    rule: str = RECONCILIATION_RULE_VERSION,
 ) -> None:
     """Save a day result built, as reconciliation does, from the newest
     saved result of the day before."""
@@ -134,7 +135,7 @@ def _saved_day(
                       ORDER BY version DESC, id DESC LIMIT 1
                   ))))
         """,
-        (player_id, day, day + DAY, season, RECONCILIATION_RULE_VERSION,
+        (player_id, day, day + DAY, season, rule,
          f"{version:x}" * 64, version, "a" * 64, player_id, day - DAY),
     )
 
@@ -522,8 +523,12 @@ def test_campaign_keeps_days_a_finished_fix_left_stale(database_url: str) -> Non
             # whose saved day still counts the old one.
             _report(connection, paid, opponent, day2, rule=TROPHY_ALLOCATION_RULE_VERSION)
             _saved_day(connection, paid, day2)
+            # The same, with the day last saved under an older calculation rule.
+            older = _player(connection, "#OLDER")
+            _report(connection, older, opponent, day4, rule=TROPHY_ALLOCATION_RULE_VERSION)
+            _saved_day(connection, older, day4, rule="legend-ranked-day-reconciliation-v2")
             for boundary_at in (day3, day4, day5, day5 + DAY):
-                _population(connection, boundary_at, moved, paid, opponent)
+                _population(connection, boundary_at, moved, paid, opponent, older)
         # A late battle queues a correction of the moved player's day 3,
         # which needs no repair, so its Reset is not held.
         _unpublished_correction(connection_info, day4, {"player_id": moved})
@@ -533,13 +538,14 @@ def test_campaign_keeps_days_a_finished_fix_left_stale(database_url: str) -> Non
             (_key("day", moved, day4), ["dependency"]),
             (_key("day", moved, day5), ["dependency"]),
             (_key("day", paid, day2), ["payout"]),
+            (_key("day", older, day4), ["payout"]),
         ])
         assert [row[:2] for row in _items(connection_info, "publication")] == [
             (_key("boundary", day3), ["payout"]),
-            (_key("boundary", day5), ["dependency"]),
+            (_key("boundary", day5), ["dependency", "payout"]),
             (_key("boundary", day5 + DAY), ["dependency"]),
         ]
-        assert report["items"] == {"day": 3, "publication": 3}
+        assert report["items"] == {"day": 4, "publication": 3}
 
 
 def test_campaign_saves_nothing_once_the_window_closes_mid_write(

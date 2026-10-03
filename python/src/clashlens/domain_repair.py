@@ -166,8 +166,7 @@ WITH selected AS (
     WHERE player_id IN (SELECT player_id FROM affected)
       AND ranked_day_start >= %(start)s - interval '1 day'
       AND ranked_day_start <= %(end)s
-      AND reconciliation_rule_version = %(reconciliation)s
-    ORDER BY player_id, ranked_day_start, version DESC, id DESC
+    ORDER BY player_id, ranked_day_start, id DESC
 ), saved AS (
     SELECT newest.player_id, newest.ranked_day_start, newest.id,
            v.input_evidence -> 'previous_day' ->> 'version_id' AS built_from,
@@ -278,7 +277,6 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
         "start": start, "end": campaign_window(start)[0], "grace": BATTLE_DAY_GRACE,
         "old_rule": HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
         "decoder": DECODER_VERSION, "catalog": CATALOG_VERSION,
-        "reconciliation": RECONCILIATION_RULE_VERSION,
     }
     items = []
     query = _INVENTORY.format(unfinished_moves=UNFINISHED_MOVES)
