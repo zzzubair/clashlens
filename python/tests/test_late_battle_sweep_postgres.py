@@ -8,6 +8,7 @@ every later saved day of the player, in order, in one transaction.
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -22,8 +23,13 @@ from test_domain_processing_postgres import (
 )
 from test_league_history import _entry, _payload
 
-from clashlens import job_outcomes, late_battle_sweep, reconciliation_db
-from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
+from clashlens import boundary, job_outcomes, late_battle_sweep, reconciliation_db
+from clashlens.db import (
+    ANALYTICS_RULE_VERSION,
+    DEFAULT_PARSER_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+)
 from clashlens.late_battle_sweep import LateBattleSweep, sweep_late_battles
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
@@ -997,5 +1003,150 @@ def test_indexed_selection_picks_the_same_player_days_as_before(
             assert [
                 outdated for _, outdated in _selections(connection_info).values()
             ] == [[(TAG, DAY + timedelta(days=1))]] * 8 + [[]]
+        finally:
+            database.close()
+
+
+def _reset_is_free(connection_info: str, boundary_at: datetime) -> bool:
+    with psycopg.connect(connection_info) as connection:
+        return bool(
+            connection.execute(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"boundary-publication:{boundary_at.isoformat()}",),
+            ).fetchone()[0]
+        )
+
+
+def _job(connection_info: str, job_id: int) -> tuple[str, int]:
+    with psycopg.connect(connection_info) as connection:
+        status, attempts = connection.execute(
+            "SELECT status, attempt_count FROM python_processing_jobs WHERE id = %s",
+            (job_id,),
+        ).fetchone()
+    return str(status), int(attempts)
+
+
+def test_busy_reset_releases_earlier_resets_and_retries_next_run(
+    database_url: str, archive_server
+) -> None:
+    # On 2026-10-04 one calculation held the October 1-3 Resets for minutes
+    # while it waited for October 4, and other daily work queued behind it.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _published_with_late_battle(
+                connection_info, archive_server, processor, database
+            )
+            boundary_at = DAY + timedelta(days=2)
+            _finish_reset_sweep(connection_info, DAY + timedelta(days=1))
+            _finish_reset_sweep(connection_info, boundary_at)
+            before = _published(connection_info, DAY)
+            with psycopg.connect(connection_info) as publisher:
+                boundary.lock_boundary_publication(publisher, boundary_at)
+                started = time.monotonic()
+                # DAY's result takes its Reset, then the next day's is busy.
+                assert sweep_late_battles(
+                    database, now=boundary_at + timedelta(minutes=31)
+                ) == (0, 1)
+                assert time.monotonic() - started < 5
+                assert _reset_is_free(connection_info, DAY + timedelta(days=1))
+                assert _published(connection_info, DAY) == before
+            assert sweep_late_battles(
+                database, now=boundary_at + timedelta(minutes=41)
+            ) == (1, 0)
+            after = _published(connection_info, DAY)
+            assert after is not None
+            assert after[0] == [("#2PP", 0, 0), ("#QPP", 3, -40)]
+        finally:
+            database.close()
+
+
+def test_daily_job_on_a_busy_reset_retries_without_using_an_attempt(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _published_with_late_battle(
+                connection_info, archive_server, processor, database
+            )
+            _finish_reset_sweep(connection_info, DAY + timedelta(days=1))
+            before = _published(connection_info, DAY)
+            job_id = reconciliation_db.enqueue_reconciliation(
+                database,
+                player_tag=TAG,
+                day_start=DAY,
+                now=DAY,
+                request_key="busy-reset",
+            )
+            with psycopg.connect(connection_info) as publisher:
+                boundary.lock_boundary_publication(publisher, DAY + timedelta(days=1))
+                started = time.monotonic()
+                result = processor.process_job(job_id, owner="busy")
+                assert time.monotonic() - started < 5
+                assert result is not None
+                assert (result.outcome, result.category) == (
+                    "retrying",
+                    "database_lock_busy",
+                )
+                assert _job(connection_info, job_id) == ("leased", 0)
+                assert _published(connection_info, DAY) == before
+            database.expire_lease(job_id)
+            assert database.maintain_queue(max_jobs=1) == 1
+            assert _job(connection_info, job_id) == ("pending", 0)
+            _process(processor, job_id)
+            assert _job(connection_info, job_id) == ("complete", 1)
+            after = _published(connection_info, DAY)
+            assert after is not None
+            assert after[0] == [("#2PP", 0, 0), ("#QPP", 3, -40)]
+        finally:
+            database.close()
+
+
+def test_daily_calculation_keeps_the_callers_own_lock_wait(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _published_with_late_battle(
+                connection_info, archive_server, processor, database
+            )
+            reset = DAY + timedelta(days=1)
+            _finish_reset_sweep(connection_info, reset)
+            with (
+                psycopg.connect(connection_info) as publisher,
+                psycopg.connect(connection_info) as connection,
+            ):
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                ).fetchone()[0]
+
+                def recalculate() -> None:
+                    reconciliation_db.recalculate_ranked_day(
+                        database,
+                        connection,
+                        player_id=player_id,
+                        day_start=DAY,
+                        parser_version=DEFAULT_PARSER_VERSION,
+                        processing_version=PROCESSING_VERSION,
+                        domain_rule_version=DOMAIN_RULE_VERSION,
+                        analytics_rule_version=ANALYTICS_RULE_VERSION,
+                    )
+
+                def lock_wait() -> str:
+                    return connection.execute(
+                        "SELECT current_setting('lock_timeout')"
+                    ).fetchone()[0]
+
+                connection.execute("SET LOCAL lock_timeout = '7s'")
+                boundary.lock_boundary_publication(publisher, reset)
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    with connection.transaction():
+                        recalculate()
+                assert lock_wait() == "7s"
+                publisher.rollback()
+                recalculate()
+                assert lock_wait() == "7s"
         finally:
             database.close()

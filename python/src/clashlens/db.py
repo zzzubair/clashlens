@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +31,10 @@ MAX_POOL_SIZE = 64
 # waiting for a lock, after 15 minutes. Its slowest statements since
 # 2026-10-01 took under a minute, so only stuck work reaches this.
 WORKER_STATEMENT_TIMEOUT_SECONDS = 900
+# Work that can give up and retry waits at most this long for a busy Reset.
+# Otherwise it keeps its own rows, and any earlier Resets it already took,
+# locked for as long as a slow publication holds that Reset.
+RESET_LOCK_WAIT = "250ms"
 
 # Work types this worker image may claim. Unsupported work types (for example
 # build_export) and unknown or future contracts stay pending and unclaimed so a
@@ -1324,6 +1328,22 @@ class Database:
         )
         if completed.rowcount != 1:
             raise LeaseLost("job completion fence was lost")
+
+
+@contextmanager
+def lock_wait(connection: Any, wait: str | None) -> Iterator[None]:
+    """Limit lock waits inside the block, then restore the caller's limit.
+
+    A lock that is not free in time raises LockNotAvailable; rolling back
+    the transaction then also restores the caller's limit.
+    """
+    if wait is None:
+        yield
+        return
+    previous = connection.execute("SELECT current_setting('lock_timeout')").fetchone()[0]
+    connection.execute("SELECT set_config('lock_timeout', %s, true)", (wait,))
+    yield
+    connection.execute("SELECT set_config('lock_timeout', %s, true)", (previous,))
 
 
 def _positive_int_input(values: dict[str, Any], name: str) -> int:

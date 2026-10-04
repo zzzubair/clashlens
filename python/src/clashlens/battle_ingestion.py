@@ -9,18 +9,13 @@ from psycopg.types.json import Jsonb
 
 from . import army_ingestion, job_outcomes, reconciliation_db, reset_baselines
 from .battle import ParsedBattleLog, ParsedBattleRow
-from .db import Claim, Database, _text_value
+from .db import RESET_LOCK_WAIT, Claim, Database, _text_value
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
     DomainRuleError,
     ranked_day_for,
 )
-
-# A battle log with changed armies waits at most this long for its Resets.
-# Otherwise it keeps its battle rows and its response locked for as long as a
-# slow publication holds a Reset; the worker retries it later instead.
-RESET_LOCK_WAIT = "250ms"
 
 
 def _battle_log_reset_baseline(

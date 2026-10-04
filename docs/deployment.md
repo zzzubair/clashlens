@@ -1010,10 +1010,13 @@ the worker, which restarts. Operator commands have no deadline.
 
 A battle log with new or changed armies waits at most 250 milliseconds for the
 Reset publication locks of its days (`RESET_LOCK_WAIT` in
-[`battle_ingestion.py`](../python/src/clashlens/battle_ingestion.py)). If a
+[`db.py`](../python/src/clashlens/db.py)). If a
 slow publication holds one, its whole transaction rolls back, so it stops
 holding its battles and the collector's response, and the worker gives its
-attempt back and logs it as `retrying` with `database_lock_busy`. Any other job
+attempt back and logs it as `retrying` with `database_lock_busy`. A daily
+calculation waits the same 250 milliseconds for each day's Reset, so one that
+spans several days does not keep earlier Resets locked while a later one is
+busy; the late-battle sweep retries such a player at its next run. Any other job
 that hits a short lock-wait limit is handled the same way. If a database time
 limit ends the worker's whole session mid-job
 (`idle_in_transaction_session_timeout` or `transaction_timeout`), the worker
