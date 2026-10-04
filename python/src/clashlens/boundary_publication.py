@@ -7,7 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, reset_baselines
+from . import battle, boundary, reset_baselines
 from .analytics import CLASSIFICATION_CONFIDENCE, CLASSIFICATION_VERSION
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
@@ -444,14 +444,16 @@ def complete_analytics(database: Database, claim: Claim) -> None:
     # the newer layouts' latest-evidence lookup returns one row and is
     # omitted. A row with no outcome of its own takes its source row's.
     occurrences = """
-        SELECT NULL::text AS outcome, source.id AS source_row_id
+        SELECT NULL::text AS outcome, source.id AS source_row_id,
+               log.parser_version
         FROM selected_log AS log
         JOIN battle_source_rows AS source
           ON source.battle_log_observation_id = log.id
     """
     if content_dedup:
         occurrences = """
-            SELECT NULL::text AS outcome, source.id AS source_row_id
+            SELECT NULL::text AS outcome, source.id AS source_row_id,
+                   log.parser_version
             FROM selected_log AS log
             JOIN battle_source_rows AS source
               ON source.battle_log_observation_id = log.id
@@ -460,19 +462,20 @@ def complete_analytics(database: Database, claim: Claim) -> None:
              AND evidence.observation_row_id IS NULL
             WHERE log.parsed_payload_id IS NULL
             UNION ALL
-            SELECT occurrence.outcome, occurrence.source_row_id
+            SELECT occurrence.outcome, occurrence.source_row_id,
+                   log.parser_version
             FROM selected_log AS log
             JOIN battle_log_observation_rows AS occurrence
               ON occurrence.battle_log_observation_id = log.id
             WHERE log.parsed_payload_id IS NULL
             UNION ALL
-            SELECT NULL, member.source_row_id
+            SELECT NULL, member.source_row_id, log.parser_version
             FROM selected_log AS log
             JOIN battle_payload_rows AS member
               ON member.parsed_payload_id = log.parsed_payload_id
              AND member.reporting_player_id = log.player_id
             UNION ALL
-            SELECT NULL, member.source_row_id
+            SELECT NULL, member.source_row_id, log.parser_version
             FROM selected_log AS log
             JOIN battle_payload_row_lists AS list
               ON list.parsed_payload_id = log.parsed_payload_id
@@ -631,30 +634,39 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 stale_count=int(snapshot[8]),
             )
             prior_snapshot_id = int(snapshot[3]) if snapshot[3] is not None else None
-            # Malformed rows and rows without an army share code, counted per
-            # log that returned them. A row counted here is in both lenses'
+            # Malformed rows, other than "no opponent, no battle" rows, and
+            # rows without an army share code, counted per log that returned
+            # them. A row counted here is in both lenses'
             # samples, so one count serves both. Each distinct row's stored
             # JSON is read once, however many logs returned it.
+            no_opponent = battle.no_opponent_row_sql(
+                "source", "counted.parser_version"
+            )
             quality = connection.execute(
                 f"""
                 WITH selected_log AS MATERIALIZED (
-                    SELECT log.id, log.parsed_payload_id, log.player_id
+                    SELECT log.id, log.parsed_payload_id, log.player_id,
+                           log.parser_version
                     FROM battle_log_observations AS log
                     JOIN leaderboard_snapshot_entries AS se
                       ON se.snapshot_id = %s AND se.player_id = log.player_id
                     WHERE log.observed_at >= %s
                       AND log.observed_at < %s
                 ), counted AS (
-                    SELECT outcome, source_row_id, count(*) AS occurrences
+                    SELECT outcome, source_row_id, parser_version,
+                           count(*) AS occurrences
                     FROM ({occurrences}) AS occurrence
-                    GROUP BY outcome, source_row_id
+                    GROUP BY outcome, source_row_id, parser_version
                 )
                 SELECT COALESCE(sum(counted.occurrences), 0)
                 FROM counted
                 JOIN battle_source_rows AS source
                   ON source.id = counted.source_row_id
-                WHERE COALESCE(counted.outcome, source.outcome)
+                WHERE (
+                      COALESCE(counted.outcome, source.outcome)
                           = 'malformed_legend_row'
+                      AND NOT {no_opponent}
+                   )
                    OR (
                       COALESCE(counted.outcome, source.outcome) = 'valid_legend'
                       AND (

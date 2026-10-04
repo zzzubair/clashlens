@@ -141,9 +141,7 @@ def complete_battle_log(
                 response_hash=response_hash,
                 parser_version=battle_log.parser_version,
                 schema_version=schema_version,
-                parse_outcome=(
-                    "valid_with_gaps" if battle_log.has_row_gap else "valid"
-                ),
+                parse_outcome=_parse_outcome(battle_log),
                 parsed_json={"items": [row.source_json for row in battle_log.rows]},
                 representation="battle_payload_rows" if compact else None,
             )
@@ -908,9 +906,7 @@ def _complete_battle_log_legacy(
                 response_hash=response_hash,
                 parser_version=battle_log.parser_version,
                 schema_version=schema_version,
-                parse_outcome=(
-                    "valid_with_gaps" if battle_log.has_row_gap else "valid"
-                ),
+                parse_outcome=_parse_outcome(battle_log),
                 parsed_json={"items": [row.source_json for row in battle_log.rows]},
             )
             outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -965,6 +961,20 @@ def _complete_battle_log_legacy(
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
+
+
+def _parse_outcome(battle_log: ParsedBattleLog) -> str:
+    """The saved parse verdict: with gaps when any row was rejected.
+
+    Unlike the log's own gap, it still counts "no opponent, no battle" rows,
+    so identical bytes saved before those rows stopped counting as gaps keep
+    the same saved verdict.
+    """
+    return (
+        "valid_with_gaps"
+        if any(row.outcome == "malformed_legend_row" for row in battle_log.rows)
+        else "valid"
+    )
 
 
 def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:

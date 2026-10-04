@@ -40,6 +40,24 @@ def _source_rows(database: Database) -> tuple[str, str, str]:
     return source_rows_relation, source_row_id_column, evidence_join
 
 
+def only_no_opponent_gaps_sql(database: Database, log: str) -> str:
+    """SQL: every row battle log ``log`` rejected, at least one, is a "no
+    opponent, no battle" row, so its gap flag and gap outcome hide no battle.
+
+    Logs saved before those rows stopped counting as gaps keep their saved
+    flag and outcome; their saved rows decide instead.
+    """
+    relation, _, _ = _source_rows(database)
+    no_opponent = battle.no_opponent_row_sql("gap_row", f"{log}.parser_version")
+    # An aggregate subquery stays a per-log index lookup; an EXISTS can be
+    # planned as a scan of every saved row.
+    return f"""COALESCE((
+        SELECT bool_and({no_opponent}) FROM {relation} AS gap_row
+        WHERE gap_row.battle_log_observation_id = {log}.id
+          AND gap_row.outcome = 'malformed_legend_row'
+    ), false)"""
+
+
 def load_coverage(
     database: Database,
     connection: Any,
@@ -50,18 +68,27 @@ def load_coverage(
 ) -> tuple[CoverageObservation, ...]:
     """The player's battle logs from the start to the end Reset log, in order."""
     source_rows_relation, source_row_id_column, evidence_join = _source_rows(database)
+    no_opponent = battle.no_opponent_row_sql("sr", "blo.parser_version")
     coverage_rows = connection.execute(
         f"""
         SELECT
             blo.observation_id,
             blo.observed_at,
             blo.row_count,
-            blo.has_row_gap,
+            -- A log saved before "no opponent, no battle" rows stopped
+            -- counting as gaps keeps its saved flag and outcome; its rows
+            -- decide instead.
+            blo.has_row_gap AND NOT row_flags.only_no_opponent,
             COALESCE(evidence.battle_identities, ARRAY[]::text[]),
             COALESCE(evidence.source_row_ids, ARRAY[]::bigint[]),
             COALESCE(row_flags.malformed_count, 0),
             COALESCE(row_flags.unclassified_count, 0),
-            COALESCE(processing.outcome = 'processed', false),
+            COALESCE(
+                processing.outcome = 'processed'
+                OR (processing.outcome = 'processed_with_gaps'
+                    AND row_flags.only_no_opponent),
+                false
+            ),
             observed.response_hash,
             blo.parser_version,
             processing.processing_version
@@ -87,14 +114,18 @@ def load_coverage(
         LEFT JOIN LATERAL (
             SELECT
                 count(*) FILTER (
-                    WHERE sr.outcome = 'malformed_legend_row'
-                       OR sr.failure_category LIKE 'malformed%%'
-                       OR sr.failure_category LIKE 'unsupported%%'
-                       OR sr.failure_category LIKE 'identity%%'
+                    WHERE (sr.outcome = 'malformed_legend_row'
+                           OR sr.failure_category LIKE 'malformed%%'
+                           OR sr.failure_category LIKE 'unsupported%%'
+                           OR sr.failure_category LIKE 'identity%%')
+                      AND NOT {no_opponent}
                 ) AS malformed_count,
                 count(*) FILTER (
                     WHERE sr.failure_category LIKE 'unclassified%%'
-                ) AS unclassified_count
+                ) AS unclassified_count,
+                COALESCE(bool_and({no_opponent}) FILTER (
+                    WHERE sr.outcome = 'malformed_legend_row'
+                ), false) AS only_no_opponent
             FROM {source_rows_relation} AS sr
             WHERE sr.battle_log_observation_id = blo.id
         ) AS row_flags ON true
@@ -385,6 +416,8 @@ def load_unreadable_report_times(
     ).fetchall()
     times: list[datetime | None] = []
     for log_id, source in rows:
+        if battle.is_no_opponent_row(source, parsers[log_id]):
+            continue
         try:
             times.append(battle._parse_battle_timestamp(
                 battle._battle_timestamp_value(source, parsers[log_id]), parsers[log_id]
@@ -438,7 +471,9 @@ def load_reading(
     database: Database, connection: Any, player_id: int, observation_id: int | None
 ) -> Reading | None:
     """One saved profile or battle log; usable once processed into an
-    accepted, eligible profile of this player or a saved battle log."""
+    accepted, eligible profile of this player or a saved battle log. A log
+    saved with gaps that were only "no opponent, no battle" rows counts as
+    processed."""
     if observation_id is None:
         return None
     row = connection.execute(
@@ -451,7 +486,10 @@ def load_reading(
                        AND profile.eligibility_state = 'eligible'
                    ELSE log.id IS NOT NULL
                END,
-               profile.trophies
+               profile.trophies,
+               outcome.outcome = 'processed'
+               OR (outcome.outcome = 'processed_with_gaps'
+                   AND {only_no_opponent_gaps_sql(database, "log")})
         FROM collector_observations AS observed
         {_OUTCOME}
         {_profile_join(database)}
@@ -467,7 +505,7 @@ def load_reading(
         return None
     return Reading(
         observation_id, row[0], row[1], row[2], row[3],
-        usable=row[2] == "processed" and bool(row[4]), trophies=row[5],
+        usable=bool(row[6]) and bool(row[4]), trophies=row[5],
     )
 
 

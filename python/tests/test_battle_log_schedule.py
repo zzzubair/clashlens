@@ -275,8 +275,8 @@ def test_refresh_during_a_check_does_not_hide_its_failed_profile(
 @pytest.mark.parametrize(
     "bad_row",
     [
-        # Live logs keep rows like this for days: no opponent, no battle.
-        {"opponentPlayerTag": None, "battleTime": 0, "destructionPercentage": 0},
+        # A row without an opponent that may still hide a battle.
+        {"opponentPlayerTag": None, "battleTime": 0, "destructionPercentage": 12},
         {"stars": None},
         {"battleTimestamp": "yesterday"},
         # Live battleTime is the battle's length, not its date.
@@ -760,6 +760,24 @@ def test_log_with_a_malformed_row_never_counts_as_finished() -> None:
     now = _finish(state, *battles, unreadable)
 
     assert _recheck_at(state, now) is None
+
+
+def test_no_opponent_no_battle_row_leaves_a_finished_log_finished() -> None:
+    state = _Schedule()
+    no_opponent = {
+        "battleType": "legend",
+        "attack": False,
+        "battleTime": 0,
+        "battleTimestamp": (START - timedelta(hours=2)).strftime("%Y%m%dT%H%M%S.000Z"),
+        "stars": 0,
+        "destructionPercentage": 0,
+        "opponentPlayerTag": None,
+    }
+    now = state.settle(TAG)
+
+    assert state.log(TAG, now, *_day(START - timedelta(minutes=30)), no_opponent)
+    state.profile(TAG, now)
+    assert _recheck_at(state, now) == now + timedelta(minutes=8)
 
 
 def test_finished_player_is_checked_every_8_minutes_with_the_profile_only(

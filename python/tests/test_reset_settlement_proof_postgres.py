@@ -72,10 +72,16 @@ def _save(connection_info, archive_server, endpoint: str, body: bytes, at: datet
 
 
 def _scenario(connection_info, archive_server, *, profile_offset: int = 0,
-              work_status: str = "complete", with_root: bool = True) -> dict[str, int]:
-    """Save a Reset pair, the named check and a later post-battle profile and
-    log; return each response's processing job."""
+              work_status: str = "complete", with_root: bool = True,
+              check_rows: tuple[dict, ...] = ()) -> dict[str, int]:
+    """Save a Reset pair, the named check, its log holding ``check_rows`` too,
+    and a later post-battle profile and log; return each response's
+    processing job."""
     log, net, automatic = _battles(RESET)
+    check_log = (
+        json.dumps({"items": [*json.loads(log)["items"], *check_rows]}).encode()
+        if check_rows else log
+    )
     target = START + net - automatic
     jobs: dict[str, int] = {}
     ids: dict[str, int] = {}
@@ -83,7 +89,7 @@ def _scenario(connection_info, archive_server, *, profile_offset: int = 0,
         ("early_profile", "profile", _profile(target + automatic), RESET + timedelta(seconds=31)),
         ("early_log", "battle_log", log, RESET + timedelta(seconds=33)),
         ("profile", "profile", _profile(target + profile_offset), RESET + timedelta(minutes=23, seconds=56)),
-        ("log", "battle_log", log, RESET + timedelta(minutes=23, seconds=58)),
+        ("log", "battle_log", check_log, RESET + timedelta(minutes=23, seconds=58)),
         ("newer_log", "battle_log", _battles(RESET, new_day=True)[0], RESET + 36 * MINUTE),
         ("newer_profile", "profile", _profile(target + 40), RESET + 40 * MINUTE),
     ):

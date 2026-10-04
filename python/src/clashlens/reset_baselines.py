@@ -8,7 +8,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, reset_settlement
+from . import boundary, ranked_day_inputs, reset_settlement
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -53,7 +53,11 @@ def repair_current_season_reset_baselines(
     """Re-check current-season Reset pairs left partial with both results saved.
 
     Until profiles and battle logs were read under their own parser versions,
-    every such pair stayed partial, so its Legend day was never finished. One
+    every such pair stayed partial, so its Legend day was never finished.
+    Pairs that failed only because their battle log held "no opponent, no
+    battle" rows, once counted as gaps, are re-checked too, oldest Reset
+    first; any other reason they failed still holds. So are pairs whose
+    delayed settlement check's log was saved with only such gaps. One
     batch of at most ``max_works`` pairs is re-checked from saved results, each
     in its own short transaction. Returns the end-of-day reconciliation jobs
     queued, how many pairs were checked, and how often each failure reason was
@@ -66,10 +70,13 @@ def repair_current_season_reset_baselines(
     (counted as checked); ``failed_blockers`` lists those it cannot retry.
     """
 
+    only_no_opponent = ranked_day_inputs.only_no_opponent_gaps_sql(
+        database, "battle_log"
+    )
     with database.pool.connection() as connection:
         with connection.transaction():
             candidates = connection.execute(
-                """
+                f"""
                 WITH current_anchor AS (
                     SELECT current_start, current_league_season_id
                     FROM legend_season_anchors
@@ -87,20 +94,56 @@ def repair_current_season_reset_baselines(
                 ), sweep.boundary_at > anchor.current_start,
                 sweep.boundary_at < anchor.current_start + interval '28 days'
                 AND sweep.boundary_at + interval '1 day' <= clock_timestamp(),
-                anchor.current_league_season_id
+                anchor.current_league_season_id, work.battle_log_observation_id,
+                delayed_log.observation_id
                 FROM collector_work AS work
                 JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
                 JOIN current_anchor AS anchor
                   ON sweep.boundary_at >= anchor.current_start
                  AND sweep.boundary_at <= anchor.current_start + interval '28 days'
+                JOIN LATERAL (
+                    SELECT evidence.state, evidence.failure_reasons
+                    FROM reset_baseline_evidence AS evidence
+                    WHERE evidence.collector_work_id = work.id
+                    ORDER BY evidence.version DESC, evidence.id DESC
+                    LIMIT 1
+                ) AS latest ON true
+                LEFT JOIN LATERAL (
+                    SELECT delayed.battle_log_observation_id AS observation_id
+                    FROM reset_boundary_settlements AS settlement
+                    JOIN collector_work AS delayed
+                      ON delayed.id = settlement.delayed_work_id
+                    WHERE settlement.player_id = work.player_id
+                      AND settlement.boundary_at = sweep.boundary_at
+                ) AS delayed_log ON true
                 WHERE work.kind = 'reset_baseline'
                   AND (
-                      SELECT evidence.state
-                      FROM reset_baseline_evidence AS evidence
-                      WHERE evidence.collector_work_id = work.id
-                      ORDER BY evidence.version DESC, evidence.id DESC
-                      LIMIT 1
-                  ) = 'partial'
+                      latest.state = 'partial'
+                      -- Failed only because its battle log held "no
+                      -- opponent, no battle" rows, then counted as gaps.
+                      OR (
+                          latest.state = 'failed'
+                          AND latest.failure_reasons ?| array[
+                              'battle_log_processed_with_gaps',
+                              'battle_log_malformed'
+                          ]
+                          AND EXISTS (
+                              SELECT 1 FROM battle_log_observations AS battle_log
+                              WHERE battle_log.observation_id
+                                    = work.battle_log_observation_id
+                                AND {only_no_opponent}
+                          )
+                      )
+                      -- Its delayed settlement check's log was saved with
+                      -- gaps that were only those rows.
+                      OR EXISTS (
+                          SELECT 1 FROM battle_log_observations AS battle_log
+                          WHERE battle_log.observation_id
+                                = delayed_log.observation_id
+                            AND battle_log.has_row_gap
+                            AND {only_no_opponent}
+                      )
+                  )
                   AND EXISTS (
                       SELECT 1 FROM observation_processing_outcomes AS outcome
                       WHERE outcome.observation_id = work.profile_observation_id
@@ -111,7 +154,7 @@ def repair_current_season_reset_baselines(
                       WHERE outcome.observation_id = work.battle_log_observation_id
                         AND outcome.processing_version = %s
                   )
-                ORDER BY work.id
+                ORDER BY sweep.boundary_at, work.id
                 LIMIT %s
                 """,
                 (
@@ -130,8 +173,15 @@ def repair_current_season_reset_baselines(
             ends_day,
             starts_ended_day,
             official_season_id,
+            battle_log_observation_id,
+            delayed_battle_log_observation_id,
         ) in candidates:
             with connection.transaction():
+                _clear_no_opponent_gaps(
+                    connection,
+                    [battle_log_observation_id, delayed_battle_log_observation_id],
+                    only_no_opponent,
+                )
                 pair_job_ids, reasons = _evaluate_reset_baseline(
                     database,
                     connection,
@@ -155,6 +205,39 @@ def repair_current_season_reset_baselines(
         "failure_reasons": dict(sorted(failure_reasons.items())),
         "failed_blockers": failed_blockers,
     }
+
+
+def _clear_no_opponent_gaps(
+    connection: Any, observation_ids: list[int | None], only_no_opponent: str
+) -> None:
+    """Re-derive the saved gap flag and outcome of a Reset's battle logs, the
+    one read at the Reset and the delayed settlement check's.
+
+    A log whose only rejected rows are "no opponent, no battle" rows was saved
+    as having a gap before those rows stopped counting. Its rows and response
+    stay as they are; only the two results now derived from them change, to
+    what processing it today would save.
+    """
+    connection.execute(
+        f"""
+        WITH cleared AS (
+            UPDATE battle_log_observations AS battle_log
+            SET has_row_gap = false
+            WHERE battle_log.observation_id = ANY(%s)
+              AND battle_log.has_row_gap
+              AND {only_no_opponent}
+            RETURNING battle_log.observation_id, battle_log.parser_version
+        )
+        UPDATE observation_processing_outcomes AS outcome
+        SET outcome = 'processed'
+        FROM cleared
+        WHERE outcome.observation_id = cleared.observation_id
+          AND outcome.parser_version = cleared.parser_version
+          AND outcome.outcome = 'processed_with_gaps'
+        """,
+        ([observation_id for observation_id in observation_ids
+          if observation_id is not None],),
+    )
 
 
 # Failures from running out of time or retries, not from bad input.
