@@ -177,6 +177,41 @@ class ReconciliationResult:
         return self.observed_defense_loss
 
 
+DISPUTED_BATTLE_REASONS = frozenset(
+    {"perspective_disagreement", "duplicate_contribution_disagreement"}
+)
+
+
+def all_battles_recorded(
+    attack_count: int | None, defense_count: int | None, reasons: Iterable[Any]
+) -> bool:
+    """The game allows 8 attacks and 8 defenses a day, so with all 16 recorded
+    and undisputed none can be missing, and 8 defenses leave no automatic
+    defense loss."""
+    return (
+        attack_count == MAX_DAILY_ATTACKS
+        and defense_count == MAX_DAILY_DEFENSES
+        and not any(
+            isinstance(reason, str) and reason in DISPUTED_BATTLE_REASONS
+            for reason in reasons
+        )
+    )
+
+
+def day_totals_supported(
+    coverage_complete: bool,
+    attack_count: int | None,
+    defense_count: int | None,
+    reasons: Iterable[Any],
+) -> bool:
+    """Whether a day's EOD and net change can be shown. A battle missing from
+    the logs is missing from the sums too, so the total would look exact while
+    being wrong."""
+    return coverage_complete or all_battles_recorded(
+        attack_count, defense_count, reasons
+    )
+
+
 def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     failures: list[str] = []
     malformed_evidence = data.malformed_evidence
@@ -290,17 +325,10 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 # The paired baselines isolate the calculated settlement loss.
                 automatic_state = "confirmed"
 
-    # The game allows 8 attacks and 8 defenses a day, so with all 16 recorded
-    # none can be missing, and 8 defenses leave no automatic defense loss.
-    all_battles_recorded = (
-        not inconsistent_evidence
-        and attack_count == MAX_DAILY_ATTACKS
-        and defense_count == MAX_DAILY_DEFENSES
-    )
-    if not coverage_complete and not all_battles_recorded:
-        # A battle missing from the logs is missing from these sums too, so the
-        # total would look exact while being wrong. The equation check above
-        # has already recorded any mismatch it found.
+    if not day_totals_supported(
+        coverage_complete, attack_count, defense_count, failures
+    ):
+        # The equation check above has already recorded any mismatch it found.
         final_trophies = None
         net_trophy_change = None
         boundary_adjustment = 0
@@ -382,7 +410,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # useful to consumers that only inspect the shield evidence state.
         shield_evidence.setdefault("unknown_reason", "coverage_incomplete")
 
-    if net_trophy_change is None and all_battles_recorded:
+    if net_trophy_change is None and all_battles_recorded(
+        attack_count, defense_count, failures
+    ):
         # Without a usable start, the recorded battles alone give the day's
         # result.
         net_trophy_change = attack_gain - defense_loss

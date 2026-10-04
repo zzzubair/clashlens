@@ -11,10 +11,12 @@ from .api_db import (
     ApiDatabase,
     _daily_log,
     _historical_season_summary,
+    _json_array,
     _public_army,
     _public_confidence,
     _screen_daily_log_with_events,
     _text,
+    _withhold_unsupported_entries,
 )
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
@@ -525,7 +527,8 @@ def list_player_seasons(
             SELECT summary.official_season_id, summary.coverage_state,
                    summary.days_observed, summary.days_missing,
                    summary.start_trophies, summary.end_trophies,
-                   summary.published_at, summary.season_start
+                   summary.published_at, summary.season_start,
+                   summary.daily_entries
             FROM player_season_summaries AS summary
             JOIN players AS player ON player.id = summary.player_id
             WHERE player.normalized_tag = %s
@@ -539,7 +542,10 @@ def list_player_seasons(
                 "days_observed": int(row[2]),
                 "days_missing": int(row[3]),
                 "start_trophies": None if row[4] is None else int(row[4]),
-                "end_trophies": None if row[5] is None else int(row[5]),
+                "end_trophies": None
+                if row[5] is None
+                or 28 in _withhold_unsupported_entries(_json_array(row[8]))
+                else int(row[5]),
                 "published_at": row[6].astimezone(UTC).isoformat(),
                 "source": "tracked_summary",
                 "official_history": None,

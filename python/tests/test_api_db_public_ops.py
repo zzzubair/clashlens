@@ -807,6 +807,69 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
             database.close()
 
 
+def test_player_page_hides_saved_net_for_days_missing_battles(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE api_player_daily_logs
+                    SET ranked_day_end = '2026-08-07T05:00:00Z',
+                        official_season_id = 'current-season', season_day_number = 4
+                    """
+                )
+                # Saved before the rule: one attack of +20 and a gap in the
+                # battle log, published with a net of 20. The other days hold
+                # complete coverage, or all 8 attacks and 8 defenses.
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, ranked_day_end,
+                        official_season_id, season_day_number, version, state, coverage,
+                        confidence, attack_count, attack_three_star_count, attack_gain,
+                        defense_count, defense_three_star_count, defense_loss,
+                        net_trophy_change, adjustments, battles, partial_reasons
+                    )
+                    SELECT player.id, day.start, day.start + interval '1 day',
+                           'current-season', day.number, 1, day.state, day.coverage,
+                           day.confidence, day.attacks, 0, day.gain, day.defenses,
+                           0, day.loss, day.net, '[]'::jsonb, '[]'::jsonb, day.reasons
+                    FROM players AS player, (VALUES
+                        (timestamptz '2026-08-05T05:00:00Z', 3, 'Partial', 'partial',
+                         'uncertain', 1, 20, 0, 0, 20,
+                         '["battle_log_overlap_gap"]'::jsonb),
+                        ('2026-08-04T05:00:00Z', 2, 'Partial', 'partial', 'partial',
+                         8, 240, 8, 200, 40, '["battle_log_overlap_gap"]'::jsonb),
+                        ('2026-08-03T05:00:00Z', 1, 'Complete', 'complete', 'exact',
+                         2, 70, 1, 20, 50, '[]'::jsonb)
+                    ) AS day(start, number, state, coverage, confidence, attacks,
+                             gain, defenses, loss, net, reasons)
+                    WHERE player.normalized_tag = '#2PP'
+                    """
+                )
+                connection.commit()
+
+            player = api_players.get_player_page(
+                database, "#2PP", now=NOW, freshness_seconds=900
+            )
+
+            assert player is not None
+            screen = player["screen_ready"]
+            for days in (screen["recent_days"], screen["season_days"]):
+                assert [
+                    (day["season_day_number"], day["net_trophy_change"])
+                    for day in days
+                ] == [(4, None), (3, None), (2, 40), (1, 50)]
+        finally:
+            database.close()
+
+
 def test_concurrent_refreshes_share_one_collector_work_and_public_refresh_identity(
     database_url: str,
 ) -> None:

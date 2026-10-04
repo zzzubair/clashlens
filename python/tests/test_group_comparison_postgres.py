@@ -189,15 +189,15 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
             players = {player["tag"]: player for player in result["players"]}
             leader = players["#2PP"]
             # Cleaned-up days read as history no longer kept, missing days stay
-            # empty, the last ended day may still change and a partial day is
-            # shown but left out of the counted total.
+            # empty, the last ended day may still change and a day missing
+            # battles shows no net and is left out of the counted total.
             assert [(day["state"], day["net"]) for day in leader["day_results"]] == [
                 ("retired", None),
                 ("retired", None),
                 ("missing", None),
                 ("missing", None),
                 ("complete", 20),
-                ("partial", 10),
+                ("partial", None),
                 ("correcting", 40),
             ]
             assert (
