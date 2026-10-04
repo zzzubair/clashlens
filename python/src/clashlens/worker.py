@@ -13,10 +13,13 @@ from psycopg.errors import (
     DataError,
     DeadlockDetected,
     Error,
+    IdleInTransactionSessionTimeout,
     IntegrityError,
+    LockNotAvailable,
     QueryCanceled,
     RaiseException,
     SerializationFailure,
+    TransactionTimeout,
 )
 from psycopg_pool import PoolTimeout, TooManyRequests
 
@@ -189,6 +192,10 @@ DATABASE_REJECTIONS = (RaiseException, IntegrityError, DataError)
 # The shared connection pool had no free connection in time. Only the lane
 # that waited is affected: it retries its claim, or its job, later.
 POOL_BUSY = (PoolTimeout, TooManyRequests)
+
+# Time limits that end the database session, rolling back its open
+# transaction. The pool replaces the closed connection on its next use.
+SESSION_ENDED = (IdleInTransactionSessionTimeout, TransactionTimeout)
 
 # Connections for the maintenance timer, kept apart from the lanes' pool so a
 # slow round never holds a connection a lane is waiting for.
@@ -608,10 +615,22 @@ class ObservationProcessor:
             pass
         except DATABASE_REJECTIONS as error:
             return self._fail_rejected(claim, error)
+        except LockNotAvailable:
+            # A short lock wait limit, such as a battle log's on a busy Reset,
+            # gave up and its transaction rolled back.
+            reason = "database_lock_busy"
         except QueryCanceled:
             # The worker's statement deadline cancelled stuck work and its
             # transaction rolled back.
             reason = "database_timeout"
+        except SESSION_ENDED:
+            # The session ended mid-transaction, even while committing. Trust
+            # the job's saved attempt, not the error: a commit that landed
+            # stays done and is never run again.
+            reason = "database_session_timeout"
+            saved = self._saved_result(claim, reason)
+            if saved is not None:
+                return saved
         except POOL_BUSY:
             # No pool connection came free in time, so this job's next write
             # never started.
@@ -630,9 +649,10 @@ class ObservationProcessor:
                 return ProcessResult(claim.job_id, "lease_lost")
             except (DeadlockDetected, SerializationFailure, QueryCanceled):
                 continue
-            except POOL_BUSY:
-                # Leave the lease to run out so queue maintenance retries the
-                # job or fails its last try.
+            except (*POOL_BUSY, LockNotAvailable, *SESSION_ENDED):
+                # No connection, or the refund's own short lock wait or
+                # session ran out. Leave the lease to run out so queue
+                # maintenance retries the job or fails its last try.
                 break
         return ProcessResult(claim.job_id, "retrying", reason)
 
@@ -951,17 +971,58 @@ class ObservationProcessor:
         detail = error.diag.message_primary or type(error).__name__
         try:
             return self._fail(claim, "database_rejected", detail=detail, retryable=True)
+        except SESSION_ENDED:
+            saved = self._saved_result(claim, "database_rejected")
+            if saved is not None:
+                return saved
         except (
             *DATABASE_REJECTIONS,
             DeadlockDetected,
             SerializationFailure,
             QueryCanceled,
+            LockNotAvailable,
             *POOL_BUSY,
         ):
-            # Recording the failure was refused, conflicted or timed out too.
-            # Leave the lease to run out so queue maintenance retries the job
-            # or fails its last try.
-            return ProcessResult(claim.job_id, "retrying", "database_rejected")
+            pass
+        # Recording the failure was refused, conflicted or timed out too.
+        # Leave the lease to run out so queue maintenance retries the job
+        # or fails its last try.
+        return ProcessResult(claim.job_id, "retrying", "database_rejected")
+
+    def _saved_result(self, claim: Claim, reason: str) -> ProcessResult | None:
+        # None while nothing committed this attempt's outcome.
+        try:
+            saved = self.database.finished_attempt(claim)
+        except (*SESSION_ENDED, QueryCanceled, *POOL_BUSY):
+            # Unknown: leave the lease to run out; maintenance recovers
+            # the job only if it is still unfinished.
+            return ProcessResult(claim.job_id, "retrying", reason)
+        if saved is None:
+            return None
+        # Report what the normal path returns for the saved attempt.
+        state, outcome, category = saved
+        if state == "stale":
+            return ProcessResult(claim.job_id, "lease_lost")
+        if state != "complete":
+            return ProcessResult(
+                claim.job_id,
+                "retrying"
+                if state in {"waiting_retry", "waiting_dependency"}
+                else "failed",
+                category,
+            )
+        if outcome == "superseded":
+            return ProcessResult(claim.job_id, "superseded")
+        if outcome == "source_non_success":
+            return ProcessResult(claim.job_id, "classified", "non_success")
+        if outcome == "season_detail_retired":
+            return ProcessResult(claim.job_id, outcome, outcome)
+        gaps = outcome == "processed_with_gaps" or (
+            claim.endpoint == "league_history" and outcome == "official_partial"
+        )
+        return ProcessResult(
+            claim.job_id, "processed_with_gaps" if gaps else "processed"
+        )
 
     def _complete_retired(self, claim: Claim, error: DomainRuleError) -> ProcessResult:
         if error.category != "season_detail_retired":

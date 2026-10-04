@@ -17,6 +17,11 @@ from .domain import (
     ranked_day_for,
 )
 
+# A battle log with changed armies waits at most this long for its Resets.
+# Otherwise it keeps its battle rows and its response locked for as long as a
+# slow publication holds a Reset; the worker retries it later instead.
+RESET_LOCK_WAIT = "250ms"
+
 
 def _battle_log_reset_baseline(
     connection: Any, claim: Claim
@@ -484,6 +489,7 @@ def complete_battle_log(
                 sorted(affected_battle_ids),
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
                 observation_id=claim.observation_id,
+                reset_lock_wait=RESET_LOCK_WAIT,
             )
 
             outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -893,6 +899,7 @@ def _complete_battle_log_legacy(
                 sorted(affected_battle_ids),
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
                 observation_id=claim.observation_id,
+                reset_lock_wait=RESET_LOCK_WAIT,
             )
 
             job_outcomes._record_parsed_payload(

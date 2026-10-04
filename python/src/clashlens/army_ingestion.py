@@ -54,6 +54,7 @@ def _upsert_army_decodes(
     *,
     reset_baseline: tuple[int, int, datetime] | None = None,
     observation_id: int | None = None,
+    reset_lock_wait: str | None = None,
 ) -> None:
     if not battle_ids:
         return
@@ -157,6 +158,15 @@ def _upsert_army_decodes(
     # army or generation row another job needs while that job holds a lock.
     boundaries = {day_start + timedelta(days=1) for day_start in players_by_day}
     resets: list[tuple[int, datetime]] = []
+    if reset_lock_wait is not None:
+        # Give up on a busy Reset after this wait; the whole transaction rolls
+        # back and the job retries later rather than holding its rows.
+        previous_wait = connection.execute(
+            "SELECT current_setting('lock_timeout')"
+        ).fetchone()[0]
+        connection.execute(
+            "SELECT set_config('lock_timeout', %s, true)", (reset_lock_wait,)
+        )
     if reset_baseline is not None:
         work_id, player_id, boundary_at = reset_baseline
         connection.execute(
@@ -168,6 +178,10 @@ def _upsert_army_decodes(
     reset_settlement.lock_resets(
         database, connection, observation_id, resets, tuple(boundaries)
     )
+    if reset_lock_wait is not None:
+        connection.execute(
+            "SELECT set_config('lock_timeout', %s, true)", (previous_wait,)
+        )
     current_evidence = {
         (int(battle_id), _text_value(perspective)): int(evidence_id)
         for battle_id, perspective, evidence_id in connection.execute(

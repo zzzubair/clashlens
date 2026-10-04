@@ -966,6 +966,22 @@ deadline every time keeps being retried and raises the one-hour processing
 alert. A cancelled statement outside a job, such as queue maintenance, stops
 the worker, which restarts. Operator commands have no deadline.
 
+A battle log with new or changed armies waits at most 250 milliseconds for the
+Reset publication locks of its days (`RESET_LOCK_WAIT` in
+[`battle_ingestion.py`](../python/src/clashlens/battle_ingestion.py)). If a
+slow publication holds one, its whole transaction rolls back, so it stops
+holding its battles and the collector's response, and the worker gives its
+attempt back and logs it as `retrying` with `database_lock_busy`. Any other job
+that hits a short lock-wait limit is handled the same way. If a database time
+limit ends the worker's whole session mid-job
+(`idle_in_transaction_session_timeout` or `transaction_timeout`), the worker
+first reads the job's saved attempt: a result that committed is kept and
+reported as such; otherwise the attempt is given back and logged as `retrying`
+with `database_session_timeout`. The pool opens a new connection in place of
+the closed one. Giving an attempt back waits at most one second for the job's
+row; if that runs out, the lease expires and maintenance retries the job, or
+fails it on its last attempt.
+
 Production runs one worker process, whose queue maintenance runs between
 batches. If maintenance in another worker process reaches an expired job on
 its last allowed attempt before restoration succeeds, it still fails the job
