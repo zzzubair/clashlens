@@ -383,7 +383,13 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
         and season_start is not None
         and season_end is not None
     )
-    final_rank = _season_final_rank(connection, player_id, last)
+    final_boundary = season_end
+    if final_boundary is None:
+        from .season_retirement import _canonical_season_bounds
+
+        bounds = _canonical_season_bounds(connection, season_id)
+        final_boundary = None if bounds is None else bounds[1]
+    final_rank = season_final_rank(connection, player_id, final_boundary)
     resolved_totals = {
         field: (totals[field] if totals_complete[field] else None) for field in _TOTAL_FIELDS
     }
@@ -436,19 +442,19 @@ def _add_eod_changes(entries: list[dict[str, Any]]) -> None:
         )
 
 
-def _season_final_rank(
-    connection: Any, player_id: int, last: dict[str, Any] | None
+def season_final_rank(
+    connection: Any, player_id: int, season_end: datetime | str | None
 ) -> int | None:
     """Clash Lens final rank: the player's position on the Season's last board.
 
-    The day-28 ranked-day end must exist and match the boundary of a
-    published frozen leaderboard snapshot whose publication generation is
-    not superseded, the same choice the public frozen board makes. The
-    newest such board wins: when it omits the player the rank stays NULL
-    instead of falling back to an older board. Official placement is never
-    used here.
+    The Season's end must be known and match the boundary of a published
+    frozen leaderboard snapshot whose publication generation is not
+    superseded, the same choice the public frozen board makes. Daily detail
+    is not needed. The newest such board wins: when it omits the player the
+    rank stays NULL instead of falling back to an older board. Official
+    placement is never used here.
     """
-    if last is None or not last.get("ranked_day_end"):
+    if season_end is None:
         return None
     row = connection.execute(
         """
@@ -466,7 +472,7 @@ def _season_final_rank(
         ORDER BY snapshot.version DESC, snapshot.id DESC
         LIMIT 1
         """,
-        (player_id, last["ranked_day_end"]),
+        (player_id, season_end),
     ).fetchone()
     if row is None or row[0] is None:
         return None

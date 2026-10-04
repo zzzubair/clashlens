@@ -392,7 +392,7 @@ describe("historical player-season client boundary", () => {
     });
   });
 
-  it("rejects missing star totals, invented official stars, official placement as final rank, and bad adjustments", async () => {
+  it("rejects missing star totals, invented official stars, and bad adjustments", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -412,11 +412,6 @@ describe("historical player-season client boundary", () => {
         ),
       )
       .mockResolvedValueOnce(
-        new Response(JSON.stringify(officialSeasonPayload({ final_rank: 12 })), {
-          status: 200,
-        }),
-      )
-      .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
             ...seasonPayload(),
@@ -431,9 +426,6 @@ describe("historical player-season client boundary", () => {
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(
-      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
-    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
       createPythonClient().getPlayerSeason("#2PP", "1785714000"),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
