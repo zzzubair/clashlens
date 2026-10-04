@@ -11,6 +11,7 @@ from contextlib import ExitStack, suppress
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from itertools import batched
 from typing import Any
 from uuid import uuid4
 
@@ -60,8 +61,8 @@ _UPLOAD_LEASE_SECONDS = 60
 _UPLOAD_RENEW_INTERVAL = 20.0
 _HANDOFF_LOCK_STRIPES = 256
 _HANDOFF_PROTOCOL = 2
-# Short cleanup turns keep publication moving while the deletion queue drains.
-_CLEANUP_BATCH_SIZE = 16
+# Short deletion turns; one whole-table lookup feeds many and rests 30 s when short.
+_CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE, _CLEANUP_IDLE_SECONDS = 16, 256, 30.0
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
 # A check fetches its profile, saves it, then maybe its battle log, one after
 # the other, so a check holds at most one request at a time. The collector
@@ -887,10 +888,11 @@ class Collector:
 
     def cleanup_uploaded(self, *, limit: int = 100) -> int:
         candidates = self.database.deletable_hashes(limit=limit)
-        if not candidates:
-            return 0
-        with self.spool.delete_unreferenced_batch() as delete:
-            return self.database.delete_spool_if_deletable(candidates, delete)
+        deleted = 0
+        for turn in batched(candidates, _CLEANUP_BATCH_SIZE):
+            with self.spool.delete_unreferenced_batch() as delete:
+                deleted += self.database.delete_spool_if_deletable(list(turn), delete)
+        return deleted
 
     async def run(
         self,
@@ -1181,7 +1183,8 @@ class Collector:
             )
             for owner in owners
         }
-        last_sweep = 0.0
+        last_sweep = next_cleanup = 0.0
+        loop = asyncio.get_running_loop()
         graceful = False
         try:
             while not stop_requested.is_set():
@@ -1194,11 +1197,13 @@ class Collector:
                 if self._spool_io_failed:
                     await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
                     continue
-                deleted = 0
                 try:
-                    deleted = await asyncio.to_thread(
-                        self.cleanup_uploaded, limit=_CLEANUP_BATCH_SIZE
-                    )
+                    if self._spool_capacity_failed or loop.time() >= next_cleanup:
+                        deleted = await asyncio.to_thread(
+                            self.cleanup_uploaded, limit=_CLEANUP_LOOKUP_SIZE
+                        )
+                        if deleted < _CLEANUP_LOOKUP_SIZE:
+                            next_cleanup = loop.time() + _CLEANUP_IDLE_SECONDS
                     # Compacted responses leave no upload row or observation, so
                     # their spool bytes are unreferenced. Sweep them under the
                     # cleanup barrier; the referenced set is evaluated inside it so
@@ -1221,12 +1226,7 @@ class Collector:
                     # Uploads and deletion continue while collection is
                     # paused, so archived bytes can make room for this probe.
                     await self._spool_available()
-                await _wait_or_stop(
-                    stop_requested,
-                    idle_seconds
-                    if deleted == _CLEANUP_BATCH_SIZE
-                    else max(1.0, idle_seconds),
-                )
+                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
             await asyncio.gather(*owner_tasks.values())
             try:
                 await _drain_to_thread(self.cleanup_uploaded, limit=_UPLOAD_CONCURRENCY)

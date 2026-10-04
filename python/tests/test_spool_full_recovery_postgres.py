@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
@@ -8,11 +9,13 @@ from types import SimpleNamespace
 import psycopg
 import pytest
 from domain_test_support import domain_database
+from test_collector import _collector
 from test_collector_uploads_postgres import _archive_instance
 from test_domain_processing_postgres import PROFILE_FIXTURE
 from test_worker_lifecycle import _worker_namespace
 
 from clashlens import cli
+from clashlens import spool as spool_module
 from clashlens.archive import SpoolFirstReader
 from clashlens.collector import Collector
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
@@ -166,3 +169,59 @@ def test_failed_spool_read_waits_instead_of_failing_the_job(
         # The response is still on disk; the job waits to be read again rather
         # than being failed as missing evidence or spending an attempt.
         assert job[:2] == ("waiting_dependency", "spool_io_failed")
+
+
+def test_cleanup_deletes_the_same_responses_with_few_lookups(
+    database_url: str, tmp_path, monkeypatch
+) -> None:
+    # Each lookup reads the whole upload table: on production 2026-10-04 that
+    # was 42% of all database reads, 16 responses at a time every few seconds.
+    # Flushing to disk changes no outcome here and is most of the time taken.
+    monkeypatch.setattr(spool_module.os, "fsync", lambda _fd: None)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
+        digests = {
+            _save(connection_info, database, spool, f"#{index:04d}")
+            for index in range(260)
+        }
+        while (claim := claim_upload(database, owner="uploader")) is not None:
+            complete_upload(
+                database,
+                claim,
+                archive_reference=f"s3://evidence/{claim.response_hash}",
+                archive_instance_id="fixture-instance",
+            )
+        with psycopg.connect(connection_info) as connection:
+            # The worker has read every response and its finished jobs are gone.
+            connection.execute("DELETE FROM python_processing_jobs")
+        assert set(database.deletable_hashes(limit=1000)) == digests
+
+        lookups = []
+        deletable_hashes = database.deletable_hashes
+
+        def counted(*, limit: int) -> list[str]:
+            lookups.append(limit)
+            return deletable_hashes(limit=limit)
+
+        database.deletable_hashes = counted  # type: ignore[method-assign]
+        collector = _collector(spool, database, None)  # type: ignore[arg-type]
+
+        async def clean() -> None:
+            stop = asyncio.Event()
+            task = asyncio.create_task(collector._upload_loop(stop, 0.01))
+            for _attempt in range(500):
+                if all(spool.verify(digest) is None for digest in digests):
+                    break
+                await asyncio.sleep(0.01)
+            # A short turn means little is left, so the next lookup waits.
+            await asyncio.sleep(2)
+            stop.set()
+            await asyncio.wait_for(task, timeout=5)
+
+        asyncio.run(clean())
+        assert all(spool.verify(digest) is None for digest in digests)
+        # Two turns, then one more as the collector stops.
+        assert len(lookups) == 3
+        assert deletable_hashes(limit=1000) == []
