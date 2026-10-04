@@ -362,11 +362,8 @@ class Collector:
         reservation: Any | None = None,
         usable: list[bool] | None = None,
     ) -> str:
-        important = (
-            lane in {"interactive", "reset"}
-            or endpoint == "global_player_rankings"
-            or work.eligibility_recheck
-        )
+        # Discovery work makes one request per run; its work row retries it.
+        important = lane in {"interactive", "reset"} or endpoint == "global_player_rankings"
         attempts = 3 if important else 1
         pool_name = "interactive" if pool is self.interactive_keys else "regular"
         for attempt in range(attempts):
@@ -597,7 +594,7 @@ class Collector:
                     response.http_status in {401, 403, 429}
                     or response.http_status >= 500
                 )
-                if terminal_status and important:
+                if terminal_status and (important or work.collector_work_id is not None):
                     if attempt + 1 < attempts:
                         await asyncio.sleep(_retry_delay(attempt))
                         continue

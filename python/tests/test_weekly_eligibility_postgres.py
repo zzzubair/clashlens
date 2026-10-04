@@ -39,12 +39,12 @@ def _player(info, tag="#2PP"):
         ).fetchone()[0]
 
 
-def _profile(info, archive, *, at, eligible=False, tag="#2PP"):
+def _profile(info, archive, *, at, eligible=False, tag="#2PP", tier=None):
     payload = json.loads(PROFILE.read_bytes())
     payload["tag"] = tag
     payload["currentLeagueSeasonId"] = int(datetime(2026, 10, 5, 5, tzinfo=UTC).timestamp())
     if not eligible:
-        payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+        payload["leagueTier"] = tier or {"id": 105000035, "name": "Legend II"}
     observation, job = store_observation(
         info, archive, occurrence_key=f"weekly:{tag}:{at.isoformat()}",
         endpoint="profile", body=json.dumps(payload).encode(), observed_at=at,
@@ -437,6 +437,149 @@ def test_promotion_reuses_identity_and_starts_regular_battle_collection(database
             database.close()
 
 
+@pytest.mark.parametrize("tier,tracked", [
+    ({"id": 105000034, "name": "Legend III"}, False),
+    ({"id": 105000032, "name": "Electro League 32"}, False),
+    ({"id": 105000000, "name": "Unranked"}, True),
+])
+def test_lower_tier_ends_tracking_but_an_unlisted_tier_never_does(
+    database_url, archive_server, tier, tracked,
+):
+    with domain_database(database_url) as info:
+        _profile(info, archive_server, at=MONDAY - timedelta(days=1), eligible=True)
+        database = _collector(info)
+        try:
+            database.begin_reset(MONDAY, local_regular_inflight=0)
+            _profile(info, archive_server, at=MONDAY + timedelta(seconds=5), tier=tier)
+            with psycopg.connect(info) as connection:
+                row = connection.execute("SELECT active, eligibility_state FROM players").fetchone()
+            assert (row[0], text(row[1])) == ((True, "eligible") if tracked else (False, "ineligible"))
+            # Either way this week needs no weekly request.
+            assert next_check(database, MONDAY + timedelta(seconds=6), schedule=True) is None
+        finally:
+            database.close()
+
+
+# Migration 0037's candidate search, kept here to prove its replacement
+# selects exactly the same players.
+_0037_SELECTION = """
+    SELECT player.id FROM players AS player
+    WHERE (NOT player.active OR (NOT %(scheduled)s AND player.eligibility_state <> 'eligible'))
+      AND (%(scheduled)s OR player.id = ANY(%(ids)s))
+      AND NOT clashlens_eligibility_checked_since(player.id, %(boundary)s, %(instant)s)
+      AND NOT clashlens_eligibility_fetched_since(player.id, %(boundary)s, %(instant)s)
+      AND NOT EXISTS (
+          SELECT 1 FROM collector_work AS work
+          WHERE work.player_id = player.id
+            AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
+            AND (work.status IN ('pending', 'waiting_retry')
+                 OR (work.due_at >= %(boundary)s AND work.due_at < %(boundary)s + interval '7 days')
+                 OR EXISTS (
+                     SELECT 1 FROM collector_observations AS observation
+                     WHERE observation.id = work.profile_observation_id
+                       AND observation.response_completed_at >= %(boundary)s
+                       AND observation.response_completed_at <= %(instant)s)))
+    ORDER BY player.id"""
+
+
+def test_direct_selection_matches_0037_for_every_evidence_case(database_url, archive_server):
+    instant = MONDAY + timedelta(days=1)
+    with domain_database(database_url) as info:
+        database = _collector(info)
+        try:
+            players = {}
+
+            def player(name, active=False, state="unknown"):
+                tag = "#" + "".join("0289PYLQGRJCUV"[int(d)] for d in str(len(players) + 10))
+                players[name] = (_player(info, tag), tag)
+                with psycopg.connect(info) as connection:
+                    connection.execute(
+                        "UPDATE players SET active = %s, eligibility_state = %s WHERE id = %s",
+                        (active, state, players[name][0]),
+                    )
+                return players[name]
+
+            def fetch(name, at, status=200, work=None):
+                player_id, tag = players[name]
+                return database.record_response(_handoff(
+                    occurrence_key=f"{name}:{at.isoformat()}", tag=tag, player_id=player_id,
+                    response_hash=hashlib.sha256(f"{name}{at}".encode()).hexdigest(),
+                    completed_at=at, http_status=status, collector_work_id=work,
+                ))
+
+            def work(name, due, status="complete", kind="discovery_profile"):
+                player_id, tag = players[name]
+                with psycopg.connect(info) as connection:
+                    return connection.execute(
+                        """INSERT INTO collector_work (kind, lane, scope, player_id, normalized_tag,
+                               due_at, coalescing_key, status, battle_log_status,
+                               league_history_status)
+                           VALUES (%s, %s, 'player', %s, %s, %s, %s, %s, %s, 'not_applicable')
+                           RETURNING id""",
+                        (kind, "ordinary" if kind == "discovery_profile" else "interactive",
+                         player_id, tag, due, f"{name}:{due.isoformat()}", status,
+                         "not_applicable" if kind == "discovery_profile" else "pending"),
+                    ).fetchone()[0]
+
+            player("nothing")
+            player("fetched_this_week"); fetch("fetched_this_week", MONDAY + timedelta(hours=1))
+            player("fetched_after_instant"); fetch("fetched_after_instant", instant + timedelta(hours=1))
+            player("fetched_last_week"); fetch("fetched_last_week", MONDAY - timedelta(hours=1))
+            player("failed_fetch_this_week"); fetch("failed_fetch_this_week", MONDAY + timedelta(hours=1), 503)
+            player("unchanged_this_week")
+            fetch("unchanged_this_week", MONDAY - timedelta(hours=1))
+            database.record_response(replace(_handoff(
+                occurrence_key="unchanged-again", tag=players["unchanged_this_week"][1],
+                player_id=players["unchanged_this_week"][0],
+                response_hash=hashlib.sha256(
+                    f"unchanged_this_week{MONDAY - timedelta(hours=1)}".encode()).hexdigest(),
+                completed_at=MONDAY + timedelta(hours=1),
+            )))
+            for name, at, tier in (
+                ("recognized_this_week", MONDAY + timedelta(hours=1), None),
+                ("recognized_last_week", MONDAY - timedelta(hours=1), None),
+                ("uncertain_this_week", MONDAY + timedelta(hours=1), {"id": 105000000, "name": "Unranked"}),
+            ):
+                _profile(info, archive_server, at=at, tag=player(name)[1], tier=tier)
+            player("work_this_week"); work("work_this_week", MONDAY + timedelta(hours=1))
+            player("failed_work_this_week"); work("failed_work_this_week", MONDAY + timedelta(hours=1), "failed")
+            player("failed_work_last_week"); work("failed_work_last_week", MONDAY - timedelta(days=1), "failed")
+            player("pending_old_work"); work("pending_old_work", MONDAY - timedelta(days=8), "pending")
+            player("old_refresh_answered_this_week")
+            refresh = work("old_refresh_answered_this_week", MONDAY - timedelta(minutes=1),
+                           "pending", kind="live_refresh")
+            fetch("old_refresh_answered_this_week", MONDAY - timedelta(minutes=1), 503, work=refresh)
+            fetch("old_refresh_answered_this_week", MONDAY + timedelta(minutes=1), 503, work=refresh)
+            with psycopg.connect(info) as connection:
+                connection.execute("UPDATE collector_work SET status = 'complete' WHERE id = %s", (refresh,))
+            player("active_eligible", active=True, state="eligible")
+            player("active_unknown", active=True)
+            player("inactive_eligible", state="eligible")
+            ids = [player_id for player_id, _tag in players.values()]
+            by_id = {player_id: name for name, (player_id, _tag) in players.items()}
+
+            for scheduled in (True, False):
+                with psycopg.connect(info) as connection, connection.transaction(force_rollback=True):
+                    expected = [row[0] for row in connection.execute(_0037_SELECTION, {
+                        "scheduled": scheduled, "ids": ids, "boundary": MONDAY, "instant": instant,
+                    })]
+                    assert connection.execute(
+                        "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
+                        (None if scheduled else ids, instant, scheduled),
+                    ).fetchone()[0] == len(expected)
+                    selected = [row[0] for row in connection.execute(
+                        "SELECT player_id FROM collector_work WHERE coalescing_key LIKE 'discovery-profile:%' ORDER BY player_id"
+                    )]
+                assert [by_id[i] for i in selected] == [by_id[i] for i in expected]
+                assert {by_id[i] for i in expected} == {
+                    "nothing", "fetched_after_instant", "fetched_last_week", "failed_fetch_this_week",
+                    "recognized_last_week", "uncertain_this_week", "failed_work_last_week",
+                    "inactive_eligible", *(() if scheduled else ("active_unknown",)),
+                }
+        finally:
+            database.close()
+
+
 def test_live_profiles_satisfy_week_without_extra_requests(database_url, archive_server):
     with domain_database(database_url) as info:
         database = _collector(info)
@@ -687,5 +830,106 @@ def test_unchanged_pending_profile_reuse_depends_on_fetch_completion(
                 assert connection.execute(
                     "SELECT profile_observation_id FROM collector_work WHERE id = %s", (work,),
                 ).fetchone()[0] == original.observation_id
+        finally:
+            database.close()
+
+
+class _EndpointClient(_Client):
+    """A fake API answering each endpoint with its own HTTP status."""
+
+    def __init__(self, spool, statuses):
+        super().__init__(spool)
+        self.statuses = statuses
+
+    async def fetch_player(self, pool, tag, endpoint):
+        return replace(await super().fetch_player(pool, tag, endpoint),
+                       http_status=self.statuses.get(endpoint, 200))
+
+
+@pytest.mark.parametrize("weekly", [False, True])
+def test_temporary_failure_retries_the_same_weeks_work_until_the_api_answers(
+    database_url, weekly,
+):
+    with domain_database(database_url) as info:
+        player = _player(info)
+        database = _collector(info)
+        try:
+            database.begin_reset(MONDAY, local_regular_inflight=0)
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
+                    (None if weekly else [player], MONDAY, weekly),
+                ).fetchone()[0] == 1
+
+            def admitted():
+                now = MONDAY + timedelta(minutes=1)
+                return (next_check(database, now, schedule=False) if weekly else
+                        database.pending_intents(limit=1, now=now, interactive=False)[0])
+
+            spool = _Spool()
+            # The profile arrives; league history answers 503 once, then 200.
+            client = _EndpointClient(spool, {"league_history": 503})
+            collector = _fake_collector(spool, database, client)
+            first = admitted()
+            assert asyncio.run(collector.collect_intent(first)) == "retrying"
+            client.statuses = {}
+            retry = admitted()
+            assert retry.work_id == first.work_id
+            assert not retry.profile_required and retry.league_history_required
+            assert asyncio.run(collector.collect_intent(retry)) == "complete"
+            assert spool.events.count("fetch:profile") == 1
+            assert spool.events.count("fetch:league_history") == 2
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT count(*), min(status) FROM collector_work"
+                ).fetchone() == (1, "complete")
+                # Another submission that week reuses the finished check.
+                assert connection.execute(
+                    "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, false)",
+                    ([player], MONDAY + timedelta(days=1)),
+                ).fetchone()[0] == 0
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("weekly", [False, True])
+@pytest.mark.parametrize("status,runs", [(503, 4), (429, 4), (403, 1)])
+def test_failed_check_retries_only_temporary_failures_and_a_bounded_number_of_times(
+    database_url, weekly, status, runs,
+):
+    with domain_database(database_url) as info:
+        player = _player(info)
+        database = _collector(info)
+        try:
+            database.begin_reset(MONDAY, local_regular_inflight=0)
+            with psycopg.connect(info) as connection:
+                connection.execute(
+                    "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
+                    (None if weekly else [player], MONDAY, weekly),
+                )
+                connection.execute(
+                    "UPDATE collector_work SET league_history_status = 'not_applicable'")
+            spool = _Spool()
+            client = _Client(spool, http_status=status)
+            collector = _fake_collector(spool, database, client)
+            outcomes = []
+            while True:
+                now = MONDAY + timedelta(minutes=1)
+                intent = (next_check(database, now, schedule=False) if weekly else
+                          next(iter(database.pending_intents(limit=1, now=now, interactive=False)), None))
+                if intent is None:
+                    break
+                outcomes.append(asyncio.run(collector.collect_intent(intent)))
+            # One request per run: the first, then three retries while the API answers.
+            assert outcomes == ["retrying"] * (runs - 1) + ["failed"]
+            assert client.fetch_count == runs
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT count(*), min(status) FROM collector_work"
+                ).fetchone() == (1, "failed")
+                assert connection.execute(
+                    "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, false)",
+                    ([player], MONDAY + timedelta(days=1)),
+                ).fetchone()[0] == 0
         finally:
             database.close()

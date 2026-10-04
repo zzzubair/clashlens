@@ -24,7 +24,23 @@ SUPPORTED_PARSER_VERSIONS = (
 )
 LEGEND_I_TIER_ID = 105000036
 LEGEND_I_TIER_NAME = "Legend I"
-RECOGNIZED_NON_LEGEND_TIERS_V1 = {105000035: "Legend II"}
+# Every tier below Legend I, as official profiles name it: each ID seen with
+# exactly this one name. Any other ID or name stays uncertain, never
+# ineligible. Unranked (105000000) is left out on purpose.
+RECOGNIZED_NON_LEGEND_TIERS_V1 = {
+    105000001: "Skeleton League 1", 105000002: "Skeleton League 2", 105000003: "Skeleton League 3",
+    105000004: "Barbarian League 4", 105000005: "Barbarian League 5", 105000006: "Barbarian League 6",
+    105000007: "Archer League 7", 105000008: "Archer League 8", 105000009: "Archer League 9",
+    105000010: "Wizard League 10", 105000011: "Wizard League 11", 105000012: "Wizard League 12",
+    105000013: "Valkyrie League 13", 105000014: "Valkyrie League 14", 105000015: "Valkyrie League 15",
+    105000016: "Witch League 16", 105000017: "Witch League 17", 105000018: "Witch League 18",
+    105000019: "Golem League 19", 105000020: "Golem League 20", 105000021: "Golem League 21",
+    105000022: "P.E.K.K.A League 22", 105000023: "P.E.K.K.A League 23", 105000024: "P.E.K.K.A League 24",
+    105000025: "Titan League 25", 105000026: "Titan League 26", 105000027: "Titan League 27",
+    105000028: "Dragon League 28", 105000029: "Dragon League 29", 105000030: "Dragon League 30",
+    105000031: "Electro League 31", 105000032: "Electro League 32", 105000033: "Electro League 33",
+    105000034: "Legend III", 105000035: "Legend II",
+}
 _PLAYER_TAG_RE = re.compile(r"^#[0289PYLQGRJCUV]+$")
 
 

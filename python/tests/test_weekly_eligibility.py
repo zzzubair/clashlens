@@ -75,22 +75,6 @@ def test_resuming_a_durable_weekly_profile_does_not_fetch_it_again():
     assert client.fetch_count == 0
 
 
-def test_weekly_failure_has_bounded_retries_on_the_same_work(monkeypatch):
-    spool = _Spool()
-    store = _Store(spool)
-    client = _Client(spool, http_status=503)
-    collector = _collector(spool, store, client)
-    monkeypatch.setattr("clashlens.collector._retry_delay", lambda _attempt: 0)
-    intent = CollectorIntent(
-        "discovery_profile", datetime.now(UTC), 1, "#2PP", work_id=9,
-        eligibility_recheck=True,
-    )
-    assert asyncio.run(collector.collect_intent(intent)) == "failed"
-    assert client.fetch_count == 3
-    assert {item.collector_work_id for item in store.handoffs} == {9}
-    assert spool.events[-1] == "fail:9"
-
-
 def test_slow_weekly_collection_has_no_catchup_burst(monkeypatch):
     # A virtual clock advances through a slow request, without a long test sleep.
     clock = [0.0]

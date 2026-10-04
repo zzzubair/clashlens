@@ -15,9 +15,10 @@ if TYPE_CHECKING:
     from .collector import Collector
 
 # Player work kept for retry when every failure was transient.
-_RETRIED_INTENTS = frozenset(
-    {"reset_baseline", "reset_settlement", "initial_collection", "live_refresh"}
-)
+_RETRIED_INTENTS = frozenset({
+    "reset_baseline", "reset_settlement", "initial_collection", "live_refresh",
+    "discovery_profile",
+})
 # Failed runs allowed outside a provider-outage pause before such work settles
 # as missing, so a few failing players cannot hold ordinary collection.
 _RETRIES_WHILE_ANSWERING = 3

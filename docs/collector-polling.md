@@ -47,8 +47,17 @@ Migration `0037_weekly_eligibility.sql` makes the shared
 as soon as the migration is applied, independently of the switch. First-time
 tags still enqueue immediately. Pending profile checks across older cycles are
 reused, and terminal routine attempts do not restart on every repeat sighting.
-Weekly work retries transport/server failures at most three times per endpoint.
-A failed or unrecognized response never becomes proof of eligibility.
+Migration `0067_weekly_eligibility_direct_selection.sql` keeps that selection
+but finds due players with plain lookups, so a finished week costs one cheap
+lookup per inactive player instead of the per-player evidence checks.
+
+Weekly and ordinary discovery work make one request per endpoint per run. A
+temporary failure (a transport failure, a rate limit or a server error) puts the
+same work row back after five seconds, refetching only endpoints without a
+successful or not-found answer, up to three more runs while the API answers and
+without limit during a provider-outage pause, within 23 hours 55 minutes of
+queueing. A rejected key (401 or 403) fails the work at once. A failed or
+unrecognized response never becomes proof of eligibility.
 
 Successful profile fetches completed since Monday's 05:00 UTC Reset prevent
 another routine profile request, even while processing is pending or after a
