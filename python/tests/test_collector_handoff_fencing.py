@@ -115,6 +115,47 @@ def test_cleanup_pauses_between_turns_and_reports_every_found_file(
     assert kept not in store.marked
 
 
+def test_full_cleanup_lookup_while_spool_is_full_clears_an_earlier_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool = _Spool()
+    collector = _collector(spool, _Store(spool), _Client(spool))
+    stop = asyncio.Event()
+    found = iter((0, 256, 0, 0))
+    lookups: list[dict[str, object]] = []
+    waits = 0
+
+    def cleanup(**kwargs: object) -> tuple[int, int]:
+        lookups.append(kwargs)
+        count = next(found)
+        return count, count
+
+    async def spool_available() -> bool:
+        collector._spool_capacity_failed = False
+        return True
+
+    async def no_wait(stop_requested: asyncio.Event, _seconds: float) -> None:
+        nonlocal waits
+        waits += 1
+        collector._spool_capacity_failed = waits == 1
+        if waits == 3:
+            stop_requested.set()
+        await asyncio.sleep(0)
+
+    async def idle_upload(*, owner: str) -> bool:
+        del owner
+        await stop.wait()
+        return False
+
+    monkeypatch.setattr("clashlens.collector._wait_or_stop", no_wait)
+    collector.cleanup_uploaded = cleanup  # type: ignore[method-assign]
+    collector._spool_available = spool_available  # type: ignore[method-assign]
+    collector.upload_once = idle_upload  # type: ignore[method-assign]
+
+    asyncio.run(asyncio.wait_for(collector._upload_loop(stop, 0.01), timeout=2))
+    assert lookups == [{}, {}, {}, {"limit": 32}]
+
+
 def test_normal_upload_shutdown_finishes_owned_upload_and_removes_its_raw_body(
     tmp_path: Path,
 ) -> None:

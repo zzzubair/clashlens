@@ -1185,8 +1185,7 @@ class Collector:
             )
             for owner in owners
         }
-        last_sweep = next_cleanup = 0.0
-        loop = asyncio.get_running_loop()
+        last_sweep, next_cleanup, loop = 0.0, 0.0, asyncio.get_running_loop()
         graceful = False
         try:
             while not stop_requested.is_set():
@@ -1202,8 +1201,9 @@ class Collector:
                 try:
                     if self._spool_capacity_failed or loop.time() >= next_cleanup:
                         _, found = await asyncio.to_thread(self.cleanup_uploaded)
-                        if found < _CLEANUP_LOOKUP_SIZE:
-                            next_cleanup = loop.time() + _CLEANUP_IDLE_SECONDS
+                        next_cleanup = loop.time() + _CLEANUP_IDLE_SECONDS * (
+                            found < _CLEANUP_LOOKUP_SIZE
+                        )
                     # Compacted responses leave no upload row or observation, so
                     # their spool bytes are unreferenced. Sweep them under the
                     # cleanup barrier; the referenced set is evaluated inside it so
