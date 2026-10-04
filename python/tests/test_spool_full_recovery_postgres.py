@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -17,7 +18,7 @@ from test_worker_lifecycle import _worker_namespace
 from clashlens import cli
 from clashlens import spool as spool_module
 from clashlens.archive import SpoolFirstReader
-from clashlens.collector import Collector
+from clashlens.collector import _CLEANUP_LOOKUP_SIZE, Collector
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 from clashlens.collector_uploads import claim_upload, complete_upload
 from clashlens.spool import Spool, SpoolError
@@ -174,8 +175,8 @@ def test_failed_spool_read_waits_instead_of_failing_the_job(
 def test_cleanup_deletes_the_same_responses_with_few_lookups(
     database_url: str, tmp_path, monkeypatch
 ) -> None:
-    # Each lookup reads the whole upload table: on production 2026-10-04 that
-    # was 42% of all database reads, 16 responses at a time every few seconds.
+    # Each lookup once read the whole upload table: on production 2026-10-04
+    # that was 42% of all database reads, 16 responses at a time.
     # Flushing to disk changes no outcome here and is most of the time taken.
     monkeypatch.setattr(spool_module.os, "fsync", lambda _fd: None)
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -184,7 +185,7 @@ def test_cleanup_deletes_the_same_responses_with_few_lookups(
         spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
         digests = {
             _save(connection_info, database, spool, f"#{index:04d}")
-            for index in range(260)
+            for index in range(_CLEANUP_LOOKUP_SIZE + 4)
         }
         while (claim := claim_upload(database, owner="uploader")) is not None:
             complete_upload(
@@ -196,7 +197,7 @@ def test_cleanup_deletes_the_same_responses_with_few_lookups(
         with psycopg.connect(connection_info) as connection:
             # The worker has read every response and its finished jobs are gone.
             connection.execute("DELETE FROM python_processing_jobs")
-        assert set(database.deletable_hashes(limit=1000)) == digests
+        assert set(database.deletable_hashes(limit=2000)) == digests
 
         lookups = []
         deletable_hashes = database.deletable_hashes
@@ -211,7 +212,7 @@ def test_cleanup_deletes_the_same_responses_with_few_lookups(
         async def clean() -> None:
             stop = asyncio.Event()
             task = asyncio.create_task(collector._upload_loop(stop, 0.01))
-            for _attempt in range(500):
+            for _attempt in range(1000):
                 if all(spool.verify(digest) is None for digest in digests):
                     break
                 await asyncio.sleep(0.01)
@@ -222,6 +223,74 @@ def test_cleanup_deletes_the_same_responses_with_few_lookups(
 
         asyncio.run(clean())
         assert all(spool.verify(digest) is None for digest in digests)
-        # Two turns, then one more as the collector stops.
+        # A full lookup, a short one, then one more as the collector stops.
         assert len(lookups) == 3
-        assert deletable_hashes(limit=1000) == []
+        assert deletable_hashes(limit=2000) == []
+
+
+def test_cleanup_lookup_reads_kept_uploads_from_the_index_in_order(
+    database_url: str,
+) -> None:
+    # Production kept 1.67 million upload rows on 2026-10-04, almost all
+    # already deleted locally; every lookup read and sorted all of them.
+    with domain_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state, archive_reference,
+                    archive_instance_id, completed_at, local_deleted_at,
+                    latest_sighting_at
+                )
+                SELECT encode(sha256(i::text::bytea), 'hex'), 'sha256/fixture', 1,
+                       'complete', 's3://evidence/' || i, 'fixture-instance', now(),
+                       CASE WHEN i % 500 = 0 THEN NULL ELSE now() END,
+                       now() - i * interval '1 second'
+                FROM generate_series(1, 100000) AS i
+                """
+            )
+            connection.execute("ANALYZE collector_response_uploads")
+        database = CollectorDatabase(connection_info)
+        plans = []
+
+        @contextmanager
+        def explained():
+            with database.pool.connection() as connection:
+                query = SimpleNamespace(
+                    execute=lambda sql, params: (
+                        plans.append(
+                            connection.execute(
+                                f"EXPLAIN (FORMAT JSON) {sql}", params
+                            ).fetchone()[0][0]["Plan"]
+                        ),
+                        connection.execute(sql, params),
+                    )[1]
+                )
+                yield query
+
+        database._connection = explained  # type: ignore[method-assign]
+        try:
+            found = database.deletable_hashes(limit=_CLEANUP_LOOKUP_SIZE)
+        finally:
+            database.close()
+
+    def nodes(plan: dict) -> list[dict]:
+        return [
+            plan,
+            *(node for child in plan.get("Plans", []) for node in nodes(child)),
+        ]
+
+    # The 200 kept rows come back oldest sighting first.
+    assert found == [
+        hashlib.sha256(str(i).encode()).hexdigest() for i in range(100000, 0, -500)
+    ]
+    uploads = [
+        node
+        for node in nodes(plans[0])
+        if node.get("Relation Name") == "collector_response_uploads"
+    ]
+    assert [node.get("Index Name") for node in uploads] == [
+        "collector_response_uploads_cleanup_order"
+    ]
+    assert all(node["Node Type"] != "Sort" for node in nodes(plans[0]))

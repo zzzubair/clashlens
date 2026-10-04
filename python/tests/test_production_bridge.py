@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from domain_test_support import production_worker_grants
+from domain_test_support import apply_migration, production_worker_grants
 from psycopg.conninfo import make_conninfo
 
 from clashlens.db import Database
@@ -27,7 +27,7 @@ def _production_database(database_url: str) -> Iterator[tuple[str, str]]:
         with psycopg.connect(connection_info, autocommit=True) as connection:
             root = Path(__file__).parents[2]
             for migration in sorted((root / "deploy" / "migrations").glob("*.sql")):
-                connection.execute(migration.read_text(encoding="utf-8"))
+                apply_migration(connection, migration.read_text(encoding="utf-8"))
             for statement in production_worker_grants():
                 connection.execute(statement)
         yield connection_info, schema

@@ -9,7 +9,13 @@ from unittest.mock import patch
 
 import psycopg
 import pytest
-from domain_test_support import as_api_role, domain_database, store_observation, text
+from domain_test_support import (
+    apply_migration,
+    as_api_role,
+    domain_database,
+    store_observation,
+    text,
+)
 from test_discovery_history_prune_postgres import _attach_complete_work
 from test_domain_processing_postgres import _processor
 
@@ -673,7 +679,7 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
                 connection.commit()
                 for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
                     if int(migration.name.split("_", 1)[0]) >= 40:
-                        connection.execute(migration.read_text())
+                        apply_migration(connection, migration.read_text())
                 fingerprint = connection.execute(
                     "SELECT current_profile_fingerprint FROM players WHERE normalized_tag = '#2PP'"
                 ).fetchone()[0]

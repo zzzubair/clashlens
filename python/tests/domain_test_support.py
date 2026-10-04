@@ -109,6 +109,22 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(army_ingestion, "complete_army_analytics", complete)
 
 
+def apply_migration(connection: psycopg.Connection[Any], sql: str) -> None:
+    """Run a migration as ./ops does: psql sends one statement at a time."""
+    if "CONCURRENTLY" not in sql:
+        connection.execute(sql)
+        return
+    # One multi-statement string is one transaction, which a non-blocking
+    # index build refuses, so these files run statement by statement.
+    autocommit, connection.autocommit = connection.autocommit, True
+    try:
+        for statement in sql.split(";\n"):
+            if statement.strip():
+                connection.execute(statement)
+    finally:
+        connection.autocommit = autocommit
+
+
 def production_worker_grants() -> list[str]:
     """The worker table restrictions `./ops` applies after every migration."""
     ops = (Path(__file__).parents[2] / "ops").read_text(encoding="utf-8")
@@ -140,7 +156,7 @@ def domain_database(
         sql_files = sorted(migrations_dir.glob("*.sql"))
         with psycopg.connect(connection_info, autocommit=True) as connection:
             for path in sql_files:
-                connection.execute(path.read_text(encoding="utf-8"))
+                apply_migration(connection, path.read_text(encoding="utf-8"))
             for statement in production_worker_grants():
                 connection.execute(statement)
         yield connection_info
