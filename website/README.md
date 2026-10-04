@@ -286,8 +286,10 @@ The linking form includes the in-game API token instructions.
 Each linked account on a profile is one card that opens its player page: name,
 tag, clan, current trophies, Live Leaderboard rank ("Unranked" when off the
 board) and today's net so far with attacks and defenses done. The one profile
-read returns every card. An account without current results shows its player
-page's explanation instead of numbers.
+read returns every card. An account without current results also shows its
+player page's explanation, with any saved trophies and today's battles from its
+last accepted profile (for example after leaving Legend I) and "Unknown",
+"Unranked" or "Not available yet" where nothing valid is saved.
 
 Usernames are fixed after signup. Both the website action and private API reject
 rename attempts; display-name edits still work. The form directs username-change

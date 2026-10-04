@@ -70,8 +70,8 @@ export interface GroupDeleteResult {
 }
 
 /**
- * One linked player on a public profile. Numbers appear only for a player
- * with current results: tracking with no `reason`.
+ * One linked player on a public profile. Numbers come from the player's
+ * last accepted profile, and stay null while a `reason` explains a newer one.
  */
 export interface LinkedPlayerCard extends VerifiedPlayer {
   clan: string | null;

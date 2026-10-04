@@ -47,6 +47,17 @@ const data = {
         rank: null,
         today: null,
       },
+      {
+        tag: "#9PY",
+        name: "Demoted",
+        clan: null,
+        state: "not_in_legend",
+        reason: null,
+        trophies: 4900,
+        seasonResetPending: false,
+        rank: null,
+        today: { net: -40, attacks: 0, defenses: 1 },
+      },
     ],
   },
   notFound: false,
@@ -80,8 +91,8 @@ it("confirms a just-linked player without knowing who is signed in", async () =>
 it("shows each linked account as one card linking to its player page", async () => {
   const html = await renderProfile("");
   const cards = html.match(/<a class="linked-player-card"[\s\S]*?<\/a>/g) ?? [];
-  expect(cards).toHaveLength(3);
-  const [tracked, unknownNet, season0] = cards;
+  expect(cards).toHaveLength(4);
+  const [tracked, unknownNet, season0, demoted] = cards;
   expect(tracked).toContain('href="/players/%232PP"');
   expect(tracked).toContain(
     'aria-labelledby="linked-player-2PP-name linked-player-2PP-tag"',
@@ -94,9 +105,18 @@ it("shows each linked account as one card linking to its player page", async () 
   expect(unknownNet).toContain("Unknown");
   expect(unknownNet).not.toContain("so far");
   expect(unknownNet).toContain("2/8 attacks · 0/8 defenses");
-  // The same words as the player page, and no numbers.
+  expect(tracked).not.toContain("linked-player-note");
+  // The same words as the player page, with nothing valid to count.
   expect(season0).toContain(
     "Quiet is in Legend League but hasn&#x27;t played a Legend League battle this Season.",
   );
-  expect(season0).not.toContain("Trophies");
+  for (const text of ["Trophies", "Unknown", "Unranked", "Not available yet"])
+    expect(season0).toContain(text);
+  // A player who left Legend I keeps their saved trophies and today's battles.
+  expect(demoted).toContain("This player is not in Legend I.");
+  for (const text of ["4,900", "Unranked", "-40", "0/8 attacks · 1/8 defenses"])
+    expect(demoted).toContain(text);
+  expect(demoted).toContain(
+    'aria-describedby="linked-player-9PY-details linked-player-9PY-note"',
+  );
 });

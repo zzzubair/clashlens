@@ -148,17 +148,22 @@ export default function UserRoute() {
 /**
  * The whole card is one link to the player page, named by the player's name
  * and tag; the numbers are its description. A player without current results
- * says what their own page says instead.
+ * also says what their own page says.
  */
 function LinkedPlayer({ player }: { player: LinkedPlayerCard }) {
   const id = `linked-player-${player.tag.slice(1)}`;
-  const hasResults = player.state === "tracking" && player.reason === null;
+  const note =
+    player.state === "tracking" && player.reason === null
+      ? null
+      : ((player.state === "tracking"
+          ? lookupExplanation(player.reason, player.name)
+          : null) ?? LOOKUP_MESSAGES[player.state]);
   return (
     <a
       className="linked-player-card"
       href={canonicalPlayerPath(player.tag)}
       aria-labelledby={`${id}-name ${id}-tag`}
-      aria-describedby={`${player.clan ? `${id}-clan ` : ""}${id}-details`}
+      aria-describedby={`${player.clan ? `${id}-clan ` : ""}${id}-details${note === null ? "" : ` ${id}-note`}`}
     >
       <span className="linked-player-identity">
         <strong className="linked-player-name" id={`${id}-name`}>
@@ -173,54 +178,51 @@ function LinkedPlayer({ player }: { player: LinkedPlayerCard }) {
           </span>
         ) : null}
       </span>
-      {hasResults ? (
-        <span className="linked-player-stats" id={`${id}-details`}>
-          <span className="linked-player-stat">
-            <small>Trophies</small>
-            {player.trophies === null ? (
-              <span className="linked-player-wait">
-                {player.seasonResetPending
-                  ? "Waiting for this player's Season reset"
-                  : "Unknown"}
-              </span>
-            ) : (
-              <strong>{player.trophies.toLocaleString("en-GB")}</strong>
-            )}
-          </span>
-          <span className="linked-player-stat">
-            <small>Rank</small>
-            <strong>
-              {player.rank === null
-                ? "Unranked"
-                : `#${player.rank.toLocaleString("en-GB")}`}
-            </strong>
-          </span>
-          <span className="linked-player-stat linked-player-today">
-            <small>Today</small>
-            {player.today === null ? (
-              <span className="linked-player-wait">Not available yet</span>
-            ) : (
-              <>
-                <span>
-                  <strong className={netTone(player.today.net)}>
-                    {formatNet(player.today.net)}
-                  </strong>
-                  {player.today.net === null ? null : " so far"}
-                </span>
-                {player.today.attacks !== null && player.today.defenses !== null ? (
-                  <span className="linked-player-battles">
-                    {player.today.attacks}/8 attacks · {player.today.defenses}/8 defenses
-                  </span>
-                ) : null}
-              </>
-            )}
-          </span>
+      <span className="linked-player-stats" id={`${id}-details`}>
+        <span className="linked-player-stat">
+          <small>Trophies</small>
+          {player.trophies === null ? (
+            <span className="linked-player-wait">
+              {player.seasonResetPending
+                ? "Waiting for this player's Season reset"
+                : "Unknown"}
+            </span>
+          ) : (
+            <strong>{player.trophies.toLocaleString("en-GB")}</strong>
+          )}
         </span>
-      ) : (
-        <span className="linked-player-note" id={`${id}-details`}>
-          {(player.state === "tracking"
-            ? lookupExplanation(player.reason, player.name)
-            : null) ?? LOOKUP_MESSAGES[player.state]}
+        <span className="linked-player-stat">
+          <small>Rank</small>
+          <strong>
+            {player.rank === null
+              ? "Unranked"
+              : `#${player.rank.toLocaleString("en-GB")}`}
+          </strong>
+        </span>
+        <span className="linked-player-stat linked-player-today">
+          <small>Today</small>
+          {player.today === null ? (
+            <span className="linked-player-wait">Not available yet</span>
+          ) : (
+            <>
+              <span>
+                <strong className={netTone(player.today.net)}>
+                  {formatNet(player.today.net)}
+                </strong>
+                {player.today.net === null ? null : " so far"}
+              </span>
+              {player.today.attacks !== null && player.today.defenses !== null ? (
+                <span className="linked-player-battles">
+                  {player.today.attacks}/8 attacks · {player.today.defenses}/8 defenses
+                </span>
+              ) : null}
+            </>
+          )}
+        </span>
+      </span>
+      {note === null ? null : (
+        <span className="linked-player-note" id={`${id}-note`}>
+          {note}
         </span>
       )}
     </a>

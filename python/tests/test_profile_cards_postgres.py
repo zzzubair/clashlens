@@ -20,10 +20,10 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
             account_id = create_owner(database)
             for tag, trophies in [
                 ("#2PP", 5300), ("#8PY", 5400), ("#9PY", 5200), ("#LQ2", 5500),
-                ("#PQ2", 5600),
+                ("#PQ2", 5600), ("#YQ2", 4900),
             ]:
                 seed_profile(database, tag, trophies)
-            for tag in ["#2PP", "#8PY", "#9PY", "#LQ2"]:
+            for tag in ["#2PP", "#8PY", "#9PY", "#LQ2", "#YQ2"]:
                 link_player(database, account_id, tag)
             # Every battle so far is recorded, so its net so far is known.
             seed_day(
@@ -106,6 +106,13 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
                     WHERE normalized_tag = '#2PP' AND profile_json -> 'clan' ->> 'name' = 'Clan A'
                     """
                 )
+                # Dropped out of Legend I, keeping its last accepted profile.
+                connection.execute(
+                    """
+                    UPDATE players SET active = false, eligibility_state = 'ineligible'
+                    WHERE normalized_tag = '#YQ2'
+                    """
+                )
 
             cards = api_accounts.get_public_user(database, "groupowner", now=NOW)[
                 "verified_players"
@@ -142,6 +149,12 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
                     "state": "tracking", "reason": "no_legend_battles",
                     "trophies": None, "season_reset_pending": False, "rank": None,
                     "today": None,
+                },
+                {
+                    "tag": "#YQ2", "name": "Player #YQ2", "clan": None,
+                    "state": "not_in_legend", "reason": None, "trophies": 4900,
+                    "season_reset_pending": False, "rank": None,
+                    "today": {"net": None, "attacks": None, "defenses": None},
                 },
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.

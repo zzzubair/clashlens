@@ -433,9 +433,11 @@ def player_cards(
     """Each player's current trophies, Live Leaderboard position and today's
     battles so far, read for every player at once.
 
-    ``players`` holds (player id, tag, name, clan). A player without current
-    results carries the lookup state and reason its own page explains, and no
-    numbers, so Season 0 trophies stay on that page alone.
+    ``players`` holds (player id, tag, name, clan). Every card carries the
+    lookup state and reason its own page explains. Numbers come only from an
+    accepted current profile, including for a player who has left Legend I.
+    While a newer profile goes unaccepted they stay unknown, so Season 0
+    trophies stay on that page alone.
     """
     ids = [player[0] for player in players]
     profiles = {
@@ -486,8 +488,7 @@ def player_cards(
             "rank": None,
             "today": None,
         }
-        if lookup["state"] == "tracking" and reason is None:
-            assert profile is not None
+        if reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
             pending = not season_is_current(_text(profile[1]), now)
             card["trophies"] = None if pending else int(profile[0])
