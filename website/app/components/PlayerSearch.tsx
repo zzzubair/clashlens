@@ -120,7 +120,9 @@ export function SearchSuggestions({
                 to={`/users/${encodeURIComponent(user.username)}`}
               >
                 <span className="search-suggestion-player">
-                  <strong>{user.displayName}</strong>
+                  <strong>
+                    <bdi>{user.displayName}</bdi>
+                  </strong>
                   <small>@{user.username}</small>
                   <span className="profile-badge">Clash Lens profile</span>
                 </span>
@@ -139,11 +141,13 @@ export function SearchSuggestions({
                 href={canonicalPlayerPath(result.tag)}
               >
                 <span className="search-suggestion-player">
-                  <strong>{result.name}</strong>
+                  <strong>
+                    <bdi>{result.name}</bdi>
+                  </strong>
                   <small>{result.tag}</small>
                 </span>
                 <span className="search-suggestion-meta">
-                  {result.clan} ·{" "}
+                  <bdi>{result.clan}</bdi> ·{" "}
                   {result.trophies === null
                     ? "Waiting for Season reset"
                     : result.trophies.toLocaleString()}

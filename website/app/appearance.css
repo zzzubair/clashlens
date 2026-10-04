@@ -126,6 +126,10 @@ summary {
 .search-result {
   position: relative;
 }
+/* Long names and usernames wrap instead of pushing the page sideways. */
+.search-result :is(.player-name, .player-tag) {
+  overflow-wrap: anywhere;
+}
 .search-result .player-name::after {
   position: absolute;
   inset: 0;

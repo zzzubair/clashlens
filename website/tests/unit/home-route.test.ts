@@ -87,7 +87,7 @@ it("labels Clash Lens profiles so they do not look like game players", async () 
   );
   expect(html).toContain('class="search-result search-result-profile"');
   expect(html).toMatch(
-    /href="\/users\/nova_star"[^>]*>Nova <span class="profile-badge">Clash Lens profile<\/span><\/a>/,
+    /href="\/users\/nova_star"[^>]*><bdi>Nova<\/bdi> <span class="profile-badge">Clash Lens profile<\/span><\/a>/,
   );
   expect(html.match(/profile-badge/g)).toHaveLength(1);
 });
@@ -147,11 +147,86 @@ it("formats the tracked total and explains a logout the server could not record"
   };
   expect(await renderHome(data, "")).not.toContain("could not record it");
   const html = await renderHome(data, "?logout=unrecorded");
-  expect(html).toContain("Top 0 of 13,263 tracked players");
+  expect(html).toContain(
+    "Daily results, rankings and armies for 13,263 tracked players.",
+  );
+  expect(html).not.toContain("Top 0");
+  expect(html).toContain("<h3>No standings available yet</h3>");
+  expect(html).not.toContain("<table");
   expect(html).toContain(
     "You are logged out on this browser, but Clash Lens could not record it.",
   );
   expect(html).not.toContain("log out again");
+});
+
+it("keeps worst-case names readable: one player, right-to-left text and no clan", async () => {
+  const html = await renderHome(
+    {
+      leaderboard: {
+        totalTracked: 1,
+        generatedAt: "2026-10-04T04:00:00Z",
+        entries: [
+          {
+            rank: 1,
+            tag: "#2PP0JLQ8VV",
+            name: "محمد الأسطورة 👑",
+            clan: "العائلة الملكية",
+            trophies: 6512,
+            freshness: {
+              state: "fresh",
+              observedAt: "2026-10-04T03:59:00Z",
+              ageSeconds: 60,
+            },
+            state: "available",
+          },
+        ],
+      },
+      query: "",
+      error: null,
+      search: null,
+    },
+    "",
+  );
+  expect(html).toContain("Daily results, rankings and armies for 1 tracked player.");
+  expect(html).toContain("Top 1 of 1 tracked player<");
+  // Isolated so right-to-left names and clans do not reorder the text around them.
+  expect(html).toContain("<bdi>محمد الأسطورة 👑</bdi>");
+  expect(html).toContain("<bdi>العائلة الملكية</bdi>");
+
+  const dropdown = renderToString(
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(SearchSuggestions, {
+        id: "suggestions",
+        data: {
+          search: {
+            ...search,
+            results: [
+              {
+                tag: "#P0Y8URGQ2",
+                name: "محمد الأسطورة",
+                clan: "العائلة الملكية",
+                trophies: 6455,
+              },
+            ],
+            users: [
+              {
+                username: "mohammad_legend",
+                displayName: "محمد 👑",
+                linkedPlayerCount: 1,
+              },
+            ],
+          },
+          error: null,
+        } as never,
+        loading: false,
+      }),
+    ),
+  ).replaceAll("<!-- -->", "");
+  expect(dropdown).toContain("<bdi>العائلة الملكية</bdi> · 6,455");
+  expect(dropdown).toContain("<bdi>محمد 👑</bdi>");
+  expect(dropdown).toContain("1 linked account<");
 });
 
 it("counts the shown rankings that are more than 10 minutes old", async () => {

@@ -53,6 +53,22 @@
   display: none;
 }
 
+/* Below the header, stay inside the screen: the suggestions shrink and scroll
+   while the input stays visible (landscape phones, zoomed pages). */
+@media (min-width: 34.0625rem) {
+  .header-search-panel {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 100% - 1rem);
+  }
+
+  .header-search-panel .search-form {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+}
+
 /* Make room for the search icon so the header never gains a row. */
 @media (min-width: 64.0625rem) {
   .site-header:has(.header-search) {
