@@ -214,87 +214,103 @@ export default function GroupCompareRoute() {
         </p>
       ) : null}
 
-      <p className="section-note">
-        Last {days} days adds up each player&apos;s trophy change on counted days only.
-        Won vs lost adds up trophies won in attacks and lost in defenses across every
-        battle recorded in these days, incomplete days included, so the two can differ.
-      </p>
+      {comparison.players.length > 0 ? (
+        <>
+          <p className="section-note">
+            Last {days} days adds up each player&apos;s trophy change on counted days
+            only. Won vs lost adds up trophies won in attacks and lost in defenses across
+            every battle recorded in these days, incomplete days included, so the two can
+            differ.
+          </p>
 
-      <div className="compare-board">
-        <table className="compare-table">
-          <caption className="sr-only">
-            {comparison.name}: {days}-day comparison sorted by {SORTS[sort]}
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">Player</th>
-              <th scope="col">Trophies now</th>
-              <th scope="col">Today so far</th>
-              <th scope="col">Last {days} days</th>
-              <th scope="col">Won vs lost</th>
-              <th scope="col">Vs the group</th>
-              <th scope="col">Attack</th>
-              <th scope="col">Defense</th>
-            </tr>
-          </thead>
-          <tbody>
-            {players.map((player) => (
-              <PlayerRow key={player.tag} player={player} scale={scale} days={days} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+          <div className="compare-board">
+            <table className="compare-table">
+              <caption className="sr-only">
+                {comparison.name}: {days}-day comparison sorted by {SORTS[sort]}
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Player</th>
+                  <th scope="col">Trophies now</th>
+                  <th scope="col">Today so far</th>
+                  <th scope="col">Last {days} days</th>
+                  <th scope="col">Won vs lost</th>
+                  <th scope="col">Vs the group</th>
+                  <th scope="col">Attack</th>
+                  <th scope="col">Defense</th>
+                </tr>
+              </thead>
+              <tbody>
+                {players.map((player) => (
+                  <PlayerRow key={player.tag} player={player} scale={scale} days={days} />
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-      <dl className="compare-key">
-        <div>
-          <dt>
-            <span className="day-bar day-complete" aria-hidden="true" /> Counted
-          </dt>
-          <dd>A complete day. Bars go up for trophies won and down for trophies lost.</dd>
+          <dl className="compare-key">
+            <div>
+              <dt>
+                <span className="day-bar day-complete" aria-hidden="true" /> Counted
+              </dt>
+              <dd>
+                A complete day. Bars go up for trophies won and down for trophies lost.
+              </dd>
+            </div>
+            <div>
+              <dt>
+                <span className="day-bar day-correcting" aria-hidden="true" /> May still
+                change
+              </dt>
+              <dd>
+                The day that ended at the last Reset. It is counted, but battles reported
+                late can still change it.
+              </dd>
+            </div>
+            <div>
+              <dt>
+                <span className="day-bar day-partial" aria-hidden="true" /> Incomplete
+              </dt>
+              <dd>
+                Some battles are missing. Shown, but left out of the Last {days} days
+                total.
+              </dd>
+            </div>
+            <div>
+              <dt>
+                <span className="day-bar day-missing" aria-hidden="true" /> No result
+              </dt>
+              <dd>Nothing recorded. Never counted as zero.</dd>
+            </div>
+            <div>
+              <dt>
+                <span className="day-bar day-retired" aria-hidden="true" /> History no
+                longer kept
+              </dt>
+              <dd>
+                The day belongs to a finished season whose daily detail has been cleaned
+                up. Never counted as zero.
+              </dd>
+            </div>
+          </dl>
+          <p className="section-note">
+            Attack and defense also use every battle recorded in these days; the number of
+            battles is shown with each. Attack success is the average stars and average
+            destruction per attack. Attacks a day count only counted days, out of the 8
+            attacks a Legend day allows. Vs the group compares a player with each other
+            group member on the days both have counted results, then averages across those
+            members; your own players outside the group are never part of it.
+          </p>
+        </>
+      ) : (
+        <div className="empty-state compare-empty-group">
+          <h2>No players in this group yet</h2>
+          <p>
+            <a href={`/account/groups#group-${comparison.groupId}`}>Add players</a> to
+            compare them side by side.
+          </p>
         </div>
-        <div>
-          <dt>
-            <span className="day-bar day-correcting" aria-hidden="true" /> May still
-            change
-          </dt>
-          <dd>
-            The day that ended at the last Reset. It is counted, but battles reported late
-            can still change it.
-          </dd>
-        </div>
-        <div>
-          <dt>
-            <span className="day-bar day-partial" aria-hidden="true" /> Incomplete
-          </dt>
-          <dd>
-            Some battles are missing. Shown, but left out of the Last {days} days total.
-          </dd>
-        </div>
-        <div>
-          <dt>
-            <span className="day-bar day-missing" aria-hidden="true" /> No result
-          </dt>
-          <dd>Nothing recorded. Never counted as zero.</dd>
-        </div>
-        <div>
-          <dt>
-            <span className="day-bar day-retired" aria-hidden="true" /> History no longer
-            kept
-          </dt>
-          <dd>
-            The day belongs to a finished season whose daily detail has been cleaned up.
-            Never counted as zero.
-          </dd>
-        </div>
-      </dl>
-      <p className="section-note">
-        Attack and defense also use every battle recorded in these days; the number of
-        battles is shown with each. Attack success is the average stars and average
-        destruction per attack. Attacks a day count only counted days, out of the 8
-        attacks a Legend day allows. Vs the group compares a player with each other group
-        member on the days both have counted results, then averages across those members;
-        your own players outside the group are never part of it.
-      </p>
+      )}
     </main>
   );
 }
@@ -390,7 +406,8 @@ function PlayerRow({
           <>
             <Signed value={attack.trophies - defense.trophies} />
             <span className="compare-sub">
-              +{attack.trophies} won · −{defense.trophies} lost
+              +{attack.trophies.toLocaleString("en")} won · −
+              {defense.trophies.toLocaleString("en")} lost
             </span>
           </>
         )}
@@ -439,7 +456,10 @@ function PlayerRow({
               {plural(defense.count, "defense")}:{" "}
               <span className="star-split">
                 {defense.starCounts.map((count, stars) => (
-                  <span key={stars} title={`${count} defenses gave up ${stars} stars`}>
+                  <span
+                    key={stars}
+                    title={`${plural(count, "defense")} gave up ${plural(stars, "star")}`}
+                  >
                     {stars}★ {count}
                     {stars < 3 ? <span className="sr-only">, </span> : null}
                   </span>
@@ -541,7 +561,10 @@ function sortPlayers(players: ComparedPlayer[], sort: SortKey): ComparedPlayer[]
 }
 
 function signed(value: number, decimals = 0): string {
-  const text = Math.abs(value).toFixed(decimals);
+  const text = Math.abs(value).toLocaleString("en", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
   return value > 0 ? `+${text}` : value < 0 ? `−${text}` : text;
 }
 

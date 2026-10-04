@@ -230,6 +230,10 @@
   background: transparent;
 }
 
+.compare-empty-group {
+  margin-top: 1.25rem;
+}
+
 .compare-key {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
@@ -303,5 +307,13 @@
   .compare-table tbody td:nth-child(4),
   .compare-table tbody td:last-child {
     grid-column: 1 / -1;
+  }
+}
+
+/* Four sort buttons share a 320 px phone without pushing the page sideways. */
+@media (max-width: 34rem) {
+  .compare-controls .leaderboard-view-switch .button {
+    min-width: 0;
+    padding-inline: 0.3rem;
   }
 }
