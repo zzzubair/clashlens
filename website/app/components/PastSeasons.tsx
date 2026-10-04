@@ -52,7 +52,12 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
         ClashKing. They are not Clash Lens tracking and are never added to the daily log
         or totals. Dates show when each Season ended; older seasons ran by calendar month.
       </p>
-      <div className="table-wrap" tabIndex={0} role="region" aria-label="Past Seasons table">
+      <div
+        className="table-wrap"
+        tabIndex={0}
+        role="region"
+        aria-label="Past Seasons table"
+      >
         <table className="data-table" aria-label="Past Seasons">
           <thead>
             <tr>
