@@ -371,6 +371,8 @@ these steps, all run by the worker:
    when that output's inputs are ready for every player in the Reset's
    `boundary_publication_generations` row. A failed pair is recorded as
    unavailable rather than blocking the other players' publication.
+   Builds for a Reset older than the newest one wait out 04:30-07:00 UTC; see
+   [past-Reset rebuild pacing](domain.md#6-ranked-day-and-leaderboard-snapshots).
 3. `build_army_analytics` writes the day's `army_analytics_battle_facts`,
    its `army_analytics_completed_days` marker and its per-lens
    `army_analytics_day_totals` in one transaction, reading 500 frozen

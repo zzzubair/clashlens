@@ -17,7 +17,13 @@ from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
-from clashlens import boundary, boundary_publication, domain_repair, reset_baselines
+from clashlens import (
+    boundary,
+    boundary_publication,
+    domain_repair,
+    past_reset_pacing,
+    reset_baselines,
+)
 from clashlens.army_decoder import DECODER_VERSION
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database
@@ -386,6 +392,11 @@ def _decoded(connection_info: str, evidence_id: int) -> None:
 def test_campaign_hold_defers_only_affected_artifacts(
     database_url: str, monkeypatch
 ) -> None:
+    # Midday, outside the 04:30-07:00 UTC quiet window, so whatever the real
+    # time, the two past Resets' builds start once the campaign lets them.
+    monkeypatch.setattr(
+        past_reset_pacing, "_now", lambda _connection: NOW + timedelta(hours=7)
+    )
     # The player's two saved days list the Resets ending them, not the third.
     held, held_next, free = START + 5 * DAY, START + 6 * DAY, START + 7 * DAY
     with _campaign_database(database_url) as (connection_info, worker):

@@ -11,6 +11,7 @@ from uuid import uuid4
 from psycopg_pool import ConnectionPool
 
 from .operating import database_pool_health
+from .past_reset_pacing import past_reset_build_hold
 from .source_observation_contract import SOURCE_OBSERVATION_CONTRACTS
 
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
@@ -194,6 +195,7 @@ def _supported_claim_filter(
     *,
     denormalized_contract: bool = True,
     supports_coordinator: bool = False,
+    past_reset_build_hold: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Parameterized supported-job predicate for the claim SELECT.
 
@@ -201,7 +203,9 @@ def _supported_claim_filter(
     UPDATE paths), with the claim compatibility fence also applied here. Both
     read the denormalized endpoint/schema contract columns on the job row.
     Parameters are named so the claim statement can
-    also bind the claim time and direct job id.
+    also bind the claim time and direct job id. ``past_reset_build_hold`` is
+    the newest Reset while past-Reset builds wait out the quiet
+    window; those builds stay queued until it is None again.
     """
     # The source contract is denormalized onto the job row by migration 0009
     # (trigger python_processing_jobs_set_source_contract_v3), so every
@@ -300,7 +304,11 @@ def _supported_claim_filter(
                         {alias}.work_type = 'build_army_analytics'
                         AND {coordinator_input_shape}
                     )
-                ))))
+                )))
+            AND NOT COALESCE(
+                {alias}.work_type IN ('build_snapshot', 'build_army_analytics')
+                AND {alias}.input_json->>'boundary_at' < %(past_reset_build_hold)s::text,
+                false))
         """,
         {
             "source_work_types": list(SUPPORTED_WORK_TYPES[:2]),
@@ -312,6 +320,7 @@ def _supported_claim_filter(
             "build_work_types": ["build_snapshot", "build_analytics"],
             "army_work_types": ["build_army_analytics", "redecode_army"],
             "army_analytics_rule_version": ARMY_ANALYTICS_RULE_VERSION,
+            "past_reset_build_hold": past_reset_build_hold,
         },
     )
 
@@ -341,6 +350,7 @@ def _claim_select_statement(
     denormalized_contract: bool = True,
     supports_coordinator: bool = False,
     work_types: Collection[str] | None = None,
+    past_reset_build_hold: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT and its named parameters.
 
@@ -363,6 +373,7 @@ def _claim_select_statement(
         "source_observation",
         denormalized_contract=denormalized_contract,
         supports_coordinator=supports_coordinator,
+        past_reset_build_hold=past_reset_build_hold,
     )
     params: dict[str, Any] = {**supported_params}
     if work_types is not None:
@@ -902,15 +913,21 @@ class Database:
         with self._timed_connection() as connection:
             with connection.transaction():
                 self._ensure_dependency_support_probed()
+                supports_coordinator = getattr(
+                    self, "_supports_coordinator_contract", False
+                )
                 claim_statement, claim_params = _claim_select_statement(
                     self._jobs_relation,
                     job_id=job_id,
                     supports_dependency=self._supports_dependency_deferral,
                     denormalized_contract=self._supports_denormalized_contract,
-                    supports_coordinator=getattr(
-                        self, "_supports_coordinator_contract", False
-                    ),
+                    supports_coordinator=supports_coordinator,
                     work_types=work_types,
+                    past_reset_build_hold=(
+                        past_reset_build_hold(connection)
+                        if supports_coordinator
+                        else None
+                    ),
                 )
                 row = connection.execute(claim_statement, claim_params).fetchone()
                 if row is None:
