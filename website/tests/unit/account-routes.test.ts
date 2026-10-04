@@ -240,7 +240,7 @@ describe("account routes", () => {
       const loginCookie = createLoginCookieValue(
         IDENTITY,
         config.loginSecret,
-        Math.floor(Date.now() / 1000),
+        Date.now(),
       );
       const response = await providersAction({
         request: formRequest(

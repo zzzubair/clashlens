@@ -101,7 +101,11 @@ describe("readLoginIdentity", () => {
 
   it("returns the exact signed identity for a valid cookie and nothing else", async () => {
     const config = testConfig();
-    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
+    const cookie = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      NOW_SECONDS * 1000,
+    );
     const identity = await readLoginIdentity(
       requestWithCookie(`${LOGIN_COOKIE_NAME}=${cookie}`),
       config,
@@ -115,7 +119,11 @@ describe("readLoginIdentity", () => {
 
   it("returns null for a missing, tampered, or expired cookie", async () => {
     const config = testConfig();
-    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
+    const cookie = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      NOW_SECONDS * 1000,
+    );
     const [, signaturePart] = cookie.split(".");
     const forged = `${Buffer.from(
       JSON.stringify({
@@ -136,7 +144,7 @@ describe("readLoginIdentity", () => {
     const expired = createLoginCookieValue(
       IDENTITY,
       config.loginSecret,
-      NOW_SECONDS - 86_401,
+      (NOW_SECONDS - 86_401) * 1000,
     );
     expect(
       await readLoginIdentity(
@@ -165,13 +173,25 @@ describe("readLoginIdentity", () => {
 
   it("returns null once the login has logged out and refuses to guess when the API fails", async () => {
     const config = testConfig();
-    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
+    const cookie = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      NOW_SECONDS * 1000,
+    );
     const request = requestWithCookie(`${LOGIN_COOKIE_NAME}=${cookie}`);
     mocks.isLoginRevoked.mockResolvedValueOnce(true);
     expect(await readLoginIdentity(request, config)).toBeNull();
-    expect(mocks.isLoginRevoked).toHaveBeenCalledWith(IDENTITY, cookie, undefined);
+    expect(mocks.isLoginRevoked).toHaveBeenCalledWith(
+      { ...IDENTITY, issuedAtMs: NOW_SECONDS * 1000 },
+      cookie,
+      undefined,
+    );
     await readLoginIdentity(request, config, 250);
-    expect(mocks.isLoginRevoked).toHaveBeenLastCalledWith(IDENTITY, cookie, 250);
+    expect(mocks.isLoginRevoked).toHaveBeenLastCalledWith(
+      { ...IDENTITY, issuedAtMs: NOW_SECONDS * 1000 },
+      cookie,
+      250,
+    );
     mocks.isLoginRevoked.mockRejectedValueOnce(
       new PythonApiError(503, { error: "unavailable" }),
     );

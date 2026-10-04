@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import psycopg
 from test_api_migration import migrated_production_database
+from test_private_api_providers import migrate_login_tables
 
 from clashlens import api_accounts
 from clashlens.api_db import ApiDatabase, OperationResult, RequestBinding
@@ -185,6 +186,7 @@ def test_unlink_removes_only_the_reauthenticated_identity_and_keeps_the_account(
     database_url: str,
 ) -> None:
     with migrated_production_database(database_url) as connection_info:
+        migrate_login_tables(connection_info)
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(
@@ -255,6 +257,7 @@ def test_concurrent_unlinks_of_both_providers_cannot_empty_the_account(
     """Two simultaneous unlinks race on separate connections; the per-account
     row lock serializes them, so exactly one removal can ever succeed."""
     with migrated_production_database(database_url) as connection_info:
+        migrate_login_tables(connection_info)
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(
@@ -411,6 +414,7 @@ def test_provider_events_leave_audits_without_duplicating_subjects(
     database_url: str,
 ) -> None:
     with migrated_production_database(database_url) as connection_info:
+        migrate_login_tables(connection_info)
         database = ApiDatabase(connection_info)
         try:
             account_id = _create_account(

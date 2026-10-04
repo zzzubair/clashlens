@@ -63,7 +63,11 @@ describe("requireLogin auth guard", () => {
 
   it("returns the server identity for a valid signed login cookie", async () => {
     const config = testConfig();
-    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
+    const cookie = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      NOW_SECONDS * 1000,
+    );
     await expect(
       requireLogin(loginRequest("/account", `${LOGIN_COOKIE_NAME}=${cookie}`)),
     ).resolves.toEqual(IDENTITY);
@@ -92,7 +96,7 @@ describe("requireLogin auth guard", () => {
     const expired = createLoginCookieValue(
       IDENTITY,
       config.loginSecret,
-      NOW_SECONDS - 86_401,
+      (NOW_SECONDS - 86_401) * 1000,
     );
     await expect(
       requireLogin(
@@ -125,7 +129,11 @@ describe("requireLogin auth guard", () => {
 
   it("redirects safely for tampered, malformed, and expired cookies", async () => {
     const config = testConfig();
-    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
+    const cookie = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      NOW_SECONDS * 1000,
+    );
     const [, signaturePart] = cookie.split(".");
     const forged = `${Buffer.from(
       JSON.stringify({
@@ -139,7 +147,7 @@ describe("requireLogin auth guard", () => {
     const expired = createLoginCookieValue(
       IDENTITY,
       config.loginSecret,
-      NOW_SECONDS - 86_401,
+      (NOW_SECONDS - 86_401) * 1000,
     );
     for (const value of [forged, expired, "junk"]) {
       await expect(
@@ -153,7 +161,11 @@ describe("requireLogin auth guard", () => {
 
   it("redirects a logged-out login and answers 503 when the API cannot check it", async () => {
     const config = testConfig();
-    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);
+    const cookie = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      NOW_SECONDS * 1000,
+    );
     const request = loginRequest("/account", `${LOGIN_COOKIE_NAME}=${cookie}`);
     mocks.isLoginRevoked.mockResolvedValueOnce(true);
     await expect(requireLogin(request)).rejects.toSatisfy((thrown: unknown) => {

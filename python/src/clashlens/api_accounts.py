@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -38,11 +38,28 @@ def resolve_account(
         return None if row is None else _account_context(row)
 
 
-def login_session_revoked(database, session_hash: str) -> bool:
+def login_session_revoked(
+    database, session_hash: str, provider: str, provider_subject: str, issued_at_ms: int
+) -> bool:
+    """True when this exact login logged out, or when its provider identity
+    was removed at or after the millisecond the login cookie was issued."""
     with database.pool.connection() as connection:
         row = connection.execute(
-            "SELECT EXISTS (SELECT 1 FROM login_session_revocations WHERE session_hash = %s)",
-            (session_hash,),
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM login_session_revocations WHERE session_hash = %s
+            ) OR EXISTS (
+                SELECT 1 FROM provider_identity_removals
+                WHERE provider = %s AND provider_subject = %s
+                  AND removed_at >= %s
+            )
+            """,
+            (
+                session_hash,
+                provider,
+                provider_subject,
+                datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=issued_at_ms),
+            ),
         ).fetchone()
         return bool(row and row[0])
 
@@ -63,6 +80,27 @@ def _record_logout(connection: Any, session_hash: str) -> None:
         "INSERT INTO login_session_revocations (session_hash) VALUES (%s)"
         " ON CONFLICT (session_hash) DO NOTHING",
         (session_hash,),
+    )
+
+
+def _record_identity_removal(
+    connection: Any, provider: str, provider_subject: str
+) -> None:
+    # Every login cookie issued through this identity up to now stops working,
+    # on every browser. Relinking never clears the row, and a login cookie
+    # lives 24 hours, so an older removal guards nothing.
+    connection.execute(
+        "DELETE FROM provider_identity_removals"
+        " WHERE removed_at < now() - interval '25 hours'"
+    )
+    connection.execute(
+        """
+        INSERT INTO provider_identity_removals (provider, provider_subject, removed_at)
+        VALUES (%s, %s, clock_timestamp())
+        ON CONFLICT (provider, provider_subject) DO UPDATE SET removed_at =
+            GREATEST(provider_identity_removals.removed_at, EXCLUDED.removed_at)
+        """,
+        (provider, provider_subject),
     )
 
 
@@ -326,8 +364,10 @@ def unlink_provider(
     """Remove one freshly reauthenticated provider identity.
 
     The final linked identity cannot be removed, and unlinking never
-    deletes the account or any private data. When `ended_session` is given,
-    that login is recorded as logged out in the same transaction.
+    deletes the account or any private data. Every login issued through the
+    removed identity up to now ends, on every browser. When `ended_session`
+    is given, that login is also recorded as logged out in the same
+    transaction.
 
     The account row lock serializes concurrent unlinks: the second unlink
     re-reads the remaining providers only after the first commits, so two
@@ -383,6 +423,7 @@ def unlink_provider(
                 operator_identity=None,
                 reason="unlinked after fresh provider authentication",
             )
+            _record_identity_removal(connection, provider, provider_subject)
             if ended_session is not None:
                 _record_logout(connection, ended_session)
             providers = _account_providers(connection, account_id)

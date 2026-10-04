@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import time
 from datetime import UTC, datetime
 
 import psycopg
+import pytest
 from fastapi.testclient import TestClient
 from test_api_migration import ROOT, migrated_production_database
 from test_private_api import signed_headers
@@ -13,6 +16,17 @@ from clashlens.api_db import ApiDatabase
 TS_CURRENT = bytes.fromhex("21" * 32)
 NOW_SECONDS = 1_807_000_000
 NOW = datetime.fromtimestamp(NOW_SECONDS, tz=UTC)
+
+
+def migrate_login_tables(connection_info: str) -> None:
+    """Add the logout and removed-connection tables that login checks and
+    unlinking need."""
+    with psycopg.connect(connection_info, autocommit=True) as connection:
+        for name in (
+            "0054_login_session_revocations.sql",
+            "0070_provider_identity_removals.sql",
+        ):
+            connection.execute((ROOT / "deploy/migrations" / name).read_text())
 
 
 def _app(database: ApiDatabase) -> TestClient:
@@ -72,6 +86,7 @@ def test_discord_identity_creates_and_resolves_an_account(database_url: str) -> 
 
 def test_link_then_unlink_through_the_private_api_endpoints(database_url: str) -> None:
     with migrated_production_database(database_url) as connection_info:
+        migrate_login_tables(connection_info)
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -243,9 +258,26 @@ def test_collision_final_provider_and_unknown_provider_fail_safely(
             database.close()
 
 
-def _session_call(client: TestClient, action: str, session: str, *, provider: str = "google"):
+SUBJECTS = {"google": "google-subject-1001", "discord": "discord-subject-2002"}
+
+
+def _session_call(
+    client: TestClient,
+    action: str,
+    session: str,
+    *,
+    provider: str = "google",
+    issued_at_ms: int | None = None,
+):
+    """Check or log out one login. A check sends the login cookie's issue
+    time in milliseconds, a minute ago unless given."""
     target = f"/v1/account/session/{action}"
-    body = b'{"session": "%s"}' % session.encode()
+    fields = {"session": session}
+    if action == "check":
+        fields["issued_at_ms"] = (
+            int(time.time() * 1000) - 60_000 if issued_at_ms is None else issued_at_ms
+        )
+    body = json.dumps(fields).encode()
     return client.post(
         target,
         content=body,
@@ -254,17 +286,46 @@ def _session_call(client: TestClient, action: str, session: str, *, provider: st
             method="POST",
             body=body,
             provider=provider,
-            subject="google-subject-1001" if provider else "",
+            subject=SUBJECTS.get(provider, ""),
         ),
     )
 
 
+def _change_provider(
+    client: TestClient, method: str, provider: str, *, signed_in_with: str, session=None
+):
+    target = f"/v1/account/providers/{provider}"
+    fields = {"provider_subject": SUBJECTS[provider]}
+    if session is not None:
+        fields["session"] = session
+    body = json.dumps(fields).encode()
+    return client.request(
+        method,
+        target,
+        content=body,
+        headers=signed_headers(
+            target,
+            method=method,
+            body=body,
+            provider=signed_in_with,
+            subject=SUBJECTS[signed_in_with],
+        ),
+    )
+
+
+def _removed_at(database: ApiDatabase, provider: str) -> int | None:
+    with database.pool.connection() as connection:
+        row = connection.execute(
+            "SELECT floor(extract(epoch FROM removed_at) * 1000)::bigint"
+            " FROM provider_identity_removals WHERE provider = %s",
+            (provider,),
+        ).fetchone()
+    return None if row is None else int(row[0])
+
+
 def test_logout_ends_only_that_login_and_old_logouts_are_dropped(database_url: str) -> None:
     with migrated_production_database(database_url) as connection_info:
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute(
-                (ROOT / "deploy/migrations/0054_login_session_revocations.sql").read_text()
-            )
+        migrate_login_tables(connection_info)
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -300,10 +361,7 @@ def test_unlinking_the_login_provider_ends_that_login_in_the_same_transaction(
     database_url: str,
 ) -> None:
     with migrated_production_database(database_url) as connection_info:
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute(
-                (ROOT / "deploy/migrations/0054_login_session_revocations.sql").read_text()
-            )
+        migrate_login_tables(connection_info)
         database = ApiDatabase(connection_info)
         try:
             with _app(database) as client:
@@ -337,6 +395,7 @@ def test_unlinking_the_login_provider_ends_that_login_in_the_same_transaction(
                 # A refused unlink changes nothing, so the login stays valid.
                 assert unlink().json() == {"error": "final_provider"}
                 assert _session_call(client, "check", session).json() == {"revoked": False}
+                assert _removed_at(database, "google") is None
 
                 link_target = "/v1/account/providers/discord"
                 link_body = b'{"provider_subject": "discord-subject-2002"}'
@@ -357,5 +416,164 @@ def test_unlinking_the_login_provider_ends_that_login_in_the_same_transaction(
                 assert removed.status_code == 200
                 assert removed.json() == {"providers": ["discord"]}
                 assert _session_call(client, "check", session).json() == {"revoked": True}
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("removed", ["google", "discord"])
+@pytest.mark.parametrize("signed_in_with", ["removed", "other"])
+def test_removing_a_connection_ends_its_logins_on_every_browser(
+    database_url: str, removed: str, signed_in_with: str
+) -> None:
+    other = "discord" if removed == "google" else "google"
+    remover = removed if signed_in_with == "removed" else other
+    with migrated_production_database(database_url) as connection_info:
+        migrate_login_tables(connection_info)
+        database = ApiDatabase(connection_info)
+        try:
+            with _app(database) as client:
+                _create_account(
+                    client, provider=other, subject=SUBJECTS[other], username="twologins"
+                )
+                assert (
+                    _change_provider(client, "POST", removed, signed_in_with=other).status_code
+                    == 200
+                )
+                # Two browsers signed in through the connection, and one through
+                # the other connection.
+                browser_a, browser_b, other_login = "a" * 43, "b" * 43, "o" * 43
+                assert _session_call(client, "check", browser_b, provider=removed).json() == {
+                    "revoked": False
+                }
+
+                ended = browser_a if remover == removed else None
+                removal = _change_provider(
+                    client, "DELETE", removed, signed_in_with=remover, session=ended
+                )
+                assert removal.status_code == 200, removal.text
+                for browser in (browser_a, browser_b):
+                    assert _session_call(client, "check", browser, provider=removed).json() == {
+                        "revoked": True
+                    }
+                assert _session_call(client, "check", other_login, provider=other).json() == {
+                    "revoked": False
+                }
+
+                # A login made after the removal works, and linking the
+                # connection again never revives the older logins.
+                removed_at = _removed_at(database, removed)
+                assert removed_at is not None
+                fresh = {"provider": removed, "issued_at_ms": removed_at + 1}
+                assert _session_call(client, "check", "f" * 43, **fresh).json() == {
+                    "revoked": False
+                }
+                assert (
+                    _change_provider(client, "POST", removed, signed_in_with=other).status_code
+                    == 200
+                )
+                assert _session_call(client, "check", browser_b, provider=removed).json() == {
+                    "revoked": True
+                }
+                assert _session_call(client, "check", "f" * 43, **fresh).json() == {
+                    "revoked": False
+                }
+                # Without the issue time, the check refuses to answer.
+                target = "/v1/account/session/check"
+                body = json.dumps({"session": browser_b}).encode()
+                missing = client.post(
+                    target,
+                    content=body,
+                    headers=signed_headers(
+                        target,
+                        method="POST",
+                        body=body,
+                        provider=removed,
+                        subject=SUBJECTS[removed],
+                    ),
+                )
+                assert missing.status_code == 422
+        finally:
+            database.close()
+
+
+def test_removals_over_25_hours_old_are_deleted_and_end_nothing(database_url: str) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        migrate_login_tables(connection_info)
+        database = ApiDatabase(connection_info)
+        try:
+            with _app(database) as client:
+                _create_account(
+                    client, provider="google", subject=SUBJECTS["google"], username="aged"
+                )
+                link = _change_provider(client, "POST", "discord", signed_in_with="google")
+                assert link.status_code == 200
+                unlink = _change_provider(client, "DELETE", "discord", signed_in_with="google")
+                assert unlink.status_code == 200
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE provider_identity_removals"
+                        " SET removed_at = now() - interval '26 hours'"
+                    )
+                old_login = {
+                    "provider": "discord",
+                    "issued_at_ms": int(time.time() * 1000) - 27 * 3_600_000,
+                }
+                assert _session_call(client, "check", "d" * 43, **old_login).json() == {
+                    "revoked": True
+                }
+
+                # The next removal deletes the aged row, which then ends nothing.
+                link = _change_provider(client, "POST", "discord", signed_in_with="google")
+                assert link.status_code == 200
+                unlink = _change_provider(client, "DELETE", "google", signed_in_with="discord")
+                assert unlink.status_code == 200
+                assert _removed_at(database, "discord") is None
+                assert _removed_at(database, "google") is not None
+                assert _session_call(client, "check", "d" * 43, **old_login).json() == {
+                    "revoked": False
+                }
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("removed", ["google", "discord"])
+def test_a_login_in_the_same_second_as_a_removal_is_judged_by_millisecond(
+    database_url: str, removed: str
+) -> None:
+    other = "discord" if removed == "google" else "google"
+    with migrated_production_database(database_url) as connection_info:
+        migrate_login_tables(connection_info)
+        database = ApiDatabase(connection_info)
+        try:
+            with _app(database) as client:
+                _create_account(
+                    client, provider=other, subject=SUBJECTS[other], username="samesecond"
+                )
+                link = _change_provider(client, "POST", removed, signed_in_with=other)
+                assert link.status_code == 200
+                unlink = _change_provider(client, "DELETE", removed, signed_in_with=other)
+                assert unlink.status_code == 200
+                # Pin the removal to 200 milliseconds into a recent second.
+                second = int(time.time()) - 10
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE provider_identity_removals"
+                        " SET removed_at = to_timestamp(%s) + interval '200 milliseconds'",
+                        (second,),
+                    )
+                assert _removed_at(database, removed) == second * 1000 + 200
+
+                def check(issued_at_ms: int) -> bool:
+                    response = _session_call(
+                        client, "check", "s" * 43, provider=removed, issued_at_ms=issued_at_ms
+                    )
+                    assert response.status_code == 200, response.text
+                    return response.json()["revoked"]
+
+                assert check(second * 1000 + 800) is False
+                assert check(second * 1000 + 201) is False
+                assert check(second * 1000 + 200) is True
+                assert check(second * 1000 + 100) is True
+                assert check(second * 1000 - 1) is True
         finally:
             database.close()

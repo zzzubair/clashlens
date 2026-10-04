@@ -45,6 +45,11 @@ export interface LoginIdentity {
   providerSubject: string;
 }
 
+/** A verified login cookie: who signed in and when, in Unix milliseconds. */
+export interface LoginSession extends LoginIdentity {
+  issuedAtMs: number;
+}
+
 function isBoundedIntent(value: unknown): value is OAuthIntent {
   return value === "login" || value === "link" || value === "unlink";
 }
@@ -126,6 +131,7 @@ function isSafeInteger(value: unknown): value is number {
 function canonicalLoginPayload(
   identity: LoginIdentity,
   issuedAt: number,
+  issuedMillisecond: number,
   expiresAt: number,
 ): Buffer {
   const payload = Buffer.from(
@@ -134,6 +140,7 @@ function canonicalLoginPayload(
       p: identity.provider,
       s: identity.providerSubject,
       i: issuedAt,
+      m: issuedMillisecond,
       e: expiresAt,
       n: randomBytes(16).toString("base64url"),
     }),
@@ -146,13 +153,13 @@ function canonicalLoginPayload(
 }
 
 /**
- * Build a signed login cookie value. `nowSeconds` is the current epoch time
- * in seconds; the cookie never slides and expires exactly 24 hours later.
+ * Build a signed login cookie value. `nowMs` is the current epoch time in
+ * milliseconds; the cookie never slides and expires exactly 24 hours later.
  */
 export function createLoginCookieValue(
   identity: LoginIdentity,
   key: Buffer,
-  nowSeconds: number,
+  nowMs: number,
 ): string {
   assertKey(key);
   if (
@@ -161,25 +168,31 @@ export function createLoginCookieValue(
   ) {
     throw new Error("login identity must be a bounded provider subject");
   }
-  if (!Number.isSafeInteger(nowSeconds) || nowSeconds < 0) {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
     throw new Error("login cookie timestamps must be safe integers");
   }
-  const issuedAt = nowSeconds;
+  const issuedAt = Math.floor(nowMs / 1000);
   return encodeValue(
-    canonicalLoginPayload(identity, issuedAt, issuedAt + LOGIN_COOKIE_LIFETIME_SECONDS),
+    canonicalLoginPayload(
+      identity,
+      issuedAt,
+      nowMs % 1000,
+      issuedAt + LOGIN_COOKIE_LIFETIME_SECONDS,
+    ),
     key,
   );
 }
 
 /**
- * Parse and verify a login cookie value. Returns the identity or null for any
- * missing, malformed, tampered, or expired value. Never throws for input.
+ * Parse and verify a login cookie value. Returns the identity and issue time
+ * or null for any missing, malformed, tampered, or expired value. Never
+ * throws for input.
  */
 export function parseLoginCookieValue(
   value: string | undefined | null,
   key: Buffer,
   nowSeconds: number,
-): LoginIdentity | null {
+): LoginSession | null {
   assertKey(key);
   if (!Number.isSafeInteger(nowSeconds)) return null;
   const parsed = parseValue(value, key, 256);
@@ -194,6 +207,16 @@ export function parseLoginCookieValue(
   ) {
     return null;
   }
+  // Cookies issued before the millisecond field count from the start of
+  // their second.
+  const issuedMillisecond = parsed.m === undefined ? 0 : parsed.m;
+  if (
+    !isSafeInteger(issuedMillisecond) ||
+    issuedMillisecond < 0 ||
+    issuedMillisecond > 999
+  ) {
+    return null;
+  }
   const issuedAt = parsed.i;
   const expiresAt = parsed.e;
   if (
@@ -203,7 +226,11 @@ export function parseLoginCookieValue(
   ) {
     return null;
   }
-  return { provider: parsed.p as LoginIdentity["provider"], providerSubject: parsed.s };
+  return {
+    provider: parsed.p as LoginIdentity["provider"],
+    providerSubject: parsed.s,
+    issuedAtMs: issuedAt * 1000 + issuedMillisecond,
+  };
 }
 
 function canonicalOAuthPayload(transaction: OAuthTransaction): Buffer {
