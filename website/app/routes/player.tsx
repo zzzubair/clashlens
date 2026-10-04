@@ -1407,7 +1407,7 @@ function provisional(value: string, state: string | null): string {
 }
 
 function formatCount(value: number | null): string {
-  return value === null ? "Unknown" : value.toLocaleString("en-GB");
+  return value === null ? "Unknown" : (value || 0).toLocaleString("en-GB");
 }
 
 function recordedCount(value: number | null): string {

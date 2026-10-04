@@ -276,7 +276,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
     return {
       battleId: value.battle_id,
       battleTimestamp: value.battle_timestamp,
-      opponent: { tag: value.opponent.tag, name: value.opponent.name },
+      opponent: { tag: value.opponent.tag, name: value.opponent.name || null },
       destructionPercentage: value.destruction_percentage,
       stars: value.stars,
       trophyChange: value.trophy_change,

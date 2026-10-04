@@ -1393,7 +1393,7 @@ describe("player day honesty", () => {
             {
               ...entry,
               dayNumber: 5,
-              attackGain: 284,
+              defenseLoss: 0,
               netChange: 0,
               defenses: 9,
               state: "Partial",
@@ -1454,7 +1454,7 @@ describe("player day honesty", () => {
     expect(rows[4]).toContain(
       "Clash of Clans returned 9 defenses for this day, more than the usual 8, so this day is marked partial.",
     );
-    expect(rows[4]).toContain("<td>0</td><td>0</td>");
+    expect(rows[4]).toContain("<td>+310</td><td>0</td><td>0</td><td>+310</td>");
     expect(rows[5]).toContain("<td>Provisional result");
     expect(rows[5]).not.toContain("Incomplete");
     expect(rows[5]).toContain("<td>-11</td><td>-11</td>");

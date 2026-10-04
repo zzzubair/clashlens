@@ -668,7 +668,7 @@ describe("server-only Python client response boundary", () => {
       {
         battle_id: "defense-2",
         battle_timestamp: "2026-08-06T14:00:00Z",
-        opponent: { tag: "#2P9", name: null },
+        opponent: { tag: "#2P9", name: "" },
         destruction_percentage: 50,
         stars: 1,
         trophy_change: -5,
@@ -832,7 +832,7 @@ describe("server-only Python client response boundary", () => {
     const mapExpectedEvent = (event: (typeof offenseEvents)[number]) => ({
       battleId: event.battle_id,
       battleTimestamp: event.battle_timestamp,
-      opponent: event.opponent,
+      opponent: { ...event.opponent, name: event.opponent.name || null },
       destructionPercentage: event.destruction_percentage,
       stars: event.stars,
       trophyChange: event.trophy_change,
