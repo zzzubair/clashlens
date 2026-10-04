@@ -441,10 +441,13 @@ def season_final_rank(
     player_id: int,
     season_end: datetime | str | None,
     season_id: str | None = None,
+    *,
+    without_board: int | None = None,
 ) -> int | None:
     """Clash Lens final rank: the player's position on the Season's last board.
 
     An unknown end falls back to the confirmed canonical end of season_id.
+    When no such board exists the result is without_board.
     The Season's end must be known and match the boundary of a published
     frozen leaderboard snapshot whose publication generation is not
     superseded, the same choice the public frozen board makes. Daily detail
@@ -458,7 +461,7 @@ def season_final_rank(
         bounds = _canonical_season_bounds(connection, season_id)
         season_end = None if bounds is None else bounds[1]
     if season_end is None:
-        return None
+        return without_board
     row = connection.execute(
         """
         SELECT entry.position
@@ -477,9 +480,9 @@ def season_final_rank(
         """,
         (player_id, season_end),
     ).fetchone()
-    if row is None or row[0] is None:
-        return None
-    return int(row[0])
+    if row is None:
+        return without_board
+    return None if row[0] is None else int(row[0])
 
 
 _SUMMARY_COLUMNS = (

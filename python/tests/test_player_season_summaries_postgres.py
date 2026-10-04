@@ -870,7 +870,7 @@ def test_summary_written_before_final_board_shows_rank_once_published(
                 ranked = _player(connection, "#9Q2")
                 _full_season(connection, early)
                 _full_season(connection, ranked)
-                _frozen_board(connection, observation_id, {ranked: (1, None)})
+                first_board = _frozen_board(connection, observation_id, {ranked: (1, None)})
                 connection.commit()
                 materialize_player_season(connection, early, SEASON)
                 materialize_player_season(connection, ranked, SEASON)
@@ -880,12 +880,26 @@ def test_summary_written_before_final_board_shows_rank_once_published(
                 return api_players.get_player_season_summary(database, tag, SEASON)["final_rank"]
 
             assert rank("#2PP") is None
+            assert rank("#9Q2") == 1
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO boundary_publication_generations (
+                        boundary_at, target_at, generation, ordering_rule_version,
+                        freshness_rule_version, expected_population_count,
+                        expected_population_hash, snapshot_state, snapshot_id
+                    ) VALUES (%s, %s, 1, 'test', 'test', 1, %s, 'superseded', %s)
+                    """,
+                    (SEASON_END, SEASON_END, "0" * 64, first_board),
+                )
+            assert rank("#2PP") is None
+            assert rank("#9Q2") == 1
             with database.pool.connection() as connection:
                 _frozen_board(
                     connection, observation_id, {ranked: (5, None), early: (3, None)}, version=2
                 )
             assert rank("#2PP") == 3
-            assert rank("#9Q2") == 1
+            assert rank("#9Q2") == 5
         finally:
             database.close()
 

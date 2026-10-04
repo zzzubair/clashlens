@@ -578,15 +578,15 @@ def get_player_season_summary(
             for entry in result["daily_entries"]:
                 for key in ("eod_state", "eod_change", "eod_change_state"):
                     entry.setdefault(key, None)
-            if result["final_rank"] is None:
-                # Summaries are written before the Season's final board is
-                # published; read the rank once that board exists.
-                result["final_rank"] = season_final_rank(
-                    connection,
-                    int(record["player_id"]),
-                    record["season_end"],
-                    official_season_id,
-                )
+            # Summaries can be written before the Season's newest final board
+            # is published; that board's rank wins once it exists.
+            result["final_rank"] = season_final_rank(
+                connection,
+                int(record["player_id"]),
+                record["season_end"],
+                official_season_id,
+                without_board=result["final_rank"],
+            )
             result["source"] = "tracked_summary"
             result["official_history"] = (
                 None if history is None else _official_history_payload(history)
