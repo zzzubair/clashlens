@@ -147,7 +147,7 @@ def test_username_and_google_provider_uniqueness_fail_safely(
 
 
 def test_username_is_fixed_but_display_name_can_change(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(database_url, include_compact_collector=True) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = create_owner(database)
