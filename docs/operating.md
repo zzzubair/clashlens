@@ -411,10 +411,11 @@ player. It reports how many pairs it checked (`evaluated_count`), the
 end-of-day jobs it queued, and how often each reason a pair failed was seen
 (`failure_reasons`). Pairs that failed only because their battle log held
 "no opponent, no battle" rows, then counted as gaps, are re-checked too,
-oldest Reset first: the saved gap flag and outcome of the Reset's battle log,
-and of its delayed settlement check's log, are first re-derived from their
-saved rows, and any other reason the pair failed, such as a rejected profile,
-still holds. A run that checks pairs but queues nothing stops there;
+as are pairs whose delayed settlement check's log was saved with only such
+gaps, oldest Reset first: the saved gap flag and outcome of the Reset's
+battle log, and of its delayed settlement check's log, are first re-derived
+from their saved rows, and any other reason the pair failed, such as a
+rejected profile, still holds. A run that checks pairs but queues nothing stops there;
 read its `failure_reasons` before running again. The season's opening Reset
 is re-checked too, as day 1's starting evidence, but queues no leaderboard,
 army or day rebuild for the previous season. A repaired pair rebuilds both

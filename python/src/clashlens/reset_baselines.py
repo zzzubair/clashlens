@@ -56,7 +56,8 @@ def repair_current_season_reset_baselines(
     every such pair stayed partial, so its Legend day was never finished.
     Pairs that failed only because their battle log held "no opponent, no
     battle" rows, once counted as gaps, are re-checked too, oldest Reset
-    first; any other reason they failed still holds. One
+    first; any other reason they failed still holds. So are pairs whose
+    delayed settlement check's log was saved with only such gaps. One
     batch of at most ``max_works`` pairs is re-checked from saved results, each
     in its own short transaction. Returns the end-of-day reconciliation jobs
     queued, how many pairs were checked, and how often each failure reason was
@@ -94,14 +95,7 @@ def repair_current_season_reset_baselines(
                 sweep.boundary_at < anchor.current_start + interval '28 days'
                 AND sweep.boundary_at + interval '1 day' <= clock_timestamp(),
                 anchor.current_league_season_id, work.battle_log_observation_id,
-                (
-                    SELECT delayed.battle_log_observation_id
-                    FROM reset_boundary_settlements AS settlement
-                    JOIN collector_work AS delayed
-                      ON delayed.id = settlement.delayed_work_id
-                    WHERE settlement.player_id = work.player_id
-                      AND settlement.boundary_at = sweep.boundary_at
-                )
+                delayed_log.observation_id
                 FROM collector_work AS work
                 JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
                 JOIN current_anchor AS anchor
@@ -114,6 +108,14 @@ def repair_current_season_reset_baselines(
                     ORDER BY evidence.version DESC, evidence.id DESC
                     LIMIT 1
                 ) AS latest ON true
+                LEFT JOIN LATERAL (
+                    SELECT delayed.battle_log_observation_id AS observation_id
+                    FROM reset_boundary_settlements AS settlement
+                    JOIN collector_work AS delayed
+                      ON delayed.id = settlement.delayed_work_id
+                    WHERE settlement.player_id = work.player_id
+                      AND settlement.boundary_at = sweep.boundary_at
+                ) AS delayed_log ON true
                 WHERE work.kind = 'reset_baseline'
                   AND (
                       latest.state = 'partial'
@@ -131,6 +133,15 @@ def repair_current_season_reset_baselines(
                                     = work.battle_log_observation_id
                                 AND {only_no_opponent}
                           )
+                      )
+                      -- Its delayed settlement check's log was saved with
+                      -- gaps that were only those rows.
+                      OR EXISTS (
+                          SELECT 1 FROM battle_log_observations AS battle_log
+                          WHERE battle_log.observation_id
+                                = delayed_log.observation_id
+                            AND battle_log.has_row_gap
+                            AND {only_no_opponent}
                       )
                   )
                   AND EXISTS (

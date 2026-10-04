@@ -15,7 +15,7 @@ from test_reconciliation_postgres import (
     _seed_reset_collection_identity,
 )
 
-from clashlens import battle, reset_baselines, reset_settlement
+from clashlens import battle, ranked_day_inputs, reset_baselines
 
 # Live logs keep this row for days: no opponent, no battle.
 NO_OPPONENT_ROW = {
@@ -231,7 +231,7 @@ def _log_results(database, observation_id: int) -> tuple[str, bool, int]:
     return text(outcome), gap, kept
 
 
-def test_reset_check_reads_a_delayed_log_saved_with_only_no_opponent_gaps(
+def test_republication_rechecks_a_complete_reset_whose_delayed_log_had_only_no_opponent_gaps(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     monkeypatch.setenv(proof.SWITCH, "true")
@@ -254,13 +254,25 @@ def test_reset_check_reads_a_delayed_log_saved_with_only_no_opponent_gaps(
                     (scenario["work"],),
                 ).fetchone()[0]
             assert _log_results(database, log_id) == ("processed_with_gaps", True, 1)
+            assert _resets(database) == [("complete", [])]
             with database.pool.connection() as connection:
-                reset_settlement.refresh_boundary(
-                    database, connection, scenario["player"], proof.RESET
-                )
+                assert ranked_day_inputs.load_reading(
+                    database, connection, scenario["player"], log_id
+                ).usable
+
+            report = reset_baselines.repair_current_season_reset_baselines(
+                database, max_works=10
+            )
+
+            assert report["evaluated_count"] == 1
+            assert _log_results(database, log_id) == ("processed", False, 1)
             assert proof._verdict(connection_info)[:3] == (
                 "settled", scenario["target"], []
             )
+            again = reset_baselines.repair_current_season_reset_baselines(
+                database, max_works=10
+            )
+            assert again["evaluated_count"] == 0
         finally:
             database.close()
 
