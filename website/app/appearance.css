@@ -176,6 +176,7 @@ main {
   outline: none;
 }
 .home-page .search-controls:focus-within {
+  border-color: var(--cl-input-border);
   outline: 2px solid var(--cl-action-text);
   outline-offset: 2px;
 }
@@ -193,7 +194,8 @@ main {
 .form-field textarea,
 .filter-field input,
 .filter-field select,
-.search-controls {
+.search-controls,
+.home-page .search-controls {
   border-color: var(--cl-input-border);
 }
 .fixed-field,

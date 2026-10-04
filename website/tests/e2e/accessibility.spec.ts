@@ -1,6 +1,10 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
-import { expectNoSeriousAccessibilityViolations } from "./helpers/account";
+import {
+  ensureAccount,
+  expectNoSeriousAccessibilityViolations,
+  signIn,
+} from "./helpers/account";
 
 for (const [name, path, heading] of [
   ["home", "/", "Legend League"],
@@ -47,35 +51,61 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 }
 
-// Paints the search box's ring and border onto the panel behind them.
-async function headerSearchBox(page: Page) {
-  return page.evaluate(() => {
-    const style = getComputedStyle(
-      document.querySelector(".header-search-panel .search-controls")!,
-    );
-    const background = getComputedStyle(
-      document.querySelector(".header-search-panel")!,
-    ).backgroundColor;
-    // Let the browser blend a see-through colour onto the panel it sits on.
-    const paint = (colour: string) => {
+// Paints a text box's border onto its own fill and its ring onto what sits behind it.
+async function boxColours(box: Locator) {
+  return box.evaluate((element) => {
+    const style = getComputedStyle(element);
+    let backdrop = element.parentElement!;
+    while (getComputedStyle(backdrop).backgroundColor === "rgba(0, 0, 0, 0)") {
+      backdrop = backdrop.parentElement!;
+    }
+    const paint = (under: string, colour: string) => {
       const context = document.createElement("canvas").getContext("2d")!;
-      context.fillStyle = background;
+      context.fillStyle = under;
       context.fillRect(0, 0, 1, 1);
       context.fillStyle = colour;
       context.fillRect(0, 0, 1, 1);
       return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
     };
+    const behind = getComputedStyle(backdrop).backgroundColor;
+    const fill = paint(behind, style.backgroundColor);
     return {
-      style: style.outlineStyle,
-      width: parseFloat(style.outlineWidth),
-      colour: paint(style.outlineColor),
-      border: paint(style.borderTopColor),
-      background: paint(background),
+      ringStyle: style.outlineStyle,
+      ringWidth: parseFloat(style.outlineWidth),
+      ring: paint(behind, style.outlineColor),
+      behind: paint(behind, behind),
+      border: paint(`rgb(${fill.join(" ")})`, style.borderTopColor),
+      fill,
     };
   });
 }
 
+async function expectVisibleBorder(box: Locator) {
+  const colours = await boxColours(box);
+  expect(contrast(colours.border, colours.fill)).toBeGreaterThanOrEqual(3);
+}
+
+async function expectVisibleRing(box: Locator) {
+  const colours = await boxColours(box);
+  expect(colours.ringStyle).toBe("solid");
+  expect(colours.ringWidth).toBeGreaterThanOrEqual(2);
+  expect(contrast(colours.ring, colours.behind)).toBeGreaterThanOrEqual(3);
+}
+
 for (const theme of ["light", "dark"] as const) {
+  test(`home search has a visible border and focus ring in ${theme} mode`, async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await useTheme(page, theme);
+    const box = page.locator(".home-page .search-controls");
+    await expectVisibleBorder(box);
+
+    await box.getByRole("searchbox").focus();
+    await expectVisibleBorder(box);
+    await expectVisibleRing(box);
+  });
+
   test(`open header search has a visible focus ring and border in ${theme} mode`, async ({
     page,
   }) => {
@@ -86,12 +116,10 @@ for (const theme of ["light", "dark"] as const) {
       name: "Search players and Clash Lens profiles",
     });
     await expect(input).toBeFocused();
+    const box = page.locator(".header-search-panel .search-controls");
 
-    const focused = await headerSearchBox(page);
-    expect(focused.style).toBe("solid");
-    expect(focused.width).toBeGreaterThanOrEqual(2);
-    expect(contrast(focused.colour, focused.background)).toBeGreaterThanOrEqual(3);
-    expect(contrast(focused.border, focused.background)).toBeGreaterThanOrEqual(3);
+    await expectVisibleBorder(box);
+    await expectVisibleRing(box);
     await expectNoSeriousAccessibilityViolations(page);
 
     // Moving into the suggestions drops the ring, so the border alone must stay visible.
@@ -102,7 +130,26 @@ for (const theme of ["light", "dark"] as const) {
       .first();
     await suggestion.focus();
     await expect(suggestion).toBeFocused();
-    const unfocused = await headerSearchBox(page);
-    expect(contrast(unfocused.border, unfocused.background)).toBeGreaterThanOrEqual(3);
+    await expectVisibleBorder(box);
+  });
+
+  test(`private group Add player box has a visible border in ${theme} mode`, async ({
+    page,
+  }) => {
+    await signIn(page);
+    await ensureAccount(page, "lensscout", "Lens Scout");
+    await page.goto("/account/groups");
+    if (await page.getByRole("heading", { name: "No private groups yet" }).isVisible()) {
+      await page.getByLabel("Group name").first().fill("War plan");
+      await page.getByRole("button", { name: "Create group" }).click();
+      await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
+    }
+    await useTheme(page, theme);
+    const input = page.getByLabel("Add player").first();
+    await expectVisibleBorder(input);
+
+    await input.focus();
+    await expectVisibleBorder(input);
+    await expectVisibleRing(input);
   });
 }

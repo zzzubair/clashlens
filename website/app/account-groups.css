@@ -59,7 +59,7 @@
   padding: 0.6rem 0.75rem;
   color: var(--cl-ink);
   background: var(--cl-paper);
-  border: 1px solid var(--cl-border);
+  border: 1px solid var(--cl-input-border);
   border-radius: var(--cl-radius);
   font: inherit;
   text-transform: uppercase;
