@@ -36,6 +36,8 @@ test("Live keeps its way to page 1 when Reset makes the open page unavailable", 
   await page.route("**/leaderboards/tracked.data*", (request) =>
     request.fulfill({
       status: expired ? 404 : 200,
+      // React Router treats an error status without this header as a missing route.
+      headers: { "X-Remix-Response": "yes" },
       contentType: "text/x-script",
       body: encode(
         expired
