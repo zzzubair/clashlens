@@ -455,11 +455,15 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     };
 
     const poll = async () => {
-      if (cancelled || inFlight) return;
+      if (cancelled) return;
+      // Stop at the deadline even while a read hangs, and ignore its late result.
       if (Date.now() >= deadline) {
+        cancelled = true;
+        controller?.abort();
         setPollingError(unavailableError);
         return;
       }
+      if (inFlight) return;
       inFlight = true;
       controller = new AbortController();
       try {
@@ -1305,9 +1309,14 @@ function BattleColumn({
 
 function RefreshProgress({ status }: { status: RefreshStatus | RefreshWork }) {
   const inProgress = status.state === "queued" || status.state === "running";
+  const message = inProgress
+    ? "Refreshing…"
+    : status.state === "complete"
+      ? "Updated."
+      : "Couldn't refresh right now. Showing saved results.";
   return (
     <section className="refresh-panel" aria-live="polite" aria-label="Player refresh">
-      <p role="status">{inProgress ? "Refreshing…" : "Updated."}</p>
+      <p role="status">{message}</p>
       {inProgress ? (
         <progress aria-label="Refresh progress" value={status.progressPercent} max="100">
           {status.progressPercent}%

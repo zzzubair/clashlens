@@ -510,3 +510,101 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   await page.goto("/?q=Lookup%20Season%200%20Clasher");
   await expect(page.locator(".search-results")).not.toContainText("#LQQC");
 });
+
+for (const [stall, read] of [
+  ["headers", "never sends headers"],
+  ["body", "never finishes its body"],
+  ["late", "answers after the deadline"],
+] as const) {
+  test(`a Refresh status read that ${read} stops at the one-minute deadline`, async ({
+    page,
+  }) => {
+    const work = {
+      kind: "refresh-work",
+      workId: randomUUID(),
+      tag: "#2PP",
+      state: "queued",
+      progressPercent: 0,
+      message: "Queued.",
+      publishedAt: null,
+    };
+    // The Refresh itself is faked, so it spends none of the shared allowance.
+    await page.route("**/resources/players/*/refresh*", (route) =>
+      route.fulfill({
+        status: 202,
+        contentType: "text/x-script",
+        headers: { "X-Remix-Response": "yes" },
+        body: encodePageData({ data: work }),
+      }),
+    );
+    // Status reads never send headers, never finish their body, or answer only
+    // after the deadline without noticing the abort.
+    await page.addInitScript(
+      ({ stall, complete }) => {
+        const realFetch = window.fetch;
+        const reads: AbortSignal[] = [];
+        Object.assign(window, { statusReads: reads });
+        window.fetch = (input, init) => {
+          if (!String(input).includes("/refresh?workId=")) return realFetch(input, init);
+          const signal = init!.signal!;
+          reads.push(signal);
+          const stop = (fail: (reason: unknown) => void) =>
+            signal.addEventListener("abort", () => fail(signal.reason));
+          if (stall === "headers") return new Promise((_, reject) => stop(reject));
+          if (stall === "body") {
+            const body = new ReadableStream({
+              start: (stream) => stop((r) => stream.error(r)),
+            });
+            return Promise.resolve(new Response(body));
+          }
+          return new Promise((resolve) =>
+            Object.assign(window, {
+              answerLate: () => resolve(new Response(JSON.stringify(complete))),
+            }),
+          );
+        };
+      },
+      {
+        stall,
+        complete: {
+          ...work,
+          kind: "refresh-status",
+          state: "complete",
+          progressPercent: 100,
+          message: "Complete.",
+          player: null,
+        },
+      },
+    );
+    const reads = () =>
+      page.evaluate(() =>
+        (window as unknown as { statusReads: AbortSignal[] }).statusReads.map(
+          (signal) => signal.aborted,
+        ),
+      );
+    const stopped = page.getByRole("alert").filter({
+      hasText: "Saved data is still available, but the live service is unavailable.",
+    });
+    const refresh = page.getByRole("region", { name: "Player refresh" });
+
+    await page.clock.install();
+    await page.goto("/players/%232PP");
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect.poll(reads).toEqual([false]);
+    await page.clock.runFor(59_000);
+    await expect(stopped).toHaveCount(0);
+    await page.clock.runFor(2_000);
+    await expect(stopped).toBeVisible();
+    expect(await reads()).toEqual([true]);
+
+    if (stall === "late") {
+      await page.evaluate(() =>
+        (window as unknown as { answerLate(): void }).answerLate(),
+      );
+    }
+    await page.clock.runFor(240_000);
+    await expect(stopped).toBeVisible();
+    await expect(refresh).not.toContainText("Updated.");
+    expect(await reads()).toEqual([true]);
+  });
+}
