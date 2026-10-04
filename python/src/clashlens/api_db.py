@@ -803,15 +803,15 @@ def _saved_totals_supported(
 ) -> bool:
     """A saved row without the coverage or battle counts needed to decide is
     withheld only when its stored reasons name a battle log gap."""
-    if coverage not in {"complete", "partial"} or (
-        coverage == "partial" and (attack_count is None or defense_count is None)
-    ):
-        return not any(
-            isinstance(reason, str) and reason in COVERAGE_GAP_REASONS
-            for reason in reasons
-        )
-    return day_totals_supported(
+    if day_totals_supported(
         coverage == "complete", attack_count, defense_count, reasons
+    ):
+        return True
+    if coverage == "partial" and attack_count is not None and defense_count is not None:
+        return False
+    return not any(
+        isinstance(reason, str) and reason in COVERAGE_GAP_REASONS
+        for reason in reasons
     )
 
 
