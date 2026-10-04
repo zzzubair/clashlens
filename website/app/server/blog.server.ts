@@ -72,7 +72,7 @@ for (const rule of ["fence", "code_block"] as const) {
 interface RenderEnv {
   /** File names in media/. */
   media: ReadonlySet<string>;
-  /** Collects the media/ files the rendered post uses. */
+  /** Collects the addresses the rendered post shows or links to. */
   used: Set<string>;
 }
 
@@ -88,7 +88,7 @@ markdown.core.ruler.push("blog_media", (state) => {
       if (file && MEDIA_NAME.test(file[1])) {
         token.attrSet(name, MEDIA_URL + file[1]);
       }
-      useMedia((state.env as unknown as RenderEnv).used, String(token.attrGet(name)));
+      (state.env as unknown as RenderEnv).used.add(String(token.attrGet(name)));
     }
   }
 });
@@ -104,7 +104,7 @@ markdown.renderer.rules.image = (tokens, index, options, env, self) => {
   if (!dark || dark === src || !media.has(dark.slice(MEDIA_URL.length))) {
     return renderImage(tokens, index, options, env, self);
   }
-  useMedia(used, dark);
+  used.add(dark);
   token.attrSet("class", "blog-img-light");
   token.attrSet("loading", "lazy");
   const light = renderImage(tokens, index, options, env, self);
@@ -115,7 +115,7 @@ markdown.renderer.rules.image = (tokens, index, options, env, self) => {
 
 /**
  * Renders a post body; `media` lists media/ so each chart can find its dark
- * version, and `used` collects the media/ files the body shows or links to.
+ * version, and `used` collects the addresses the body shows or links to.
  */
 export function renderBlogMarkdown(
   source: string,
@@ -126,8 +126,8 @@ export function renderBlogMarkdown(
 }
 
 /**
- * Parses one post file, adding the media/ files it uses, cover included, to
- * `used`. Throws BlogPostError for anything a reader would trip on.
+ * Parses one post file, adding the addresses it shows or links to, cover
+ * included, to `used`. Throws BlogPostError for anything a reader would trip on.
  */
 export function parseBlogPost(
   file: string,
@@ -170,7 +170,7 @@ export function parseBlogPost(
     throw new BlogPostError(file, "draft must be true or false");
   }
   const html = renderBlogMarkdown(source.slice(match[0].length), media, used);
-  if (fields.cover) useMedia(used, fields.cover);
+  if (fields.cover) used.add(fields.cover);
   return {
     slug,
     title: fields.title,
@@ -185,14 +185,14 @@ export function parseBlogPost(
 }
 
 /**
- * Parses every source and returns the posts newest first, adding the media/
- * files published posts use to `publicMedia`. A post that fails to parse is
- * logged and left out, so one bad file cannot take the blog down.
+ * Parses every source and returns the posts newest first, adding the
+ * addresses published posts show or link to to `published`. A post that fails
+ * to parse is logged and left out, so one bad file cannot take the blog down.
  */
 export function loadBlogPosts(
   sources: Record<string, string>,
   media: ReadonlySet<string> = new Set(),
-  publicMedia: Set<string> = new Set(),
+  published: Set<string> = new Set(),
 ): BlogPost[] {
   const posts: BlogPost[] = [];
   for (const [file, source] of Object.entries(sources)) {
@@ -200,7 +200,7 @@ export function loadBlogPosts(
       const used = new Set<string>();
       const post = parseBlogPost(file, source, media, used);
       posts.push(post);
-      if (!post.draft) used.forEach((name) => publicMedia.add(name));
+      if (!post.draft) used.forEach((address) => published.add(address));
     } catch (error) {
       if (!(error instanceof BlogPostError)) throw error;
       console.error(error.message);
@@ -222,9 +222,13 @@ export interface BlogFolder {
 
 /**
  * Reads posts/ and media/ from a blog checkout. A missing folder is an empty
- * blog, and a post a sync removes while it is being read is left out.
+ * blog, and a post a sync removes while it is being read is left out. `origin`
+ * is the site's public origin, so a full address on this site counts as media.
  */
-export async function readBlogFolder(directory: string | null): Promise<BlogFolder> {
+export async function readBlogFolder(
+  directory: string | null,
+  origin: string | null = null,
+): Promise<BlogFolder> {
   if (directory === null) return { posts: [], media: new Set(), publicMedia: new Set() };
   const media = new Set(
     (await listFiles(join(directory, "media"))).filter((name) => MEDIA_NAME.test(name)),
@@ -240,8 +244,14 @@ export async function readBlogFolder(directory: string | null): Promise<BlogFold
       if (source !== null) sources[name] = source;
     }
   }
+  const published = new Set<string>();
+  const posts = loadBlogPosts(sources, media, published);
   const publicMedia = new Set<string>();
-  return { posts: loadBlogPosts(sources, media, publicMedia), media, publicMedia };
+  for (const address of published) {
+    const name = mediaFile(address, origin);
+    if (name !== null) publicMedia.add(name);
+  }
+  return { posts, media, publicMedia };
 }
 
 let cached:
@@ -253,15 +263,24 @@ export function blogDirectory(): string | null {
   return directory ? resolve(directory) : null;
 }
 
-/** The blog folder, reread at most once per BLOG_CACHE_MS so a sync shows up quickly. */
-export function blogFolder(now = Date.now()): Promise<BlogFolder> {
+/**
+ * The blog folder, reread at most once per BLOG_CACHE_MS so a sync shows up
+ * quickly, and reread now when `changedAt`, a file's modification time, is not
+ * before the last read started.
+ */
+export function blogFolder(now = Date.now(), changedAt = -Infinity): Promise<BlogFolder> {
   const directory = blogDirectory();
   if (
     cached === undefined ||
     cached.directory !== directory ||
-    now - cached.readAt >= BLOG_CACHE_MS
+    now - cached.readAt >= BLOG_CACHE_MS ||
+    changedAt >= cached.readAt
   ) {
-    const entry = { directory, readAt: now, folder: readBlogFolder(directory) };
+    const entry = {
+      directory,
+      readAt: now,
+      folder: configuredOrigin().then((origin) => readBlogFolder(directory, origin)),
+    };
     cached = entry;
     // A failed read is retried on the next request instead of being kept.
     entry.folder.catch(() => {
@@ -315,11 +334,16 @@ export function summarizeBlogPost(post: BlogPost): BlogPostSummary {
 
 /** The site's public origin for absolute links in previews and the feed. */
 export async function blogOrigin(request: Request): Promise<string> {
+  return (await configuredOrigin()) ?? new URL(request.url).origin;
+}
+
+/** The configured public origin, or null when the site settings cannot be read. */
+async function configuredOrigin(): Promise<string | null> {
   try {
     const { getWebsiteConfig } = await import("./config.server");
     return getWebsiteConfig().publicOrigin.origin;
   } catch {
-    return new URL(request.url).origin;
+    return null;
   }
 }
 
@@ -377,9 +401,17 @@ async function ifMissing<T, M>(read: Promise<T>, missing: M): Promise<T | M> {
   }
 }
 
-/** Records the media/ file a /blog/media/ address points at. */
-function useMedia(used: Set<string>, url: string): void {
-  if (url.startsWith(MEDIA_URL)) used.add(url.slice(MEDIA_URL.length));
+/** The media/ file an address on this site's /blog/media/ points at, if any. */
+function mediaFile(address: string, origin: string | null): string | null {
+  const base = new URL(origin ?? "https://site.invalid");
+  try {
+    const url = new URL(address, base);
+    return url.origin === base.origin && url.pathname.startsWith(MEDIA_URL)
+      ? url.pathname.slice(MEDIA_URL.length)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** A path that stays on this site, or an https URL, that both parse as addresses. */

@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createElement } from "react";
@@ -554,6 +562,59 @@ describe("blog media", () => {
     expect((await get("gap-chart.csv")).headers.get("Content-Type")).toBe(
       "text/csv; charset=utf-8",
     );
+  });
+
+  it("serves media a published cover uses by file name on this site only", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-cover-media-"));
+    try {
+      await mkdir(join(directory, "posts"));
+      await mkdir(join(directory, "media"));
+      const covers = {
+        query: "/blog/media/x.png?v=2#top",
+        absolute: `${ORIGIN}/blog/media/y.png`,
+        external: "https://images.example/blog/media/z.png",
+      };
+      for (const [slug, cover] of Object.entries(covers)) {
+        await writeFile(
+          join(directory, "posts", `${slug}.md`),
+          `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ncover: ${cover}\n---\n`,
+        );
+      }
+      for (const name of ["x.png", "y.png", "z.png"]) {
+        await writeFile(join(directory, "media", name), name);
+      }
+      vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
+      expect((await get("x.png")).status).toBe(200);
+      expect((await get("y.png")).status).toBe(200);
+      expect((await get("z.png")).status).toBe(404);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  });
+
+  it("rechecks a file a sync rewrote since the cached read before serving it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-sync-media-"));
+    const post = (draft: boolean) =>
+      `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ndraft: ${draft}\n---\n[Data](../media/chart.csv)\n`;
+    try {
+      await mkdir(join(directory, "posts"));
+      await mkdir(join(directory, "media"));
+      const chart = join(directory, "media", "chart.csv");
+      await writeFile(join(directory, "posts", "chart.md"), post(false));
+      await writeFile(chart, "published");
+      const hourAgo = new Date(Date.now() - 3_600_000);
+      await utimes(chart, hourAgo, hourAgo);
+      vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
+      await blogFolder(Date.now() - 10_000);
+      const first = await get("chart.csv");
+      expect(first.headers.get("Cache-Control")).toBe("public, max-age=300");
+      expect(await first.text()).toBe("published");
+      await writeFile(join(directory, "posts", "chart.md"), post(true));
+      await writeFile(chart, "unpublished");
+      expect((await get("chart.csv")).status).toBe(404);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
   });
 
   it("serves media only drafts use to the signed-in owner alone, never cached", async () => {
