@@ -85,8 +85,10 @@ the refusal reason. Each Refresh gets one minute from when it is submitted; afte
 that the page stops checking, says so, and ignores any later answer.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
-publishes an RSS feed at `/blog/rss.xml`. Posts are Markdown files in
-[`blog/`](blog/README.md), built into the website; raw HTML in a post is removed.
+publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
+website reads them from a copy of the private blog repo on the server, named by
+`CLASHLENS_BLOG_DIR`. [`blog/README.md`](blog/README.md) describes what a post
+can contain; raw HTML in a post is removed.
 
 ## Requirements and setup
 

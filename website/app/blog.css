@@ -157,3 +157,13 @@
   border: 0;
   border-top: 1px solid var(--cl-border);
 }
+
+/* A chart with a dark version: show the one matching the site theme. */
+.blog-body .blog-img-dark,
+:root[data-theme="dark"] .blog-body .blog-img-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .blog-body .blog-img-dark {
+  display: inline;
+}
