@@ -9,14 +9,14 @@ export interface BlogIndexLoaderData {
   origin: string;
 }
 
-/** GET /blog — every committed post, newest first. */
+/** GET /blog — every published post, newest first, plus drafts for the site owner. */
 export async function loader({
   request,
 }: Route.LoaderArgs): Promise<BlogIndexLoaderData> {
-  const { blogOrigin, publishedBlogPosts, summarizeBlogPost } =
+  const { blogOrigin, summarizeBlogPost, visibleBlogPosts } =
     await import("../server/blog.server");
   return {
-    posts: publishedBlogPosts().map(summarizeBlogPost),
+    posts: (await visibleBlogPosts(request)).map(summarizeBlogPost),
     origin: await blogOrigin(request),
   };
 }
@@ -55,6 +55,7 @@ export default function BlogIndex() {
                 </h2>
                 <p className="blog-date">
                   <time dateTime={post.date}>{formatBlogDate(post.date)}</time>
+                  {post.draft ? <> · Draft</> : null}
                 </p>
                 <p>{post.summary}</p>
               </article>

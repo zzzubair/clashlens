@@ -1005,3 +1005,37 @@ def test_finished_job_cleanup_runs_one_batch_as_its_own_role_without_waiting(run
     # No spool, archive keys or other database credentials reach the cleanup container.
     assert "--volume" not in command and "archive-operator" not in command
 
+
+@pytest.mark.parametrize("blog_dir", [None, "/home/clashlens/clashlens-blog"])
+def test_blog_folder_is_mounted_read_only_only_when_configured(
+    tmp_path, mode_config, blog_dir
+):
+    if blog_dir is not None:
+        with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+            config.write(
+                f"CLASHLENS_BLOG_DIR={blog_dir}\nCLASHLENS_BLOG_OWNER=google:owner-1\n"
+            )
+    website = (
+        render_units(tmp_path, mode_config, "production")
+        / "containers"
+        / "systemd"
+        / "clashlens-website.container"
+    ).read_text()
+    volumes = [line for line in website.splitlines() if line.startswith("Volume=")]
+    assert volumes == ([] if blog_dir is None else [f"Volume={blog_dir}:/blog:ro,z"])
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + "write_environment\n", "blog-env-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    environment = (tmp_path / "state" / "clashlens" / "env" / "website.env").read_text()
+    blog_lines = [line for line in environment.splitlines() if "BLOG" in line]
+    assert blog_lines == (
+        []
+        if blog_dir is None
+        else ["CLASHLENS_BLOG_DIR=/blog", "CLASHLENS_BLOG_OWNER=google:owner-1"]
+    )

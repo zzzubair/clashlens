@@ -12,6 +12,7 @@ Image=@@WEBSITE_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-website
 EnvironmentFile=@@ENV_DIR@@/website.env
+@@BLOG_VOLUME@@
 Secret=clashlens-hmac-current,type=mount,target=/run/secrets/clashlens-hmac-current,uid=1000,gid=1000,mode=0400
 Secret=clashlens-login-secret,type=mount,target=/run/secrets/clashlens-login-secret,uid=1000,gid=1000,mode=0400
 Secret=clashlens-google-client-secret,type=mount,target=/run/secrets/clashlens-google-client-secret,uid=1000,gid=1000,mode=0400
