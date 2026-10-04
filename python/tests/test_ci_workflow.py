@@ -404,6 +404,7 @@ def test_pr_packaging_builds_only_python_and_runs_packaged_tests(
                 "pytest",
                 "-q",
                 "tests/test_ops_backup.py",
+                "tests/test_ops_keep_running.py",
                 "tests/test_support_wrapper.py",
             ],
         ),
@@ -415,6 +416,7 @@ def test_pr_packaging_builds_only_python_and_runs_packaged_tests(
                 "pytest",
                 "-q",
                 "tests/test_ops_backup.py",
+                "tests/test_ops_keep_running.py",
                 "tests/test_support_wrapper.py",
             ],
         ),
@@ -440,6 +442,7 @@ def test_packaging_test_failure_fails_the_container_step(command_workspace) -> N
             "pytest",
             "-q",
             "tests/test_ops_backup.py",
+            "tests/test_ops_keep_running.py",
             "tests/test_support_wrapper.py",
         ]
     )
