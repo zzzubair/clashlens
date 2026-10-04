@@ -52,7 +52,10 @@ function loginRedirectUrl(request: Request, config: WebsiteConfig): string {
   const { pathname, searchParams } = new URL(request.url);
   let returnPath = safeReturnPath(pathname, config.publicOrigin);
   if (returnPath === ACCOUNT_SETUP_PATH) {
-    const destination = setupReturnPath(searchParams.get("returnPath"), config.publicOrigin);
+    const destination = setupReturnPath(
+      searchParams.get("returnPath"),
+      config.publicOrigin,
+    );
     if (destination !== DEFAULT_RETURN_PATH) returnPath = destination;
   }
   if (returnPath === null) return "/login";

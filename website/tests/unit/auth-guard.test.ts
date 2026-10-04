@@ -89,7 +89,11 @@ describe("requireLogin auth guard", () => {
 
   it("keeps account setup's destination when its login has expired", async () => {
     const config = testConfig();
-    const expired = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS - 86_401);
+    const expired = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      NOW_SECONDS - 86_401,
+    );
     await expect(
       requireLogin(
         loginRequest(
