@@ -603,7 +603,7 @@ checkpoint, and the old 1 GB `max_wal_size` forced a checkpoint every three
 minutes. The 128 MB page cache also wrote 8.6 MB/s of table pages as it evicted
 them.
 
-The PostgreSQL unit now sets `shared_buffers=2GB` (inside the 4 GB memory cap;
+The PostgreSQL unit now sets `shared_buffers=2GB` (inside the 6 GB memory cap;
 128 MB for fake-service runs; `./ops` refuses a `CLASHLENS_POSTGRES_MEMORY`
 below twice the cache), `checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
 Commit flushing, full-page writes, checksums and archiving are unchanged. A
