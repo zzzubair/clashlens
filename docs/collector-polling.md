@@ -149,11 +149,13 @@ requests, and the same keys allowed one check every ~177 seconds.
 
 A check fetches the profile, saves it, and only then fetches the battle log if
 needed, so it holds at most one request at a time. The collector keeps two
-seconds of its regular keys' request starts in flight as checks, at least 256:
-392 with seven keys at 28 a second. `CLASHLENS_REGULAR_PARALLELISM` in
-`app.env` (or `--regular-parallelism`, 1 to 384) overrides it. The collector has a save
-thread for each slot, at most 384, which keeps its threads under the container's
-limit of 512 processes and threads; any further checks wait for a free one. Its database connections stay at 32 whatever the slot
+seconds of its regular keys' request starts in flight as checks, at least 256
+and at most 384: 384 with seven keys at 28 a second, which would otherwise be
+392. `CLASHLENS_REGULAR_PARALLELISM` in `app.env` (or `--regular-parallelism`,
+1 to 384) overrides it. The collector has a save thread for each slot, and
+request threads (normally 48) share what the save threads leave of 448, so the
+two together keep 64 of the container's 512 processes and threads for database,
+archive and other threads. Its database connections stay at 32 whatever the slot
 count, so more slots cannot use more of PostgreSQL's 100 connections
 (production used 52 on 2026-10-03).
 

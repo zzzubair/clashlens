@@ -82,7 +82,7 @@ def test_collector_loads_four_to_seven_regular_keys(monkeypatch, count: int) -> 
 
 @pytest.mark.parametrize(
     ("keys", "rate", "setting", "in_flight"),
-    [(7, 28, None, 392), (4, 25, None, 256), (7, 28, "300", 300)],
+    [(7, 28, None, 384), (4, 25, None, 256), (7, 28, "300", 300)],
 )
 def test_collector_sizes_checks_in_flight_from_its_keys(
     monkeypatch, keys: int, rate: int, setting: str | None, in_flight: int
@@ -121,21 +121,36 @@ def test_collector_sizes_checks_in_flight_from_its_keys(
 
 
 @pytest.mark.parametrize(
-    ("setting", "rate", "threads"), [(None, 25, 350), ("300", 25, 300), (None, 29, 384)]
+    ("setting", "rate", "concurrency", "threads"),
+    [
+        (None, 25, 6, (350, 48)),
+        ("300", 25, 6, (300, 48)),
+        (None, 29, 6, (384, 48)),
+        # The widest request pool shrinks to what the save threads leave.
+        (None, 28, 32, (384, 64)),
+        ("256", 28, 32, (256, 192)),
+    ],
 )
-def test_collector_save_threads_stay_under_the_container_limit(
-    monkeypatch, setting: str | None, rate: int, threads: int
+def test_collector_threads_stay_under_the_container_limit(
+    monkeypatch, setting: str | None, rate: int, concurrency: int, threads: tuple[int, int]
 ) -> None:
-    # Seven keys at 29 a second size 406 checks; their saves share 384 threads.
+    # Seven keys at 29 a second would size 406 checks; they get 384 save threads.
     monkeypatch.delenv("CLASHLENS_REGULAR_PARALLELISM", raising=False)
     if setting is not None:
         monkeypatch.setenv("CLASHLENS_REGULAR_PARALLELISM", setting)
     with pytest.raises(SystemExit):
         build_parser().parse_args(["collector", "--regular-parallelism", "385"])
     arguments = build_parser().parse_args(
-        ["collector", "--starts-per-second-per-key", str(rate)]
+        ["collector", "--starts-per-second-per-key", str(rate),
+         "--concurrency-per-key", str(concurrency)]
     )
     arguments.regular_api_keys = ",".join(f"regular-{i}=fixture-{i}" for i in range(7))
+    requests: list[int] = []
+
+    def client(*_args: object, max_connections: int, **_kwargs: object) -> object:
+        requests.append(max_connections)
+        return object()
+
     arguments.interactive_api_keys = "interactive-1=fixture-interactive"
 
     class Started(Exception):
@@ -147,7 +162,7 @@ def test_collector_save_threads_stay_under_the_container_limit(
 
         async def run(self, *_args: object, **_kwargs: object) -> None:
             executor = asyncio.get_running_loop()._default_executor
-            raise Started(executor._max_workers)
+            raise Started(executor._max_workers, *requests)
 
     closed = SimpleNamespace(close=lambda: None)
     database = SimpleNamespace(
@@ -161,10 +176,13 @@ def test_collector_save_threads_stay_under_the_container_limit(
     )
     monkeypatch.setattr("clashlens.cli.SpoolFirstReader", SimpleNamespace)
     monkeypatch.setattr("clashlens.cli.Collector", Collector)
+    monkeypatch.setattr("clashlens.cli.OfficialApiClient", client)
 
     with pytest.raises(Started) as started:
         _run_collector(arguments)
-    assert started.value.args == (threads,)
+    assert started.value.args == threads
+    # 64 of the container's 512 processes and threads stay for everything else.
+    assert sum(started.value.args) <= 448
 
 
 @pytest.mark.parametrize(
