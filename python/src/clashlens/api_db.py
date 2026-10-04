@@ -545,7 +545,9 @@ def _screen_daily_log_with_events(
     day: dict[str, Any], profile_confidence: str, now: datetime
 ) -> dict[str, Any]:
     screen_day = _screen_daily_log(day, profile_confidence)
-    offense_events, defense_events = _screen_events(day.get("battles"))
+    # The events carry every battle the website shows. Sending the stored
+    # battles too would double the player response.
+    offense_events, defense_events = _screen_events(screen_day.pop("battles", None))
     screen_day["offense_events"] = offense_events
     screen_day["defense_events"] = defense_events
     end = day["ranked_day_end"]

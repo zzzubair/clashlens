@@ -4,10 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
+from fastapi.responses import JSONResponse
 from psycopg.types.json import Jsonb
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts, api_analytics, api_leaderboard, api_players
+from clashlens import api, api_accounts, api_analytics, api_leaderboard, api_players
 from clashlens.api_db import (
     ApiDatabase,
     RequestBinding,
@@ -15,6 +17,8 @@ from clashlens.api_db import (
     _screen_daily_log_with_events,
     _screen_events,
 )
+from clashlens.army_decoder import DECODER_VERSION
+from clashlens.catalog import CATALOG_VERSION
 from clashlens.domain import ranked_day_for
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -239,29 +243,14 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             assert player["screen_ready"]["recent_days"][0]["offense_events"] == []
             assert player["screen_ready"]["recent_days"][0]["defense_events"] == []
             assert player["screen_ready"]["data_quality"][0]["code"] == "unavailable"
-            assert player["daily_logs"] == [
-                {
-                    "ranked_day_start": "2026-08-06T05:00:00+00:00",
-                    "ranked_day_end": None,
-                    "official_season_id": None,
-                    "season_day_number": None,
-                    "version": 1,
-                    "state": "Live",
-                    "coverage": "partial",
-                    "confidence": None,
-                    "attack_count": None,
-                    "attack_three_star_count": None,
-                    "attack_gain": None,
-                    "defense_count": None,
-                    "defense_three_star_count": None,
-                    "defense_loss": None,
-                    "net_trophy_change": None,
-                    "adjustments": [],
-                    "battles": [],
-                    "partial_reasons": ["active_day"],
-                    "start_trophies": None,
-                }
-            ]
+            assert {
+                key: player["screen_ready"]["recent_days"][0][key]
+                for key in ("ranked_day_start", "state", "uncertainty_reasons")
+            } == {
+                "ranked_day_start": "2026-08-06T05:00:00+00:00",
+                "state": "Live",
+                "uncertainty_reasons": ["active_day"],
+            }
             assert [entry["tag"] for entry in live["entries"]] == ["#8PY", "#2PP"]
             assert live["kind"] == "live"
             assert live["ordering_rule_version"] == "tracked-trophies-md5-v1"
@@ -941,5 +930,125 @@ def test_live_leaderboard_reports_empty_population(database_url: str) -> None:
                 )
                 is None
             )
+        finally:
+            database.close()
+
+
+# A full army: 6 troops, 5 spells, a siege, Clan Castle troops and spell, and
+# 5 heroes each with a pet and 2 equipment, as the busiest attacks bring.
+HEAVY_ARMY = {
+    "home_troops": [[f"troop:{i}", 8, "home"] for i in (0, 1, 3, 4, 5, 6)],
+    "spells": [[f"spell:{i}", 2, "home"] for i in (0, 1, 2, 3, 10)],
+    "siege": [["troop:51", 1, "home"]],
+    "cc_troops": [["troop:10", 3, "clan_castle"], ["spell:11", 1, "clan_castle"]],
+    "heroes": [
+        {"hero": f"hero:{hero}", "pet": f"pet:{pet}", "equipment": [
+            f"equipment:{equipment}", f"equipment:{equipment + 1}"]}
+        for hero, pet, equipment in ((0, 0, 0), (1, 1, 10), (2, 2, 12), (4, 3, 14), (6, 4, 16))
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "days",
+    [
+        5,
+        # A full Season is the worst case. Each day is still sent in both
+        # the recent and Season lists, so this waits for sending each day once.
+        pytest.param(28, marks=pytest.mark.xfail(strict=True, reason="days sent twice")),
+    ],
+)
+def test_busiest_player_page_stays_well_under_the_response_limit(
+    database_url: str, days: int
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            today = ranked_day_for(NOW).start
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                connection.execute(
+                    "DELETE FROM api_player_daily_logs WHERE player_id = %s",
+                    (player_id,),
+                )
+                # Armies need saved battles; skip those links to seed only what
+                # the player page reads.
+                connection.execute("SET LOCAL session_replication_role = replica")
+                for day_number in range(1, days + 1):
+                    start = today - timedelta(days=days - day_number)
+                    battles = [
+                        {
+                            "lens": lens,
+                            "battle_id": str(day_number * 100 + slot),
+                            "battle_timestamp": (start + timedelta(minutes=slot)).isoformat(),
+                            "opponent": {"tag": f"#2PP{'0289PYLQGR'[slot % 10]}", "name": "Opponent name"},
+                            "destruction_percentage": 100,
+                            "stars": 3,
+                            "trophy_change": 40 if lens == "offense" else -40,
+                            "army_share_code": "u" + "1x2" * 20,
+                        }
+                        for slot in range(16)
+                        for lens in ["offense" if slot < 8 else "defense"]
+                    ]
+                    connection.execute(
+                        """
+                        INSERT INTO api_player_daily_logs (
+                            player_id, ranked_day_start, ranked_day_end,
+                            official_season_id, season_day_number, version, state,
+                            coverage, confidence, attack_count, attack_three_star_count,
+                            attack_gain, defense_count, defense_three_star_count,
+                            defense_loss, net_trophy_change, adjustments, battles,
+                            partial_reasons, published_at
+                        ) VALUES (
+                            %s, %s, %s, 'current-season', %s, 1, 'Complete', 'complete',
+                            'exact', 8, 8, 320, 8, 8, 320, 0, '[]'::jsonb, %s,
+                            '[]'::jsonb, %s
+                        )
+                        """,
+                        (player_id, start, start + timedelta(days=1), day_number,
+                         Jsonb(battles), NOW),
+                    )
+                    for battle in battles:
+                        connection.execute(
+                            """
+                            INSERT INTO battle_army_decodes (
+                                battle_id, evidence_id, perspective, decoder_version,
+                                catalog_version, catalog_hash, status, exact_army_id,
+                                identity_hash, home_troops, spells, siege, cc_troops,
+                                heroes
+                            ) VALUES (%s, 1, %s, %s, %s, %s, 'decoded', 1, %s,
+                                      %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                int(battle["battle_id"]),
+                                "attacker" if battle["lens"] == "offense" else "defender",
+                                DECODER_VERSION, CATALOG_VERSION, "a" * 64, "b" * 64,
+                                *(Jsonb(HEAVY_ARMY[key]) for key in (
+                                    "home_troops", "spells", "siege", "cc_troops", "heroes")),
+                            ),
+                        )
+                connection.commit()
+
+            player = api_players.get_player_page(
+                database, "#2PP", now=NOW, freshness_seconds=900
+            )
+
+            assert player is not None
+            screen = player["screen_ready"]
+            assert len(screen["recent_days"]) == len(screen["season_days"]) == days
+            # Every battle still reaches the page with its army.
+            assert all(
+                len(day["offense_events"]) == len(day["defense_events"]) == 8
+                and all(event["army"]["components"] for event in
+                        [*day["offense_events"], *day["defense_events"]])
+                for day in [screen["current_day"], *screen["recent_days"], *screen["season_days"]]
+            )
+            size = len(JSONResponse(content=api._json_safe(player)).body)
+            assert size < 0.6 * api._DEFAULT_MAX_RESPONSE_BYTES
         finally:
             database.close()

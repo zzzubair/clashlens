@@ -90,7 +90,8 @@ def test_raw_battle_reconciles_to_both_player_pages_and_analytics(database_url, 
                     now=DAY_START + timedelta(hours=2), request_key=f"single-{tag}")
                 assert processor.process_job(job, owner=f"single-{tag}").outcome == "processed"
             missing = api_players.get_player_page(api, "#8PP", now=DAY_START + timedelta(hours=3), freshness_seconds=300)
-            assert missing["daily_logs"][0]["battles"] == []
+            missing_day = missing["screen_ready"]["recent_days"][0]
+            assert missing_day["offense_events"] == missing_day["defense_events"] == []
             _ingest(ci, archive_server, processor, "trace-2", False, code="u5x58")
             for tag, trophies in (("#2PP", 6040), ("#8PP", 5960)):
                 pair = _store_baseline_pair(ci, archive_server, key=f"end-{tag}", boundary=DAY_START + timedelta(days=1),
@@ -102,15 +103,15 @@ def test_raw_battle_reconciles_to_both_player_pages_and_analytics(database_url, 
                 assert processor.process_job(job, owner=f"complete-{tag}").outcome == "processed"
             pages = [api_players.get_player_page(api, tag, now=DAY_START + timedelta(days=1, hours=1), freshness_seconds=300)
                      for tag in ("#2PP", "#8PP")]
-            logs = [next(day for day in page["daily_logs"] if day["battles"]) for page in pages]
-            battles = [log["battles"][0] for log in logs]
-            assert all(len(log["battles"]) == 1 for log in logs)
+            logs = [next(day for day in page["screen_ready"]["recent_days"]
+                         if day["offense_events"] or day["defense_events"]) for page in pages]
+            assert [(len(log["offense_events"]), len(log["defense_events"])) for log in logs] == [(1, 0), (0, 1)]
+            battles = [logs[0]["offense_events"][0], logs[1]["defense_events"][0]]
             assert battles[0]["battle_id"] == battles[1]["battle_id"]
-            assert {battle["lens"] for battle in battles} == {"offense", "defense"}
             assert [battle["trophy_change"] for battle in battles] == [40, -40]
             assert logs[0]["state"] == "Complete"
             assert logs[1]["state"] == "Partial"
-            assert logs[1]["partial_reasons"] == ["automatic_defense_basis_unavailable"]
+            assert logs[1]["uncertainty_reasons"] == ["automatic_defense_basis_unavailable"]
             # Use the existing completed-day fixture publication seam. It reads
             # the real reconciled logs and decodes above, without changing them.
             enable_direct_army_fixture(database, monkeypatch)
