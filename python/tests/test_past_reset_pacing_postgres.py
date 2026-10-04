@@ -19,7 +19,9 @@ class Clock:
         monkeypatch.setattr(past_reset_pacing, "_now", lambda _connection: self.now)
 
 
-def _version(connection, player_id: int, boundary_at: datetime, version: int) -> int:
+def _version(
+    connection, player_id: int, boundary_at: datetime, version: int, state: str
+) -> int:
     input_hash = format(version, "x") * 64
     return int(
         connection.execute(
@@ -31,7 +33,7 @@ def _version(connection, player_id: int, boundary_at: datetime, version: int) ->
                 input_hash, evidence_complete, coverage_complete
             ) VALUES (
                 %s, %s, %s, 'test-season', 1, 'test-anchor', 'test-rules',
-                %s, %s, 'Complete', 'exact', %s, true, true
+                %s, %s, %s, 'exact', %s, true, true
             ) RETURNING id
             """,
             (
@@ -40,14 +42,22 @@ def _version(connection, player_id: int, boundary_at: datetime, version: int) ->
                 boundary_at,
                 input_hash,
                 version,
+                state,
                 input_hash,
             ),
         ).fetchone()[0]
     )
 
 
-def _record(database, connection, player_id: int, boundary_at: datetime, version: int):
-    version_id = _version(connection, player_id, boundary_at, version)
+def _record(
+    database,
+    connection,
+    player_id: int,
+    boundary_at: datetime,
+    version: int,
+    state: str = "Complete",
+):
+    version_id = _version(connection, player_id, boundary_at, version, state)
     boundary._record_boundary_generation(
         database,
         connection,
@@ -234,6 +244,88 @@ def test_past_reset_correction_waits_out_the_quiet_window(
                     (PAST,),
                 ).fetchone()[0]
                 assert sorted(affected) == ["army", "snapshot"]
+        finally:
+            database.close()
+
+
+def _build_jobs(connection, boundary_at: datetime, generation: int) -> list[str]:
+    key = boundary_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return sorted(
+        row[0]
+        for row in connection.execute(
+            """
+            SELECT work_type FROM python_processing_jobs_worker
+            WHERE deduplication_key LIKE %s
+            """,
+            (f"%:boundary:{key}:gen:{generation}:%",),
+        ).fetchall()
+    )
+
+
+def test_past_reset_correction_joins_the_one_already_waiting(
+    database_url: str, monkeypatch
+) -> None:
+    clock = Clock(monkeypatch, NOON)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _published_resets(database, connection)
+                published_id = _latest(connection, PAST)[0]
+                _created(connection, PAST, NOON)
+                clock.now = NOON + timedelta(hours=1)
+                boundary_publication._queue_boundary_army_correction(
+                    database, connection, boundary_at=PAST, generation_id=published_id
+                )
+                _record(database, connection, player_id, PAST, 2)
+
+                # Due again, a later correction arrives before the re-check.
+                clock.now = NOON + timedelta(hours=6)
+                latest_version = _record(database, connection, player_id, PAST, 3)
+                assert _latest(connection, PAST)[1] == 1
+                connection.commit()
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _latest(connection, PAST)[1:] == (2, latest_version)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _latest(connection, PAST)[1] == 2
+                waiting = connection.execute(
+                    """
+                    SELECT count(*) FROM boundary_publication_corrections
+                    WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
+                    """,
+                    (PAST,),
+                ).fetchone()[0]
+                assert waiting == 0
+        finally:
+            database.close()
+
+
+def test_past_reset_build_ready_in_the_quiet_window_starts_after_it(
+    database_url: str, monkeypatch
+) -> None:
+    clock = Clock(monkeypatch, datetime(2026, 8, 11, 4, 29, tzinfo=UTC))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _published_resets(database, connection)
+                _created(connection, PAST, NOON - timedelta(hours=10))
+                _record(database, connection, player_id, PAST, 2, state="Live")
+                assert _latest(connection, PAST)[1] == 2
+                assert _build_jobs(connection, PAST, 2) == []
+
+                clock.now = datetime(2026, 8, 11, 4, 31, tzinfo=UTC)
+                _record(database, connection, player_id, PAST, 3)
+                connection.commit()
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _build_jobs(connection, PAST, 2) == []
+
+                clock.now = datetime(2026, 8, 11, 7, tzinfo=UTC)
+                boundary_publication.reevaluate_boundary_publications(database)
+                assert _build_jobs(connection, PAST, 2) == [
+                    "build_army_analytics",
+                    "build_snapshot",
+                ]
         finally:
             database.close()
 

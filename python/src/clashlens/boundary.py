@@ -22,7 +22,7 @@ from .db import (
 )
 from .domain import RANKED_DAY_DURATION, season_is_current
 from .domain_repair import boundary_held
-from .past_reset_pacing import past_reset_correction_waits
+from .past_reset_pacing import past_reset_build_waits, past_reset_correction_waits
 
 
 def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
@@ -777,6 +777,9 @@ def _try_enqueue_boundary_artifacts(
     if generation is None:
         return
     generation_number = int(generation[1])
+    # A past Reset's correction starts no build in the quiet window.
+    if generation_number > 1 and past_reset_build_waits(connection, boundary_at):
+        return
     sweep_id = int(generation[2]) if generation[2] is not None else None
     if sweep_id is None:
         return
@@ -1184,15 +1187,33 @@ def _record_boundary_generation(
             # manifest has frozen, reprocess both instead of inheriting an
             # army identity built from the previous source version.
             frozen_artifacts = ["snapshot", "army"]
+        queued = (
+            connection.execute(
+                """
+                SELECT id
+                FROM boundary_publication_corrections
+                WHERE boundary_at = %s AND source_generation_id = %s
+                  AND state IN ('queued', 'pending_inputs')
+                ORDER BY id DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (boundary_at, generation_id),
+            ).fetchone()
+            if changed
+            else None
+        )
         fully_published = (
             _text_value(current[2]) == "published"
             and _text_value(current[3]) == "published"
-            # A repair campaign holding this Reset, or a past Reset not yet
-            # due to rebuild, keeps the change queued.
+            # A correction already waiting, a repair campaign holding this
+            # Reset, or a past Reset not yet due to rebuild keeps the change
+            # queued, so waiting inputs start together.
             and not (
                 changed
                 and (
-                    boundary_held(connection, boundary_at)
+                    queued is not None
+                    or boundary_held(connection, boundary_at)
                     or past_reset_correction_waits(connection, boundary_at)
                 )
             )
@@ -1279,18 +1300,6 @@ def _record_boundary_generation(
                 "ranked_day_version_id": ranked_day_version_id,
                 "input_hash": ranked_day_input_hash,
             }
-            queued = connection.execute(
-                """
-                SELECT id
-                FROM boundary_publication_corrections
-                WHERE boundary_at = %s AND source_generation_id = %s
-                  AND state IN ('queued', 'pending_inputs')
-                ORDER BY id DESC
-                LIMIT 1
-                FOR UPDATE
-                """,
-                (boundary_at, generation_id),
-            ).fetchone()
             correction_artifacts = frozen_artifacts
             if queued is None:
                 connection.execute(
