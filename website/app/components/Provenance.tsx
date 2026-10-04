@@ -88,8 +88,8 @@ export function useServerTime(loadedAt: string | undefined) {
   const [now, setNow] = useState(() => (loadedAt ? Date.parse(loadedAt) : 0));
   useEffect(() => {
     if (!loadedAt) return;
-    const offset = Date.parse(loadedAt) - Date.now();
-    const tick = () => setNow(Date.now() + offset);
+    const offset = Date.parse(loadedAt) - performance.now();
+    const tick = () => setNow(performance.now() + offset);
     tick();
     const timer = setInterval(tick, 30_000);
     return () => clearInterval(timer);
