@@ -13,6 +13,7 @@ import {
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PastSeasons } from "../components/PastSeasons";
 import { formatAge, useCurrentTime } from "../components/Provenance";
+import { pageMeta } from "../lib/blog";
 import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
@@ -47,6 +48,8 @@ export interface PlayerLoaderData {
   lookupError: WebsiteErrorResponse | null;
   // Streams in after the page; null when ClashKing finishes are unavailable.
   pastSeasons?: Promise<PastSeasonFinish[] | null>;
+  // The site's public address, for absolute links in link previews.
+  origin?: string;
 }
 
 export async function loader({
@@ -98,6 +101,9 @@ export async function loader({
   const pastSeasons = import("../services/past-seasons.server")
     .then((api) => api.getPastSeasons(normalizedTag))
     .catch(() => null);
+  const origin = import("../server/blog.server").then(({ blogOrigin }) =>
+    blogOrigin(request),
+  );
   const [playerResult, seasonsResult, historicalResult, refreshResult, lookupResult] =
     await Promise.allSettled([
       client.then((api) => api.getPlayer(normalizedTag)),
@@ -172,7 +178,26 @@ export async function loader({
     lookup,
     lookupError,
     pastSeasons,
+    origin: await origin,
   };
+}
+
+// Link previews name the player only from their own saved profile, and never
+// show trophies or ranks, which go stale the moment the link is shared.
+export function meta({ loaderData }: { loaderData?: PlayerLoaderData }) {
+  const tag = loaderData?.requestedTag;
+  if (!tag || !loaderData.origin) return [{ title: "Player not found · Clash Lens" }];
+  const player = loaderData.player?.tag === tag ? loaderData.player : null;
+  const name = player?.profile.name.trim();
+  return pageMeta({
+    title: name ? `${name} (${tag})` : `Player ${tag}`,
+    description: "Legend League days, battles and Season history on Clash Lens.",
+    url: `${loaderData.origin}${canonicalPlayerPath(tag)}`,
+    origin: loaderData.origin,
+    type: "website",
+    image: "/images/legend-league.webp",
+    imageAlt: "The Legend League badge",
+  });
 }
 
 function readSeasonParam(value: string | null): string | null {

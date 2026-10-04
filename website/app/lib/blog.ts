@@ -35,7 +35,7 @@ export function absoluteBlogUrl(pathOrUrl: string, origin: string): string {
   return new URL(pathOrUrl, origin).href;
 }
 
-interface BlogPageMeta {
+interface PageMeta {
   title: string;
   description: string;
   /** Absolute page address. */
@@ -44,11 +44,16 @@ interface BlogPageMeta {
   type: "website" | "article";
   image?: string | null;
   imageAlt?: string;
+  /** Shows the image as a large card instead of a small thumbnail. */
+  largeImage?: boolean;
+}
+
+interface BlogPageMeta extends PageMeta {
   publishedDate?: string;
 }
 
 /** Page title plus the Open Graph and Twitter tags Discord reads for link previews. */
-export function blogMeta(page: BlogPageMeta): MetaDescriptor[] {
+export function pageMeta(page: PageMeta): MetaDescriptor[] {
   const image = page.image ? absoluteBlogUrl(page.image, page.origin) : null;
   return [
     { title: `${page.title} · Clash Lens` },
@@ -66,14 +71,24 @@ export function blogMeta(page: BlogPageMeta): MetaDescriptor[] {
             : []),
         ]
       : []),
-    ...(page.publishedDate
-      ? [{ property: "article:published_time", content: page.publishedDate }]
-      : []),
-    { name: "twitter:card", content: image ? "summary_large_image" : "summary" },
+    {
+      name: "twitter:card",
+      content: image && page.largeImage ? "summary_large_image" : "summary",
+    },
     { name: "twitter:title", content: page.title },
     { name: "twitter:description", content: page.description },
     ...(image ? [{ name: "twitter:image", content: image }] : []),
     { tagName: "link", rel: "canonical", href: page.url },
+  ];
+}
+
+/** The shared preview tags plus the blog's publish date and feed link. */
+export function blogMeta(page: BlogPageMeta): MetaDescriptor[] {
+  return [
+    ...pageMeta({ ...page, largeImage: true }),
+    ...(page.publishedDate
+      ? [{ property: "article:published_time", content: page.publishedDate }]
+      : []),
     {
       tagName: "link",
       rel: "alternate",
