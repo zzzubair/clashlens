@@ -9,6 +9,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation, text
+from test_boundary_publication_postgres import _sweep_with_members
 
 from clashlens import (
     army_ingestion,
@@ -769,80 +770,79 @@ def test_battle_logs_before_a_reset_do_not_wait_on_each_other(
     assert saved == 2
 
 
-def test_reset_swept_during_a_battle_log_waits_for_its_decodes(
-    database_url: str, archive_server, monkeypatch
+def test_battle_log_started_before_a_reset_records_its_member(
+    database_url: str, archive_server
 ) -> None:
-    # A battle log that starts before the Reset can still be saving decodes
-    # when the collector saves the sweep. The first leaderboard generation
-    # must wait for it, or it records the player's armies as missing.
+    # A job that saves decodes before the Reset's sweep exists, then records
+    # the player's day result after the collector saves the sweep, still
+    # records that result in the Reset's first generation.
     with domain_database(database_url, include_coordinator=True) as ci:
         battle_ids = _unswept_battles(ci, archive_server, {"#2PP": "u1x58"})["#2PP"]
         reset = datetime(2026, 8, 5, 5, tzinfo=UTC)
-        checked, resume = threading.Event(), threading.Event()
-        original = boundary.lock_boundary_publication_once_swept
-
-        def pause_after_first_check(connection, boundary_at):
-            swept = original(connection, boundary_at)
-            if not checked.is_set():
-                checked.set()
-                assert resume.wait(30)
-            return swept
-
-        monkeypatch.setattr(
-            boundary, "lock_boundary_publication_once_swept", pause_after_first_check
-        )
-        errors: list[BaseException] = []
-        seen: list[int] = []
-
-        def battle_log() -> None:
-            db = Database(ci)
-            try:
-                with db.pool.connection() as connection:
-                    with connection.transaction():
-                        army_ingestion._upsert_army_decodes(db, connection, battle_ids)
-            except BaseException as error:  # noqa: BLE001 - asserted below
-                errors.append(error)
-            finally:
-                db.close()
-
-        def first_generation() -> None:
-            try:
-                with psycopg.connect(ci) as connection:
-                    boundary.lock_boundary_publication(connection, reset)
-                    seen.append(
-                        connection.execute(
-                            "SELECT count(*) FROM battle_army_decodes WHERE is_active"
+        db = Database(ci)
+        try:
+            with db.pool.connection() as job:
+                with job.transaction():
+                    player_id = int(
+                        job.execute(
+                            "SELECT id FROM players WHERE normalized_tag = '#2PP'"
                         ).fetchone()[0]
                     )
-            except BaseException as error:  # noqa: BLE001 - asserted below
-                errors.append(error)
+                    army_ingestion._upsert_army_decodes(db, job, battle_ids)
+                    with psycopg.connect(ci, autocommit=True) as collector:
+                        sweep_id = _sweep_with_members(collector, [player_id])
+                    version_id = int(
+                        job.execute(
+                            """
+                            INSERT INTO ranked_day_versions (
+                                player_id, ranked_day_start, ranked_day_end,
+                                official_season_id, season_day_number,
+                                season_anchor_rule_version,
+                                reconciliation_rule_version, result_hash,
+                                version, state, confidence, input_hash,
+                                evidence_complete, coverage_complete
+                            ) VALUES (
+                                %s, %s, %s, 'test-season', 1, 'test-anchor',
+                                'test-rules', %s, 1, 'Complete', 'exact', %s,
+                                true, true
+                            ) RETURNING id
+                            """,
+                            (
+                                player_id,
+                                reset - timedelta(days=1),
+                                reset,
+                                "a" * 64,
+                                "a" * 64,
+                            ),
+                        ).fetchone()[0]
+                    )
+                    assert boundary._record_boundary_generation(
+                        db,
+                        job,
+                        boundary_at=reset,
+                        player_id=player_id,
+                        ranked_day_version_id=version_id,
+                        ranked_day_input_hash="a" * 64,
+                    )
+            with db.pool.connection() as connection:
+                members = connection.execute(
+                    """
+                    SELECT generation.sweep_id, member.player_id,
+                           member.ranked_day_version_id,
+                           member.ranked_day_input_hash
+                    FROM boundary_publication_generation_members AS member
+                    JOIN boundary_publication_generations AS generation
+                      ON generation.id = member.generation_id
+                    WHERE generation.boundary_at = %s
+                    """,
+                    (reset,),
+                ).fetchall()
+        finally:
+            db.close()
 
-        writer = threading.Thread(target=battle_log)
-        writer.start()
-        assert checked.wait(30)
-        with psycopg.connect(ci, autocommit=True) as observer:
-            observer.execute(
-                """
-                INSERT INTO collector_reset_sweeps
-                    (boundary_at, member_ids, membership_captured_at)
-                SELECT %s, array_agg(id), clock_timestamp() FROM players
-                """,
-                (reset,),
-            )
-            generation = threading.Thread(target=first_generation)
-            generation.start()
-            deadline = time.monotonic() + 30
-            while not observer.execute(
-                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
-            ).fetchone()[0]:
-                assert time.monotonic() < deadline, "generation never waited"
-                time.sleep(0.02)
-            resume.set()
-            writer.join(60)
-            generation.join(60)
-
-    assert errors == []
-    assert seen == [1]
+    assert [tuple(row[:3]) + (text(row[3]),) for row in members] == [
+        (sweep_id, player_id, version_id, "a" * 64)
+    ]
 
 
 @pytest.mark.parametrize("attack", [True, False])
