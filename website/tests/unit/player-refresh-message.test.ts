@@ -7,7 +7,11 @@ import {
   StaticRouterProvider,
 } from "react-router";
 
-import type { PlayerPage, RefreshState } from "../../app/lib/contracts";
+import type {
+  PlayerPage,
+  RefreshState,
+  WebsiteErrorResponse,
+} from "../../app/lib/contracts";
 import PlayerRoute, { type loader as playerLoader } from "../../app/routes/player";
 
 const TAG = "#2PP";
@@ -41,7 +45,10 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
-async function refreshMessage(state: RefreshState) {
+async function refreshMessage(
+  state: RefreshState,
+  refreshError: WebsiteErrorResponse | null = null,
+) {
   const data: Awaited<ReturnType<typeof playerLoader>> = {
     requestedTag: TAG,
     player: PLAYER,
@@ -56,7 +63,7 @@ async function refreshMessage(state: RefreshState) {
       publishedAt: null,
       player: null,
     },
-    refreshError: null,
+    refreshError,
     noJsIdempotencyKey: "test-idempotency-key",
     lookup: { tag: TAG, state: "tracking" },
     lookupError: null,
@@ -74,7 +81,7 @@ async function refreshMessage(state: RefreshState) {
   if (context instanceof Response) throw new Error("unexpected route response");
   const router = createStaticRouter(handler.dataRoutes, context);
   const html = renderToString(createElement(StaticRouterProvider, { router, context }));
-  return html.split('aria-label="Player refresh"')[1].split("</p>")[0];
+  return html.split('aria-label="Player refresh"')[1].split("</section>")[0];
 }
 
 describe("player refresh message", () => {
@@ -92,5 +99,14 @@ describe("player refresh message", () => {
   it("says Updated. only once the refresh completed", async () => {
     expect(await refreshMessage("complete")).toContain("Updated.");
     expect(await refreshMessage("queued")).toContain("Refreshing…");
+  });
+
+  it("replaces Refreshing… and its progress once the status read failed", async () => {
+    const message = await refreshMessage("running", {
+      error: { code: "unavailable", message: "Unavailable." },
+    });
+    expect(message).toContain("Couldn&#x27;t refresh right now. Showing saved results.");
+    expect(message).not.toContain("Refreshing…");
+    expect(message).not.toContain("<progress");
   });
 });
