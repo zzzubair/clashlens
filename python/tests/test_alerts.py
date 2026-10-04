@@ -35,7 +35,6 @@ def runtime(tmp_path, monkeypatch):
             "clashlens_collector_failed_processing": 0,
             "clashlens_collector_failed_uploads": 0,
             "clashlens_collector_oldest_pending_processing_age_seconds": 0,
-            "clashlens_collector_oldest_pending_build_age_seconds": 0,
             "clashlens_collector_oldest_pending_upload_age_seconds": 0,
         },
         posts=[],
@@ -205,7 +204,7 @@ def trigger(rt, condition, value=True):
         rt.metrics["clashlens_collector_newest_failed_upload_age_seconds"] = (
             86399 if value else 86400
         )
-    elif condition in ("processing", "build", "upload"):
+    elif condition in ("processing", "upload"):
         name = f"clashlens_collector_oldest_pending_{condition}_age_seconds"
         limit = 1800 if condition == "processing" else 3600
         rt.metrics[name] = limit if value else limit - 1
@@ -226,7 +225,6 @@ def trigger(rt, condition, value=True):
         "leaderboard",
         "failures",
         "processing",
-        "build",
         "upload",
         "publication",
     ],
@@ -629,24 +627,24 @@ def test_unknown_reset_progress_neither_raises_nor_clears_the_leaderboard(
 
 def test_saved_work_alerts_clear_only_when_their_own_problem_clears(runtime):
     rt = runtime
-    for condition in ("failures", "processing", "build", "upload", "publication"):
+    for condition in ("failures", "processing", "upload", "publication"):
         trigger(rt, condition)
     assert rt.run() == 0
-    assert len(rt.posts) == 5
+    assert len(rt.posts) == 4
     rt.metrics_status = 503
     rt.publication = ""
     assert rt.run() == 1
-    assert len(rt.posts) == 5
+    assert len(rt.posts) == 4
     # Finished work and a fresh Live Leaderboard leave a missing Reset
     # publication open.
     rt.metrics_status = 200
-    for condition in ("failures", "processing", "build", "upload"):
+    for condition in ("failures", "processing", "upload"):
         trigger(rt, condition, False)
     rt.publication = "1"
     assert rt.run() == 0
-    assert len(rt.posts) == 9
-    assert all("recovered" in post["content"] for post in rt.posts[5:])
-    assert not any("publication time" in post["content"] for post in rt.posts[5:])
+    assert len(rt.posts) == 7
+    assert all("recovered" in post["content"] for post in rt.posts[4:])
+    assert not any("publication time" in post["content"] for post in rt.posts[4:])
     state = json.loads((rt.state_dir / "alerts.json").read_text())
     assert "site" not in state["incidents"]
 
@@ -658,8 +656,7 @@ def test_processing_alert_ignores_builds_and_names_the_oldest_work(runtime):
         f"{prefix}oldest_pending_processing_age_seconds": 1799,
         f"{prefix}oldest_job_reconcile_ranked_day_age_seconds": 1799,
         f"{prefix}oldest_job_process_observation_age_seconds": 600,
-        f"{prefix}oldest_pending_build_age_seconds": 3599,
-        f"{prefix}oldest_job_build_snapshot_age_seconds": 3599,
+        f"{prefix}oldest_job_build_snapshot_age_seconds": 7200,
     }
     assert rt.run() == 0
     assert not rt.posts
@@ -669,11 +666,6 @@ def test_processing_alert_ignores_builds_and_names_the_oldest_work(runtime):
     assert len(rt.posts) == 1
     assert "over 30 minutes" in rt.posts[0]["content"]
     assert "Oldest waiting: daily result calculations, 31 minutes." in rt.posts[0]["content"]
-    rt.metrics[f"{prefix}oldest_pending_build_age_seconds"] = 3600
-    rt.metrics[f"{prefix}oldest_job_build_snapshot_age_seconds"] = 3600
-    assert rt.run() == 0
-    assert len(rt.posts) == 2
-    assert "Oldest waiting: frozen leaderboard builds, 60 minutes." in rt.posts[1]["content"]
 
 
 def test_missing_failure_age_is_unknown_unless_nothing_has_failed(runtime):

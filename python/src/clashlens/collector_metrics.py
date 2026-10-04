@@ -61,9 +61,8 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline' AND status IN ('complete', 'failed', 'cancelled')),
                (SELECT CASE WHEN max(last_success_at) IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM clock_timestamp() - max(last_success_at))) END
                 FROM collector_response_state),
-               -- Publication builds often run for most of an hour, so they get their own age.
+               -- Publication builds often run for most of an hour, so they are left out.
                COALESCE((SELECT max(age) FROM processing WHERE NOT starts_with(work_type, 'build_')), 0),
-               COALESCE((SELECT max(age) FROM processing WHERE starts_with(work_type, 'build_')), 0),
                COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - oldest_at)) FROM uploads), 0),
                (SELECT CASE WHEN newest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - newest_at)) END FROM failed_jobs),
                (SELECT CASE WHEN newest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - newest_at)) END FROM failed_uploads),
@@ -86,7 +85,6 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
         "reset_terminal",
         "last_success_age_seconds",
         "oldest_pending_processing_age_seconds",
-        "oldest_pending_build_age_seconds",
         "oldest_pending_upload_age_seconds",
         "newest_failed_processing_age_seconds",
         "newest_failed_upload_age_seconds",

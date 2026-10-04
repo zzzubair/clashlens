@@ -192,9 +192,8 @@ def test_metrics_include_jobs_without_observations_or_successful_fetches(
                 assert metrics["pending_processing"] == 1
                 assert metrics["oldest_pending_processing_age_seconds"] >= 3600
                 assert metrics["oldest_job_reconcile_ranked_day_age_seconds"] >= 3600
-                assert metrics["oldest_pending_build_age_seconds"] == 0
                 assert "last_success_age_seconds" not in metrics
-            # An older build counts only toward the build age.
+            # An older build is left out of the processing age.
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     """
@@ -218,7 +217,6 @@ def test_metrics_include_jobs_without_observations_or_successful_fetches(
             metrics = database.health_metrics()
             assert metrics["pending_processing"] == 2
             assert 3600 <= metrics["oldest_pending_processing_age_seconds"] < 7200
-            assert metrics["oldest_pending_build_age_seconds"] >= 7200
             assert metrics["oldest_job_build_army_analytics_age_seconds"] >= 7200
             with psycopg.connect(connection_info) as connection:
                 connection.execute(

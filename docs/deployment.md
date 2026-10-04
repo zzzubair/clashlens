@@ -791,22 +791,20 @@ use the [operating notes](operating.md#respond-to-alerts).
   Seeing a failed upload's bytes again does not restart its 24 hours.
   A manual retry of a failed item clears the alert early; a repeat failure
   raises a fresh alert.
-- **Saved work waiting too long**, as three separate alerts:
+- **Saved work waiting too long**, as two separate alerts:
   - ordinary processing work (saved responses, daily calculations and army
     re-decoding) waiting at least **30 minutes**, from
-    `oldest_pending_processing_age_seconds`;
-  - a leaderboard, analytics or export build unfinished for at least **one
-    hour**, from `oldest_pending_build_age_seconds`. Builds are kept out of
-    the 30-minute alert because on Oct 3–4 they routinely ran 24–63 minutes,
-    which would have kept that alert open and hidden a real backlog;
+    `oldest_pending_processing_age_seconds`. Leaderboard, analytics and
+    export builds are left out because on Oct 3–4 they routinely ran 24–63
+    minutes, which would have kept this alert open and hidden a real backlog.
+    The alert names the oldest kind of waiting work and its age, from the
+    collector's per-type `oldest_job_<work_type>_age_seconds`;
   - a raw response waiting at least **one hour** to be uploaded to the
     archive, from `oldest_pending_upload_age_seconds`. An upload's wait
     starts when it is first saved, or when retired bytes come back for a
     fresh upload. Retries, including an operator retry of a failed upload,
     keep the original wait.
 
-  The processing and build alerts name the oldest kind of waiting work and
-  its age, from the collector's per-type `oldest_job_<work_type>_age_seconds`.
   Since the Oct 1 worker fixes, the longest ordinary processing wait was 18
   minutes and the longest upload wait under two minutes; Oct 1's stalls of up
   to 3.7 hours would have alerted. Expect the 30-minute alert on Reset

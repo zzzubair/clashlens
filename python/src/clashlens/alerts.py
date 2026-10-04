@@ -64,10 +64,6 @@ CONDITIONS = {
         "Ordinary saved work, not counting publication builds, has waited over 30 minutes to be processed",
         "./ops logs worker",
     ),
-    "builds": (
-        "A leaderboard, analytics or export build has been unfinished for over an hour",
-        "./ops logs worker",
-    ),
     "uploads": (
         "A raw response has waited over an hour to be uploaded to the archive",
         "./ops logs collector",
@@ -84,16 +80,12 @@ CONDITIONS = {
 }
 
 
-# Plain names for the worker's job types in processing and build alerts.
+# Plain names for the worker's ordinary job types in processing alerts.
 WORK_NAMES = {
     "process_observation": "saved API responses",
     "replay_observation": "replayed API responses",
     "reconcile_ranked_day": "daily result calculations",
     "redecode_army": "army re-decoding",
-    "build_snapshot": "frozen leaderboard builds",
-    "build_analytics": "analytics builds",
-    "build_army_analytics": "army analytics builds",
-    "build_export": "account export builds",
 }
 
 # A recovery is sent only after this long without the problem, so a problem
@@ -445,27 +437,25 @@ def observe(
         )
         for name, kind, limit in (
             ("processing", "processing", 1800),
-            ("builds", "build", 3600),
             ("uploads", "upload", 3600),
         ):
             age = metrics.get(f"{prefix}oldest_pending_{kind}_age_seconds")
             findings[name] = None if age is None else age >= limit
-        # Name the oldest job type in each alert so it says which work is behind.
-        jobs = [
-            (age, name.removeprefix(f"{prefix}oldest_job_").removesuffix("_age_seconds"))
-            for name, age in metrics.items()
-            if name.startswith(f"{prefix}oldest_job_")
-        ]
+        # Name the oldest ordinary job type so the alert says which work is behind.
+        age, work = max(
+            (
+                (age, name.removeprefix(f"{prefix}oldest_job_").removesuffix("_age_seconds"))
+                for name, age in metrics.items()
+                if name.startswith(f"{prefix}oldest_job_")
+                and not name.startswith(f"{prefix}oldest_job_build_")
+            ),
+            default=(0, None),
+        )
         state["details"] = {}
-        for name, build in (("processing", False), ("builds", True)):
-            age, work = max(
-                (job for job in jobs if job[1].startswith("build_") == build),
-                default=(0, None),
+        if work:
+            state["details"]["processing"] = (
+                f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
             )
-            if work:
-                state["details"][name] = (
-                    f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
-                )
 
     names = (
         ("clashlens_spool_bytes", "max_bytes"),
