@@ -8,9 +8,9 @@ All times use Coordinated Universal Time, **UTC**. For how Clash Lens assigns ba
 
 Ranked unlocks at Town Hall 7. Ordinary Battles allow unlimited attacks without changing Ranked standing. Ranked uses limited attacks and Tournament results to determine movement through the ladder. Below Legend I, matchmaking considers Town Hall level and league placement; in Legend I, Supercell identifies trophy count as the most important factor. [Launch, 2025-10-06][launch]; [mode comparison][modes]; [Ranked scoring][ranked-scoring]; [Legend matchmaking][matchmaking].
 
-The table covers every tier. Counts are **per full 100-player group**, not worldwide. Supercell groups lower tiers into percentage ranges; the Wiki supplies the individual percentages shown below. Those exact lower-tier splits are therefore **Wiki-reported**, consistent with the current support ranges but not independently verified in-game. Legend III/II's promotion counts are explicit in the April release. [Ranked support][ranked]; [Wiki Ranked Battles][wiki-ranked]; [2026-04-27 release][april].
+The table covers every tier. Promotion and demotion figures below Legend I are bracket places per full 100-player group, not guaranteed counts of players who move or worldwide totals. Supercell groups lower tiers into percentage ranges; the Wiki supplies the individual percentages shown below. Those exact lower-tier splits are therefore **Wiki-reported**, consistent with the current support ranges but not independently verified in-game. Legend III/II's promotion counts are explicit in the April release. [Ranked support][ranked]; [Wiki Ranked Battles][wiki-ranked]; [2026-04-27 release][april].
 
-| Tier | Attacks/week | Promote/group | Demote/group |
+| Tier | Attacks/week | Promotion bracket/group | Demotion bracket/group |
 | --- | ---: | ---: | ---: |
 | Skeleton 1 | 6 | 50 | 0 |
 | Skeleton 2 | 6 | 50 | 5 |
@@ -51,7 +51,7 @@ The table covers every tier. Counts are **per full 100-player group**, not world
 
 Below Legend III, groups can be smaller than 100. Supercell's minimum group sizes are 15 for Skeleton/Barbarian, 20 for Archer/Wizard, 25 for Valkyrie/Witch, 30 for Golem/P.E.K.K.A/Titan, 40 for Dragon and 50 for Electro. Legend III and II list both minimum and normal size as 100. Percentages cannot be converted into exact counts for smaller groups without a rounding rule. [Ranked support][ranked].
 
-The Wiki describes one-tier promotion/demotion, with other players staying put. Its tie order is highest average attack destruction, lowest average defense destruction, then shortest average attack time; a remaining tie stays tied. A Town Hall upgrade can raise a player multiple tiers to the new floor after the Tournament. These details are secondary evidence. [Wiki Ranked Battles][wiki-ranked].
+The Wiki describes one-tier promotion/demotion, with other players staying put. A player in a demotion place at their Town Hall floor stays in that league. Its tie order is highest average attack destruction, lowest average defense destruction, then shortest average attack time; a remaining tie stays tied. A Town Hall upgrade can raise a player multiple tiers to the new floor after the Tournament. These details are secondary evidence. [Wiki Ranked Battles][wiki-ranked].
 
 **Bracket uncertainty:** February's release set Golem 19/20 demotion to 15% and Dragon 29/30 to 20%; current support instead gives 10% and 15% respectively. Other promotion percentages also exceed February's published values. No dated later post reviewed explains every difference. The table records current published support/Wiki values, not a claim that all transitions were verified. [2026-02-23 release][february]; [Ranked support][ranked].
 
@@ -102,7 +102,7 @@ Supercell publishes the ranges and says Legend I attacks depend on stars/destruc
 
 Below Legend I, Supercell says the defender gains the unused portion of 40 trophies and never loses trophies. In Legend I, it says the defender loses the attacker's gain. **Zero-star exception:** the Wiki instead explicitly gives lower-league defenders all 40 on a zero-star defense and Legend I defenders zero loss, even when the attacker gains 1–4. Clash Lens models the Legend I exception in the [domain trophy rules](domain.md#player-profiles-and-battle-logs). The official summaries omit this exception; it is not resolved by treating either page as a full formula. [Ranked scoring][ranked-scoring]; [Legend scoring][legend-scoring]; [Wiki Ranked Battles][wiki-ranked]; [Wiki Legend][wiki-legend].
 
-Legend I matchmaking happens for each Legend day, using a saved defensive layout. Incoming and outgoing opponents need not be the same. There is no Revenge in Ranked. The Wiki says targets cannot be skipped and cannot be scouted before committing to an attack. [Legend matchmaking][matchmaking]; [Wiki Legend][wiki-legend]; [Wiki Ranked Battles][wiki-ranked].
+Legend I matchmaking happens for each Legend day, using a saved defensive layout. Incoming and outgoing opponents need not be the same. There is no Revenge in Ranked. The current Ranked Wiki says targets cannot be skipped. Supercell's 2019 FAQ also says Legend targets cannot be scouted before attacking; no current published page reviewed independently confirms that restriction. [Legend matchmaking][matchmaking]; [Wiki Legend][wiki-legend]; [Wiki Ranked Battles][wiki-ranked]; [2019 FAQ][old-faq].
 
 Missing **allocated** Legend I defenses are filled using the average of the current and previous day's defensive results. Supercell does not publish the precise averaging, rounding or fallback algorithm. The Wiki also reports compensation for missing weekly defenses below Legend I, based on that week's received defenses, with no compensation if none were received. That lower-league detail is not confirmed by the official pages reviewed. [April release][april]; [Wiki Ranked Battles][wiki-ranked].
 
@@ -157,9 +157,9 @@ In the **2026-10-04 read-only data export**, player `#LY2QQ9L9Q`, fxDefuser, had
 | 2026-10-03 | 0 / 0 | 5,411 → 5,411 | `inferred_shielded` | Complete, inferred; next Reset also 5,411 |
 | 2026-10-04 | 0 / 0 | 5,411 → unknown | `not_inferred` | Live, partial; ending observations absent |
 
-October 3 has complete saved coverage and no automatic defense adjustment: `automatic_defense_evidence_state = not_applicable`, while `automatic_defense_loss` is unset, not an API-reported zero. October 4 has the same automatic-adjustment fields but cannot establish a full-day result yet. The latest retained detailed profile, at 06:23:17 UTC on October 4, has `trophies = 5411`, `leagueTier = Legend I`, `currentLeagueSeasonId = 1788757200`, and `attackWins = defenseWins = 0`. Those win counters do not establish shield state; earlier days contain real battles despite those latest zero counters.
+October 3 has complete saved coverage and no automatic defense adjustment: `automatic_defense_evidence_state = not_applicable`, while `automatic_defense_loss` is unset, not an API-reported zero. October 4 has the same automatic-adjustment fields but cannot establish a full-day result yet. The latest retained detailed profile, at 06:23:17 UTC on October 4, has `trophies = 5411`, `leagueTier.name = "Legend I"`, `currentLeagueSeasonId = 1788757200`, and `attackWins = defenseWins = 0`. Those win counters do not establish shield state; earlier days contain real battles despite those latest zero counters.
 
-The latest recorded defense was October 3 at 04:26:52 UTC, belonging to the October 2 Legend day. No later attack/defense for this player was present in the export. Thus the October 3 pattern supports a shield inference, consistent with the supplied report that the player was shielded on October 3–4. October 4 cannot be confirmed from this partial export. An inactive, unsigned or incompletely observed player can also have no new battles. No live player request was made because no Clash API key was available in the task environment; raw profile/log field changes during purchase or expiry were not observed.
+The latest recorded defense was October 3 at 04:26:52 UTC, belonging to the October 2 Legend day. No later attack/defense for this player was present in the export. Thus the October 3 pattern supports a shield inference. October 4 cannot be confirmed from this partial export. An inactive, unsigned or incompletely observed player can also have no new battles. This example uses retained observations; raw profile/log field changes during a shield purchase or expiry were not observed.
 
 Reproduction against the supplied snapshot, opened read-only; no production query or application change was made:
 
@@ -180,7 +180,7 @@ ORDER BY legend_day_start;
 
 The April 2026 placement was **one time**. Performance from April 20 until release selected the top 12,500 for Legend I, the next 50,000 for Legend II, the remaining eligible players for Legend III, and demoted players for Electro 33. These were initial allocations, not permanent capacities. [2026-04-16 announcement][announcement].
 
-**Clash Lens measurement, 2026-10-04:** 13,263 known Legend I tier holders = **11,968 signed up for the Season + 1,295 promoted but not signed up**, using the retained current-Season identifier to interpret enrollment. All 1,295 had identifier `0`, 5,000 trophies and no recorded battles; the other 11,968 had identifier `1788757200`. The counts were reproduced from each tracked player's latest saved profile version. The enrollment interpretation is our measurement convention, not an official published definition of identifier `0`. This is a known-player sample using latest observations, not a simultaneous worldwide census or a capacity limit.
+**Clash Lens measurement, 2026-10-04:** 13,263 known Legend I tier holders = **11,968 profiles with the current Season identifier + 1,295 profiles with identifier 0**. All 1,295 had identifier `0`, 5,000 trophies and no recorded battles; the other 11,968 had identifier `1788757200`. The counts were reproduced from each tracked player's latest saved profile version. We interpret the identifier-0 group as likely promoted players who have not enrolled, but the reviewed official sources do not define 0 as an enrollment flag; enrollment was not directly verified. This is a known-player sample using latest observations, not a simultaneous worldwide census or a capacity limit.
 
 For reproduction, group the latest `profile_versions` row per `player_id` by `league_tier_name` and `current_league_season_id`, ordered by `observed_at` then `profile_version_id` descending, and join `players` where `tracked_active` is true. That produces the two counts above. Do not calculate weekly promotions as `11,968 - 10,000`: enrollment timing, discovery and older observations prevent that inference.
 
@@ -190,7 +190,7 @@ Newest first. This covers Ranked/Legend structure, movement, entry, scoring-rela
 
 | Date | Change or announcement | Source |
 | --- | --- | --- |
-| 2026-06-15 | Ranked achievement Gem rewards rebalanced; the post gives no exact new amounts. No change to the Legend I movement/entry rules is stated. | [June update][june] |
+| 2026-06-15 publication; Wiki dates update 2026-06-16 | Supercell's release notes report rebalanced Ranked achievement Gem rewards without exact new amounts. The precise rollout date was not independently established. No change to the Legend I movement/entry rules is stated. | [June update][june]; [Wiki 2026 history][wiki-2026] |
 | 2026-04-27 | Released Legend III/II/I: 24/30 weekly attacks in III/II, top 5/top 3 promote, 8 daily attacks and four-week Seasons in I; weekly global rank-10,000 cutoff; new entrants and weekly sub-5,000 survivors raised to 5,000; all reset at the new Season; missing defenses filled from current/previous-day defensive results. | [Sound of Clash][april] |
 | 2026-04-27 | Weekly battles moved from Tuesday 05:00 to Monday 17:00 UTC. Inactivity allowance and later tier decay changed from one to four weeks. Town Hall floors: 16 Golem 21→20; 17 Titan 25→P.E.K.K.A 23; 18 gets Titan 26. | [Sound of Clash][april] |
 | 2026-04-27 | Weekly attack counts: Titan 25–27 14→12, Dragon 28–30 18→14, Electro 31–33 24→18. Removed Electro 32/33 modifiers; established the Legend modifier table above. | [Sound of Clash][april] |
@@ -230,7 +230,7 @@ Dated primary sources, with short exact excerpts for key numbers:
 
 - 2026-08-30: [August Update][august]. Clan War League modifier changes, not new individual Ranked tier rules.
 - 2026-07-09: [July Balance Update][july]. Checked for Ranked/Legend changes.
-- 2026-06-15: [The Anime Fury Update][june]. Ranked achievement rewards.
+- 2026-06-15 article publication: [The Anime Fury Update][june]. Ranked achievement rewards.
 - 2026-05-26: [May Update][may]; 2026-05-22: [State of Gameplay, Part 2][may-state]. Checked for subsequent rule changes.
 - 2026-04-27: [The Sound of Clash Update][april]. Exact excerpts: "Top 3 players per group promote each week"; "Players below Rank 10,000 demote each week"; "Monday at 5 PM UTC".
 - 2026-04-16: [Big changes are coming to Ranked this April][announcement]. "Top 12,500 players move to Legend I"; "Next 50,000 players move to Legend II"; "Top 5 players per group promote each week".
