@@ -87,28 +87,23 @@ def test_serve_requires_fixed_egress_proxy(tmp_path: Path, capsys) -> None:
     assert "service command failed" in captured.err
 
 
-def test_serve_rejects_credentialed_proxy_url(tmp_path: Path, capsys) -> None:
-    secret_file = _write_secret_file(tmp_path, bytes(range(32)))
-    key_file = _write_official_key_file(tmp_path, b"synthetic-official-key-bytes\n")
+def test_serve_rejects_credentialed_proxy_url(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    arguments = _serve_arguments(tmp_path)
+    arguments.official_proxy_url = "http://operator:secret@proxy.example:8080"
+    _skip_credential_registration(monkeypatch)
+    closed = _track_pool_close(monkeypatch)
 
-    result = cli.main(
-        [
-            "serve",
-            "--database-url",
-            "postgresql://user:***@db/production",
-            "--secret-file",
-            secret_file,
-            "--official-key-file",
-            key_file,
-            "--official-proxy-url",
-            "http://operator:secret@proxy.example:8080",
-        ]
-    )
+    with pytest.raises(
+        ValueError, match="a non-credentialed fixed-egress proxy URL is required"
+    ) as exc:
+        cli._serve_app(arguments)
+    assert len(closed) == 1
     captured = capsys.readouterr()
-
-    assert result == 1
-    assert "operator" not in captured.err
-    assert "secret" not in captured.err
+    combined = captured.out + captured.err + str(exc.value)
+    assert "operator" not in combined
+    assert "secret" not in combined
 
 
 def test_serve_rejects_invalid_official_key_file_bytes(tmp_path: Path, capsys) -> None:

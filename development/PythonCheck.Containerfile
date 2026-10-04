@@ -5,6 +5,11 @@ WORKDIR /workspace/python
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/workspace:/workspace/python/src
 
+# The base image ships the standard library without compiled caches, and the
+# setting above stops tests writing them, so every short-lived Python process
+# the operations tests start would recompile it. uv compiles installed packages.
+RUN python -m compileall -q -o 0 "$(python -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+
 COPY python/pyproject.toml python/uv.lock ./
 RUN uv sync --locked --all-groups --no-install-project
 
