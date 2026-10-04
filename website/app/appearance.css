@@ -127,7 +127,8 @@ summary {
   position: relative;
 }
 /* Long names and usernames wrap instead of pushing the page sideways. */
-.search-result :is(.player-name, .player-tag) {
+.search-result :is(.player-name, .player-tag),
+.search-suggestion-player small {
   overflow-wrap: anywhere;
 }
 .search-result .player-name::after {

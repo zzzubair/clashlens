@@ -16,20 +16,34 @@ async function serveWorstCaseSuggestions(page: Page) {
   await page.route("**/resources/players/search*", async (route) => {
     const response = await route.fetch();
     let index = 0;
-    const body = (await response.text())
-      .replace(/"Synthetic Clasher \d{3}"/g, () =>
-        JSON.stringify(worstCaseNames[index++ % worstCaseNames.length]),
-      )
-      .replaceAll('"Synthetic Clan"', JSON.stringify("中华联盟总部永远第一名"));
-    await route.fulfill({ response, body });
+    const json = JSON.parse(
+      (await response.text())
+        .replace(/"Synthetic Clasher \d{3}"/g, () =>
+          JSON.stringify(worstCaseNames[index++ % worstCaseNames.length]),
+        )
+        .replaceAll('"Synthetic Clan"', JSON.stringify("中华联盟总部永远第一名")),
+    );
+    // Usernames allow 32 characters with no spaces.
+    json.search.users.unshift({
+      username: "m".repeat(32),
+      displayName: "M".repeat(80),
+      linkedPlayerCount: 1,
+    });
+    await route.fulfill({ response, json });
   });
 }
 
 async function typeSearch(page: Page, input: Locator) {
   await input.fill("Synthetic Clasher 00");
-  await expect(
-    page.getByRole("region", { name: "Player and profile search suggestions" }),
-  ).toContainText(worstCaseNames[1]);
+  const suggestions = page.getByRole("region", {
+    name: "Player and profile search suggestions",
+  });
+  await expect(suggestions).toContainText(worstCaseNames[1]);
+  await expect(suggestions).toContainText("@" + "m".repeat(32));
+  // Nothing inside the suggestions scrolls sideways either.
+  expect(await suggestions.evaluate((list) => list.scrollWidth - list.clientWidth)).toBe(
+    0,
+  );
 }
 
 async function expectNoSidewaysScroll(page: Page) {
