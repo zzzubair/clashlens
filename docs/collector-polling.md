@@ -228,9 +228,10 @@ it, in case a corrected copy follows: whether a regular check, Refresh or Reset
 saved that log, one more fetch is owed that starts at least 60 seconds after
 that log's request started, so neither a Refresh nor a quick re-check inside
 the API cache can use it up. The collector recognises a row it has seen by
-the row's own content, not its time: live logs keep rows with no opponent for
-days; 448 players' logs had shown one by 2026-10-02. Valid rows in such a log
-still count as seen battles and still mark tracked opponents.
+the row's own content, not its time. A "no opponent, no battle" row (see
+[domain.md](domain.md)) is skipped: it is not a battle, owes no fetch and does
+not count as malformed. Live logs keep such rows for days; 448 players' logs
+had shown one by 2026-10-02.
 
 The two players' logs time the same battle differently: on 2026-10-02 the
 attacker's `battleTimestamp` was 108–211 seconds after the defender's. So the
@@ -401,8 +402,8 @@ of these hold:
 
 - the last saved battle log shows exactly 8 valid attacks and 8 valid defenses
   on the current Legend day (each battle on the day of its `battleTimestamp`
-  less 5 minutes, as the worker stores it), and no malformed row; 9 of either
-  never counts;
+  less 5 minutes, as the worker stores it), and no malformed row other than
+  a "no opponent, no battle" row; 9 of either never counts;
 - this check's profile was usable and no battle-log fetch is owed, so the
   profile has not changed since a log that followed its last change;
 - the newest battle in the log is at least 15 minutes old. The attacker's
