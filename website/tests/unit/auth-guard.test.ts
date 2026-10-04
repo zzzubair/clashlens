@@ -87,6 +87,38 @@ describe("requireLogin auth guard", () => {
     );
   });
 
+  it("keeps account setup's destination when its login has expired", async () => {
+    const config = testConfig();
+    const expired = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS - 86_401);
+    await expect(
+      requireLogin(
+        loginRequest(
+          "/account/setup?returnPath=%2Faccount%2Fgroups",
+          `${LOGIN_COOKIE_NAME}=${expired}`,
+        ),
+      ),
+    ).rejects.toSatisfy((thrown: unknown) => {
+      expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fgroups");
+      return true;
+    });
+  });
+
+  it("falls back to account setup when its destination is unsafe", async () => {
+    for (const destination of [
+      "https%3A%2F%2Fevil.example",
+      "%2F%2Fevil.example",
+      "%2Faccount%2Fgroups%3Fdays%3D7",
+      "%2Faccount%2Fsetup",
+    ]) {
+      await expect(
+        requireLogin(loginRequest(`/account/setup?returnPath=${destination}`)),
+      ).rejects.toSatisfy((thrown: unknown) => {
+        expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fsetup");
+        return true;
+      });
+    }
+  });
+
   it("redirects safely for tampered, malformed, and expired cookies", async () => {
     const config = testConfig();
     const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, NOW_SECONDS);

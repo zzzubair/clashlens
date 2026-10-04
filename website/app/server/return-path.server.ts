@@ -43,7 +43,7 @@ export function safeReturnPath(
   return value;
 }
 
-const ACCOUNT_SETUP_PATH = "/account/setup";
+export const ACCOUNT_SETUP_PATH = "/account/setup";
 
 /**
  * Where account setup sends the user once the account exists: the validated
