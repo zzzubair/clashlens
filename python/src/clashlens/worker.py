@@ -992,12 +992,37 @@ class ObservationProcessor:
     def _saved_result(self, claim: Claim, reason: str) -> ProcessResult | None:
         # None while nothing committed this attempt's outcome.
         try:
-            finished = self.database.finished_attempt_status(claim)
+            saved = self.database.finished_attempt(claim)
         except (*SESSION_ENDED, QueryCanceled, *POOL_BUSY):
             # Unknown: leave the lease to run out; maintenance recovers
             # the job only if it is still unfinished.
             return ProcessResult(claim.job_id, "retrying", reason)
-        return None if finished is None else ProcessResult(claim.job_id, finished)
+        if saved is None:
+            return None
+        # Report what the normal path returns for the saved attempt.
+        state, outcome, category = saved
+        if state == "stale":
+            return ProcessResult(claim.job_id, "lease_lost")
+        if state != "complete":
+            return ProcessResult(
+                claim.job_id,
+                "retrying"
+                if state in {"waiting_retry", "waiting_dependency"}
+                else "failed",
+                category,
+            )
+        if outcome == "superseded":
+            return ProcessResult(claim.job_id, "superseded")
+        if outcome == "source_non_success":
+            return ProcessResult(claim.job_id, "classified", "non_success")
+        if outcome == "season_detail_retired":
+            return ProcessResult(claim.job_id, outcome, outcome)
+        gaps = outcome == "processed_with_gaps" or (
+            claim.endpoint == "league_history" and outcome == "official_partial"
+        )
+        return ProcessResult(
+            claim.job_id, "processed_with_gaps" if gaps else "processed"
+        )
 
     def _complete_retired(self, claim: Claim, error: DomainRuleError) -> ProcessResult:
         if error.category != "season_detail_retired":

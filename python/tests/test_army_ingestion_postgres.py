@@ -1195,19 +1195,34 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
             db.close()
 
 
-@pytest.mark.parametrize("endpoint", ["battle_log", "global_player_rankings"])
+@pytest.mark.parametrize(
+    ("endpoint", "invalid_row", "outcome"),
+    [
+        ("battle_log", False, "processed"),
+        ("battle_log", True, "processed_with_gaps"),
+        ("global_player_rankings", False, "processed"),
+    ],
+)
 def test_a_session_ending_after_its_commit_landed_keeps_the_saved_result(
-    database_url: str, archive_server, monkeypatch, endpoint: str
+    database_url: str,
+    archive_server,
+    monkeypatch,
+    endpoint: str,
+    invalid_row: bool,
+    outcome: str,
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as ci:
         ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
         battle_log = endpoint == "battle_log"
+        rows = [_live_row(True, "#8PP", "u1x58", ts)]
+        if invalid_row:
+            rows.append({**_live_row(True, "#9PP", None, ts), "stars": None})
         _, job_id = store_observation(
             ci,
             archive_server,
             occurrence_key="committed",
             endpoint=endpoint,
-            body=json.dumps({"items": [_live_row(True, "#8PP", "u1x58", ts)]}).encode()
+            body=json.dumps({"items": rows}).encode()
             if battle_log
             else (Path(__file__).parents[1] / "testdata/global_top_200_v1.json").read_bytes(),
             observed_at=ts + timedelta(minutes=1),
@@ -1228,7 +1243,7 @@ def test_a_session_ending_after_its_commit_landed_keeps_the_saved_result(
         db, proc = _processor(ci, archive_server)
         try:
             assert proc.process_job(job_id, owner="committed") == ProcessResult(
-                job_id, "processed"
+                job_id, outcome
             )
             assert _job_state(db, job_id) == ("complete", 1)
         finally:
@@ -1263,7 +1278,7 @@ def test_a_session_ending_after_a_storage_wait_landed_reports_retrying(
         monkeypatch.setattr(job_outcomes, "fail_claim", committed_then_lost)
         try:
             assert proc.process_job(job_id, owner="storage") == ProcessResult(
-                job_id, "retrying"
+                job_id, "retrying", "archive_unavailable"
             )
             assert _job_state(db, job_id)[0] == "waiting_dependency"
         finally:
@@ -1303,7 +1318,7 @@ def test_a_session_ending_after_a_final_rejection_landed_reports_failed(
         db, proc = _processor(ci, archive_server)
         try:
             assert proc.process_job(job_id, owner="rejected") == ProcessResult(
-                job_id, "failed"
+                job_id, "failed", "database_rejected"
             )
             assert _job_state(db, job_id) == ("failed", 1)
             assert db.maintain_queue(max_jobs=1) == 0
