@@ -43,6 +43,28 @@ def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
     )
 
 
+def lock_boundary_publication_once_swept(connection: Any, boundary_at: datetime) -> bool:
+    """Take a Reset's publication lock, shared until its sweep exists.
+
+    No generation exists before the collector saves a Reset's sweep, so work
+    for a Reset that has not happened yet shares the lock and runs in
+    parallel. A generation is created only under the full lock, which waits
+    for those jobs to commit. Returns whether the full lock was taken.
+    """
+    swept = connection.execute(
+        "SELECT 1 FROM collector_reset_sweeps WHERE boundary_at = %s",
+        (boundary_at,),
+    ).fetchone() is not None
+    if swept:
+        lock_boundary_publication(connection, boundary_at)
+    else:
+        connection.execute(
+            "SELECT pg_advisory_xact_lock_shared(hashtextextended(%s, 0))",
+            (f"boundary-publication:{boundary_at.astimezone(UTC).isoformat()}",),
+        )
+    return swept
+
+
 def _create_boundary_generation(
     database: Database,
     connection: Any,
@@ -1067,13 +1089,15 @@ def _record_boundary_generation(
     coalesce into it.
     """
     boundary_at = boundary_at.astimezone(UTC)
-    lock_boundary_publication(connection, boundary_at)
+    # A sweep is saved with its members in one transaction and never changes,
+    # so a Reset that has not happened yet is skipped without its lock.
     sweep = connection.execute(
         "SELECT id, member_ids FROM collector_reset_sweeps WHERE boundary_at = %s",
         (boundary_at,),
     ).fetchone()
     if sweep is None:
         return False
+    lock_boundary_publication(connection, boundary_at)
     sweep_id = int(sweep[0])
     member_ids = [int(value) for value in (sweep[1] or [])]
     if player_id not in member_ids:

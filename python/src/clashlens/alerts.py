@@ -422,9 +422,12 @@ def observe(
         findings["failures"] = (
             True if True in recent else None if None in recent else False
         )
-        for name, kind in (("processing", "processing"), ("uploads", "upload")):
+        for name, kind, limit in (
+            ("processing", "processing", 1800),
+            ("uploads", "upload", 3600),
+        ):
             age = metrics.get(f"{prefix}oldest_pending_{kind}_age_seconds")
-            findings[name] = None if age is None else age >= 3600
+            findings[name] = None if age is None else age >= limit
 
     names = (
         ("clashlens_spool_bytes", "max_bytes"),

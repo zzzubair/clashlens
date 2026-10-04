@@ -206,7 +206,8 @@ def trigger(rt, condition, value=True):
         )
     elif condition in ("processing", "upload"):
         name = f"clashlens_collector_oldest_pending_{condition}_age_seconds"
-        rt.metrics[name] = 3600 if value else 3599
+        limit = 1800 if condition == "processing" else 3600
+        rt.metrics[name] = limit if value else limit - 1
     elif condition == "publication":
         rt.publication = "1" if value else "0"
 

@@ -13,6 +13,7 @@ from domain_test_support import domain_database, store_observation, text
 from clashlens import (
     army_ingestion,
     battle_ingestion,
+    boundary,
     boundary_publication,
     ingestion,
     job_outcomes,
@@ -707,6 +708,141 @@ def test_battle_log_with_saved_decodes_does_not_wait_for_reset_lock(
                         army_ingestion._upsert_army_decodes(db, connection, battle_ids)
         finally:
             db.close()
+
+
+def _unswept_battles(ci: str, archive_server, players: dict[str, str]):
+    """Save one Aug 4 battle per player whose decodes still need saving."""
+    ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+    db, proc = _processor(ci, archive_server)
+    try:
+        for player, code in players.items():
+            _, job_id = store_observation(
+                ci,
+                archive_server,
+                occurrence_key=f"unswept-{player}",
+                endpoint="battle_log",
+                body=json.dumps({"items": [_live_row(True, "#8PP", code, ts)]}).encode(),
+                observed_at=ts + timedelta(minutes=1),
+                normalized_tag=player,
+            )
+            assert proc.process_job(job_id, owner="seed").outcome == "processed"
+    finally:
+        db.close()
+    with psycopg.connect(ci) as connection:
+        # As if each battle were new, so the next save writes decodes again.
+        connection.execute("UPDATE battle_army_decodes SET is_active = false")
+        return {
+            text(tag): [int(battle_id)]
+            for tag, battle_id in connection.execute(
+                """
+                SELECT player.normalized_tag, battle.id FROM legend_battles AS battle
+                JOIN players AS player ON player.id = battle.attacker_player_id
+                """
+            ).fetchall()
+        }
+
+
+def test_battle_logs_before_a_reset_do_not_wait_on_each_other(
+    database_url: str, archive_server
+) -> None:
+    # 2026-10-04 03:41 UTC: 7-8 worker connections queued one at a time on
+    # the lock of that day's 05:00 Reset, which had not happened yet.
+    with domain_database(database_url, include_coordinator=True) as ci:
+        battles = _unswept_battles(
+            ci, archive_server, {"#2PP": "u1x58", "#2PQ": "u2x58"}
+        )
+        db = Database(ci)
+        try:
+            with psycopg.connect(ci) as first, db.pool.connection() as second:
+                army_ingestion._upsert_army_decodes(db, first, battles["#2PP"])
+                with second.transaction():
+                    second.execute("SET LOCAL lock_timeout = '2s'")
+                    army_ingestion._upsert_army_decodes(db, second, battles["#2PQ"])
+                first.commit()
+            with db.pool.connection() as connection:
+                saved = connection.execute(
+                    "SELECT count(*) FROM battle_army_decodes WHERE is_active"
+                ).fetchone()[0]
+        finally:
+            db.close()
+
+    assert saved == 2
+
+
+def test_reset_swept_during_a_battle_log_waits_for_its_decodes(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # A battle log that starts before the Reset can still be saving decodes
+    # when the collector saves the sweep. The first leaderboard generation
+    # must wait for it, or it records the player's armies as missing.
+    with domain_database(database_url, include_coordinator=True) as ci:
+        battle_ids = _unswept_battles(ci, archive_server, {"#2PP": "u1x58"})["#2PP"]
+        reset = datetime(2026, 8, 5, 5, tzinfo=UTC)
+        checked, resume = threading.Event(), threading.Event()
+        original = boundary.lock_boundary_publication_once_swept
+
+        def pause_after_first_check(connection, boundary_at):
+            swept = original(connection, boundary_at)
+            if not checked.is_set():
+                checked.set()
+                assert resume.wait(30)
+            return swept
+
+        monkeypatch.setattr(
+            boundary, "lock_boundary_publication_once_swept", pause_after_first_check
+        )
+        errors: list[BaseException] = []
+        seen: list[int] = []
+
+        def battle_log() -> None:
+            db = Database(ci)
+            try:
+                with db.pool.connection() as connection:
+                    with connection.transaction():
+                        army_ingestion._upsert_army_decodes(db, connection, battle_ids)
+            except BaseException as error:  # noqa: BLE001 - asserted below
+                errors.append(error)
+            finally:
+                db.close()
+
+        def first_generation() -> None:
+            try:
+                with psycopg.connect(ci) as connection:
+                    boundary.lock_boundary_publication(connection, reset)
+                    seen.append(
+                        connection.execute(
+                            "SELECT count(*) FROM battle_army_decodes WHERE is_active"
+                        ).fetchone()[0]
+                    )
+            except BaseException as error:  # noqa: BLE001 - asserted below
+                errors.append(error)
+
+        writer = threading.Thread(target=battle_log)
+        writer.start()
+        assert checked.wait(30)
+        with psycopg.connect(ci, autocommit=True) as observer:
+            observer.execute(
+                """
+                INSERT INTO collector_reset_sweeps
+                    (boundary_at, member_ids, membership_captured_at)
+                SELECT %s, array_agg(id), clock_timestamp() FROM players
+                """,
+                (reset,),
+            )
+            generation = threading.Thread(target=first_generation)
+            generation.start()
+            deadline = time.monotonic() + 30
+            while not observer.execute(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+            ).fetchone()[0]:
+                assert time.monotonic() < deadline, "generation never waited"
+                time.sleep(0.02)
+            resume.set()
+            writer.join(60)
+            generation.join(60)
+
+    assert errors == []
+    assert seen == [1]
 
 
 @pytest.mark.parametrize("attack", [True, False])

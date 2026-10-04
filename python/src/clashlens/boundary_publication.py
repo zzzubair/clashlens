@@ -1210,8 +1210,11 @@ def _enqueue_army_analytics(
     ranked_day_start = ranked_day_start.astimezone(UTC)
     coordinator = None
     boundary_at = ranked_day_start + timedelta(days=1)
-    if getattr(database, "_supports_coordinator_contract", False):
-        boundary.lock_boundary_publication(connection, boundary_at)
+    # Before the sweep no generation exists, but the shared lock still makes
+    # the first generation wait for these decodes.
+    if getattr(
+        database, "_supports_coordinator_contract", False
+    ) and boundary.lock_boundary_publication_once_swept(connection, boundary_at):
         coordinator = connection.execute(
             """
             SELECT id, generation, snapshot_state, army_state,

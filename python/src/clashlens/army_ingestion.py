@@ -156,6 +156,8 @@ def _upsert_army_decodes(
     # battle log records its baseline and re-judges its Resets after these
     # army writes, so it takes all of them first; otherwise it could hold an
     # army or generation row another job needs while that job holds a lock.
+    # A Reset with no sweep yet is only shared, so battle logs for the
+    # current Legend day do not queue behind each other.
     boundaries = {day_start + timedelta(days=1) for day_start in players_by_day}
     resets: list[tuple[int, datetime]] = []
     if reset_lock_wait is not None:
@@ -175,9 +177,9 @@ def _upsert_army_decodes(
         )
         boundaries.add(boundary_at.astimezone(UTC))
         resets.append((player_id, boundary_at))
-    reset_settlement.lock_resets(
-        database, connection, observation_id, resets, tuple(boundaries)
-    )
+    for boundary_at in sorted(boundaries):
+        boundary.lock_boundary_publication_once_swept(connection, boundary_at)
+    reset_settlement.lock_resets(database, connection, observation_id, resets)
     if reset_lock_wait is not None:
         connection.execute(
             "SELECT set_config('lock_timeout', %s, true)", (previous_wait,)

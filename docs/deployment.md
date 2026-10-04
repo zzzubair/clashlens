@@ -791,9 +791,10 @@ use the [operating notes](operating.md#respond-to-alerts).
   Seeing a failed upload's bytes again does not restart its 24 hours.
   A manual retry of a failed item clears the alert early; a repeat failure
   raises a fresh alert.
-- **Saved work waiting at least one hour**: a job waiting to be processed,
-  from `oldest_pending_processing_age_seconds`, or a raw response waiting to
-  be uploaded to the archive, from `oldest_pending_upload_age_seconds`. An
+- **Saved work waiting too long**: a job waiting to be processed for at least
+  30 minutes, from `oldest_pending_processing_age_seconds`, or a raw response
+  waiting to be uploaded to the archive for at least one hour, from
+  `oldest_pending_upload_age_seconds`. An
   upload's wait starts when it is first saved, or when retired bytes come back
   for a fresh upload. Retries, including an operator retry of a failed upload,
   keep the original wait. These
