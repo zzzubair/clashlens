@@ -55,10 +55,10 @@ def test_collector_rate_stays_under_thirty(monkeypatch, source: str, rate: str) 
         assert error.value.code == 2
 
 
-@pytest.mark.parametrize("count", [3, 4, 6, 7, 8])
-def test_collector_loads_four_to_seven_regular_keys(monkeypatch, count: int) -> None:
-    labels = ["normal-1", "normal-2", "normal-3", "normal-4", "extra-1", "extra-2"]
-    labels += ["extra-3", "extra-4"]
+@pytest.mark.parametrize("count", [3, 4, 6, 9, 10])
+def test_collector_loads_four_to_nine_regular_keys(monkeypatch, count: int) -> None:
+    labels = ["normal-1", "normal-2", "normal-3", "normal-4", "normal-5", "normal-6"]
+    labels += ["extra-1", "extra-2", "extra-3", "extra-4"]
     arguments = build_parser().parse_args(["collector"])
     arguments.regular_api_keys = ",".join(
         f"{label}=fixture-{label}" for label in labels[:count]
@@ -75,14 +75,14 @@ def test_collector_loads_four_to_seven_regular_keys(monkeypatch, count: int) -> 
     monkeypatch.setattr("clashlens.cli.CollectorDatabase", stop_after_key_checks)
 
     assert arguments.starts_per_second_per_key == 25
-    expected = KeysAccepted if 4 <= count <= 7 else ValueError
+    expected = KeysAccepted if 4 <= count <= 9 else ValueError
     with pytest.raises(expected):
         _run_collector(arguments)
 
 
 @pytest.mark.parametrize(
     ("keys", "rate", "setting", "in_flight"),
-    [(7, 28, None, 384), (4, 25, None, 256), (7, 28, "300", 300)],
+    [(9, 28, None, 384), (7, 28, None, 384), (4, 25, None, 256), (7, 28, "300", 300)],
 )
 def test_collector_sizes_checks_in_flight_from_its_keys(
     monkeypatch, keys: int, rate: int, setting: str | None, in_flight: int
@@ -121,18 +121,22 @@ def test_collector_sizes_checks_in_flight_from_its_keys(
 
 
 @pytest.mark.parametrize(
-    ("setting", "rate", "concurrency", "threads"),
+    ("keys", "setting", "rate", "concurrency", "threads"),
     [
-        (None, 25, 6, (350, 48)),
-        ("300", 25, 6, (300, 48)),
-        (None, 29, 6, (384, 48)),
+        (7, None, 25, 6, (350, 48)),
+        (7, "300", 25, 6, (300, 48)),
+        (7, None, 29, 6, (384, 48)),
+        # Nine keys at 28 a second would size 504 checks; with 60 request threads
+        # they still leave 64 of 512.
+        (9, None, 28, 6, (384, 60)),
         # The widest request pool shrinks to what the save threads leave.
-        (None, 28, 32, (384, 64)),
-        ("256", 28, 32, (256, 192)),
+        (7, None, 28, 32, (384, 64)),
+        (9, "256", 28, 32, (256, 192)),
     ],
 )
 def test_collector_threads_stay_under_the_container_limit(
-    monkeypatch, setting: str | None, rate: int, concurrency: int, threads: tuple[int, int]
+    monkeypatch, keys: int, setting: str | None, rate: int, concurrency: int,
+    threads: tuple[int, int],
 ) -> None:
     # Seven keys at 29 a second would size 406 checks; they get 384 save threads.
     monkeypatch.delenv("CLASHLENS_REGULAR_PARALLELISM", raising=False)
@@ -144,7 +148,7 @@ def test_collector_threads_stay_under_the_container_limit(
         ["collector", "--starts-per-second-per-key", str(rate),
          "--concurrency-per-key", str(concurrency)]
     )
-    arguments.regular_api_keys = ",".join(f"regular-{i}=fixture-{i}" for i in range(7))
+    arguments.regular_api_keys = ",".join(f"regular-{i}=fixture-{i}" for i in range(keys))
     requests: list[int] = []
 
     def client(*_args: object, max_connections: int, **_kwargs: object) -> object:
@@ -243,16 +247,19 @@ up_stack
 
 
 @pytest.mark.parametrize(
-    ("pids", "setting", "accepted"),
+    ("pids", "setting", "keys", "accepted"),
     [
         # Six keys at 25 a second: 300 save and 42 request threads, plus 64.
-        ("512", None, True),
-        ("400", None, False),
-        ("400", "256", True),
+        ("512", None, 6, True),
+        ("400", None, 6, False),
+        ("400", "256", 6, True),
+        # Nine keys at 28 a second: 384 save and 60 request threads, plus 64.
+        ("512", None, 9, True),
+        ("507", None, 9, False),
     ],
 )
 def test_ops_refuses_collector_threads_beyond_its_process_limit(
-    tmp_path: Path, pids: str, setting: str | None, accepted: bool
+    tmp_path: Path, pids: str, setting: str | None, keys: int, accepted: bool
 ) -> None:
     ops = Path(__file__).resolve().parents[2] / "ops"
     result = subprocess.run(
@@ -265,6 +272,7 @@ STATE_DIR="$2"
 load_fixture_config
 COLLECTOR_PIDS=$3
 [[ -z "$4" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$4
+(( $5 == 6 )) || REGULAR_KEY_NAMES=n-1,n-2,n-3,n-4,n-5,n-6,n-7,n-8,n-9 KEY_RATE=28
 validate_runtime_values
 """,
             "test-ops-threads",
@@ -272,6 +280,7 @@ validate_runtime_values
             str(tmp_path),
             pids,
             setting or "",
+            str(keys),
         ],
         check=False,
         capture_output=True,
@@ -279,7 +288,7 @@ validate_runtime_values
     )
     assert (result.returncode == 0) is accepted, result.stderr
     if not accepted:
-        assert "exceed CLASHLENS_COLLECTOR_PIDS=400" in result.stderr
+        assert f"exceed CLASHLENS_COLLECTOR_PIDS={pids}" in result.stderr
 
 
 def test_cli_loads_current_and_previous_hmac_keys_from_files(tmp_path: Path) -> None:
