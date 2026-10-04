@@ -131,6 +131,16 @@ summary {
 .search-suggestion-player small {
   overflow-wrap: anywhere;
 }
+/* Safari still sizes these boxes to the unbroken name unless told they may shrink. */
+.search-result-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+.search-result > div {
+  max-width: 100%;
+}
+.search-suggestion-player small {
+  min-width: 0;
+}
 .search-result .player-name::after {
   position: absolute;
   inset: 0;

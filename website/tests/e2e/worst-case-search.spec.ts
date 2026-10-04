@@ -10,35 +10,49 @@ const worstCaseNames = [
   "J",
 ];
 
-// Suggestions come from the real backend; only the saved synthetic names and clan
-// are swapped for worst-case ones on the way to the browser.
-async function serveWorstCaseSuggestions(page: Page) {
-  await page.route("**/resources/players/search*", async (route) => {
+// Suggestions and submitted searches come from the real backend; only the saved
+// synthetic names and clan are swapped for worst-case ones and a worst-case
+// profile is added on the way to the browser.
+async function serveWorstCaseSearch(page: Page) {
+  await page.route(/\.data\?/, async (route) => {
     const response = await route.fetch();
     let index = 0;
-    const json = JSON.parse(
+    // React Router packs the response into one flat array: each object maps
+    // "_<key position>" to its value's position. New values go on the end.
+    const values: unknown[] = JSON.parse(
       (await response.text())
         .replace(/"Synthetic Clasher \d{3}"/g, () =>
           JSON.stringify(worstCaseNames[index++ % worstCaseNames.length]),
         )
         .replaceAll('"Synthetic Clan"', JSON.stringify("中华联盟总部永远第一名")),
     );
+    const add = (value: unknown) => values.push(value) - 1;
+    const usersKey = `_${values.indexOf("users")}`;
+    const search = values.find(
+      (value): value is Record<string, number> =>
+        typeof value === "object" && value !== null && usersKey in value,
+    )!;
     // Usernames allow 32 characters with no spaces.
-    json.search.users.unshift({
-      username: "m".repeat(32),
-      displayName: "M".repeat(80),
-      linkedPlayerCount: 1,
-    });
-    await route.fulfill({ response, json });
+    (values[search[usersKey]] as number[]).unshift(
+      add({
+        [`_${add("username")}`]: add("m".repeat(32)),
+        [`_${add("displayName")}`]: add("M".repeat(80)),
+        [`_${add("linkedPlayerCount")}`]: add(1),
+      }),
+    );
+    await route.fulfill({ response, body: JSON.stringify(values) });
   });
 }
 
 async function typeSearch(page: Page, input: Locator) {
-  await input.fill("Synthetic Clasher 00");
   const suggestions = page.getByRole("region", {
     name: "Player and profile search suggestions",
   });
-  await expect(suggestions).toContainText(worstCaseNames[1]);
+  // Typing before the page has started up is lost, so type again until it lands.
+  await expect(async () => {
+    await input.fill("Synthetic Clasher 00");
+    await expect(suggestions).toContainText(worstCaseNames[1], { timeout: 2_000 });
+  }).toPass();
   await expect(suggestions).toContainText("@" + "m".repeat(32));
   // Nothing inside the suggestions scrolls sideways either.
   expect(await suggestions.evaluate((list) => list.scrollWidth - list.clientWidth)).toBe(
@@ -73,7 +87,7 @@ async function expectLastSuggestionTappable(page: Page) {
 }
 
 test("home suggestions fit a 320 px phone with worst-case names", async ({ page }) => {
-  await serveWorstCaseSuggestions(page);
+  await serveWorstCaseSearch(page);
   await page.setViewportSize({ width: 320, height: 568 });
   await page.goto("/");
   await typeSearch(
@@ -91,7 +105,7 @@ for (const viewport of [
   test(`header search stays on screen at ${viewport.width}x${viewport.height}`, async ({
     page,
   }) => {
-    await serveWorstCaseSuggestions(page);
+    await serveWorstCaseSearch(page);
     await page.setViewportSize(viewport);
     await page.goto("/about");
     const input = page.getByRole("searchbox", {
@@ -114,19 +128,20 @@ for (const viewport of [
   });
 }
 
-test("a long name with no spaces wraps in search results on a 320 px phone", async ({
+test("a long profile name wraps in search results on a 320 px phone", async ({
   page,
 }) => {
+  await serveWorstCaseSearch(page);
   await page.setViewportSize({ width: 320, height: 568 });
-  await page.goto("/?q=Synthetic%20Clasher%20001");
-  const result = page.locator(".search-result").first();
-  await expect(result).toBeVisible();
-  // Display names allow 80 characters and usernames 32, with no spaces required.
-  await result.evaluate((card) => {
-    card.querySelector(".player-name")!.textContent =
-      "ThisIsMyVeryLongClashLensDisplayNameWithoutSpacesBecausePeopleDoThat12";
-    card.querySelector(".player-tag")!.textContent = "@aleksandra_wisniewska_kowalczyk";
+  await page.goto("/");
+  const input = page.getByRole("searchbox", {
+    name: "Search players and Clash Lens profiles",
   });
+  // Suggestions showing means the page is ready to search without reloading.
+  await typeSearch(page, input);
+  await input.press("Enter");
+  const result = page.locator(".search-result-profile");
+  await expect(result).toContainText("@" + "m".repeat(32));
   await expectNoSidewaysScroll(page);
   const card = (await result.boundingBox())!;
   expect(card.x + card.width).toBeLessThanOrEqual(320);
