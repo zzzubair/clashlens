@@ -4,8 +4,8 @@ Each correction generation rebuilds a Reset's whole leaderboard and army
 records and freezes new manifests, so corrections to Resets before the
 newest one wait and start together. A waiting correction stays queued, and
 the worker's publication re-check starts it once the Reset may rebuild; no
-correction is dropped. A correction already waiting for its inputs at the
-quiet window starts no build until the window ends; builds already running
+correction is dropped. No build for a past Reset starts in the quiet
+window, so one not yet started waits until it ends; builds already running
 finish and publish. The newest swept Reset is live and never waits.
 """
 
@@ -43,7 +43,7 @@ def _in_quiet_window(now: datetime) -> bool:
 
 
 def past_reset_build_waits(connection: Any, boundary_at: datetime) -> bool:
-    """Whether a past Reset's correction build must wait out the quiet window."""
+    """Whether a past Reset's build must wait out the quiet window."""
     return _is_past_reset(connection, boundary_at) and _in_quiet_window(
         _now(connection)
     )
@@ -52,7 +52,7 @@ def past_reset_build_waits(connection: Any, boundary_at: datetime) -> bool:
 def past_reset_build_hold(connection: Any) -> str | None:
     """In the quiet window, the newest Reset as build jobs write it; else None.
 
-    The worker claims no correction build for a Reset before this one, so a
+    The worker claims no build for a Reset before this one, so a
     build queued before the window starts after it, with no attempt spent.
     """
     if not _in_quiet_window(_now(connection)):

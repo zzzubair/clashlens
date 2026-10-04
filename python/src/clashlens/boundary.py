@@ -777,8 +777,8 @@ def _try_enqueue_boundary_artifacts(
     if generation is None:
         return
     generation_number = int(generation[1])
-    # A past Reset's correction starts no build in the quiet window.
-    if generation_number > 1 and past_reset_build_waits(connection, boundary_at):
+    # A past Reset starts no build in the quiet window.
+    if past_reset_build_waits(connection, boundary_at):
         return
     sweep_id = int(generation[2]) if generation[2] is not None else None
     if sweep_id is None:

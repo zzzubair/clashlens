@@ -349,41 +349,46 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
                 _record(database, connection, player_id, LIVE, 2)
                 connection.commit()
 
-            def claimed() -> list[tuple[str, str]]:
+            def claimed() -> list[tuple[str, int, str]]:
                 jobs = []
                 while claim := database.claim_job(
                     owner="pacing",
                     work_types=["build_snapshot", "build_army_analytics"],
                 ):
-                    if claim.input_json["generation"] == 2:
-                        jobs.append((claim.input_json["boundary_at"], claim.work_type))
+                    jobs.append(
+                        (
+                            claim.input_json["boundary_at"],
+                            claim.input_json["generation"],
+                            claim.work_type,
+                        )
+                    )
                 return sorted(jobs)
+
+            def both(boundary_text: str) -> list[tuple[str, int, str]]:
+                return [
+                    (boundary_text, generation, work_type)
+                    for generation in (1, 2)
+                    for work_type in ("build_army_analytics", "build_snapshot")
+                ]
 
             live = LIVE.strftime("%Y-%m-%dT%H:%M:%SZ")
             past = PAST.strftime("%Y-%m-%dT%H:%M:%SZ")
-            assert claimed() == [
-                (live, "build_army_analytics"),
-                (live, "build_snapshot"),
-            ]
+            # The first and corrected builds of the newest Reset still start.
+            assert claimed() == both(live)
             with database.pool.connection() as connection:
                 attempts = connection.execute(
                     """
                     SELECT state, attempt_count FROM python_processing_jobs_worker
                     WHERE input_json->>'boundary_at' = %s
-                      AND input_json->>'generation' = '2'
                     """,
                     (past,),
                 ).fetchall()
             assert [(str(state), count) for state, count in attempts] == [
-                ("pending", 0),
-                ("pending", 0),
-            ]
+                ("pending", 0)
+            ] * 4
 
             clock.now = datetime(2026, 8, 11, 7, tzinfo=UTC)
-            assert claimed() == [
-                (past, "build_army_analytics"),
-                (past, "build_snapshot"),
-            ]
+            assert claimed() == both(past)
         finally:
             database.close()
 

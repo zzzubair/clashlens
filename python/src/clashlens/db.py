@@ -204,7 +204,7 @@ def _supported_claim_filter(
     read the denormalized endpoint/schema contract columns on the job row.
     Parameters are named so the claim statement can
     also bind the claim time and direct job id. ``past_reset_build_hold`` is
-    the newest Reset while past-Reset correction builds wait out the quiet
+    the newest Reset while past-Reset builds wait out the quiet
     window; those builds stay queued until it is None again.
     """
     # The source contract is denormalized onto the job row by migration 0009
@@ -307,7 +307,6 @@ def _supported_claim_filter(
                 )))
             AND NOT COALESCE(
                 {alias}.work_type IN ('build_snapshot', 'build_army_analytics')
-                AND {alias}.input_json->>'generation' <> '1'
                 AND {alias}.input_json->>'boundary_at' < %(past_reset_build_hold)s::text,
                 false))
         """,
