@@ -66,9 +66,10 @@ authorize going live. The final PR records the tested commit and CI runs.
   turns so waiting publications go first. One lookup of up to 1,024 eligible
   files feeds those turns; [migration 0071](../deploy/migrations/0071_spool_cleanup_candidates.sql)
   indexes it, so it no longer reads the whole upload table.
-  When the lookup found 1,024 files the next follows after one second, even if
-  some were then kept; when it found fewer it waits 30 seconds, or one second
-  while the spool is full. 16-file turns fell behind arrivals in production on
+  When the lookup found at least one full 64-file turn the next follows after
+  one second, even if some were then kept, so a burst never waits behind a long
+  rest; when it found fewer it waits 30 seconds, or one second while the spool
+  is full. 16-file turns fell behind arrivals in production on
   October 4: each turn spent seconds waiting, so 64 files now share that wait.
   A measured 128-file turn held publication too long, despite fixing the
   earlier cleanup starvation.

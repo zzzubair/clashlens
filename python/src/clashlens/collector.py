@@ -61,7 +61,7 @@ _UPLOAD_LEASE_SECONDS = 60
 _UPLOAD_RENEW_INTERVAL = 20.0
 _HANDOFF_LOCK_STRIPES = 4096
 _HANDOFF_PROTOCOL = 2
-# 64 files share each turn's wait; one indexed lookup feeds 16 and rests 30 s when short.
+# 64 files share each turn's wait; one indexed lookup feeds 16, resting 30 s below one turn.
 _CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE, _CLEANUP_IDLE_SECONDS = 64, 1024, 30.0
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
 # A check fetches its profile, saves it, then maybe its battle log, one after
@@ -1199,7 +1199,7 @@ class Collector:
                     if self._spool_capacity_failed or loop.time() >= next_cleanup:
                         _, found = await asyncio.to_thread(self.cleanup_uploaded)
                         next_cleanup = loop.time() + _CLEANUP_IDLE_SECONDS * (
-                            found < _CLEANUP_LOOKUP_SIZE
+                            found < _CLEANUP_BATCH_SIZE
                         )
                     # Compacted responses leave no upload row or observation, so
                     # their spool bytes are unreferenced. Sweep them under the
