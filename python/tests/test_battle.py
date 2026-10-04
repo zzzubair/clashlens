@@ -384,6 +384,67 @@ def test_invalid_legend_row_is_visible_as_a_coverage_gap_without_losing_valid_ro
     assert parsed.rows[0].battle is not None
 
 
+# Live logs keep this row for days: no opponent, no battle.
+NO_OPPONENT_ROW = {
+    "battleType": "legend",
+    "attack": False,
+    "battleTime": 0,
+    "battleTimestamp": "20260804T110000.000Z",
+    "stars": 0,
+    "destructionPercentage": 0,
+    "opponentPlayerTag": None,
+    "opponentName": None,
+    "armyShareCode": None,
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "gap"),
+    [
+        ({}, False),
+        ({"opponentPlayerTag": KeyError}, False),
+        ({"stars": 1}, True),
+        ({"destructionPercentage": 12}, True),
+        ({"battleTime": 31}, True),
+        ({"stars": False}, True),
+        ({"opponentPlayerTag": ""}, True),
+    ],
+)
+def test_only_the_exact_no_opponent_row_leaves_its_log_complete(
+    change: dict, gap: bool
+) -> None:
+    payload = json.loads(FIXTURE.read_bytes())
+    # A real battle against an opponent that moved no trophies still counts.
+    payload["items"][0] |= {"stars": 0, "destructionPercentage": 0}
+    row = NO_OPPONENT_ROW | change
+    payload["items"].append(
+        {key: value for key, value in row.items() if value is not KeyError}
+    )
+
+    parsed = parse_battle_log(
+        json.dumps(payload).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 8, 4, 12, 5, tzinfo=UTC),
+        parser_version=SOURCE_PARSER_VERSION,
+    )
+
+    assert parsed.has_row_gap is gap
+    assert parsed.rows[2].outcome == "malformed_legend_row"
+    assert parsed.rows[2].battle is None
+    assert parsed.rows[0].battle is not None
+
+
+def test_legacy_rows_without_an_opponent_stay_gaps() -> None:
+    parsed = parse_battle_log(
+        json.dumps({"items": [NO_OPPONENT_ROW | {"attackOrDefense": "defense"}]}).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 8, 4, 12, 5, tzinfo=UTC),
+        parser_version=LEGACY_SOURCE_PARSER_VERSION,
+    )
+
+    assert parsed.has_row_gap is True
+
+
 @pytest.mark.parametrize("body", [b"not-json", b"{}", b'{"items": {}}'])
 def test_battle_log_parser_distinguishes_malformed_json_from_unsupported_schema(
     body: bytes,

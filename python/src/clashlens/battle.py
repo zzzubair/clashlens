@@ -130,11 +130,50 @@ def parse_battle_log(
         observed_at=observed_at.astimezone(UTC),
         row_count=len(items),
         rows=rows,
-        has_row_gap=any(row.outcome == "malformed_legend_row" for row in rows),
+        has_row_gap=any(
+            row.outcome == "malformed_legend_row"
+            and not is_no_opponent_row(row.source_json, parser_version)
+            for row in rows
+        ),
         endpoint_version=endpoint_version,
         schema_version=BATTLE_LOG_SCHEMA_VERSION,
         parser_version=parser_version,
     )
+
+
+def is_no_opponent_row(source: Any, parser_version: str) -> bool:
+    """Whether a rejected row is the live log's "no opponent, no battle" row.
+
+    Live logs keep Legend rows with no opponent tag, 0 stars, 0% and a
+    0-second battle for days. Such a row is not a battle: it stays saved as a
+    rejected row, adds no battle, attack or defense, and leaves its log
+    complete. Any other row without an opponent is still malformed.
+    """
+    return (
+        parser_version in _LIVE_SHAPE_PARSER_VERSIONS
+        and isinstance(source, dict)
+        and source.get("battleType") == "legend"
+        and source.get("opponentPlayerTag") is None
+        and all(
+            type(source.get(key)) is int and source[key] == 0
+            for key in ("stars", "destructionPercentage", "battleTime")
+        )
+    )
+
+
+def no_opponent_row_sql(row: str, parser_version: str) -> str:
+    """``is_no_opponent_row`` for saved source row ``row`` read under
+    ``parser_version``, both SQL expressions."""
+    versions = ", ".join(f"'{version}'" for version in sorted(_LIVE_SHAPE_PARSER_VERSIONS))
+    return f"""COALESCE((
+        {parser_version} IN ({versions})
+        AND {row}.source_json ->> 'battleType' = 'legend'
+        AND COALESCE({row}.source_json -> 'opponentPlayerTag', 'null'::jsonb)
+            = 'null'::jsonb
+        AND ({row}.source_json -> 'stars')::text = '0'
+        AND ({row}.source_json -> 'destructionPercentage')::text = '0'
+        AND ({row}.source_json -> 'battleTime')::text = '0'
+    ), false)"""
 
 
 def _parse_row(
