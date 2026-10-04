@@ -1249,10 +1249,17 @@ def _linked_players(
         FROM verified_player_links AS link
         JOIN players AS player ON player.id = link.player_id
         LEFT JOIN LATERAL (
-            SELECT name, profile_json -> 'clan' ->> 'name' AS clan, player_id
-            FROM player_profile_versions
-            WHERE normalized_tag = player.normalized_tag
-            ORDER BY observed_at DESC, id DESC LIMIT 1
+            SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
+                   version.player_id
+            FROM player_profile_versions AS version
+            CROSS JOIN LATERAL (
+                SELECT max(observed_at) AS observed_at FROM player_profile_effects
+                WHERE profile_version_id = version.id
+            ) AS effect
+            WHERE version.normalized_tag = player.normalized_tag
+            ORDER BY COALESCE(effect.observed_at, version.observed_at) DESC,
+                     version.id DESC
+            LIMIT 1
         ) AS profile ON profile.player_id = player.id
         WHERE link.account_id = %s
         ORDER BY player.normalized_tag

@@ -65,6 +65,47 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
                     FROM player_profile_versions WHERE normalized_tag = '#LQ2'
                     """
                 )
+                # Clan A, then Clan B, then Clan A again: the unchanged first
+                # profile is observed again rather than saved a second time.
+                connection.execute(
+                    """
+                    UPDATE player_profile_versions
+                    SET profile_json = '{"clan": {"name": "Clan A"}}'::jsonb
+                    WHERE normalized_tag = '#2PP'
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO player_profile_versions (
+                        player_id, observation_id, normalized_tag,
+                        endpoint_version, schema_version, parser_version,
+                        observed_at, source_http_status, name, trophies,
+                        league_tier_id, league_tier_name, eligibility_state,
+                        current_league_season_id, profile_json
+                    )
+                    SELECT player_id, observation_id, normalized_tag,
+                           endpoint_version, schema_version, 'clan-b-test',
+                           observed_at + interval '1 minute', source_http_status,
+                           name, trophies, league_tier_id, league_tier_name,
+                           eligibility_state, current_league_season_id,
+                           '{"clan": {"name": "Clan B"}}'::jsonb
+                    FROM player_profile_versions WHERE normalized_tag = '#2PP'
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO player_profile_effects (
+                        profile_version_id, observation_id, effect_kind,
+                        observed_at, source_http_status, endpoint_version,
+                        schema_version, parser_version
+                    )
+                    SELECT id, observation_id, 'current_profile',
+                           observed_at + interval '2 minutes', source_http_status,
+                           endpoint_version, schema_version, parser_version
+                    FROM player_profile_versions
+                    WHERE normalized_tag = '#2PP' AND profile_json -> 'clan' ->> 'name' = 'Clan A'
+                    """
+                )
 
             cards = api_accounts.get_public_user(database, "groupowner", now=NOW)[
                 "verified_players"
@@ -78,7 +119,7 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
             }
             assert cards == [
                 {
-                    "tag": "#2PP", "name": "Player #2PP", "clan": None,
+                    "tag": "#2PP", "name": "Player #2PP", "clan": "Clan A",
                     "state": "tracking", "reason": None, "trophies": 5300,
                     "season_reset_pending": False, "rank": board["#2PP"],
                     "today": {"net": 28, "attacks": 1, "defenses": 1},
