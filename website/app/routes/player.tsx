@@ -930,6 +930,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
               <th scope="col">Trophy change</th>
               <th scope="col">Recorded battle net</th>
               <th scope="col">End</th>
+              <th scope="col">EOD change from previous day</th>
               <th scope="col">Attacks recorded</th>
               <th scope="col">Defenses recorded</th>
               <th scope="col">Adjustment</th>
@@ -970,7 +971,8 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                   </td>
                   <td>{formatSigned(day.netChange)}</td>
                   <td>{formatSigned(battleNet)}</td>
-                  <td>{formatCount(day.endTrophies)}</td>
+                  <td>{provisional(formatCount(day.endTrophies), day.eodState)}</td>
+                  <td>{provisional(formatSigned(day.eodChange), day.eodChangeState)}</td>
                   <td>{formatCount(day.attacks)}</td>
                   <td>{formatCount(day.defenses)}</td>
                   <td>{formatAdjustment(day)}</td>
@@ -1346,6 +1348,10 @@ function formatSigned(value: number | null): string {
 function valueTone(value: number | null): string {
   if (value === null || value === 0) return "score-neutral";
   return value > 0 ? "score-positive" : "score-negative";
+}
+
+function provisional(value: string, state: string | null): string {
+  return value === "Unknown" || state === "accepted" ? value : `${value} (provisional)`;
 }
 
 function formatCount(value: number | null): string {
