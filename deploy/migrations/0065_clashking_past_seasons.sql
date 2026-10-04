@@ -12,7 +12,8 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS clashking_history_fetches (
     player_id bigint PRIMARY KEY REFERENCES players (id) ON DELETE CASCADE,
     -- Last time a view claimed a fetch; another fetch waits an hour after it.
-    attempted_at timestamptz NOT NULL,
+    -- NULL when no fetch has been attempted yet.
+    attempted_at timestamptz,
     -- Last successful fetch; the rows below are as of this time.
     fetched_at timestamptz
 );

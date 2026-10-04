@@ -277,7 +277,7 @@ def get_past_seasons(
     )
     if due and _claim(database, player_id, now):
         if not client.try_acquire():
-            _release(database, player_id, now, attempted_at or now - RETRY_AFTER)
+            _release(database, player_id, now, attempted_at)
         else:
             try:
                 finishes = parse_season_finishes(
@@ -297,7 +297,7 @@ def _claim(database: Any, player_id: int, now: datetime) -> bool:
             INSERT INTO clashking_history_fetches AS history (player_id, attempted_at)
             VALUES (%(player)s, %(now)s)
             ON CONFLICT (player_id) DO UPDATE SET attempted_at = EXCLUDED.attempted_at
-            WHERE history.attempted_at <= %(retry_before)s
+            WHERE (history.attempted_at IS NULL OR history.attempted_at <= %(retry_before)s)
               AND (history.fetched_at IS NULL OR history.fetched_at <= %(stale_before)s)
             RETURNING player_id
             """,
@@ -312,7 +312,7 @@ def _claim(database: Any, player_id: int, now: datetime) -> bool:
 
 
 def _release(
-    database: Any, player_id: int, claimed_at: datetime, previous: datetime
+    database: Any, player_id: int, claimed_at: datetime, previous: datetime | None
 ) -> None:
     with database.pool.connection() as connection:
         connection.execute(

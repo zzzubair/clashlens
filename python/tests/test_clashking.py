@@ -270,6 +270,13 @@ def test_a_view_refused_by_the_request_limit_can_retry_promptly(
                 assert fake.calls == 1
                 assert refused["seasons"] == []
                 assert refused["fetched_at"] is None
+                with database.pool.connection() as connection:
+                    assert connection.execute(
+                        "SELECT history.attempted_at FROM clashking_history_fetches"
+                        " AS history JOIN players AS player"
+                        " ON player.id = history.player_id"
+                        " WHERE player.normalized_tag = '#2QQ'"
+                    ).fetchall() == [(None,)]
 
                 clock.now += 0.5
                 retried = view("%232QQ")
