@@ -1201,20 +1201,24 @@ def _enqueue_army_analytics(
     *,
     ranked_day_start: datetime,
     player_ids: list[int] | None = None,
+    swept: bool | None = None,
 ) -> None:
     """Refresh army readiness after decodes change for one Legend day.
 
     ``player_ids`` limits the Reset member refresh to the players in the
     changed battles; their status is the only one those decodes can change.
+    ``swept`` is whether the caller already holds the Reset's full lock;
+    False means it holds only the shared one and the refresh is skipped.
     """
     ranked_day_start = ranked_day_start.astimezone(UTC)
     coordinator = None
     boundary_at = ranked_day_start + timedelta(days=1)
     # Before the sweep no generation exists, but the shared lock still makes
-    # the first generation wait for these decodes.
-    if getattr(
-        database, "_supports_coordinator_contract", False
-    ) and boundary.lock_boundary_publication_once_swept(connection, boundary_at):
+    # the first generation wait for these decodes, and see them once created.
+    coordinated = getattr(database, "_supports_coordinator_contract", False)
+    if coordinated and swept is None:
+        swept = boundary.lock_boundary_publication_once_swept(connection, boundary_at)
+    if coordinated and swept:
         coordinator = connection.execute(
             """
             SELECT id, generation, snapshot_state, army_state,

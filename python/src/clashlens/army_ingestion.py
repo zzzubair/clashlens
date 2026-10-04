@@ -140,6 +140,17 @@ def _upsert_army_decodes(
     # which every battle log for the same Legend day would otherwise queue on.
     if not decoded_rows:
         return
+    # Lock order everywhere: battle locks, then a Reset baseline's work lock,
+    # then Reset publication locks, then Reset settlement locks, then army
+    # rows. A battle lock keeps two jobs saving one battle's armies from
+    # interleaving, so neither replaces the other's newer evidence or races
+    # the one-active-per-perspective unique index. Different battles save
+    # concurrently.
+    for battle_id in sorted({row[0] for row in decoded_rows}):
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"army-redecode-battle:{battle_id}",),
+        )
     players_by_day: dict[datetime, set[int]] = {}
     for day_start, attacker_id, defender_id in connection.execute(
         """
@@ -151,13 +162,12 @@ def _upsert_army_decodes(
         players_by_day.setdefault(day_start.astimezone(UTC), set()).update(
             (int(attacker_id), int(defender_id))
         )
-    # Lock order everywhere: a Reset baseline's work lock, then Reset
-    # publication locks, then Reset settlement locks, then army rows. A Reset
-    # battle log records its baseline and re-judges its Resets after these
-    # army writes, so it takes all of them first; otherwise it could hold an
-    # army or generation row another job needs while that job holds a lock.
-    # A Reset with no sweep yet is only shared, so battle logs for the
-    # current Legend day do not queue behind each other.
+    # A Reset battle log records its baseline and re-judges its Resets after
+    # these army writes, so it takes all of them first; otherwise it could
+    # hold an army or generation row another job needs while that job holds a
+    # lock. A Reset with no sweep yet is only shared, so battle logs for the
+    # current Legend day do not queue behind each other, and stays shared for
+    # this transaction: two jobs upgrading their shared locks would deadlock.
     boundaries = {day_start + timedelta(days=1) for day_start in players_by_day}
     resets: list[tuple[int, datetime]] = []
     if reset_lock_wait is not None:
@@ -177,8 +187,10 @@ def _upsert_army_decodes(
         )
         boundaries.add(boundary_at.astimezone(UTC))
         resets.append((player_id, boundary_at))
+    unswept: set[datetime] = set()
     for boundary_at in sorted(boundaries):
-        boundary.lock_boundary_publication_once_swept(connection, boundary_at)
+        if not boundary.lock_boundary_publication_once_swept(connection, boundary_at):
+            unswept.add(boundary_at)
     reset_settlement.lock_resets(database, connection, observation_id, resets)
     if reset_lock_wait is not None:
         connection.execute(
@@ -364,6 +376,7 @@ def _upsert_army_decodes(
             connection,
             ranked_day_start=day_start,
             player_ids=sorted(player_ids),
+            swept=day_start + timedelta(days=1) not in unswept,
         )
 
 
@@ -1403,15 +1416,6 @@ def complete_army_redecode(database: Database, claim: Claim) -> None:
                         SEASON_DETAIL_RETIRED,
                         f"season {season_id} detail is retired",
                     )
-            # Two redecodes for one battle must not interleave: the
-            # deactivate-then-insert sequence would otherwise race the
-            # one-active-per-perspective unique index into a transaction
-            # abort. Different battles redecode concurrently.
-            for battle_id in sorted(set(battle_ids)):
-                connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (f"army-redecode-battle:{battle_id}",),
-                )
             _upsert_army_decodes(database, connection, battle_ids)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
