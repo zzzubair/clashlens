@@ -1,8 +1,11 @@
 import {
   mkdir,
   mkdtemp,
+  open,
   readFile,
+  rename,
   rm,
+  stat,
   symlink,
   utimes,
   writeFile,
@@ -16,7 +19,7 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readLoginIdentity: vi.fn(),
@@ -24,7 +27,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, readFile: vi.fn(actual.readFile) };
+  return {
+    ...actual,
+    open: vi.fn(actual.open),
+    readFile: vi.fn(actual.readFile),
+    stat: vi.fn(actual.stat),
+  };
 });
 vi.mock("../../app/server/actions.server", () => ({
   readLoginIdentity: mocks.readLoginIdentity,
@@ -592,7 +600,7 @@ describe("blog media", () => {
     }
   });
 
-  it("rechecks a file a sync rewrote since the cached read before serving it", async () => {
+  it("serves the version it opened, and rechecks a file a sync replaced", async () => {
     const directory = await mkdtemp(join(tmpdir(), "blog-sync-media-"));
     const post = (draft: boolean) =>
       `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ndraft: ${draft}\n---\n[Data](../media/chart.csv)\n`;
@@ -606,13 +614,32 @@ describe("blog media", () => {
       await utimes(chart, hourAgo, hourAgo);
       vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
       await blogFolder(Date.now() - 10_000);
+      let synced = false;
+      const sync = async () => {
+        if (synced) return;
+        synced = true;
+        await writeFile(join(directory, "posts", "chart.md"), post(true));
+        await writeFile(`${chart}.new`, "unpublished");
+        await rename(`${chart}.new`, chart);
+      };
+      for (const read of [open, stat] as unknown as Mock<
+        (...args: unknown[]) => Promise<unknown>
+      >[]) {
+        const real = read.getMockImplementation()!;
+        read.mockImplementationOnce(async (...args) => {
+          const result = await real(...args);
+          await sync();
+          return result;
+        });
+      }
       const first = await get("chart.csv");
+      expect(synced).toBe(true);
       expect(first.headers.get("Cache-Control")).toBe("public, max-age=300");
       expect(await first.text()).toBe("published");
-      await writeFile(join(directory, "posts", "chart.md"), post(true));
-      await writeFile(chart, "unpublished");
       expect((await get("chart.csv")).status).toBe(404);
     } finally {
+      vi.mocked(open).mockReset();
+      vi.mocked(stat).mockReset();
       await rm(directory, { recursive: true });
     }
   });

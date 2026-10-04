@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { extname, join } from "node:path";
 
 import type { Route } from "./+types/blog.media";
@@ -18,7 +18,8 @@ const CONTENT_TYPES: Record<string, string> = {
  * Only plain file names found by listing media/ are served, so no address can
  * reach a file outside that folder. A file no published post uses is served
  * only to the signed-in site owner, decided by a read of the blog folder taken
- * after the served file last changed.
+ * after the served file last changed. The file is opened once, so a sync that
+ * replaces it cannot swap in other bytes after that decision.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
   const { MEDIA_NAME, blogDirectory, blogFolder, isBlogOwner } =
@@ -29,30 +30,29 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw new Response(null, { status: 404 });
   }
   const path = join(directory, "media", params.file);
-  const metadata = await stat(path).catch(() => null);
-  if (!metadata) throw new Response(null, { status: 404 });
-  const folder = await blogFolder(Date.now(), metadata.mtimeMs);
-  const isPublic = folder.publicMedia.has(params.file);
-  if (!folder.media.has(params.file) || (!isPublic && !(await isBlogOwner(request)))) {
-    throw new Response(null, { status: 404 });
-  }
-  const etag = `W/"${metadata.size}-${metadata.mtimeMs}"`;
-  let body: Buffer;
+  const file = await open(path).catch(() => null);
+  if (!file) throw new Response(null, { status: 404 });
   try {
-    body = await readFile(path);
-  } catch {
-    throw new Response(null, { status: 404 });
+    const metadata = await file.stat();
+    const folder = await blogFolder(Date.now(), metadata.mtimeMs);
+    const isPublic = folder.publicMedia.has(params.file);
+    if (!folder.media.has(params.file) || (!isPublic && !(await isBlogOwner(request)))) {
+      throw new Response(null, { status: 404 });
+    }
+    const etag = `W/"${metadata.size}-${metadata.mtimeMs}"`;
+    const headers = {
+      "Content-Type": contentType,
+      "X-Content-Type-Options": "nosniff",
+      // A sync can replace a file under the same name, so browsers recheck after
+      // 5 minutes. Owner-only files are never stored.
+      "Cache-Control": isPublic ? "public, max-age=300" : "no-store",
+      ETag: etag,
+    };
+    if (request.headers.get("If-None-Match") === etag) {
+      return new Response(null, { status: 304, headers });
+    }
+    return new Response(new Uint8Array(await file.readFile()), { headers });
+  } finally {
+    await file.close();
   }
-  const headers = {
-    "Content-Type": contentType,
-    "X-Content-Type-Options": "nosniff",
-    // A sync can replace a file under the same name, so browsers recheck after
-    // 5 minutes. Owner-only files are never stored.
-    "Cache-Control": isPublic ? "public, max-age=300" : "no-store",
-    ETag: etag,
-  };
-  if (request.headers.get("If-None-Match") === etag) {
-    return new Response(null, { status: 304, headers });
-  }
-  return new Response(new Uint8Array(body), { headers });
 }
