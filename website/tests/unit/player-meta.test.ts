@@ -111,11 +111,58 @@ describe("player link previews", () => {
     expect(tags).toContainEqual({ property: "og:url", content: URL_FOR_TAG });
   });
 
+  it("names a player known only from the lookup, as the page heading does", async () => {
+    mocks.getPlayer.mockRejectedValue(new PythonApiError(404, { error: "missing" }));
+    mocks.getPlayerLookup.mockResolvedValue({
+      tag: TAG,
+      state: "tracking",
+      reason: "no_legend_battles",
+      profile: { name: "Nova", clan: null, trophies: 5000 },
+    });
+    const tags = meta({ loaderData: await loadFor(TAG) });
+    expect(tags).toEqual(
+      expect.arrayContaining([
+        { title: "Nova (#2PP) · Clash Lens" },
+        { property: "og:title", content: "Nova (#2PP)" },
+        { name: "twitter:title", content: "Nova (#2PP)" },
+      ]),
+    );
+  });
+
+  it("uses a renamed player's newest name, never the older saved one", async () => {
+    mocks.getPlayer.mockResolvedValue(playerNamed("Old name"));
+    mocks.getPlayerLookup.mockResolvedValue({
+      tag: TAG,
+      state: "tracking",
+      reason: "no_legend_battles",
+      profile: { name: "New name", clan: null, trophies: 5000 },
+    });
+    expect(meta({ loaderData: await loadFor(TAG) })).toContainEqual({
+      title: "New name (#2PP) · Clash Lens",
+    });
+
+    const saved = playerNamed("Old name");
+    saved.profile.freshness = { observedAt: "2026-10-01T00:00:00Z" } as never;
+    const refreshed = playerNamed("New name");
+    refreshed.profile.freshness = { observedAt: "2026-10-02T00:00:00Z" } as never;
+    const tags = meta({
+      loaderData: {
+        requestedTag: TAG,
+        player: saved,
+        refreshStatus: { kind: "refresh-status", tag: TAG, player: refreshed },
+        lookup: { tag: TAG, state: "tracking" },
+        origin: ORIGIN,
+      } as PlayerLoaderData,
+    });
+    expect(tags).toContainEqual({ title: "New name (#2PP) · Clash Lens" });
+  });
+
   it("never names a different player than the link asks for", () => {
     const tags = meta({
       loaderData: {
         requestedTag: TAG,
         player: playerNamed("Someone else", "#8QQ"),
+        lookup: null,
         origin: ORIGIN,
       } as PlayerLoaderData,
     });
