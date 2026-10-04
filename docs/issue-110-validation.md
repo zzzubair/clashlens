@@ -62,13 +62,16 @@ authorize going live. The final PR records the tested commit and CI runs.
   database, raw-handoff, and spool checks still decide whether deletion is safe.
   The current cleanup batching and crash-safety contract belongs in
   [collector polling](collector-polling.md#spool-archive-and-rate-enforcement).
-  The running loop limits each turn to 16 files and pauses 0.1 seconds between
-  turns so waiting publications go first. One lookup of up to 256 eligible
-  files feeds those turns, because each lookup reads the whole upload table.
-  When the lookup found 256 files the next follows after one second, even if
+  The running loop limits each turn to 64 files and pauses 0.1 seconds between
+  turns so waiting publications go first. One lookup of up to 1,024 eligible
+  files feeds those turns; [migration 0071](../deploy/migrations/0071_spool_cleanup_candidates.sql)
+  indexes it, so it no longer reads the whole upload table.
+  When the lookup found 1,024 files the next follows after one second, even if
   some were then kept; when it found fewer it waits 30 seconds, or one second
-  while the spool is full. A measured 128-file turn held publication too long,
-  despite fixing the earlier cleanup starvation.
+  while the spool is full. 16-file turns fell behind arrivals in production on
+  October 4: each turn spent seconds waiting, so 64 files now share that wait.
+  A measured 128-file turn held publication too long, despite fixing the
+  earlier cleanup starvation.
   Eligible copies are selected by oldest last sighting, not oldest upload.
   Reused league-history hashes keep their original upload time; sorting by
   that time repeatedly selected hot copies ahead of much older profile copies.

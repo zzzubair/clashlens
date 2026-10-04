@@ -61,8 +61,8 @@ _UPLOAD_LEASE_SECONDS = 60
 _UPLOAD_RENEW_INTERVAL = 20.0
 _HANDOFF_LOCK_STRIPES = 4096
 _HANDOFF_PROTOCOL = 2
-# Short deletion turns; one whole-table lookup feeds many and rests 30 s when short.
-_CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE, _CLEANUP_IDLE_SECONDS = 16, 256, 30.0
+# 64 files share each turn's wait; one indexed lookup feeds 16 and rests 30 s when short.
+_CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE, _CLEANUP_IDLE_SECONDS = 64, 1024, 30.0
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
 # A check fetches its profile, saves it, then maybe its battle log, one after
 # the other, so a check holds at most one request at a time. The collector

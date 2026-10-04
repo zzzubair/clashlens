@@ -15,6 +15,7 @@ import pytest
 from test_collector import _Client, _collector, _Reservation, _Spool, _Store
 from test_collector_upload_slots import _handoff_for
 
+from clashlens.collector import _CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE
 from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.collector_http import FetchedResponse, KeyPool
 from clashlens.spool import Spool
@@ -99,7 +100,7 @@ def test_cleanup_pauses_between_turns_and_reports_every_found_file(
 ) -> None:
     spool = _Spool()
     store = _Store(spool)
-    store.deletable = [f"{index:064x}" for index in range(17)]
+    store.deletable = [f"{index:064x}" for index in range(_CLEANUP_BATCH_SIZE + 1)]
     kept = store.deletable[3]
 
     def delete_if_unreferenced(digest: str) -> bool:
@@ -111,7 +112,7 @@ def test_cleanup_pauses_between_turns_and_reports_every_found_file(
     )
     collector = _collector(spool, store, _Client(spool))
 
-    assert collector.cleanup_uploaded() == (16, 17)
+    assert collector.cleanup_uploaded() == (_CLEANUP_BATCH_SIZE, _CLEANUP_BATCH_SIZE + 1)
     assert spool.events == ["locked", "paused", "locked"]
     assert kept not in store.marked
 
@@ -122,7 +123,7 @@ def test_full_cleanup_lookup_while_spool_is_full_clears_an_earlier_rest(
     spool = _Spool()
     collector = _collector(spool, _Store(spool), _Client(spool))
     stop = asyncio.Event()
-    found = iter((0, 256, 0, 0))
+    found = iter((0, _CLEANUP_LOOKUP_SIZE, 0, 0))
     lookups: list[dict[str, object]] = []
     waits = 0
 
