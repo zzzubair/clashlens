@@ -26,6 +26,7 @@ from urllib.parse import quote
 import certifi
 
 from .domain import SEASON_DURATION, DomainRuleError, validate_legend_season_start
+from .verification import _NoRedirectHandler
 
 CLASHKING_ORIGIN = "https://api.clashk.ing"
 REFRESH_AFTER = timedelta(days=1)
@@ -34,6 +35,8 @@ RETRY_AFTER = timedelta(hours=1)
 REQUEST_TIMEOUT_SECONDS = 2.5
 MAX_RESPONSE_BYTES = 512 * 1024
 MIN_REQUEST_GAP_SECONDS = 0.5
+# Stops a slow ClashKing from holding more than two of the website's threads.
+MAX_CONCURRENT_REQUESTS = 2
 FIRST_BACKOFF_SECONDS = 60.0
 MAX_BACKOFF_SECONDS = 3600.0
 
@@ -175,13 +178,19 @@ Transport = Callable[[str, float], tuple[int, dict[str, str], bytes]]
 
 def _urllib_transport(url: str, timeout: float) -> tuple[int, dict[str, str], bytes]:
     context = ssl.create_default_context(cafile=certifi.where())
+    # A redirect comes back as a failed fetch instead of leaving api.clashk.ing.
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=context), _NoRedirectHandler()
+    )
     request = urllib.request.Request(
         url, headers={"Accept": "application/json", "User-Agent": "ClashLens"}
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-            return response.status, dict(response.headers), response.read(
-                MAX_RESPONSE_BYTES + 1
+        with opener.open(request, timeout=timeout) as response:
+            return (
+                response.status,
+                dict(response.headers),
+                response.read(MAX_RESPONSE_BYTES + 1),
             )
     except urllib.error.HTTPError as error:
         return error.code, dict(error.headers or {}), b""
@@ -190,10 +199,11 @@ def _urllib_transport(url: str, timeout: float) -> tuple[int, dict[str, str], by
 class ClashKingClient:
     """Shared request pacing for every ClashKing call this process makes.
 
-    Requests are spaced at least half a second apart. A 429 or 5xx answer, or
-    no answer, pauses every request: one minute, doubling up to an hour, or
-    longer when ClashKing asks for it. Calls never wait for a slot; a view
-    that cannot have one shows what is already saved.
+    Requests are spaced at least half a second apart, measured from when each
+    is sent, and at most two run at once. A 429 or 5xx answer, or no answer,
+    pauses every request: one minute, doubling up to an hour, or longer when
+    ClashKing asks for it. Calls never wait for a slot; a view that cannot have
+    one shows what is already saved.
     """
 
     def __init__(
@@ -208,18 +218,34 @@ class ClashKingClient:
         self._transport = transport
         self._clock = clock
         self._lock = threading.Lock()
+        self._slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
         self._next_request_at = 0.0
         self._backoff = 0.0
 
     def try_acquire(self) -> bool:
+        """Take a request slot without waiting; every True needs a release().
+
+        This only checks that a request could start now. The gap is taken when
+        the request is sent, so it may still be refused then.
+        """
+        if not self._slots.acquire(blocking=False):
+            return False
+        with self._lock:
+            if self._enabled and self._clock() >= self._next_request_at:
+                return True
+        self._slots.release()
+        return False
+
+    def release(self) -> None:
+        self._slots.release()
+
+    def fetch_legend_history(self, normalized_tag: str) -> bytes | None:
+        """The player's legend history, or None when pacing refuses to send."""
         with self._lock:
             now = self._clock()
             if not self._enabled or now < self._next_request_at:
-                return False
+                return None
             self._next_request_at = now + MIN_REQUEST_GAP_SECONDS
-            return True
-
-    def fetch_legend_history(self, normalized_tag: str) -> bytes:
         url = f"{CLASHKING_ORIGIN}/v2/player/{quote(normalized_tag, safe='')}/legend-history"
         try:
             status, headers, body = self._transport(url, REQUEST_TIMEOUT_SECONDS)
@@ -273,18 +299,20 @@ def get_past_seasons(
     due = (fetched_at is None or fetched_at <= now - REFRESH_AFTER) and (
         attempted_at is None or attempted_at <= now - RETRY_AFTER
     )
-    if due and _claim(database, player_id, now):
-        if not client.try_acquire():
-            _release(database, player_id, now, attempted_at)
-        else:
-            try:
-                finishes = parse_season_finishes(
-                    client.fetch_legend_history(normalized_tag), now=now
-                )
-            except ClashKingUnavailable:
-                pass
-            else:
-                _store(database, player_id, finishes, now)
+    # The slot comes before the claim, so a refused view writes nothing.
+    if due and client.try_acquire():
+        try:
+            if _claim(database, player_id, now):
+                payload = client.fetch_legend_history(normalized_tag)
+                if payload is None:
+                    _release(database, player_id, now, attempted_at)
+                else:
+                    finishes = parse_season_finishes(payload, now=now)
+                    _store(database, player_id, finishes, now)
+        except ClashKingUnavailable:
+            pass
+        finally:
+            client.release()
     return _saved(database, player_id, normalized_tag)
 
 
