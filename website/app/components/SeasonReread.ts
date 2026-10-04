@@ -5,12 +5,24 @@ const SEASON_MS = 28 * 24 * 60 * 60 * 1000;
 // The same confirmed 28-day phase used by the server's Season validation.
 const SEASON_ANCHOR_MS = 1_783_918_800_000;
 
-function advanceClock(clock: { now: number; elapsed: number; wall: number }) {
+type Clock = {
+  loadedAt?: string;
+  now: number;
+  elapsed: number;
+  wall: number;
+  unsettled?: "slipped" | "asked";
+};
+
+function advanceClock(clock: Clock) {
   const elapsed = performance.now();
   const wall = Date.now();
+  const ran = Math.max(0, elapsed - clock.elapsed);
+  const moved = wall - clock.wall;
   // Some browsers pause performance.now() during device sleep. Only use the
   // device clock's elapsed time, never its absolute date.
-  clock.now += Math.max(0, elapsed - clock.elapsed, wall - clock.wall);
+  clock.now += Math.max(ran, moved);
+  // Sleep or a device clock change: only a fresh server time can settle it.
+  if (Math.abs(moved - ran) > 1_000) clock.unsettled = "slipped";
   clock.elapsed = elapsed;
   clock.wall = wall;
   return clock.now;
@@ -37,7 +49,7 @@ export function useSeasonReread(
   busy.current = revalidator.state !== "idle" || navigation.state !== "idle";
   const lastRead = useRef(-Infinity);
   const inFlight = useRef(false);
-  const clock = useRef({
+  const clock = useRef<Clock>({
     loadedAt,
     now: loadedAt ? Date.parse(loadedAt) : 0,
     elapsed: performance.now(),
@@ -45,8 +57,15 @@ export function useSeasonReread(
   });
   advanceClock(clock.current);
   if (loadedAt && clock.current.loadedAt !== loadedAt) {
-    // A buffered response from before Reset cannot wind the established clock back.
-    clock.current.now = Math.max(clock.current.now, Date.parse(loadedAt));
+    const served = Date.parse(loadedAt);
+    if (clock.current.unsettled === "asked") {
+      // Requested after the device clock slipped, so it carries the real time.
+      clock.current.now = lastRead.current = served;
+      clock.current.unsettled = undefined;
+    } else {
+      // A buffered response from before Reset cannot wind the established clock back.
+      clock.current.now = Math.max(clock.current.now, served);
+    }
     clock.current.loadedAt = loadedAt;
   }
   const sourceTime = clock.current.loadedAt;
@@ -63,14 +82,16 @@ export function useSeasonReread(
       const elapsed = advanceClock(clock.current);
       const expired = elapsed >= reset;
       if (expired && sourceTime) setExpiredFor(sourceTime);
+      const { unsettled } = clock.current;
       if (
         document.hidden ||
-        (!expired && !recoveryWaiting) ||
+        (!expired && !recoveryWaiting && !unsettled) ||
         busy.current ||
         inFlight.current ||
-        elapsed - lastRead.current < 60_000
+        (unsettled !== "slipped" && elapsed - lastRead.current < 60_000)
       )
         return;
+      if (unsettled) clock.current.unsettled = "asked";
       lastRead.current = elapsed;
       inFlight.current = true;
       void Promise.resolve(revalidate())

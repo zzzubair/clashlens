@@ -158,6 +158,33 @@ it("expires and rereads on wake when the elapsed clock paused during sleep", () 
   tab.dispatchEvent(new Event("visibilitychange"));
   expect(mocks.expired).toHaveBeenCalled();
   expect(mocks.revalidate).toHaveBeenCalledTimes(1);
+  expect(start("2026-10-05T09:00:00Z")).toBe(false);
+});
+
+it("rereads on wake when the device clock moved back during sleep across Reset", async () => {
+  // Slept 20 minutes with the elapsed clock paused; the device clock lost 30.
+  start("2026-10-05T04:50:00Z");
+  vi.setSystemTime(Date.now() - 10 * 60_000);
+  tab.dispatchEvent(new Event("visibilitychange"));
+  expect(mocks.revalidate).toHaveBeenCalledTimes(1);
+  expect(start("2026-10-05T05:10:00Z")).toBe(false);
+  await vi.advanceTimersByTimeAsync(180_000);
+  expect(mocks.revalidate).toHaveBeenCalledTimes(1);
+});
+
+it("lets fresh server time undo a forward device clock change before Reset", async () => {
+  start("2026-10-05T04:00:00Z");
+  vi.setSystemTime(Date.now() + 2 * 3600_000);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(mocks.revalidate).toHaveBeenCalledTimes(1);
+  expect(start("2026-10-05T04:01:00Z")).toBe(false);
+  mocks.expired.mockClear();
+  await vi.advanceTimersByTimeAsync(59 * 60_000 - 1);
+  expect(mocks.expired).not.toHaveBeenCalled();
+  expect(mocks.revalidate).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(mocks.expired).toHaveBeenCalledWith("2026-10-05T04:01:00Z");
+  expect(mocks.revalidate).toHaveBeenCalledTimes(2);
 });
 
 it("keeps recovery reads after a pending response is followed by a failed read", async () => {
