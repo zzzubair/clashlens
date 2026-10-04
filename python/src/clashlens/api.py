@@ -40,6 +40,7 @@ from .army_analytics import (
     CurrentSeasonEmpty,
 )
 from .clashking import ClashKingClient, get_past_seasons
+from .domain import ranked_day_for
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .operating import ApiMetrics, elapsed
 from .profile import normalize_player_tag
@@ -797,12 +798,14 @@ def create_app(
     def groups(request: Request) -> JSONResponse:
         context = _authorize(request, "groups.read", production_database)
         assert production_database is not None and context.account is not None
+        now = current_time()
         return JSONResponse(
             status_code=200,
             content={
                 "groups": api_accounts.list_groups(
-                    production_database, context.account.internal_id, now=current_time()
-                )
+                    production_database, context.account.internal_id, now=now
+                ),
+                "season": ranked_day_for(now).official_season_id,
             },
         )
 

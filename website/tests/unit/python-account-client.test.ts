@@ -322,6 +322,7 @@ describe("server-only Python account client", () => {
       .fn()
       .mockResolvedValueOnce(
         jsonResponse({
+          season: "1791176400",
           groups: [
             {
               group_id: GROUP_ID,
@@ -342,22 +343,25 @@ describe("server-only Python account client", () => {
     vi.stubGlobal("fetch", fetchMock);
     const client = await importClient();
 
-    await expect(client.listGroups()).resolves.toEqual([
-      {
-        groupId: GROUP_ID,
-        name: "Favorites",
-        tags: ["#2PP"],
-        players: [
-          {
-            tag: "#2PP",
-            name: "Nova",
-            trophies: 5400,
-            seasonResetPending: false,
-            state: "tracking",
-          },
-        ],
-      },
-    ]);
+    await expect(client.listGroups()).resolves.toEqual({
+      season: "1791176400",
+      groups: [
+        {
+          groupId: GROUP_ID,
+          name: "Favorites",
+          tags: ["#2PP"],
+          players: [
+            {
+              tag: "#2PP",
+              name: "Nova",
+              trophies: 5400,
+              seasonResetPending: false,
+              state: "tracking",
+            },
+          ],
+        },
+      ],
+    });
     await expect(
       client.createGroup({ name: "Favorites" }, IDEMPOTENCY_KEY),
     ).resolves.toMatchObject({ groupId: GROUP_ID });

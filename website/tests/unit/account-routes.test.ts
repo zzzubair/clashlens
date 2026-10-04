@@ -139,7 +139,7 @@ function fakeClient(overrides: Partial<PythonClient> = {}): PythonClient {
     listSavedTags: vi.fn(async () => []),
     addSavedTag: vi.fn(async () => ({ tag: TAG, saved: true })),
     removeSavedTag: vi.fn(async () => ({ tag: TAG, saved: false })),
-    listGroups: vi.fn(async () => []),
+    listGroups: vi.fn(async () => ({ groups: [], season: "1791176400" })),
     createGroup: vi.fn(async () => ({
       groupId: GROUP_ID,
       name: "Clanmates",
@@ -325,9 +325,10 @@ describe("account routes", () => {
       "keeps loaded values after a failed save on %s",
       async (route, Component, loader, action, write, fields, savedContent) => {
         client.listSavedTags = vi.fn(async () => [{ tag: TAG, name: "Nova" }]);
-        client.listGroups = vi.fn(async () => [
-          { groupId: GROUP_ID, name: "Clanmates", tags: [], players: [] },
-        ]);
+        client.listGroups = vi.fn(async () => ({
+          season: "1791176400",
+          groups: [{ groupId: GROUP_ID, name: "Clanmates", tags: [], players: [] }],
+        }));
         client[write] = vi
           .fn()
           .mockRejectedValue(new PythonApiError(503, { error: "unavailable" }));
@@ -973,22 +974,25 @@ describe("account routes", () => {
 
   describe("account.groups", () => {
     it("loads groups with fresh per-group update and delete keys", async () => {
-      client.listGroups = vi.fn(async () => [
-        {
-          groupId: GROUP_ID,
-          name: "Clanmates",
-          tags: [TAG],
-          players: [
-            {
-              tag: TAG,
-              name: "Nova",
-              trophies: 5400,
-              seasonResetPending: false,
-              state: "tracking" as const,
-            },
-          ],
-        },
-      ]);
+      client.listGroups = vi.fn(async () => ({
+        season: "1791176400",
+        groups: [
+          {
+            groupId: GROUP_ID,
+            name: "Clanmates",
+            tags: [TAG],
+            players: [
+              {
+                tag: TAG,
+                name: "Nova",
+                trophies: 5400,
+                seasonResetPending: false,
+                state: "tracking" as const,
+              },
+            ],
+          },
+        ],
+      }));
       const result = await groupsLoader({
         request: new Request(`${ORIGIN}/account/groups`),
       } as never);

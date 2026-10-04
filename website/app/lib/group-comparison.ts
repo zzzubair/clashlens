@@ -73,6 +73,8 @@ export interface GroupComparison {
   dayStarts: string[];
   todayStart: string;
   generatedAt: string;
+  /** The current Season: its first Reset, in Unix seconds. */
+  season: string;
   players: ComparedPlayer[];
 }
 
@@ -106,6 +108,7 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     value.day_starts.length !== value.days ||
     !isTimestamp(value.today_start) ||
     !isTimestamp(value.generated_at) ||
+    !(typeof value.season === "string" && /^\d+$/.test(value.season)) ||
     !Array.isArray(value.players)
   )
     return null;
@@ -122,6 +125,7 @@ export function mapGroupComparison(value: unknown): GroupComparison | null {
     dayStarts: value.day_starts as string[],
     todayStart: value.today_start as string,
     generatedAt: value.generated_at as string,
+    season: value.season,
     players,
   };
 }

@@ -78,6 +78,7 @@ function payload(players = [player()]) {
     day_starts: DAYS,
     today_start: "2026-08-06T05:00:00+00:00",
     generated_at: "2026-08-06T12:00:00+00:00",
+    season: "1783918800",
     players,
   };
 }
