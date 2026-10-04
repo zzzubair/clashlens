@@ -24,7 +24,6 @@ import "./app.css";
 import "./theme.css";
 import "./explore.css";
 import "./appearance.css";
-import "./details.css";
 import "./header-search.css";
 
 export interface RootLoaderData {
