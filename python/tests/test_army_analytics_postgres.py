@@ -20,6 +20,7 @@ from clashlens.archive import S3ArchiveReader
 from clashlens.army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
+    CurrentSeasonEmpty,
     build_army_result,
 )
 from clashlens.db import Database
@@ -30,32 +31,38 @@ SEASON_ID = "1783918800"
 FIXTURE_CODE = "h0p9e14_32d1x53u2x58-1x97s2x2"
 
 
-def _army_range_database(monkeypatch, *, missing_kind: str, missing_day: int):
+def _army_range_database(
+    monkeypatch,
+    *,
+    missing_kind: str = "",
+    missing_day: int = 0,
+    anchor: tuple[str, str, datetime] = (
+        SEASON_ID, "previous-season", DAY_START - timedelta(days=22)
+    ),
+    days: tuple[int, ...] = (23, 24, 25),
+):
     database = MagicMock()
     database._army_request_timeout_seconds = 30
     database._army_cache_get.return_value = None
     connection = database.pool.connection.return_value.__enter__.return_value
     cursor = connection.execute.return_value
-    cursor.fetchone.side_effect = [
-        (SEASON_ID, "previous-season", DAY_START - timedelta(days=22)),
-        (0, "a" * 64),
-        (0,),
-    ]
+    cursor.fetchone.side_effect = [anchor, (0, "a" * 64), (0,)]
+    season_start = anchor[2]
     rows = iter(
         [
             [
-                (day, DAY_START + timedelta(days=day - 23))
-                for day in (23, 24, 25)
+                (day, season_start + timedelta(days=day - 1))
+                for day in days
                 if missing_kind != "day" or day != missing_day
             ],
             [
                 (day, str(day))
-                for day in (23, 24, 25)
+                for day in days
                 if missing_kind != "army" or day != missing_day
             ],
             [
-                (DAY_START + timedelta(days=day - 22), day, 1)
-                for day in (23, 24, 25)
+                (season_start + timedelta(days=day), day, 1)
+                for day in days
                 if missing_kind != "snapshot" or day != missing_day
             ],
         ]
@@ -123,6 +130,72 @@ def test_top_n_names_ended_days_consistent_top_cannot_use(
         database, selection, now=DAY_START + timedelta(days=3)
     )
     assert result["collection_coverage"]["streak_gap_days"] == [missing_day]
+
+
+SEPTEMBER, OCTOBER = "1788757200", "1791176400"
+SEPTEMBER_START = datetime(2026, 9, 7, 5, tzinfo=UTC)
+OCTOBER_START = datetime(2026, 10, 5, 5, tzinfo=UTC)
+
+
+def _current_top_100(monkeypatch, anchor, now, days=(1,)):
+    database = _army_range_database(monkeypatch, anchor=anchor, days=days)
+    selection = ArmyAnalyticsSelection.parse(
+        lens="offense", season="current", start_day=1, end_day=28,
+        population="top-100", category="troops", sort="usage-rate",
+    )
+    return api_analytics.get_army_analytics(database, selection, now=now)
+
+
+@pytest.mark.parametrize("seconds_after_reset", [0, 1])
+@pytest.mark.parametrize("days_after_season", [0, 1, 27])
+def test_ended_season_anchor_is_never_current(
+    monkeypatch, seconds_after_reset, days_after_season
+) -> None:
+    # The September anchor outlives the Reset until a newer profile is
+    # processed; the current season must already be the new one, empty.
+    now = OCTOBER_START + timedelta(
+        days=days_after_season, seconds=seconds_after_reset
+    )
+    with pytest.raises(CurrentSeasonEmpty) as empty:
+        _current_top_100(
+            monkeypatch, (SEPTEMBER, "1786338000", SEPTEMBER_START), now,
+            days=tuple(range(1, 29)),
+        )
+    assert empty.value.previous_season_id == SEPTEMBER
+
+
+def test_season_anchor_two_seasons_stale_names_just_ended_season(
+    monkeypatch,
+) -> None:
+    with pytest.raises(CurrentSeasonEmpty) as empty:
+        _current_top_100(
+            monkeypatch, (SEPTEMBER, "1786338000", SEPTEMBER_START),
+            OCTOBER_START + timedelta(days=28, seconds=1),
+        )
+    assert empty.value.previous_season_id == OCTOBER
+
+
+def test_new_season_anchor_waits_then_serves_first_published_day(
+    monkeypatch,
+) -> None:
+    anchor = (OCTOBER, SEPTEMBER, OCTOBER_START)
+    with pytest.raises(CurrentSeasonEmpty) as empty:
+        _current_top_100(monkeypatch, anchor, OCTOBER_START + timedelta(seconds=1))
+    assert empty.value.previous_season_id == SEPTEMBER
+    result = _current_top_100(
+        monkeypatch, anchor, OCTOBER_START + timedelta(days=1, seconds=1)
+    )
+    assert result["selection"]["season"] == OCTOBER
+    assert (result["selection"]["start_day"], result["selection"]["end_day"]) == (1, 1)
+
+
+def test_season_last_day_stays_current_until_reset(monkeypatch) -> None:
+    result = _current_top_100(
+        monkeypatch, (SEPTEMBER, "1786338000", SEPTEMBER_START),
+        OCTOBER_START - timedelta(seconds=1), days=tuple(range(1, 28)),
+    )
+    assert result["selection"]["season"] == SEPTEMBER
+    assert result["selection"]["end_day"] == 27
 
 
 def test_consistent_top_follows_saved_positions_on_every_day(

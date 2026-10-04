@@ -42,7 +42,12 @@ from .army_rank_bands import (
 )
 from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
-from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION, ranked_day_for
+from .domain import (
+    RANKED_DAY_DURATION,
+    SEASON_ANCHOR_RULE_VERSION,
+    SEASON_DURATION,
+    ranked_day_for,
+)
 
 
 def get_army_season_summary(
@@ -230,15 +235,23 @@ def get_army_analytics(
                 current_time = (
                     now.astimezone(UTC) if now is not None else datetime.now(tz=UTC)
                 )
+                if current_time >= anchor[2] + SEASON_DURATION:
+                    # The anchor advances only when a newer profile is
+                    # processed, which can lag the Reset. Once its 28 days
+                    # have ended, the calendar's new season is current and
+                    # has no anchor-confirmed day to serve yet.
+                    ended_start = (
+                        ranked_day_for(current_time).season_start - SEASON_DURATION
+                    )
+                    raise CurrentSeasonEmpty(str(int(ended_start.timestamp())))
                 if current_time < anchor[2]:
                     latest_ended_day = 0
                 else:
                     # A Legend day's interval ends one full day after the
                     # season anchor, so the count of fully elapsed days is
                     # the latest ended day number.
-                    latest_ended_day = min(
-                        28,
-                        int((current_time - anchor[2]) // RANKED_DAY_DURATION),
+                    latest_ended_day = int(
+                        (current_time - anchor[2]) // RANKED_DAY_DURATION
                     )
                 clipped_end = min(selection.end_day, latest_ended_day)
                 if clipped_end < selection.start_day:
