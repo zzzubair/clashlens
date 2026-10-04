@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Form, Link, useFetcher } from "react-router";
+import { Link, useFetcher, useNavigate } from "react-router";
 
-import { canonicalPlayerPath } from "../lib/player-tag";
+import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { PlayerSearchLoaderData } from "../routes/player-search";
 
@@ -41,8 +41,7 @@ export function usePlayerSuggestions(initialQuery = "") {
     setRequestedQuery("");
   }
 
-  function change(value: string) {
-    setQuery(value);
+  function request(value: string, delay: number) {
     if (timer.current !== null) clearTimeout(timer.current);
 
     const trimmed = value.trim();
@@ -54,13 +53,19 @@ export function usePlayerSuggestions(initialQuery = "") {
     timer.current = setTimeout(() => {
       setRequestedQuery(trimmed);
       void fetcher.load(`/resources/players/search?q=${encodeURIComponent(trimmed)}`);
-    }, SEARCH_DEBOUNCE_MS);
+    }, delay);
+  }
+
+  function change(value: string) {
+    setQuery(value);
+    request(value, SEARCH_DEBOUNCE_MS);
   }
 
   return {
     query,
     setQuery,
     change,
+    searchNow: () => request(query, 0),
     dismiss,
     open,
     data,
@@ -190,6 +195,7 @@ export function HeaderSearch() {
   const toggleRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (expanded) inputRef.current?.focus();
@@ -270,13 +276,20 @@ export function HeaderSearch() {
             }
           }}
         >
-          <Form
-            method="get"
-            action="/"
+          <form
             role="search"
             aria-label="Players and profiles"
             className="search-form"
-            onSubmit={() => collapse(false)}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const tag = normalizePlayerTag(suggestions.query);
+              if (tag) {
+                collapse(false);
+                void navigate(canonicalPlayerPath(tag));
+              } else {
+                suggestions.searchNow();
+              }
+            }}
           >
             <label className="sr-only" htmlFor="header-search-input">
               Search players and Clash Lens profiles
@@ -311,7 +324,7 @@ export function HeaderSearch() {
                 loading={suggestions.loading}
               />
             ) : null}
-          </Form>
+          </form>
           <button
             type="button"
             className="header-search-close"

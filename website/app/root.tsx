@@ -208,6 +208,7 @@ export default function App() {
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const isNotFound = isRouteErrorResponse(error) && error.status === 404;
+  const location = useLocation();
   return (
     <>
       <header className="site-header">
@@ -215,6 +216,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
           Clash Lens
         </Link>
         <div className="site-nav">
+          <HeaderSearch key={location.pathname} />
           <ThemeToggle />
         </div>
       </header>
