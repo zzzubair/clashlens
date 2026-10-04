@@ -564,11 +564,15 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {lookup?.profile ? (
           <header className="player-header">
             <div className="player-profile">
-              <h1>{lookup.profile.name}</h1>
+              <h1>
+                <bdi>{lookup.profile.name}</bdi>
+              </h1>
               <p className="player-identity">
                 <span className="player-tag prominent">{lookup.tag}</span>
                 {lookup.profile.clan ? (
-                  <span className="player-clan">{lookup.profile.clan}</span>
+                  <span className="player-clan">
+                    <bdi>{lookup.profile.clan}</bdi>
+                  </span>
                 ) : null}
               </p>
             </div>
@@ -578,7 +582,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                   <span className="metric-label">Trophies</span>
                   <strong className="player-trophy-count">
                     <span className="trophy-mark" aria-hidden="true" />
-                    {lookup.profile.trophies.toLocaleString()}
+                    {lookup.profile.trophies.toLocaleString("en-GB")}
                   </strong>
                 </div>
               </div>
@@ -640,10 +644,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     <main id="main-content" tabIndex={-1} className="page-shell player-page">
       <header className="player-header">
         <div className="player-profile">
-          <h1>{trackedPlayer.profile.name}</h1>
+          <h1>
+            <bdi>{trackedPlayer.profile.name}</bdi>
+          </h1>
           <p className="player-identity">
             <span className="player-tag prominent">{trackedPlayer.tag}</span>
-            <span className="player-clan">{trackedPlayer.profile.clan}</span>
+            {trackedPlayer.profile.clan ? (
+              <span className="player-clan">
+                <bdi>{trackedPlayer.profile.clan}</bdi>
+              </span>
+            ) : null}
           </p>
         </div>
         <div className="player-summary">
@@ -657,13 +667,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                   </strong>
                   <span className="player-update-age">
                     Last saved before the reset:{" "}
-                    {trackedPlayer.profile.trophies.toLocaleString()}
+                    {trackedPlayer.profile.trophies.toLocaleString("en-GB")}
                   </span>
                 </>
               ) : (
                 <strong className="player-trophy-count">
                   <span className="trophy-mark" aria-hidden="true" />
-                  {trackedPlayer.profile.trophies.toLocaleString()}
+                  {trackedPlayer.profile.trophies.toLocaleString("en-GB")}
                 </strong>
               )}
             </div>
@@ -755,6 +765,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               Calculated totals use saved trophies minus recorded changes. Unavailable
               means the saved history is incomplete.
             </p>
+          ) : null}
+          {history.length === 0 ? (
+            <p className="section-note">No Legend days are saved for this player yet.</p>
           ) : null}
           <div className="legend-days">
             {history.map(({ day, inSeason }) => (
@@ -943,7 +956,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
             value={
               summary.endTrophies === null
                 ? "Unknown"
-                : `${summary.startTrophies ?? "Unknown"} → ${summary.endTrophies}`
+                : `${formatCount(summary.startTrophies)} → ${formatCount(summary.endTrophies)}`
             }
           />
           <Metric label="Final rank" value={formatCount(summary.finalRank)} />
@@ -1055,9 +1068,7 @@ function seasonLabel(seasonId: string, seasonEnd?: string | null): string {
   const end = seasonEnd
     ? new Date(seasonEnd)
     : new Date((Number(seasonId) + 28 * 24 * 60 * 60) * 1000);
-  return Number.isNaN(end.getTime())
-    ? "Past season"
-    : formatPlayerDate(end).replace("Sept", "Sep");
+  return Number.isNaN(end.getTime()) ? "Past season" : formatPlayerDate(end);
 }
 
 const playerDateFormatter = new Intl.DateTimeFormat("en-GB", {
@@ -1073,7 +1084,7 @@ const playerTimeFormatter = new Intl.DateTimeFormat("en-GB", {
 });
 
 function formatPlayerDate(date: Date): string {
-  return playerDateFormatter.format(date);
+  return playerDateFormatter.format(date).replace("Sept", "Sep");
 }
 
 function legendDayDate(period: string): string {
@@ -1222,7 +1233,7 @@ function LegendDay({
           <strong className={valueTone(day.offense.trophyGain)}>
             {formatSigned(day.offense.trophyGain)}
           </strong>
-          <span>{formatCount(day.offense.attacks)} recorded</span>
+          <span>{recordedCount(day.offense.attacks)}</span>
         </span>
         <span className="legend-day-stat legend-day-defense">
           <small>Defenses</small>
@@ -1235,7 +1246,7 @@ function LegendDay({
               day.defense.trophyLoss === null ? null : -day.defense.trophyLoss,
             )}
           </strong>
-          <span>{formatCount(day.defense.defenses)} recorded</span>
+          <span>{recordedCount(day.defense.defenses)}</span>
         </span>
         <span className="legend-day-stat legend-day-net">
           <small>Trophy change</small>
@@ -1319,9 +1330,13 @@ function BattleColumn({
                   href={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
                   aria-label={`View ${event.opponent.name ?? event.opponent.tag}'s Legend log for ${dayLabel}`}
                 >
-                  <strong>{event.opponent.name ?? event.opponent.tag}</strong>
+                  <strong>
+                    <bdi>{event.opponent.name ?? event.opponent.tag}</bdi>
+                  </strong>
                 </a>
-                <span className="player-tag">{event.opponent.tag}</span>
+                {event.opponent.name ? (
+                  <span className="player-tag">{event.opponent.tag}</span>
+                ) : null}
                 <time dateTime={event.battleTimestamp}>
                   {playerTimeFormatter.format(new Date(event.battleTimestamp))} UTC
                 </time>
@@ -1419,7 +1434,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function formatSigned(value: number | null): string {
   if (value === null) return "Unknown";
-  return value > 0 ? `+${value}` : String(value);
+  return value > 0 ? `+${formatCount(value)}` : formatCount(value);
 }
 
 function valueTone(value: number | null): string {
@@ -1432,7 +1447,11 @@ function provisional(value: string, state: string | null): string {
 }
 
 function formatCount(value: number | null): string {
-  return value === null ? "Unknown" : String(value);
+  return value === null ? "Unknown" : (value || 0).toLocaleString("en-GB");
+}
+
+function recordedCount(value: number | null): string {
+  return value === null ? "Count unknown" : `${formatCount(value)} recorded`;
 }
 
 function formatAdjustment(day: HistoricalSeasonDayEntry): string {

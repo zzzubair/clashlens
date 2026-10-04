@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
+import {
+  WORST_SEASON_SUMMARY,
+  WORST_SEASONS,
+  worstCasePlayer,
+} from "../fixtures/player-worst-case";
 
 // Sends Refresh submissions with an invalid key, so the server refuses them
 // before they spend either per-visitor allowance.
@@ -349,6 +354,80 @@ test("player page stays within a narrow viewport", async ({ page }) => {
   ).toBe(0);
 });
 
+// Nothing may widen the page, and every visible control must take a tap at its
+// own center. Safari once let full-row link overlays cover other controls.
+async function expectUsableLayout(page: Page) {
+  const problems = await page.locator("main").evaluate((main) => {
+    const found: string[] = [];
+    const { scrollWidth, clientWidth } = document.documentElement;
+    if (scrollWidth > clientWidth)
+      found.push(`page is ${scrollWidth - clientWidth}px too wide`);
+    for (const control of main.querySelectorAll("a, button, summary")) {
+      if (!control.checkVisibility()) continue;
+      control.scrollIntoView({ block: "center", inline: "nearest" });
+      const box = control.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        box.x + box.width / 2,
+        box.y + box.height / 2,
+      );
+      if (!hit || !control.contains(hit))
+        found.push(
+          `"${control.textContent?.trim()}" is covered by ${hit?.outerHTML.slice(0, 80)}`,
+        );
+    }
+    return found;
+  });
+  expect(problems).toEqual([]);
+}
+
+test("player page holds worst-case player data on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await refuseRefreshes(page);
+  await page.goto("/players/%232PP");
+  const saved = await page.request.get("/players/%232PP.data");
+  const dataType = saved.headers()["content-type"];
+  const decoded = decodePageData(await saved.text());
+  const data = Object.values(decoded).find((route) => route.data?.player)!.data!;
+  Object.assign(data, { player: worstCasePlayer("#2PP"), seasons: WORST_SEASONS });
+  const current = encodePageData(decoded);
+  Object.assign(data, {
+    selectedSeason: WORST_SEASON_SUMMARY.seasonId,
+    historical: { ...WORST_SEASON_SUMMARY, tag: "#2PP" },
+  });
+  const season = encodePageData(decoded);
+  await page.route("**/players/%232PP.data*", (route) =>
+    route.fulfill({
+      contentType: dataType,
+      body: new URL(route.request().url()).searchParams.has("season") ? season : current,
+    }),
+  );
+
+  // Client navigation reads the replaced page data.
+  const seasons = page.getByRole("navigation", { name: "Historical seasons" });
+  await seasons.getByRole("link").first().click();
+  await expect(page.getByText("Unknown → 6,498", { exact: true })).toBeVisible();
+  await expect(page.getByText("-12,880", { exact: true })).toBeVisible();
+  await expectUsableLayout(page);
+
+  await seasons.getByRole("link", { name: "Current Season" }).click();
+  await expect(page.getByRole("heading", { name: "xXDragonSlayerX" })).toBeVisible();
+  await expect(page.getByText("Count unknown", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("-1,288", { exact: true })).toBeVisible();
+  await expect(page.getByText(/1,284 days old/)).toBeVisible();
+  // A nameless opponent shows its tag once, as the name.
+  const nameless = page.locator(".battle-slot-attack").nth(8);
+  await expect(nameless.locator(".battle-opponent strong")).toHaveText("#P0Y");
+  await expect(nameless.locator(".player-tag")).toHaveCount(0);
+  for (const size of [
+    { width: 320, height: 568 },
+    { width: 750, height: 342 },
+    { width: 1280, height: 900 },
+  ]) {
+    await page.setViewportSize(size);
+    await expectUsableLayout(page);
+  }
+});
+
 test("season navigation clears refresh state for the same player", async ({ page }) => {
   // Only the manual Refresh below may spend the shared allowance.
   let manual = false;
@@ -593,7 +672,9 @@ for (const [stall, read] of [
 ] as const) {
   test(`a Refresh status read that ${read} stops at the one-minute deadline`, async ({
     page,
+    request,
   }) => {
+    await serveWithAge(page, request, 0);
     const work = refreshWork();
     // The Refresh itself is faked, so it spends none of the shared allowance.
     await page.route("**/resources/players/*/refresh*", (route) =>
@@ -691,7 +772,9 @@ for (const [stall, read] of [
 
 test("a failed Refresh status read replaces Refreshing… with saved results", async ({
   page,
+  request,
 }) => {
+  await serveWithAge(page, request, 0);
   // The Refresh itself is faked, so it spends none of the shared allowance.
   await page.route("**/resources/players/*/refresh*", (route) =>
     route.request().method() === "POST"
