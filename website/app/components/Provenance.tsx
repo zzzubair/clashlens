@@ -83,6 +83,20 @@ export function useCurrentTime(loadedAt: string | undefined) {
   return now;
 }
 
+/** The server's time plus time spent on the page, so a wrong device clock cannot shift it. */
+export function useServerTime(loadedAt: string | undefined) {
+  const [now, setNow] = useState(() => (loadedAt ? Date.parse(loadedAt) : 0));
+  useEffect(() => {
+    if (!loadedAt) return;
+    const offset = Date.parse(loadedAt) - performance.now();
+    const tick = () => setNow(performance.now() + offset);
+    tick();
+    const timer = setInterval(tick, 30_000);
+    return () => clearInterval(timer);
+  }, [loadedAt]);
+  return now;
+}
+
 export function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown";
