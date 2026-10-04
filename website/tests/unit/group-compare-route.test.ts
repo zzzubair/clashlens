@@ -231,6 +231,37 @@ describe("group comparison", () => {
     expect(text).toContain("Recorded: 2 attacks, 1 defense");
   });
 
+  it("offers to reload the comparison when it could not be read", async () => {
+    const handler = createStaticHandler([
+      {
+        path: "/account/groups/:groupId",
+        Component: GroupCompareRoute,
+        loader: () => ({
+          comparison: null,
+          days: 3,
+          sort: "net",
+          notFound: false,
+          tooLarge: null,
+          error: { error: { code: "unavailable", message: "Try again later." } },
+        }),
+      },
+    ]);
+    const context = await handler.query(
+      new Request(`${ORIGIN}/account/groups/${GROUP_ID}?days=3&sort=net`),
+    );
+    if (context instanceof Response) throw new Error("unexpected response");
+    const html = renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+      }),
+    ).replaceAll("&amp;", "&");
+    expect(html).toContain("Comparison unavailable");
+    expect(html).toContain(
+      `<a href="/account/groups/${GROUP_ID}?days=3&sort=net">Try again</a>`,
+    );
+  });
+
   it("does not call Python for a malformed group ID", async () => {
     const result = await load("/account/groups/not-a-group");
     expect(result.init.status).toBe(404);

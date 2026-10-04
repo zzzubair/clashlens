@@ -387,7 +387,6 @@ export default function GroupsRoute() {
         </p>
       </section>
 
-      {loaderData.error ? <ErrorNotice error={loaderData.error} /> : null}
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
       <section className="form-panel" aria-label="Create a group">
@@ -409,7 +408,12 @@ export default function GroupsRoute() {
 
       <section className="data-section" aria-labelledby="group-list-title">
         <h2 id="group-list-title">Your groups</h2>
-        {loaderData.groups.length > 0 ? (
+        {loaderData.error ? (
+          <aside className="notice notice-unavailable" role="alert">
+            <strong>Groups could not be loaded.</strong>{" "}
+            <a href="/account/groups">Try again</a>
+          </aside>
+        ) : loaderData.groups.length > 0 ? (
           <ul className="group-card-list">
             {loaderData.groups.map((group) => (
               <GroupCard

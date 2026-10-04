@@ -1,6 +1,5 @@
 import { redirect, useLoaderData } from "react-router";
 
-import { ErrorNotice } from "../components/ErrorNotice";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/account.providers";
 
@@ -114,6 +113,22 @@ export function headers() {
 
 export default function AccountProvidersRoute() {
   const data = useLoaderData<typeof loader>();
+  if (data.error) {
+    return (
+      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
+        <h1>Sign-in connections</h1>
+        <aside className="notice notice-unavailable" role="alert">
+          <strong>Sign-in connections could not be loaded.</strong>{" "}
+          <a href="/account/providers">Try again</a>
+        </aside>
+        <p className="hero-actions">
+          <a className="button button-primary" href="/account">
+            Back to your account
+          </a>
+        </p>
+      </main>
+    );
+  }
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="providers-title">
@@ -123,8 +138,6 @@ export default function AccountProvidersRoute() {
           Linking asks you to sign in with that service.
         </p>
       </section>
-
-      {data.error ? <ErrorNotice error={data.error} /> : null}
 
       <section className="form-panel stack-form" aria-label="Connected sign-in providers">
         <p id="provider-requirement" className="form-help">

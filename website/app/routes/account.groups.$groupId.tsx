@@ -1,4 +1,4 @@
-import { data, redirect, useLoaderData } from "react-router";
+import { data, redirect, useLoaderData, useLocation } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { formatAge } from "../components/Provenance";
@@ -107,6 +107,7 @@ export function headers() {
 export default function GroupCompareRoute() {
   const { comparison, days, sort, notFound, tooLarge, error } =
     useLoaderData<typeof loader>();
+  const location = useLocation();
   if (comparison === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -124,6 +125,11 @@ export default function GroupCompareRoute() {
           </p>
         ) : null}
         {error ? <ErrorNotice error={error} /> : null}
+        {error ? (
+          <p>
+            <a href={`${location.pathname}${location.search}`}>Try again</a>
+          </p>
+        ) : null}
       </main>
     );
   }

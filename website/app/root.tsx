@@ -233,9 +233,22 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
             ? "This route does not exist."
             : "The website returned a safe error. Saved data is not changed by this page error."}
         </p>
-        <a className="button button-primary" href="/">
-          Return home
-        </a>
+        <p className="hero-actions">
+          {isNotFound ? null : (
+            <a
+              className="button button-primary"
+              href={`${location.pathname}${location.search}`}
+            >
+              Try again
+            </a>
+          )}
+          <a
+            className={`button ${isNotFound ? "button-primary" : "button-secondary"}`}
+            href="/"
+          >
+            Return home
+          </a>
+        </p>
       </main>
     </>
   );

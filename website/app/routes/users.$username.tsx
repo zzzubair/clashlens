@@ -3,11 +3,11 @@ import {
   data,
   redirect,
   useLoaderData,
+  useLocation,
   useRouteLoaderData,
   useSearchParams,
 } from "react-router";
 
-import { ErrorNotice } from "../components/ErrorNotice";
 import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
@@ -73,6 +73,7 @@ export function headers() {
 
 export default function UserRoute() {
   const data = useLoaderData<typeof loader>();
+  const location = useLocation();
   const navigation = useRouteLoaderData<RootLoaderData>("root");
   const isOwnProfile = Boolean(
     data.user && navigation?.accountUsername === data.user.username,
@@ -90,6 +91,17 @@ export default function UserRoute() {
           <h1 id="user-not-found-title">User not found</h1>
           <p>No Clash Lens user exists at this address.</p>
         </section>
+      </main>
+    );
+  }
+  if (data.error) {
+    return (
+      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
+        <h1>User profile</h1>
+        <aside className="notice notice-unavailable" role="alert">
+          <strong>Profile could not be loaded.</strong>{" "}
+          <a href={location.pathname}>Try again</a>
+        </aside>
       </main>
     );
   }
@@ -115,7 +127,6 @@ export default function UserRoute() {
           Linked {justLinked.tag}
         </div>
       ) : null}
-      {data.error ? <ErrorNotice error={data.error} /> : null}
 
       <section className="data-section" aria-labelledby="user-players-title">
         <div className="section-heading">

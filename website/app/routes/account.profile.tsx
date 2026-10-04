@@ -212,6 +212,21 @@ export default function AccountProfileRoute() {
     if (error) event.preventDefault();
   }
 
+  if (loaderData.error) {
+    return (
+      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
+        <h1>Edit profile</h1>
+        <aside className="notice notice-unavailable" role="alert">
+          <strong>Profile could not be loaded.</strong>{" "}
+          <a href="/account/profile">Try again</a>
+        </aside>
+        {actionData?.generalError ? (
+          <ErrorNotice error={actionData.generalError} />
+        ) : null}
+      </main>
+    );
+  }
+
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="profile-title">
@@ -221,7 +236,6 @@ export default function AccountProfileRoute() {
         </p>
       </section>
 
-      {loaderData.error ? <ErrorNotice error={loaderData.error} /> : null}
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
       <section className="form-panel" aria-label="Profile form">
