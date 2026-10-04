@@ -6,6 +6,7 @@
  * fields; a payload that does not validate is rejected as malformed.
  */
 
+import type { PlayerLookup } from "./contracts";
 import { normalizePlayerTag } from "./player-tag";
 
 export interface ClashLensAccount {
@@ -68,10 +69,26 @@ export interface GroupDeleteResult {
   deleted: boolean;
 }
 
+/**
+ * One linked player on a public profile. Numbers appear only for a player
+ * with current results: tracking with no `reason`.
+ */
+export interface LinkedPlayerCard extends VerifiedPlayer {
+  clan: string | null;
+  state: PlayerLookup["state"];
+  reason: NonNullable<PlayerLookup["reason"]> | null;
+  trophies: number | null;
+  seasonResetPending: boolean;
+  /** Live Leaderboard position; null when not on the board. */
+  rank: number | null;
+  /** Today's battles so far; `net` only once every one is recorded. */
+  today: { net: number | null; attacks: number | null; defenses: number | null } | null;
+}
+
 export interface PublicUser {
   username: string;
   displayName: string;
-  verifiedPlayers: VerifiedPlayer[];
+  verifiedPlayers: LinkedPlayerCard[];
 }
 
 export interface PublicUserResult {
@@ -331,11 +348,87 @@ export function mapGroupDeleteResult(value: unknown): GroupDeleteResult | null {
 
 export function mapPublicUser(value: unknown): PublicUser | null {
   const payload = asNamePayload(value);
-  if (payload === null) return null;
+  if (payload === null || !isRecord(value) || !Array.isArray(value.verified_players)) {
+    return null;
+  }
+  const cards: LinkedPlayerCard[] = [];
+  for (const [index, entry] of value.verified_players.entries()) {
+    const card = asLinkedPlayerCard(entry, payload.verified_players[index]);
+    if (card === null) return null;
+    cards.push(card);
+  }
   return {
     username: payload.username,
     displayName: payload.display_name,
-    verifiedPlayers: payload.verified_players,
+    verifiedPlayers: cards,
+  };
+}
+
+const LOOKUP_STATES: readonly PlayerLookup["state"][] = [
+  "unknown",
+  "checking",
+  "tracking",
+  "not_found",
+  "not_in_legend",
+  "uncertain",
+  "failed",
+];
+const LOOKUP_REASONS: readonly NonNullable<PlayerLookup["reason"]>[] = [
+  "pending",
+  "no_legend_battles",
+  "season_unconfirmed",
+  "unknown_tier",
+  "profile_rejected",
+];
+
+function isNullableCount(value: unknown): value is number | null {
+  return value === null || (Number.isSafeInteger(value) && (value as number) >= 0);
+}
+
+function isNullableInteger(value: unknown): value is number | null {
+  return value === null || Number.isSafeInteger(value);
+}
+
+function asLinkedPlayerCard(
+  value: unknown,
+  player: VerifiedPlayer,
+): LinkedPlayerCard | null {
+  if (!isRecord(value)) return null;
+  const { clan, state, reason, trophies, season_reset_pending, rank, today } = value;
+  if (
+    !isNullableString(clan) ||
+    !LOOKUP_STATES.includes(state as PlayerLookup["state"]) ||
+    (reason !== null &&
+      !LOOKUP_REASONS.includes(reason as NonNullable<PlayerLookup["reason"]>)) ||
+    !isNullableCount(trophies) ||
+    typeof season_reset_pending !== "boolean" ||
+    !(rank === null || (Number.isSafeInteger(rank) && (rank as number) > 0)) ||
+    !(
+      today === null ||
+      (isRecord(today) &&
+        isNullableInteger(today.net) &&
+        isNullableCount(today.attacks) &&
+        isNullableCount(today.defenses))
+    )
+  ) {
+    return null;
+  }
+  return {
+    ...player,
+    clan,
+    state: state as PlayerLookup["state"],
+    reason: reason as LinkedPlayerCard["reason"],
+    trophies,
+    seasonResetPending: season_reset_pending,
+    rank: rank as number | null,
+    today:
+      today === null
+        ? null
+        : {
+            net: today.net as number | null,
+            attacks: today.attacks as number | null,
+            defenses: today.defenses as number | null,
+          },
   };
 }
 

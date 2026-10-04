@@ -283,6 +283,11 @@ have their own navigation tabs. The account link and `/account` open the user's
 public `/users/:username` profile, including after successful player linking.
 Only the owner sees edit, sign-in connection and account-linking controls.
 The linking form includes the in-game API token instructions.
+Each linked account on a profile is one card that opens its player page: name,
+tag, clan, current trophies, Live Leaderboard rank ("Unranked" when off the
+board) and today's net so far with attacks and defenses done. The one profile
+read returns every card. An account without current results shows its player
+page's explanation instead of numbers.
 
 Usernames are fixed after signup. Both the website action and private API reject
 rename attempts; display-name edits still work. The form directs username-change

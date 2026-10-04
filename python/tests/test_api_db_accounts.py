@@ -12,6 +12,17 @@ from clashlens.api_db import ApiDatabase, RequestBinding
 from clashlens.verification import VerificationOutcome
 
 
+def names(public: dict) -> dict:
+    """The public user with each linked player's tag and name alone."""
+    return {
+        **public,
+        "verified_players": [
+            {"tag": player["tag"], "name": player["name"]}
+            for player in public["verified_players"]
+        ],
+    }
+
+
 def binding(
     *,
     request_id: str | None = None,
@@ -159,8 +170,8 @@ def test_username_is_fixed_but_display_name_can_change(database_url: str) -> Non
                 else:
                     assert account["display_name"] == "New display name"
                     assert account["preferences"] == {"timezone": "UTC"}
-            assert api_accounts.get_public_user(database, "changedowner") is None
-            assert api_accounts.get_public_user(database, "groupowner")["display_name"] == "New display name"
+            assert api_accounts.get_public_user(database, "changedowner", now=NOW) is None
+            assert api_accounts.get_public_user(database, "groupowner", now=NOW)["display_name"] == "New display name"
         finally:
             database.close()
 
@@ -200,7 +211,7 @@ def test_public_search_finds_linked_players_without_exposing_private_lists(datab
                     "UPDATE players SET current_profile_version_id = NULL WHERE normalized_tag = '#2PP'"
                 )
             assert api_accounts.search_public_users(database, "Player #2PP") == expected
-            public = api_accounts.get_public_user(database, "groupowner")
+            public = names(api_accounts.get_public_user(database, "groupowner", now=NOW))
             assert public["verified_players"] == [
                 {"tag": "#2PP", "name": "Player #2PP"},
                 {"tag": "#8PY", "name": "Player #8PY"},
@@ -233,7 +244,7 @@ def test_public_search_finds_linked_players_without_exposing_private_lists(datab
             )
             assert api_accounts.search_public_users(database, "Player #2PP") == []
             assert api_accounts.search_public_users(database, "Renamed%#2PP") == []
-            assert api_accounts.get_public_user(database, "groupowner")[
+            assert names(api_accounts.get_public_user(database, "groupowner", now=NOW))[
                 "verified_players"
             ][0] == {
                 "tag": "#2PP",
@@ -264,7 +275,7 @@ def test_public_search_finds_linked_players_without_exposing_private_lists(datab
             assert api_accounts.search_public_users(database, "Private #8PY") == []
             assert api_accounts.search_public_users(database, "Renamed_#2PP") == []
             assert api_accounts.search_public_users(database, "#2PP") == expected
-            assert api_accounts.get_public_user(database, "groupowner")[
+            assert names(api_accounts.get_public_user(database, "groupowner", now=NOW))[
                 "verified_players"
             ][0] == {"tag": "#2PP", "name": None}
         finally:

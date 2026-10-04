@@ -12,6 +12,7 @@ import {
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { formatAge, useCurrentTime } from "../components/Provenance";
+import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
   HistoricalSeasonDayEntry,
@@ -668,33 +669,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
 }
 
 function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: boolean }) {
-  const messages: Record<PlayerLookup["state"], string> = {
-    unknown: "Waiting to check this tag with Clash of Clans.",
-    checking:
-      "Checking this tag with Clash of Clans. Legend I players start tracking automatically.",
-    tracking: "Now tracking in Legend I. The first results are being prepared.",
-    not_found:
-      "Player not found. Clash of Clans did not find this tag. Check the tag and try again.",
-    not_in_legend:
-      "This player is not in Legend I. Clash Lens tracks Legend League players only. We have kept the tag and any saved history.",
-    uncertain:
-      "Clash Lens tracks Legend League players only. This player exists, but we could not confirm they are in Legend I. Any saved history is still available.",
-    failed:
-      "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
-  };
-  // Clash Lens rechecks these players' profiles every 15 minutes.
-  const explanations = {
-    no_legend_battles: `${lookup.profile?.name ?? "This player"} is in Legend League but hasn't played a Legend League battle this Season.`,
-    season_unconfirmed:
-      "Clash of Clans has not confirmed this player's Season yet. We are still checking, but current results are unavailable until it does.",
-    unknown_tier:
-      "Clash of Clans reported a league we do not recognize for this player. We are still checking, but current results are unavailable until it reports a known league.",
-    profile_rejected:
-      "Clash of Clans sent player details we could not use. We are still checking, but current results are unavailable until it sends valid details.",
-  };
   const explanation =
-    lookup.state === "tracking" && lookup.reason && lookup.reason !== "pending"
-      ? explanations[lookup.reason]
+    lookup.state === "tracking"
+      ? lookupExplanation(lookup.reason, lookup.profile?.name)
       : null;
   return (
     <section aria-label="Player lookup" aria-live="polite">
@@ -702,7 +679,7 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
         {explanation ??
           (timedOut && (lookup.state === "checking" || lookup.state === "tracking")
             ? "The check is taking longer than expected. It may still be running."
-            : messages[lookup.state])}
+            : LOOKUP_MESSAGES[lookup.state])}
       </p>
       {explanation && lookup.reason === "no_legend_battles" ? (
         <p className="section-note">

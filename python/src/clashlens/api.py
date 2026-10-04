@@ -637,7 +637,9 @@ def create_app(
             normalized_username = normalize_username(username)
         except ValueError as error:
             raise ApiError(404, "user_not_found") from error
-        result = api_accounts.get_public_user(production_database, normalized_username)
+        result = api_accounts.get_public_user(
+            production_database, normalized_username, now=current_time()
+        )
         if result is None:
             raise ApiError(404, "user_not_found")
         return JSONResponse(status_code=200, content=result)

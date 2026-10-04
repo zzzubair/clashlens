@@ -77,14 +77,69 @@ describe("Python account response mappers", () => {
         { tag: "#2PQ", name: null },
       ],
     });
-    expect(mapPublicUser(payload)).toEqual({
+  });
+
+  it("maps each public profile card and rejects a malformed one", () => {
+    const card = {
+      tag: "#2PP",
+      name: "Nova",
+      clan: "Night Owls",
+      state: "tracking",
+      reason: null,
+      trophies: 5300,
+      season_reset_pending: false,
+      rank: 12,
+      today: { net: -8, attacks: 5, defenses: 3 },
+    };
+    const season0 = {
+      ...card,
+      tag: "#2PQ",
+      name: null,
+      clan: null,
+      reason: "no_legend_battles",
+      trophies: null,
+      rank: null,
+      today: null,
+    };
+    const user = { username: "nova", display_name: "Nova" };
+    expect(mapPublicUser({ ...user, verified_players: [card, season0] })).toEqual({
       username: "nova",
       displayName: "Nova",
       verifiedPlayers: [
-        { tag: "#2PP", name: "Nova" },
-        { tag: "#2PQ", name: null },
+        {
+          tag: "#2PP",
+          name: "Nova",
+          clan: "Night Owls",
+          state: "tracking",
+          reason: null,
+          trophies: 5300,
+          seasonResetPending: false,
+          rank: 12,
+          today: { net: -8, attacks: 5, defenses: 3 },
+        },
+        {
+          tag: "#2PQ",
+          name: null,
+          clan: null,
+          state: "tracking",
+          reason: "no_legend_battles",
+          trophies: null,
+          seasonResetPending: false,
+          rank: null,
+          today: null,
+        },
       ],
     });
+    for (const broken of [
+      { ...card, state: "ranked" },
+      { ...card, reason: "other" },
+      { ...card, rank: 0 },
+      { ...card, trophies: "5300" },
+      { ...card, today: { net: 1, attacks: -1, defenses: 0 } },
+      { tag: "#2PP", name: "Nova" },
+    ]) {
+      expect(mapPublicUser({ ...user, verified_players: [broken] })).toBeNull();
+    }
   });
 
   it("rejects malformed summary and public user payloads", () => {

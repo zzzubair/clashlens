@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from . import api_leaderboard, api_player_lookup
 from .api_db import (
     PLAYER_SCREEN_READY_VERSION,
     ApiDatabase,
@@ -421,6 +422,94 @@ def get_player_page(
                 },
             },
         }
+
+
+def player_cards(
+    connection: Any,
+    players: list[tuple[int, str, str | None, str | None]],
+    *,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Each player's current trophies, Live Leaderboard position and today's
+    battles so far, read for every player at once.
+
+    ``players`` holds (player id, tag, name, clan). A player without current
+    results carries the lookup state and reason its own page explains, and no
+    numbers, so Season 0 trophies stay on that page alone.
+    """
+    ids = [player[0] for player in players]
+    profiles = {
+        int(row[0]): row[1:]
+        for row in connection.execute(
+            """
+            SELECT player.id, profile.trophies, profile.current_league_season_id
+            FROM players AS player
+            JOIN player_profile_versions AS profile
+                ON profile.id = player.current_profile_version_id
+            WHERE player.id = ANY(%s) AND profile.source_contract_state = 'accepted'
+            """,
+            (ids,),
+        ).fetchall()
+    }
+    today = {
+        int(row[0]): _screen_daily_log_with_events(_daily_log(row[1:]), "high", now)
+        for row in connection.execute(
+            """
+            SELECT DISTINCT ON (player_id)
+                   player_id, ranked_day_start, ranked_day_end, official_season_id,
+                   season_day_number, version, state, coverage, confidence,
+                   attack_count, attack_three_star_count, attack_gain,
+                   defense_count, defense_three_star_count, defense_loss,
+                   net_trophy_change, adjustments, battles, partial_reasons, NULL
+            FROM api_player_daily_logs
+            WHERE player_id = ANY(%s) AND ranked_day_start = %s
+            ORDER BY player_id, version DESC
+            """,
+            (ids, ranked_day_for(now).start),
+        ).fetchall()
+    }
+    cards = []
+    for player_id, tag, name, clan in players:
+        lookup = api_player_lookup._lookup(connection, tag)
+        profile = profiles.get(player_id)
+        reason = lookup.get("reason")
+        if lookup["state"] == "tracking" and reason is None and profile is None:
+            reason = "pending"
+        card: dict[str, Any] = {
+            "tag": tag,
+            "name": name,
+            "clan": clan,
+            "state": lookup["state"],
+            "reason": reason,
+            "trophies": None,
+            "season_reset_pending": False,
+            "rank": None,
+            "today": None,
+        }
+        if lookup["state"] == "tracking" and reason is None:
+            assert profile is not None
+            # As on the player page: an earlier Season's trophies are no total.
+            pending = not season_is_current(_text(profile[1]), now)
+            card["trophies"] = None if pending else int(profile[0])
+            card["season_reset_pending"] = pending
+            day = today.get(player_id)
+            if day is not None:
+                card["today"] = {
+                    # The live day has no net change until it ends; the
+                    # player page shows its battles' sum only once every
+                    # battle so far is recorded.
+                    "net": day["attack_gain"] - day["defense_loss"]
+                    if day["battles_complete"]
+                    else None,
+                    "attacks": day["attack_count"],
+                    "defenses": day["defense_count"],
+                }
+        cards.append(card)
+    ranked = [card["tag"] for card in cards if card["trophies"] is not None]
+    positions = api_leaderboard.live_positions(connection, ranked, now=now)
+    for card in cards:
+        card["rank"] = positions.get(card["tag"])
+    return cards
 
 
 def list_player_seasons(

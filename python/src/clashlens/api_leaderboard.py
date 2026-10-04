@@ -110,6 +110,20 @@ def search_live_leaderboard(
     }
 
 
+def live_positions(connection: Any, tags: list[str], *, now: datetime) -> dict[str, int]:
+    """Each tag's Live Leaderboard position; a tag off the board is left out."""
+    if not tags:
+        return {}
+    rows = connection.execute(
+        f"""
+        SELECT normalized_tag, position FROM ({_LIVE_RANKED_SQL}) AS ranked
+        WHERE normalized_tag = ANY(%(tags)s)
+        """,
+        {"tags": tags, "season_id": _season_id(now)},
+    ).fetchall()
+    return {_text(row[0]): int(row[1]) for row in rows}
+
+
 def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str, Any]:
     """Measure the whole Live Leaderboard, without sorting or fetching a page."""
     with database.pool.connection() as connection:
