@@ -524,24 +524,47 @@ def test_lanes_stop_claiming_when_the_spool_fails_during_slow_maintenance() -> N
     spool_ready.set()
     maintenance_started = Event()
     release_maintenance = Event()
+    lock = threading.Lock()
+    false_checks: dict[int, int] = {}
+    all_lanes_saw_failure = Event()
+    release_lanes = Event()
+    all_lanes_rechecked = Event()
 
     def maintain(_turns: object) -> None:
         maintenance_started.set()
         assert release_maintenance.wait(10), "test release gate was not opened"
 
+    def claims_ready() -> bool:
+        if spool_ready.is_set():
+            return True
+        # Each lane's first failed check waits, so the count below is taken
+        # after any claim already under way and before any lane moves on.
+        with lock:
+            lane = threading.get_ident()
+            false_checks[lane] = false_checks.get(lane, 0) + 1
+            first_check = false_checks[lane] == 1
+            if len(false_checks) == 3:
+                all_lanes_saw_failure.set()
+                if min(false_checks.values()) >= 2:
+                    all_lanes_rechecked.set()
+        if first_check:
+            assert release_lanes.wait(10), "test release gate was not opened"
+        return False
+
     processor = RecordingProcessor()
     thread = _run_until_stopped(
         processor,
         stop_requested=stop,
-        claims_ready=spool_ready.is_set,
+        claims_ready=claims_ready,
         maintain=maintain,
     )
     try:
         assert maintenance_started.wait(5)
         spool_ready.clear()
-        time.sleep(0.05)
+        assert all_lanes_saw_failure.wait(5)
         claims_when_spool_failed = len(processor.calls)
-        time.sleep(0.1)
+        release_lanes.set()
+        assert all_lanes_rechecked.wait(5)
         assert len(processor.calls) == claims_when_spool_failed
         spool_ready.set()
         deadline = time.monotonic() + 5
@@ -553,6 +576,7 @@ def test_lanes_stop_claiming_when_the_spool_fails_during_slow_maintenance() -> N
         assert len(processor.calls) > claims_when_spool_failed
         assert not release_maintenance.is_set()
     finally:
+        release_lanes.set()
         release_maintenance.set()
         stop.set()
         thread.join(10)
