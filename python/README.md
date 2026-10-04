@@ -57,12 +57,12 @@ Each group runs with `pytest --durations=30`, reporting its 30 slowest setup,
 test, and cleanup phases. The separate fake-service tests in
 `development/test_fixtures.py` run once, after group 1's Python tests.
 
-`tests/ci_test_durations.json` records per-file seconds measured on GitHub on
-October 3, 2026, from the two-group runs of main commits `6a21ddb`, `fcc5bcf`,
-`3e59e20`, `d8b75e6` and `a7af5ca`. Each pytest progress line covers 72 tests
-and carries GitHub's timestamp; each listed slow test kept its reported time,
-the rest of that line's time was shared evenly across its other tests, and each
-file keeps the median over the five runs. The longest files go first into the
+`tests/ci_test_durations.json` records per-file seconds from one complete local
+run of the whole suite on October 4, 2026, at commit `b73e710` with Python
+3.12.13 and PostgreSQL 18.6, using `pytest --junitxml`; each test's setup, test
+and cleanup time is summed into its file. Where the slowest-30 lists of the four
+GitHub groups in run 37176424841 showed a test taking longer than locally, the
+GitHub time is used. The longest files go first into the
 group with less recorded work. New test files also run once, with an initial
 estimate of one second. The workflow tests collect the full suite and all four
 groups to check for missing or repeated tests and check that their recorded
