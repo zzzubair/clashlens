@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createElement } from "react";
@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
   readLoginIdentity: vi.fn(),
 }));
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 vi.mock("../../app/server/actions.server", () => ({
   readLoginIdentity: mocks.readLoginIdentity,
 }));
@@ -125,11 +129,32 @@ describe("blog posts", () => {
       "gap-chart.csv",
       "gap-chart.png",
     ]);
-    expect(await readBlogFolder(null)).toEqual({ posts: [], media: new Set() });
-    expect(await readBlogFolder(join(FIXTURE_DIR, "missing"))).toEqual({
-      posts: [],
-      media: new Set(),
-    });
+    const empty = { posts: [], media: new Set(), publicMedia: new Set() };
+    expect(await readBlogFolder(null)).toEqual(empty);
+    expect(await readBlogFolder(join(FIXTURE_DIR, "missing"))).toEqual(empty);
+  });
+
+  it("leaves out a post a sync removes between listing and reading", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-sync-"));
+    try {
+      await mkdir(join(directory, "posts"));
+      for (const slug of ["kept", "gone"]) {
+        await writeFile(
+          join(directory, "posts", `${slug}.md`),
+          "---\ntitle: T\ndate: 2026-01-01\nsummary: S\n---\n",
+        );
+      }
+      const read = vi.mocked(readFile);
+      const realRead = read.getMockImplementation()!;
+      read.mockImplementationOnce(async (...args) => {
+        await rm(join(directory, "posts", "gone.md"));
+        return realRead(...args);
+      });
+      const folder = await readBlogFolder(directory);
+      expect(folder.posts.map((post) => post.slug)).toEqual(["kept"]);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
   });
 
   it("leaves out a broken post and logs why", () => {
@@ -150,6 +175,8 @@ describe("blog posts", () => {
         "---",
         '# author: "Your name"    # optional',
         'title: "Gems # and gold"   # quoted, so the # stays',
+        "coverAlt: 'Badge' # rename to 'Shield'",
+        'author: "T" # rename to "U"',
         "date: 2026-10-04          # YYYY-MM-DD",
         "summary: Plain text # comment",
         "cover: badge.png",
@@ -161,8 +188,9 @@ describe("blog posts", () => {
       title: "Gems # and gold",
       date: "2026-10-04",
       summary: "Plain text",
-      author: null,
+      author: "T",
       cover: "/blog/media/badge.png",
+      coverAlt: "Badge",
       draft: false,
     });
   });
@@ -221,8 +249,11 @@ describe("blog posts", () => {
 
   it("pairs only files found in media/", () => {
     const media = new Set(["x.png", "x-dark.png"]);
-    expect(renderBlogMarkdown("![A](media/x-dark.png)", media)).toBe(
+    expect(renderBlogMarkdown("![A](../media/x-dark.png)", media)).toBe(
       '<p><img src="/blog/media/x-dark.png" alt="A"></p>\n',
+    );
+    expect(renderBlogMarkdown("![A](media/x.png)", media)).toBe(
+      '<p><img src="media/x.png" alt="A"></p>\n',
     );
     expect(renderBlogMarkdown("![A](../media/x.png)")).toBe(
       '<p><img src="/blog/media/x.png" alt="A"></p>\n',
@@ -523,6 +554,63 @@ describe("blog media", () => {
     expect((await get("gap-chart.csv")).headers.get("Content-Type")).toBe(
       "text/csv; charset=utf-8",
     );
+  });
+
+  it("serves media only drafts use to the signed-in owner alone, never cached", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-draft-media-"));
+    const post = (draft: boolean, cover: string, body: string) =>
+      `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ncover: ${cover}\ndraft: ${draft}\n---\n${body}\n`;
+    try {
+      await mkdir(join(directory, "posts"));
+      await mkdir(join(directory, "media"));
+      for (const name of [
+        "shared.png",
+        "cover.png",
+        "secret.png",
+        "secret-dark.png",
+        "secret.csv",
+        "secret-cover.png",
+        "unused.png",
+      ]) {
+        await writeFile(join(directory, "media", name), name);
+      }
+      await writeFile(
+        join(directory, "posts", "published.md"),
+        post(false, "cover.png", "![A](../media/shared.png)"),
+      );
+      await writeFile(
+        join(directory, "posts", "draft.md"),
+        post(
+          true,
+          "secret-cover.png",
+          "![A](../media/shared.png) ![B](../media/secret.png) [Data](../media/secret.csv)",
+        ),
+      );
+      vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
+      for (const name of ["shared.png", "cover.png"]) {
+        const response = await get(name);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+      }
+      const ownerOnly = [
+        "secret.png",
+        "secret-dark.png",
+        "secret.csv",
+        "secret-cover.png",
+        "unused.png",
+      ];
+      signIn({ provider: "google", providerSubject: "someone-else" });
+      for (const name of ownerOnly) expect((await get(name)).status).toBe(404);
+      signIn(OWNER);
+      for (const name of ownerOnly) {
+        const response = await get(name);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Cache-Control")).toBe("no-store");
+        expect(await response.text()).toBe(name);
+      }
+    } finally {
+      await rm(directory, { recursive: true });
+    }
   });
 
   it.each([

@@ -33,14 +33,15 @@ The post starts here.
 anything after ` #` on a line, are comments. `cover` is a file name in
 `media/`, a site path starting with `/`, or an https address. A cover image
 appears at the top of the post and in Discord link previews; 1200 by 630 pixels
-suits previews best.
+suits previews best. Cover images do not switch with the site theme.
 
 `draft: true` hides the post from the list, the RSS feed and its address for
 everyone except the site owner, the sign-in named by `CLASHLENS_BLOG_OWNER`
 (for example `google:<subject>`). The owner sees it marked "Draft", and search
 engines are told not to index it. Remove the line, or write `draft: false`, to
-publish. Files in `media/` are served to anyone who knows their address, drafts'
-images included.
+publish. A file in `media/` that a published post uses, as an image, its dark
+version, a linked data file or the cover, is served to anyone. Any other file
+in `media/`, such as a draft's images, is served only to the site owner.
 
 Refer to images and files as `../media/<file>`, which the website serves at
 `/blog/media/<file>`. A chart `x.png` with a dark version `x-dark.png` next to

@@ -16,13 +16,22 @@ const CONTENT_TYPES: Record<string, string> = {
 /**
  * GET /blog/media/:file — one image or data file from the blog folder's media/.
  * Only names found by listing media/ are served, never a path built from the
- * request alone, so no address can reach a file outside that folder.
+ * request alone, so no address can reach a file outside that folder. A file no
+ * published post uses is served only to the signed-in site owner.
  */
 export async function loader({ params, request }: Route.LoaderArgs) {
-  const { blogDirectory, blogFolder } = await import("../server/blog.server");
+  const { blogDirectory, blogFolder, isBlogOwner } =
+    await import("../server/blog.server");
   const directory = blogDirectory();
   const contentType = CONTENT_TYPES[extname(params.file).toLowerCase()];
-  if (!directory || !contentType || !(await blogFolder()).media.has(params.file)) {
+  const folder = await blogFolder();
+  const isPublic = folder.publicMedia.has(params.file);
+  if (
+    !directory ||
+    !contentType ||
+    !folder.media.has(params.file) ||
+    (!isPublic && !(await isBlogOwner(request)))
+  ) {
     throw new Response(null, { status: 404 });
   }
   const path = join(directory, "media", params.file);
@@ -38,8 +47,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const headers = {
     "Content-Type": contentType,
     "X-Content-Type-Options": "nosniff",
-    // A sync can replace a file under the same name, so browsers recheck after 5 minutes.
-    "Cache-Control": "public, max-age=300",
+    // A sync can replace a file under the same name, so browsers recheck after
+    // 5 minutes. Owner-only files are never stored.
+    "Cache-Control": isPublic ? "public, max-age=300" : "no-store",
     ETag: etag,
   };
   if (request.headers.get("If-None-Match") === etag) {

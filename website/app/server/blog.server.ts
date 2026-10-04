@@ -69,6 +69,13 @@ for (const rule of ["fence", "code_block"] as const) {
     render(...args).replace(/^<pre>/, '<pre tabindex="0">');
 }
 
+interface RenderEnv {
+  /** File names in media/. */
+  media: ReadonlySet<string>;
+  /** Collects the media/ files the rendered post uses. */
+  used: Set<string>;
+}
+
 // Posts refer to media as `../media/<file>`, relative to the post in the blog
 // repo. On the site that folder is served at /blog/media/.
 markdown.core.ruler.push("blog_media", (state) => {
@@ -76,11 +83,12 @@ markdown.core.ruler.push("blog_media", (state) => {
     for (const token of block.children ?? []) {
       const name =
         token.type === "image" ? "src" : token.type === "link_open" ? "href" : null;
-      const file =
-        name && /^(?:\.\.\/)?media\/([^/?#]+)$/.exec(String(token.attrGet(name)));
-      if (name && file && MEDIA_NAME.test(file[1])) {
+      if (!name) continue;
+      const file = /^\.\.\/media\/([^/?#]+)$/.exec(String(token.attrGet(name)));
+      if (file && MEDIA_NAME.test(file[1])) {
         token.attrSet(name, MEDIA_URL + file[1]);
       }
+      useMedia((state.env as unknown as RenderEnv).used, String(token.attrGet(name)));
     }
   }
 });
@@ -92,10 +100,11 @@ markdown.renderer.rules.image = (tokens, index, options, env, self) => {
   const token = tokens[index];
   const src = String(token.attrGet("src"));
   const dark = src.startsWith(MEDIA_URL) && src.replace(/(\.[A-Za-z0-9]+)$/, "-dark$1");
-  const media = (env as { media?: ReadonlySet<string> }).media;
-  if (!dark || dark === src || !media?.has(dark.slice(MEDIA_URL.length))) {
+  const { media, used } = env as unknown as RenderEnv;
+  if (!dark || dark === src || !media.has(dark.slice(MEDIA_URL.length))) {
     return renderImage(tokens, index, options, env, self);
   }
+  useMedia(used, dark);
   token.attrSet("class", "blog-img-light");
   token.attrSet("loading", "lazy");
   const light = renderImage(tokens, index, options, env, self);
@@ -104,19 +113,27 @@ markdown.renderer.rules.image = (tokens, index, options, env, self) => {
   return light + renderImage(tokens, index, options, env, self);
 };
 
-/** Renders a post body; `media` lists media/ so each chart can find its dark version. */
+/**
+ * Renders a post body; `media` lists media/ so each chart can find its dark
+ * version, and `used` collects the media/ files the body shows or links to.
+ */
 export function renderBlogMarkdown(
   source: string,
   media: ReadonlySet<string> = new Set(),
+  used: Set<string> = new Set(),
 ): string {
-  return markdown.render(source, { media });
+  return markdown.render(source, { media, used } satisfies RenderEnv);
 }
 
-/** Parses one post file. Throws BlogPostError for anything a reader would trip on. */
+/**
+ * Parses one post file, adding the media/ files it uses, cover included, to
+ * `used`. Throws BlogPostError for anything a reader would trip on.
+ */
 export function parseBlogPost(
   file: string,
   source: string,
   media: ReadonlySet<string> = new Set(),
+  used: Set<string> = new Set(),
 ): BlogPost {
   const slug = (file.split("/").pop() ?? "").replace(/\.md$/, "");
   if (!SLUG.test(slug)) {
@@ -152,6 +169,8 @@ export function parseBlogPost(
   if (fields.draft !== undefined && !["true", "false"].includes(fields.draft)) {
     throw new BlogPostError(file, "draft must be true or false");
   }
+  const html = renderBlogMarkdown(source.slice(match[0].length), media, used);
+  if (fields.cover) useMedia(used, fields.cover);
   return {
     slug,
     title: fields.title,
@@ -161,22 +180,27 @@ export function parseBlogPost(
     cover: fields.cover || null,
     coverAlt: fields.coverAlt ?? "",
     draft: fields.draft === "true",
-    html: renderBlogMarkdown(source.slice(match[0].length), media),
+    html,
   };
 }
 
 /**
- * Parses every source and returns the posts newest first. A post that fails
- * to parse is logged and left out, so one bad file cannot take the blog down.
+ * Parses every source and returns the posts newest first, adding the media/
+ * files published posts use to `publicMedia`. A post that fails to parse is
+ * logged and left out, so one bad file cannot take the blog down.
  */
 export function loadBlogPosts(
   sources: Record<string, string>,
   media: ReadonlySet<string> = new Set(),
+  publicMedia: Set<string> = new Set(),
 ): BlogPost[] {
   const posts: BlogPost[] = [];
   for (const [file, source] of Object.entries(sources)) {
     try {
-      posts.push(parseBlogPost(file, source, media));
+      const used = new Set<string>();
+      const post = parseBlogPost(file, source, media, used);
+      posts.push(post);
+      if (!post.draft) used.forEach((name) => publicMedia.add(name));
     } catch (error) {
       if (!(error instanceof BlogPostError)) throw error;
       console.error(error.message);
@@ -192,11 +216,16 @@ export interface BlogFolder {
   posts: BlogPost[];
   /** File names in media/ that may be served. */
   media: ReadonlySet<string>;
+  /** The media/ files a published post uses; the rest are for the owner only. */
+  publicMedia: ReadonlySet<string>;
 }
 
-/** Reads posts/ and media/ from a blog checkout. A missing folder is an empty blog. */
+/**
+ * Reads posts/ and media/ from a blog checkout. A missing folder is an empty
+ * blog, and a post a sync removes while it is being read is left out.
+ */
 export async function readBlogFolder(directory: string | null): Promise<BlogFolder> {
-  if (directory === null) return { posts: [], media: new Set() };
+  if (directory === null) return { posts: [], media: new Set(), publicMedia: new Set() };
   const media = new Set(
     (await listFiles(join(directory, "media"))).filter((name) => MEDIA_NAME.test(name)),
   );
@@ -204,10 +233,15 @@ export async function readBlogFolder(directory: string | null): Promise<BlogFold
   for (const name of await listFiles(join(directory, "posts"))) {
     // posts/_template.md and other underscore files are not posts.
     if (name.endsWith(".md") && !name.startsWith("_")) {
-      sources[name] = await readFile(join(directory, "posts", name), "utf8");
+      const source = await ifMissing(
+        readFile(join(directory, "posts", name), "utf8"),
+        null,
+      );
+      if (source !== null) sources[name] = source;
     }
   }
-  return { posts: loadBlogPosts(sources, media), media };
+  const publicMedia = new Set<string>();
+  return { posts: loadBlogPosts(sources, media, publicMedia), media, publicMedia };
 }
 
 let cached:
@@ -323,19 +357,29 @@ export function blogFeed(posts: BlogPostSummary[], origin: string): string {
 
 /** A front matter value without its quotes or a trailing `# comment`. */
 function frontMatterValue(value: string): string {
-  const quoted = /^"(.*)"(?:\s+#.*)?$/.exec(value) ?? /^'(.*)'(?:\s+#.*)?$/.exec(value);
+  const quoted = /^"(.*?)"(?:\s+#.*)?$/.exec(value) ?? /^'(.*?)'(?:\s+#.*)?$/.exec(value);
   return quoted ? quoted[1] : value.replace(/\s+#.*$/, "");
 }
 
 /** Regular files directly in a folder; a missing folder has none. */
 async function listFiles(directory: string): Promise<string[]> {
+  const entries = await ifMissing(readdir(directory, { withFileTypes: true }), []);
+  return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+}
+
+/** The result of reading a file or folder, or `missing` when it does not exist. */
+async function ifMissing<T, M>(read: Promise<T>, missing: M): Promise<T | M> {
   try {
-    const entries = await readdir(directory, { withFileTypes: true });
-    return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+    return await read;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return missing;
     throw error;
   }
+}
+
+/** Records the media/ file a /blog/media/ address points at. */
+function useMedia(used: Set<string>, url: string): void {
+  if (url.startsWith(MEDIA_URL)) used.add(url.slice(MEDIA_URL.length));
 }
 
 /** A path that stays on this site, or an https URL, that both parse as addresses. */
