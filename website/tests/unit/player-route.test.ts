@@ -394,12 +394,12 @@ describe("player route historical independence", () => {
       endTrophies: 5800,
     });
     expect(late).toContain("<dt>Trophies</dt><dd>Unknown → 5800</dd>");
-    const none = await renderSeason({
+    const unfinished = await renderSeason({
       ...SUMMARY,
-      startTrophies: null,
+      startTrophies: 5000,
       endTrophies: null,
     });
-    expect(none).toContain("<dt>Trophies</dt><dd>Unknown</dd>");
+    expect(unfinished).toContain("<dt>Trophies</dt><dd>Unknown</dd>");
   });
 
   it("keeps all 28 days and 448 battles in the page for search and print", async () => {

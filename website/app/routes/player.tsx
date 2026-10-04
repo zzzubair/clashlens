@@ -887,9 +887,9 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           <Metric
             label="Trophies"
             value={
-              summary.startTrophies === null && summary.endTrophies === null
+              summary.endTrophies === null
                 ? "Unknown"
-                : `${summary.startTrophies ?? "Unknown"} → ${summary.endTrophies ?? "Unknown"}`
+                : `${summary.startTrophies ?? "Unknown"} → ${summary.endTrophies}`
             }
           />
           <Metric label="Final rank" value={formatCount(summary.finalRank)} />
