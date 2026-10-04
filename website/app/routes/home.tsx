@@ -114,7 +114,7 @@ export default function Home() {
           <h1 id="search-title">Legend League</h1>
           <p>
             {leaderboard
-              ? `Daily results, rankings and armies for ${leaderboard.totalTracked.toLocaleString()} tracked players.`
+              ? `Daily results, rankings and armies for ${trackedPlayers(leaderboard.totalTracked)}.`
               : "Daily results, rankings and armies for tracked players."}
           </p>
           <p>
@@ -200,10 +200,12 @@ export default function Home() {
             <h2 id="live-leaderboard-title">Rankings</h2>
             {leaderboard ? (
               <p className="standings-context">
-                <span>
-                  Top {leaderboard.entries.length} of{" "}
-                  {leaderboard.totalTracked.toLocaleString()} tracked players
-                </span>
+                {leaderboard.entries.length > 0 ? (
+                  <span>
+                    Top {leaderboard.entries.length} of{" "}
+                    {trackedPlayers(leaderboard.totalTracked)}
+                  </span>
+                ) : null}
                 {latestObservedAt ? (
                   <span>
                     Newest player update <LocalTimestamp value={latestObservedAt} />
@@ -225,8 +227,13 @@ export default function Home() {
             Full rankings
           </Link>
         </div>
-        {leaderboard ? (
+        {leaderboard && leaderboard.entries.length > 0 ? (
           <LeaderboardTable entries={leaderboard.entries} />
+        ) : leaderboard ? (
+          <div className="empty-state">
+            <h3>No standings available yet</h3>
+            <p>Check back after player updates have been saved.</p>
+          </div>
         ) : (
           <div className="empty-state">
             <h3>Tracked player data is unavailable</h3>
@@ -254,7 +261,7 @@ function SearchResults({ search, busy }: { search: SearchResponse; busy: boolean
                       className="player-name"
                       to={`/users/${encodeURIComponent(user.username)}`}
                     >
-                      {user.displayName}{" "}
+                      <bdi>{user.displayName}</bdi>{" "}
                       <span className="profile-badge">Clash Lens profile</span>
                     </Link>
                     <span className="player-tag">@{user.username}</span>
@@ -333,12 +340,12 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
     <div className="search-result">
       <div>
         <a className="player-name" href={canonicalPlayerPath(result.tag)}>
-          {result.name}
+          <bdi>{result.name}</bdi>
         </a>
         <span className="player-tag">{result.tag}</span>
       </div>
       <div className="search-context">
-        <span>{result.clan}</span>
+        <bdi>{result.clan}</bdi>
         <span>
           {result.trophies === null
             ? "Waiting for this player's Season reset"
@@ -376,11 +383,13 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
               </td>
               <th scope="row" data-label="Player">
                 <a className="player-name" href={canonicalPlayerPath(entry.tag)}>
-                  {entry.name}
+                  <bdi>{entry.name}</bdi>
                 </a>
                 <span className="player-tag">{entry.tag}</span>
               </th>
-              <td data-label="Clan">{entry.clan}</td>
+              <td data-label="Clan">
+                <bdi>{entry.clan}</bdi>
+              </td>
               <td className="trophy-cell" data-label="Trophies">
                 <TrophyMark />
                 <strong>{entry.trophies.toLocaleString()}</strong>
@@ -394,6 +403,10 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
       </table>
     </div>
   );
+}
+
+function trackedPlayers(count: number) {
+  return `${count.toLocaleString()} tracked ${count === 1 ? "player" : "players"}`;
 }
 
 async function safeError(cause: unknown): Promise<WebsiteErrorResponse> {
