@@ -468,35 +468,9 @@ def _freeze_boundary_manifest(
                 (version_id,),
             ).fetchone()
             identity["daily_log_id"] = int(daily_log[0]) if daily_log else None
-            battle_ids: list[int] = []
-            decode_ids: list[int] = []
-            moved: dict[tuple[int, str], int] = {}
-            if daily_log is not None and isinstance(daily_log[1], list):
-                sides = [
-                    (int(event["battle_id"]), event.get("lens"))
-                    for event in daily_log[1]
-                    if isinstance(event, dict)
-                    and str(event.get("battle_id", "")).isdigit()
-                ]
-                battle_ids = [battle_id for battle_id, _lens in sides]
-                if battle_ids:
-                    moved = _moved_sides(connection, sides)
-                    decode_ids = sorted(
-                        {
-                            *(
-                                int(row[0])
-                                for row in connection.execute(
-                                    """
-                                    SELECT id FROM battle_army_decodes
-                                    WHERE battle_id = ANY(%s::bigint[]) AND is_active
-                                      AND decoder_version = %s AND catalog_version = %s
-                                    """,
-                                    (battle_ids, DECODER_VERSION, CATALOG_VERSION),
-                                ).fetchall()
-                            ),
-                            *_moved_decode_ids(connection, moved),
-                        }
-                    )
+            battle_ids, decode_ids, moved = _army_decode_selection(
+                connection, daily_log[1] if daily_log is not None else None
+            )
             evidence_ids: list[int] = []
             if daily_log is not None and isinstance(daily_log[1], list):
                 for event in daily_log[1]:
@@ -960,6 +934,43 @@ def _boundary_snapshot_status(
         (player_id, boundary_at, boundary_at),
     ).fetchone()
     return "complete" if profile is not None else "missing"
+
+
+def _army_decode_selection(
+    connection: Any, battles: Any
+) -> tuple[list[int], list[int], dict[tuple[int, str], int]]:
+    """A daily log's listed battles, the decodes its army inputs freeze and
+    the listed sides 0057 moved.
+
+    The decodes are every listed battle's active ones, both sides, plus each
+    moved side's on the battle it is on now.
+    """
+    sides = [
+        (int(event["battle_id"]), event.get("lens"))
+        for event in (battles if isinstance(battles, list) else [])
+        if isinstance(event, dict) and str(event.get("battle_id", "")).isdigit()
+    ]
+    battle_ids = [battle_id for battle_id, _lens in sides]
+    if not battle_ids:
+        return battle_ids, [], {}
+    moved = _moved_sides(connection, sides)
+    decode_ids = sorted(
+        {
+            *(
+                int(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT id FROM battle_army_decodes
+                    WHERE battle_id = ANY(%s::bigint[]) AND is_active
+                      AND decoder_version = %s AND catalog_version = %s
+                    """,
+                    (battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                ).fetchall()
+            ),
+            *_moved_decode_ids(connection, moved),
+        }
+    )
+    return battle_ids, decode_ids, moved
 
 
 def _moved_sides(

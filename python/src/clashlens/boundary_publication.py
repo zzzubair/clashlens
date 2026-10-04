@@ -7,7 +7,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair, boundary, reset_baselines
+from . import boundary, reset_baselines
 from .analytics import CLASSIFICATION_CONFIDENCE, CLASSIFICATION_VERSION
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
@@ -970,10 +970,29 @@ def complete_analytics(database: Database, claim: Claim) -> None:
             )
 
 
+# An army reading's contents: what the army build reads from it, without the
+# row's own identity, the report it was read from or when it was saved.
+_DECODE_CONTENTS = """
+    SELECT coalesce(array_agg(contents ORDER BY contents), '{}')
+    FROM (
+        SELECT to_jsonb(decode)
+               - ARRAY['id', 'evidence_id', 'is_active', 'created_at', 'supersedes_id']
+               AS contents
+        FROM battle_army_decodes AS decode
+        WHERE decode.id = ANY(%s::bigint[])
+    ) AS read
+"""
+
+
 def _boundary_army_manifest_needs_correction(
     database, connection: Any, *, manifest_id: int, player_ids: list[int] | None
 ) -> bool:
-    """Whether the changed players' frozen army inputs differ from now.
+    """Whether the changed players' frozen army readings differ from now.
+
+    Each row's readings are selected again exactly as freezing selected them,
+    then compared by contents per battle side. A re-saved report gives an
+    unchanged army a new reading id; comparing ids queued a correction for
+    every one of those, each right after the previous one froze.
 
     Only ``player_ids`` (the players in the battles whose decodes changed) are
     read: a Reset's manifest is about 13,000 rows and 110 MB, and reading it
@@ -982,7 +1001,7 @@ def _boundary_army_manifest_needs_correction(
     """
     rows = connection.execute(
         """
-        SELECT player_id, ranked_day_version_id, input_identity
+        SELECT input_identity
         FROM boundary_publication_manifest_rows
         WHERE manifest_id = %s
           AND (%s::bigint[] IS NULL OR player_id = ANY(%s::bigint[]))
@@ -990,74 +1009,24 @@ def _boundary_army_manifest_needs_correction(
         """,
         (manifest_id, player_ids, player_ids),
     ).fetchall()
-    for player_id, version_id, identity in rows:
-        expected = {
+    for (identity,) in rows:
+        identity = identity if isinstance(identity, dict) else {}
+        expected = [
             int(value)
-            for value in (
-                identity.get("decode_ids", []) if isinstance(identity, dict) else []
-            )
+            for value in identity.get("decode_ids", [])
             if str(value).isdigit()
-        }
-        expected_battles = {
-            int(value)
-            for value in (
-                identity.get("battle_ids", []) if isinstance(identity, dict) else []
-            )
-            if str(value).isdigit()
-        }
-        moved, _ = battle_day_repair.merged_battles(
-            connection,
-            sorted(expected_battles),
-            [
-                int(value)
-                for value in (
-                    identity.get("evidence_ids", [])
-                    if isinstance(identity, dict)
-                    else []
-                )
-                if str(value).isdigit()
-            ],
+        ]
+        daily = connection.execute(
+            "SELECT battles FROM api_player_daily_logs WHERE id = %s",
+            (identity.get("daily_log_id"),),
+        ).fetchone()
+        _battles, current, _moved = boundary._army_decode_selection(
+            connection, daily[0] if daily else None
         )
-        actual: set[int] = set()
-        if version_id is not None:
-            daily = connection.execute(
-                """
-                SELECT battles
-                FROM api_player_daily_logs
-                WHERE player_id = %s AND ranked_day_version_id = %s
-                ORDER BY version DESC LIMIT 1
-                """,
-                (player_id, version_id),
-            ).fetchone()
-            for event in daily[0] if daily and isinstance(daily[0], list) else []:
-                if not isinstance(event, dict) or event.get("included") is False:
-                    continue
-                battle_id = event.get("battle_id")
-                lens = event.get("lens")
-                if (
-                    not str(battle_id).isdigit()
-                    or int(battle_id) not in expected_battles
-                    or lens not in {"offense", "defense"}
-                ):
-                    continue
-                perspective = "attacker" if lens == "offense" else "defender"
-                decode = connection.execute(
-                    """
-                    SELECT id
-                    FROM battle_army_decodes
-                    WHERE battle_id = %s AND perspective = %s
-                      AND is_active AND decoder_version = %s AND catalog_version = %s
-                    """,
-                    (
-                        moved.get((int(battle_id), lens), int(battle_id)),
-                        perspective,
-                        DECODER_VERSION,
-                        CATALOG_VERSION,
-                    ),
-                ).fetchone()
-                if decode is not None:
-                    actual.add(int(decode[0]))
-        if actual != expected:
+        if not connection.execute(
+            f"SELECT ({_DECODE_CONTENTS}) = ({_DECODE_CONTENTS})",
+            (expected, current),
+        ).fetchone()[0]:
             return True
     return False
 

@@ -691,6 +691,259 @@ def test_changed_armies_check_only_their_players_frozen_army_inputs(
             database.close()
 
 
+def _resave_report(database: Database) -> None:
+    """Save the battle's report again, unchanged, as production re-saves it."""
+    with database.pool.connection() as connection, connection.transaction():
+        [(battle,)] = connection.execute(
+            """
+            WITH copy AS (
+                INSERT INTO battle_evidence (
+                    battle_id, source_row_id, observation_id,
+                    reporting_player_id, perspective, battle_timestamp, stars,
+                    destruction_percentage, army_share_code, reporter_trophies,
+                    opponent_trophies, attacker_gain, defender_loss,
+                    trophy_rule_version, source_observed_at, parser_version
+                )
+                SELECT evidence.battle_id, source_row_id, observation_id,
+                       reporting_player_id, evidence.perspective,
+                       battle_timestamp, stars, destruction_percentage,
+                       army_share_code, reporter_trophies, opponent_trophies,
+                       attacker_gain, defender_loss, trophy_rule_version,
+                       evidence.source_observed_at + interval '1 minute',
+                       parser_version || '-resaved'
+                FROM battle_evidence AS evidence
+                JOIN battle_perspectives AS side ON side.evidence_id = evidence.id
+                RETURNING id, battle_id, perspective, source_observed_at
+            )
+            UPDATE battle_perspectives AS side
+            SET evidence_id = copy.id, source_observed_at = copy.source_observed_at
+            FROM copy
+            WHERE side.battle_id = copy.battle_id
+              AND side.perspective = copy.perspective
+            RETURNING side.battle_id
+            """
+        ).fetchall()
+        army_ingestion._upsert_army_decodes(database, connection, [battle])
+
+
+def test_a_resaved_unchanged_army_queues_no_army_correction(
+    database_url: str, archive_server
+) -> None:
+    # A re-saved, byte-identical battle report gives an unchanged army a new
+    # reading id. Comparing ids queued an army correction for each of 4,161
+    # such readings in one night, the next one seconds after the last froze.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            jobs, army_job, _army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+
+            def state() -> tuple[list, int]:
+                with database.pool.connection() as connection:
+                    return (
+                        connection.execute(
+                            "SELECT id FROM battle_army_decodes WHERE is_active"
+                        ).fetchall(),
+                        connection.execute(
+                            "SELECT count(*) FROM boundary_publication_corrections"
+                        ).fetchone()[0],
+                    )
+
+            frozen, _none = state()
+            _resave_report(database)
+            resaved, corrections = state()
+            assert resaved != frozen and corrections == 0
+            # Published, then re-saved again: still nothing to correct.
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+            _resave_report(database)
+            again, corrections = state()
+            assert again != resaved and corrections == 0
+            assert jobs("build_army_analytics") == []
+            # A different army is still corrected.
+            _process_changed_army(
+                connection_info,
+                archive_server,
+                processor,
+                key="changed",
+                code="u3x0-2x1",
+            )
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT affected_artifacts FROM boundary_publication_corrections"
+                ).fetchall() == [(["army"],)]
+        finally:
+            database.close()
+
+
+def _resave_army(
+    connection, perspective: str, *, code_suffix: str | None = ""
+) -> None:
+    """Replace a battle side's active reading; ``None`` leaves it with none."""
+    [(old,)] = connection.execute(
+        "UPDATE battle_army_decodes SET is_active = false"
+        " WHERE perspective = %s AND is_active RETURNING id",
+        (perspective,),
+    ).fetchall()
+    if code_suffix is None:
+        return
+    connection.execute(
+        """
+        INSERT INTO battle_army_decodes (
+            battle_id, evidence_id, perspective, raw_code, decoder_version,
+            catalog_version, catalog_hash, status, failure_category,
+            failure_detail, exact_army_id, identity_hash, home_troops, spells,
+            home_spells, cc_spells, siege, cc_troops, heroes, raw_m,
+            unresolved_components, supersedes_id
+        )
+        SELECT battle_id, evidence_id, perspective, raw_code || %s,
+               decoder_version, catalog_version, catalog_hash, status,
+               failure_category, failure_detail, exact_army_id, identity_hash,
+               home_troops, spells, home_spells, cc_spells, siege, cc_troops,
+               heroes, raw_m, unresolved_components, id
+        FROM battle_army_decodes WHERE id = %s
+        """,
+        (code_suffix, old),
+    )
+
+
+def test_army_correction_compares_every_frozen_side_by_contents(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Freezing pins both sides of every battle the day lists, excluded ones
+    # too; the check compared only the player's own included side, so an
+    # unchanged two-sided battle always looked changed.
+    freeze = boundary._freeze_boundary_manifest
+
+    def opponent_then_freeze(database, connection, *, generation_id, artifact_kind):
+        if artifact_kind == "army":
+            connection.execute(
+                """
+                WITH defense AS (
+                    INSERT INTO battle_evidence (
+                        battle_id, source_row_id, observation_id,
+                        reporting_player_id, perspective, battle_timestamp,
+                        stars, destruction_percentage, army_share_code,
+                        reporter_trophies, opponent_trophies, attacker_gain,
+                        defender_loss, trophy_rule_version,
+                        source_observed_at, parser_version
+                    )
+                    SELECT battle_id, source_row_id, observation_id,
+                           reporting_player_id, 'defender', battle_timestamp,
+                           stars, destruction_percentage, army_share_code,
+                           reporter_trophies, opponent_trophies, attacker_gain,
+                           defender_loss, trophy_rule_version,
+                           source_observed_at, parser_version || '-defense'
+                    FROM battle_evidence
+                    RETURNING id
+                )
+                INSERT INTO battle_army_decodes (
+                    battle_id, evidence_id, perspective, raw_code,
+                    decoder_version, catalog_version, catalog_hash, status,
+                    failure_category, exact_army_id, identity_hash
+                )
+                SELECT decode.battle_id, defense.id, 'defender',
+                       decode.raw_code, decode.decoder_version,
+                       decode.catalog_version, decode.catalog_hash,
+                       decode.status, decode.failure_category,
+                       decode.exact_army_id, decode.identity_hash
+                FROM battle_army_decodes AS decode, defense
+                WHERE decode.is_active
+                """
+            )
+            connection.execute(
+                "UPDATE api_player_daily_logs"
+                " SET battles = jsonb_set(battles, '{0,included}', 'false')"
+            )
+        return freeze(
+            database,
+            connection,
+            generation_id=generation_id,
+            artifact_kind=artifact_kind,
+        )
+
+    monkeypatch.setattr(boundary, "_freeze_boundary_manifest", opponent_then_freeze)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, _army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                [(frozen,)] = connection.execute(
+                    "SELECT input_identity FROM boundary_publication_manifest_rows"
+                    " WHERE manifest_id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
+                assert len(frozen["decode_ids"]) == 2
+
+                def needs_correction() -> bool:
+                    return boundary_publication._boundary_army_manifest_needs_correction(
+                        database,
+                        connection,
+                        manifest_id=army_input["manifest_id"],
+                        player_ids=[frozen["player_id"]],
+                    )
+
+                assert not needs_correction()
+                _resave_army(connection, "defender")
+                _resave_army(connection, "attacker")
+                assert not needs_correction()
+                _resave_army(connection, "defender", code_suffix=None)
+                assert needs_correction()
+                connection.execute(
+                    "UPDATE battle_army_decodes SET is_active = true"
+                    " WHERE id = (SELECT max(id) FROM battle_army_decodes"
+                    "             WHERE perspective = 'defender')"
+                )
+                assert not needs_correction()
+                _resave_army(connection, "defender", code_suffix="-changed")
+                assert needs_correction()
+        finally:
+            database.close()
+
+
+def test_army_correction_follows_a_battle_moved_after_the_freeze(
+    database_url: str, archive_server
+) -> None:
+    # A side moved after freezing is compared where it is now: the same army
+    # there asks for nothing, a different one asks for a correction.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, _army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                [(frozen,)] = connection.execute(
+                    "SELECT input_identity FROM boundary_publication_manifest_rows"
+                    " WHERE manifest_id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall()
+                [old] = frozen["battle_ids"]
+                target = _merge_into_day_before(connection, old)
+
+                def needs_correction() -> bool:
+                    return boundary_publication._boundary_army_manifest_needs_correction(
+                        database,
+                        connection,
+                        manifest_id=army_input["manifest_id"],
+                        player_ids=[frozen["player_id"]],
+                    )
+
+                _resave_army(connection, "attacker")
+                assert connection.execute(
+                    "SELECT battle_id FROM battle_army_decodes"
+                    " WHERE is_active AND NOT id = ANY(%s::bigint[])",
+                    (frozen["decode_ids"],),
+                ).fetchall() == [(target,)]
+                assert not needs_correction()
+                _resave_army(connection, "attacker", code_suffix="-changed")
+                assert needs_correction()
+        finally:
+            database.close()
+
+
 def _merge_into_day_before(connection, old: int) -> int:
     """Do to battle ``old`` what 0057 did to a merged battle; return its new row."""
     target = connection.execute(
