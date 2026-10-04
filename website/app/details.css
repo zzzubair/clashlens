@@ -38,6 +38,7 @@
   margin: 0.15rem 0 0.35rem;
   font-size: clamp(2rem, 5vw, 3.15rem);
   letter-spacing: -0.045em;
+  overflow-wrap: anywhere;
 }
 .player-page .player-identity {
   margin: 0;
@@ -61,6 +62,11 @@
   background: transparent;
   border: 0;
   border-right: 1px solid var(--cl-border);
+}
+/* Without a Refresh button there is nothing to divide. */
+.player-page .player-trophy-card:only-child {
+  padding-right: 0;
+  border-right: 0;
 }
 .player-page .player-trophy-card .metric-label {
   color: var(--cl-muted);
@@ -357,6 +363,7 @@
   background: color-mix(in srgb, var(--cl-panel) 55%, transparent);
   border-left-color: var(--cl-border);
   border-style: dashed;
+  align-content: center;
   align-items: center;
   color: var(--cl-muted);
   font-size: 0.8125rem;
@@ -364,6 +371,9 @@
 .player-page .table-note {
   display: block;
   color: var(--cl-muted);
+}
+.player-page .data-table td:has(> .table-note) {
+  min-width: 12rem;
 }
 /* Analytics query bar and results */
 .analytics-page .hero {
@@ -655,6 +665,10 @@
   .player-page .battle-opponent time {
     grid-column: 2;
     white-space: nowrap;
+  }
+  /* A nameless opponent shows its tag as the name, with no tag line. */
+  .player-page .battle-profile-link + time {
+    grid-column: 1;
   }
   .player-page .battle-score {
     grid-column: 2;

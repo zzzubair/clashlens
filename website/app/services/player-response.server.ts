@@ -376,7 +376,8 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
     profile: {
       tag: payload.tag,
       name: payload.name,
-      clan: isString(payload.clan) ? payload.clan : "Unknown",
+      // Python sends no clan name when the saved profile has no clan.
+      clan: isString(payload.clan) ? payload.clan : "",
       trophies: payload.trophies,
       seasonResetPending: payload.season_reset_pending === true,
       currentLeagueSeasonId: isString(payload.current_league_season_id)
