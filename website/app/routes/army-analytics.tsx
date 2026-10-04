@@ -503,6 +503,7 @@ export default function ArmyAnalyticsRoute() {
   const trophyRange = /^trophies-(\d+)-(\d+)$/.exec(population)?.slice(1);
   const playerGroup = population.startsWith("trophies") ? "trophies" : population;
   const [customTrophies, setCustomTrophies] = useState(playerGroup === "trophies");
+  const [incompleteTrophies, setIncompleteTrophies] = useState(false);
   const [trophyProblem, setTrophyProblem] = useState<string | null>(null);
   const [dayProblem, setDayProblem] = useState<string | null>(null);
   const category =
@@ -605,6 +606,7 @@ export default function ArmyAnalyticsRoute() {
     )
       return;
     setCustomTrophies(playerGroup === "trophies");
+    setIncompleteTrophies(false);
     setTrophyProblem(null);
     setDayProblem(null);
     const values = {
@@ -685,6 +687,7 @@ export default function ArmyAnalyticsRoute() {
             event.target.name === "population"
           ) {
             setCustomTrophies(event.target.value === "trophies");
+            setIncompleteTrophies(false);
             setTrophyProblem(null);
             for (const name of ["trophy_min", "trophy_max"]) {
               const field = form.elements.namedItem(name);
@@ -707,8 +710,12 @@ export default function ArmyAnalyticsRoute() {
             if (values.get("population") === "trophies") {
               const minimum = String(values.get("trophy_min") ?? "");
               const maximum = String(values.get("trophy_max") ?? "");
+              setIncompleteTrophies(!minimum || !maximum);
               // Wait for both fields before saying anything is wrong.
-              if (!minimum || !maximum) return;
+              if (!minimum || !maximum) {
+                setTrophyProblem(null);
+                return;
+              }
               const problem = trophyRangeProblem(minimum, maximum);
               setTrophyProblem(problem);
               if (problem !== null) return;
@@ -833,6 +840,11 @@ export default function ArmyAnalyticsRoute() {
                 disabled={isHistorical}
               >
                 {isHistorical ? <option value="all">All players</option> : null}
+                {!snapshot && !isHistorical ? (
+                  <optgroup label="Trophies at battle time">
+                    <option value="trophies">Custom trophy range</option>
+                  </optgroup>
+                ) : null}
                 {!isHistorical &&
                 playerGroup !== "trophies" &&
                 !topPlayers.some(
@@ -874,9 +886,6 @@ export default function ArmyAnalyticsRoute() {
                         </option>
                       ))}
                     </optgroup>
-                    <optgroup label="Trophies at battle time">
-                      <option value="trophies">Custom trophy range</option>
-                    </optgroup>
                   </>
                 )}
               </select>
@@ -896,7 +905,7 @@ export default function ArmyAnalyticsRoute() {
                       step="1"
                       defaultValue={trophyRange?.[0] ?? params.get("trophy_min") ?? ""}
                       aria-invalid={trophyProblem !== null}
-                      aria-describedby="trophy-range-help"
+                      aria-describedby="trophy-range-help trophy-range-status"
                     />
                   </label>
                   <label className="filter-field">
@@ -911,7 +920,7 @@ export default function ArmyAnalyticsRoute() {
                       step="1"
                       defaultValue={trophyRange?.[1] ?? params.get("trophy_max") ?? ""}
                       aria-invalid={trophyProblem !== null}
-                      aria-describedby="trophy-range-help"
+                      aria-describedby="trophy-range-help trophy-range-status"
                     />
                   </label>
                 </div>
@@ -923,13 +932,29 @@ export default function ArmyAnalyticsRoute() {
                   {trophyProblem ??
                     "Each battle counts if the player’s trophies at that moment fall in this range."}
                 </p>
+                <p id="trophy-range-status" className="form-help" role="status">
+                  {incompleteTrophies ? (
+                    <>
+                      Enter both trophy limits to update results. This range has not been
+                      applied.
+                      {analytics
+                        ? ` Results below still show ${populationDescription(population)}.`
+                        : null}
+                    </>
+                  ) : null}
+                </p>
               </>
             ) : null}
           </div>
         </div>
-        {!showConsistent && !snapshot && !isHistorical && trackedRun.length > 0 ? (
+        {!customTrophies &&
+        !showConsistent &&
+        !snapshot &&
+        !isHistorical &&
+        trackedRun.length > 0 ? (
           <p className="form-help">
-            Consistent top needs every selected day tracked.{" "}
+            To compare players who stayed in the top ranks on every selected day, choose
+            days tracked throughout.{" "}
             <Link to={`?${trackedRunQuery}`} preventScrollReset replace>
               Use {dayRange(trackedRun)}
             </Link>
