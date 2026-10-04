@@ -281,7 +281,7 @@ def test_army_build_does_not_deadlock_with_day_result_rebuild(
 
 
 def test_publication_can_point_at_a_result_while_a_rebuild_replaces_it(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     """A real rebuild locks the latest result, then waits for the Reset lock.
 
@@ -289,6 +289,8 @@ def test_publication_can_point_at_a_result_while_a_rebuild_replaces_it(
     When the rebuild locked the result against reference checks, the two
     waited for each other.
     """
+    # The rebuild keeps waiting while the publication holds the Reset.
+    monkeypatch.setattr(reconciliation_db, "RESET_LOCK_WAIT", "10s")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = list(_store_baseline_pair(
             connection_info, archive_server, key="rebuild-start",

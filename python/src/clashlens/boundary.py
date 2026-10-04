@@ -19,14 +19,18 @@ from .db import (
     PROCESSING_VERSION,
     Database,
     _text_value,
+    lock_wait,
 )
 from .domain import RANKED_DAY_DURATION, season_is_current
 from .domain_repair import boundary_held
 from .past_reset_pacing import past_reset_build_waits, past_reset_correction_waits
 
 
-def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
-    """Take a Reset's publication lock for the rest of the transaction.
+def lock_boundary_publication(
+    connection: Any, boundary_at: datetime, wait: str | None = None
+) -> None:
+    """Take a Reset's publication lock for the rest of the transaction,
+    waiting at most ``wait`` for it when given.
 
     Lock order everywhere: a player-day lock or army battle locks
     (army_ingestion._upsert_army_decodes), then this lock for the Reset
@@ -39,10 +43,11 @@ def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
     reconciliation_db.recalculate_ranked_day uses FOR NO KEY UPDATE: reference
     checks that publication paths run under this lock do not wait for it.
     """
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"boundary-publication:{boundary_at.astimezone(UTC).isoformat()}",),
-    )
+    with lock_wait(connection, wait):
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"boundary-publication:{boundary_at.astimezone(UTC).isoformat()}",),
+        )
 
 
 def lock_boundary_publication_once_swept(connection: Any, boundary_at: datetime) -> bool:
@@ -1101,6 +1106,7 @@ def _record_boundary_generation(
     player_id: int,
     ranked_day_version_id: int,
     ranked_day_input_hash: str,
+    reset_lock_wait: str | None = None,
 ) -> bool:
     """Record one member result and enqueue each ready artifact once.
 
@@ -1118,7 +1124,7 @@ def _record_boundary_generation(
     ).fetchone()
     if sweep is None:
         return False
-    lock_boundary_publication(connection, boundary_at)
+    lock_boundary_publication(connection, boundary_at, reset_lock_wait)
     sweep_id = int(sweep[0])
     member_ids = [int(value) for value in (sweep[1] or [])]
     if player_id not in member_ids:

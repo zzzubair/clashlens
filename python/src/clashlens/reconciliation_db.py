@@ -13,6 +13,7 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    RESET_LOCK_WAIT,
     Claim,
     Database,
     _text_value,
@@ -533,13 +534,16 @@ def recalculate_ranked_day(
     if existing is None:
         # A reset sweep is the sole source of expected population.
         # No population-wide job is created for an uncoordinated
-        # legacy fixture or a late/discovered player.
+        # legacy fixture or a late/discovered player. A busy Reset fails
+        # the whole calculation, which rolls back, releasing any earlier
+        # Resets it took, and retries later instead of holding them.
         boundary._record_boundary_generation(database, 
             connection,
             boundary_at=ranked_day.end,
             player_id=player_id,
             ranked_day_version_id=version_id,
             ranked_day_input_hash=input_hash,
+            reset_lock_wait=RESET_LOCK_WAIT,
         )
 
 
