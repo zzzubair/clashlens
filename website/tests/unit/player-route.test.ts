@@ -180,6 +180,26 @@ async function renderRoute(
   return renderToString(createElement(StaticRouterProvider, { router, context }));
 }
 
+function renderSeason(historical: HistoricalSeasonSummary) {
+  return renderRoute(
+    {
+      requestedTag: TAG,
+      player: null,
+      error: null,
+      refreshStatus: null,
+      refreshError: null,
+      noJsIdempotencyKey: "test-idempotency-key",
+      lookup: null,
+      lookupError: null,
+      seasons: SEASONS,
+      selectedSeason: SEASON,
+      historical,
+      historicalError: null,
+    },
+    `?season=${SEASON}`,
+  );
+}
+
 function requestFor(season: string | null) {
   const target = season === null ? "/players/%232PP" : `/players/%232PP?season=${season}`;
   return new Request(`https://clashlens.example${target}`);
@@ -339,25 +359,7 @@ describe("player route historical independence", () => {
       eodTrophies: 5812,
       finalPlacement: 12,
     };
-    const render = (historical: HistoricalSeasonSummary) =>
-      renderRoute(
-        {
-          requestedTag: TAG,
-          player: null,
-          error: null,
-          refreshStatus: null,
-          refreshError: null,
-          noJsIdempotencyKey: "test-idempotency-key",
-          lookup: null,
-          lookupError: null,
-          seasons: SEASONS,
-          selectedSeason: SEASON,
-          historical,
-          historicalError: null,
-        },
-        `?season=${SEASON}`,
-      );
-    const official = await render({
+    const official = await renderSeason({
       ...SUMMARY,
       source: "official_league_history",
       finalRank: null,
@@ -365,13 +367,39 @@ describe("player route historical independence", () => {
     });
     expect(official).toContain("<dt>Final rank</dt><dd>Unknown</dd>");
     expect(official).not.toContain(">12<");
-    const tracked = await render({ ...SUMMARY, finalRank: 3, officialHistory });
+    const tracked = await renderSeason({ ...SUMMARY, finalRank: 3, officialHistory });
     expect(tracked).toContain("<dt>Final rank</dt><dd>3</dd>");
     expect(tracked).toContain("Final trophies: <!-- -->5812");
     expect(tracked).not.toContain(">12<");
     expect(tracked).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
     expect(tracked).toContain('<th scope="col">Trophy change</th>');
     expect(tracked).not.toContain('<th scope="col">Net</th>');
+  });
+
+  it("says only that a missing summary is unavailable and keeps a known final count", async () => {
+    const official = await renderSeason({
+      ...SUMMARY,
+      source: "official_league_history",
+      officialHistory: {
+        observedAt: "2026-05-29T06:00:00+00:00",
+        eodTrophies: 5800,
+        finalPlacement: 12,
+      },
+    });
+    expect(official).toContain("A Clash Lens daily summary is not available");
+    expect(official).not.toContain("not recorded");
+    const late = await renderSeason({
+      ...SUMMARY,
+      startTrophies: null,
+      endTrophies: 5800,
+    });
+    expect(late).toContain("<dt>Trophies</dt><dd>Unknown → 5800</dd>");
+    const unfinished = await renderSeason({
+      ...SUMMARY,
+      startTrophies: 5000,
+      endTrophies: null,
+    });
+    expect(unfinished).toContain("<dt>Trophies</dt><dd>Unknown</dd>");
   });
 
   it("keeps all 28 days and 448 battles in the page for search and print", async () => {
