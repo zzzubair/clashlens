@@ -24,7 +24,7 @@ from .reconciliation import (
 
 API_CONTRACT_VERSION = 2
 VERIFICATION_RESERVATION_SECONDS = 45
-PLAYER_SCREEN_READY_VERSION = "api-player-daily-log-v3"
+PLAYER_SCREEN_READY_VERSION = "api-player-daily-log-v4"
 ARMY_ANALYTICS_CACHE_CAPACITY = 128
 ARMY_ANALYTICS_QUERY_WORK_MEM = "256MB"
 ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS = 5.0
@@ -35,6 +35,10 @@ ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
 # Any other lock wait gives up after this long instead of holding a pool
 # connection behind a long worker transaction until every page times out.
 API_LOCK_TIMEOUT = "2s"
+# The website gives up on a request after 5 seconds. A query still running
+# well after that is cancelled so it stops holding one of the pool's
+# connections. Army reads keep their own shorter transaction limit.
+API_STATEMENT_TIMEOUT = "10s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +107,7 @@ class ApiDatabase:
 
         def configure(connection: Any) -> None:
             connection.execute(f"SET lock_timeout = '{API_LOCK_TIMEOUT}'")
+            connection.execute(f"SET statement_timeout = '{API_STATEMENT_TIMEOUT}'")
             connection.commit()
 
         self.pool = ConnectionPool(
@@ -708,8 +713,6 @@ def _screen_event(
     }
     if isinstance(battle.get("army_share_code"), str):
         event["army_share_code"] = battle["army_share_code"]
-    if isinstance(battle.get("army"), Mapping):
-        event["army"] = battle["army"]
     return lens, battle_id, timestamp, event
 
 

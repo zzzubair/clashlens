@@ -20,6 +20,8 @@ from clashlens.operating import (
         ("/v1/account/saved-tags", "saved_players"),
         ("/v1/account/saved-tags/%232PP", "saved_players"),
         ("/v1/players/%232PP/verifytoken", "verification"),
+        ("/v1/analytics/armies", "army_analytics"),
+        ("/v1/analytics/armies/seasons/1759640400", "army_analytics"),
     ),
 )
 def test_api_route_uses_shipped_bounded_route_categories(

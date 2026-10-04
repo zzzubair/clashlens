@@ -338,13 +338,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     }, 1000);
     return () => clearInterval(timer);
   }, [isChecking, lookupTimedOut, revalidator]);
+  // Only the stable revalidate function, so a reread starting or finishing never
+  // restarts the minute.
+  const { revalidate } = revalidator;
   useEffect(() => {
     if (!minuteChecks) return;
     const timer = setInterval(() => {
-      if (!document.hidden && revalidator.state === "idle") revalidator.revalidate();
+      if (!document.hidden) void revalidate();
     }, 60_000);
     return () => clearInterval(timer);
-  }, [minuteChecks, revalidator]);
+  }, [minuteChecks, revalidate]);
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;
@@ -489,7 +492,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   }, [player?.tag, refreshResourcePath, terminalState, workId]);
 
   const completedWorkId = lastStatus?.state === "complete" ? lastStatus.workId : null;
-  const { revalidate } = revalidator;
   useEffect(() => {
     if (completedWorkId === null) return;
     const timers = [0, 3_000, 8_000].map((delay) =>
@@ -1322,20 +1324,9 @@ function LegendDay({
 }
 
 function LiveBadge() {
-  const dot = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    let frame = 0;
-    const breathe = (time: number) => {
-      const phase = (1 - Math.cos((time / 2600) * Math.PI * 2)) / 2;
-      dot.current?.style.setProperty("--live-pulse", String(phase));
-      frame = requestAnimationFrame(breathe);
-    };
-    frame = requestAnimationFrame(breathe);
-    return () => cancelAnimationFrame(frame);
-  }, []);
   return (
     <span className="legend-day-live" aria-label="Today's Legend day, in progress">
-      <span className="legend-live-dot" ref={dot} aria-hidden="true" />
+      <span className="legend-live-dot" aria-hidden="true" />
       In progress
     </span>
   );

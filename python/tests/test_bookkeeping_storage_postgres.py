@@ -25,7 +25,7 @@ def _visible(api: ApiDatabase) -> tuple[object, object]:
         api, "#2PP", now=READ_AT, freshness_seconds=900
     )
     board = api_leaderboard.get_live_leaderboard(api, limit=50, now=READ_AT)
-    assert page is not None and page["screen_ready"]["recent_days"]
+    assert page is not None and page["screen_ready"]["days"]
     assert board is not None
     return page, board
 

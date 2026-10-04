@@ -227,6 +227,7 @@ main {
 }
 @media (prefers-reduced-motion: reduce) {
   .legend-live-dot::after {
+    animation: none;
     transform: none;
     opacity: 0.3;
   }

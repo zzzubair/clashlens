@@ -1,5 +1,4 @@
 import type {
-  BattleArmy,
   HistoricalSeasonSummary,
   PlayerPage,
   RankedBattleEvent,
@@ -235,61 +234,6 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
   };
 }
 
-function mapBattleArmy(value: unknown): BattleArmy | null {
-  if (value === null) return null;
-  if (
-    !isRecord(value) ||
-    !isOneOf(value.state, ["decoded", "partial", "failed"] as const) ||
-    !(value.failure_reason === null || isString(value.failure_reason)) ||
-    !Array.isArray(value.components) ||
-    !Array.isArray(value.unknown_components) ||
-    !isString(value.decoder_version) ||
-    !isString(value.catalog_version)
-  )
-    malformed();
-  const components = value.components.map((item) => {
-    if (
-      !isRecord(item) ||
-      !isString(item.typed_id) ||
-      !isString(item.name) ||
-      !isInteger(item.quantity) ||
-      item.quantity < 1 ||
-      !isString(item.origin)
-    )
-      malformed();
-    return {
-      typedId: item.typed_id,
-      name: item.name,
-      quantity: item.quantity,
-      origin: item.origin,
-    };
-  });
-  const unknownComponents = value.unknown_components.map((item) => {
-    if (
-      !isRecord(item) ||
-      !isInteger(item.numeric_id) ||
-      !isInteger(item.quantity) ||
-      !isString(item.section) ||
-      !isString(item.origin)
-    )
-      malformed();
-    return {
-      numericId: item.numeric_id,
-      quantity: item.quantity,
-      section: item.section,
-      origin: item.origin,
-    };
-  });
-  return {
-    state: value.state,
-    failureReason: value.failure_reason,
-    components,
-    unknownComponents,
-    decoderVersion: value.decoder_version,
-    catalogVersion: value.catalog_version,
-  };
-}
-
 export function mapPlayerPage(payload: unknown): PlayerPage {
   if (
     !isRecord(payload) ||
@@ -328,7 +272,6 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       stars: value.stars,
       trophyChange: value.trophy_change,
       perspectiveDisagreement: value.perspective_disagreement === true,
-      army: mapBattleArmy(value.army ?? null),
       armyShareCode: isString(value.army_share_code) ? value.army_share_code : null,
     };
   };
@@ -396,10 +339,22 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       uncertainty: value.uncertainty_reasons as string[],
     };
   };
-  if (screen.current_day !== null && screen.current_day !== undefined)
-    mapDay(screen.current_day);
-  if (!Array.isArray(screen.recent_days) || !Array.isArray(screen.season_days))
+  if (
+    !Array.isArray(screen.days) ||
+    !isNullableString(screen.current_day_start) ||
+    !Array.isArray(screen.recent_day_starts) ||
+    !Array.isArray(screen.season_day_starts)
+  )
     malformed();
+  screen.days.forEach(mapDay);
+  // Each day is sent once; the recent and Season lists name days by start.
+  const days = new Map(
+    screen.days.map((day) => [(day as Record<string, unknown>).ranked_day_start, day]),
+  );
+  const dayAt = (start: unknown) => {
+    if (!isString(start) || !days.has(start)) malformed();
+    return mapDay(days.get(start));
+  };
   const player: PlayerPage = {
     kind: "player-page",
     tag: payload.tag,
@@ -442,9 +397,10 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       eligibility: payload.eligibility === "eligible" ? "legend-i" : "uncertain",
     },
     season: mapSeason(screen.season),
-    currentDay: screen.current_day === null ? null : mapDay(screen.current_day),
-    recentDays: screen.recent_days.map(mapDay),
-    seasonDays: screen.season_days.map(mapDay),
+    currentDay:
+      screen.current_day_start === null ? null : dayAt(screen.current_day_start),
+    recentDays: screen.recent_day_starts.map(dayAt),
+    seasonDays: screen.season_day_starts.map(dayAt),
     dataQuality: mapDataQuality(screen.data_quality),
     provenance: mapSnakeProvenanceRequired(screen.provenance),
   };

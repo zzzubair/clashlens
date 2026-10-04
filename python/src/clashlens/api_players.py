@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,14 +10,11 @@ from .api_db import (
     _daily_log,
     _historical_season_summary,
     _json_array,
-    _public_army,
     _public_confidence,
     _screen_daily_log_with_events,
     _text,
     _withhold_unsupported_entries,
 )
-from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
 from .domain import (
     SEASON_DURATION,
     DomainRuleError,
@@ -188,44 +184,11 @@ def get_player_page(
             (day[19].astimezone(UTC) for day in daily_rows), default=None
         )
         public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
-        daily_logs = [_daily_log(day) for day in daily_rows]
-        battle_ids = {
-            int(battle["battle_id"])
-            for day in daily_logs
-            for battle in day.get("battles", [])
-            if isinstance(battle, Mapping)
-            and isinstance(battle.get("battle_id"), (int, str))
-            and str(battle["battle_id"]).isdigit()
-        }
-        army_rows = (
-            connection.execute(
-                """
-            SELECT battle_id, perspective, status, failure_category,
-                   home_troops, spells, siege, cc_troops, heroes,
-                   unresolved_components, decoder_version, catalog_version
-            FROM battle_army_decodes
-            WHERE battle_id = ANY(%s::bigint[]) AND is_active
-              AND decoder_version = %s AND catalog_version = %s
-            """,
-                (list(battle_ids), DECODER_VERSION, CATALOG_VERSION),
-            ).fetchall()
-            if battle_ids
-            else []
-        )
-        armies = {(str(row[0]), _text(row[1])): _public_army(row) for row in army_rows}
-        for day in daily_logs:
-            for battle in day.get("battles", []):
-                if not isinstance(battle, dict):
-                    continue
-                perspective = (
-                    "attacker" if battle.get("lens") == "offense" else "defender"
-                )
-                army = armies.get((str(battle.get("battle_id")), perspective))
-                if army is not None:
-                    battle["army"] = army
+        # The page never shows decoded armies; Copy army uses each event's
+        # army_share_code, and the army routes read the saved decodes.
         screen_days = [
             _screen_daily_log_with_events(day, public_confidence, now)
-            for day in daily_logs
+            for day in map(_daily_log, daily_rows)
         ]
         now_utc = now.astimezone(UTC)
         current_day_pair = next(
@@ -311,21 +274,17 @@ def get_player_page(
                     season_context["id"],
                 ),
             ).fetchall()
-        season_display_logs = [_daily_log(day) for day in season_rows]
-        for day in season_display_logs:
-            for battle in day.get("battles", []):
-                if not isinstance(battle, dict):
-                    continue
-                perspective = (
-                    "attacker" if battle.get("lens") == "offense" else "defender"
+        # Send each day once: the Season's days are almost always among the
+        # recent ones, so the response lists their starts instead.
+        days = {day["ranked_day_start"]: day for day in screen_days}
+        season_day_starts = []
+        for season_row in season_rows:
+            start = season_row[0].astimezone(UTC).isoformat()
+            if start not in days:
+                days[start] = _screen_daily_log_with_events(
+                    _daily_log(season_row), public_confidence, now
                 )
-                army = armies.get((str(battle.get("battle_id")), perspective))
-                if army is not None:
-                    battle["army"] = army
-        season_days = [
-            _screen_daily_log_with_events(day, public_confidence, now)
-            for day in season_display_logs
-        ]
+            season_day_starts.append(start)
         data_quality = []
         if age_seconds > freshness_seconds:
             data_quality.append(
@@ -389,9 +348,14 @@ def get_player_page(
             "clan": None if row[10] is None else _text(row[10]),
             "public_confidence": public_confidence,
             "screen_ready": {
-                "current_day": current_day,
-                "recent_days": screen_days,
-                "season_days": season_days,
+                "days": sorted(
+                    days.values(), key=lambda day: day["ranked_day_start"], reverse=True
+                ),
+                "current_day_start": None
+                if current_day is None
+                else current_day["ranked_day_start"],
+                "recent_day_starts": [day["ranked_day_start"] for day in screen_days],
+                "season_day_starts": season_day_starts,
                 "season": None
                 if season_context is None or season_anchor_conflict
                 else {

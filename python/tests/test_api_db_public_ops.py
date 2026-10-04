@@ -6,10 +6,18 @@ from uuid import uuid4
 
 import pytest
 from fastapi.responses import JSONResponse
+from psycopg.errors import QueryCanceled
 from psycopg.types.json import Jsonb
 from test_api_migration import migrated_production_database
 
-from clashlens import api, api_accounts, api_analytics, api_leaderboard, api_players
+from clashlens import (
+    api,
+    api_accounts,
+    api_analytics,
+    api_db,
+    api_leaderboard,
+    api_players,
+)
 from clashlens.api_db import (
     ApiDatabase,
     RequestBinding,
@@ -237,14 +245,14 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             assert player is not None
             assert player["tag"] == "#2PP"
             assert player["freshness"] == "fresh"
-            assert player["screen_ready"]["current_day"] is None
+            assert player["screen_ready"]["current_day_start"] is None
             assert player["screen_ready"]["season"] is None
-            assert player["screen_ready"]["season_days"] == []
-            assert player["screen_ready"]["recent_days"][0]["offense_events"] == []
-            assert player["screen_ready"]["recent_days"][0]["defense_events"] == []
+            assert player["screen_ready"]["season_day_starts"] == []
+            assert player["screen_ready"]["days"][0]["offense_events"] == []
+            assert player["screen_ready"]["days"][0]["defense_events"] == []
             assert player["screen_ready"]["data_quality"][0]["code"] == "unavailable"
             assert {
-                key: player["screen_ready"]["recent_days"][0][key]
+                key: player["screen_ready"]["days"][0][key]
                 for key in ("ranked_day_start", "state", "uncertainty_reasons")
             } == {
                 "ranked_day_start": "2026-08-06T05:00:00+00:00",
@@ -380,8 +388,10 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
             )
 
             assert player is not None
-            current_day = player["screen_ready"]["current_day"]
-            assert current_day is not None
+            [current_day] = player["screen_ready"]["days"]
+            assert player["screen_ready"]["current_day_start"] == (
+                current_day["ranked_day_start"]
+            )
             assert current_day["season_day_number"] == 25
             assert current_day["public_confidence"] == "partial"
             assert current_day["completeness"] == {
@@ -391,7 +401,9 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
             assert current_day["uncertainty_reasons"] == ["active_day"]
             assert current_day["offense_events"] == []
             assert current_day["defense_events"] == []
-            assert player["screen_ready"]["season_days"] == [current_day]
+            assert player["screen_ready"]["season_day_starts"] == [
+                current_day["ranked_day_start"]
+            ]
             assert player["screen_ready"]["season"] == {
                 "id": "1783918800",
                 "current_day_number": 25,
@@ -445,7 +457,7 @@ def test_player_page_withholds_season_days_when_official_history_disagrees(
 
     assert player is not None
     assert player["screen_ready"]["season"] is None
-    assert player["screen_ready"]["season_days"] == []
+    assert player["screen_ready"]["season_day_starts"] == []
     assert player["screen_ready"]["data_quality"] == [
         {
             "code": "uncertain",
@@ -746,10 +758,10 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
 
             assert player is not None
             screen = player["screen_ready"]
-            assert [day["season_day_number"] for day in screen["season_days"]] == [
-                3,
-                2,
-            ]
+            by_start = {day["ranked_day_start"]: day for day in screen["days"]}
+            season_days = [by_start[start] for start in screen["season_day_starts"]]
+            current_day = by_start[screen["current_day_start"]]
+            assert [day["season_day_number"] for day in season_days] == [3, 2]
             assert screen["season"] == {
                 "id": "current-season",
                 "current_day_number": 3,
@@ -760,10 +772,10 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
             }
             assert all(
                 day["official_season_id"] == "current-season"
-                for day in screen["season_days"]
+                for day in season_days
             )
-            assert screen["season_days"][0] == screen["current_day"]
-            assert screen["current_day"]["offense_events"] == [
+            assert season_days[0] is current_day
+            assert current_day["offense_events"] == [
                 {
                     "battle_id": "2",
                     "battle_timestamp": "2026-08-06T11:00:00Z",
@@ -783,15 +795,11 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                     "perspective_disagreement": False,
                 },
             ]
-            assert screen["current_day"]["defense_events"][0]["trophy_change"] == -20
-            assert screen["current_day"]["attack_count"] == len(
-                screen["current_day"]["offense_events"]
-            )
-            assert screen["current_day"]["defense_count"] == len(
-                screen["current_day"]["defense_events"]
-            )
-            assert screen["season_days"][1]["offense_events"] == []
-            assert screen["season_days"][1]["defense_events"] == []
+            assert current_day["defense_events"][0]["trophy_change"] == -20
+            assert current_day["attack_count"] == len(current_day["offense_events"])
+            assert current_day["defense_count"] == len(current_day["defense_events"])
+            assert season_days[1]["offense_events"] == []
+            assert season_days[1]["defense_events"] == []
         finally:
             database.close()
 
@@ -850,7 +858,9 @@ def test_player_page_hides_saved_net_for_days_missing_battles(
 
             assert player is not None
             screen = player["screen_ready"]
-            for days in (screen["recent_days"], screen["season_days"]):
+            by_start = {day["ranked_day_start"]: day for day in screen["days"]}
+            for starts in (screen["recent_day_starts"], screen["season_day_starts"]):
+                days = [by_start[start] for start in starts]
                 assert [
                     (day["season_day_number"], day["net_trophy_change"])
                     for day in days
@@ -997,6 +1007,20 @@ def test_live_leaderboard_reports_empty_population(database_url: str) -> None:
             database.close()
 
 
+def test_api_cancels_a_runaway_query_and_keeps_serving(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api_db, "API_STATEMENT_TIMEOUT", "100ms")
+    database = ApiDatabase(database_url, max_size=1)
+    try:
+        with pytest.raises(QueryCanceled):
+            database.scalar("SELECT pg_sleep(5)")
+        # The pool's only connection still answers the next request.
+        assert database.scalar("SELECT 1") == 1
+    finally:
+        database.close()
+
+
 # A full army: 6 troops, 5 spells, a siege, Clan Castle troops and spell, and
 # 5 heroes each with a pet and 2 equipment, as the busiest attacks bring.
 HEAVY_ARMY = {
@@ -1012,15 +1036,8 @@ HEAVY_ARMY = {
 }
 
 
-@pytest.mark.parametrize(
-    "days",
-    [
-        5,
-        # A full Season is the worst case. Each day is still sent in both
-        # the recent and Season lists, so this waits for sending each day once.
-        pytest.param(28, marks=pytest.mark.xfail(strict=True, reason="days sent twice")),
-    ],
-)
+# A full Season is the worst case.
+@pytest.mark.parametrize("days", [5, 28])
 def test_busiest_player_page_stays_well_under_the_response_limit(
     database_url: str, days: int
 ) -> None:
@@ -1103,13 +1120,20 @@ def test_busiest_player_page_stays_well_under_the_response_limit(
 
             assert player is not None
             screen = player["screen_ready"]
-            assert len(screen["recent_days"]) == len(screen["season_days"]) == days
-            # Every battle still reaches the page with its army.
+            # Each day is sent once, even though every day is recent and in
+            # the Season.
+            assert len(screen["days"]) == days
+            assert screen["recent_day_starts"] == screen["season_day_starts"] == [
+                day["ranked_day_start"] for day in screen["days"]
+            ]
+            assert screen["current_day_start"] == screen["days"][0]["ranked_day_start"]
+            # Every battle still reaches the page with its Copy army code, but
+            # not the decoded army the page never shows.
             assert all(
                 len(day["offense_events"]) == len(day["defense_events"]) == 8
-                and all(event["army"]["components"] for event in
+                and all(event["army_share_code"] and "army" not in event for event in
                         [*day["offense_events"], *day["defense_events"]])
-                for day in [screen["current_day"], *screen["recent_days"], *screen["season_days"]]
+                for day in screen["days"]
             )
             size = len(JSONResponse(content=api._json_safe(player)).body)
             assert size < 0.6 * api._DEFAULT_MAX_RESPONSE_BYTES
