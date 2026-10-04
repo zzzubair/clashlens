@@ -886,13 +886,15 @@ class Collector:
             lease_seconds=_UPLOAD_LEASE_SECONDS,
         )
 
-    def cleanup_uploaded(self, *, limit: int = 100) -> int:
+    def cleanup_uploaded(self, *, limit: int = _CLEANUP_LOOKUP_SIZE) -> tuple[int, int]:
         candidates = self.database.deletable_hashes(limit=limit)
         deleted = 0
-        for turn in batched(candidates, _CLEANUP_BATCH_SIZE):
+        for index, turn in enumerate(batched(candidates, _CLEANUP_BATCH_SIZE)):
+            if index:
+                time.sleep(0.1)
             with self.spool.delete_unreferenced_batch() as delete:
                 deleted += self.database.delete_spool_if_deletable(list(turn), delete)
-        return deleted
+        return deleted, len(candidates)
 
     async def run(
         self,
@@ -1199,10 +1201,8 @@ class Collector:
                     continue
                 try:
                     if self._spool_capacity_failed or loop.time() >= next_cleanup:
-                        deleted = await asyncio.to_thread(
-                            self.cleanup_uploaded, limit=_CLEANUP_LOOKUP_SIZE
-                        )
-                        if deleted < _CLEANUP_LOOKUP_SIZE:
+                        _, found = await asyncio.to_thread(self.cleanup_uploaded)
+                        if found < _CLEANUP_LOOKUP_SIZE:
                             next_cleanup = loop.time() + _CLEANUP_IDLE_SECONDS
                     # Compacted responses leave no upload row or observation, so
                     # their spool bytes are unreferenced. Sweep them under the

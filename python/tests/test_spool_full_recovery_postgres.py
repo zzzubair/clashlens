@@ -86,7 +86,7 @@ def test_full_spool_drains_once_the_archive_returns(
         with pytest.raises(SpoolError, match="degraded_capacity"):
             spool.reserve()
         collector = SimpleNamespace(database=database, spool=spool)
-        assert Collector.cleanup_uploaded(collector) == 0
+        assert Collector.cleanup_uploaded(collector) == (0, 0)
 
         # The archive comes back and takes a copy of both responses.
         for index in range(len(TAGS)):
@@ -98,7 +98,7 @@ def test_full_spool_drains_once_the_archive_returns(
                 archive_reference=f"s3://evidence/{index}",
                 archive_instance_id="fixture-instance",
             )
-        assert Collector.cleanup_uploaded(collector) == 0
+        assert Collector.cleanup_uploaded(collector) == (0, 0)
 
         # The real worker entry point still reads the saved responses.
         reader = SpoolFirstReader(
@@ -126,7 +126,7 @@ def test_full_spool_drains_once_the_archive_returns(
         }
 
         # Cleanup can now free the space and collection can resume.
-        assert Collector.cleanup_uploaded(collector) == len(TAGS)
+        assert Collector.cleanup_uploaded(collector) == (len(TAGS), len(TAGS))
         assert all(spool.verify(digest) is None for digest in digests)
         assert spool.readiness() == (True, "ready")
         with spool.reserve():

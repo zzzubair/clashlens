@@ -87,10 +87,32 @@ def test_cleanup_batch_acknowledges_a_file_already_removed_by_a_crash(
     collector = _collector(spool, store, _Client(_Spool()))
 
     try:
-        assert collector.cleanup_uploaded() == 1
+        assert collector.cleanup_uploaded() == (1, 1)
         assert store.marked == [digest]
     finally:
         spool.close()
+
+
+def test_cleanup_pauses_between_turns_and_reports_every_found_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    store.deletable = [f"{index:064x}" for index in range(17)]
+    kept = store.deletable[3]
+
+    def delete_if_unreferenced(digest: str) -> bool:
+        return digest != kept
+
+    spool.delete_if_unreferenced = delete_if_unreferenced  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "clashlens.collector.time.sleep", lambda _: spool.events.append("paused")
+    )
+    collector = _collector(spool, store, _Client(spool))
+
+    assert collector.cleanup_uploaded() == (16, 17)
+    assert spool.events == ["locked", "paused", "locked"]
+    assert kept not in store.marked
 
 
 def test_normal_upload_shutdown_finishes_owned_upload_and_removes_its_raw_body(
