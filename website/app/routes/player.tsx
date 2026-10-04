@@ -577,8 +577,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           selectedSeason={data.selectedSeason}
           currentAvailable={player !== null}
         />
-        {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
-        {data.historical ? <HistoricalSeasonPanel summary={data.historical} /> : null}
+        {data.selectedSeason !== null ? (
+          <SelectedSeason
+            seasonId={data.selectedSeason}
+            summary={data.historical}
+            error={data.historicalError}
+          />
+        ) : null}
         {data.selectedSeason === null && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
@@ -679,19 +684,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       />
 
       {data.selectedSeason !== null ? (
-        data.historical !== null ? (
-          <HistoricalSeasonPanel summary={data.historical} />
-        ) : (
-          <section className="data-section" aria-labelledby="historical-title">
-            <div className="section-heading">
-              <h2 id="historical-title">Historical season</h2>
-            </div>
-            {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
-            <p className="section-note">
-              Results for {seasonLabel(data.selectedSeason)} are unavailable.
-            </p>
-          </section>
-        )
+        <SelectedSeason
+          seasonId={data.selectedSeason}
+          summary={data.historical}
+          error={data.historicalError}
+        />
       ) : null}
 
       {data.selectedSeason !== null ? null : (
@@ -792,19 +789,20 @@ function SeasonNav({
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
-  if (seasons.length === 0) return null;
+  // A selected past Season always keeps its way back, even if the list failed.
+  if (seasons.length === 0 && selectedSeason === null) return null;
   return (
     <nav className="data-section" aria-label="Historical seasons">
       <div className="section-heading">
         <h2>Historical seasons</h2>
       </div>
       <ul className="season-list">
-        {currentAvailable ? (
+        {currentAvailable || selectedSeason !== null ? (
           <li key="current">
             {selectedSeason === null ? (
-              <strong aria-current="page">Current season</strong>
+              <strong aria-current="page">Current Season</strong>
             ) : (
-              <Link to={canonicalPlayerPath(tag)}>Current season</Link>
+              <Link to={canonicalPlayerPath(tag)}>Current Season</Link>
             )}
           </li>
         ) : null}
@@ -826,6 +824,27 @@ function SeasonNav({
   );
 }
 
+function SelectedSeason({
+  seasonId,
+  summary,
+  error,
+}: {
+  seasonId: string;
+  summary: HistoricalSeasonSummary | null;
+  error: WebsiteErrorResponse | null;
+}) {
+  if (summary !== null) return <HistoricalSeasonPanel summary={summary} />;
+  return (
+    <section className="data-section" aria-labelledby="historical-title">
+      <div className="section-heading">
+        <h2 id="historical-title">Historical season</h2>
+      </div>
+      {error ? <ErrorNotice error={error} /> : null}
+      <p className="section-note">Results for {seasonLabel(seasonId)} are unavailable.</p>
+    </section>
+  );
+}
+
 function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
   if (summary.source === "official_league_history") {
     return (
@@ -836,8 +855,8 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           </h2>
         </div>
         <p className="section-note">
-          Season result from Clash of Clans. Daily battle logs were not recorded for this
-          season.
+          Season result from Clash of Clans. A Clash Lens daily summary is not available
+          for this Season.
         </p>
         {summary.officialHistory ? (
           <div className="metric-grid">
@@ -860,7 +879,11 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           {seasonLabel(summary.seasonId, summary.seasonEnd)}
         </h2>
       </div>
-      <p className="section-note">{summary.daysObserved} of 28 Legend days recorded</p>
+      <p className="section-note">
+        {summary.coverageState === "complete"
+          ? "Records cover all 28 Legend days."
+          : `Partial Season history: records cover ${summary.daysObserved} of 28 Legend days, and some of those may be incomplete. Totals below cover the recorded days only.`}
+      </p>
       {summary.officialHistory ? (
         <p className="section-note">
           Final trophies: {formatCount(summary.officialHistory.eodTrophies)}
@@ -883,13 +906,16 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           />
         </MetricCard>
         <MetricCard title="Season">
-          <Metric label="Net change" value={formatSigned(summary.netTrophyChange)} />
+          <Metric
+            label={`Sum of daily trophy changes (${summary.daysObserved} of 28 days)`}
+            value={formatSigned(summary.netTrophyChange)}
+          />
           <Metric
             label="Trophies"
             value={
-              summary.startTrophies === null || summary.endTrophies === null
+              summary.endTrophies === null
                 ? "Unknown"
-                : `${summary.startTrophies} → ${summary.endTrophies}`
+                : `${summary.startTrophies ?? "Unknown"} → ${summary.endTrophies}`
             }
           />
           <Metric label="Final rank" value={formatCount(summary.finalRank)} />
@@ -909,7 +935,18 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           <Metric label="Unknown" value={formatCount(summary.defenseStarsUnknown)} />
         </MetricCard>
       </div>
-      {summary.source === "tracked_summary" && summary.unresolvedFlags.length > 0 ? (
+      <p className="section-note">
+        The sum of daily trophy changes includes automatic defense losses at Reset; it
+        shows Unknown if any recorded day&apos;s change is unknown. Recorded battle net
+        leaves those losses out.
+      </p>
+      {[
+        summary.attackCount,
+        summary.attackGain,
+        summary.defenseCount,
+        summary.defenseLoss,
+        summary.netTrophyChange,
+      ].includes(null) ? (
         <p className="section-note">Some daily totals are unavailable.</p>
       ) : null}
       <p className="section-note">{LEGEND_DAY_NOTE}</p>
@@ -930,6 +967,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
               <th scope="col">Trophy change</th>
               <th scope="col">Recorded battle net</th>
               <th scope="col">End</th>
+              <th scope="col">EOD change from previous day</th>
               <th scope="col">Attacks recorded</th>
               <th scope="col">Defenses recorded</th>
               <th scope="col">Adjustment</th>
@@ -970,7 +1008,8 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                   </td>
                   <td>{formatSigned(day.netChange)}</td>
                   <td>{formatSigned(battleNet)}</td>
-                  <td>{formatCount(day.endTrophies)}</td>
+                  <td>{provisional(formatCount(day.endTrophies), day.eodState)}</td>
+                  <td>{provisional(formatSigned(day.eodChange), day.eodChangeState)}</td>
                   <td>{formatCount(day.attacks)}</td>
                   <td>{formatCount(day.defenses)}</td>
                   <td>{formatAdjustment(day)}</td>
@@ -1346,6 +1385,10 @@ function formatSigned(value: number | null): string {
 function valueTone(value: number | null): string {
   if (value === null || value === 0) return "score-neutral";
   return value > 0 ? "score-positive" : "score-negative";
+}
+
+function provisional(value: string, state: string | null): string {
+  return value === "Unknown" || state === "accepted" ? value : `${value} (provisional)`;
 }
 
 function formatCount(value: number | null): string {

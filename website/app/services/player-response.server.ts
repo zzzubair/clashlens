@@ -1,4 +1,5 @@
 import type {
+  EodProofState,
   HistoricalSeasonSummary,
   PlayerPage,
   RankedBattleEvent,
@@ -16,6 +17,8 @@ import {
   isString,
   isUtcTimestamp,
 } from "./python-response.server";
+
+const EOD_STATES = ["accepted", "provisional"] as const;
 
 export function mapPlayerSeasons(payload: unknown): SummarizedSeasonRef[] {
   if (!isRecord(payload) || !Array.isArray(payload.seasons)) malformed();
@@ -170,12 +173,16 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
       !isString(value.coverage) ||
       typeof value.has_adjustment !== "boolean" ||
       !Array.isArray(value.flags) ||
-      !value.flags.every(isString)
+      !value.flags.every(isString) ||
+      ![value.eod_state, value.eod_change_state].every(
+        (item) => (item ?? null) === null || isOneOf(item, EOD_STATES),
+      )
     )
       malformed();
     const metrics = [
       value.start_trophies,
       value.end_trophies,
+      value.eod_change ?? null,
       value.attack_gain,
       value.defense_loss,
       value.net_change,
@@ -192,6 +199,9 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
         : (value.ranked_day_start as string),
       startTrophies: value.start_trophies as number | null,
       endTrophies: value.end_trophies as number | null,
+      eodState: (value.eod_state ?? null) as EodProofState,
+      eodChange: (value.eod_change ?? null) as number | null,
+      eodChangeState: (value.eod_change_state ?? null) as EodProofState,
       attackGain: value.attack_gain as number | null,
       defenseLoss: value.defense_loss as number | null,
       netChange: value.net_change as number | null,

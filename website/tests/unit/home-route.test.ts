@@ -168,6 +168,7 @@ it("counts the shown rankings that are more than 10 minutes old", async () => {
     {
       leaderboard: {
         totalTracked: 13263,
+        generatedAt: "2026-10-04T04:00:00Z",
         entries: [
           entry(1, "fresh", "2026-10-04T03:54:00Z"),
           entry(2, "stale", "2026-10-03T23:59:00Z"),
@@ -183,6 +184,39 @@ it("counts the shown rankings that are more than 10 minutes old", async () => {
   expect(html).toContain("Newest player update");
   expect(html).not.toContain("Last updated <");
   expect(html).toContain("2 of 3 more than 10 minutes old");
+});
+
+it("counts a ranking as old once it passes 10 minutes while the page is open", async () => {
+  const observedAt = "2026-10-04T04:00:00Z";
+  const render = (generatedAt: string) =>
+    renderHome(
+      {
+        leaderboard: {
+          totalTracked: 13263,
+          generatedAt,
+          entries: [
+            {
+              rank: 1,
+              tag: "#2PP",
+              name: "Player 1",
+              clan: "",
+              trophies: 5000,
+              // The server's flag stays fresh; only the clock decides.
+              freshness: { state: "fresh", observedAt, ageSeconds: 0 },
+              state: "available",
+            },
+          ],
+        },
+        query: "",
+        error: null,
+        search: null,
+      },
+      "",
+    );
+  expect(await render("2026-10-04T04:10:00Z")).not.toContain("more than 10 minutes old");
+  expect(await render("2026-10-04T04:10:01Z")).toContain(
+    "1 of 1 more than 10 minutes old",
+  );
 });
 
 describe("home search loading", () => {

@@ -342,6 +342,9 @@ describe("historical player-season client boundary", () => {
           has_adjustment: true,
           adjustment_total: -15,
           flags: ["late_data"],
+          eod_state: "provisional",
+          eod_change: 1010,
+          eod_change_state: "accepted",
         },
       ],
     };
@@ -367,6 +370,18 @@ describe("historical player-season client boundary", () => {
     expect(partialDay.flags).toEqual(["late_data"]);
     expect(partialDay.hasAdjustment).toBe(true);
     expect(partialDay.adjustmentTotal).toBe(-15);
+    // Older summaries have no EOD fields: they stay unknown, never 0.
+    expect(completeDay).toMatchObject({
+      eodState: null,
+      eodChange: null,
+      eodChangeState: null,
+    });
+    expect(partialDay).toMatchObject({
+      netChange: 10,
+      eodState: "provisional",
+      eodChange: 1010,
+      eodChangeState: "accepted",
+    });
   });
 
   it("keeps official history separate when tracked day detail is unavailable", async () => {
@@ -437,7 +452,7 @@ describe("historical player-season client boundary", () => {
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
-  it("rejects malformed seasons, oversized days, and embedded battles", async () => {
+  it("rejects malformed seasons, oversized days, bad EOD states, and embedded battles", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -460,6 +475,15 @@ describe("historical player-season client boundary", () => {
           JSON.stringify({
             ...seasonPayload(),
             daily_entries: [{ ...seasonPayload().daily_entries[0], battles: [] }],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...seasonPayload(),
+            daily_entries: [{ ...seasonPayload().daily_entries[0], eod_state: "final" }],
           }),
           { status: 200 },
         ),
@@ -497,6 +521,9 @@ describe("historical player-season client boundary", () => {
       status: 502,
       payload: { error: "malformed" },
     });
+    await expect(
+      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
       createPythonClient().getPlayerSeason("#2PP", "1785714000"),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
