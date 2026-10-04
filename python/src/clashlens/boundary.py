@@ -22,6 +22,7 @@ from .db import (
 )
 from .domain import RANKED_DAY_DURATION, season_is_current
 from .domain_repair import boundary_held
+from .past_reset_pacing import past_reset_correction_waits
 
 
 def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
@@ -1186,8 +1187,15 @@ def _record_boundary_generation(
         fully_published = (
             _text_value(current[2]) == "published"
             and _text_value(current[3]) == "published"
-            # A repair campaign holding this Reset keeps the change queued.
-            and not (changed and boundary_held(connection, boundary_at))
+            # A repair campaign holding this Reset, or a past Reset not yet
+            # due to rebuild, keeps the change queued.
+            and not (
+                changed
+                and (
+                    boundary_held(connection, boundary_at)
+                    or past_reset_correction_waits(connection, boundary_at)
+                )
+            )
         )
         active_target_correction = connection.execute(
             """

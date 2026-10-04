@@ -26,6 +26,7 @@ from .db import (
 )
 from .domain import DomainRuleError, battle_window
 from .domain_repair import boundary_held
+from .past_reset_pacing import past_reset_correction_waits
 
 
 def reevaluate_boundary_publications(database) -> int:
@@ -121,7 +122,7 @@ def reevaluate_boundary_publications(database) -> int:
                 )
             corrections = connection.execute(
                 """
-                SELECT source_generation_id
+                SELECT source_generation_id, boundary_at
                 FROM boundary_publication_corrections
                 WHERE state IN ('queued', 'pending_inputs')
                   AND boundary_at = ANY(%s::timestamptz[])
@@ -130,7 +131,9 @@ def reevaluate_boundary_publications(database) -> int:
                 """,
                 (boundaries,),
             ).fetchall()
-            for (source_generation_id,) in corrections:
+            for source_generation_id, boundary_at in corrections:
+                if past_reset_correction_waits(connection, boundary_at):
+                    continue
                 _maybe_emit_boundary_signal(
                     database, connection, generation_id=int(source_generation_id)
                 )
@@ -225,8 +228,11 @@ def _maybe_emit_boundary_signal(
             """,
             (generation_id,),
         )
-        # A repair campaign holding this Reset starts no queued correction.
-        if boundary_held(connection, row[0]):
+        # A repair campaign holding this Reset, or a past Reset not yet due
+        # to rebuild, starts no queued correction.
+        if boundary_held(connection, row[0]) or past_reset_correction_waits(
+            connection, row[0]
+        ):
             return
         queued = connection.execute(
             """
@@ -1096,12 +1102,14 @@ def _queue_boundary_army_correction(
     ).fetchone()
     if current is None or current[2] is None or _text_value(current[1]) == "superseded":
         return
-    # A repair campaign holding this Reset leaves the published generation
-    # and queues the correction, as for one not yet published.
+    # A repair campaign holding this Reset, or a past Reset not yet due to
+    # rebuild, leaves the published generation and queues the correction,
+    # as for one not yet published.
     if (
         _text_value(current[0]) == "published"
         and _text_value(current[1]) == "published"
         and not boundary_held(connection, boundary_at)
+        and not past_reset_correction_waits(connection, boundary_at)
     ):
         connection.execute(
             """
