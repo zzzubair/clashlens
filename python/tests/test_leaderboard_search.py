@@ -284,7 +284,7 @@ def test_players_waiting_for_their_season_reset_stay_off_the_live_board(
             database.close()
 
 
-def test_trophies_unchanged_since_the_frozen_final_board_wait_for_the_season_reset(
+def test_first_day_trophies_equal_to_the_frozen_final_board_wait_for_the_season_reset(
     database_url: str,
 ):
     from datetime import UTC, datetime, timedelta
@@ -302,7 +302,6 @@ def test_trophies_unchanged_since_the_frozen_final_board_wait_for_the_season_res
         "#P50": (new_season, 5000, 5000),  # finished September on 5,000
         "#PMV": (new_season, 5040, 5957),  # battled since the Reset
         "#PNF": (new_season, 5100, None),  # missing from the frozen board
-        "#PRT": (new_season, 5957, 5957),  # reset, then battled back to 5,957
     }
     with migrated_production_database(
         database_url, include_compact_collector=True
@@ -348,24 +347,6 @@ def test_trophies_unchanged_since_the_frozen_final_board_wait_for_the_season_res
                         """,
                         (snapshot_id, position, frozen, season_start, tag),
                     )
-                connection.execute(
-                    """
-                    INSERT INTO player_profile_versions (
-                        player_id, observation_id, normalized_tag, endpoint_version,
-                        schema_version, parser_version, observed_at,
-                        source_http_status, name, trophies, league_tier_id,
-                        league_tier_name, eligibility_state,
-                        current_league_season_id, profile_json
-                    )
-                    SELECT player_id, observation_id, normalized_tag, endpoint_version,
-                           schema_version, 'profile-parser-earlier', %s,
-                           source_http_status, name, 5000, league_tier_id,
-                           league_tier_name, eligibility_state,
-                           current_league_season_id, profile_json
-                    FROM player_profile_versions WHERE normalized_tag = '#PRT'
-                    """,
-                    (season_start + timedelta(minutes=5),),
-                )
 
             def check(now, waiting):
                 board = api_leaderboard.get_live_leaderboard(
@@ -407,9 +388,9 @@ def test_trophies_unchanged_since_the_frozen_final_board_wait_for_the_season_res
                 )
                 assert average["sample_size"] == len(players) - len(waiting)
 
-            # The frozen September trophies, other than 5,000, wait until a
-            # profile since the Reset shows other trophies, on any day.
-            for day in (0, 1, 27):
-                check(season_start + timedelta(days=day, minutes=20), {"#PH2", "#PH3"})
+            # Day 1: the frozen September trophies, other than 5,000, still wait.
+            check(season_start + timedelta(minutes=20), {"#PH2", "#PH3"})
+            # Day 2 compares the Season id alone.
+            check(season_start + timedelta(days=1, minutes=20), {"#PH2"})
         finally:
             database.close()

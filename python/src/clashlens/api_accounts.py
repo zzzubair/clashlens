@@ -1064,7 +1064,7 @@ def list_groups(
             SELECT group_row.public_id, group_row.name, player.normalized_tag,
                    player.active, COALESCE(accepted.name, latest.name),
                    accepted.trophies, accepted.current_league_season_id,
-                   {_frozen_trophies_sql("player", "%s")}
+                   {_frozen_trophies_sql("player.id", "%s")}
             FROM account_groups AS group_row
             LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
             {_MEMBER_JOINS}
@@ -1263,7 +1263,7 @@ def _group_players(
         SELECT player.normalized_tag, player.active,
                COALESCE(accepted.name, latest.name), accepted.trophies,
                accepted.current_league_season_id,
-               {_frozen_trophies_sql("player", "%s")}
+               {_frozen_trophies_sql("player.id", "%s")}
         FROM account_group_players AS member
         {_MEMBER_JOINS}
         WHERE member.group_id = %s

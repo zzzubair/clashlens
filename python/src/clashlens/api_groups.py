@@ -98,7 +98,7 @@ def get_group_comparison(
                 SELECT player.id, player.active, profile.name, profile.trophies,
                        player.current_observed_at, player.current_profile_confirmed_at,
                        profile.current_league_season_id,
-                       {_frozen_trophies_sql("player", "%s")}
+                       {_frozen_trophies_sql("player.id", "%s")}
                 FROM players AS player
                 LEFT JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id

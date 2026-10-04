@@ -457,10 +457,9 @@ def _text(value: Any) -> Any:
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
-def _frozen_trophies_sql(player: str, reset_at: str) -> str:
-    """The ``player`` row's trophies on the published frozen final board of
-    the day that ended at ``reset_at``, or NULL once any accepted profile
-    observed since that Reset showed other trophies."""
+def _frozen_trophies_sql(player_id: str, reset_at: str) -> str:
+    """A player's trophies on the published frozen final board of the day
+    that ended at ``reset_at``, or NULL. A NULL ``reset_at`` matches nothing."""
     return f"""(
         SELECT frozen_entry.trophies
         FROM leaderboard_snapshots AS frozen_board
@@ -469,14 +468,7 @@ def _frozen_trophies_sql(player: str, reset_at: str) -> str:
         WHERE frozen_board.snapshot_kind = 'frozen'
           AND frozen_board.state = 'published'
           AND frozen_board.boundary_at = {reset_at}::timestamptz
-          AND frozen_entry.player_id = {player}.id
-          AND NOT EXISTS (
-              SELECT 1 FROM player_profile_versions AS since_reset
-              WHERE since_reset.normalized_tag = {player}.normalized_tag
-                AND since_reset.observed_at >= frozen_board.boundary_at
-                AND since_reset.source_contract_state = 'accepted'
-                AND since_reset.trophies <> frozen_entry.trophies
-          )
+          AND frozen_entry.player_id = {player_id}
     )"""
 
 

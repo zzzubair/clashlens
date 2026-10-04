@@ -283,6 +283,84 @@ describe("historical player-season client boundary", () => {
     },
   );
 
+  it.each([
+    [5957, null],
+    [5000, 5000],
+  ])(
+    "works back to a day 1 start from day 2's saved %s only when it gives 5,000",
+    async (dayTwoStart, expected) => {
+      const event = (id: string, change: number) => ({
+        battle_id: id,
+        battle_timestamp: "2026-10-05T13:00:00Z",
+        opponent: { tag: "#2PY", name: "Opponent" },
+        stars: 3,
+        destruction_percentage: 100,
+        trophy_change: change,
+      });
+      const day = (start: string, end: string, dayNumber: number) => ({
+        ranked_day_start: start,
+        ranked_day_end: end,
+        season_day_number: dayNumber,
+        state: "Partial",
+        confidence: "partial",
+        completeness: { state: "partial", reason: "No saved reset total." },
+        public_confidence: "partial",
+        uncertainty_reasons: [],
+        start_trophies: dayNumber === 2 ? dayTwoStart : null,
+        attack_count: dayNumber === 1 ? 8 : 0,
+        attack_three_star_count: dayNumber === 1 ? 8 : 0,
+        attack_gain: dayNumber === 1 ? 320 : 0,
+        defense_count: dayNumber === 1 ? 8 : 0,
+        defense_three_star_count: dayNumber === 1 ? 8 : 0,
+        defense_loss: dayNumber === 1 ? 320 : 0,
+        net_trophy_change: null,
+        offense_events:
+          dayNumber === 1 ? Array.from({ length: 8 }, (_, i) => event(`a${i}`, 40)) : [],
+        defense_events:
+          dayNumber === 1 ? Array.from({ length: 8 }, (_, i) => event(`d${i}`, -40)) : [],
+      });
+      const days = [
+        day("2026-10-05T05:00:00Z", "2026-10-06T05:00:00Z", 1),
+        day("2026-10-06T05:00:00Z", "2026-10-07T05:00:00Z", 2),
+      ];
+      const observedAt = "2026-10-07T06:00:00Z";
+      const payload = {
+        tag: "#2PP",
+        name: "Nova",
+        trophies: dayTwoStart,
+        season_reset_pending: false,
+        current_league_season_id: "1791176400",
+        observed_at: observedAt,
+        screen_ready: {
+          days,
+          current_day_start: null,
+          recent_day_starts: days.map((d) => d.ranked_day_start),
+          season_day_starts: days.map((d) => d.ranked_day_start),
+          season: null,
+          data_quality: [],
+          provenance: {
+            source: "test",
+            observed_at: observedAt,
+            freshness: "fresh",
+            confidence: "partial",
+            coverage: "partial",
+            version: "test",
+          },
+        },
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 })),
+      );
+      process.env.NODE_ENV = "test";
+      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+      const { createPythonClient } = await import("../../app/services/python.server");
+      const player = await createPythonClient().getPlayer("#2PP");
+      expect(player.seasonDays[0].startTrophies).toBe(expected);
+      expect(player.recentDays[0].startTrophies).toBe(expected);
+    },
+  );
+
   it("maps summarized seasons and one compact season without battle drilldown", async () => {
     const fetchMock = vi
       .fn()
