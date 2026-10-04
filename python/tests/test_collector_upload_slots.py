@@ -469,46 +469,116 @@ def test_stopping_ends_lock_retries_and_keeps_the_saved_response(held: str) -> N
     assert client.fetch_count == 1
 
 
-def test_a_held_player_never_delays_another_players_reset_answer() -> None:
-    # Both profiles share one disk-write lock; at 05:00 a worker still holds #2P0P.
+def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #2P0P and #2P2G share one disk-write lock. A worker holds #2P0P from
+    # before 05:00 until after the Reset pair for #2P2G must finish.
+    reset_at = datetime(2026, 10, 5, 5, tzinfo=UTC)
+
+    class Clock(datetime):
+        current = reset_at - timedelta(seconds=2)
+
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return cls.current
+
+    monkeypatch.setattr(collector_module, "datetime", Clock)
+    reset_pair = CollectorIntent(
+        "reset_baseline", reset_at, 2, "#2P2G", work_id=7, sweep_id=1,
+        battle_log_required=False,
+    )
+
+    class ResetStore(_Store):
+        def __init__(self, spool: _Spool) -> None:
+            super().__init__(spool)
+            self.sweeps: list[datetime] = []
+            self.completed: list[int] = []
+            self.regular = ["#2P0P", "#2Q2G", "#2Q8G"]
+
+        def record_response(self, handoff: ResponseHandoff) -> object:
+            if handoff.identity_key == "#2P0P":
+                raise psycopg.errors.LockNotAvailable("the worker holds #2P0P")
+            return super().record_response(handoff)
+
+        def claim_due_players(
+            self, limit: int, now: datetime, first_battle_pending: bool | None = None
+        ) -> list[CollectorWork]:
+            # As in the database, an unfinished Reset pair holds regular checks.
+            if (now >= reset_at and 7 not in self.completed) or not self.regular:
+                return []
+            if now < reset_at and self.regular[0] != "#2P0P":
+                return []
+            tag = self.regular.pop(0)
+            return [CollectorWork(len(self.regular) + 10, tag, now)]
+
+        def begin_reset(self, boundary: datetime, *, local_regular_inflight: int) -> int:
+            self.sweeps.append(boundary)
+            return 1
+
+        @staticmethod
+        def expire_settlement_checks(_now: datetime) -> int:
+            return 0
+
+        def pending_intents(
+            self, limit: int, now: datetime, *, interactive: bool, held: list[int]
+        ) -> list[CollectorIntent]:
+            due = not interactive and self.sweeps and 7 not in self.completed
+            return [reset_pair] if due else []
+
+        def complete_intent(self, work_id: int) -> bool:
+            self.completed.append(work_id)
+            return True
+
+    class Client(_Client):
+        def __init__(self, spool: _Spool) -> None:
+            super().__init__(spool)
+            self.tags: list[str] = []
+
+        async def fetch_player(self, pool: object, tag: str, endpoint: str) -> FetchedResponse:
+            self.tags.append(tag)
+            return await super().fetch_player(pool, tag, endpoint)  # type: ignore[arg-type]
+
     spool = _Spool()
-    store = _Store(spool)
-    collector = _collector(spool, store, _Client(spool))
-    record = store.record_response
-
-    def held_for_one_player(handoff: ResponseHandoff) -> object:
-        if handoff.identity_key == "#2P0P":
-            raise psycopg.errors.LockNotAvailable("the worker holds #2P0P")
-        return record(handoff)
-
-    store.record_response = held_for_one_player  # type: ignore[method-assign]
+    store = ResetStore(spool)
+    client = Client(spool)
+    collector = _collector(spool, store, client)
     now = datetime.now(UTC)
     assert collector._handoff_lock(
         _handoff_for(collector, "#2P0P", now)
     ) is collector._handoff_lock(_handoff_for(collector, "#2P2G", now))
 
     async def scenario() -> None:
-        held = collector.collect_player(
-            CollectorWork(1, "#2P0P", now), lane="ordinary", endpoints=("profile",)
-        )
-        assert await held == ["recorded"]
-        reset = collector.collect_player(
-            CollectorWork(2, "#2P2G", now, collector_work_id=7),
-            lane="reset",
-            endpoints=("profile",),
-        )
-        assert await asyncio.wait_for(reset, 1) == ["recorded"]
-        regular = collector.collect_player(
-            CollectorWork(3, "#2Q2G", now), lane="ordinary", endpoints=("profile",)
-        )
-        assert await asyncio.wait_for(regular, 1) == ["recorded"]
-        assert len(collector._later_commits) == 1
-        collector._stopping.set()
-        await asyncio.wait(set(collector._later_commits))
+        stop = asyncio.Event()
+        loops = [
+            asyncio.create_task(collector._regular_loop(stop, 0.01)),
+            asyncio.create_task(collector._intent_loop(stop, False, 0.01)),
+        ]
+        try:
+            while not collector._later_commits or collector.regular_inflight:
+                await asyncio.sleep(0.01)
+            assert store.sweeps == []
+            Clock.current = reset_at + timedelta(seconds=1)
+            while "#2Q8G" not in client.tags:
+                await asyncio.sleep(0.01)
+                assert time.monotonic() - started < 5
+            # #2P0P's answer is still waiting for the worker.
+            assert collector._later_commits
+            assert "#2P0P" not in {h.identity_key for h in store.handoffs}
+        finally:
+            waiting = list(collector._later_commits)
+            stop.set()
+            collector._stopping.set()
+            await asyncio.gather(*loops)
+            await asyncio.gather(*waiting, return_exceptions=True)
 
+    started = time.monotonic()
     asyncio.run(scenario())
 
-    assert [handoff.identity_key for handoff in store.handoffs] == ["#2P2G", "#2Q2G"]
+    assert store.sweeps == [reset_at]
+    assert store.completed == [7]
+    assert client.tags[0] == "#2P0P"
+    assert client.tags.index("#2P2G") < client.tags.index("#2Q2G")
 
 
 def _handoff_for(collector: collector_module.Collector, tag: str, now: datetime) -> ResponseHandoff:

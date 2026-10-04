@@ -242,6 +242,46 @@ up_stack
     assert collector.get("CLASHLENS_REGULAR_PARALLELISM") == forwarded
 
 
+@pytest.mark.parametrize(
+    ("pids", "setting", "accepted"),
+    [
+        # Six keys at 25 a second: 300 save and 42 request threads, plus 64.
+        ("512", None, True),
+        ("400", None, False),
+        ("400", "256", True),
+    ],
+)
+def test_ops_refuses_collector_threads_beyond_its_process_limit(
+    tmp_path: Path, pids: str, setting: str | None, accepted: bool
+) -> None:
+    ops = Path(__file__).resolve().parents[2] / "ops"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$1" help >/dev/null
+STATE_DIR="$2"
+load_fixture_config
+COLLECTOR_PIDS=$3
+[[ -z "$4" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$4
+validate_runtime_values
+""",
+            "test-ops-threads",
+            str(ops),
+            str(tmp_path),
+            pids,
+            setting or "",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr
+    if not accepted:
+        assert "exceed CLASHLENS_COLLECTOR_PIDS=400" in result.stderr
+
+
 def test_cli_loads_current_and_previous_hmac_keys_from_files(tmp_path: Path) -> None:
     current = tmp_path / "current.key"
     previous = tmp_path / "previous.key"

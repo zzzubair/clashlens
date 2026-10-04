@@ -155,7 +155,9 @@ and at most 384: 384 with seven keys at 28 a second, which would otherwise be
 1 to 384) overrides it. The collector has a save thread for each slot, and
 request threads (normally 48) share what the save threads leave of 448, so the
 two together keep 64 of the container's 512 processes and threads for database,
-archive and other threads. Its database connections stay at 32 whatever the slot
+archive and other threads. Before stopping anything, `./ops up` refuses settings
+whose save and request threads plus those 64 exceed `CLASHLENS_COLLECTOR_PIDS`.
+Its database connections stay at 32 whatever the slot
 count, so more slots cannot use more of PostgreSQL's 100 connections
 (production used 52 on 2026-10-03).
 
