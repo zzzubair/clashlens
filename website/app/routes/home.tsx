@@ -15,7 +15,7 @@ import { SearchSuggestions, usePlayerSuggestions } from "../components/PlayerSea
 import {
   LocalTimestamp,
   OLD_UPDATE_SECONDS,
-  useCurrentTime,
+  useServerTime,
 } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
@@ -87,7 +87,7 @@ export default function Home() {
 
   const leaderboard = data.leaderboard;
   const latestObservedAt = leaderboard ? latestObservation(leaderboard.entries) : null;
-  const now = useCurrentTime(leaderboard?.generatedAt);
+  const now = useServerTime(leaderboard?.generatedAt);
   const staleEntries =
     leaderboard?.entries.filter(
       (entry) =>
