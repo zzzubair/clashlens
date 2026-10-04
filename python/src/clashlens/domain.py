@@ -246,11 +246,10 @@ def season_is_current(profile_season_id: str | None, at: datetime) -> bool:
     return profile_season_id == ranked_day_for(at).official_season_id
 
 
-def season_opening_reset(at: datetime) -> datetime | None:
-    """The Reset that opened the Season when ``at`` is on its first Legend
-    day. Its frozen final board holds each player's pre-Reset trophies."""
-    day = ranked_day_for(at)
-    return day.start if day.day_number == 1 else None
+def season_opening_reset(at: datetime) -> datetime:
+    """The Reset that opened the Season ``at`` falls in. Its frozen final
+    board holds each player's pre-Reset trophies."""
+    return ranked_day_for(at).season_start
 
 
 def awaits_season_reset(
@@ -260,13 +259,13 @@ def awaits_season_reset(
     at: datetime,
 ) -> bool:
     """True when a profile's trophies come from before that player's Season
-    reset: it names an earlier Season, or on the Season's first Legend day it
-    still shows the player's frozen pre-Reset final trophies, unless 5,000."""
+    reset: it names an earlier Season, or it still shows the player's frozen
+    final trophies from before the Season-opening Reset, unless 5,000.
+    ``frozen_trophies`` is NULL once a profile since that Reset differed."""
     if not season_is_current(profile_season_id, at):
         return True
     return (
-        season_opening_reset(at) is not None
-        and trophies is not None
+        trophies is not None
         and trophies != SEASON_START_TROPHIES
         and trophies == frozen_trophies
     )

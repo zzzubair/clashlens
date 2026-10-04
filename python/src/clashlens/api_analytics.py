@@ -792,12 +792,12 @@ def get_basic_analytics(
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
             -- Trophies from before a player's Season reset are left out,
-            -- including first-day trophies still equal to the frozen final board.
+            -- including trophies unchanged since the Season's frozen final board.
             WHERE player.active = true
               AND profile.current_league_season_id = %s
               AND NOT COALESCE(
                   profile.trophies <> {SEASON_START_TROPHIES}
-                  AND profile.trophies = {_frozen_trophies_sql("player.id", "%s")},
+                  AND profile.trophies = {_frozen_trophies_sql("player", "%s")},
                   false
               )
             """,

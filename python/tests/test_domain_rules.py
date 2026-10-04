@@ -227,22 +227,23 @@ OCTOBER, SEPTEMBER = "1791176400", "1788757200"
 @pytest.mark.parametrize(
     "at,season_id,trophies,frozen,waiting",
     [
-        # Day 1 of October, frozen September final trophies 5,957.
+        # October, frozen September final trophies 5,957.
         (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5000, 5957, False),
         (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), SEPTEMBER, 5957, 5957, True),
         (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5957, 5957, True),
         (datetime(2026, 10, 6, 4, 59, tzinfo=UTC), OCTOBER, 5957, 5957, True),
         # A player whose frozen final trophies were exactly 5,000.
         (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5000, 5000, False),
-        # Moved since the Reset, or no frozen value saved for this player.
+        # Moved since the Reset, or no frozen value saved for this player
+        # (also the case once any profile since the Reset showed other trophies).
         (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5040, 5957, False),
         (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5957, None, False),
-        # Day 2 and an ordinary daily Reset use the Season id alone.
-        (datetime(2026, 10, 6, 5, 10, tzinfo=UTC), OCTOBER, 5957, 5957, False),
-        (datetime(2026, 10, 4, 5, 10, tzinfo=UTC), SEPTEMBER, 5957, 5957, False),
+        # Later days keep waiting while the trophies stay unchanged.
+        (datetime(2026, 10, 6, 5, 10, tzinfo=UTC), OCTOBER, 5957, 5957, True),
+        (datetime(2026, 11, 1, 4, 59, tzinfo=UTC), OCTOBER, 5957, 5957, True),
     ],
 )
-def test_first_day_trophies_equal_to_the_frozen_final_board_await_the_season_reset(
+def test_trophies_unchanged_since_the_frozen_final_board_await_the_season_reset(
     at: datetime, season_id: str, trophies: int, frozen: int | None, waiting: bool
 ) -> None:
     assert awaits_season_reset(season_id, trophies, frozen, at) is waiting

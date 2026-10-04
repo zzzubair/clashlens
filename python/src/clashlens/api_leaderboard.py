@@ -20,9 +20,9 @@ _FOCUS_NEIGHBORS = 5
 # Shared membership and confirmation rule for the page and operator measurements.
 # A profile still naming an earlier Season than the calendar shows trophies from
 # before that player's Season reset, so it waits off the board until it updates.
-# On a Season's first Legend day, trophies still equal to the player's frozen
-# pre-Reset final trophies (other than 5,000) wait the same way.
-_FROZEN_TROPHIES_SQL = _frozen_trophies_sql("player.id", "%(opening_reset)s")
+# Trophies unchanged since the player's frozen final trophies before the
+# Season-opening Reset (other than 5,000) wait the same way.
+_FROZEN_TROPHIES_SQL = _frozen_trophies_sql("player", "%(opening_reset)s")
 _LIVE_CANDIDATES_SQL = f"""
 SELECT player.normalized_tag, profile.name, profile.trophies,
        greatest(

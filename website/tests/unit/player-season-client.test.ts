@@ -199,16 +199,20 @@ describe("historical player-season client boundary", () => {
 
   it.each([
     // October day 1 after the player's Season reset.
-    ["2026-10-05", 1, "1791176400", false, "2026-10-05T20:00:00Z", 5000],
+    ["2026-10-05", 1, "1791176400", false, "2026-10-05T20:00:00Z", 5000, null, 5000],
     // October day 1 still read from a September profile.
-    ["2026-10-05", 1, "1788757200", true, "2026-10-05T20:00:00Z", null],
+    ["2026-10-05", 1, "1788757200", true, "2026-10-05T20:00:00Z", 5000, null, null],
     // October day 1 from an October profile still showing pre-Reset trophies.
-    ["2026-10-05", 1, "1791176400", true, "2026-10-05T20:00:00Z", null],
+    ["2026-10-05", 1, "1791176400", true, "2026-10-05T20:00:00Z", 5000, null, null],
+    // A day 1 start other than 5,000 is not one, calculated or saved.
+    ["2026-10-05", 1, "1791176400", false, "2026-10-05T20:00:00Z", 5957, null, null],
+    ["2026-10-05", 1, "1791176400", false, "2026-10-06T06:00:00Z", 5000, 5957, null],
+    ["2026-10-05", 1, "1791176400", false, "2026-10-06T06:00:00Z", 5000, 5000, 5000],
     // September day 28 read from a September profile, seen at October 5 05:10.
-    ["2026-10-04", 28, "1788757200", true, "2026-10-04T23:00:00Z", 5000],
+    ["2026-10-04", 28, "1788757200", true, "2026-10-04T23:00:00Z", 5000, null, 5000],
   ])(
     "uses an in-day profile as a day total only for its own Season: %s day %s",
-    async (date, dayNumber, seasonId, pending, observedAt, expected) => {
+    async (date, dayNumber, seasonId, pending, observedAt, trophies, saved, expected) => {
       // A day with all sixteen battles, read before any stored starting total.
       const event = (id: string, change: number) => ({
         battle_id: id,
@@ -229,7 +233,7 @@ describe("historical player-season client boundary", () => {
         completeness: { state: "partial", reason: "No saved reset total." },
         public_confidence: "partial",
         uncertainty_reasons: [],
-        start_trophies: null,
+        start_trophies: saved,
         attack_count: 8,
         attack_three_star_count: 8,
         attack_gain: 320,
@@ -243,7 +247,7 @@ describe("historical player-season client boundary", () => {
       const payload = {
         tag: "#2PP",
         name: "Nova",
-        trophies: 5000,
+        trophies,
         season_reset_pending: pending,
         current_league_season_id: seasonId,
         observed_at: observedAt,

@@ -136,7 +136,7 @@ def get_player_page(
                    profile.profile_json -> 'clan' ->> 'name',
                    player.current_profile_confirmed_at,
                    profile.current_league_season_id,
-                   {_frozen_trophies_sql("player.id", "%s")}
+                   {_frozen_trophies_sql("player", "%s")}
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -150,7 +150,7 @@ def get_player_page(
             return None
         observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
         # A profile naming an earlier Season, or still showing the frozen
-        # pre-Reset trophies on a Season's first day, shows trophies from
+        # pre-Reset trophies since the Season opened, shows trophies from
         # before this player's Season reset, not their current Season total.
         season_reset_pending = awaits_season_reset(
             _text(row[12]), int(row[4]), row[13], now
@@ -417,7 +417,7 @@ def player_cards(
         for row in connection.execute(
             f"""
             SELECT player.id, profile.trophies, profile.current_league_season_id,
-                   {_frozen_trophies_sql("player.id", "%s")}
+                   {_frozen_trophies_sql("player", "%s")}
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -663,7 +663,7 @@ def search_known_players(
                        player.eligibility_state, player.active,
                        profile.profile_json -> 'clan' ->> 'name' AS clan,
                        profile.current_league_season_id,
-                       {_frozen_trophies_sql("player.id", "%(opening_reset)s")}
+                       {_frozen_trophies_sql("player", "%(opening_reset)s")}
                            AS frozen_trophies
                 FROM players AS player
                 JOIN LATERAL (

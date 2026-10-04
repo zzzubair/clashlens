@@ -424,6 +424,9 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
 // before it, as BATTLE_DAY_GRACE in python/src/clashlens/domain.py.
 const BATTLE_DAY_GRACE_MS = 5 * 60 * 1000;
 const SEASON_MS = 28 * 24 * 60 * 60 * 1000;
+// Every Legend I player starts a Season at exactly this many trophies, as
+// SEASON_START_TROPHIES in python/src/clashlens/domain.py.
+const SEASON_START_TROPHIES = 5000;
 
 function calculateStartingTrophies(
   days: RankedDaySummary[],
@@ -438,6 +441,8 @@ function calculateStartingTrophies(
     const [start, end] = bounds(day);
     const next = nextDay;
     nextDay = day;
+    if (day.dayNumber === 1 && day.startTrophies !== SEASON_START_TROPHIES)
+      day.startTrophies = null;
     if (day.startTrophies != null || !Number.isFinite(start) || !Number.isFinite(end))
       continue;
     const events = [...day.offenseEvents, ...day.defenseEvents];
@@ -490,7 +495,8 @@ function calculateStartingTrophies(
     if (
       trophies === undefined ||
       !Number.isSafeInteger(trophies - netChange) ||
-      trophies - netChange < 0
+      trophies - netChange < 0 ||
+      (day.dayNumber === 1 && trophies - netChange !== SEASON_START_TROPHIES)
     )
       continue;
     day.startTrophies = trophies - netChange;
