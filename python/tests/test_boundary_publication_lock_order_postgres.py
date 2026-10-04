@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation, text
 from test_army_analytics_publication_postgres import _insert_confirmed_anchor
+from test_army_ingestion_postgres import _live_row, _unswept_battles
 from test_boundary_publication_postgres import (
     BOUNDARY,
     DAY_START,
@@ -376,3 +378,158 @@ def test_publication_can_point_at_a_result_while_a_rebuild_replaces_it(
                 ).fetchone()[0] == latest
         finally:
             database.close()
+
+
+def test_battle_logs_sharing_a_reset_when_its_sweep_is_saved_both_finish(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Two jobs sharing a Reset's lock when its sweep was saved each waited
+    # for the other to take the full lock, and the database aborted one.
+    with domain_database(database_url, include_coordinator=True) as ci:
+        battles = _unswept_battles(
+            ci, archive_server, {"#2PP": "u1x58", "#2PQ": "u2x58"}
+        )
+
+        def save_sweep() -> None:
+            with psycopg.connect(ci, autocommit=True) as collector:
+                players = collector.execute("SELECT id FROM players").fetchall()
+                _sweep_with_members(collector, [row[0] for row in players])
+
+        barrier = threading.Barrier(2, action=save_sweep, timeout=10)
+        original = boundary.lock_boundary_publication_once_swept
+        held = threading.local()
+
+        def hold_until_both_share(connection, boundary_at):
+            swept = original(connection, boundary_at)
+            if not getattr(held, "done", False):
+                held.done = True
+                barrier.wait()
+            return swept
+
+        monkeypatch.setattr(
+            boundary, "lock_boundary_publication_once_swept", hold_until_both_share
+        )
+        db = Database(ci)
+        results: dict[str, str] = {}
+
+        def save(tag: str) -> None:
+            try:
+                with db.pool.connection() as connection:
+                    with connection.transaction():
+                        army_ingestion._upsert_army_decodes(db, connection, battles[tag])
+                results[tag] = "saved"
+            except Exception as error:  # noqa: BLE001 - reported by the assertion
+                results[tag] = repr(error)
+
+        threads = [threading.Thread(target=save, args=(tag,)) for tag in battles]
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(60)
+        finally:
+            db.close()
+
+    assert results == {"#2PP": "saved", "#2PQ": "saved"}
+
+
+def test_redecode_after_its_evidence_check_keeps_a_later_correction(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # A redecode that had already checked the battle's report replaced a
+    # correction saved meanwhile with the older army.
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        jobs = []
+        for occurrence, code, minutes in (
+            ("before-correction", "u1x58", 1),
+            ("after-correction", "u2x58", 5),
+        ):
+            _, job_id = store_observation(
+                ci,
+                archive_server,
+                occurrence_key=occurrence,
+                endpoint="battle_log",
+                body=json.dumps({"items": [_live_row(True, "#8PP", code, ts)]}).encode(),
+                observed_at=ts + timedelta(minutes=minutes),
+                normalized_tag="#2PP",
+            )
+            jobs.append(job_id)
+        db, proc = _processor(ci, archive_server)
+        checked, resume = threading.Event(), threading.Event()
+        results: dict[str, str] = {}
+
+        def run(name, work) -> None:
+            try:
+                results[name] = work()
+            except Exception as error:  # noqa: BLE001 - reported by the assertion
+                results[name] = repr(error)
+
+        def redecode() -> str:
+            with db.pool.connection() as connection:
+                with connection.transaction():
+                    army_ingestion._upsert_army_decodes(db, connection, battle_ids)
+            return "processed"
+
+        redecoder = threading.Thread(target=run, args=("redecode", redecode))
+        corrector = threading.Thread(
+            target=run,
+            args=(
+                "correction",
+                lambda: proc.process_job(jobs[1], owner="correction").outcome,
+            ),
+        )
+        original_execute = psycopg.Connection.execute
+
+        def pause_after_evidence_check(connection, query, params=None, **kwargs):
+            cursor = original_execute(connection, query, params, **kwargs)
+            if (
+                threading.current_thread() is redecoder
+                and "FROM battle_perspectives" in str(query)
+                and not checked.is_set()
+            ):
+                checked.set()
+                assert resume.wait(timeout=20), "correction never released the redecode"
+            return cursor
+
+        try:
+            assert proc.process_job(jobs[0], owner="seed").outcome == "processed"
+            with db.pool.connection() as connection:
+                battle_ids = [
+                    row[0]
+                    for row in connection.execute("SELECT id FROM legend_battles")
+                ]
+                connection.execute(
+                    "UPDATE battle_army_decodes SET decoder_version = 'army-decoder-v1'"
+                )
+            monkeypatch.setattr(
+                psycopg.Connection, "execute", pause_after_evidence_check
+            )
+            redecoder.start()
+            assert checked.wait(timeout=10), "redecode never checked the report"
+            corrector.start()
+            deadline = time.monotonic() + 10
+            with psycopg.connect(ci, autocommit=True) as observer:
+                while corrector.is_alive() and not _advisory_waiters(observer):
+                    assert time.monotonic() < deadline, "correction never finished or waited"
+                    time.sleep(0.02)
+            resume.set()
+            redecoder.join(timeout=20)
+            corrector.join(timeout=20)
+            with db.pool.connection() as connection:
+                active = connection.execute(
+                    """
+                    SELECT raw_code FROM battle_army_decodes
+                    WHERE is_active AND decoder_version = %s
+                    """,
+                    (army_ingestion.DECODER_VERSION,),
+                ).fetchall()
+        finally:
+            resume.set()
+            for thread in (redecoder, corrector):
+                if thread.ident is not None:
+                    thread.join(timeout=20)
+            db.close()
+
+    assert results == {"redecode": "processed", "correction": "processed"}
+    assert [text(row[0]) for row in active] == ["u2x58"]
