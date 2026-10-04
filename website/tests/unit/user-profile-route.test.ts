@@ -64,9 +64,9 @@ const data = {
   error: null,
 };
 
-async function renderProfile(search: string) {
+async function renderProfile(search: string, loaderData: object = data) {
   const handler = createStaticHandler([
-    { path: "/users/:username", Component: UserRoute, loader: () => data },
+    { path: "/users/:username", Component: UserRoute, loader: () => loaderData },
   ]);
   const context = await handler.query(
     new Request(`https://clashlens.example/users/nova88${search}`),
@@ -119,4 +119,16 @@ it("shows each linked account as one card linking to its player page", async () 
   expect(demoted).toContain(
     'aria-describedby="linked-player-9PY-details linked-player-9PY-note"',
   );
+});
+
+it("says a failed profile read could not load instead of showing no linked accounts", async () => {
+  const html = await renderProfile("?linked=%232PP", {
+    user: null,
+    notFound: false,
+    error: { error: { code: "unavailable", message: "Try again later." } },
+  });
+  expect(html).toContain("Profile could not be loaded.");
+  expect(html).toContain('<a href="/users/nova88">Try again</a>');
+  expect(html).not.toContain("No linked accounts yet");
+  expect(html).not.toContain("Linked accounts");
 });
