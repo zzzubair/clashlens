@@ -17,8 +17,16 @@
   box-shadow: var(--cl-shadow);
 }
 
+/* Same focus ring as the home search: around the whole box, not the bare input. */
+.header-search-panel .search-controls:focus-within {
+  border-color: var(--cl-outline);
+  outline: 3px solid color-mix(in srgb, var(--cl-action) 22%, transparent);
+  outline-offset: 2px;
+}
+
 .header-search-panel .search-controls input {
   font-size: 1rem;
+  outline: none;
 }
 
 /* Suggestions stay inside the panel instead of floating over the page. */
@@ -26,6 +34,12 @@
   position: static;
   margin-top: 0.5rem;
   box-shadow: none;
+}
+
+/* The panel is narrow, so details sit under the name instead of squeezing it. */
+.header-search-panel .search-suggestion {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
 }
 
 .header-search-panel .search-suggestion-profile {
@@ -40,8 +54,23 @@
   display: none;
 }
 
+/* Make room for the search icon so the header never gains a row. */
+@media (min-width: 64.0625rem) {
+  .site-header:has(.header-search) {
+    column-gap: 2rem;
+  }
+
+  .site-header:has(.header-search) .primary-nav a {
+    padding-inline: 0.7rem;
+  }
+}
+
 /* Phones: a full-width sheet over the header. */
 @media (max-width: 34rem) {
+  .site-header:has(.header-search) .nav-account-name {
+    max-width: 4.5rem;
+  }
+
   .header-search-panel {
     position: absolute;
     top: 0;
@@ -76,5 +105,16 @@
     font-size: 0.875rem;
     font-weight: 650;
     cursor: pointer;
+  }
+}
+
+/* The narrowest phones show only the account icon; screen readers still hear the name. */
+@media (max-width: 23rem) {
+  .site-header:has(.header-search) .nav-account-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 }
