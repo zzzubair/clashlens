@@ -479,7 +479,10 @@ Season 0 profile with unchanged counts. A failed profile request is no
 evidence, so the next check retries it. Reset, settlement and Refresh requests
 are unchanged. The wait lives in collector memory and a restarted collector
 cannot tell who played, so it checks every Season 0 player as usual until the
-next Reset. Restarts are rare, so this costs little.
+next Reset. A restart after Reset therefore costs roughly 0.4 to 0.7 million
+extra profile requests that Legend day. `./ops up` leaves the collector running
+when its image and configuration are unchanged, so only deploys that change it,
+or use `--restart-collector`, pay this.
 
 In the fake-game check model (`tests/test_battle_log_schedule.py`), a day of
 checks 91 seconds apart, after a Reset the collector was running through,

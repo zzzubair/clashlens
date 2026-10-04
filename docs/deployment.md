@@ -393,13 +393,44 @@ the private API have no host port. Production discovery and the global Top-200
 request remain disabled until real collection is approved.
 
 `up` first checks configuration and existing resources without stopping services.
-Once those checks pass, it disables and stops the whole target. It then starts
-PostgreSQL by itself, applies every missing numbered migration in order,
+Once those checks pass, it disables and stops the whole target, except as described in
+[when up restarts the collector](#when-up-restarts-the-collector).
+It then starts PostgreSQL by itself, applies every missing numbered migration in order,
 verifies the fixed archive contract, rotates the admin and runtime-role
 passwords through standard input, and only then enables the application target.
 A failed migration leaves application services disabled for the next reboot.
 Re-running `up` applies only migrations
 whose recorded version is absent.
+
+### When up restarts the collector
+
+`up` leaves the collector running when nothing it runs on changed, because a
+restart empties its scheduling memory, such as the Season 0 wait in
+[collector polling](collector-polling.md). The collector cannot outlive the
+database, pod or network, so these four keep running, or restart, together.
+They keep running only when all of these hold since the last successful `up`:
+
+- the collector and PostgreSQL images have the same file layers and run
+  settings (build labels such as the commit are ignored);
+- their rendered service files, apart from the image line, their settings
+  files, the pod, network and database volume files, and the migration files
+  are unchanged;
+- the contents of their secrets are unchanged, compared by hash and never
+  printed;
+- all four are running and the collector and PostgreSQL containers are healthy.
+
+Otherwise, or with `./ops up --restart-collector`, `up` restarts all four as
+before. It prints which happened and why, for example `Restarting the collector
+with the database, pod and network: changed collector settings.` The API,
+worker, website, fixture services and timers always restart. Files are compared
+whole, so even a comment-only edit restarts the four; that is deliberate, because
+such edits are rare and a needless restart is safe. When the four keep running, an
+`up` that fails after comparing them, for example because the website is unhealthy, stops only
+the services it restarted and leaves the four running. While they keep running,
+the active release records their running images, so their image
+revision label can name an older commit than the release. The record of what
+they run with is `kept-services.env` in the state directory; it holds only
+hashes.
 
 ## PostgreSQL backups and recovery
 

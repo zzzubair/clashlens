@@ -697,6 +697,7 @@ def test_changed_checkout_is_rejected_before_remote_activity(runtime, tmp_path):
     checkout.mkdir()
     copied_ops = checkout / "ops"
     shutil.copy2(OPS, copied_ops)
+    shutil.copy2(OPS.with_name("ops-keep-running.sh"), checkout)
     copied_ops.write_bytes(copied_ops.read_bytes() + b"\n")
 
     result = subprocess.run(
@@ -724,6 +725,7 @@ def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
     checkout = tmp_path / "locale-checkout"
     checkout.mkdir()
     shutil.copy2(OPS, checkout / "ops")
+    shutil.copy2(OPS.with_name("ops-keep-running.sh"), checkout)
     (checkout / "website").mkdir()
     for name in ("A", "a", "a-b"):
         (checkout / "website" / name).write_text(name)
@@ -731,7 +733,7 @@ def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
 
     # The persisted release contract hashes relative paths and their file bytes
     # in byte order, independently of the service manager's language settings.
-    paths = ["ops", "website/A", "website/a", "website/a-b"]
+    paths = ["ops", "ops-keep-running.sh", "website/A", "website/a", "website/a-b"]
     records = b"".join(
         path.encode()
         + b"\0"
