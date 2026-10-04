@@ -170,9 +170,9 @@ describe("past-Season view", () => {
       expect(html).not.toContain("<dt>Final rank</dt>");
       expect(html).not.toContain(">12<");
       if (source === "official_league_history") {
-        expect(html).toContain("<dt>Final trophies</dt><dd>5812</dd>");
+        expect(html).toContain("<dt>Final trophies</dt><dd>5,812</dd>");
       } else {
-        expect(html).toContain("Final trophies: 5812");
+        expect(html).toContain("Final trophies: 5,812");
         expect(html).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
         expect(html).toContain('<th scope="col">Trophy change</th>');
         expect(html).not.toContain('<th scope="col">Net</th>');
