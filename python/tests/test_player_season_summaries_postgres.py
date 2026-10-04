@@ -255,6 +255,97 @@ def test_eod_change_uses_previous_day_and_day_one_5000(database_url: str) -> Non
             database.close()
 
 
+def test_saved_summary_hides_eod_and_net_for_days_missing_battles(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection, "#2PP")
+                _days(
+                    connection,
+                    player_id,
+                    {1: (5000, 5010), 2: (5010, 5030), 3: (5030, 5040), 28: (5300, 5320)},
+                )
+                # Saved before the rule: days 2 and 28 hold one attack of +20
+                # and a gap in the battle log, yet carry an EOD and a net.
+                for table, defense_loss in (
+                    ("api_player_daily_logs", "defense_loss"),
+                    ("ranked_day_versions", "observed_defense_loss"),
+                ):
+                    connection.execute(
+                        f"""
+                        UPDATE {table}
+                        SET attack_count = 1, defense_count = 0, attack_gain = 20,
+                            {defense_loss} = 0
+                        WHERE player_id = %s AND season_day_number IN (2, 28)
+                        """,
+                        (player_id,),
+                    )
+                connection.execute(
+                    """
+                    UPDATE api_player_daily_logs
+                    SET state = 'Partial', coverage = 'partial',
+                        net_trophy_change = 20,
+                        partial_reasons = '["battle_log_overlap_gap"]'::jsonb
+                    WHERE player_id = %s AND season_day_number IN (2, 28)
+                    """,
+                    (player_id,),
+                )
+                materialize_player_season(connection, player_id, SEASON)
+                connection.commit()
+            page = api_players.get_player_season_summary(database, "#2PP", SEASON)
+            assert [
+                (
+                    day["season_day_number"],
+                    day["end_trophies"],
+                    day["net_change"],
+                    day["eod_change"],
+                )
+                for day in page["daily_entries"]
+            ] == [(1, 5010, 10, 10), (2, None, None, None), (3, 5040, 10, None), (28, None, None, None)]
+            assert (page["end_trophies"], page["net_trophy_change"]) == (None, None)
+            assert [
+                season["end_trophies"]
+                for season in api_players.list_player_seasons(database, "#2PP")
+            ] == [None]
+            # Days saved without their coverage or battle counts are withheld
+            # only when their stored reasons name a battle log gap, and a day
+            # with all 8 attacks and 8 defenses keeps its numbers regardless.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE player_season_summaries
+                    SET daily_entries = (
+                        SELECT jsonb_agg(
+                            CASE WHEN entry ->> 'season_day_number' = '28'
+                                THEN entry - 'coverage'
+                                    || '{"attack_count": 8, "defense_count": 8}'
+                                ELSE entry - 'coverage' - 'attack_count'
+                                    - 'defense_count'
+                            END
+                            ORDER BY position
+                        )
+                        FROM jsonb_array_elements(daily_entries)
+                            WITH ORDINALITY AS item(entry, position)
+                    )
+                    """
+                )
+                connection.commit()
+            page = api_players.get_player_season_summary(database, "#2PP", SEASON)
+            assert [
+                (day["season_day_number"], day["end_trophies"], day["net_change"])
+                for day in page["daily_entries"]
+            ] == [(1, 5010, 10), (2, None, None), (3, 5040, 10), (28, 5320, 20)]
+            assert [
+                season["end_trophies"]
+                for season in api_players.list_player_seasons(database, "#2PP")
+            ] == [5320]
+        finally:
+            database.close()
+
+
 def test_missing_previous_eod_and_late_start_stay_unknown(database_url: str) -> None:
     """Partial history: tracking began on day 25, day 26 is missing and
     day 27's EOD is unknown, while the final trophies are known."""

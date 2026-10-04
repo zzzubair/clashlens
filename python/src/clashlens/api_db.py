@@ -14,7 +14,13 @@ from psycopg_pool import ConnectionPool
 from .catalog import catalog_name
 from .operating import database_pool_health
 from .profile import normalize_player_tag
-from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
+from .reconciliation import (
+    COVERAGE_GAP_REASONS,
+    MAX_DAILY_ATTACKS,
+    MAX_DAILY_DEFENSES,
+    all_battles_recorded,
+    day_totals_supported,
+)
 
 API_CONTRACT_VERSION = 2
 VERIFICATION_RESERVATION_SECONDS = 45
@@ -579,9 +585,6 @@ _BATTLE_SUM_NEUTRAL_REASONS = frozenset(
         "player_not_eligible",
     }
 )
-_DISPUTE_REASONS = frozenset(
-    {"perspective_disagreement", "duplicate_contribution_disagreement"}
-)
 
 
 def _battles_so_far_complete(
@@ -592,13 +595,11 @@ def _battles_so_far_complete(
     """Whether the listed battles are every battle of the day so far. The game
     allows 8 attacks and 8 defenses a day, so 8 of each leave none missing."""
     reasons = set(screen_day["uncertainty_reasons"])
-    all_battles = (
-        len(offense) == MAX_DAILY_ATTACKS
-        and len(defense) == MAX_DAILY_DEFENSES
-        and not reasons & _DISPUTE_REASONS
-    )
     return (
-        (all_battles or reasons <= _BATTLE_SUM_NEUTRAL_REASONS)
+        (
+            all_battles_recorded(len(offense), len(defense), reasons)
+            or reasons <= _BATTLE_SUM_NEUTRAL_REASONS
+        )
         and screen_day["attack_count"] == len(offense) <= MAX_DAILY_ATTACKS
         and screen_day["defense_count"] == len(defense) <= MAX_DAILY_DEFENSES
         and screen_day["attack_gain"] == sum(item["trophy_change"] for item in offense)
@@ -769,7 +770,9 @@ def _daily_log(day: Any) -> dict[str, Any]:
         "defense_count": None if day[11] is None else int(day[11]),
         "defense_three_star_count": None if day[12] is None else int(day[12]),
         "defense_loss": None if day[13] is None else int(day[13]),
-        "net_trophy_change": None if day[14] is None else int(day[14]),
+        "net_trophy_change": _shown_total(
+            day[14], _text(day[6]), day[8], day[11], _json_array(day[17])
+        ),
         "adjustments": _json_array(day[15]),
         "battles": _json_array(day[16]),
         "partial_reasons": _json_array(day[17]),
@@ -779,6 +782,60 @@ def _daily_log(day: Any) -> dict[str, Any]:
 
 def _json_array(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
+
+
+def _shown_total(
+    value: Any,
+    coverage: Any,
+    attack_count: Any,
+    defense_count: Any,
+    reasons: list[Any],
+) -> int | None:
+    """A saved EOD or net change, unless the day's battles were not all
+    captured. Rows saved before that rule still carry the numbers."""
+    if value is None or not _saved_totals_supported(
+        coverage, attack_count, defense_count, reasons
+    ):
+        return None
+    return int(value)
+
+
+def _saved_totals_supported(
+    coverage: Any, attack_count: Any, defense_count: Any, reasons: list[Any]
+) -> bool:
+    """A saved row without the coverage or battle counts needed to decide is
+    withheld only when its stored reasons name a battle log gap."""
+    if day_totals_supported(
+        coverage == "complete", attack_count, defense_count, reasons
+    ):
+        return True
+    if coverage == "partial" and attack_count is not None and defense_count is not None:
+        return False
+    return not any(
+        isinstance(reason, str) and reason in COVERAGE_GAP_REASONS
+        for reason in reasons
+    )
+
+
+def _withhold_unsupported_entries(entries: list[Any]) -> set[Any]:
+    """Apply the same rule to a saved Season summary's days and return the day
+    numbers withheld. A day's EOD change also needs the EOD of the day before."""
+    hidden: set[Any] = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or _saved_totals_supported(
+            entry.get("coverage"),
+            entry.get("attack_count"),
+            entry.get("defense_count"),
+            _json_array(entry.get("flags")),
+        ):
+            continue
+        hidden.add(entry.get("season_day_number"))
+        entry.update(end_trophies=None, eod_state=None, net_change=None)
+    for entry in entries:
+        number = entry.get("season_day_number") if isinstance(entry, dict) else None
+        if number in hidden or (number is not None and number - 1 in hidden):
+            entry.update(eod_change=None, eod_change_state=None)
+    return hidden
 
 
 def _historical_season_summary(record: dict[str, Any]) -> dict[str, Any]:
@@ -795,7 +852,7 @@ def _historical_season_summary(record: dict[str, Any]) -> dict[str, Any]:
     def _iso(value: Any) -> str | None:
         return None if value is None else value.astimezone(UTC).isoformat()
 
-    return {
+    summary = {
         "kind": "player-season-summary",
         "tag": _text(record["normalized_tag"]),
         "official_season_id": _text(record["official_season_id"]),
@@ -830,3 +887,9 @@ def _historical_season_summary(record: dict[str, Any]) -> dict[str, Any]:
         "projection_version": _text(record["projection_version"]),
         "published_at": _iso(record["published_at"]),
     }
+    hidden = _withhold_unsupported_entries(summary["daily_entries"])
+    if hidden:
+        summary["net_trophy_change"] = None
+    if 28 in hidden:
+        summary["end_trophies"] = None
+    return summary

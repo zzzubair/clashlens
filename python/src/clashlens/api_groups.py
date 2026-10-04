@@ -13,7 +13,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from . import api_player_lookup
-from .api_db import ApiDatabase, _screen_daily_log, _screen_events, _text
+from .api_db import (
+    ApiDatabase,
+    _screen_daily_log,
+    _screen_events,
+    _shown_total,
+    _text,
+)
 from .domain import ranked_day_for, season_is_current
 from .season_retirement import retired_day_ranges
 
@@ -217,7 +223,13 @@ def _window(
         # late, so it is counted but marked as able to change.
         if state == "complete" and start == day_starts[-1]:
             state = "correcting"
-        day_net = None if row[6] is None else int(row[6])
+        day_net = _shown_total(
+            row[6],
+            _text(row[3]),
+            row[7],
+            row[8],
+            list(row[5]) if isinstance(row[5], list) else [],
+        )
         days.append({"start": start.isoformat(), "state": state, "net": day_net})
         offense_events, defense_events = _screen_events(row[9])
         if state in {"complete", "correcting"} and day_net is not None:

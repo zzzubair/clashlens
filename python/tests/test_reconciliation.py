@@ -675,3 +675,69 @@ def test_a_finished_day_with_eight_attacks_and_eight_defenses_has_a_known_net() 
     ]
     assert [result.net_trophy_change for result in results] == [None] * len(unknown)
     assert "attack_count_exceeds_eight" in results[0].failure_reasons
+
+
+def test_incomplete_coverage_withholds_the_final_total_and_net() -> None:
+    no_overlap = list(_coverage())
+    no_overlap[1] = CoverageObservation(
+        observed_at=no_overlap[1].observed_at,
+        row_count=50,
+        battle_identities=("different",),
+        has_row_gap=False,
+        observation_id=102,
+    )
+    attack = BattleContribution("attack-1", "offense", 20)
+    attacks = tuple(BattleContribution(f"a{n}", "offense", 30) for n in range(8))
+    defenses = tuple(BattleContribution(f"d{n}", "defense", 25) for n in range(8))
+    sunday = ranked_day_for(datetime(2026, 10, 4, 12, tzinfo=UTC))
+    days = {
+        # One attack and no defenses were kept, but a log page was missed.
+        "missing battles": {"contributions": (attack,), "next_start_trophies": None},
+        # Eight attacks and no defenses: a missed defense would not show.
+        "missing defense": {"contributions": attacks, "next_start_trophies": None},
+        # Seven attacks and eight defenses: a missed attack would not show.
+        "missing attack": {
+            "contributions": (*attacks[1:], *defenses),
+            "next_start_trophies": None,
+        },
+        # Day 28: the Season reset makes any total 5,000, so the next start
+        # cannot expose the missed battles.
+        "season close": {
+            "ranked_day": sunday,
+            "now": sunday.end + timedelta(minutes=1),
+            "contributions": (attack,),
+            "next_start_trophies": 5000,
+            "boundary_kind": "season",
+        },
+    }
+    for name, day in days.items():
+        result = reconcile_ranked_day(
+            _input(coverage_observations=tuple(no_overlap), **day)
+        )
+        assert result.coverage_complete is False, name
+        assert result.final_trophies_before_reset is None, name
+        assert result.net_trophy_change is None, name
+        assert result.expected_next_start_trophies is None, name
+        assert result.boundary_adjustment_type is None, name
+        assert result.formula_components["final_trophies_before_reset"] is None, name
+        assert (result.state, result.confidence) == ("Partial", "uncertain"), name
+        assert "battle_log_overlap_gap" in result.failure_reasons, name
+    assert reconcile_ranked_day(
+        _input(coverage_observations=tuple(no_overlap), **days["season close"])
+    ).failure_reasons == ("battle_log_overlap_gap",)
+
+    # With every battle captured the same day keeps its total.
+    complete = reconcile_ranked_day(_input(**days["season close"]))
+    assert (complete.final_trophies_before_reset, complete.net_trophy_change) == (
+        6020,
+        20,
+    )
+    # All 8 attacks and 8 defenses on record leave nothing to miss.
+    full = reconcile_ranked_day(
+        _input(
+            coverage_observations=tuple(no_overlap),
+            contributions=(*attacks, *defenses),
+            next_start_trophies=None,
+        )
+    )
+    assert (full.final_trophies_before_reset, full.net_trophy_change) == (6040, 40)

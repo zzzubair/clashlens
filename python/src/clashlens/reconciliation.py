@@ -177,6 +177,53 @@ class ReconciliationResult:
         return self.observed_defense_loss
 
 
+# Any of these means the battle logs may have missed a battle.
+COVERAGE_GAP_REASONS = frozenset(
+    {
+        "missing_start_battle_log_baseline",
+        "missing_end_battle_log_baseline",
+        "battle_log_row_gap",
+        "battle_log_overlap_gap",
+        "battle_log_stale_window",
+        "battle_log_row_count_exceeds_fifty",
+        "unclassified_rows",
+    }
+)
+DISPUTED_BATTLE_REASONS = frozenset(
+    {"perspective_disagreement", "duplicate_contribution_disagreement"}
+)
+
+
+def all_battles_recorded(
+    attack_count: int | None, defense_count: int | None, reasons: Iterable[Any]
+) -> bool:
+    """The game allows 8 attacks and 8 defenses a day, so with all 16 recorded
+    and undisputed none can be missing, and 8 defenses leave no automatic
+    defense loss."""
+    return (
+        attack_count == MAX_DAILY_ATTACKS
+        and defense_count == MAX_DAILY_DEFENSES
+        and not any(
+            isinstance(reason, str) and reason in DISPUTED_BATTLE_REASONS
+            for reason in reasons
+        )
+    )
+
+
+def day_totals_supported(
+    coverage_complete: bool,
+    attack_count: int | None,
+    defense_count: int | None,
+    reasons: Iterable[Any],
+) -> bool:
+    """Whether a day's EOD and net change can be shown. A battle missing from
+    the logs is missing from the sums too, so the total would look exact while
+    being wrong."""
+    return coverage_complete or all_battles_recorded(
+        attack_count, defense_count, reasons
+    )
+
+
 def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     failures: list[str] = []
     malformed_evidence = data.malformed_evidence
@@ -290,6 +337,18 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 # The paired baselines isolate the calculated settlement loss.
                 automatic_state = "confirmed"
 
+    if not day_totals_supported(
+        coverage_complete, attack_count, defense_count, failures
+    ):
+        # The equation check above has already recorded any mismatch it found.
+        final_trophies = None
+        net_trophy_change = None
+        boundary_adjustment = 0
+        boundary_type = None
+        observed_boundary_adjustment = None
+        expected_next = None
+        residual = None
+
     if not ended:
         shield_state, shield_duration, shield_evidence = _shield_state(
             data,
@@ -363,15 +422,11 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # useful to consumers that only inspect the shield evidence state.
         shield_evidence.setdefault("unknown_reason", "coverage_incomplete")
 
-    if (
-        net_trophy_change is None
-        and not inconsistent_evidence
-        and attack_count == MAX_DAILY_ATTACKS
-        and defense_count == MAX_DAILY_DEFENSES
+    if net_trophy_change is None and all_battles_recorded(
+        attack_count, defense_count, failures
     ):
-        # The game allows 8 attacks and 8 defenses a day, so none can be
-        # missing, and 8 defenses leave no automatic defense loss: the
-        # recorded battles alone give the day's result.
+        # Without a usable start, the recorded battles alone give the day's
+        # result.
         net_trophy_change = attack_gain - defense_loss
 
     unique_failures = tuple(dict.fromkeys(failures))
@@ -787,16 +842,7 @@ def _coverage_is_continuous(
         ):
             failures.append("battle_log_overlap_gap")
 
-    hard_coverage_reasons = {
-        "missing_start_battle_log_baseline",
-        "missing_end_battle_log_baseline",
-        "battle_log_row_gap",
-        "battle_log_overlap_gap",
-        "battle_log_stale_window",
-        "battle_log_row_count_exceeds_fifty",
-        "unclassified_rows",
-    }
-    complete = not any(reason in hard_coverage_reasons for reason in failures)
+    complete = not any(reason in COVERAGE_GAP_REASONS for reason in failures)
     return complete, evidence, malformed
 
 
