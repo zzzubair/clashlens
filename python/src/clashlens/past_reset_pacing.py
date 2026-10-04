@@ -27,10 +27,14 @@ def _now(connection: Any) -> datetime:
     return connection.execute("SELECT clock_timestamp()").fetchone()[0]
 
 
-def _is_past_reset(connection: Any, boundary_at: datetime) -> bool:
-    latest_reset = connection.execute(
+def _latest_reset(connection: Any) -> datetime | None:
+    return connection.execute(
         "SELECT max(boundary_at) FROM collector_reset_sweeps"
     ).fetchone()[0]
+
+
+def _is_past_reset(connection: Any, boundary_at: datetime) -> bool:
+    latest_reset = _latest_reset(connection)
     return latest_reset is not None and boundary_at < latest_reset
 
 
@@ -43,6 +47,20 @@ def past_reset_build_waits(connection: Any, boundary_at: datetime) -> bool:
     return _is_past_reset(connection, boundary_at) and _in_quiet_window(
         _now(connection)
     )
+
+
+def past_reset_build_hold(connection: Any) -> str | None:
+    """In the quiet window, the newest Reset as build jobs write it; else None.
+
+    The worker claims no correction build for a Reset before this one, so a
+    build queued before the window starts after it, with no attempt spent.
+    """
+    if not _in_quiet_window(_now(connection)):
+        return None
+    latest_reset = _latest_reset(connection)
+    if latest_reset is None:
+        return None
+    return latest_reset.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def past_reset_correction_waits(connection: Any, boundary_at: datetime) -> bool:

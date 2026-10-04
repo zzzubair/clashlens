@@ -330,6 +330,64 @@ def test_past_reset_build_ready_in_the_quiet_window_starts_after_it(
             database.close()
 
 
+def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
+    database_url: str, monkeypatch
+) -> None:
+    clock = Clock(monkeypatch, datetime(2026, 8, 11, 4, 29, tzinfo=UTC))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _published_resets(database, connection)
+                _created(connection, PAST, NOON - timedelta(hours=10))
+                _record(database, connection, player_id, PAST, 2)
+                assert _build_jobs(connection, PAST, 2) == [
+                    "build_army_analytics",
+                    "build_snapshot",
+                ]
+                clock.now = datetime(2026, 8, 11, 4, 31, tzinfo=UTC)
+                _record(database, connection, player_id, LIVE, 2)
+                connection.commit()
+
+            def claimed() -> list[tuple[str, str]]:
+                jobs = []
+                while claim := database.claim_job(
+                    owner="pacing",
+                    work_types=["build_snapshot", "build_army_analytics"],
+                ):
+                    if claim.input_json["generation"] == 2:
+                        jobs.append((claim.input_json["boundary_at"], claim.work_type))
+                return sorted(jobs)
+
+            live = LIVE.strftime("%Y-%m-%dT%H:%M:%SZ")
+            past = PAST.strftime("%Y-%m-%dT%H:%M:%SZ")
+            assert claimed() == [
+                (live, "build_army_analytics"),
+                (live, "build_snapshot"),
+            ]
+            with database.pool.connection() as connection:
+                attempts = connection.execute(
+                    """
+                    SELECT state, attempt_count FROM python_processing_jobs_worker
+                    WHERE input_json->>'boundary_at' = %s
+                      AND input_json->>'generation' = '2'
+                    """,
+                    (past,),
+                ).fetchall()
+            assert [(str(state), count) for state, count in attempts] == [
+                ("pending", 0),
+                ("pending", 0),
+            ]
+
+            clock.now = datetime(2026, 8, 11, 7, tzinfo=UTC)
+            assert claimed() == [
+                (past, "build_army_analytics"),
+                (past, "build_snapshot"),
+            ]
+        finally:
+            database.close()
+
+
 def test_live_reset_correction_rebuilds_at_once(database_url: str, monkeypatch) -> None:
     Clock(monkeypatch, datetime(2026, 8, 5, 5, 30, tzinfo=UTC))
     with domain_database(database_url, include_coordinator=True) as connection_info:
