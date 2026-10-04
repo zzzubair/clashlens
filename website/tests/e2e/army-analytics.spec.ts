@@ -116,6 +116,69 @@ test("a reversed day range is explained while a custom trophy range is unfinishe
   await expect(page).not.toHaveURL(/end_day=26/);
 });
 
+for (const lens of ["offense", "defense"]) {
+  test(`trophy drafts explain unchanged ${lens} results and recover to rank filtering`, async ({
+    page,
+  }) => {
+    await page.goto(
+      `/analytics/armies?saved=1&season=current&lens=${lens}&population=top-100`,
+    );
+    const form = page.getByRole("form", { name: "Army analytics filters" });
+    const players = form.getByLabel("Players");
+    await expect(players).toHaveValue("top-100");
+    expect(await players.locator("option").first().getAttribute("value")).toBe(
+      "trophies",
+    );
+    const appliedURL = page.url();
+    const results = page.getByRole("region", { name: "Army statistics" });
+    const appliedResults = (await results.count()) ? await results.innerText() : null;
+    await players.selectOption("trophies");
+    const status = form.locator("#trophy-range-status");
+    await expect(status).toContainText(
+      "Enter both trophy limits to update results. This range has not been applied.",
+    );
+    if (appliedResults !== null) {
+      await expect(status).toContainText("Results below still show top-100 players.");
+    }
+    await expect(form.getByText(/choose days tracked throughout/)).toHaveCount(0);
+    await form.getByLabel("Min trophies").fill("5500");
+    await expect(status).toContainText("This range has not been applied.");
+    await expect(page).toHaveURL(appliedURL);
+    if (appliedResults !== null) {
+      await expect.poll(() => results.innerText()).toBe(appliedResults);
+    }
+
+    await form.getByLabel("Max trophies").fill("5400");
+    await expect(form.getByRole("alert")).toContainText("can’t be above");
+    await expect(page).toHaveURL(appliedURL);
+    await form.getByLabel("Max trophies").clear();
+    await expect(form.getByRole("alert")).toHaveCount(0);
+    await expect(status).toContainText("This range has not been applied.");
+
+    await form.getByLabel("Max trophies").fill("5600");
+    await expect(page).toHaveURL(/population=trophies-5500-5600/);
+    await expect(status).toBeEmpty();
+    await expect(form.locator("#trophy-range-help")).toHaveText(
+      "Each battle counts if the player’s trophies at that moment fall in this range.",
+    );
+    await expect(form.getByText(/choose days tracked throughout/)).toHaveCount(0);
+    const rangeURL = page.url();
+    await form.getByLabel("Min trophies").clear();
+    await expect(status).toContainText("This range has not been applied.");
+    await expect(page).toHaveURL(rangeURL);
+    if (await results.count()) {
+      await expect(status).toContainText(
+        "Results below still show players with 5,500 to 5,600 trophies at battle time.",
+      );
+    }
+    await players.selectOption("top-50");
+    await expect(page).toHaveURL(/population=top-50/);
+    await expect(form.getByLabel("Min trophies")).toHaveCount(0);
+    await expect(status).toHaveCount(0);
+    await expectNoSeriousAccessibilityViolations(page);
+  });
+}
+
 test("Clan Castle switches between individual and regular troop results", async ({
   page,
 }) => {

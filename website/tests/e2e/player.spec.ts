@@ -741,6 +741,7 @@ for (const [stall, read] of [
 
     await page.clock.install();
     await page.goto("/players/%232PP");
+    await page.waitForLoadState("networkidle");
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect.poll(reads).toEqual([false]);
     if (stall === "late") {
@@ -792,6 +793,7 @@ test("a failed Refresh status read replaces Refreshing… with saved results", a
   const refresh = page.getByRole("region", { name: "Player refresh" });
 
   await page.goto("/players/%232PP");
+  await page.waitForLoadState("networkidle");
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: UNAVAILABLE })).toBeVisible();
   await expect(refresh).toContainText(NOT_REFRESHED);
