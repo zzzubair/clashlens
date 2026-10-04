@@ -754,8 +754,16 @@ h3 {
   content: "";
   border-radius: inherit;
   background: var(--cl-negative);
-  opacity: calc(0.18 + 0.3 * var(--live-pulse, 0));
-  transform: scale(calc(1 + 0.55 * var(--live-pulse, 0)));
+  opacity: 0.18;
+  /* Half of a 2.6-second breath each way, eased like a sine wave. */
+  animation: legend-live-pulse 1.3s cubic-bezier(0.37, 0, 0.63, 1) infinite alternate;
+}
+
+@keyframes legend-live-pulse {
+  to {
+    opacity: 0.48;
+    transform: scale(1.55);
+  }
 }
 
 .battle-columns {

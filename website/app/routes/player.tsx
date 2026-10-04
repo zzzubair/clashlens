@@ -1285,20 +1285,9 @@ function LegendDay({
 }
 
 function LiveBadge() {
-  const dot = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    let frame = 0;
-    const breathe = (time: number) => {
-      const phase = (1 - Math.cos((time / 2600) * Math.PI * 2)) / 2;
-      dot.current?.style.setProperty("--live-pulse", String(phase));
-      frame = requestAnimationFrame(breathe);
-    };
-    frame = requestAnimationFrame(breathe);
-    return () => cancelAnimationFrame(frame);
-  }, []);
   return (
     <span className="legend-day-live" aria-label="Today's Legend day, in progress">
-      <span className="legend-live-dot" ref={dot} aria-hidden="true" />
+      <span className="legend-live-dot" aria-hidden="true" />
       In progress
     </span>
   );
