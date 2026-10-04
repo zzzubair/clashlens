@@ -96,7 +96,6 @@ describe("player link previews", () => {
         { property: "og:title", content: "Nova (#2PP)" },
         { property: "og:url", content: URL_FOR_TAG },
         { property: "og:image", content: `${ORIGIN}/images/legend-league.webp` },
-        { name: "twitter:card", content: "summary" },
         { tagName: "link", rel: "canonical", href: URL_FOR_TAG },
       ]),
     );

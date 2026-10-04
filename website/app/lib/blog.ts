@@ -44,8 +44,6 @@ interface PageMeta {
   type: "website" | "article";
   image?: string | null;
   imageAlt?: string;
-  /** Shows the image as a large card instead of a small thumbnail. */
-  largeImage?: boolean;
 }
 
 interface BlogPageMeta extends PageMeta {
@@ -71,10 +69,7 @@ export function pageMeta(page: PageMeta): MetaDescriptor[] {
             : []),
         ]
       : []),
-    {
-      name: "twitter:card",
-      content: image && page.largeImage ? "summary_large_image" : "summary",
-    },
+    { name: "twitter:card", content: image ? "summary_large_image" : "summary" },
     { name: "twitter:title", content: page.title },
     { name: "twitter:description", content: page.description },
     ...(image ? [{ name: "twitter:image", content: image }] : []),
@@ -85,7 +80,7 @@ export function pageMeta(page: PageMeta): MetaDescriptor[] {
 /** The shared preview tags plus the blog's publish date and feed link. */
 export function blogMeta(page: BlogPageMeta): MetaDescriptor[] {
   return [
-    ...pageMeta({ ...page, largeImage: true }),
+    ...pageMeta(page),
     ...(page.publishedDate
       ? [{ property: "article:published_time", content: page.publishedDate }]
       : []),
