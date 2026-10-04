@@ -64,7 +64,7 @@ describe("calculated starting trophies on the player page", () => {
     ["stored total takes priority", "2026-09-21T21:41:20Z", "stored", 5632, 5500, 5465],
     ["incomplete older day", "2026-09-21T21:41:20Z", "partial-older", 5632, 5462, null],
     ["gap between days", "2026-09-21T21:41:20Z", "gap", 5632, 5462, null],
-    ["season reset", "2026-09-21T21:41:20Z", "season-reset", 5632, 5462, null],
+    ["season reset", "2026-09-21T21:41:20Z", "season-reset", 5170, 5000, null],
     ["zero starting total", "2026-09-21T21:41:20Z", "normal", 170, 0, null],
     ["impossible negative total", "2026-09-21T21:41:20Z", "normal", 100, null, null],
     ["negative daily change", "2026-09-21T21:41:20Z", "negative-net", 5632, 5792, 5757],

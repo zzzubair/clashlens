@@ -282,3 +282,115 @@ def test_players_waiting_for_their_season_reset_stay_off_the_live_board(
             assert not waiting("#PP0")
         finally:
             database.close()
+
+
+def test_first_day_trophies_equal_to_the_frozen_final_board_wait_for_the_season_reset(
+    database_url: str,
+):
+    from datetime import UTC, datetime, timedelta
+
+    from clashlens import api_analytics
+
+    season_start = datetime(2026, 10, 5, 5, tzinfo=UTC)
+    old_season = str(int((season_start - timedelta(days=28)).timestamp()))
+    new_season = str(int(season_start.timestamp()))
+    # (profile Season, trophies now, frozen September final trophies or None)
+    players = {
+        "#PH1": (new_season, 5000, 5957),  # reset by the game
+        "#PH2": (old_season, 5957, 5957),  # still names September
+        "#PH3": (new_season, 5957, 5957),  # names October, old trophies
+        "#P50": (new_season, 5000, 5000),  # finished September on 5,000
+        "#PMV": (new_season, 5040, 5957),  # battled since the Reset
+        "#PNF": (new_season, 5100, None),  # missing from the frozen board
+    }
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            for tag, (season, trophies, _frozen) in players.items():
+                seed_profile(
+                    database, tag, trophies, observed_at=season_start + timedelta(minutes=10)
+                )
+            with database.pool.connection() as connection:
+                snapshot_id = connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshots (
+                        snapshot_kind, boundary_at, version, ordering_rule_version,
+                        freshness_rule_version, state, measured_coverage,
+                        stale_entry_count, published_at
+                    ) VALUES ('frozen', %s, 1, 'test', 'test', 'published', 1, 0, %s)
+                    RETURNING id
+                    """,
+                    (season_start, season_start),
+                ).fetchone()[0]
+                position = 0
+                for tag, (season, _trophies, frozen) in players.items():
+                    connection.execute(
+                        "UPDATE player_profile_versions SET current_league_season_id = %s"
+                        " WHERE normalized_tag = %s",
+                        (season, tag),
+                    )
+                    if frozen is None:
+                        continue
+                    position += 1
+                    connection.execute(
+                        """
+                        INSERT INTO leaderboard_snapshot_entries (
+                            snapshot_id, position, player_id, trophies,
+                            trophy_observation_id, trophy_observed_at,
+                            observation_age_seconds, freshness, confidence, tie_hash
+                        )
+                        SELECT %s, %s, player_id, %s, observation_id, %s, 0,
+                               'fresh', 'confirmed', repeat('0', 64)
+                        FROM player_profile_versions WHERE normalized_tag = %s
+                        """,
+                        (snapshot_id, position, frozen, season_start, tag),
+                    )
+
+            def check(now, waiting):
+                board = api_leaderboard.get_live_leaderboard(
+                    database, limit=100, now=now
+                )
+                assert sorted(e["tag"] for e in board["entries"]) == sorted(
+                    set(players) - waiting
+                )
+                assert board["season_reset_pending"] == len(waiting)
+                found = api_leaderboard.search_live_leaderboard(
+                    database, "Player", now=now
+                )["results"]
+                assert {r["tag"] for r in found} == set(players) - waiting
+                known = api_players.search_known_players(
+                    database, "Player", now=now, freshness_seconds=900
+                )
+                assert {r["tag"] for r in known if r["season_reset_pending"]} == waiting
+                assert all(
+                    r["trophies"] is None for r in known if r["season_reset_pending"]
+                )
+                for tag in players:
+                    page = api_players.get_player_page(
+                        database, tag, now=now, freshness_seconds=900
+                    )
+                    labels = [q["label"] for q in page["screen_ready"]["data_quality"]]
+                    pending = "Waiting for this player's Season reset" in labels
+                    assert (page["season_reset_pending"], pending) == (
+                        tag in waiting,
+                        tag in waiting,
+                    )
+                with database.pool.connection() as connection:
+                    ids = connection.execute(
+                        "SELECT id, normalized_tag, NULL, NULL FROM players"
+                    ).fetchall()
+                    cards = api_players.player_cards(connection, ids, now=now)
+                assert {c["tag"] for c in cards if c["season_reset_pending"]} == waiting
+                average = api_analytics.get_basic_analytics(
+                    database, now=now, freshness_seconds=900
+                )
+                assert average["sample_size"] == len(players) - len(waiting)
+
+            # Day 1: the frozen September trophies, other than 5,000, still wait.
+            check(season_start + timedelta(minutes=20), {"#PH2", "#PH3"})
+            # Day 2 compares the Season id alone.
+            check(season_start + timedelta(days=1, minutes=20), {"#PH2"})
+        finally:
+            database.close()

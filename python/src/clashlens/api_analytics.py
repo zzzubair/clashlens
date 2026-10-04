@@ -21,6 +21,7 @@ from .api_db import (
     ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS,
     ARMY_ANALYTICS_QUERY_WORK_MEM,
     ApiDatabase,
+    _frozen_trophies_sql,
     _json_array,
     _public_army,
     _text,
@@ -46,7 +47,9 @@ from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
     SEASON_DURATION,
+    SEASON_START_TROPHIES,
     ranked_day_for,
+    season_opening_reset,
 )
 
 
@@ -779,7 +782,7 @@ def get_basic_analytics(
 ) -> dict[str, Any]:
     with database.pool.connection() as connection:
         row = connection.execute(
-            """
+            f"""
             SELECT count(*), avg(profile.trophies),
                    count(*) FILTER (
                        WHERE player.current_observed_at
@@ -788,11 +791,22 @@ def get_basic_analytics(
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
-            -- Trophies from before a player's Season reset are left out.
+            -- Trophies from before a player's Season reset are left out,
+            -- including first-day trophies still equal to the frozen final board.
             WHERE player.active = true
               AND profile.current_league_season_id = %s
+              AND NOT COALESCE(
+                  profile.trophies <> {SEASON_START_TROPHIES}
+                  AND profile.trophies = {_frozen_trophies_sql("player.id", "%s")},
+                  false
+              )
             """,
-            (now, freshness_seconds, ranked_day_for(now).official_season_id),
+            (
+                now,
+                freshness_seconds,
+                ranked_day_for(now).official_season_id,
+                season_opening_reset(now),
+            ),
         ).fetchone()
         sample_size = int(row[0])
         fresh = int(row[2])
