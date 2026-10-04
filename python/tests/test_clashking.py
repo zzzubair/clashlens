@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -14,6 +17,7 @@ from clashlens.api_db import ApiDatabase
 from clashlens.clashking import (
     ClashKingClient,
     ClashKingUnavailable,
+    _urllib_transport,
     parse_season_finishes,
 )
 
@@ -111,9 +115,11 @@ def test_requests_are_spaced_and_paused_after_overload() -> None:
 
     client = ClashKingClient(transport=transport, clock=clock)
     assert client.try_acquire()
+    client.release()
     assert not client.try_acquire()  # two requests a second at most
     clock.now += 0.5
     assert client.try_acquire()
+    client.release()
 
     with pytest.raises(ClashKingUnavailable):
         client.fetch_legend_history("#2PP")
@@ -122,6 +128,7 @@ def test_requests_are_spaced_and_paused_after_overload() -> None:
     assert not client.try_acquire()  # ClashKing asked for two minutes
     clock.now += 1
     assert client.try_acquire()
+    client.release()
     with pytest.raises(ClashKingUnavailable):
         client.fetch_legend_history("#2PP")
     clock.now += 119
@@ -143,6 +150,51 @@ def test_no_answer_pauses_and_disabled_client_never_requests() -> None:
     clock.now += 59
     assert not client.try_acquire()
     assert not ClashKingClient(enabled=False, clock=clock).try_acquire()
+
+
+def test_at_most_two_requests_run_at_once() -> None:
+    clock = FakeClock()
+    client = ClashKingClient(
+        transport=lambda url, timeout: (200, {}, b"{}"), clock=clock
+    )
+    assert client.try_acquire()
+    clock.now += 0.5
+    assert client.try_acquire()
+    clock.now += 0.5
+    started = time.monotonic()
+    assert not client.try_acquire()  # both busy: refused at once, not queued
+    assert time.monotonic() - started < 0.1
+    client.release()
+    assert client.try_acquire()  # the busy refusal did not use up the gap
+
+
+def test_redirects_are_not_followed() -> None:
+    paths: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            paths.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "/elsewhere")
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/legend-history"
+        assert _urllib_transport(url, 2.0)[0] == 302
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert paths == ["/legend-history"]
+
+    client = ClashKingClient(transport=lambda url, timeout: (302, {}, b""))
+    with pytest.raises(ClashKingUnavailable):
+        client.fetch_legend_history("#2PP")
 
 
 class FakeClashKing:
@@ -247,21 +299,33 @@ def test_a_view_refused_by_the_request_limit_can_retry_promptly(
             with database.pool.connection() as connection:
                 connection.execute(
                     "INSERT INTO players (normalized_tag, active, eligibility_state)"
-                    " VALUES ('#2PP', true, 'eligible'), ('#2QQ', true, 'eligible')"
+                    " VALUES ('#2PP', true, 'eligible'), ('#2QQ', true, 'eligible'),"
+                    " ('#2RR', true, 'eligible')"
                 )
             fake = FakeClashKing()
             clock = FakeClock()
+            clashking = ClashKingClient(transport=fake, clock=clock)
             app = create_app(
                 database,
                 keys={("typescript-website", "current"): TS_CURRENT},
                 clock=lambda: NOW_SECONDS,
                 now=lambda: NOW,
-                clashking_client=ClashKingClient(transport=fake, clock=clock),
+                clashking_client=clashking,
             )
 
             def view(tag: str):
                 target = f"/v1/players/{tag}/past-seasons"
                 return client.get(target, headers=signed_headers(target)).json()
+
+            def fetch_rows(tag: str):
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        "SELECT history.attempted_at FROM clashking_history_fetches"
+                        " AS history JOIN players AS player"
+                        " ON player.id = history.player_id"
+                        " WHERE player.normalized_tag = %s",
+                        (tag,),
+                    ).fetchall()
 
             with TestClient(app) as client:
                 assert len(view("%232PP")["seasons"]) == 9
@@ -270,18 +334,21 @@ def test_a_view_refused_by_the_request_limit_can_retry_promptly(
                 assert fake.calls == 1
                 assert refused["seasons"] == []
                 assert refused["fetched_at"] is None
-                with database.pool.connection() as connection:
-                    assert connection.execute(
-                        "SELECT history.attempted_at FROM clashking_history_fetches"
-                        " AS history JOIN players AS player"
-                        " ON player.id = history.player_id"
-                        " WHERE player.normalized_tag = '#2QQ'"
-                    ).fetchall() == [(None,)]
+                assert fetch_rows("#2QQ") == []  # refused before any write
 
                 clock.now += 0.5
                 retried = view("%232QQ")
                 assert fake.calls == 2
                 assert len(retried["seasons"]) == 9
                 assert retried["fetched_at"] == NOW.isoformat()
+
+                # Two requests already running also refuse without a write.
+                for _ in range(2):
+                    clock.now += 0.5
+                    assert clashking.try_acquire()
+                clock.now += 0.5
+                assert view("%232RR")["seasons"] == []
+                assert fake.calls == 2
+                assert fetch_rows("#2RR") == []
         finally:
             database.close()
