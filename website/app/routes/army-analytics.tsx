@@ -19,6 +19,11 @@ import {
   TROPHY_RANGE_LIMITS,
   trophyRangeProblem,
 } from "../lib/validation";
+import detailsStyles from "../details.css?url";
+
+export function links() {
+  return [{ rel: "stylesheet", href: detailsStyles }];
+}
 
 const allowed = {
   lens: ["offense", "defense"],
@@ -412,7 +417,7 @@ const ArmyResultRow = memo(function ArmyResultRow({
       <th scope="row" role="rowheader">
         {row.label}
       </th>
-      {isHistorical ? <td role="cell">{row.quantity}</td> : null}
+      {isHistorical ? <td role="cell">{row.quantity?.toLocaleString()}</td> : null}
       <td role="cell" data-column="usage-count">
         {row.usageCount.toLocaleString()} / {row.usageDenominator.toLocaleString()}
       </td>
@@ -455,10 +460,10 @@ const ArmyBreakdownRow = memo(function ArmyBreakdownRow({ row }: { row: ArmyRow 
       <th scope="row">{row.label}</th>
       {row.starCounts?.map((count, index) => (
         <td key={index}>
-          {count} ({formatRate(row.starRates![index])})
+          {count.toLocaleString()} ({formatRate(row.starRates![index])})
         </td>
       ))}
-      <td>{row.unknownExcludedAttacks}</td>
+      <td>{row.unknownExcludedAttacks?.toLocaleString()}</td>
     </tr>
   );
 });
@@ -1092,9 +1097,12 @@ export default function ArmyAnalyticsRoute() {
           {/^(top|band)-/.test(population) && oldTrophyPlayers > 0 ? (
             <p className="section-note analytics-coverage-note">
               Ranks come from the leaderboard saved just before the last selected day’s
-              Reset (05:00 UTC). {oldTrophyPlayers.toLocaleString()} of these{" "}
-              {cohortPlayers.toLocaleString()} players had a trophy count over 10 minutes
-              old at that Reset, so their rank may be out of date.
+              Reset (05:00 UTC).{" "}
+              {cohortPlayers === 1
+                ? "This player"
+                : `${oldTrophyPlayers.toLocaleString()} of these ${cohortPlayers.toLocaleString()} players`}{" "}
+              had a trophy count over 10 minutes old at that Reset, so their rank may be
+              out of date.
             </p>
           ) : null}
           <div className="analytics-kpis" aria-label="Battle coverage">
@@ -1116,8 +1124,9 @@ export default function ArmyAnalyticsRoute() {
           </div>
           {partialArmies > 0 ? (
             <p className="section-note analytics-coverage-note">
-              {partialArmies.toLocaleString()} of the included armies are partly readable.
-              Known troops, spells and equipment count; unknown items do not.
+              {partialArmies.toLocaleString()} of the included armies{" "}
+              {partialArmies === 1 ? "is" : "are"} partly readable. Known troops, spells
+              and equipment count; unknown items do not.
             </p>
           ) : null}
           <div className="section-heading">
@@ -1183,21 +1192,32 @@ export default function ArmyAnalyticsRoute() {
               <p className="section-note">
                 {snapshot
                   ? "Recent battle logs can omit older battles and include unfinished days."
-                  : `${analytics.collectionCoverage.completedDays} completed Legend days.`}{" "}
-                {analytics.perspectiveDisagreementCount} battles have conflicting reports.{" "}
-                {unreadableArmyRecords.toLocaleString()} battle records had missing or
-                unreadable army details and are excluded from every row.{" "}
+                  : `${analytics.collectionCoverage.completedDays} completed Legend ${analytics.collectionCoverage.completedDays === 1 ? "day" : "days"}.`}{" "}
+                {analytics.perspectiveDisagreementCount.toLocaleString()}{" "}
+                {analytics.perspectiveDisagreementCount === 1
+                  ? "battle has"
+                  : "battles have"}{" "}
+                conflicting reports. {unreadableArmyRecords.toLocaleString()} battle{" "}
+                {unreadableArmyRecords === 1 ? "record had" : "records had"} missing or
+                unreadable army details and {unreadableArmyRecords === 1 ? "is" : "are"}{" "}
+                excluded from every row.{" "}
                 {snapshot?.invalidBattleRows
                   ? `${snapshot.invalidBattleRows} other battle ${snapshot.invalidBattleRows === 1 ? "record had" : "records had"} no opponent and ${snapshot.invalidBattleRows === 1 ? "was" : "were"} excluded. `
                   : ""}
                 Additional exclusions below apply when unknown details prevent a
                 particular combination from being identified.
               </p>
+              {analytics.rows.length === 0 ? (
+                <p className="section-note">
+                  No recognized components in this selection.
+                </p>
+              ) : null}
               <div
                 className="table-wrap analytics-table-wrap"
                 tabIndex={0}
                 role="region"
                 aria-label="Star breakdown table"
+                hidden={analytics.rows.length === 0}
               >
                 <table
                   className="data-table analytics-table"
@@ -1236,8 +1256,9 @@ export default function ArmyAnalyticsRoute() {
           {analytics.pagination ? (
             <div className="hero-actions">
               <span>
-                Showing {analytics.rows.length} of {analytics.pagination.totalRows}{" "}
-                results
+                Showing {analytics.rows.length.toLocaleString()} of{" "}
+                {analytics.pagination.totalRows.toLocaleString()}{" "}
+                {analytics.pagination.totalRows === 1 ? "result" : "results"}
                 {analytics.pagination.totalRows > analytics.rows.length
                   ? ". Heading sorts apply to this page."
                   : ""}

@@ -145,6 +145,8 @@ export function worstComparison(days: 3 | 7 | 14 = 14): GroupComparison {
     dayStarts: dayStarts(days),
     todayStart: new Date(LAST_DAY + DAY_MS).toISOString(),
     generatedAt: new Date(LAST_DAY + DAY_MS + 3_600_000).toISOString(),
+    // The Season these days fall in: first Reset 2026-07-13 05:00 UTC.
+    season: "1783918800",
     players: Array.from({ length: 20 }, (_, index) => comparedPlayer(index, days)),
   };
 }

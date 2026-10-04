@@ -12,6 +12,7 @@ import {
   type MemberStatus,
 } from "../lib/group-comparison";
 import { canonicalPlayerPath } from "../lib/player-tag";
+import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
 import type { Route } from "./+types/account.groups.$groupId";
 import "../group-compare.css";
@@ -108,6 +109,7 @@ export default function GroupCompareRoute() {
   const { comparison, days, sort, notFound, tooLarge, error } =
     useLoaderData<typeof loader>();
   const location = useLocation();
+  const seasonEnded = useSeasonEnded(comparison?.season ?? null);
   if (comparison === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -133,7 +135,10 @@ export default function GroupCompareRoute() {
       </main>
     );
   }
-  const players = sortPlayers(comparison.players, sort);
+  const players = sortPlayers(
+    seasonEnded ? comparison.players.map(expireSeasonTrophies) : comparison.players,
+    sort,
+  );
   const waiting = comparison.players.filter((player) => player.status !== "tracking");
   const retiredDays = comparison.dayStarts.filter((_, index) =>
     comparison.players.some((player) => player.days[index].state === "retired"),

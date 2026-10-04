@@ -830,3 +830,100 @@ describe("army analytics day range", () => {
     expect(html).toMatch(/id="day-range-help"[^>]*>Only completed Legend days/);
   });
 });
+
+describe("army analytics worst-case data", () => {
+  // Long Clan Castle mixes, unknown catalog IDs, six-figure counts and counts of 1.
+  const worstRows = [
+    {
+      key: "cc:troop:58,troop:1,troop:6,troop:57,troop:59",
+      label: "Super Wall Breaker + Wall Breaker + Balloon + Rocket Balloon + Ice Golem",
+      usageCount: 128_473,
+      usageDenominator: 131_020,
+      usageRate: 128_473 / 131_020,
+      starCounts: [1_284, 12_345, 23_456, 91_388],
+      starRates: [0.01, 0.096, 0.183, 0.711],
+      threeStarRate: 0.711,
+      averageStars: 2.6,
+      averageDestruction: 87.6,
+      unknownExcludedAttacks: 12_847,
+    },
+    {
+      key: "troop:4000123",
+      label: "Unknown ID 4000123",
+      usageCount: 1,
+      usageDenominator: 131_020,
+      usageRate: 1 / 131_020,
+      starCounts: [0, 0, 0, 1],
+      starRates: [0, 0, 0, 1],
+      threeStarRate: 1,
+      averageStars: 3,
+      averageDestruction: 100,
+      unknownExcludedAttacks: 1,
+    },
+  ];
+
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
+  });
+
+  it("formats large counts and says 1 correctly", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue({
+        ...currentAnalytics("top-100", [1], 1, 1),
+        totalAttacks: 2,
+        usableArmySample: 1,
+        armyStates: { partial: 1 },
+        perspectiveDisagreementCount: 1,
+        rows: worstRows,
+      }),
+    });
+    const text = renderedText(
+      await renderArmyRoute("season=current&start_day=1&end_day=1&population=top-100"),
+    );
+    expect(text).toContain(
+      "This player had a trophy count over 10 minutes old at that Reset",
+    );
+    expect(text).toContain("1 of the included armies is partly readable.");
+    expect(text).toContain(
+      "1 completed Legend day. 1 battle has conflicting reports. 1 battle record had missing or unreadable army details and is excluded from every row.",
+    );
+    expect(text).toContain("128,473 / 131,020");
+    expect(text).toContain("91,388 (71.1%)");
+    expect(text).toContain("12,847");
+    expect(text).toContain("Unknown ID 4000123");
+  });
+
+  it("says an empty breakdown has no components instead of showing a bare header", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [1], 0)),
+    });
+    const html = await renderArmyRoute("season=current&start_day=1&end_day=1");
+    expect(html.match(/No recognized components in this selection\./g)).toHaveLength(2);
+    expect(html).toMatch(/aria-label="Star breakdown table" hidden=""/);
+  });
+
+  it("formats past-season quantities and result totals", async () => {
+    const pastRows = worstRows.map(({ key, label, usageCount, usageDenominator }) => ({
+      key,
+      label,
+      usageCount,
+      usageDenominator,
+      usageRate: usageCount / usageDenominator,
+      quantity: usageCount * 3,
+      oneStarCount: 1,
+      twoStarCount: 1,
+      threeStarCount: 1,
+    }));
+    mocks.createPythonClient.mockReturnValue({
+      getArmySeasonSummary: vi.fn().mockResolvedValue({
+        ...currentAnalytics("all", [1, 28], 0),
+        pagination: { offset: 0, totalRows: 1_284, nextOffset: 50 },
+        rows: pastRows,
+      }),
+      getArmyAnalytics: vi.fn(),
+    });
+    const text = renderedText(await renderArmyRoute(`season=${SEASON}`));
+    expect(text).toContain("385,419");
+    expect(text).toContain("Showing 2 of 1,284 results");
+  });
+});

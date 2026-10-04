@@ -100,7 +100,10 @@ def assert_private_state(client, owner):
     assert call(client, owner, "GET", "/v1/account/saved-tags").json() == {
         "players": [{"tag": owner["tag"], "name": None}],
     }
-    groups = call(client, owner, "GET", "/v1/account/groups").json()["groups"]
+    listed = call(client, owner, "GET", "/v1/account/groups").json()
+    # The Season holding 2027-04-06, which opened at 2027-03-22 05:00 UTC.
+    assert listed["season"] == "1805691600"
+    groups = listed["groups"]
     assert [
         {key: group[key] for key in ("group_id", "name", "tags")} for group in groups
     ] == [owner["group"]]

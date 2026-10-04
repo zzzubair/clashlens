@@ -49,7 +49,8 @@ def get_group_comparison(
     if days not in COMPARISON_DAYS:
         raise ValueError("comparison window is not supported")
     now = now.astimezone(UTC)
-    today_start = ranked_day_for(now).start
+    today = ranked_day_for(now)
+    today_start = today.start
     day_starts = [today_start - timedelta(days=offset) for offset in range(days, 0, -1)]
     with database.pool.connection() as connection:
         # Filtering by the account as well as the group means a guessed group
@@ -157,6 +158,7 @@ def get_group_comparison(
         "day_starts": [start.isoformat() for start in day_starts],
         "today_start": today_start.isoformat(),
         "generated_at": now.isoformat(),
+        "season": today.official_season_id,
         "players": results,
     }
 
