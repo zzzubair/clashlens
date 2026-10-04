@@ -27,7 +27,8 @@ from .domain_repair import boundary_held
 def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
     """Take a Reset's publication lock for the rest of the transaction.
 
-    Lock order everywhere: a player-day lock, then this lock for the Reset
+    Lock order everywhere: a player-day lock or army battle locks
+    (army_ingestion._upsert_army_decodes), then this lock for the Reset
     ending that day, then that Reset's settlement locks
     (reset_settlement.lock_resets), then its generation rows; several Resets
     are taken oldest first. Every path that locks or updates a generation row
@@ -41,6 +42,33 @@ def lock_boundary_publication(connection: Any, boundary_at: datetime) -> None:
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
         (f"boundary-publication:{boundary_at.astimezone(UTC).isoformat()}",),
     )
+
+
+def lock_boundary_publication_once_swept(connection: Any, boundary_at: datetime) -> bool:
+    """Take a Reset's publication lock, shared until its sweep exists.
+
+    No generation exists before the collector saves a Reset's sweep, so work
+    for a Reset that has not happened yet shares the lock and runs in
+    parallel. A generation is created only under the full lock, which waits
+    for those jobs to commit. A sweep saved while the shared lock was being
+    taken also takes the full lock. Returns whether the full lock was taken.
+    """
+
+    def swept() -> bool:
+        return connection.execute(
+            "SELECT 1 FROM collector_reset_sweeps WHERE boundary_at = %s",
+            (boundary_at,),
+        ).fetchone() is not None
+
+    if not swept():
+        connection.execute(
+            "SELECT pg_advisory_xact_lock_shared(hashtextextended(%s, 0))",
+            (f"boundary-publication:{boundary_at.astimezone(UTC).isoformat()}",),
+        )
+        if not swept():
+            return False
+    lock_boundary_publication(connection, boundary_at)
+    return True
 
 
 def _create_boundary_generation(
@@ -1067,13 +1095,15 @@ def _record_boundary_generation(
     coalesce into it.
     """
     boundary_at = boundary_at.astimezone(UTC)
-    lock_boundary_publication(connection, boundary_at)
+    # A sweep is saved with its members in one transaction and never changes,
+    # so a Reset that has not happened yet is skipped without its lock.
     sweep = connection.execute(
         "SELECT id, member_ids FROM collector_reset_sweeps WHERE boundary_at = %s",
         (boundary_at,),
     ).fetchone()
     if sweep is None:
         return False
+    lock_boundary_publication(connection, boundary_at)
     sweep_id = int(sweep[0])
     member_ids = [int(value) for value in (sweep[1] or [])]
     if player_id not in member_ids:

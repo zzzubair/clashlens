@@ -32,6 +32,7 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
         *,
         ranked_day_start: datetime,
         player_ids: list[int] | None = None,
+        swept: bool | None = None,
     ) -> None:
         if target is not database:
             return original_enqueue(
@@ -39,6 +40,7 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
                 connection,
                 ranked_day_start=ranked_day_start,
                 player_ids=player_ids,
+                swept=swept,
             )
         if getattr(database, "_suppress_fixture_enqueue", False):
             return

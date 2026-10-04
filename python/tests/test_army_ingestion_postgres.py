@@ -9,10 +9,12 @@ from pathlib import Path
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation, text
+from test_boundary_publication_postgres import _sweep_with_members
 
 from clashlens import (
     army_ingestion,
     battle_ingestion,
+    boundary,
     boundary_publication,
     ingestion,
     job_outcomes,
@@ -709,6 +711,140 @@ def test_battle_log_with_saved_decodes_does_not_wait_for_reset_lock(
             db.close()
 
 
+def _unswept_battles(ci: str, archive_server, players: dict[str, str]):
+    """Save one Aug 4 battle per player whose decodes still need saving."""
+    ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+    db, proc = _processor(ci, archive_server)
+    try:
+        for player, code in players.items():
+            _, job_id = store_observation(
+                ci,
+                archive_server,
+                occurrence_key=f"unswept-{player}",
+                endpoint="battle_log",
+                body=json.dumps({"items": [_live_row(True, "#8PP", code, ts)]}).encode(),
+                observed_at=ts + timedelta(minutes=1),
+                normalized_tag=player,
+            )
+            assert proc.process_job(job_id, owner="seed").outcome == "processed"
+    finally:
+        db.close()
+    with psycopg.connect(ci) as connection:
+        # As if each battle were new, so the next save writes decodes again.
+        connection.execute("UPDATE battle_army_decodes SET is_active = false")
+        return {
+            text(tag): [int(battle_id)]
+            for tag, battle_id in connection.execute(
+                """
+                SELECT player.normalized_tag, battle.id FROM legend_battles AS battle
+                JOIN players AS player ON player.id = battle.attacker_player_id
+                """
+            ).fetchall()
+        }
+
+
+def test_battle_logs_before_a_reset_do_not_wait_on_each_other(
+    database_url: str, archive_server
+) -> None:
+    # 2026-10-04 03:41 UTC: 7-8 worker connections queued one at a time on
+    # the lock of that day's 05:00 Reset, which had not happened yet.
+    with domain_database(database_url, include_coordinator=True) as ci:
+        battles = _unswept_battles(
+            ci, archive_server, {"#2PP": "u1x58", "#2PQ": "u2x58"}
+        )
+        db = Database(ci)
+        try:
+            with psycopg.connect(ci) as first, db.pool.connection() as second:
+                army_ingestion._upsert_army_decodes(db, first, battles["#2PP"])
+                with second.transaction():
+                    second.execute("SET LOCAL lock_timeout = '2s'")
+                    army_ingestion._upsert_army_decodes(db, second, battles["#2PQ"])
+                first.commit()
+            with db.pool.connection() as connection:
+                saved = connection.execute(
+                    "SELECT count(*) FROM battle_army_decodes WHERE is_active"
+                ).fetchone()[0]
+        finally:
+            db.close()
+
+    assert saved == 2
+
+
+def test_battle_log_started_before_a_reset_records_its_member(
+    database_url: str, archive_server
+) -> None:
+    # A job that saves decodes before the Reset's sweep exists, then records
+    # the player's day result after the collector saves the sweep, still
+    # records that result in the Reset's first generation.
+    with domain_database(database_url, include_coordinator=True) as ci:
+        battle_ids = _unswept_battles(ci, archive_server, {"#2PP": "u1x58"})["#2PP"]
+        reset = datetime(2026, 8, 5, 5, tzinfo=UTC)
+        db = Database(ci)
+        try:
+            with db.pool.connection() as job:
+                with job.transaction():
+                    player_id = int(
+                        job.execute(
+                            "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                        ).fetchone()[0]
+                    )
+                    army_ingestion._upsert_army_decodes(db, job, battle_ids)
+                    with psycopg.connect(ci, autocommit=True) as collector:
+                        sweep_id = _sweep_with_members(collector, [player_id])
+                    version_id = int(
+                        job.execute(
+                            """
+                            INSERT INTO ranked_day_versions (
+                                player_id, ranked_day_start, ranked_day_end,
+                                official_season_id, season_day_number,
+                                season_anchor_rule_version,
+                                reconciliation_rule_version, result_hash,
+                                version, state, confidence, input_hash,
+                                evidence_complete, coverage_complete
+                            ) VALUES (
+                                %s, %s, %s, 'test-season', 1, 'test-anchor',
+                                'test-rules', %s, 1, 'Complete', 'exact', %s,
+                                true, true
+                            ) RETURNING id
+                            """,
+                            (
+                                player_id,
+                                reset - timedelta(days=1),
+                                reset,
+                                "a" * 64,
+                                "a" * 64,
+                            ),
+                        ).fetchone()[0]
+                    )
+                    assert boundary._record_boundary_generation(
+                        db,
+                        job,
+                        boundary_at=reset,
+                        player_id=player_id,
+                        ranked_day_version_id=version_id,
+                        ranked_day_input_hash="a" * 64,
+                    )
+            with db.pool.connection() as connection:
+                members = connection.execute(
+                    """
+                    SELECT generation.sweep_id, member.player_id,
+                           member.ranked_day_version_id,
+                           member.ranked_day_input_hash
+                    FROM boundary_publication_generation_members AS member
+                    JOIN boundary_publication_generations AS generation
+                      ON generation.id = member.generation_id
+                    WHERE generation.boundary_at = %s
+                    """,
+                    (reset,),
+                ).fetchall()
+        finally:
+            db.close()
+
+    assert [tuple(row[:3]) + (text(row[3]),) for row in members] == [
+        (sweep_id, player_id, version_id, "a" * 64)
+    ]
+
+
 @pytest.mark.parametrize("attack", [True, False])
 @pytest.mark.parametrize(
     ("old_code", "new_code", "expected_status"),
@@ -719,7 +855,7 @@ def test_battle_log_with_saved_decodes_does_not_wait_for_reset_lock(
         ("u1x58", "u1x58", "decoded"),
     ],
 )
-def test_redecode_preserves_report_corrected_before_reset_lock(
+def test_redecode_preserves_report_corrected_before_battle_lock(
     database_url: str,
     archive_server,
     monkeypatch,
@@ -767,10 +903,10 @@ def test_redecode_preserves_report_corrected_before_reset_lock(
         thread = threading.Thread(target=redecode)
         original_execute = psycopg.Connection.execute
 
-        def pause_before_reset_lock(connection, query, params=None, **kwargs):
-            if threading.current_thread() is thread and params == (
-                "boundary-publication:2026-08-05T05:00:00+00:00",
-            ):
+        def pause_before_battle_lock(connection, query, params=None, **kwargs):
+            if threading.current_thread() is thread and str(
+                (params or ("",))[0]
+            ).startswith("army-redecode-battle:"):
                 waiting.set()
                 assert resume.wait(timeout=20), "correction never released the redecode"
             return original_execute(connection, query, params, **kwargs)
@@ -787,9 +923,9 @@ def test_redecode_preserves_report_corrected_before_reset_lock(
                 connection.execute(
                     "UPDATE battle_army_decodes SET decoder_version = 'army-decoder-v1'"
                 )
-            monkeypatch.setattr(psycopg.Connection, "execute", pause_before_reset_lock)
+            monkeypatch.setattr(psycopg.Connection, "execute", pause_before_battle_lock)
             thread.start()
-            assert waiting.wait(timeout=10), "redecode never reached its Reset lock"
+            assert waiting.wait(timeout=10), "redecode never reached its battle lock"
             assert proc.process_job(jobs[1], owner="correction").outcome == "processed"
             with db.pool.connection() as connection:
                 corrected = connection.execute(
