@@ -1099,9 +1099,11 @@ class Database:
             return None
         if row[0] == "complete":
             return str(row[1])
-        return {"waiting_retry": "retrying", "stale": "lease_lost"}.get(
-            row[0], "failed"
-        )
+        return {
+            "waiting_retry": "retrying",
+            "waiting_dependency": "retrying",
+            "stale": "lease_lost",
+        }.get(row[0], "failed")
 
     def maintain_queue(self, *, max_jobs: int = 100) -> int:
         """Recover a bounded set of expired worker leases.

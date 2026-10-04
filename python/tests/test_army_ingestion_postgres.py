@@ -14,9 +14,10 @@ from clashlens import (
     army_ingestion,
     battle_ingestion,
     boundary_publication,
+    job_outcomes,
     reset_baselines,
 )
-from clashlens.archive import S3ArchiveReader
+from clashlens.archive import ArchiveReadError, S3ArchiveReader
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor, ProcessResult, process_concurrently
 
@@ -1220,5 +1221,40 @@ def test_a_session_ending_after_its_commit_landed_keeps_the_saved_result(
                 job_id, "processed"
             )
             assert _job_state(db, job_id) == ("complete", 1)
+        finally:
+            db.close()
+
+
+def test_a_session_ending_after_a_storage_wait_landed_reports_retrying(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        _, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="storage-wait",
+            endpoint="battle_log",
+            body=json.dumps({"items": [_live_row(True, "#8PP", "u1x58", ts)]}).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        original = job_outcomes.fail_claim
+
+        def storage_down(*args, **kwargs):
+            raise ArchiveReadError("archive_unavailable", "down", retryable=True)
+
+        def committed_then_lost(*args, **kwargs):
+            original(*args, **kwargs)
+            raise psycopg.errors.TransactionTimeout("terminating connection")
+
+        db, proc = _processor(ci, archive_server)
+        monkeypatch.setattr(proc.archive, "read_verified", storage_down)
+        monkeypatch.setattr(job_outcomes, "fail_claim", committed_then_lost)
+        try:
+            assert proc.process_job(job_id, owner="storage") == ProcessResult(
+                job_id, "retrying"
+            )
+            assert _job_state(db, job_id)[0] == "waiting_dependency"
         finally:
             db.close()
