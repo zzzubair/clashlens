@@ -4,6 +4,7 @@ import { data, redirect, useActionData, useLoaderData } from "react-router";
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
   isInappropriateName,
+  MAX_NAME_LENGTH,
   normalizeDisplayName,
   normalizeUsername,
 } from "../lib/account-validation";
@@ -223,6 +224,7 @@ export default function AccountSetupRoute() {
               id="setup-username"
               name="username"
               type="text"
+              maxLength={32}
               autoComplete="off"
               autoCapitalize="none"
               spellCheck={false}
@@ -246,6 +248,7 @@ export default function AccountSetupRoute() {
               id="setup-display-name"
               name="displayName"
               type="text"
+              maxLength={MAX_NAME_LENGTH}
               autoComplete="nickname"
               defaultValue={initialValues.displayName}
               aria-invalid={displayNameError ? true : undefined}

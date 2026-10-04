@@ -44,6 +44,7 @@ import {
 import { mapGroups } from "../../app/lib/account-contracts";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python.server";
+import { worstGroups } from "../fixtures/worst-case-accounts";
 
 const ORIGIN = "https://clashlens.example";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -301,5 +302,40 @@ describe("adding and removing one group player", () => {
     expect(removed.data.generalError?.error.message).toBe(
       "The group no longer exists. Refresh the page.",
     );
+  });
+
+  it("lists a full, a one-player and an empty group with worst-case names", async () => {
+    const groups = worstGroups();
+    const keys = Object.fromEntries(
+      groups.map((group) => [group.groupId, IDEMPOTENCY_KEY]),
+    );
+    const handler = createStaticHandler([
+      {
+        path: "/account/groups",
+        Component: GroupsRoute,
+        loader: () => ({
+          groups,
+          error: null,
+          createIdempotencyKey: IDEMPOTENCY_KEY,
+          updateIdempotencyKeys: keys,
+          deleteIdempotencyKeys: keys,
+          addIdempotencyKeys: keys,
+          removeIdempotencyKeys: {},
+        }),
+      },
+    ]);
+    const context = await handler.query(new Request(`${ORIGIN}/account/groups`));
+    if (context instanceof Response) throw new Error("unexpected response");
+    const html = renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+      }),
+    ).replaceAll("<!-- -->", "");
+    for (const text of ["20 of 20 players", "1 of 20 players", "No players yet"])
+      expect(html).toContain(text);
+    // Every group name box stops at the 80 characters Python accepts.
+    expect(html.match(/name="name"/g)).toHaveLength(4);
+    expect(html.match(/<input[^>]*maxLength="80"[^>]*name="name"/g)).toHaveLength(4);
   });
 });

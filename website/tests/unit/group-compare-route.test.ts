@@ -24,7 +24,8 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import GroupCompareRoute, { loader } from "../../app/routes/account.groups.$groupId";
 import { PythonApiError } from "../../app/services/python.server";
-import { mapGroupComparison } from "../../app/lib/group-comparison";
+import { mapGroupComparison, type GroupComparison } from "../../app/lib/group-comparison";
+import { worstComparison } from "../fixtures/worst-case-accounts";
 
 const ORIGIN = "https://clashlens.example";
 const GROUP_ID = "6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e";
@@ -267,4 +268,49 @@ describe("group comparison", () => {
     expect(result.init.status).toBe(404);
     expect(mocks.requestJson).not.toHaveBeenCalled();
   });
+
+  it("keeps a full group of worst-case players readable", async () => {
+    const html = await renderComparison(worstComparison());
+    expect(html.match(/<tr/g)).toHaveLength(21);
+    // Totals over 14 days pass 1,000 trophies, and each count reads in the singular.
+    for (const text of ["−1,234", "+3,808 won · −3,360 lost", "1 defense gave up 1 star"])
+      expect(html).toContain(text);
+    expect(html).not.toContain("No players in this group yet");
+  });
+
+  it("says a group without players has nobody to compare", async () => {
+    const comparison = worstComparison(3);
+    comparison.players = comparison.players.filter((player) => !player.inGroup);
+    const html = await renderComparison(comparison);
+    expect(html).toContain("No players in this group yet");
+    expect(html).toContain(`href="/account/groups#group-${comparison.groupId}"`);
+    expect(html).not.toContain("<table");
+  });
 });
+
+async function renderComparison(comparison: GroupComparison) {
+  const handler = createStaticHandler([
+    {
+      path: "/account/groups/:groupId",
+      Component: GroupCompareRoute,
+      loader: () => ({
+        comparison,
+        days: comparison.days,
+        sort: "trophies",
+        notFound: false,
+        tooLarge: null,
+        error: null,
+      }),
+    },
+  ]);
+  const context = await handler.query(
+    new Request(`${ORIGIN}/account/groups/${GROUP_ID}`),
+  );
+  if (context instanceof Response) throw new Error("unexpected response");
+  return renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+    }),
+  ).replaceAll("<!-- -->", "");
+}

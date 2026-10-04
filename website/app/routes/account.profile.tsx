@@ -4,6 +4,7 @@ import { data, redirect, useActionData, useLoaderData } from "react-router";
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
   isInappropriateName,
+  MAX_NAME_LENGTH,
   normalizeDisplayName,
   normalizeUsername,
 } from "../lib/account-validation";
@@ -267,6 +268,7 @@ export default function AccountProfileRoute() {
               id="profile-display-name"
               name="displayName"
               type="text"
+              maxLength={MAX_NAME_LENGTH}
               autoComplete="nickname"
               value={displayName}
               aria-invalid={displayNameError ? true : undefined}
