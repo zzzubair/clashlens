@@ -858,7 +858,9 @@ def test_player_page_hides_saved_net_for_days_missing_battles(
 
             assert player is not None
             screen = player["screen_ready"]
-            for days in (screen["recent_days"], screen["season_days"]):
+            by_start = {day["ranked_day_start"]: day for day in screen["days"]}
+            for starts in (screen["recent_day_starts"], screen["season_day_starts"]):
+                days = [by_start[start] for start in starts]
                 assert [
                     (day["season_day_number"], day["net_trophy_change"])
                     for day in days
