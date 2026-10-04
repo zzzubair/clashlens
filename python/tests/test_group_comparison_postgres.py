@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -10,10 +10,185 @@ from test_api_db_public_ops import NOW, seed_profile
 from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_analytics, api_groups, api_players
-from clashlens.api_db import ApiDatabase
+from clashlens.api_db import ApiDatabase, _screen_daily_log_with_events
 from clashlens.domain import ranked_day_for
 
 TODAY = datetime.fromisoformat("2026-08-06T05:00:00+00:00")
+
+
+@pytest.mark.parametrize(
+    "reasons,slots,disputed,gain_offset,count_offset,expected",
+    [
+        (["missing_start_battle_log_baseline"], 1, False, 0, 0, None),
+        (["battle_log_overlap_gap"], 1, False, 0, 0, None),
+        (["perspective_disagreement"], 1, False, 0, 0, None),
+        ([], 1, True, 0, 0, None),
+        ([], 1, False, 1, 0, None),
+        ([], 1, False, 0, 1, None),
+        (
+            [
+                "missing_start_baseline",
+                "missing_end_battle_log_baseline",
+                "automatic_defense_basis_unavailable",
+            ],
+            1,
+            False,
+            0,
+            0,
+            40,
+        ),
+        (["missing_start_battle_log_baseline"], 8, False, 0, 0, 0),
+        (["missing_start_battle_log_baseline"], 8, True, 0, 0, None),
+        (["missing_end_battle_log_baseline"], 0, False, 0, 0, 0),
+    ],
+)
+def test_today_withholds_unproven_net_but_keeps_recorded_evidence(
+    reasons, slots, disputed, gain_offset, count_offset, expected
+) -> None:
+    attacks = [battle("offense", 3, 100, 40) for _ in range(slots)]
+    defenses = [battle("defense", 3, 100, -40) for _ in range(8)] if slots == 8 else []
+    for event in attacks + defenses:
+        event["battle_timestamp"] = (TODAY + timedelta(hours=1)).isoformat()
+    if disputed:
+        attacks[0]["disagreement"] = True
+    day = {
+        "ranked_day_start": TODAY.isoformat(),
+        "ranked_day_end": (TODAY + timedelta(days=1)).isoformat(),
+        "state": "Live",
+        "coverage": "partial",
+        "confidence": "partial",
+        "partial_reasons": reasons,
+        "net_trophy_change": None,
+        "attack_count": slots + count_offset,
+        "defense_count": len(defenses),
+        "attack_gain": slots * 40 + gain_offset,
+        "defense_loss": len(defenses) * 40,
+        "battles": attacks + defenses,
+    }
+    row = (
+        1,
+        TODAY,
+        "Live",
+        "partial",
+        "partial",
+        reasons,
+        None,
+        day["attack_count"],
+        day["defense_count"],
+        day["battles"],
+        day["attack_gain"],
+        day["defense_loss"],
+    )
+    today = api_groups._window(1, {(1, TODAY): row}, [], TODAY, set())["today"]
+    assert today == {
+        "net": expected,
+        "gained": day["attack_gain"],
+        "lost": day["defense_loss"],
+        "attacks": day["attack_count"],
+        "defenses": day["defense_count"],
+    }
+    player = _screen_daily_log_with_events(day, "high", NOW)
+    assert player["battles_complete"] is (expected is not None)
+
+
+def test_member_list_and_add_wait_for_current_season(
+    database_url: str,
+) -> None:
+    now = datetime(2026, 10, 5, 4, 59, 59, tzinfo=UTC)
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        try:
+            seed_profile(
+                database,
+                "#2PP",
+                6000,
+                observed_at=datetime(2026, 9, 28, 4, 58, tzinfo=UTC),
+            )
+            owner = create_owner(database)
+            original = create_group(database, owner, ["#2PP"])
+            for index, (at, trophies, pending) in enumerate(
+                [
+                    (now, 6000, False),
+                    (datetime(2026, 10, 5, 5, tzinfo=UTC), None, True),
+                    (datetime(2026, 10, 5, 5, 1, tzinfo=UTC), None, True),
+                    (datetime(2026, 10, 6, 12, tzinfo=UTC), None, True),
+                    (datetime(2026, 9, 28, 5, 1, tzinfo=UTC), 6000, False),
+                ]
+            ):
+                now = at
+                members = api_accounts.list_groups(database, owner, now=now)
+                member = next(
+                    g for g in members if g["group_id"] == original.payload["group_id"]
+                )["players"][0]
+                assert (
+                    member["trophies"],
+                    member["season_reset_pending"],
+                ) == (trophies, pending)
+                assert (member["name"], member["state"]) == ("Player #2PP", "tracking")
+                group = create_group(database, owner, [], name=f"Add {index}")
+                group_id = group.payload["group_id"]
+                binding = account_binding(
+                    owner,
+                    "groups.add_player",
+                    f"/v1/account/groups/{group_id}/players",
+                    {"group_id": group_id, "tag": "#2PP"},
+                )
+                added = api_accounts.add_group_player(
+                    database,
+                    binding,
+                    group_id=group_id,
+                    normalized_tag="#2PP",
+                    now=now,
+                )
+                assert added.status_code == 200
+                assert (
+                    added.payload["trophies"],
+                    added.payload["season_reset_pending"],
+                ) == (trophies, pending)
+                if index == 0:
+                    first_binding, first_group_id, first_added = (
+                        binding,
+                        group_id,
+                        added,
+                    )
+                elif index == 1:
+                    replay = api_accounts.add_group_player(
+                        database,
+                        first_binding,
+                        group_id=first_group_id,
+                        normalized_tag="#2PP",
+                        now=now,
+                    )
+                    assert replay.replayed and replay.payload == first_added.payload
+                    # The saved operation stays intact; the notice must not
+                    # repeat its pre-Reset trophy number as a current value.
+                    assert replay.payload["trophies"] == 6000
+                    assert next(g for g in members if g["group_id"] == first_group_id)[
+                        "tags"
+                    ] == ["#2PP"]
+                comparison = api_groups.get_group_comparison(
+                    database, owner, group_id, days=3, now=now, freshness_seconds=900
+                )
+                assert (
+                    comparison["players"][0]["trophies"],
+                    comparison["players"][0]["season_reset_pending"],
+                ) == (trophies, pending)
+                page = api_players.get_player_page(
+                    database, "#2PP", now=now, freshness_seconds=900
+                )
+                assert page["season_reset_pending"] is pending
+            now = datetime(2026, 10, 5, 5, 2, tzinfo=UTC)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE player_profile_versions SET current_league_season_id = %s, trophies = 5000 WHERE normalized_tag = '#2PP'",
+                    (ranked_day_for(now).official_season_id,),
+                )
+            member = api_accounts.list_groups(database, owner, now=now)[0]["players"][0]
+            assert (member["trophies"], member["season_reset_pending"]) == (5000, False)
+        finally:
+            database.close()
 
 
 def battle(lens: str, stars: int, destruction: int, trophies: int) -> dict:
@@ -40,6 +215,7 @@ def seed_day(
     lost: int | None = None,
     attacks: int | None = None,
     defenses: int | None = None,
+    reasons: list[str] | None = None,
 ) -> None:
     start = TODAY - timedelta(days=days_ago)
     with database.pool.connection() as connection:
@@ -65,7 +241,7 @@ def seed_day(
                 state,
                 "complete" if state == "Complete" else "partial",
                 Jsonb(battles or []),
-                Jsonb([] if state == "Complete" else ["missing_battle_log"]),
+                Jsonb(reasons if reasons is not None else [] if state == "Complete" else ["missing_battle_log"]),
                 net,
                 gained,
                 lost,
@@ -165,7 +341,14 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 lost=16,
                 attacks=2,
                 defenses=1,
+                battles=[battle("offense", 3, 100, 40), battle("offense", 3, 100, 40),
+                         battle("defense", 1, 45, -16)],
+                reasons=["missing_end_battle_log_baseline"],
             )
+            seed_day(database, "#8PY", 0, net=None, state="Live",
+                     gained=40, lost=0, attacks=1, defenses=0,
+                     battles=[battle("offense", 3, 100, 40)],
+                     reasons=["battle_log_overlap_gap"])
             # The account's own player, outside the group, with a big day.
             seed_profile(database, "#YQ", 5400)
             seed_day(database, "#YQ", 1, net=100)
@@ -212,6 +395,9 @@ def test_group_comparison_counts_samples_and_keeps_missing_days_empty(
                 "lost": 16,
                 "attacks": 2,
                 "defenses": 1,
+            }
+            assert players["#8PY"]["today"] == {
+                "net": None, "gained": 40, "lost": 0, "attacks": 1, "defenses": 0,
             }
             assert leader["attack"] == {
                 "count": 2,

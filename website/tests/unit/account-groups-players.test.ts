@@ -33,7 +33,15 @@ vi.mock("../../app/services/group-players.server", () => ({
   removeGroupPlayer: mocks.removeGroupPlayer,
 }));
 
-import { action } from "../../app/routes/account.groups";
+import GroupsRoute, { action } from "../../app/routes/account.groups";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createStaticHandler,
+  createStaticRouter,
+  StaticRouterProvider,
+} from "react-router";
+import { mapGroups } from "../../app/lib/account-contracts";
 import { loadWebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError } from "../../app/services/python.server";
 
@@ -114,11 +122,11 @@ describe("adding and removing one group player", () => {
     });
   });
 
-  it("adds a confirmed player and names them with their trophies", async () => {
+  it("keeps trophies out of an add confirmation that may replay a saved response", async () => {
     const added = await submit({ action: "add-player", tag: " p0lq2y8 " });
 
     expect(added.status).toBe(200);
-    expect(added.data.notice).toBe("Added Nova (#P0LQ2Y8), 5,412 trophies.");
+    expect(added.data.notice).toBe("Added Nova (#P0LQ2Y8).");
     expect(mocks.addGroupPlayer).toHaveBeenCalledWith(
       IDENTITY,
       GROUP_ID,
@@ -126,6 +134,63 @@ describe("adding and removing one group player", () => {
       IDEMPOTENCY_KEY,
     );
     expect(added.data.playerIdempotencyKey).not.toBe(IDEMPOTENCY_KEY);
+  });
+
+  it("explains a pending Season reset in both the add notice and member row", async () => {
+    mocks.addGroupPlayer.mockResolvedValue({
+      tag: TAG,
+      name: "Nova",
+      trophies: null,
+      state: "tracking",
+      seasonResetPending: true,
+    });
+    const added = await submit({ action: "add-player", tag: TAG });
+    expect(added.data.notice).toBe(
+      "Added Nova (#P0LQ2Y8). Waiting for this player's Season reset.",
+    );
+    const groups = mapGroups({
+      groups: [
+        {
+          group_id: GROUP_ID,
+          name: "Clanmates",
+          tags: [TAG],
+          players: [
+            {
+              tag: TAG,
+              name: "Nova",
+              trophies: null,
+              state: "tracking",
+              season_reset_pending: true,
+            },
+          ],
+        },
+      ],
+    });
+    const handler = createStaticHandler([
+      {
+        path: "/account/groups",
+        Component: GroupsRoute,
+        loader: () => ({
+          groups,
+          error: null,
+          createIdempotencyKey: IDEMPOTENCY_KEY,
+          updateIdempotencyKeys: { [GROUP_ID]: IDEMPOTENCY_KEY },
+          deleteIdempotencyKeys: { [GROUP_ID]: IDEMPOTENCY_KEY },
+          addIdempotencyKeys: { [GROUP_ID]: IDEMPOTENCY_KEY },
+          removeIdempotencyKeys: { [GROUP_ID]: { [TAG]: IDEMPOTENCY_KEY } },
+        }),
+      },
+    ]);
+    const context = await handler.query(new Request(`${ORIGIN}/account/groups`));
+    if (context instanceof Response) throw new Error("unexpected response");
+    const html = renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+      }),
+    ).replaceAll("&#x27;", "'");
+    expect(html).toContain("Waiting for this player's Season reset");
+    expect(html).not.toContain("6,000 trophies");
   });
 
   it("adds a real player outside Legend League with a no-data label", async () => {

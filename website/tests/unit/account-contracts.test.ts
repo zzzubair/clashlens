@@ -4,6 +4,7 @@ import {
   mapAccount,
   mapGroupDeleteResult,
   mapGroupResult,
+  mapGroupPlayer,
   mapGroups,
   mapPublicUser,
   mapSavedTagResult,
@@ -184,7 +185,12 @@ describe("Python account response mappers", () => {
       { tag: "#2PL", name: null, trophies: null, state: "not_in_legend" },
     ];
     expect(mapGroups({ groups: [{ ...group, players }] })).toEqual([
-      { groupId: group.group_id, name: "Push team", tags: ["#2PP", "#2PL"], players },
+      {
+        groupId: group.group_id,
+        name: "Push team",
+        tags: ["#2PP", "#2PL"],
+        players: players.map((player) => ({ ...player, seasonResetPending: false })),
+      },
     ]);
     expect(mapGroups({ groups: [group] })).toBeNull();
     expect(
@@ -207,6 +213,21 @@ describe("Python account response mappers", () => {
     expect(mapGroupResult({ ...group, name: "" })).toBeNull();
     expect(mapGroupDeleteResult({ deleted: true, group_id: "x" })).toBeNull();
     expect(mapGroupDeleteResult({ deleted: "yes", group_id: group.group_id })).toBeNull();
+  });
+
+  it("preserves the Season wait in member and add responses", () => {
+    const waiting = {
+      tag: "#2PP",
+      name: "Nova",
+      trophies: null,
+      state: "tracking",
+      season_reset_pending: true,
+    };
+    expect(mapGroupPlayer(waiting)).toMatchObject({
+      trophies: null,
+      seasonResetPending: true,
+    });
+    expect(mapGroupPlayer({ ...waiting, season_reset_pending: "true" })).toBeNull();
   });
 
   it("maps every verification outcome payload", () => {

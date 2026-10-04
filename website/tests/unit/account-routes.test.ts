@@ -822,7 +822,13 @@ describe("account routes", () => {
           name: "Clanmates",
           tags: [TAG],
           players: [
-            { tag: TAG, name: "Nova", trophies: 5400, state: "tracking" as const },
+            {
+              tag: TAG,
+              name: "Nova",
+              trophies: 5400,
+              seasonResetPending: false,
+              state: "tracking" as const,
+            },
           ],
         },
       ]);

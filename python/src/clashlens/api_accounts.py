@@ -16,6 +16,7 @@ from .api_db import (
     _account_context,
     _text,
 )
+from .domain import season_is_current
 
 # Saving a group starts at most this many new player checks, the most a
 # comparison shows, so one save cannot flood the collector's visitor lane.
@@ -964,8 +965,10 @@ def add_group_player(
     *,
     group_id: str,
     normalized_tag: str,
+    now: datetime | None = None,
 ) -> OperationResult:
     """Add one player the game has already confirmed exists."""
+    now = now or datetime.now(UTC)
     with database.pool.connection() as connection:
         with connection.transaction():
             existing = api_db._reserve_request(database, connection, binding)
@@ -977,7 +980,10 @@ def add_group_player(
             else:
                 # Same order as saving a whole group: the group row, then the tag.
                 api_player_lookup.lock_tag(connection, normalized_tag)
-                members = [player["tag"] for player in _group_players(connection, group)]
+                members = [
+                    player["tag"]
+                    for player in _group_players(connection, group, now=now)
+                ]
                 state = api_player_lookup._lookup(connection, normalized_tag)["state"]
                 if normalized_tag in members:
                     result = OperationResult(409, {"error": "group_player_exists"})
@@ -1001,7 +1007,7 @@ def add_group_player(
                     )
                     [player] = [
                         player
-                        for player in _group_players(connection, group)
+                        for player in _group_players(connection, group, now=now)
                         if player["tag"] == normalized_tag
                     ]
                     result = OperationResult(200, {"group_id": group_id, **player})
@@ -1047,13 +1053,16 @@ def remove_group_player(
             return result
 
 
-def list_groups(database: ApiDatabase, account_id: int) -> list[dict[str, Any]]:
+def list_groups(
+    database: ApiDatabase, account_id: int, *, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    now = now or datetime.now(UTC)
     with database.pool.connection() as connection:
         rows = connection.execute(
             f"""
             SELECT group_row.public_id, group_row.name, player.normalized_tag,
                    player.active, COALESCE(accepted.name, latest.name),
-                   accepted.trophies
+                   accepted.trophies, accepted.current_league_season_id
             FROM account_groups AS group_row
             LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
             {_MEMBER_JOINS}
@@ -1071,7 +1080,7 @@ def list_groups(database: ApiDatabase, account_id: int) -> list[dict[str, Any]]:
                 {"group_id": public_id, "name": _text(row[1]), "tags": [], "players": []},
             )
             if row[2] is not None:
-                player = _group_player(connection, row[2:])
+                player = _group_player(connection, row[2:], now)
                 group["tags"].append(player["tag"])
                 group["players"].append(player)
         return list(groups.values())
@@ -1242,12 +1251,16 @@ _MEMBER_JOINS = """
 """
 
 
-def _group_players(connection: Any, group_id: int) -> list[dict[str, Any]]:
+def _group_players(
+    connection: Any, group_id: int, *, now: datetime | None = None
+) -> list[dict[str, Any]]:
     """Each member's tag with the stored in-game name and trophies, when known."""
+    now = now or datetime.now(UTC)
     rows = connection.execute(
         f"""
         SELECT player.normalized_tag, player.active,
-               COALESCE(accepted.name, latest.name), accepted.trophies
+               COALESCE(accepted.name, latest.name), accepted.trophies,
+               accepted.current_league_season_id
         FROM account_group_players AS member
         {_MEMBER_JOINS}
         WHERE member.group_id = %s
@@ -1256,15 +1269,19 @@ def _group_players(connection: Any, group_id: int) -> list[dict[str, Any]]:
         """,
         (group_id,),
     ).fetchall()
-    return [_group_player(connection, row) for row in rows]
+    return [_group_player(connection, row, now) for row in rows]
 
 
-def _group_player(connection: Any, row: Any) -> dict[str, Any]:
-    tag, active, name, trophies = row
+def _group_player(connection: Any, row: Any, now: datetime) -> dict[str, Any]:
+    tag, active, name, trophies, season_id = row
+    pending = trophies is not None and not season_is_current(
+        None if season_id is None else _text(season_id), now
+    )
     return {
         "tag": _text(tag),
         "name": None if name is None else _text(name),
-        "trophies": None if trophies is None else int(trophies),
+        "trophies": None if trophies is None or pending else int(trophies),
+        "season_reset_pending": pending,
         "state": "tracking"
         if active
         else api_player_lookup._lookup(connection, _text(tag))["state"],

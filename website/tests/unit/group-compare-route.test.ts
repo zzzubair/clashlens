@@ -189,7 +189,13 @@ describe("group comparison", () => {
         path: "/account/groups/:groupId",
         Component: GroupCompareRoute,
         loader: () => ({
-          comparison: mapGroupComparison(payload()),
+          comparison: mapGroupComparison(
+            payload([
+              player({
+                today: { net: null, gained: 80, lost: 16, attacks: 2, defenses: 1 },
+              }),
+            ]),
+          ),
           days: 3,
           sort: "trophies",
           notFound: false,
@@ -220,6 +226,9 @@ describe("group comparison", () => {
       "Some battles are missing. Shown, but left out of the Last 3 days total.",
     );
     expect(text).not.toContain("left out of the totals");
+    expect(text).toContain("Not yet proven");
+    expect(text).toContain("Recorded: +80 won · −16 lost");
+    expect(text).toContain("Recorded: 2 attacks, 1 defense");
   });
 
   it("does not call Python for a malformed group ID", async () => {

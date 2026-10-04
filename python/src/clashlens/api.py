@@ -800,7 +800,9 @@ def create_app(
         return JSONResponse(
             status_code=200,
             content={
-                "groups": api_accounts.list_groups(production_database, context.account.internal_id)
+                "groups": api_accounts.list_groups(
+                    production_database, context.account.internal_id, now=current_time()
+                )
             },
         )
 
@@ -868,6 +870,7 @@ def create_app(
             ),
             group_id=group_id,
             normalized_tag=tag,
+            now=current_time(),
         )
         return _operation_response(result)
 
