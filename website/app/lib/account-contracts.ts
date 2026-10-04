@@ -65,6 +65,12 @@ export interface ListedGroup extends PrivateGroup {
   players: GroupPlayer[];
 }
 
+export interface GroupList {
+  groups: ListedGroup[];
+  /** The Season the trophies were read in: its first Reset, in Unix seconds. */
+  season: string;
+}
+
 export interface GroupDeleteResult {
   groupId: string;
   deleted: boolean;
@@ -312,8 +318,14 @@ export function mapGroupPlayer(value: unknown): GroupPlayer | null {
   };
 }
 
-export function mapGroups(value: unknown): ListedGroup[] | null {
-  if (!isRecord(value) || !Array.isArray(value.groups)) return null;
+export function mapGroups(value: unknown): GroupList | null {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.groups) ||
+    !(typeof value.season === "string" && /^\d+$/.test(value.season))
+  ) {
+    return null;
+  }
   const groups: ListedGroup[] = [];
   for (const entry of value.groups) {
     const payload = asGroupPayload(entry);
@@ -329,7 +341,7 @@ export function mapGroups(value: unknown): ListedGroup[] | null {
       players: players as GroupPlayer[],
     });
   }
-  return groups;
+  return { groups, season: value.season };
 }
 
 export function mapGroupResult(value: unknown): PrivateGroup | null {

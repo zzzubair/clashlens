@@ -14,7 +14,7 @@ import type {
   AccountSummary,
   ClashLensAccount,
   GroupDeleteResult,
-  ListedGroup,
+  GroupList,
   PrivateGroup,
   PublicUser,
   SavedPlayer,
@@ -112,7 +112,7 @@ export interface PythonClient {
   listSavedTags(): Promise<SavedPlayer[]>;
   addSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
   removeSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
-  listGroups(): Promise<ListedGroup[]>;
+  listGroups(): Promise<GroupList>;
   createGroup(input: GroupInput, idempotencyKey: string): Promise<PrivateGroup>;
   updateGroup(
     groupId: string,
@@ -1297,7 +1297,7 @@ async function removeSavedTag(
 
 async function listGroups(
   identity: GoogleAccountIdentity | undefined,
-): Promise<ListedGroup[]> {
+): Promise<GroupList> {
   requireIdentity(identity);
   const payload = await requestJson<unknown>(
     "/v1/account/groups",

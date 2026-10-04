@@ -19,6 +19,7 @@ import {
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { canonicalPlayerPath, MAX_PLAYER_TAG_INPUT_LENGTH } from "../lib/player-tag";
+import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
 import type { Route } from "./+types/account.groups";
 import "../account-groups.css";
@@ -29,6 +30,8 @@ type GroupAction = (typeof ACTIONS)[number];
 
 export interface GroupsLoaderData {
   groups: ListedGroup[];
+  /** The Season the members' trophies were read in, once loaded. */
+  season: string | null;
   /** Fresh idempotency key for the create form. */
   createIdempotencyKey: string;
   /** Fresh per-group idempotency keys for the rename forms. */
@@ -72,6 +75,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
   const { freshIdempotencyKey } = await import("../server/actions.server");
   const empty = {
     groups: [],
+    season: null,
     createIdempotencyKey: freshIdempotencyKey(),
     updateIdempotencyKeys: {},
     deleteIdempotencyKeys: {},
@@ -81,8 +85,8 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
   };
   try {
     const { createPythonClient } = await import("../services/python.server");
-    const groups = await createPythonClient(identity).listGroups();
-    const loaded: GroupsLoaderData = { ...empty, groups };
+    const { groups, season } = await createPythonClient(identity).listGroups();
+    const loaded: GroupsLoaderData = { ...empty, groups, season };
     for (const group of groups) {
       loaded.updateIdempotencyKeys[group.groupId] = freshIdempotencyKey();
       loaded.deleteIdempotencyKeys[group.groupId] = freshIdempotencyKey();
@@ -202,7 +206,9 @@ export async function action({ request, context }: Route.ActionArgs) {
       return reply(200, { notice: `Removed ${tag} from the group.` });
     } else {
       // Refuse duplicates and a full group before spending a player lookup.
-      const group = (await client.listGroups()).find((row) => row.groupId === groupId);
+      const group = (await client.listGroups()).groups.find(
+        (row) => row.groupId === groupId,
+      );
       if (group === undefined) return reply(404, { generalError: GROUP_GONE });
       const member = group.players.find((player) => player.tag === tag);
       if (member !== undefined) {
@@ -366,6 +372,13 @@ export function headers() {
 export default function GroupsRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<GroupsActionData>();
+  const seasonEnded = useSeasonEnded(loaderData.season);
+  const groups = seasonEnded
+    ? loaderData.groups.map((group) => ({
+        ...group,
+        players: group.players.map(expireSeasonTrophies),
+      }))
+    : loaderData.groups;
   const navigation = useNavigation();
   const creating =
     navigation.state !== "idle" && navigation.formData?.get("action") === "create";
@@ -413,9 +426,9 @@ export default function GroupsRoute() {
             <strong>Groups could not be loaded.</strong>{" "}
             <a href="/account/groups">Try again</a>
           </aside>
-        ) : loaderData.groups.length > 0 ? (
+        ) : groups.length > 0 ? (
           <ul className="group-card-list">
-            {loaderData.groups.map((group) => (
+            {groups.map((group) => (
               <GroupCard
                 key={group.groupId}
                 group={group}

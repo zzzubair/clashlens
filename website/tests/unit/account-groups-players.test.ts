@@ -81,19 +81,22 @@ async function submit(fields: Record<string, string>): Promise<Outcome> {
 }
 
 function groupWith(tags: string[]) {
-  return [
-    {
-      groupId: GROUP_ID,
-      name: "Clanmates",
-      tags,
-      players: tags.map((tag) => ({
-        tag,
-        name: null,
-        trophies: null,
-        state: "tracking",
-      })),
-    },
-  ];
+  return {
+    season: "1791176400",
+    groups: [
+      {
+        groupId: GROUP_ID,
+        name: "Clanmates",
+        tags,
+        players: tags.map((tag) => ({
+          tag,
+          name: null,
+          trophies: null,
+          state: "tracking",
+        })),
+      },
+    ],
+  };
 }
 
 describe("adding and removing one group player", () => {
@@ -148,7 +151,8 @@ describe("adding and removing one group player", () => {
     expect(added.data.notice).toBe(
       "Added Nova (#P0LQ2Y8). Waiting for this player's Season reset.",
     );
-    const groups = mapGroups({
+    const listed = mapGroups({
+      season: "1791176400",
       groups: [
         {
           group_id: GROUP_ID,
@@ -171,7 +175,9 @@ describe("adding and removing one group player", () => {
         path: "/account/groups",
         Component: GroupsRoute,
         loader: () => ({
-          groups,
+          groups: listed?.groups ?? [],
+          // No Season: this checks the server's waiting flag, not the clock.
+          season: null,
           error: null,
           createIdempotencyKey: IDEMPOTENCY_KEY,
           updateIdempotencyKeys: { [GROUP_ID]: IDEMPOTENCY_KEY },

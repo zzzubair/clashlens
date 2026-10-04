@@ -184,17 +184,26 @@ describe("Python account response mappers", () => {
       { tag: "#2PP", name: "Nova", trophies: 5400, state: "tracking" },
       { tag: "#2PL", name: null, trophies: null, state: "not_in_legend" },
     ];
-    expect(mapGroups({ groups: [{ ...group, players }] })).toEqual([
-      {
-        groupId: group.group_id,
-        name: "Push team",
-        tags: ["#2PP", "#2PL"],
-        players: players.map((player) => ({ ...player, seasonResetPending: false })),
-      },
-    ]);
-    expect(mapGroups({ groups: [group] })).toBeNull();
+    const season = "1791176400";
+    expect(mapGroups({ season, groups: [{ ...group, players }] })).toEqual({
+      season,
+      groups: [
+        {
+          groupId: group.group_id,
+          name: "Push team",
+          tags: ["#2PP", "#2PL"],
+          players: players.map((player) => ({ ...player, seasonResetPending: false })),
+        },
+      ],
+    });
+    // Without the Season, an open page could not tell when its trophies expire.
+    expect(mapGroups({ groups: [{ ...group, players }] })).toBeNull();
+    expect(mapGroups({ season, groups: [group] })).toBeNull();
     expect(
-      mapGroups({ groups: [{ ...group, players: [{ ...players[0], state: "gone" }] }] }),
+      mapGroups({
+        season,
+        groups: [{ ...group, players: [{ ...players[0], state: "gone" }] }],
+      }),
     ).toBeNull();
     expect(mapGroupResult(group)).toEqual({
       groupId: group.group_id,
@@ -206,10 +215,12 @@ describe("Python account response mappers", () => {
       groupId: group.group_id,
     });
     expect(
-      mapGroups({ groups: [{ ...group, players, group_id: "not-a-uuid" }] }),
+      mapGroups({ season, groups: [{ ...group, players, group_id: "not-a-uuid" }] }),
     ).toBeNull();
-    expect(mapGroups({ groups: [{ ...group, players, tags: ["#bad"] }] })).toBeNull();
-    expect(mapGroups({ groups: "x" })).toBeNull();
+    expect(
+      mapGroups({ season, groups: [{ ...group, players, tags: ["#bad"] }] }),
+    ).toBeNull();
+    expect(mapGroups({ season, groups: "x" })).toBeNull();
     expect(mapGroupResult({ ...group, name: "" })).toBeNull();
     expect(mapGroupDeleteResult({ deleted: true, group_id: "x" })).toBeNull();
     expect(mapGroupDeleteResult({ deleted: "yes", group_id: group.group_id })).toBeNull();
