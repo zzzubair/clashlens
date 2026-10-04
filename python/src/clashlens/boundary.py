@@ -422,22 +422,17 @@ def _freeze_boundary_manifest(
                     }.get(classification, "missing")
                 identity["snapshot_quality"] = snapshot_quality
         if artifact_kind == "army" and version_id is not None:
+            # The day's evidence stays in ranked_day_versions and input_hash
+            # pins it; copying it here made army rows ~46 KB each.
             ranked_identity = connection.execute(
-                """
-                SELECT input_evidence,
-                       coalesce(input_evidence -> 'coverage_observations', '[]'::jsonb),
-                       start_baseline_id, end_baseline_id
-                FROM ranked_day_versions WHERE id = %s
-                """,
+                "SELECT start_baseline_id, end_baseline_id FROM ranked_day_versions WHERE id = %s",
                 (version_id,),
             ).fetchone()
             if ranked_identity is not None:
                 identity.update(
                     {
-                        "input_evidence": ranked_identity[0],
-                        "coverage_evidence": ranked_identity[1],
-                        "start_baseline_id": ranked_identity[2],
-                        "end_baseline_id": ranked_identity[3],
+                        "start_baseline_id": ranked_identity[0],
+                        "end_baseline_id": ranked_identity[1],
                     }
                 )
             daily_log = connection.execute(
