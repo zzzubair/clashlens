@@ -15,7 +15,12 @@ import type { LoginIdentity } from "./auth-cookies.server";
 import { readLoginIdentity } from "./actions.server";
 import type { WebsiteConfig } from "./config.server";
 import { getWebsiteConfig } from "./config.server";
-import { safeReturnPath } from "./return-path.server";
+import {
+  ACCOUNT_SETUP_PATH,
+  DEFAULT_RETURN_PATH,
+  safeReturnPath,
+  setupReturnPath,
+} from "./return-path.server";
 
 /**
  * Require a valid browser login. Throws a redirect Response to /login when
@@ -44,8 +49,15 @@ export async function requireLogin(request: Request): Promise<LoginIdentity> {
 }
 
 function loginRedirectUrl(request: Request, config: WebsiteConfig): string {
-  const pathname = new URL(request.url).pathname;
-  const returnPath = safeReturnPath(pathname, config.publicOrigin);
+  const { pathname, searchParams } = new URL(request.url);
+  let returnPath = safeReturnPath(pathname, config.publicOrigin);
+  if (returnPath === ACCOUNT_SETUP_PATH) {
+    const destination = setupReturnPath(
+      searchParams.get("returnPath"),
+      config.publicOrigin,
+    );
+    if (destination !== DEFAULT_RETURN_PATH) returnPath = destination;
+  }
   if (returnPath === null) return "/login";
   return `/login?returnPath=${encodeURIComponent(returnPath)}`;
 }

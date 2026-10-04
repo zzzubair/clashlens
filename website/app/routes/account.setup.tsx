@@ -14,6 +14,8 @@ const NO_STORE = { "Cache-Control": "no-store" };
 
 export interface SetupLoaderData {
   idempotencyKey: string;
+  /** Validated page to open once the account exists. */
+  returnPath: string;
 }
 
 export interface SetupActionData {
@@ -32,7 +34,13 @@ export async function loader({ request }: Route.LoaderArgs): Promise<SetupLoader
   const { requireLogin } = await import("../server/auth-guard.server");
   await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
-  return { idempotencyKey: freshIdempotencyKey() };
+  const { getWebsiteConfig } = await import("../server/config.server");
+  const { setupReturnPath } = await import("../server/return-path.server");
+  const returnPath = setupReturnPath(
+    new URL(request.url).searchParams.get("returnPath"),
+    getWebsiteConfig().publicOrigin,
+  );
+  return { idempotencyKey: freshIdempotencyKey(), returnPath };
 }
 
 /**
@@ -45,6 +53,8 @@ export async function action({ request }: Route.ActionArgs) {
   const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
   const { getWebsiteConfig } = await import("../server/config.server");
+  const { accountSetupPath, setupReturnPath } =
+    await import("../server/return-path.server");
 
   const config = getWebsiteConfig();
   if (!actions.isSameOrigin(request, config.publicOrigin)) {
@@ -54,6 +64,7 @@ export async function action({ request }: Route.ActionArgs) {
   if (form === null) return invalidFormResponse();
   const idempotencyKey = form["idempotencyKey"] ?? "";
   if (!actions.isIdempotencyKey(idempotencyKey)) return invalidFormResponse();
+  const returnPath = setupReturnPath(form["returnPath"], config.publicOrigin);
 
   const values = {
     username: form["username"] ?? "",
@@ -83,7 +94,7 @@ export async function action({ request }: Route.ActionArgs) {
     );
   } catch (error) {
     const outcome = actions.mapAccountNameError(error);
-    if (outcome.kind === "account_exists") throw redirect("/account");
+    if (outcome.kind === "account_exists") throw redirect(returnPath);
     if (outcome.kind === "field") {
       return data<SetupActionData>(
         {
@@ -106,9 +117,9 @@ export async function action({ request }: Route.ActionArgs) {
         { status: 422, headers: NO_STORE },
       );
     }
-    throw redirect("/account/setup");
+    throw redirect(accountSetupPath(returnPath, config.publicOrigin));
   }
-  throw redirect("/account");
+  throw redirect(returnPath);
 }
 
 async function forbiddenResponse() {
@@ -205,6 +216,7 @@ export default function AccountSetupRoute() {
             name="idempotencyKey"
             value={actionData?.idempotencyKey ?? loaderData.idempotencyKey}
           />
+          <input type="hidden" name="returnPath" value={loaderData.returnPath} />
           <div className="form-field">
             <label htmlFor="setup-username">Username</label>
             <input

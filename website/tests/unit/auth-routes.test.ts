@@ -56,6 +56,7 @@ import {
 } from "../../app/server/google-oidc.server";
 import { PythonApiError } from "../../app/services/python.server";
 import { loader as callbackLoader } from "../../app/routes/auth.google.callback";
+import { loader as discordStartLoader } from "../../app/routes/auth.discord";
 import { loader as googleStartLoader } from "../../app/routes/auth.google";
 import { loader as loginLoader } from "../../app/routes/login";
 import { action as logoutAction, loader as logoutLoader } from "../../app/routes/logout";
@@ -547,28 +548,35 @@ describe("auth.google start loader", () => {
     ).toBeNull();
   });
 
-  it("uses the safe default return path for missing or hostile returnPath values", async () => {
-    for (const query of [
-      "",
-      "?returnPath=https%3A%2F%2Fevil.example%2F",
-      "?returnPath=%2F%2Fevil.example",
-    ]) {
-      const response = await googleStartLoader({
-        request: new Request(`${ORIGIN}/auth/google${query}`),
-      } as never);
-      const setCookies = (response as Response).headers.getSetCookie();
-      const cookieValue = setCookies[0].slice(
-        setCookies[0].indexOf("=") + 1,
-        setCookies[0].indexOf(";"),
-      );
-      const transaction = parseOAuthTransactionCookieValue(
-        cookieValue,
-        testConfig().loginSecret,
-        Math.floor(Date.now() / 1000),
-      );
-      expect(transaction?.returnPath).toBe("/account");
-    }
-  });
+  it.each([
+    ["google", googleStartLoader],
+    ["discord", discordStartLoader],
+  ] as const)(
+    "%s uses the safe default return path for missing or hostile values",
+    async (provider, startLoader) => {
+      for (const query of [
+        "",
+        "?returnPath=https%3A%2F%2Fevil.example%2F",
+        "?returnPath=%2F%2Fevil.example",
+        "?returnPath=%2Faccount%2Fgroups%3Fdays%3D3",
+      ]) {
+        const response = await startLoader({
+          request: new Request(`${ORIGIN}/auth/${provider}${query}`),
+        } as never);
+        const setCookies = (response as Response).headers.getSetCookie();
+        const cookieValue = setCookies[0].slice(
+          setCookies[0].indexOf("=") + 1,
+          setCookies[0].indexOf(";"),
+        );
+        const transaction = parseOAuthTransactionCookieValue(
+          cookieValue,
+          testConfig().loginSecret,
+          Math.floor(Date.now() / 1000),
+        );
+        expect(transaction?.returnPath).toBe("/account");
+      }
+    },
+  );
 
   it("redirects to /login when login is disabled or configuration fails", async () => {
     mocks.getWebsiteConfig.mockReturnValue(
@@ -868,6 +876,47 @@ describe("auth.google.callback loader", () => {
       ).toEqual(IDENTITY);
     }
   });
+
+  it.each(["google", "discord"] as const)(
+    "keeps a safe destination through %s sign-in for new and returning accounts",
+    async (provider) => {
+      const { completeProviderCallback } =
+        await import("../../app/server/provider-callback.server");
+      const signIn = (returnPath: string) => {
+        const transaction = createOAuthTransaction(
+          returnPath,
+          now(),
+          undefined,
+          "login",
+          provider,
+        );
+        const header = `${OAUTH_COOKIE_NAME}=${createOAuthTransactionCookieValue(
+          transaction,
+          config.loginSecret,
+        )}`;
+        return completeProviderCallback(
+          new Request(
+            `${ORIGIN}/auth/${provider}/callback?code=provider-code&state=${transaction.state}`,
+            { headers: { cookie: header } },
+          ),
+          provider,
+          async () => ({ provider, providerSubject: "110022003300440055" }),
+        );
+      };
+      const groupPath = "/account/groups/6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e";
+      expect(await signIn(groupPath)).toMatchObject({ location: groupPath });
+
+      mocks.createPythonClient.mockReturnValue({
+        getAccount: vi.fn(async () => {
+          throw new PythonApiError(403, { error: "account_not_found" });
+        }),
+      } as never);
+      expect(await signIn(groupPath)).toMatchObject({
+        location: `/account/setup?returnPath=${encodeURIComponent(groupPath)}`,
+      });
+      expect(await signIn("/account")).toMatchObject({ location: "/account/setup" });
+    },
+  );
 
   it("clears the transaction and does NOT set a login cookie when Python is unavailable", async () => {
     mocks.createPythonClient.mockReturnValue({

@@ -1018,6 +1018,14 @@ export default function ArmyAnalyticsRoute() {
               Comparison with settled end-of-day ranks: not available yet.
             </p>
           ) : null}
+          {/^(top|band)-/.test(population) && oldTrophyPlayers > 0 ? (
+            <p className="section-note analytics-coverage-note">
+              Ranks come from the leaderboard saved just before the last selected day’s
+              Reset (05:00 UTC). {oldTrophyPlayers.toLocaleString()} of these{" "}
+              {cohortPlayers.toLocaleString()} players had a trophy count over 10 minutes
+              old at that Reset, so their rank may be out of date.
+            </p>
+          ) : null}
           <div className="analytics-kpis" aria-label="Battle coverage">
             <article className="analytics-kpi analytics-kpi-primary">
               <span>Battle records</span>

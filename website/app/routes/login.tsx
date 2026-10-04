@@ -57,7 +57,8 @@ export default function LoginRoute() {
         <h1 id="login-title">Sign in</h1>
         <p className="lede">
           Sign in to save public player tags, verify your own players, and keep private
-          groups. Public player data stays free and available without an account.
+          groups to compare players&apos; attacks, defenses and daily trophies. Public
+          player data stays free and available without an account.
         </p>
       </section>
 

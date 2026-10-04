@@ -100,6 +100,37 @@ it("formats the tracked total and explains a logout the server could not record"
   expect(html).not.toContain("log out again");
 });
 
+it("counts the shown rankings that are more than 10 minutes old", async () => {
+  const entry = (rank: number, state: string, observedAt: string) => ({
+    rank,
+    tag: ["#2PP", "#2PY", "#8PY"][rank - 1],
+    name: `Player ${rank}`,
+    clan: "",
+    trophies: 5000,
+    freshness: { state, observedAt, ageSeconds: 0 },
+    state: "available",
+  });
+  const html = await renderHome(
+    {
+      leaderboard: {
+        totalTracked: 13263,
+        entries: [
+          entry(1, "fresh", "2026-10-04T03:54:00Z"),
+          entry(2, "stale", "2026-10-03T23:59:00Z"),
+          entry(3, "stale", "2026-10-03T23:58:00Z"),
+        ],
+      },
+      query: "",
+      error: null,
+      search: null,
+    },
+    "",
+  );
+  expect(html).toContain("Newest player update");
+  expect(html).not.toContain("Last updated <");
+  expect(html).toContain("2 of 3 more than 10 minutes old");
+});
+
 describe("home search loading", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();

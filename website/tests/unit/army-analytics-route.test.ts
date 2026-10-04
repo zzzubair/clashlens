@@ -354,6 +354,30 @@ describe("army analytics route historical reads", () => {
     );
   });
 
+  it("warns about old saved ranks for top and rank-range groups only", async () => {
+    const getArmyAnalytics = vi
+      .fn()
+      .mockResolvedValueOnce(currentAnalytics("top-100", [25, 26], 100, 100))
+      .mockResolvedValueOnce(currentAnalytics("band-101-200", [25, 26], 100, 7))
+      .mockResolvedValueOnce(currentAnalytics("top-100", [25, 26], 100, 0))
+      .mockResolvedValueOnce(currentAnalytics("all", [25, 26], 0, 0));
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    const render = async (population: string) =>
+      renderedText(
+        await renderArmyRoute(
+          `season=current&start_day=25&end_day=26&population=${population}`,
+        ),
+      );
+    expect(await render("top-100")).toContain(
+      "Ranks come from the leaderboard saved just before the last selected day’s Reset (05:00 UTC). 100 of these 100 players had a trophy count over 10 minutes old at that Reset, so their rank may be out of date.",
+    );
+    expect(await render("band-101-200")).toContain(
+      "7 of these 100 players had a trophy count over 10 minutes old at that Reset",
+    );
+    expect(await render("top-100")).not.toContain("Ranks come from");
+    expect(await render("all")).not.toContain("Ranks come from");
+  });
+
   it("keeps a Consistent top choice when its days are unavailable", async () => {
     mocks.createPythonClient.mockReturnValue({
       getArmyAnalytics: vi.fn().mockRejectedValue(
