@@ -672,6 +672,14 @@ export default function ArmyAnalyticsRoute() {
           const apply = () => {
             pendingChange.current = null;
             const values = new FormData(form);
+            // Disabled or absent day fields send nothing and need no check.
+            const startDay = values.get("start_day");
+            const endDay = values.get("end_day");
+            const days =
+              startDay !== null && endDay !== null
+                ? dayRangeProblem(String(startDay), String(endDay))
+                : null;
+            setDayProblem(days);
             if (values.get("population") === "trophies") {
               const minimum = String(values.get("trophy_min") ?? "");
               const maximum = String(values.get("trophy_max") ?? "");
@@ -685,15 +693,7 @@ export default function ArmyAnalyticsRoute() {
               values.delete("trophy_min");
               values.delete("trophy_max");
             }
-            // Disabled or absent day fields send nothing and need no check.
-            const startDay = values.get("start_day");
-            const endDay = values.get("end_day");
-            if (startDay !== null && endDay !== null) {
-              const problem = dayRangeProblem(String(startDay), String(endDay));
-              setDayProblem(problem);
-              if (problem !== null) return;
-            }
-            if (!form.checkValidity()) return;
+            if (days !== null || !form.checkValidity()) return;
             void submit(values, {
               method: "get",
               replace: true,

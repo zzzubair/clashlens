@@ -193,7 +193,7 @@ main {
 .form-field textarea,
 .filter-field input,
 .filter-field select,
-.home-page .search-controls {
+.search-controls {
   border-color: var(--cl-input-border);
 }
 .fixed-field,

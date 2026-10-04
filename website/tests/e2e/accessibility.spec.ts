@@ -47,8 +47,36 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 }
 
+// Paints the search box's ring and border onto the panel behind them.
+async function headerSearchBox(page: Page) {
+  return page.evaluate(() => {
+    const style = getComputedStyle(
+      document.querySelector(".header-search-panel .search-controls")!,
+    );
+    const background = getComputedStyle(
+      document.querySelector(".header-search-panel")!,
+    ).backgroundColor;
+    // Let the browser blend a see-through colour onto the panel it sits on.
+    const paint = (colour: string) => {
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.fillStyle = background;
+      context.fillRect(0, 0, 1, 1);
+      context.fillStyle = colour;
+      context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+    };
+    return {
+      style: style.outlineStyle,
+      width: parseFloat(style.outlineWidth),
+      colour: paint(style.outlineColor),
+      border: paint(style.borderTopColor),
+      background: paint(background),
+    };
+  });
+}
+
 for (const theme of ["light", "dark"] as const) {
-  test(`open header search has a visible focus ring in ${theme} mode`, async ({
+  test(`open header search has a visible focus ring and border in ${theme} mode`, async ({
     page,
   }) => {
     await page.goto("/about");
@@ -59,32 +87,22 @@ for (const theme of ["light", "dark"] as const) {
     });
     await expect(input).toBeFocused();
 
-    const ring = await page.evaluate(() => {
-      const style = getComputedStyle(
-        document.querySelector(".header-search-panel .search-controls")!,
-      );
-      const background = getComputedStyle(
-        document.querySelector(".header-search-panel")!,
-      ).backgroundColor;
-      // Let the browser blend a see-through ring onto the panel it sits on.
-      const paint = (colour: string) => {
-        const context = document.createElement("canvas").getContext("2d")!;
-        context.fillStyle = background;
-        context.fillRect(0, 0, 1, 1);
-        context.fillStyle = colour;
-        context.fillRect(0, 0, 1, 1);
-        return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
-      };
-      return {
-        style: style.outlineStyle,
-        width: parseFloat(style.outlineWidth),
-        colour: paint(style.outlineColor),
-        background: paint(background),
-      };
-    });
-    expect(ring.style).toBe("solid");
-    expect(ring.width).toBeGreaterThanOrEqual(2);
-    expect(contrast(ring.colour, ring.background)).toBeGreaterThanOrEqual(3);
+    const focused = await headerSearchBox(page);
+    expect(focused.style).toBe("solid");
+    expect(focused.width).toBeGreaterThanOrEqual(2);
+    expect(contrast(focused.colour, focused.background)).toBeGreaterThanOrEqual(3);
+    expect(contrast(focused.border, focused.background)).toBeGreaterThanOrEqual(3);
     await expectNoSeriousAccessibilityViolations(page);
+
+    // Moving into the suggestions drops the ring, so the border alone must stay visible.
+    await input.fill("Synthetic Clasher 001");
+    const suggestion = page
+      .locator(".header-search-panel")
+      .getByTestId("search-suggestion")
+      .first();
+    await suggestion.focus();
+    await expect(suggestion).toBeFocused();
+    const unfocused = await headerSearchBox(page);
+    expect(contrast(unfocused.border, unfocused.background)).toBeGreaterThanOrEqual(3);
   });
 }

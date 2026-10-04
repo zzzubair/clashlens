@@ -95,6 +95,27 @@ test("a reversed day range is explained, not silently ignored", async ({ page })
   await expect(to).toHaveAttribute("aria-invalid", "false");
 });
 
+test("a reversed day range is explained while a custom trophy range is unfinished", async ({
+  page,
+}) => {
+  await page.goto("/analytics/armies?saved=1&season=current");
+  const form = page.getByRole("form", { name: "Army analytics filters" });
+  await form.getByLabel("Players").selectOption("trophies");
+  await form.getByLabel("Min trophies").fill("5000");
+  await form.getByText("Season & day range").click();
+  const from = form.getByLabel("From Legend day");
+  const to = form.getByLabel("To Legend day");
+  await from.fill("27");
+  await to.fill("26");
+
+  await expect(form.getByRole("alert")).toHaveText(
+    "From Legend day can’t be after To Legend day.",
+  );
+  await expect(from).toHaveAttribute("aria-invalid", "true");
+  await expect(to).toHaveAttribute("aria-invalid", "true");
+  await expect(page).not.toHaveURL(/end_day=26/);
+});
+
 test("Clan Castle switches between individual and regular troop results", async ({
   page,
 }) => {
