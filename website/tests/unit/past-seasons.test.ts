@@ -168,7 +168,7 @@ describe("past Seasons from ClashKing on the player page", () => {
     expect(html).not.toContain("Past Seasons");
   });
 
-  it("keeps a long history compact by folding all but the latest ten", async () => {
+  it("lists a long history in one table", async () => {
     const months = Array.from({ length: 12 }, (_, index) => ({
       seasonId: `2024-${String(12 - index).padStart(2, "0")}`,
       seasonStart: null,
@@ -178,12 +178,11 @@ describe("past Seasons from ClashKing on the player page", () => {
     }));
     mocks.getPastSeasons.mockResolvedValue(months);
     const html = await renderStreamed(await loadPage());
-    const [shown, folded] = html.split("<details");
-    expect(shown).toContain("Dec 2024");
-    expect(shown).toContain("Mar 2024");
-    expect(shown).not.toContain("Feb 2024");
-    expect(folded).toContain("Show <!-- -->2<!-- --> older seasons");
-    expect(folded).toContain("Jan 2024");
+    const section = html.slice(html.indexOf('id="past-seasons-title"'));
+    const pastSeasons = section.slice(0, section.indexOf("</section>"));
+    expect(pastSeasons).not.toContain("<details");
+    expect(pastSeasons.match(/<table/g)?.length).toBe(1);
+    expect(pastSeasons).toMatch(/Dec 2024<\/th>.*Feb 2024<\/th>.*Jan 2024<\/th>/);
   });
 });
 

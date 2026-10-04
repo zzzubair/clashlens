@@ -47,6 +47,9 @@ _V2_LABEL = re.compile(r"v2-(\d{4}-\d{2}-\d{2})T05:00:00Z")
 _DATED_LABEL = re.compile(r"\d{4}-\d{2}-\d{2}")
 _MONTH_LABEL = re.compile(r"(\d{4})-(\d{2})")
 _V2_OFFSET = timedelta(days=7)
+# ClashKing repeats the last calendar-month result as the first 28-day Season.
+_LAST_MONTH_SEASON = "2025-09"
+_FIRST_SEASON_ID = str(int(datetime(2025, 10, 6, 5, tzinfo=UTC).timestamp()))
 
 
 class ClashKingUnavailable(RuntimeError):
@@ -74,8 +77,8 @@ def parse_season_finishes(payload: bytes, *, now: datetime) -> list[SeasonFinish
     Rows outside Legend, off our 28-day Season phase or not yet finished are
     left out. When two rows describe the same Season, the v2 row wins: its rank
     matches official results, and the dated copy's win counts can exceed what
-    28 days allow. A 28-day row repeating a calendar-month row's trophies and
-    rank is a copy of that month and is left out too.
+    28 days allow. A first 28-day Season (2025-10-06) row repeating the
+    2025-09 row's trophies and rank is a copy of that month and is left out.
     """
     try:
         document = json.loads(payload)
@@ -96,19 +99,16 @@ def parse_season_finishes(payload: bytes, *, now: datetime) -> list[SeasonFinish
         existing = chosen.get(finish.season_id)
         if existing is None or (from_v2 and not existing[0]):
             chosen[finish.season_id] = (from_v2, finish)
-    finishes = [finish for _, finish in chosen.values()]
-    monthly = {
-        (finish.trophies, finish.global_rank)
-        for finish in finishes
-        if finish.season_start is None and finish.global_rank is not None
-    }
-    finishes = [
-        finish
-        for finish in finishes
-        if finish.season_start is None
-        or (finish.trophies, finish.global_rank) not in monthly
-    ]
-    return sorted(finishes, key=_sort_key, reverse=True)
+    last_month = chosen.get(_LAST_MONTH_SEASON)
+    first_season = chosen.get(_FIRST_SEASON_ID)
+    if (
+        last_month is not None
+        and first_season is not None
+        and (last_month[1].trophies, last_month[1].global_rank)
+        == (first_season[1].trophies, first_season[1].global_rank)
+    ):
+        del chosen[_FIRST_SEASON_ID]
+    return sorted((finish for _, finish in chosen.values()), key=_sort_key, reverse=True)
 
 
 def _map_row(item: Any, *, now: datetime) -> tuple[bool, SeasonFinish] | None:
@@ -270,7 +270,7 @@ def get_past_seasons(
     due = (fetched_at is None or fetched_at <= now - REFRESH_AFTER) and (
         attempted_at is None or attempted_at <= now - RETRY_AFTER
     )
-    if due and client.try_acquire() and _claim(database, player_id, now):
+    if due and _claim(database, player_id, now) and client.try_acquire():
         try:
             finishes = parse_season_finishes(
                 client.fetch_legend_history(normalized_tag), now=now

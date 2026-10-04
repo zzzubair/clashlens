@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -44,6 +45,19 @@ def test_rows_map_to_our_seasons_without_duplicates() -> None:
         ("2024-07", None, None, 5011, 934651),
         ("2021-12", None, None, 4965, None),
     ]
+
+
+def test_distinct_seasons_with_the_same_trophies_and_rank_are_all_kept() -> None:
+    rows = [
+        {"season": season, "trophies": 6562, "rank": 8}
+        for season in ("2024-07", "2025-12-29", "v2-2026-04-13T05:00:00Z", "2025-10-06")
+    ]
+    payload = json.dumps({"items": rows}).encode()
+
+    assert [f.season_id for f in parse_season_finishes(payload, now=NOW)] == [
+        str(int(_start(day).timestamp()))
+        for day in ("2026-04-20", "2025-12-29", "2025-10-06")
+    ] + ["2024-07"]
 
 
 def test_unfinished_off_phase_and_unreadable_rows_are_left_out() -> None:

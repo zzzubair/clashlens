@@ -17,6 +17,7 @@ const monthFormatter = new Intl.DateTimeFormat("en-GB", {
 
 // Past Season finishes reported by ClashKing. They stream in after the rest
 // of the page and show nothing when ClashKing has none or is slow or down.
+// Visitors without JavaScript never see them; that is accepted for this section.
 export function PastSeasons({
   finishes,
 }: {
@@ -34,10 +35,7 @@ export function PastSeasons({
   );
 }
 
-const SHOWN_FIRST = 10;
-
 export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
-  const older = finishes.slice(SHOWN_FIRST);
   return (
     <section className="data-section past-seasons" aria-labelledby="past-seasons-title">
       <div className="section-heading">
@@ -54,49 +52,31 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
         ClashKing. They are not Clash Lens tracking and are never added to the daily log
         or totals. Dates show when each Season ended; older seasons ran by calendar month.
       </p>
-      <FinishTable finishes={finishes.slice(0, SHOWN_FIRST)} label="Past Seasons" />
-      {older.length > 0 ? (
-        <details className="top-space">
-          <summary>Show {older.length} older seasons</summary>
-          <FinishTable finishes={older} label="Older past Seasons" />
-        </details>
-      ) : null}
-    </section>
-  );
-}
-
-function FinishTable({
-  finishes,
-  label,
-}: {
-  finishes: PastSeasonFinish[];
-  label: string;
-}) {
-  return (
-    <div className="table-wrap" tabIndex={0} role="region" aria-label={`${label} table`}>
-      <table className="data-table" aria-label={label}>
-        <thead>
-          <tr>
-            <th scope="col">Season</th>
-            <th scope="col">Final trophies</th>
-            <th scope="col">Global rank</th>
-          </tr>
-        </thead>
-        <tbody>
-          {finishes.map((finish) => (
-            <tr key={finish.seasonId}>
-              <th scope="row">{pastSeasonLabel(finish)}</th>
-              <td>{finish.trophies.toLocaleString("en-GB")}</td>
-              <td>
-                {finish.globalRank === null
-                  ? "Not recorded"
-                  : `#${finish.globalRank.toLocaleString("en-GB")}`}
-              </td>
+      <div className="table-wrap" tabIndex={0} role="region" aria-label="Past Seasons table">
+        <table className="data-table" aria-label="Past Seasons">
+          <thead>
+            <tr>
+              <th scope="col">Season</th>
+              <th scope="col">Final trophies</th>
+              <th scope="col">Global rank</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {finishes.map((finish) => (
+              <tr key={finish.seasonId}>
+                <th scope="row">{pastSeasonLabel(finish)}</th>
+                <td>{finish.trophies.toLocaleString("en-GB")}</td>
+                <td>
+                  {finish.globalRank === null
+                    ? "Not recorded"
+                    : `#${finish.globalRank.toLocaleString("en-GB")}`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
