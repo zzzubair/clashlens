@@ -19,6 +19,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => ({
 import Leaderboard, { loader } from "../../app/routes/tracked-leaderboard";
 import { PythonApiError } from "../../app/services/python.server";
 import type { TrackedLeaderboard } from "../../app/lib/contracts";
+import { worstCasePlayers } from "../fixtures/worst-case-players";
 
 const board: TrackedLeaderboard = {
   kind: "tracked-leaderboard",
@@ -140,6 +141,21 @@ it("formats large ranks and explains why some tracked players are not listed", a
   expect(html).toContain(
     "Tracked players are listed once Clash Lens confirms their current profile.",
   );
+});
+
+it("keeps worst-case names readable and separates five-digit ranks", async () => {
+  mocks.getTrackedLeaderboard.mockResolvedValue({
+    ...structuredClone(board),
+    entries: worstCasePlayers.map((player) => ({ ...board.entries[0], ...player })),
+  });
+  const { html } = await render();
+  for (const player of worstCasePlayers) {
+    expect(html).toContain(
+      `<span class="rank-mark">${player.rank.toLocaleString()}</span>`,
+    );
+    // Each name sets its own direction, so a right-to-left name keeps its symbols in place.
+    expect(html).toContain(`<bdi>${player.name}</bdi>`);
+  }
 });
 
 it("shows an empty message without a table or impossible pagination", async () => {
