@@ -369,6 +369,9 @@ describe("player route historical independence", () => {
     expect(tracked).toContain("<dt>Final rank</dt><dd>3</dd>");
     expect(tracked).toContain("Final trophies: <!-- -->5812");
     expect(tracked).not.toContain(">12<");
+    expect(tracked).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
+    expect(tracked).toContain('<th scope="col">Trophy change</th>');
+    expect(tracked).not.toContain('<th scope="col">Net</th>');
   });
 
   it("keeps all 28 days and 448 battles in the page for search and print", async () => {

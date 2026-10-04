@@ -882,6 +882,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
       {summary.source === "tracked_summary" && summary.unresolvedFlags.length > 0 ? (
         <p className="section-note">Some daily totals are unavailable.</p>
       ) : null}
+      <p className="section-note">{LEGEND_DAY_NOTE}</p>
       <div
         className="table-wrap top-space"
         tabIndex={0}
@@ -896,7 +897,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
               <th scope="col">Start</th>
               <th scope="col">Attack</th>
               <th scope="col">Defense</th>
-              <th scope="col">Net</th>
+              <th scope="col">Trophy change</th>
               <th scope="col">Recorded battle net</th>
               <th scope="col">End</th>
               <th scope="col">Attacks recorded</th>
