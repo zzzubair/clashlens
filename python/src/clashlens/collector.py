@@ -123,10 +123,9 @@ class Collector:
             asyncio.Lock() for _index in range(_HANDOFF_LOCK_STRIPES)
         )
         self._handoff_recovery_required = False
-        # Each stripe's newest saved response; it resolves once that response
-        # has committed or failed, so the next one commits after it, or to the
-        # task committing it later when a worker's lock held it up.
-        self._handoff_turns: dict[asyncio.Lock, collector_commits.Turn] = {}
+        # Newest saved response per player and request type, kept while it waits; it
+        # resolves when it commits or fails, or to the task committing it later.
+        self._handoff_turns: dict[collector_commits.Identity, collector_commits.Turn] = {}
         self._later_commits: dict[asyncio.Task[None], int | None] = {}
         self._unrecovered: list[tuple[str, ResponseHandoff, bool]] = []
         self._stopping = asyncio.Event()
@@ -455,7 +454,7 @@ class Collector:
                 # the check does not compact.
                 identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
                 lock = self._handoff_lock(handoff)
-                pending = self._handoff_turns.get(lock)
+                pending = self._handoff_turns.get(identity)
                 committed = self._committed.get(identity)
                 cancelled = False
                 compacted = False
@@ -512,8 +511,8 @@ class Collector:
                                 current_reservation,
                             )
                             published = True
-                            previous = self._handoff_turns.get(lock)
-                            self._handoff_turns[lock] = turn
+                            previous = self._handoff_turns.get(identity)
+                            self._handoff_turns[identity] = turn
                         # Saved responses commit in publish order, but no
                         # database wait holds the lock, so a later response
                         # always reaches the spool first.
@@ -539,6 +538,7 @@ class Collector:
                         raise
                     finally:
                         turn.set_result(later)
+                        collector_commits.forget(self, identity, later)
                     if later is not None and work.collector_work_id is not None:
                         await asyncio.wait({later})
                         if not cancelled and (later.cancelled() or later.exception()):

@@ -15,7 +15,7 @@ from test_collector import _Client, _collector, _Spool, _Store
 
 import clashlens.collector as collector_module
 from clashlens import collector_commits
-from clashlens.collector_db import CollectorIntent, CollectorWork
+from clashlens.collector_db import CollectorIntent, CollectorWork, ResponseHandoff
 from clashlens.collector_http import FetchedResponse
 from clashlens.collector_uploads import UploadClaim
 
@@ -467,3 +467,78 @@ def test_stopping_ends_lock_retries_and_keeps_the_saved_response(held: str) -> N
     else:
         assert outcome == "incomplete"
     assert client.fetch_count == 1
+
+
+def test_a_held_player_never_delays_another_players_reset_answer() -> None:
+    # Both profiles share one disk-write lock; at 05:00 a worker still holds #2P0P.
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    record = store.record_response
+
+    def held_for_one_player(handoff: ResponseHandoff) -> object:
+        if handoff.identity_key == "#2P0P":
+            raise psycopg.errors.LockNotAvailable("the worker holds #2P0P")
+        return record(handoff)
+
+    store.record_response = held_for_one_player  # type: ignore[method-assign]
+    now = datetime.now(UTC)
+    assert collector._handoff_lock(
+        _handoff_for(collector, "#2P0P", now)
+    ) is collector._handoff_lock(_handoff_for(collector, "#2P2G", now))
+
+    async def scenario() -> None:
+        held = collector.collect_player(
+            CollectorWork(1, "#2P0P", now), lane="ordinary", endpoints=("profile",)
+        )
+        assert await held == ["recorded"]
+        reset = collector.collect_player(
+            CollectorWork(2, "#2P2G", now, collector_work_id=7),
+            lane="reset",
+            endpoints=("profile",),
+        )
+        assert await asyncio.wait_for(reset, 1) == ["recorded"]
+        regular = collector.collect_player(
+            CollectorWork(3, "#2Q2G", now), lane="ordinary", endpoints=("profile",)
+        )
+        assert await asyncio.wait_for(regular, 1) == ["recorded"]
+        assert len(collector._later_commits) == 1
+        collector._stopping.set()
+        await asyncio.wait(set(collector._later_commits))
+
+    asyncio.run(scenario())
+
+    assert [handoff.identity_key for handoff in store.handoffs] == ["#2P2G", "#2Q2G"]
+
+
+def _handoff_for(collector: collector_module.Collector, tag: str, now: datetime) -> ResponseHandoff:
+    body = tag.encode()
+    return collector._make_handoff(
+        CollectorWork(1, tag, now),
+        FetchedResponse("profile", body, 200, now, now, "regular-1", {}),
+        hashlib.sha256(body).hexdigest(),
+    )
+
+
+def test_a_save_left_at_stop_keeps_later_saves_from_committing_first() -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    held = _held_saves(store)
+    work = CollectorWork(1, "#2PP", datetime.now(UTC))
+
+    async def scenario() -> None:
+        first = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+        assert await first == ["recorded"]
+        collector._stopping.set()
+        await asyncio.wait(set(collector._later_commits))
+        # The worker lets go during shutdown, and another answer arrives.
+        held.clear()
+        second = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+        assert await second == ["capacity_paused"]
+
+    asyncio.run(scenario())
+
+    assert collector._handoff_recovery_required
+    assert store.handoffs == []
+    assert len(spool.handoffs) == 1
