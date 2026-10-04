@@ -65,3 +65,15 @@ export function trophyRangeProblem(minimum: string, maximum: string): string | n
   if (values[0] > values[1]) return "Minimum trophies can’t be above maximum trophies.";
   return null;
 }
+
+// The API's day-range rule: whole Legend days from 1 to 28, first no later
+// than last.
+export function dayRangeProblem(start: string, end: string): string | null {
+  const days = [start, end].map((value) =>
+    /^\d{1,2}$/.test(value.trim()) ? Number(value) : Number.NaN,
+  );
+  if (days.some((day) => !(day >= 1 && day <= 28)))
+    return "Enter Legend days as whole numbers from 1 to 28.";
+  if (days[0] > days[1]) return "From Legend day can’t be after To Legend day.";
+  return null;
+}

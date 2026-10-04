@@ -8,7 +8,7 @@
 
 :root {
   color-scheme: light;
-  --cl-input-border: var(--cl-outline);
+  --cl-input-border: var(--cl-muted);
   --cl-glow: linear-gradient(180deg, #ffefd9 0, #fff8ef 14rem, #ffffff 28rem);
   --cl-button-shadow: 0 2px 0 var(--cl-action-shade), 0 8px 18px -6px rgb(232 93 4 / 0.6);
   --cl-raise: 0 1px 2px rgb(90 45 10 / 0.1), 0 6px 14px -8px rgb(90 45 10 / 0.35);
@@ -171,14 +171,12 @@ main {
   outline: 3px solid var(--cl-action-text);
   outline-offset: 3px;
 }
-.site-header :is(a, button):focus-visible {
-  outline-color: var(--cl-orange);
-}
 .home-page .search-controls input:focus-visible,
 #main-content:focus {
   outline: none;
 }
 .home-page .search-controls:focus-within {
+  border-color: var(--cl-input-border);
   outline: 2px solid var(--cl-action-text);
   outline-offset: 2px;
 }
@@ -196,6 +194,7 @@ main {
 .form-field textarea,
 .filter-field input,
 .filter-field select,
+.search-controls,
 .home-page .search-controls {
   border-color: var(--cl-input-border);
 }
@@ -224,6 +223,10 @@ main {
   main :is(input, select, textarea) {
     font-size: 1rem;
   }
+}
+/* Darker red keeps today's small badge text readable on its light tint. */
+:root:not([data-theme="dark"]) .legend-day-live:not(.legend-day-status) {
+  color: #b3261e;
 }
 @media (prefers-reduced-motion: reduce) {
   .legend-live-dot::after {

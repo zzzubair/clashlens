@@ -20,6 +20,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 });
 
 import ArmyRoute, { loader as armyLoader } from "../../app/routes/army-analytics";
+import { dayRangeProblem } from "../../app/lib/validation";
 import { PythonApiError } from "../../app/services/python.server";
 
 const SEASON = "1785714000";
@@ -709,5 +710,34 @@ describe("army analytics player groups", () => {
     const error = (result as { data: { error: { error: { message: string } } } }).data
       .error.error.message;
     expect(error).toContain(message);
+  });
+});
+
+describe("army analytics day range", () => {
+  it.each([
+    ["1", "28", null],
+    ["14", "14", null],
+    ["27", "26", "can’t be after"],
+    ["", "26", "whole numbers"],
+    ["0", "26", "whole numbers"],
+    ["1", "29", "whole numbers"],
+    ["1.5", "26", "whole numbers"],
+  ])("checks From %s to %s before the page asks for results", (start, end, message) => {
+    const problem = dayRangeProblem(start, end);
+    if (message === null) expect(problem).toBeNull();
+    else expect(problem).toContain(message);
+  });
+
+  it("links both day fields to the message that explains a rejected range", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [23], 0)),
+    });
+    const html = await renderArmyRoute("season=current&start_day=20&end_day=23");
+    for (const name of ["start_day", "end_day"]) {
+      expect(html).toMatch(
+        new RegExp(`aria-describedby="day-range-help" name="${name}"`),
+      );
+    }
+    expect(html).toMatch(/id="day-range-help"[^>]*>Only completed Legend days/);
   });
 });
