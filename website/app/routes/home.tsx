@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import {
   Form,
   Link,
   redirect,
-  useFetcher,
   useLoaderData,
   useSearchParams,
   type LoaderFunctionArgs,
@@ -11,6 +10,7 @@ import {
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
+import { SearchSuggestions, usePlayerSuggestions } from "../components/PlayerSearch";
 import { LocalTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
@@ -20,9 +20,6 @@ import type {
   TrackedPlayerEntry,
   WebsiteErrorResponse,
 } from "../lib/contracts";
-import type { PlayerSearchLoaderData } from "./player-search";
-
-const SEARCH_DEBOUNCE_MS = 180;
 
 export interface HomeLoaderData {
   leaderboard: TrackedLeaderboard | null;
@@ -75,51 +72,12 @@ export default function Home() {
   // Set by /logout when this browser logged out but the server could not record it.
   const [searchParams] = useSearchParams();
   const logoutUnrecorded = searchParams.get("logout") === "unrecorded";
-  const searchFetcher = useFetcher<PlayerSearchLoaderData>();
-  const [searchQuery, setSearchQuery] = useState(data.query);
-  const [requestedQuery, setRequestedQuery] = useState("");
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suggestions = usePlayerSuggestions(data.query);
+  const { setQuery } = suggestions;
 
   useEffect(() => {
-    setSearchQuery(data.query);
-  }, [data.query]);
-
-  useEffect(
-    () => () => {
-      if (searchTimer.current !== null) clearTimeout(searchTimer.current);
-    },
-    [],
-  );
-
-  const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
-  const requestMatchesInput =
-    requestedQuery.toLocaleLowerCase() === normalizedQuery && normalizedQuery !== "";
-  const suggestionData =
-    requestMatchesInput &&
-    searchFetcher.data?.query.toLocaleLowerCase() === normalizedQuery
-      ? searchFetcher.data
-      : undefined;
-  const suggestionsOpen =
-    requestMatchesInput &&
-    (searchFetcher.state !== "idle" ||
-      suggestionData?.search != null ||
-      !!suggestionData?.error);
-
-  function handleSearchInput(value: string) {
-    setSearchQuery(value);
-    if (searchTimer.current !== null) clearTimeout(searchTimer.current);
-
-    const query = value.trim();
-    if (query === "" || value.length > MAX_SEARCH_QUERY_LENGTH) {
-      setRequestedQuery("");
-      return;
-    }
-
-    searchTimer.current = setTimeout(() => {
-      setRequestedQuery(query);
-      void searchFetcher.load(`/resources/players/search?q=${encodeURIComponent(query)}`);
-    }, SEARCH_DEBOUNCE_MS);
-  }
+    setQuery(data.query);
+  }, [data.query, setQuery]);
 
   const leaderboard = data.leaderboard;
   const latestObservedAt = leaderboard ? latestObservation(leaderboard.entries) : null;
@@ -153,21 +111,13 @@ export default function Home() {
             action="/"
             role="search"
             className="search-form"
-            onSubmit={() => {
-              if (searchTimer.current !== null) clearTimeout(searchTimer.current);
-              setRequestedQuery("");
-            }}
+            onSubmit={suggestions.dismiss}
             onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                if (searchTimer.current !== null) clearTimeout(searchTimer.current);
-                setRequestedQuery("");
-              }
+              if (event.key === "Escape") suggestions.dismiss();
             }}
             onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) {
-                if (searchTimer.current !== null) clearTimeout(searchTimer.current);
-                setRequestedQuery("");
-              }
+              if (!event.currentTarget.contains(event.relatedTarget))
+                suggestions.dismiss();
             }}
           >
             <label className="sr-only" htmlFor="player-search">
@@ -191,14 +141,14 @@ export default function Home() {
                 id="player-search"
                 name="q"
                 type="search"
-                value={searchQuery}
+                value={suggestions.query}
                 placeholder="Search player, @username or #tag"
                 autoComplete="off"
                 autoCapitalize="none"
                 enterKeyHint="search"
-                aria-controls={suggestionsOpen ? "player-search-suggestions" : undefined}
+                aria-controls={suggestions.open ? "player-search-suggestions" : undefined}
                 aria-describedby="search-keyboard-help"
-                onChange={(event) => handleSearchInput(event.currentTarget.value)}
+                onChange={(event) => suggestions.change(event.currentTarget.value)}
               />
               <button type="submit">Search</button>
             </div>
@@ -206,14 +156,15 @@ export default function Home() {
               Suggestions appear below as you type. Press Tab to reach them, or Escape to
               dismiss.
             </span>
-            {suggestionsOpen ? (
+            {suggestions.open ? (
               <SearchSuggestions
-                data={suggestionData}
-                loading={searchFetcher.state !== "idle"}
+                id="player-search-suggestions"
+                data={suggestions.data}
+                loading={suggestions.loading}
               />
             ) : null}
           </Form>
-          {data.search && searchQuery === data.query ? (
+          {data.search && suggestions.query === data.query ? (
             <SearchResults search={data.search} />
           ) : null}
         </div>
@@ -259,100 +210,6 @@ export default function Home() {
         )}
       </section>
     </main>
-  );
-}
-
-function SearchSuggestions({
-  data,
-  loading,
-}: {
-  data: PlayerSearchLoaderData | undefined;
-  loading: boolean;
-}) {
-  const search = data?.search;
-  const results = search?.results.slice(0, 5) ?? [];
-  const users = search?.users.slice(0, 3) ?? [];
-  const unknownExactTag =
-    search?.exactTag && !results.some((result) => result.tag === search.exactTag)
-      ? search.exactTag
-      : null;
-
-  return (
-    <div
-      id="player-search-suggestions"
-      className="search-dropdown"
-      role="region"
-      aria-label="Player and profile search suggestions"
-      aria-live="polite"
-      aria-busy={loading}
-    >
-      {loading && !search ? <p className="search-dropdown-status">Searching…</p> : null}
-      {data?.error ? <p className="search-dropdown-status">Search unavailable.</p> : null}
-      {!loading &&
-      search &&
-      results.length === 0 &&
-      users.length === 0 &&
-      !unknownExactTag ? (
-        <p className="search-dropdown-status">No players or profiles found.</p>
-      ) : null}
-      {results.length > 0 || users.length > 0 || unknownExactTag ? (
-        <ul className="search-dropdown-list">
-          {users.map((user) => (
-            <li key={`user:${user.username}`}>
-              <Link
-                className="search-suggestion search-suggestion-profile"
-                data-testid="search-suggestion"
-                to={`/users/${encodeURIComponent(user.username)}`}
-              >
-                <span className="search-suggestion-player">
-                  <strong>{user.displayName}</strong>
-                  <small>@{user.username}</small>
-                  <span className="profile-badge">Clash Lens profile</span>
-                </span>
-                <span className="search-suggestion-meta">
-                  {user.linkedPlayerCount} linked{" "}
-                  {user.linkedPlayerCount === 1 ? "account" : "accounts"}
-                </span>
-              </Link>
-            </li>
-          ))}
-          {results.map((result) => (
-            <li key={result.tag}>
-              <a
-                className="search-suggestion"
-                data-testid="search-suggestion"
-                href={canonicalPlayerPath(result.tag)}
-              >
-                <span className="search-suggestion-player">
-                  <strong>{result.name}</strong>
-                  <small>{result.tag}</small>
-                </span>
-                <span className="search-suggestion-meta">
-                  {result.clan} ·{" "}
-                  {result.trophies === null
-                    ? "Waiting for Season reset"
-                    : result.trophies.toLocaleString()}
-                </span>
-              </a>
-            </li>
-          ))}
-          {unknownExactTag ? (
-            <li>
-              <a
-                className="search-suggestion"
-                data-testid="search-suggestion"
-                href={canonicalPlayerPath(unknownExactTag)}
-              >
-                <span className="search-suggestion-player">
-                  <strong>Open {unknownExactTag}</strong>
-                  <small>Player tag</small>
-                </span>
-              </a>
-            </li>
-          ) : null}
-        </ul>
-      ) : null}
-    </div>
   );
 }
 

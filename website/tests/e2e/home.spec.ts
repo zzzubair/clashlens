@@ -1,4 +1,16 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+// Retries until the page's scripts are running and the header search input has focus.
+async function openHeaderSearch(page: Page, open: () => Promise<void>) {
+  const input = page.getByRole("searchbox", {
+    name: "Search players and Clash Lens profiles",
+  });
+  await expect(async () => {
+    if (!(await input.isVisible())) await open();
+    await expect(input).toBeFocused({ timeout: 1_000 });
+  }).toPass();
+  return input;
+}
 
 test("fan content notice is exact, linked and readable on phones in both themes", async ({
   page,
@@ -242,4 +254,107 @@ test("public pages render without browser JavaScript", async ({ browser }) => {
   ).toBeVisible();
 
   await context.close();
+});
+
+test("header search opens with / away from home, suggests players and closes on Escape", async ({
+  page,
+}) => {
+  const searches: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/resources/players/search")) searches.push(request.url());
+  });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Search players" })).toHaveCount(0);
+
+  await page.goto("/about");
+  const toggle = page.getByRole("button", { name: "Search players" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  const input = await openHeaderSearch(page, () => page.keyboard.press("/"));
+  expect(searches).toEqual([]);
+
+  await input.fill("Synthetic Clasher 001");
+  await expect(
+    page.getByRole("region", { name: "Player and profile search suggestions" }),
+  ).toContainText("Synthetic Clasher 001");
+  await page.keyboard.press("Escape");
+  await expect(input).toHaveCount(0);
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+});
+
+test("typing / in another field does not open the header search", async ({ page }) => {
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  // Prove the shortcut is live on this page before typing elsewhere.
+  await openHeaderSearch(page, () => page.keyboard.press("/"));
+  await page.keyboard.press("Escape");
+  const rankSearch = page.getByRole("searchbox", { name: "Find your rank" });
+  await rankSearch.pressSequentially("a/b");
+  await expect(rankSearch).toHaveValue("a/b");
+  await expect(page.getByRole("button", { name: "Search players" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+});
+
+test("header search is a full-width sheet on phones and jumps to an exact tag", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/players/%232PP");
+  const heading = page.getByRole("heading", { name: "Synthetic Clasher 001" });
+  await expect(heading).toBeVisible();
+  const headingBefore = await heading.boundingBox();
+  await openHeaderSearch(page, () =>
+    page.getByRole("button", { name: "Search players" }).click(),
+  );
+  const panel = page.locator("#header-search-panel");
+  const bounds = await panel.boundingBox();
+  expect(bounds?.x).toBe(0);
+  expect(bounds?.width).toBe(375);
+  expect(await heading.boundingBox()).toEqual(headingBefore);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBe(true);
+
+  await page.goto("/about");
+  const input = await openHeaderSearch(page, () =>
+    page.getByRole("button", { name: "Search players" }).click(),
+  );
+  await input.fill("#2pp");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  await expect(panel).toHaveCount(0);
+});
+
+test("pressing Enter on a name in the header search shows suggestions without leaving the page", async ({
+  page,
+}) => {
+  await page.goto("/about");
+  const input = await openHeaderSearch(page, () =>
+    page.getByRole("button", { name: "Search players" }).click(),
+  );
+  await input.fill("Synthetic Clasher 001");
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("region", { name: "Player and profile search suggestions" }),
+  ).toContainText("Synthetic Clasher 001");
+  await expect(page).toHaveURL(/\/about$/);
+  await expect(input).toHaveValue("Synthetic Clasher 001");
+});
+
+test("the error page header has the search and jumps to an exact tag", async ({
+  page,
+}) => {
+  const response = await page.goto("/no-such-page");
+  expect(response?.status()).toBe(404);
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  const input = await openHeaderSearch(page, () =>
+    page.getByRole("button", { name: "Search players" }).click(),
+  );
+  await input.fill("#2pp");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  await expect(
+    page.getByRole("heading", { name: "Synthetic Clasher 001" }),
+  ).toBeVisible();
 });
