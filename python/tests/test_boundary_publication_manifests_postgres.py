@@ -349,6 +349,88 @@ def _process_changed_army(
     assert processor.process_job(changed, owner=key).outcome == "processed"
 
 
+def test_army_rows_keep_the_day_evidence_out_of_the_frozen_row(
+    database_url: str, archive_server
+) -> None:
+    # Army rows used to copy the day's whole evidence (~46 KB a row) that no
+    # reader used; input_hash already pins it in ranked_day_versions.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _jobs, army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                [(generation_id, rule_versions, digest, generation)] = (
+                    connection.execute(
+                        """
+                        SELECT manifest.generation_id, manifest.rule_versions,
+                               manifest.digest, generation.generation
+                        FROM boundary_publication_manifests AS manifest
+                        JOIN boundary_publication_generations AS generation
+                          ON generation.id = manifest.generation_id
+                        WHERE manifest.id = %s
+                        """,
+                        (army_input["manifest_id"],),
+                    ).fetchall()
+                )
+                rows = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT input_identity FROM boundary_publication_manifest_rows"
+                        " WHERE manifest_id = %s ORDER BY ordinal",
+                        (army_input["manifest_id"],),
+                    ).fetchall()
+                ]
+                [frozen] = rows
+                evidence, input_hash = connection.execute(
+                    "SELECT input_evidence, input_hash FROM ranked_day_versions"
+                    " WHERE id = %s",
+                    (frozen["ranked_day_version_id"],),
+                ).fetchone()
+                assert evidence["coverage_observations"]
+                assert "input_evidence" not in frozen
+                assert "coverage_evidence" not in frozen
+                assert frozen["input_hash"] == text(input_hash)
+                assert frozen["start_baseline_id"] and frozen["end_baseline_id"]
+                assert frozen["battle_ids"] and frozen["decode_ids"]
+                assert frozen["evidence_ids"] and frozen["daily_log_id"]
+                # The digest covers exactly the stored rows, and a retry
+                # reuses the frozen manifest as stored.
+                assert digest == hashlib.sha256(
+                    json.dumps(
+                        {
+                            "generation": generation,
+                            "artifact_kind": "army",
+                            "rule_versions": rule_versions,
+                            "rows": rows,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                assert boundary._freeze_boundary_manifest(
+                    database,
+                    connection,
+                    generation_id=generation_id,
+                    artifact_kind="army",
+                ) == (army_input["manifest_id"], digest)
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT battle_id, evidence_id, decode_id"
+                    " FROM army_analytics_battle_facts WHERE is_current"
+                ).fetchall() == [
+                    (
+                        frozen["battle_ids"][0],
+                        frozen["evidence_ids"][0],
+                        frozen["decode_ids"][0],
+                    )
+                ]
+        finally:
+            database.close()
+
+
 def test_army_correction_during_publication_keeps_each_frozen_battle(
     database_url: str, archive_server
 ) -> None:
