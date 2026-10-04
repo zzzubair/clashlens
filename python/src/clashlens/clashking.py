@@ -199,10 +199,11 @@ def _urllib_transport(url: str, timeout: float) -> tuple[int, dict[str, str], by
 class ClashKingClient:
     """Shared request pacing for every ClashKing call this process makes.
 
-    Requests are spaced at least half a second apart and at most two run at
-    once. A 429 or 5xx answer, or no answer, pauses every request: one minute,
-    doubling up to an hour, or longer when ClashKing asks for it. Calls never wait for a slot; a view
-    that cannot have one shows what is already saved.
+    Requests are spaced at least half a second apart, measured from when each
+    is sent, and at most two run at once. A 429 or 5xx answer, or no answer,
+    pauses every request: one minute, doubling up to an hour, or longer when
+    ClashKing asks for it. Calls never wait for a slot; a view that cannot have
+    one shows what is already saved.
     """
 
     def __init__(
@@ -222,13 +223,15 @@ class ClashKingClient:
         self._backoff = 0.0
 
     def try_acquire(self) -> bool:
-        """Take a request slot without waiting; every True needs a release()."""
+        """Take a request slot without waiting; every True needs a release().
+
+        This only checks that a request could start now. The gap is taken when
+        the request is sent, so it may still be refused then.
+        """
         if not self._slots.acquire(blocking=False):
             return False
         with self._lock:
-            now = self._clock()
-            if self._enabled and now >= self._next_request_at:
-                self._next_request_at = now + MIN_REQUEST_GAP_SECONDS
+            if self._enabled and self._clock() >= self._next_request_at:
                 return True
         self._slots.release()
         return False
@@ -236,7 +239,13 @@ class ClashKingClient:
     def release(self) -> None:
         self._slots.release()
 
-    def fetch_legend_history(self, normalized_tag: str) -> bytes:
+    def fetch_legend_history(self, normalized_tag: str) -> bytes | None:
+        """The player's legend history, or None when pacing refuses to send."""
+        with self._lock:
+            now = self._clock()
+            if not self._enabled or now < self._next_request_at:
+                return None
+            self._next_request_at = now + MIN_REQUEST_GAP_SECONDS
         url = f"{CLASHKING_ORIGIN}/v2/player/{quote(normalized_tag, safe='')}/legend-history"
         try:
             status, headers, body = self._transport(url, REQUEST_TIMEOUT_SECONDS)
@@ -295,8 +304,11 @@ def get_past_seasons(
         try:
             if _claim(database, player_id, now):
                 payload = client.fetch_legend_history(normalized_tag)
-                finishes = parse_season_finishes(payload, now=now)
-                _store(database, player_id, finishes, now)
+                if payload is None:
+                    _release(database, player_id, now, attempted_at)
+                else:
+                    finishes = parse_season_finishes(payload, now=now)
+                    _store(database, player_id, finishes, now)
         except ClashKingUnavailable:
             pass
         finally:
@@ -323,6 +335,19 @@ def _claim(database: Any, player_id: int, now: datetime) -> bool:
             },
         ).fetchone()
     return claimed is not None
+
+
+def _release(
+    database: Any, player_id: int, claimed_at: datetime, previous: datetime | None
+) -> None:
+    with database.pool.connection() as connection:
+        connection.execute(
+            """
+            UPDATE clashking_history_fetches SET attempted_at = %s
+            WHERE player_id = %s AND attempted_at = %s
+            """,
+            (previous, player_id, claimed_at),
+        )
 
 
 def _store(
