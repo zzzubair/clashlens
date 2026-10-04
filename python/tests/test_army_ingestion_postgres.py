@@ -14,6 +14,7 @@ from clashlens import (
     army_ingestion,
     battle_ingestion,
     boundary_publication,
+    ingestion,
     job_outcomes,
     reset_baselines,
 )
@@ -1194,27 +1195,36 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
             db.close()
 
 
+@pytest.mark.parametrize("endpoint", ["battle_log", "global_player_rankings"])
 def test_a_session_ending_after_its_commit_landed_keeps_the_saved_result(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, endpoint: str
 ) -> None:
-    with domain_database(database_url) as ci:
+    with domain_database(database_url, include_coordinator=True) as ci:
         ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        battle_log = endpoint == "battle_log"
         _, job_id = store_observation(
             ci,
             archive_server,
             occurrence_key="committed",
-            endpoint="battle_log",
-            body=json.dumps({"items": [_live_row(True, "#8PP", "u1x58", ts)]}).encode(),
+            endpoint=endpoint,
+            body=json.dumps({"items": [_live_row(True, "#8PP", "u1x58", ts)]}).encode()
+            if battle_log
+            else (Path(__file__).parents[1] / "testdata/global_top_200_v1.json").read_bytes(),
             observed_at=ts + timedelta(minutes=1),
-            normalized_tag="#2PP",
+            normalized_tag="#2PP" if battle_log else None,
         )
-        original = battle_ingestion.complete_battle_log
+        module, name = (
+            (battle_ingestion, "complete_battle_log")
+            if battle_log
+            else (ingestion, "complete_rankings")
+        )
+        original = getattr(module, name)
 
         def committed_then_lost(*args, **kwargs):
             original(*args, **kwargs)
             raise psycopg.errors.TransactionTimeout("terminating connection")
 
-        monkeypatch.setattr(battle_ingestion, "complete_battle_log", committed_then_lost)
+        monkeypatch.setattr(module, name, committed_then_lost)
         db, proc = _processor(ci, archive_server)
         try:
             assert proc.process_job(job_id, owner="committed") == ProcessResult(

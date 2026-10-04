@@ -1089,7 +1089,7 @@ class Database:
         with self._timed_connection() as connection:
             row = connection.execute(
                 """
-                SELECT state, outcome FROM python_processing_attempts
+                SELECT state FROM python_processing_attempts
                 WHERE id = %s AND job_id = %s AND lease_token = %s
                 """,
                 (claim.attempt_id, claim.job_id, claim.lease_token),
@@ -1097,9 +1097,8 @@ class Database:
             connection.commit()
         if row is None or row[0] == "running":
             return None
-        if row[0] == "complete":
-            return str(row[1])
         return {
+            "complete": "processed",
             "waiting_retry": "retrying",
             "waiting_dependency": "retrying",
             "stale": "lease_lost",
