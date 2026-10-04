@@ -14,7 +14,14 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { PastSeasons } from "../components/PastSeasons";
 import { formatAge, useCurrentTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
-import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
+import {
+  LOOKUP_MESSAGES,
+  dayEvidence,
+  dayReasons,
+  liveDayNotice,
+  lookupExplanation,
+  presentDay,
+} from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
   HistoricalSeasonDayEntry,
@@ -330,6 +337,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     explainedVisit,
   );
   const history = selectPlayerHistory(player);
+  const now = useCurrentTime(player ? profileLoadedAt(player.profile) : undefined);
+  const todayEnded =
+    player?.currentDay != null &&
+    Date.parse(player.currentDay.period.split(" – ")[1]) <= now;
+  const today = todayEnded ? null : (player?.currentDay ?? null);
   useEffect(() => {
     if (!isChecking || lookupTimedOut) return;
     const timer = setInterval(() => {
@@ -569,7 +581,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 key={legendDayKey(day.period)}
                 day={day}
                 inSeason={inSeason}
-                isCurrentDay={isCurrentDay(player, day)}
+                isCurrentDay={isCurrentDay(today, day)}
                 selectedDay={selectedDay}
               />
             ))}
@@ -685,14 +697,25 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               No saved Legend log for {legendDayDate(selectedDay)}.
             </p>
           ) : null}
-          {trackedPlayer.dataQuality.map((warning) => (
-            <p className="section-note" key={`${warning.code}-${warning.label}`}>
-              <strong>{warning.label}:</strong>{" "}
-              {/^[a-z0-9_:]+(; [a-z0-9_:]+)*$/i.test(warning.detail)
-                ? dayReasons(warning.detail.split("; "), true).join(" ")
-                : warning.detail}
-            </p>
-          ))}
+          {trackedPlayer.dataQuality.map((warning) => {
+            const day = trackedPlayer.currentDay;
+            const notice =
+              day &&
+              warning.code === day.completeness.state &&
+              warning.detail === day.completeness.reason
+                ? liveDayNotice(dayEvidence(day), todayEnded, warning.label)
+                : null;
+            return (
+              <p className="section-note" key={`${warning.code}-${warning.label}`}>
+                <strong>{notice?.heading ?? warning.label}:</strong>{" "}
+                {notice
+                  ? notice.text
+                  : /^[a-z0-9_:]+(; [a-z0-9_:]+)*$/i.test(warning.detail)
+                    ? dayReasons(warning.detail.split("; "), true).join(" ")
+                    : warning.detail}
+              </p>
+            );
+          })}
           {history.some(
             ({ day }) => day.startTrophiesCalculation || day.startTrophies == null,
           ) ? (
@@ -707,7 +730,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 key={legendDayKey(day.period)}
                 day={day}
                 inSeason={inSeason}
-                isCurrentDay={isCurrentDay(player, day)}
+                isCurrentDay={isCurrentDay(today, day)}
                 selectedDay={selectedDay}
               />
             ))}
@@ -986,12 +1009,16 @@ function legendDayDate(period: string): string {
 
 const FRESHNESS_LIMIT_SECONDS = 15 * 60;
 
-function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
+// When the server read this profile, so the page's clock starts from it.
+function profileLoadedAt(profile: PlayerProfile): string | undefined {
   const { observedAt, ageSeconds } = profile.freshness;
   const loadedAt = Date.parse(observedAt) + ageSeconds * 1000;
-  const now = useCurrentTime(
-    Number.isNaN(loadedAt) ? undefined : new Date(loadedAt).toISOString(),
-  );
+  return Number.isNaN(loadedAt) ? undefined : new Date(loadedAt).toISOString();
+}
+
+function PlayerFreshness({ profile }: { profile: PlayerProfile }) {
+  const { observedAt } = profile.freshness;
+  const now = useCurrentTime(profileLoadedAt(profile));
   const oldAge = (value: string) => {
     const age = Math.floor((now - Date.parse(value)) / 1000);
     return age > FRESHNESS_LIMIT_SECONDS ? ` · ${formatAge(age)} old` : null;
@@ -1063,140 +1090,11 @@ function selectPlayerHistory(player: PlayerPage | null) {
     }));
 }
 
-function isCurrentDay(player: PlayerPage | null, day: RankedDaySummary): boolean {
-  return (
-    player?.currentDay != null &&
-    legendDayKey(player.currentDay.period) === legendDayKey(day.period)
-  );
-}
-
-interface DayEvidence {
-  net: number | null;
-  state: string;
-  coverage: string;
-  codes: string[];
-  attackGain: number | null;
-  defenseLoss: number | null;
-  attacks: number | null;
-  defenses: number | null;
-  battlesComplete?: boolean;
-}
-
-// Codes that leave a day's 8 attacks and 8 defenses in doubt, or may hide such a code.
-const BATTLE_DOUBT_CODES = new Set([
-  "perspective_disagreement",
-  "duplicate_contribution_disagreement",
-  "trophy_equation_mismatch",
-  "ranked_version_mismatch",
-  "attack_star_total_mismatch",
-  "defense_star_total_mismatch",
-  "truncated_reasons",
-]);
-
 const LEGEND_DAY_NOTE =
   "A Legend day runs from 05:00 to 05:00 UTC. Ended days show “Provisional result” until Clash Lens can prove their trophy change includes the automatic defense loss at Reset.";
 
-// Only Python's calendar check makes a day current; a saved "Live" state can
-// outlast its day. No saved result proves the Reset settled yet, so a finished
-// day with a number is still provisional. A finished day with every battle
-// recorded (all 8 of each) has nothing missing from its number. Python marks
-// this for recent days; saved Season entries carry only their counts and codes.
-function presentDay(day: DayEvidence, isCurrentDay: boolean) {
-  const battlesComplete =
-    day.battlesComplete ??
-    (day.attacks === 8 &&
-      day.defenses === 8 &&
-      !day.codes.some((code) => BATTLE_DOUBT_CODES.has(code)));
-  const status = isCurrentDay
-    ? "In progress"
-    : day.net === null
-      ? "Result unknown"
-      : !battlesComplete &&
-          (day.state !== "Complete" ||
-            day.coverage !== "complete" ||
-            day.codes.length > 0)
-        ? "Incomplete"
-        : "Provisional result";
-  const reasons = dayReasons(day.codes, isCurrentDay, day);
-  if (reasons.length === 0 && status === "Incomplete")
-    reasons.push(
-      day.state === "Live"
-        ? "Final evidence for this day has not been processed yet."
-        : "Some daily evidence is unavailable.",
-    );
-  const battleNet =
-    day.attackGain === null || day.defenseLoss === null
-      ? null
-      : day.attackGain - day.defenseLoss;
-  return { status, reasons, battleNet };
-}
-
-const REASON_TEXT: Record<string, string> = {
-  missing_start_battle_log_baseline:
-    "The battle log was not checked at the start of this day.",
-  missing_end_battle_log_baseline: "The battle log was not checked after this day ended.",
-  missing_start_baseline: "Trophies at the start of this day were not recorded.",
-  start_baseline_incomplete: "The start-of-day trophy reading is incomplete.",
-  missing_end_baseline: "Trophies at the end of this day were not recorded.",
-  end_baseline_incomplete: "The end-of-day trophy reading is incomplete.",
-  battle_log_stale_window:
-    "The battle log was not checked often enough to be sure every battle was seen.",
-  battle_log_overlap_gap: "Some battles may be missing between two battle log checks.",
-  battle_log_row_gap: "Part of a battle log reply could not be read.",
-  battle_log_row_count_exceeds_fifty: "Part of a battle log reply could not be read.",
-  duplicate_battle_identity_in_observation:
-    "Part of a battle log reply could not be read.",
-  unclassified_rows: "Some battles in the log could not be identified.",
-  perspective_disagreement: "The two players' battle logs disagree about a result.",
-  duplicate_contribution_disagreement:
-    "The two players' battle logs disagree about a result.",
-  trophy_equation_mismatch:
-    "Recorded battles do not add up to the change between trophy readings.",
-  automatic_defense_basis_unavailable:
-    "The automatic defense loss at Reset could not be calculated.",
-  season_anchor_conflict: "The Season start date could not be confirmed.",
-  player_not_eligible: "The player was not in Legend I for all of this day.",
-  shield_sequence_longer_than_two_days:
-    "A shield period was longer than expected and could not be explained.",
-  malformed_evidence: "Some saved evidence for this day could not be read.",
-  malformed_contribution: "Some saved evidence for this day could not be read.",
-  "ranked_day_state:Inconsistent": "The evidence for this day conflicts.",
-  "ranked_day_state:Malformed": "Some saved evidence for this day could not be read.",
-  battle_event_projection_incomplete: "Not every recorded battle is listed for this day.",
-  detailed_boundaries_unavailable:
-    "Detailed start and end readings for this day were not saved.",
-  ranked_version_missing: "Some saved evidence for this day could not be read.",
-  malformed_battle_entries: "Some saved evidence for this day could not be read.",
-  ranked_version_mismatch: "The evidence for this day conflicts.",
-  attack_star_total_mismatch: "Recorded attacks do not match the day's attack count.",
-  defense_star_total_mismatch: "Recorded defenses do not match the day's defense count.",
-  truncated_reasons: "More reasons were saved than can be shown.",
-};
-const ENDING_REASONS = new Set([
-  "missing_end_battle_log_baseline",
-  "missing_end_baseline",
-  "end_baseline_incomplete",
-]);
-
-// Plain words for Python's reason codes.
-function dayReasons(
-  codes: string[],
-  isCurrentDay: boolean,
-  counts: { attacks: number | null; defenses: number | null } = {
-    attacks: null,
-    defenses: null,
-  },
-): string[] {
-  const reasons = codes.map((code) =>
-    code === "attack_count_exceeds_eight"
-      ? excessNote(counts.attacks, "attacks")
-      : code === "defense_count_exceeds_eight"
-        ? excessNote(counts.defenses, "defenses")
-        : isCurrentDay && ENDING_REASONS.has(code)
-          ? "Ending evidence arrives after Reset."
-          : (REASON_TEXT[code] ?? "Some daily evidence is unavailable."),
-  );
-  return [...new Set(reasons)];
+function isCurrentDay(today: RankedDaySummary | null, day: RankedDaySummary): boolean {
+  return today != null && legendDayKey(today.period) === legendDayKey(day.period);
 }
 
 function LegendDay({
@@ -1212,20 +1110,7 @@ function LegendDay({
 }) {
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
-  const { status, reasons, battleNet } = presentDay(
-    {
-      net: day.trophyChange,
-      state: day.state,
-      coverage: day.completeness.state,
-      codes: day.uncertainty,
-      attackGain: day.offense.trophyGain,
-      defenseLoss: day.defense.trophyLoss,
-      attacks: day.offenseEvents.length,
-      defenses: day.defenseEvents.length,
-      battlesComplete: day.battlesComplete,
-    },
-    isCurrentDay,
-  );
+  const { status, reasons, battleNet } = presentDay(dayEvidence(day), isCurrentDay);
   return (
     <details
       className="legend-day"
@@ -1458,12 +1343,6 @@ function formatSigned(value: number | null): string {
 function valueTone(value: number | null): string {
   if (value === null || value === 0) return "score-neutral";
   return value > 0 ? "score-positive" : "score-negative";
-}
-
-function excessNote(count: number | null, kind: "attacks" | "defenses"): string {
-  return count === null
-    ? `Clash of Clans returned more than the usual 8 ${kind} for this day, so this day is marked partial.`
-    : `Clash of Clans returned ${count} ${kind} for this day, more than the usual 8, so this day is marked partial.`;
 }
 
 function formatCount(value: number | null): string {
