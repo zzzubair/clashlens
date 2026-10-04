@@ -369,7 +369,7 @@ test("season navigation clears refresh state for the same player", async ({ page
   await expect(page).toHaveURL(/\/players\/%232PP\?season=/);
   await expect(refresh).toHaveCount(0);
 
-  await seasons.getByRole("link", { name: "Current season" }).click();
+  await seasons.getByRole("link", { name: "Current Season" }).click();
   await expect(page).toHaveURL(/\/players\/%232PP$/);
   await expect(refresh).toHaveCount(0);
 });
