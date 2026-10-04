@@ -20,6 +20,8 @@ args = sys.argv[1:]
 with open(os.environ["CALLS"], "a") as calls:
     calls.write(" ".join(args) + "\\n")
 fmt = args[args.index("--format") + 1] if "--format" in args else ""
+if args[:2] == ["image", "inspect"] and os.environ.get("INTERRUPT"):
+    os.kill(int(os.environ["MAIN_PID"]), 15)
 if args[:2] == ["image", "inspect"]:
     images = json.loads(os.environ["IMAGES"])
     if args[-1] not in images:
@@ -49,6 +51,20 @@ keep_running_check
 [[ "$FAILS" != true ]] || die "the stack did not become healthy; run ./ops logs"
 keep_running_record
 printf 'keep=%s collector=%s\n' "$KEEP_RUNNING" "${RELEASE[COLLECTOR_IMAGE]}"
+"""
+
+# The real up, with the host and configuration checks before the keep decision skipped.
+UP = r"""
+source "$1" help >/dev/null
+for check in require_host load_release load_production_config validate_runtime_values \
+  guard_generated_units guard_existing_resources guard_trusted_proxy_ip guard_network_subnet \
+  cleanup_stale_admin_state ensure_linger migrate_legacy_units guard_systemd_units; do
+  eval "$check() { :; }"
+done
+MODE=production PREFIX=clashlens MAIN_PID=$$
+export MAIN_PID
+RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
+up_stack
 """
 
 
@@ -197,3 +213,35 @@ def test_failed_up_after_a_change_stops_everything(stack):
     assert "Restarting the collector with the database, pod and network: changed" in result.stdout
     assert KEPT <= result.stopped
     assert "--user disable --now clashlens.target" in Path(stack["env"]["CALLS"]).read_text()
+
+
+def failed_up(stack, **overrides):
+    calls = Path(stack["env"]["CALLS"])
+    calls.unlink(missing_ok=True)
+    result = subprocess.run(
+        ["bash", "-c", UP, "keep-running-test", str(OPS)],
+        env=dict(stack["env"], **overrides),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode != 0, result.stdout
+    assert not [line for line in calls.read_text().splitlines() if line.startswith("--user stop ")]
+    assert "disable" not in calls.read_text()
+    return result
+
+
+def test_failed_status_write_stops_nothing(stack):
+    fake = stack["tmp_path"] / "bin"
+    fake.mkdir()
+    (fake / "mktemp").write_text(
+        '#!/bin/sh\ncase "$*" in *alert-intent*) exit 1 ;; esac\nexec /usr/bin/mktemp "$@"\n'
+    )
+    (fake / "mktemp").chmod(0o700)
+    failed_up(stack, PATH=f"{fake}:/usr/bin:/bin")
+    assert "keep=true" in deploy(stack).stdout
+
+
+def test_interrupted_planning_stops_nothing(stack):
+    assert failed_up(stack, INTERRUPT="1").returncode == 143

@@ -1153,9 +1153,9 @@ up_stack() {
   ensure_linger
   migrate_legacy_units
   guard_systemd_units
-  UP_IN_PROGRESS=true
-  write_alert_intent stopped
   keep_running_plan
+  write_alert_intent stopped
+  UP_IN_PROGRESS=true
   stop_units
   mkdir -p "$STATE_DIR"
   local mode_file
