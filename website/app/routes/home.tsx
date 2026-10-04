@@ -4,6 +4,7 @@ import {
   Link,
   redirect,
   useLoaderData,
+  useNavigation,
   useSearchParams,
   type LoaderFunctionArgs,
 } from "react-router";
@@ -74,6 +75,7 @@ export default function Home() {
   const logoutUnrecorded = searchParams.get("logout") === "unrecorded";
   const suggestions = usePlayerSuggestions(data.query);
   const { setQuery } = suggestions;
+  const searching = useNavigation().state !== "idle";
 
   useEffect(() => {
     setQuery(data.query);
@@ -152,7 +154,9 @@ export default function Home() {
                 aria-describedby="search-keyboard-help"
                 onChange={(event) => suggestions.change(event.currentTarget.value)}
               />
-              <button type="submit">Search</button>
+              <button type="submit" disabled={searching}>
+                {searching ? "Searching…" : "Search"}
+              </button>
             </div>
             <span className="sr-only" id="search-keyboard-help">
               Suggestions appear below as you type. Press Tab to reach them, or Escape to
@@ -167,7 +171,7 @@ export default function Home() {
             ) : null}
           </Form>
           {data.search && suggestions.query === data.query ? (
-            <SearchResults search={data.search} />
+            <SearchResults search={data.search} busy={searching} />
           ) : null}
         </div>
       </section>
@@ -221,10 +225,10 @@ export default function Home() {
   );
 }
 
-function SearchResults({ search }: { search: SearchResponse }) {
+function SearchResults({ search, busy }: { search: SearchResponse; busy: boolean }) {
   const users = search.users;
   return (
-    <div className="search-results" aria-live="polite">
+    <div className="search-results" aria-live="polite" aria-busy={busy}>
       {users.length > 0 ? (
         <section aria-labelledby="profile-search-title">
           <h3 id="profile-search-title">Clash Lens profiles</h3>

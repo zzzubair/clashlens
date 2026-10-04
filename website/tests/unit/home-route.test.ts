@@ -9,7 +9,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
+  navigationState: "idle",
 }));
+
+vi.mock("react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router")>();
+  return { ...actual, useNavigation: () => ({ state: mocks.navigationState }) };
+});
 
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
@@ -82,6 +88,27 @@ it("labels Clash Lens profiles so they do not look like game players", async () 
     /href="\/users\/nova_star"[^>]*>Nova <span class="profile-badge">Clash Lens profile<\/span><\/a>/,
   );
   expect(html.match(/profile-badge/g)).toHaveLength(1);
+});
+
+it("disables the search button and marks results busy while a search loads", async () => {
+  const data = {
+    leaderboard: null,
+    query: "Nova",
+    error: null,
+    search: { exactTag: null, users: [], results: [] },
+  };
+  const idle = await renderHome(data, "?q=Nova");
+  expect(idle).toContain('<button type="submit">Search</button>');
+  expect(idle).toContain('aria-busy="false"');
+
+  mocks.navigationState = "loading";
+  try {
+    const pending = await renderHome(data, "?q=Nova");
+    expect(pending).toContain('<button type="submit" disabled="">Searching…</button>');
+    expect(pending).toContain('aria-busy="true"');
+  } finally {
+    mocks.navigationState = "idle";
+  }
 });
 
 it("formats the tracked total and explains a logout the server could not record", async () => {
