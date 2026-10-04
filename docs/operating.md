@@ -329,6 +329,10 @@ retrying, dependency-waiting and leased jobs, even when the next attempt is
 scheduled in the future. Rescheduling a retry does not reset its age; finished
 jobs are excluded. Jobs without a saved response use their own creation time,
 so delayed derived work also contributes to the processing wait.
+Leaderboard, analytics and export builds (`build_*` jobs) are left out of it
+and reported as `oldest_pending_build_age_seconds`; each job type's own
+oldest age is `oldest_job_<work_type>_age_seconds`, present only while that
+type has unfinished jobs.
 With the [worker's queue ordering](architecture.md#structured-data-and-evidence),
 this age can stay high while the Live Leaderboard is already current. Worker
 `job_result` lines with outcome `superseded` identify jobs skipped under those

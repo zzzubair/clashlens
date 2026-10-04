@@ -7,12 +7,14 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
     row = connection.execute(
         """WITH active_reset AS (SELECT sweep.id FROM collector_reset_sweeps AS sweep JOIN collector_work AS work ON work.sweep_id = sweep.id WHERE work.kind = 'reset_baseline' AND work.status NOT IN ('complete', 'failed', 'cancelled') ORDER BY sweep.boundary_at DESC, sweep.id DESC LIMIT 1),
         processing AS (
-            SELECT count(*) AS pending_count,
-                   min(COALESCE(observation.created_at, job.created_at)) AS oldest_saved_at
+            SELECT job.work_type, count(*) AS pending_count,
+                   greatest(0, extract(epoch FROM clock_timestamp()
+                       - min(COALESCE(observation.created_at, job.created_at)))) AS age
             FROM python_processing_jobs AS job
             LEFT JOIN collector_observations AS observation
               ON observation.id = job.observation_id
             WHERE job.status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
+            GROUP BY job.work_type
         ), failed_jobs AS (
             SELECT count(*) AS failed_count, max(updated_at) AS newest_at
             FROM python_processing_jobs WHERE status = 'failed'
@@ -51,7 +53,7 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
         SELECT (SELECT count(*) FROM players WHERE active = true),
                (SELECT count(*) FROM players WHERE active = true AND next_due_at <= clock_timestamp()),
                COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - min(next_due_at))) FROM players WHERE active = true AND next_due_at <= clock_timestamp()), 0),
-               (SELECT pending_count FROM processing),
+               (SELECT COALESCE(sum(pending_count), 0) FROM processing),
                (SELECT pending_count FROM uploads),
                (SELECT failed_count FROM failed_jobs),
                (SELECT failed_count FROM failed_uploads),
@@ -59,15 +61,19 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline' AND status IN ('complete', 'failed', 'cancelled')),
                (SELECT CASE WHEN max(last_success_at) IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM clock_timestamp() - max(last_success_at))) END
                 FROM collector_response_state),
-               COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - oldest_saved_at)) FROM processing), 0),
+               -- Publication builds often run for most of an hour, so they get their own age.
+               COALESCE((SELECT max(age) FROM processing WHERE NOT starts_with(work_type, 'build_')), 0),
+               COALESCE((SELECT max(age) FROM processing WHERE starts_with(work_type, 'build_')), 0),
                COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - oldest_at)) FROM uploads), 0),
                (SELECT CASE WHEN newest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - newest_at)) END FROM failed_jobs),
                (SELECT CASE WHEN newest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - newest_at)) END FROM failed_uploads),
                extract(epoch FROM statement_timestamp()),
-               checks.samples, checks.missing, checks.p50, checks.p95, checks.maximum
+               checks.samples, checks.missing, checks.p50, checks.p95, checks.maximum,
+               (SELECT json_object_agg(work_type, age) FROM processing)
         FROM checks"""
     ).fetchone()
     assert row is not None
+    *row, ages = row
     names = (
         "active_players",
         "due_queue_depth",
@@ -80,6 +86,7 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
         "reset_terminal",
         "last_success_age_seconds",
         "oldest_pending_processing_age_seconds",
+        "oldest_pending_build_age_seconds",
         "oldest_pending_upload_age_seconds",
         "newest_failed_processing_age_seconds",
         "newest_failed_upload_age_seconds",
@@ -94,4 +101,6 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
     for name, value in zip(names, row, strict=True):
         if value is not None:
             metrics[name] = float(value) if name.endswith("_seconds") else int(value)
+    for work_type, age in (ages or {}).items():
+        metrics[f"oldest_job_{work_type}_age_seconds"] = float(age)
     return metrics

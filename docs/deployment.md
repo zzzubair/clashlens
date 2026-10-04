@@ -791,15 +791,28 @@ use the [operating notes](operating.md#respond-to-alerts).
   Seeing a failed upload's bytes again does not restart its 24 hours.
   A manual retry of a failed item clears the alert early; a repeat failure
   raises a fresh alert.
-- **Saved work waiting at least one hour**: a job waiting to be processed,
-  from `oldest_pending_processing_age_seconds`, or a raw response waiting to
-  be uploaded to the archive, from `oldest_pending_upload_age_seconds`. An
-  upload's wait starts when it is first saved, or when retired bytes come back
-  for a fresh upload. Retries, including an operator retry of a failed upload,
-  keep the original wait. These
-  are two separate alerts. Since the Oct 1 worker fixes, the longest
-  processing wait was 18 minutes and the longest upload wait under two
-  minutes; Oct 1's stalls of up to 3.7 hours would have alerted.
+- **Saved work waiting too long**, as three separate alerts:
+  - ordinary processing work (saved responses, daily calculations and army
+    re-decoding) waiting at least **30 minutes**, from
+    `oldest_pending_processing_age_seconds`;
+  - a leaderboard, analytics or export build unfinished for at least **one
+    hour**, from `oldest_pending_build_age_seconds`. Builds are kept out of
+    the 30-minute alert because on Oct 3–4 they routinely ran 24–63 minutes,
+    which would have kept that alert open and hidden a real backlog;
+  - a raw response waiting at least **one hour** to be uploaded to the
+    archive, from `oldest_pending_upload_age_seconds`. An upload's wait
+    starts when it is first saved, or when retired bytes come back for a
+    fresh upload. Retries, including an operator retry of a failed upload,
+    keep the original wait.
+
+  The processing and build alerts name the oldest kind of waiting work and
+  its age, from the collector's per-type `oldest_job_<work_type>_age_seconds`.
+  Since the Oct 1 worker fixes, the longest ordinary processing wait was 18
+  minutes and the longest upload wait under two minutes; Oct 1's stalls of up
+  to 3.7 hours would have alerted. Expect the 30-minute alert on Reset
+  mornings whose processing takes longer than that: on Oct 3 ordinary work
+  passed 30 minutes at 05:43 and 06:38, and on Oct 4 it would have warned at
+  03:15 instead of 03:46.
 - **A Reset publication over an hour past its target time**: no publication
   record for that Reset has published both its frozen leaderboard and its army
   results an hour after the existing target, five minutes after Reset or ten
