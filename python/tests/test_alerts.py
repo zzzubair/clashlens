@@ -206,7 +206,8 @@ def trigger(rt, condition, value=True):
         )
     elif condition in ("processing", "upload"):
         name = f"clashlens_collector_oldest_pending_{condition}_age_seconds"
-        rt.metrics[name] = 3600 if value else 3599
+        limit = 1800 if condition == "processing" else 3600
+        rt.metrics[name] = limit if value else limit - 1
     elif condition == "publication":
         rt.publication = "1" if value else "0"
 
@@ -646,6 +647,25 @@ def test_saved_work_alerts_clear_only_when_their_own_problem_clears(runtime):
     assert not any("publication time" in post["content"] for post in rt.posts[4:])
     state = json.loads((rt.state_dir / "alerts.json").read_text())
     assert "site" not in state["incidents"]
+
+
+def test_processing_alert_ignores_builds_and_names_the_oldest_work(runtime):
+    rt = runtime
+    prefix = "clashlens_collector_"
+    rt.metrics |= {
+        f"{prefix}oldest_pending_processing_age_seconds": 1799,
+        f"{prefix}oldest_job_reconcile_ranked_day_age_seconds": 1799,
+        f"{prefix}oldest_job_process_observation_age_seconds": 600,
+        f"{prefix}oldest_job_build_snapshot_age_seconds": 7200,
+    }
+    assert rt.run() == 0
+    assert not rt.posts
+    rt.metrics[f"{prefix}oldest_pending_processing_age_seconds"] = 1860
+    rt.metrics[f"{prefix}oldest_job_reconcile_ranked_day_age_seconds"] = 1860
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    assert "over 30 minutes" in rt.posts[0]["content"]
+    assert "Oldest waiting: daily result calculations, 31 minutes." in rt.posts[0]["content"]
 
 
 def test_missing_failure_age_is_unknown_unless_nothing_has_failed(runtime):

@@ -61,7 +61,7 @@ CONDITIONS = {
         "./ops failed-items",
     ),
     "processing": (
-        "Saved work has waited over an hour to be processed",
+        "Ordinary saved work, not counting publication builds, has waited over 30 minutes to be processed",
         "./ops logs worker",
     ),
     "uploads": (
@@ -79,6 +79,14 @@ CONDITIONS = {
     ),
 }
 
+
+# Plain names for the worker's ordinary job types in processing alerts.
+WORK_NAMES = {
+    "process_observation": "saved API responses",
+    "replay_observation": "replayed API responses",
+    "reconcile_ranked_day": "daily result calculations",
+    "redecode_army": "army re-decoding",
+}
 
 # A recovery is sent only after this long without the problem, so a problem
 # that comes back sooner continues the same incident.
@@ -339,11 +347,16 @@ def deliver(
                 # A recovery reports when the problem first cleared.
                 at = now if active else incident.pop("clear_since", now)
                 incident["pending"] = {"active": active, "at": at}
+                detail = state.get("details", {}).get(name)
+                if active and detail:
+                    incident["pending"]["detail"] = detail
                 save_state(path, state)
             pending = incident["pending"]
             since = datetime.fromtimestamp(incident["since"], UTC).isoformat()
             at = datetime.fromtimestamp(pending["at"], UTC).isoformat()
             description, step = CONDITIONS[name]
+            if pending.get("detail"):
+                description += f". {pending['detail']}"
             content = (
                 f"Clash Lens alert: {description}. First observed {since}. Next step: {step}."
                 if pending["active"]
@@ -422,9 +435,27 @@ def observe(
         findings["failures"] = (
             True if True in recent else None if None in recent else False
         )
-        for name, kind in (("processing", "processing"), ("uploads", "upload")):
+        for name, kind, limit in (
+            ("processing", "processing", 1800),
+            ("uploads", "upload", 3600),
+        ):
             age = metrics.get(f"{prefix}oldest_pending_{kind}_age_seconds")
-            findings[name] = None if age is None else age >= 3600
+            findings[name] = None if age is None else age >= limit
+        # Name the oldest ordinary job type so the alert says which work is behind.
+        age, work = max(
+            (
+                (age, name.removeprefix(f"{prefix}oldest_job_").removesuffix("_age_seconds"))
+                for name, age in metrics.items()
+                if name.startswith(f"{prefix}oldest_job_")
+                and not name.startswith(f"{prefix}oldest_job_build_")
+            ),
+            default=(0, None),
+        )
+        state["details"] = {}
+        if work:
+            state["details"]["processing"] = (
+                f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
+            )
 
     names = (
         ("clashlens_spool_bytes", "max_bytes"),

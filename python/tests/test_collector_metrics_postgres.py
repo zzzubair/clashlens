@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -9,6 +10,11 @@ from domain_test_support import domain_database
 
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 from clashlens.collector_uploads import claim_upload, complete_upload, fail_upload
+from clashlens.db import (
+    ARMY_ANALYTICS_RULE_VERSION,
+    DOMAIN_RULE_VERSION,
+    PROCESSING_VERSION,
+)
 from clashlens.operator_recovery import retry_failed_item
 
 
@@ -185,7 +191,33 @@ def test_metrics_include_jobs_without_observations_or_successful_fetches(
                 metrics = database.health_metrics()
                 assert metrics["pending_processing"] == 1
                 assert metrics["oldest_pending_processing_age_seconds"] >= 3600
+                assert metrics["oldest_job_reconcile_ranked_day_age_seconds"] >= 3600
                 assert "last_success_age_seconds" not in metrics
+            # An older build is left out of the processing age.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, created_at,
+                        processing_version, domain_rule_version,
+                        analytics_rule_version, parser_version
+                    ) VALUES ('build_army_analytics', 'metrics-build',
+                              %s::jsonb, clock_timestamp() - interval '2 hours',
+                              %s, %s, %s, 'supercell-source-parser-v1')
+                    """,
+                    (
+                        json.dumps(
+                            {"generation": 1, "manifest_id": 1, "manifest_digest": "a" * 64}
+                        ),
+                        PROCESSING_VERSION,
+                        DOMAIN_RULE_VERSION,
+                        ARMY_ANALYTICS_RULE_VERSION,
+                    ),
+                )
+            metrics = database.health_metrics()
+            assert metrics["pending_processing"] == 2
+            assert 3600 <= metrics["oldest_pending_processing_age_seconds"] < 7200
+            assert metrics["oldest_job_build_army_analytics_age_seconds"] >= 7200
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     """
