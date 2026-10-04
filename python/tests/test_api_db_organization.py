@@ -116,7 +116,7 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
                     ],
                 }
             ]
-            assert api_accounts.get_public_user(database, "groupowner") == {
+            assert api_accounts.get_public_user(database, "groupowner", now=NOW) == {
                 "username": "groupowner",
                 "display_name": "Group Owner",
                 "verified_players": [],
@@ -157,9 +157,11 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
                 )
                 connection.commit()
 
-            public_user = api_accounts.get_public_user(database, "groupowner")
+            public_user = api_accounts.get_public_user(database, "groupowner", now=NOW)
             summary = api_accounts.get_multi_account_summary(database, account_id)
-            assert public_user["verified_players"] == [{"tag": "#2PP", "name": None}]
+            assert [
+                (player["tag"], player["name"]) for player in public_user["verified_players"]
+            ] == [("#2PP", None)]
             assert summary["verified_players"] == [{"tag": "#2PP", "name": None}]
             assert "id" not in str(public_user).lower()
             assert "id" not in str(summary).lower()

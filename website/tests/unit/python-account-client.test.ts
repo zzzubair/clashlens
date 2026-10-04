@@ -463,7 +463,7 @@ describe("server-only Python account client", () => {
       jsonResponse({
         username: "nova88",
         display_name: "Nova",
-        verified_players: [{ tag: "#2PP", name: null }],
+        verified_players: [],
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -473,7 +473,7 @@ describe("server-only Python account client", () => {
     await expect(client.getPublicUser("Nova88")).resolves.toEqual({
       username: "nova88",
       displayName: "Nova",
-      verifiedPlayers: [{ tag: "#2PP", name: null }],
+      verifiedPlayers: [],
     });
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(url).toEqual(new URL("/v1/users/nova88", "http://python-fixture.test/"));

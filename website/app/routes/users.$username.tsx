@@ -8,12 +8,15 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import type { PublicUser } from "../lib/account-contracts";
+import type { LinkedPlayerCard, PublicUser } from "../lib/account-contracts";
 import { normalizeUsername } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
+import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import type { Route } from "./+types/users.$username";
 import type { RootLoaderData } from "../root";
+
+import "../user-profile.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -124,11 +127,10 @@ export default function UserRoute() {
           ) : null}
         </div>
         {data.user && data.user.verifiedPlayers.length > 0 ? (
-          <ul className="player-link-list">
+          <ul className="linked-player-cards">
             {data.user.verifiedPlayers.map((player) => (
               <li key={player.tag}>
-                <a href={canonicalPlayerPath(player.tag)}>{player.name ?? player.tag}</a>
-                <span className="player-tag">{player.tag}</span>
+                <LinkedPlayer player={player} />
               </li>
             ))}
           </ul>
@@ -141,4 +143,98 @@ export default function UserRoute() {
       </section>
     </main>
   );
+}
+
+/**
+ * The whole card is one link to the player page, named by the player's name
+ * and tag; the numbers are its description. A player without current results
+ * also says what their own page says.
+ */
+function LinkedPlayer({ player }: { player: LinkedPlayerCard }) {
+  const id = `linked-player-${player.tag.slice(1)}`;
+  const note =
+    player.state === "tracking" && player.reason === null
+      ? null
+      : ((player.state === "tracking"
+          ? lookupExplanation(player.reason, player.name)
+          : null) ?? LOOKUP_MESSAGES[player.state]);
+  return (
+    <a
+      className="linked-player-card"
+      href={canonicalPlayerPath(player.tag)}
+      aria-labelledby={`${id}-name ${id}-tag`}
+      aria-describedby={`${player.clan ? `${id}-clan ` : ""}${id}-details${note === null ? "" : ` ${id}-note`}`}
+    >
+      <span className="linked-player-identity">
+        <strong className="linked-player-name" id={`${id}-name`}>
+          {player.name ?? player.tag}
+        </strong>
+        <span className="player-tag" id={`${id}-tag`}>
+          {player.tag}
+        </span>
+        {player.clan ? (
+          <span className="linked-player-clan" id={`${id}-clan`}>
+            {player.clan}
+          </span>
+        ) : null}
+      </span>
+      <span className="linked-player-stats" id={`${id}-details`}>
+        <span className="linked-player-stat">
+          <small>Trophies</small>
+          {player.trophies === null ? (
+            <span className="linked-player-wait">
+              {player.seasonResetPending
+                ? "Waiting for this player's Season reset"
+                : "Unknown"}
+            </span>
+          ) : (
+            <strong>{player.trophies.toLocaleString("en-GB")}</strong>
+          )}
+        </span>
+        <span className="linked-player-stat">
+          <small>Rank</small>
+          <strong>
+            {player.rank === null
+              ? "Unranked"
+              : `#${player.rank.toLocaleString("en-GB")}`}
+          </strong>
+        </span>
+        <span className="linked-player-stat linked-player-today">
+          <small>Today</small>
+          {player.today === null ? (
+            <span className="linked-player-wait">Not available yet</span>
+          ) : (
+            <>
+              <span>
+                <strong className={netTone(player.today.net)}>
+                  {formatNet(player.today.net)}
+                </strong>
+                {player.today.net === null ? null : " so far"}
+              </span>
+              {player.today.attacks !== null && player.today.defenses !== null ? (
+                <span className="linked-player-battles">
+                  {player.today.attacks}/8 attacks · {player.today.defenses}/8 defenses
+                </span>
+              ) : null}
+            </>
+          )}
+        </span>
+      </span>
+      {note === null ? null : (
+        <span className="linked-player-note" id={`${id}-note`}>
+          {note}
+        </span>
+      )}
+    </a>
+  );
+}
+
+function formatNet(value: number | null): string {
+  if (value === null) return "Unknown";
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function netTone(value: number | null): string | undefined {
+  if (value === null || value === 0) return undefined;
+  return value > 0 ? "linked-player-gain" : "linked-player-loss";
 }

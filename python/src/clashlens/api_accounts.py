@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 from psycopg.types.json import Jsonb
 
-from . import api_db, api_groups, api_player_lookup
+from . import api_db, api_groups, api_player_lookup, api_players
 from .api_db import (
     AccountContext,
     ApiDatabase,
@@ -1082,7 +1083,9 @@ def search_public_users(
     ]
 
 
-def get_public_user(database: ApiDatabase, normalized_username: str) -> dict[str, Any] | None:
+def get_public_user(
+    database: ApiDatabase, normalized_username: str, *, now: datetime
+) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         account = connection.execute(
             """
@@ -1094,10 +1097,13 @@ def get_public_user(database: ApiDatabase, normalized_username: str) -> dict[str
         ).fetchone()
         if account is None:
             return None
+        # One read gives every linked player's card, never one per player.
         return {
             "username": _text(account[1]),
             "display_name": _text(account[2]),
-            "verified_players": _verified_players(connection, int(account[0])),
+            "verified_players": api_players.player_cards(
+                connection, _linked_players(connection, int(account[0])), now=now
+            ),
         }
 
 
@@ -1225,17 +1231,35 @@ def _group_player(connection: Any, row: Any) -> dict[str, Any]:
 
 
 def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:
+    return [
+        {"tag": tag, "name": name}
+        for _id, tag, name, _clan in _linked_players(connection, account_id)
+    ]
+
+
+def _linked_players(
+    connection: Any, account_id: int
+) -> list[tuple[int, str, str | None, str | None]]:
+    """Each verified player's id, tag, and newest saved name and clan."""
     # Profile parsing validates the player tag and name separately from Legend
     # season/tier evidence. Linking a non-Legend account still exposes its name.
     rows = connection.execute(
         """
-        SELECT player.normalized_tag, profile.name
+        SELECT player.id, player.normalized_tag, profile.name, profile.clan
         FROM verified_player_links AS link
         JOIN players AS player ON player.id = link.player_id
         LEFT JOIN LATERAL (
-            SELECT name, player_id FROM player_profile_versions
-            WHERE normalized_tag = player.normalized_tag
-            ORDER BY observed_at DESC, id DESC LIMIT 1
+            SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
+                   version.player_id
+            FROM player_profile_versions AS version
+            CROSS JOIN LATERAL (
+                SELECT max(observed_at) AS observed_at FROM player_profile_effects
+                WHERE profile_version_id = version.id
+            ) AS effect
+            WHERE version.normalized_tag = player.normalized_tag
+            ORDER BY COALESCE(effect.observed_at, version.observed_at) DESC,
+                     version.id DESC
+            LIMIT 1
         ) AS profile ON profile.player_id = player.id
         WHERE link.account_id = %s
         ORDER BY player.normalized_tag
@@ -1244,6 +1268,11 @@ def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:
         (account_id,),
     ).fetchall()
     return [
-        {"tag": _text(row[0]), "name": None if row[1] is None else _text(row[1])}
+        (
+            int(row[0]),
+            _text(row[1]),
+            None if row[2] is None else _text(row[2]),
+            None if row[3] is None else _text(row[3]),
+        )
         for row in rows
     ]

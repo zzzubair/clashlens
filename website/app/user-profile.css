@@ -1,0 +1,111 @@
+/* Public profile: one card per linked player, each card one link. */
+.linked-player-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.linked-player-cards li {
+  display: flex;
+  min-width: 0;
+}
+
+.linked-player-card {
+  display: grid;
+  flex: 1 1 auto;
+  align-content: start;
+  gap: 0.85rem;
+  min-width: 0;
+  padding: 1rem;
+  color: var(--cl-ink);
+  font-weight: 400;
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+}
+
+.linked-player-card:hover,
+.linked-player-card:focus-visible {
+  color: var(--cl-ink);
+  background: var(--cl-panel);
+  border-color: var(--cl-accent);
+}
+
+.linked-player-card:hover .linked-player-name,
+.linked-player-card:focus-visible .linked-player-name {
+  color: var(--cl-accent-contrast);
+}
+
+.linked-player-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.linked-player-name {
+  flex-basis: 100%;
+  font-family: var(--cl-font-heading);
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+}
+
+.linked-player-clan {
+  min-width: 0;
+  color: var(--cl-muted);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.linked-player-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem 1rem;
+}
+
+.linked-player-stat {
+  display: grid;
+  align-content: start;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.linked-player-stat small {
+  color: var(--cl-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.linked-player-stat strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.linked-player-today {
+  grid-column: 1 / -1;
+}
+
+.linked-player-battles,
+.linked-player-wait {
+  color: var(--cl-muted);
+  font-size: 0.86rem;
+}
+
+.linked-player-gain {
+  color: var(--cl-positive);
+}
+
+.linked-player-loss {
+  color: var(--cl-negative);
+}
+
+.linked-player-note {
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+}
