@@ -144,7 +144,9 @@ for (const lens of ["offense", "defense"]) {
     await form.getByLabel("Min trophies").fill("5500");
     await expect(status).toContainText("This range has not been applied.");
     await expect(page).toHaveURL(appliedURL);
-    if (appliedResults !== null) await expect(results).toHaveText(appliedResults);
+    if (appliedResults !== null) {
+      await expect.poll(() => results.innerText()).toBe(appliedResults);
+    }
 
     await form.getByLabel("Max trophies").fill("5400");
     await expect(form.getByRole("alert")).toContainText("can’t be above");
