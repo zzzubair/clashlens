@@ -593,7 +593,9 @@ for (const [stall, read] of [
 ] as const) {
   test(`a Refresh status read that ${read} stops at the one-minute deadline`, async ({
     page,
+    request,
   }) => {
+    await serveWithAge(page, request, 0);
     const work = refreshWork();
     // The Refresh itself is faked, so it spends none of the shared allowance.
     await page.route("**/resources/players/*/refresh*", (route) =>
@@ -660,6 +662,7 @@ for (const [stall, read] of [
 
     await page.clock.install();
     await page.goto("/players/%232PP");
+    await page.waitForLoadState("networkidle");
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect.poll(reads).toEqual([false]);
     if (stall === "late") {
@@ -691,7 +694,9 @@ for (const [stall, read] of [
 
 test("a failed Refresh status read replaces Refreshing… with saved results", async ({
   page,
+  request,
 }) => {
+  await serveWithAge(page, request, 0);
   // The Refresh itself is faked, so it spends none of the shared allowance.
   await page.route("**/resources/players/*/refresh*", (route) =>
     route.request().method() === "POST"
@@ -709,6 +714,7 @@ test("a failed Refresh status read replaces Refreshing… with saved results", a
   const refresh = page.getByRole("region", { name: "Player refresh" });
 
   await page.goto("/players/%232PP");
+  await page.waitForLoadState("networkidle");
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: UNAVAILABLE })).toBeVisible();
   await expect(refresh).toContainText(NOT_REFRESHED);
