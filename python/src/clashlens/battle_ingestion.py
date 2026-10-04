@@ -1138,20 +1138,28 @@ def _refresh_battle_disagreements(connection: Any, battle_ids: list[int]) -> Non
                        CASE WHEN a_loss IS DISTINCT FROM d_loss THEN 'defender_loss' END
                    ], NULL)::text[] AS fields
             FROM paired
+        ), resolved AS (
+            SELECT battle_id,
+                   CASE
+                       WHEN evidence_count < 2 THEN 'single_perspective'
+                       WHEN cardinality(fields) = 0 THEN 'agreed'
+                       ELSE 'disagreement'
+                   END AS state,
+                   CASE
+                       WHEN evidence_count < 2 THEN ARRAY[]::text[]
+                       ELSE fields
+                   END AS fields
+            FROM classified
         )
         UPDATE legend_battles AS battle
-        SET disagreement_state = CASE
-                WHEN classified.evidence_count < 2 THEN 'single_perspective'
-                WHEN cardinality(classified.fields) = 0 THEN 'agreed'
-                ELSE 'disagreement'
-            END,
-            disagreement_fields = CASE
-                WHEN classified.evidence_count < 2 THEN ARRAY[]::text[]
-                ELSE classified.fields
-            END,
+        SET disagreement_state = resolved.state,
+            disagreement_fields = resolved.fields,
             updated_at = clock_timestamp()
-        FROM classified
-        WHERE battle.id = classified.battle_id
+        FROM resolved
+        WHERE battle.id = resolved.battle_id
+          -- A re-report that leaves the result unchanged writes nothing.
+          AND (battle.disagreement_state, battle.disagreement_fields)
+              IS DISTINCT FROM (resolved.state, resolved.fields)
         """,
         (battle_ids,),
     )

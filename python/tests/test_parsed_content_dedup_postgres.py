@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
+from unittest.mock import patch
 
 import psycopg
 import pytest
@@ -10,7 +13,14 @@ from domain_test_support import as_api_role, domain_database, store_observation,
 from test_discovery_history_prune_postgres import _attach_complete_work
 from test_domain_processing_postgres import _processor
 
-from clashlens import alerts, api_leaderboard, api_players, boundary, ingestion
+from clashlens import (
+    alerts,
+    api_leaderboard,
+    api_players,
+    battle_ingestion,
+    boundary,
+    ingestion,
+)
 from clashlens.api_db import ApiDatabase
 from clashlens.response_fields import content_fingerprint
 
@@ -1094,10 +1104,33 @@ def test_history_cleanup_keeps_reports_latest_profiles_and_unfinished_work(
             database.close()
 
 
+def _count_battle_result_writes(connection: psycopg.Connection) -> None:
+    # Each write to a battle's result advances this counter by one.
+    connection.execute(
+        """
+        CREATE SEQUENCE battle_result_writes;
+        CREATE FUNCTION count_battle_result_write() RETURNS trigger
+        LANGUAGE plpgsql SECURITY DEFINER AS $$
+        BEGIN
+            PERFORM nextval('battle_result_writes');
+            RETURN NEW;
+        END
+        $$;
+        CREATE TRIGGER count_battle_result_write
+        AFTER UPDATE OF disagreement_state, disagreement_fields
+        ON legend_battles FOR EACH ROW
+        EXECUTE FUNCTION count_battle_result_write();
+        GRANT USAGE ON SEQUENCE battle_result_writes TO PUBLIC;
+        """
+    )
+
+
 def test_compact_reports_survive_log_changes_and_perspective_corrections(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            _count_battle_result_writes(connection)
         database, processor = _processor(connection_info, archive_server)
         try:
             first = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
@@ -1143,6 +1176,11 @@ def test_compact_reports_survive_log_changes_and_perspective_corrections(
                             """
                         ).fetchone()[0])
                         assert state == ("disagreement" if index == 4 else "agreed")
+                    # Re-reports that leave a result unchanged write nothing.
+                    assert connection.execute(
+                        "SELECT CASE WHEN is_called THEN last_value ELSE 0 END "
+                        "FROM battle_result_writes"
+                    ).fetchone()[0] == [0, 0, 0, 1, 2, 3][index]
             with psycopg.connect(connection_info) as connection:
                 assert connection.execute(
                     "SELECT attacker_gain, defender_loss FROM battle_evidence WHERE stars = 0"
@@ -1150,6 +1188,53 @@ def test_compact_reports_survive_log_changes_and_perspective_corrections(
                 assert connection.execute(
                     "SELECT count(*) FROM battle_source_rows WHERE report_hash IS NOT NULL"
                 ).fetchone()[0] == 5
+        finally:
+            database.close()
+
+
+def test_attacker_and_defender_reporting_at_once_still_classify_the_battle(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        attack = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
+        defense = dict(attack, attack=False, opponentPlayerTag="#2PP",
+                       opponentName="Synthetic Attacker",
+                       armyShareCode="different-share-code")
+        jobs = [
+            store_observation(
+                connection_info, archive_server,
+                occurrence_key=f"two-sided-{tag}", endpoint="battle_log",
+                body=json.dumps({"items": [item]}).encode(),
+                normalized_tag=tag, observed_at=NOW,
+            )[1]
+            for tag, item in (("#2PP", attack), ("#8PP", defense))
+        ]
+        barrier = Barrier(2)
+        original_complete = battle_ingestion.complete_battle_log
+
+        def together(*args) -> None:
+            barrier.wait(timeout=10)
+            original_complete(*args)
+
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            with patch.object(
+                battle_ingestion, "complete_battle_log", together
+            ), ThreadPoolExecutor(max_workers=2) as executor:
+                results = [
+                    future.result(timeout=20)
+                    for future in [
+                        executor.submit(processor.process_job, job, owner=f"two-sided-{job}")
+                        for job in jobs
+                    ]
+                ]
+            assert all(r is not None and r.outcome == "processed" for r in results)
+            with psycopg.connect(connection_info) as connection:
+                state, fields = connection.execute(
+                    "SELECT disagreement_state, disagreement_fields FROM legend_battles"
+                ).fetchone()
+            assert text(state) == "disagreement"
+            assert [text(field) for field in fields] == ["army_share_code"]
         finally:
             database.close()
 
