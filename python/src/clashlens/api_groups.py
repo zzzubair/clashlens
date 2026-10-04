@@ -15,6 +15,7 @@ from typing import Any
 from . import api_player_lookup
 from .api_db import (
     ApiDatabase,
+    _battles_so_far_complete,
     _screen_daily_log,
     _screen_events,
     _shown_total,
@@ -262,16 +263,30 @@ def _window(
 
 
 def _today(row: Any) -> dict[str, Any]:
-    # The live day publishes no net change until it ends, so today's result
-    # is the trophies won attacking minus the trophies lost defending.
+    # Only a complete battle history proves today's net. Recorded totals
+    # remain useful evidence when a gap or disputed battle withholds it.
     gained = None if row[10] is None else int(row[10])
     lost = None if row[11] is None else int(row[11])
+    attacks = None if row[7] is None else int(row[7])
+    defenses = None if row[8] is None else int(row[8])
+    offense, defense = _screen_events(row[9])
+    complete = _battles_so_far_complete(
+        {
+            "uncertainty_reasons": list(row[5]) if isinstance(row[5], list) else [],
+            "attack_count": attacks,
+            "defense_count": defenses,
+            "attack_gain": gained,
+            "defense_loss": lost,
+        },
+        offense,
+        defense,
+    )
     return {
-        "net": None if gained is None or lost is None else gained - lost,
+        "net": gained - lost if complete else None,
         "gained": gained,
         "lost": lost,
-        "attacks": None if row[7] is None else int(row[7]),
-        "defenses": None if row[8] is None else int(row[8]),
+        "attacks": attacks,
+        "defenses": defenses,
     }
 
 

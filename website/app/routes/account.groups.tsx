@@ -308,9 +308,10 @@ function stillChecking(tag: string): string {
 function addedNotice(player: GroupPlayer): string {
   const who = player.name === null ? player.tag : `${player.name} (${player.tag})`;
   if (player.state === "tracking") {
-    return player.trophies === null
-      ? `Added ${who}.`
-      : `Added ${who}, ${player.trophies.toLocaleString("en")} trophies.`;
+    // An add retry can return the saved response from before a Season Reset.
+    return player.seasonResetPending
+      ? `Added ${who}. Waiting for this player's Season reset.`
+      : `Added ${who}.`;
   }
   return `Added ${who}. ${STATE_LABELS[player.state]}.`;
 }
@@ -600,9 +601,11 @@ function MemberRow({
         {player.name === null ? null : <span className="player-tag">{player.tag}</span>}
         <span className="group-member-detail">
           {player.state === "tracking"
-            ? player.trophies === null
-              ? "Legend League"
-              : `${player.trophies.toLocaleString("en")} trophies`
+            ? player.seasonResetPending
+              ? "Waiting for this player's Season reset"
+              : player.trophies === null
+                ? "Legend League"
+                : `${player.trophies.toLocaleString("en")} trophies`
             : STATE_LABELS[player.state]}
         </span>
       </span>

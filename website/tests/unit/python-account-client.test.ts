@@ -347,7 +347,15 @@ describe("server-only Python account client", () => {
         groupId: GROUP_ID,
         name: "Favorites",
         tags: ["#2PP"],
-        players: [{ tag: "#2PP", name: "Nova", trophies: 5400, state: "tracking" }],
+        players: [
+          {
+            tag: "#2PP",
+            name: "Nova",
+            trophies: 5400,
+            seasonResetPending: false,
+            state: "tracking",
+          },
+        ],
       },
     ]);
     await expect(
@@ -414,7 +422,7 @@ describe("server-only Python account client", () => {
 
     await expect(
       players.addGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY),
-    ).resolves.toEqual(added);
+    ).resolves.toEqual({ ...added, seasonResetPending: false });
     await players.removeGroupPlayer(IDENTITY, GROUP_ID, "#2PP", IDEMPOTENCY_KEY);
     const sleep = vi.fn(async () => undefined);
     await expect(players.checkPlayerTag("203.0.113.9", "#2QQ", sleep)).resolves.toEqual({

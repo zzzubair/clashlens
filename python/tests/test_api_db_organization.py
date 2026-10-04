@@ -105,14 +105,14 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
             assert group.status_code == 201
             group_id = group.payload["group_id"]
             assert isinstance(group_id, str)
-            assert api_accounts.list_groups(database, account_id) == [
+            assert api_accounts.list_groups(database, account_id, now=NOW) == [
                 {
                     "group_id": group_id,
                     "name": "My Accounts",
                     "tags": ["#2PP", "#8PY"],
                     "players": [
-                        {"tag": "#2PP", "name": None, "trophies": None, "state": "checking"},
-                        {"tag": "#8PY", "name": None, "trophies": None, "state": "checking"},
+                        {"tag": "#2PP", "name": None, "trophies": None, "state": "checking", "season_reset_pending": False},
+                        {"tag": "#8PY", "name": None, "trophies": None, "state": "checking", "season_reset_pending": False},
                     ],
                 }
             ]
@@ -257,7 +257,7 @@ def test_group_update_and_delete_require_the_owning_account(
                 "tags": ["#8PY"],
             }
             assert deleted.payload == {"deleted": True, "group_id": group_id}
-            assert api_accounts.list_groups(database, owner_id) == []
+            assert api_accounts.list_groups(database, owner_id, now=NOW) == []
         finally:
             database.close()
 
@@ -290,7 +290,7 @@ def test_simultaneous_group_creates_naming_one_new_player_all_succeed(
             with ThreadPoolExecutor(max_workers=6) as executor:
                 results = list(executor.map(create, [f"Group {n}" for n in range(6)]))
             assert [result.status_code for result in results] == [201] * 6
-            assert len(api_accounts.list_groups(database, owner_id)) == 6
+            assert len(api_accounts.list_groups(database, owner_id, now=NOW)) == 6
         finally:
             database.close()
 
@@ -426,6 +426,7 @@ def add_player(database: ApiDatabase, account_id: int, group_id: str, tag: str, 
         ),
         group_id=group_id,
         normalized_tag=tag,
+        now=NOW,
     )
 
 
@@ -478,6 +479,7 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
                 "tag": "#2PP",
                 "name": "Player #2PP",
                 "trophies": 5400,
+                "season_reset_pending": False,
                 "state": "tracking",
             }
             assert again.status_code == 409
@@ -487,13 +489,14 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
             assert missing.payload == {"error": "player_not_found"}
             assert unchecked.status_code == 409
             assert unchecked.payload == {"error": "player_not_checked", "state": "unknown"}
-            [group] = api_accounts.list_groups(database, owner_id)
+            [group] = api_accounts.list_groups(database, owner_id, now=NOW)
             assert group["players"] == [
-                {"tag": "#2PP", "name": "Player #2PP", "trophies": 5400, "state": "tracking"},
+                {"tag": "#2PP", "name": "Player #2PP", "trophies": 5400, "state": "tracking", "season_reset_pending": False},
                 {
                     "tag": "#8PY",
                     "name": "Player #8PY",
                     "trophies": 4100,
+                    "season_reset_pending": False,
                     "state": "not_in_legend",
                 },
             ]
@@ -510,7 +513,7 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
                 normalized_tag="#2PP",
             )
             assert removed.payload == {"group_id": group_id, "tag": "#2PP", "removed": True}
-            assert api_accounts.list_groups(database, owner_id)[0]["tags"] == ["#8PY"]
+            assert api_accounts.list_groups(database, owner_id, now=NOW)[0]["tags"] == ["#8PY"]
 
             # Another account's group reads as missing, and nothing joins it.
             api_accounts.create_account(database,
@@ -528,7 +531,7 @@ def test_group_players_join_one_at_a_time_only_once_the_game_confirms_them(
                 database, other.internal_id, group_id, "#2PP",
                 subject="other-owner-subject",
             ).payload == {"error": "group_not_found"}
-            assert api_accounts.list_groups(database, owner_id)[0]["tags"] == ["#8PY"]
+            assert api_accounts.list_groups(database, owner_id, now=NOW)[0]["tags"] == ["#8PY"]
         finally:
             database.close()
 
@@ -558,7 +561,7 @@ def test_a_full_group_refuses_the_twenty_first_player(database_url: str) -> None
 
             assert full.status_code == 422
             assert full.payload == {"error": "group_full"}
-            assert "#2PP" not in api_accounts.list_groups(database, owner_id)[0]["tags"]
+            assert "#2PP" not in api_accounts.list_groups(database, owner_id, now=NOW)[0]["tags"]
         finally:
             database.close()
 
@@ -570,14 +573,14 @@ def test_a_full_group_refuses_the_twenty_first_player(database_url: str) -> None
         (
             None,
             {"tag": "#2PP", "name": "Synthetic Legend I", "trophies": None,
-             "state": "uncertain"},
+             "state": "uncertain", "season_reset_pending": False},
             "Orion",
         ),
         # A later profile without a Legend tier never replaces the accepted name.
         (
             {"id": 105000036, "name": "Legend I"},
             {"tag": "#2PP", "name": "Synthetic Legend I", "trophies": 6123,
-             "state": "tracking"},
+             "state": "tracking", "season_reset_pending": False},
             "Synthetic Legend I",
         ),
     ],
@@ -634,14 +637,14 @@ def test_confirmed_players_join_with_their_name(
 
             assert added.status_code == 200
             assert added.payload == {"group_id": group_id, **player}
-            assert api_accounts.list_groups(database, owner_id)[0]["players"] == [player]
+            assert api_accounts.list_groups(database, owner_id, now=NOW)[0]["players"] == [player]
 
             process(
                 {**body, "leagueTier": None, "name": "Orion"},
                 "renamed-profile",
                 NOW + timedelta(minutes=1),
             )
-            assert api_accounts.list_groups(database, owner_id)[0]["players"] == [
+            assert api_accounts.list_groups(database, owner_id, now=NOW)[0]["players"] == [
                 {**player, "name": renamed_to}
             ]
         finally:

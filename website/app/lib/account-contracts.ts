@@ -57,6 +57,7 @@ export interface GroupPlayer {
   tag: string;
   name: string | null;
   trophies: number | null;
+  seasonResetPending: boolean;
   state: GroupPlayerState;
 }
 
@@ -292,11 +293,12 @@ const GROUP_PLAYER_STATES: readonly GroupPlayerState[] = [
 
 export function mapGroupPlayer(value: unknown): GroupPlayer | null {
   if (!isRecord(value)) return null;
-  const { tag, name, trophies, state } = value;
+  const { tag, name, trophies, state, season_reset_pending } = value;
   if (
     !isCanonicalTag(tag) ||
     !(name === null || isString(name)) ||
     !(trophies === null || (Number.isSafeInteger(trophies) && Number(trophies) >= 0)) ||
+    !(season_reset_pending === undefined || typeof season_reset_pending === "boolean") ||
     !GROUP_PLAYER_STATES.includes(state as GroupPlayerState)
   ) {
     return null;
@@ -305,6 +307,7 @@ export function mapGroupPlayer(value: unknown): GroupPlayer | null {
     tag,
     name: name as string | null,
     trophies: trophies as number | null,
+    seasonResetPending: season_reset_pending === true,
     state: state as GroupPlayerState,
   };
 }

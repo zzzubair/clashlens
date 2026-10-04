@@ -341,15 +341,19 @@ function PlayerRow({
           <Empty />
         ) : (
           <>
-            {player.today.net === null ? <Empty /> : <Signed value={player.today.net} />}
+            {player.today.net === null ? (
+              <span>Not yet proven</span>
+            ) : (
+              <Signed value={player.today.net} />
+            )}
             {player.today.gained !== null && player.today.lost !== null ? (
               <span className="compare-sub">
-                +{player.today.gained} won · −{player.today.lost} lost
+                Recorded: +{player.today.gained} won · −{player.today.lost} lost
               </span>
             ) : null}
             {player.today.attacks !== null && player.today.defenses !== null ? (
               <span className="compare-sub">
-                {plural(player.today.attacks, "attack")},{" "}
+                Recorded: {plural(player.today.attacks, "attack")},{" "}
                 {plural(player.today.defenses, "defense")}
               </span>
             ) : null}
