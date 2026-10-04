@@ -499,6 +499,8 @@
 }
 .analytics-page .analytics-results {
   display: grid;
+  /* An open breakdown must scroll its wide table, not widen the page. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
 }
 .analytics-page .analytics-kpis {
@@ -601,6 +603,10 @@
 .analytics-page .analytics-star-rate {
   display: block;
   font-weight: 700;
+}
+.analytics-page .analytics-table [data-column="usage-count"],
+.analytics-page .analytics-breakdown td {
+  white-space: nowrap;
 }
 .analytics-page .analytics-star-count {
   display: block;
@@ -755,7 +761,7 @@
   }
   .analytics-page
     .analytics-results-table
-    :is(.analytics-sort-button, .analytics-star-count) {
+    :is(.analytics-sort-button, .analytics-star-count, [data-column="usage-count"]) {
     white-space: normal;
   }
   .analytics-page .analytics-results-table tr > th:first-child {
@@ -776,6 +782,7 @@
   }
   .analytics-page .analytics-results-table td[colspan] {
     flex: 1 0 auto;
+    max-width: calc(100vw - 2rem - 2px);
   }
 }
 @media (max-width: 34rem) {
