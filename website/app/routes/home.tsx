@@ -10,6 +10,7 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
 import { SearchSuggestions, usePlayerSuggestions } from "../components/PlayerSearch";
 import {
@@ -85,7 +86,11 @@ export default function Home() {
     setQuery(data.query);
   }, [data.query, setQuery]);
 
-  const leaderboard = data.leaderboard;
+  const seasonExpired = useSeasonReread(
+    data.leaderboard?.generatedAt,
+    !!data.leaderboard?.seasonResetPending,
+  );
+  const leaderboard = seasonExpired ? null : data.leaderboard;
   const latestObservedAt = leaderboard ? latestObservation(leaderboard.entries) : null;
   const now = useServerTime(leaderboard?.generatedAt);
   const staleEntries =
@@ -227,7 +232,11 @@ export default function Home() {
             Full rankings
           </Link>
         </div>
-        {leaderboard && leaderboard.entries.length > 0 ? (
+        {seasonExpired ? (
+          <p className="empty-state" role="status">
+            Loading the new Season's rankings…
+          </p>
+        ) : leaderboard && leaderboard.entries.length > 0 ? (
           <LeaderboardTable entries={leaderboard.entries} />
         ) : leaderboard?.seasonResetPending ? (
           <div className="empty-state">

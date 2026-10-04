@@ -11,6 +11,7 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
@@ -378,6 +379,12 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   );
   const history = selectPlayerHistory(player);
   const now = useServerTime(player ? profileLoadedAt(player.profile) : undefined);
+  const seasonExpired = useSeasonReread(
+    player ? profileLoadedAt(player.profile) : undefined,
+    minuteChecks || !!trackedPlayer?.profile.seasonResetPending,
+    data.selectedSeason === null,
+    !!data.lookup && !["checking", "tracking"].includes(data.lookup.state),
+  );
   const todayEnded =
     player?.currentDay != null &&
     Date.parse(player.currentDay.period.split(" – ")[1]) <= now;
@@ -396,16 +403,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     }, 1000);
     return () => clearInterval(timer);
   }, [isChecking, lookupTimedOut, revalidator]);
-  // Only the stable revalidate function, so a reread starting or finishing never
-  // restarts the minute.
   const { revalidate } = revalidator;
-  useEffect(() => {
-    if (!minuteChecks) return;
-    const timer = setInterval(() => {
-      if (!document.hidden) void revalidate();
-    }, 60_000);
-    return () => clearInterval(timer);
-  }, [minuteChecks, revalidate]);
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;
@@ -671,7 +669,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           <div className="player-trophy-card">
             <div>
               <span className="metric-label">Current trophies</span>
-              {trackedPlayer.profile.seasonResetPending ? (
+              {seasonExpired || trackedPlayer.profile.seasonResetPending ? (
                 <>
                   <strong className="player-trophy-count player-reset-pending">
                     Waiting for this player&apos;s Season reset

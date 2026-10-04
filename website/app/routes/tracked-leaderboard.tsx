@@ -10,6 +10,7 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark } from "../components/LeaderboardShared";
 import {
   formatAge,
@@ -162,8 +163,22 @@ export function headers() {
 }
 
 export default function TrackedLeaderboardRoute() {
-  const { leaderboard, error, pageUnavailableUrl, view, query, search, focusTag } =
-    useLoaderData<typeof loader>();
+  const {
+    leaderboard: savedLeaderboard,
+    error,
+    pageUnavailableUrl,
+    view,
+    query,
+    search: savedSearch,
+    focusTag,
+  } = useLoaderData<typeof loader>();
+  const seasonExpired = useSeasonReread(
+    savedLeaderboard?.generatedAt,
+    !!savedLeaderboard?.seasonResetPending,
+    view === "live",
+  );
+  const leaderboard = seasonExpired ? null : savedLeaderboard;
+  const search = seasonExpired ? null : savedSearch;
   const unlistedTag = search?.results.length === 0 ? normalizePlayerTag(query) : null;
   const navigation = useNavigation();
   const selectedRow = useRef<HTMLTableRowElement>(null);
@@ -348,6 +363,10 @@ export default function TrackedLeaderboardRoute() {
             Go to page 1
           </Link>
         </div>
+      ) : seasonExpired ? (
+        <p className="empty-state" role="status">
+          Loading the new Season's rankings…
+        </p>
       ) : leaderboard ? (
         <section className="standings-board" aria-labelledby="standings-table-title">
           <div className="standings-toolbar">
