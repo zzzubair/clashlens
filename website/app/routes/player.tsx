@@ -12,12 +12,13 @@ import {
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PastSeasons } from "../components/PastSeasons";
-import { formatAge, useCurrentTime } from "../components/Provenance";
+import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
 import {
   LOOKUP_MESSAGES,
   dayEvidence,
   dayReasons,
+  liveDay,
   liveDayNotice,
   lookupExplanation,
   presentDay,
@@ -337,11 +338,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     explainedVisit,
   );
   const history = selectPlayerHistory(player);
-  const now = useCurrentTime(player ? profileLoadedAt(player.profile) : undefined);
+  const now = useServerTime(player ? profileLoadedAt(player.profile) : undefined);
   const todayEnded =
     player?.currentDay != null &&
     Date.parse(player.currentDay.period.split(" – ")[1]) <= now;
   const today = todayEnded ? null : (player?.currentDay ?? null);
+  const openDay =
+    selectedDay ??
+    (player?.currentDay &&
+    (!todayEnded || !liveDay(dayEvidence(player.currentDay)).routine)
+      ? legendDayKey(player.currentDay.period)
+      : null);
   useEffect(() => {
     if (!isChecking || lookupTimedOut) return;
     const timer = setInterval(() => {
@@ -582,7 +589,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 day={day}
                 inSeason={inSeason}
                 isCurrentDay={isCurrentDay(today, day)}
-                selectedDay={selectedDay}
+                openDay={openDay}
               />
             ))}
           </section>
@@ -731,7 +738,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 day={day}
                 inSeason={inSeason}
                 isCurrentDay={isCurrentDay(today, day)}
-                selectedDay={selectedDay}
+                openDay={openDay}
               />
             ))}
           </div>
@@ -1101,22 +1108,18 @@ function LegendDay({
   day,
   inSeason,
   isCurrentDay,
-  selectedDay,
+  openDay,
 }: {
   day: RankedDaySummary;
   inSeason: boolean;
   isCurrentDay: boolean;
-  selectedDay: string | null;
+  openDay: string | null;
 }) {
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
   const { status, reasons, battleNet } = presentDay(dayEvidence(day), isCurrentDay);
   return (
-    <details
-      className="legend-day"
-      id={`legend-day-${dayKey}`}
-      open={selectedDay ? selectedDay === dayKey : isCurrentDay}
-    >
+    <details className="legend-day" id={`legend-day-${dayKey}`} open={openDay === dayKey}>
       <summary>
         <span className="legend-day-date">
           <strong>{dayLabel}</strong>

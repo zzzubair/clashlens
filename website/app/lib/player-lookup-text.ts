@@ -123,7 +123,7 @@ const AUTOMATIC_DEFENSE = "automatic_defense_basis_unavailable";
  * Today's Legend day. It is only waiting for Reset when every reason is one
  * it cannot avoid before then; any other reason is a caution to keep visible.
  */
-function liveDay(day: DayEvidence) {
+export function liveDay(day: DayEvidence) {
   const cautions = dayReasons(
     day.codes.filter((code) => !WAITING_REASONS.has(code) && code !== AUTOMATIC_DEFENSE),
     true,
@@ -143,22 +143,21 @@ function liveDay(day: DayEvidence) {
 /**
  * The note above the daily log for today's Legend day. The day's own entry
  * lists its reasons, so a routine wait says so once here instead of
- * repeating them. Once the page's clock passes Reset, the day is no longer
- * in progress, even before the page rereads it.
+ * repeating them. Once the page's clock passes Reset, a routine wait is no
+ * longer in progress, even before the page rereads it; a caution stays.
  */
 export function liveDayNotice(day: DayEvidence, ended: boolean, label: string) {
-  if (ended)
-    return {
-      heading: "Day ended",
-      text: "This Legend day has ended. Updated results are not on this page yet.",
-    };
   const { routine, cautions } = liveDay(day);
-  return routine
+  if (!routine) return { heading: label, text: cautions.join(" ") };
+  return ended
     ? {
+        heading: "Day ended",
+        text: "This Legend day has ended. Updated results are not on this page yet.",
+      }
+    : {
         heading: "Day in progress",
         text: "This Legend day ends at 05:00 UTC; its result is not final.",
-      }
-    : { heading: label, text: cautions.join(" ") };
+      };
 }
 
 const REASON_TEXT: Record<string, string> = {

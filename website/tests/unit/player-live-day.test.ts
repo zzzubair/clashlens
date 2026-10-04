@@ -151,4 +151,17 @@ describe("today's Legend day wording", () => {
     expect(entry).toContain("Result unknown");
     expect(html).not.toContain('id="legend-day-2026-10-04" open=""');
   });
+
+  it("keeps a real problem visible and its day open after Reset", async () => {
+    const html = await page([...WAITING, "battle_log_row_gap"], "2026-10-05T05:00:00Z");
+    expect(note(html)).toContain(
+      "<strong>Incomplete ranked-day data:</strong> Part of a battle log reply could not be read.",
+    );
+    expect(html).not.toContain("Day ended");
+    expect(html).not.toContain("Day in progress");
+    expect(html).toContain('id="legend-day-2026-10-04" open=""');
+    const entry = todayEntry(html);
+    expect(entry).not.toContain("In progress");
+    expect(entry).toContain("Part of a battle log reply could not be read.");
+  });
 });
