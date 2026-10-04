@@ -290,6 +290,25 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 # The paired baselines isolate the calculated settlement loss.
                 automatic_state = "confirmed"
 
+    # The game allows 8 attacks and 8 defenses a day, so with all 16 recorded
+    # none can be missing, and 8 defenses leave no automatic defense loss.
+    all_battles_recorded = (
+        not inconsistent_evidence
+        and attack_count == MAX_DAILY_ATTACKS
+        and defense_count == MAX_DAILY_DEFENSES
+    )
+    if not coverage_complete and not all_battles_recorded:
+        # A battle missing from the logs is missing from these sums too, so the
+        # total would look exact while being wrong. The equation check above
+        # has already recorded any mismatch it found.
+        final_trophies = None
+        net_trophy_change = None
+        boundary_adjustment = 0
+        boundary_type = None
+        observed_boundary_adjustment = None
+        expected_next = None
+        residual = None
+
     if not ended:
         shield_state, shield_duration, shield_evidence = _shield_state(
             data,
@@ -363,15 +382,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # useful to consumers that only inspect the shield evidence state.
         shield_evidence.setdefault("unknown_reason", "coverage_incomplete")
 
-    if (
-        net_trophy_change is None
-        and not inconsistent_evidence
-        and attack_count == MAX_DAILY_ATTACKS
-        and defense_count == MAX_DAILY_DEFENSES
-    ):
-        # The game allows 8 attacks and 8 defenses a day, so none can be
-        # missing, and 8 defenses leave no automatic defense loss: the
-        # recorded battles alone give the day's result.
+    if net_trophy_change is None and all_battles_recorded:
+        # Without a usable start, the recorded battles alone give the day's
+        # result.
         net_trophy_change = attack_gain - defense_loss
 
     unique_failures = tuple(dict.fromkeys(failures))
