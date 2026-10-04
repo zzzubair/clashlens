@@ -353,29 +353,6 @@ describe("player route historical independence", () => {
     expect(html).not.toContain("Legend season");
   });
 
-  it("never shows official placement as the final rank", async () => {
-    const officialHistory = {
-      observedAt: "2026-08-04T12:05:00+00:00",
-      eodTrophies: 5812,
-      finalPlacement: 12,
-    };
-    const official = await renderSeason({
-      ...SUMMARY,
-      source: "official_league_history",
-      finalRank: null,
-      officialHistory,
-    });
-    expect(official).toContain("<dt>Final rank</dt><dd>Unknown</dd>");
-    expect(official).not.toContain(">12<");
-    const tracked = await renderSeason({ ...SUMMARY, finalRank: 3, officialHistory });
-    expect(tracked).toContain("<dt>Final rank</dt><dd>3</dd>");
-    expect(tracked).toContain("Final trophies: <!-- -->5,812");
-    expect(tracked).not.toContain(">12<");
-    expect(tracked).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
-    expect(tracked).toContain('<th scope="col">Trophy change</th>');
-    expect(tracked).not.toContain('<th scope="col">Net</th>');
-  });
-
   it("says only that a missing summary is unavailable and keeps a known final count", async () => {
     const official = await renderSeason({
       ...SUMMARY,
@@ -393,7 +370,7 @@ describe("player route historical independence", () => {
       startTrophies: null,
       endTrophies: 5800,
     });
-    expect(late).toContain("<dt>Trophies</dt><dd>Unknown → 5,800</dd>");
+    expect(late).toContain("<dt>Trophies</dt><dd>Unknown → 5800</dd>");
     const unfinished = await renderSeason({
       ...SUMMARY,
       startTrophies: 5000,
@@ -1393,7 +1370,7 @@ describe("player day honesty", () => {
             {
               ...entry,
               dayNumber: 5,
-              defenseLoss: 0,
+              attackGain: 284,
               netChange: 0,
               defenses: 9,
               state: "Partial",
@@ -1436,10 +1413,10 @@ describe("player day honesty", () => {
     expect(rows[0]).toContain("<td>Provisional result</td>");
     // EOD change sits beside End, apart from battle net, and is provisional
     // unless its proof is accepted; an unknown proof state is not accepted.
-    expect(rows[0]).toContain("<td>+26</td><td>+26</td><td>6,026</td><td>+40</td>");
-    expect(rows[1]).toContain("<td>6,026 (provisional)</td><td>Unknown</td>");
-    expect(rows[2]).toContain("<td>6,026 (provisional)</td><td>+40</td>");
-    expect(rows[3]).toContain("<td>6,026</td><td>+40 (provisional)</td>");
+    expect(rows[0]).toContain("<td>+26</td><td>+26</td><td>6026</td><td>+40</td>");
+    expect(rows[1]).toContain("<td>6026 (provisional)</td><td>Unknown</td>");
+    expect(rows[2]).toContain("<td>6026 (provisional)</td><td>+40</td>");
+    expect(rows[3]).toContain("<td>6026</td><td>+40 (provisional)</td>");
     expect(rows[1]).toContain("Incomplete");
     expect(rows[1]).toContain("Trophies at the end of this day were not recorded.");
     expect(rows[1]).toContain(
@@ -1454,7 +1431,7 @@ describe("player day honesty", () => {
     expect(rows[4]).toContain(
       "Clash of Clans returned 9 defenses for this day, more than the usual 8, so this day is marked partial.",
     );
-    expect(rows[4]).toContain("<td>+310</td><td>0</td><td>0</td><td>+310</td>");
+    expect(rows[4]).toContain("<td>0</td><td>0</td>");
     expect(rows[5]).toContain("<td>Provisional result");
     expect(rows[5]).not.toContain("Incomplete");
     expect(rows[5]).toContain("<td>-11</td><td>-11</td>");

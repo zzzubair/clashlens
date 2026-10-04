@@ -139,6 +139,47 @@ describe("past-Season view", () => {
     mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
   });
 
+  it.each([
+    ["official_league_history", null, "Unknown"],
+    ["official_league_history", 321, "321"],
+    ["tracked_summary", null, "Unknown"],
+    ["tracked_summary", 3, "3"],
+  ] as const)(
+    "identifies %s rank %s as the saved Clash Lens board rank",
+    async (source, finalRank, expected) => {
+      const html = await loadAndRender(
+        {
+          getPlayer: vi.fn().mockResolvedValue(PLAYER),
+          getPlayerSeasons: vi.fn().mockResolvedValue([]),
+          getPlayerSeason: vi.fn().mockResolvedValue({
+            ...SUMMARY,
+            source,
+            finalRank,
+            officialHistory: {
+              observedAt: "2026-10-05T05:08:00Z",
+              eodTrophies: 5812,
+              finalPlacement: 12,
+            },
+          }),
+        },
+        SEASON,
+      );
+      expect(html).toContain(`<dt>Clash Lens final rank</dt><dd>${expected}</dd>`);
+      expect(html).toContain("Rank on Clash Lens’s saved final leaderboard");
+      expect(html).toContain("last trophies saved before the Season Reset");
+      expect(html).not.toContain("<dt>Final rank</dt>");
+      expect(html).not.toContain(">12<");
+      if (source === "official_league_history") {
+        expect(html).toContain("<dt>Final trophies</dt><dd>5812</dd>");
+      } else {
+        expect(html).toContain("Final trophies: 5812");
+        expect(html).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
+        expect(html).toContain('<th scope="col">Trophy change</th>');
+        expect(html).not.toContain('<th scope="col">Net</th>');
+      }
+    },
+  );
+
   it("says a partial total covers 5 of 28 days and includes automatic losses", async () => {
     const html = await loadAndRender(
       {

@@ -925,10 +925,17 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 label="Final trophies"
                 value={formatCount(summary.officialHistory.eodTrophies)}
               />
-              <Metric label="Final rank" value={formatCount(summary.finalRank)} />
+              <Metric
+                label="Clash Lens final rank"
+                value={formatCount(summary.finalRank)}
+              />
             </MetricCard>
           </div>
         ) : null}
+        <p className="section-note">
+          Rank on Clash Lens’s saved final leaderboard, using each player’s last trophies
+          saved before the Season Reset.
+        </p>
       </section>
     );
   }
@@ -978,7 +985,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 : `${formatCount(summary.startTrophies)} → ${formatCount(summary.endTrophies)}`
             }
           />
-          <Metric label="Final rank" value={formatCount(summary.finalRank)} />
+          <Metric label="Clash Lens final rank" value={formatCount(summary.finalRank)} />
         </MetricCard>
         <MetricCard title="Attack stars">
           <Metric label="Three-star" value={formatCount(summary.attackStars["3"])} />
@@ -995,6 +1002,10 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           <Metric label="Unknown" value={formatCount(summary.defenseStarsUnknown)} />
         </MetricCard>
       </div>
+      <p className="section-note">
+        Rank on Clash Lens’s saved final leaderboard, using each player’s last trophies
+        saved before the Season Reset.
+      </p>
       <p className="section-note">
         The sum of daily trophy changes includes automatic defense losses at Reset; it
         shows Unknown if any recorded day&apos;s change is unknown. Recorded battle net
