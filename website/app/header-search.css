@@ -1,0 +1,80 @@
+/* Compact header search: a quiet icon that opens a small panel. */
+.header-search-toggle[aria-expanded="true"] {
+  background: var(--cl-header-soft);
+}
+
+.header-search-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 0.5rem);
+  right: max(1.5rem, calc((100% - 72rem) / 2));
+  width: min(32rem, calc(100% - 3rem));
+  padding: 0.6rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-shadow);
+}
+
+.header-search-panel .search-controls input {
+  font-size: 1rem;
+}
+
+/* Suggestions stay inside the panel instead of floating over the page. */
+.header-search-panel .search-dropdown {
+  position: static;
+  margin-top: 0.5rem;
+  box-shadow: none;
+}
+
+.header-search-panel .search-suggestion-profile {
+  background: var(--cl-panel);
+}
+
+.header-search-panel .search-suggestion:is(:hover, :focus-visible) {
+  background: var(--cl-action-soft);
+}
+
+.header-search-close {
+  display: none;
+}
+
+/* Phones: a full-width sheet over the header. */
+@media (max-width: 34rem) {
+  .header-search-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    width: auto;
+    padding: 0.5rem 1rem 0.75rem;
+    border-width: 0 0 1px;
+  }
+
+  .header-search-panel .search-form {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .header-search-panel .search-dropdown {
+    max-height: min(28rem, 70dvh);
+  }
+
+  .header-search-close {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    min-height: 3.45rem;
+    padding: 0 0.25rem;
+    color: var(--cl-action-text);
+    background: transparent;
+    border: 0;
+    font-size: 0.875rem;
+    font-weight: 650;
+    cursor: pointer;
+  }
+}

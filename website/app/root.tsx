@@ -16,6 +16,7 @@ import {
 } from "react-router";
 
 import type { Route } from "./+types/root";
+import { HeaderSearch } from "./components/PlayerSearch";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
 import type { UpdateStatus } from "./lib/contracts";
@@ -24,6 +25,7 @@ import "./theme.css";
 import "./explore.css";
 import "./appearance.css";
 import "./details.css";
+import "./header-search.css";
 
 export interface RootLoaderData {
   loggedIn: boolean;
@@ -150,6 +152,8 @@ export default function App() {
           <NavLink to="/about">About</NavLink>
         </nav>
         <nav className="site-nav" aria-label="Account and appearance">
+          {/* Home keeps its own large search. */}
+          {location.pathname !== "/" ? <HeaderSearch key={location.pathname} /> : null}
           <ThemeToggle />
           {data.loggedIn ? (
             <>

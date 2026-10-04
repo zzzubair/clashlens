@@ -30,7 +30,14 @@ body {
 }
 
 /* Secondary controls and medals sit slightly above the page. */
-:is(.section-link, .button-secondary, .button.secondary, .theme-toggle, .page-position),
+:is(
+  .section-link,
+  .button-secondary,
+  .button.secondary,
+  .theme-toggle,
+  .header-search-toggle,
+  .page-position
+),
 .leaderboard-row[data-podium-rank] .rank-mark {
   box-shadow: var(--cl-raise);
 }
@@ -86,7 +93,7 @@ body {
     0 2px 0 var(--cl-action-shade), 0 8px 18px -6px rgb(255 122 26 / 0.35);
 }
 
-.theme-toggle {
+:is(.theme-toggle, .header-search-toggle) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -100,11 +107,11 @@ body {
   border-radius: var(--cl-radius);
   cursor: pointer;
 }
-.theme-toggle:active {
+:is(.theme-toggle, .header-search-toggle):active {
   background: var(--cl-header-soft);
 }
 @media (hover: hover) and (pointer: fine) {
-  .theme-toggle:hover {
+  :is(.theme-toggle, .header-search-toggle):hover {
     background: var(--cl-header-soft);
   }
 }
