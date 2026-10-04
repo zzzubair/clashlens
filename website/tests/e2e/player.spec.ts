@@ -254,7 +254,6 @@ test("a battle processed shortly after a completed Refresh reaches the open page
     stars: 3,
     trophyChange: 40,
     perspectiveDisagreement: false,
-    army: null,
   };
   for (const day of [player.currentDay!, ...player.recentDays, ...player.seasonDays]) {
     if (day.period === player.currentDay!.period) day.offenseEvents.unshift(attack);

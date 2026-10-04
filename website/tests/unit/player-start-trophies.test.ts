@@ -154,9 +154,10 @@ describe("calculated starting trophies on the player page", () => {
         current_league_season_id: "1788757200",
         observed_at: observedAt,
         screen_ready: {
-          current_day: day,
-          recent_days: [day, older],
-          season_days: [day, older],
+          days: [day, older],
+          current_day_start: day.ranked_day_start,
+          recent_day_starts: [day.ranked_day_start, older.ranked_day_start],
+          season_day_starts: [day.ranked_day_start, older.ranked_day_start],
           season: null,
           data_quality: [],
           provenance: {

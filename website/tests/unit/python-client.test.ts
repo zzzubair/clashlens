@@ -722,9 +722,10 @@ describe("server-only Python client response boundary", () => {
       public_confidence: "high",
       eligibility: "eligible",
       screen_ready: {
-        current_day: currentDay,
-        recent_days: [previousDay],
-        season_days: [currentDay, previousDay],
+        days: [currentDay, previousDay],
+        current_day_start: currentDay.ranked_day_start,
+        recent_day_starts: [previousDay.ranked_day_start],
+        season_day_starts: [currentDay.ranked_day_start, previousDay.ranked_day_start],
         season: {
           id: "2026-08",
           start: "2026-08-04T05:00:00+00:00",
@@ -740,7 +741,7 @@ describe("server-only Python client response boundary", () => {
           freshness: "fresh",
           confidence: "partial",
           coverage: "partial",
-          version: "api-player-daily-log-v3",
+          version: "api-player-daily-log-v4",
         },
       },
     };
@@ -748,10 +749,11 @@ describe("server-only Python client response boundary", () => {
       ...full,
       screen_ready: {
         ...full.screen_ready,
-        current_day: null,
+        days: [],
+        current_day_start: null,
         season: null,
-        recent_days: [],
-        season_days: [],
+        recent_day_starts: [],
+        season_day_starts: [],
         data_quality: [
           {
             code: "unavailable",
@@ -765,13 +767,16 @@ describe("server-only Python client response boundary", () => {
       ...full,
       screen_ready: {
         ...full.screen_ready,
-        current_day: {
-          ...currentDay,
-          offense_events: [{ ...offenseEvents[0], trophy_change: -1 }],
-        },
-        recent_days: [],
-        season_days: [currentDay],
+        days: [
+          { ...currentDay, offense_events: [{ ...offenseEvents[0], trophy_change: -1 }] },
+          previousDay,
+        ],
       },
+    };
+    // Every day the lists name must be one of the days sent.
+    const unsentDay = {
+      ...full,
+      screen_ready: { ...full.screen_ready, days: [currentDay] },
     };
     // Audit example #J9Y9J80L: the game returned nine real attacks for one day.
     const nineAttacks = {
@@ -784,7 +789,11 @@ describe("server-only Python client response boundary", () => {
     };
     const tooManyEvents = {
       ...full,
-      screen_ready: { ...full.screen_ready, season_days: [nineAttacks] },
+      screen_ready: {
+        ...full.screen_ready,
+        days: [nineAttacks, previousDay],
+        season_day_starts: [nineAttacks.ranked_day_start],
+      },
     };
     const nullProvenance = {
       ...full,
@@ -800,6 +809,7 @@ describe("server-only Python client response boundary", () => {
       .mockResolvedValueOnce(
         new Response(JSON.stringify(malformedEvents), { status: 200 }),
       )
+      .mockResolvedValueOnce(new Response(JSON.stringify(unsentDay), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(tooManyEvents), { status: 200 }))
       .mockResolvedValueOnce(
         new Response(JSON.stringify(nullProvenance), { status: 200 }),
@@ -827,7 +837,6 @@ describe("server-only Python client response boundary", () => {
       stars: event.stars,
       trophyChange: event.trophy_change,
       perspectiveDisagreement: false,
-      army: null,
       armyShareCode: event.army_share_code ?? null,
     });
     expect(mappedCurrentDay.offenseEvents).toEqual(offenseEvents.map(mapExpectedEvent));
@@ -837,6 +846,10 @@ describe("server-only Python client response boundary", () => {
       currentDay: null,
       seasonDays: [],
       dataQuality: [{ code: "unavailable" }],
+    });
+    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
     });
     await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
       status: 502,
@@ -1159,24 +1172,7 @@ describe("server-only Python client response boundary", () => {
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
-  it("maps battle armies with known and unknown facts onto player events", async () => {
-    const army = {
-      state: "partial",
-      failure_reason: null,
-      components: [
-        {
-          typed_id: "troop:58",
-          name: "Ice Golem",
-          quantity: 2,
-          origin: "home",
-        },
-      ],
-      unknown_components: [
-        { numeric_id: 9999, quantity: 3, section: "u", origin: "home" },
-      ],
-      decoder_version: "army-decoder-v2",
-      catalog_version: "unit-catalog-v1",
-    };
+  it("keeps a disagreement battle on its player event", async () => {
     const day = {
       ranked_day_start: "2026-08-06T05:00:00+00:00",
       ranked_day_end: null,
@@ -1204,7 +1200,6 @@ describe("server-only Python client response boundary", () => {
           stars: 3,
           trophy_change: 35,
           perspective_disagreement: true,
-          army,
         },
         {
           battle_id: "battle-2",
@@ -1228,9 +1223,10 @@ describe("server-only Python client response boundary", () => {
       public_confidence: "high",
       eligibility: "eligible",
       screen_ready: {
-        current_day: day,
-        recent_days: [],
-        season_days: [day],
+        days: [day],
+        current_day_start: day.ranked_day_start,
+        recent_day_starts: [],
+        season_day_starts: [day.ranked_day_start],
         season: null,
         data_quality: [],
         provenance: {
@@ -1239,7 +1235,7 @@ describe("server-only Python client response boundary", () => {
           freshness: "fresh",
           confidence: "high",
           coverage: "complete",
-          version: "api-player-daily-log-v3",
+          version: "api-player-daily-log-v4",
         },
       },
     };
@@ -1261,99 +1257,5 @@ describe("server-only Python client response boundary", () => {
     // Disagreement battles stay visible on their row instead of being dropped.
     expect(event.perspectiveDisagreement).toBe(true);
     expect(mapped.currentDay?.offenseEvents[1]?.perspectiveDisagreement).toBe(false);
-    expect(event.army).toEqual({
-      state: "partial",
-      failureReason: null,
-      components: [
-        { typedId: "troop:58", name: "Ice Golem", quantity: 2, origin: "home" },
-      ],
-      unknownComponents: [{ numericId: 9999, quantity: 3, section: "u", origin: "home" }],
-      decoderVersion: "army-decoder-v2",
-      catalogVersion: "unit-catalog-v1",
-    });
-  });
-
-  it("rejects a battle army with a guessed label shape", async () => {
-    const badArmy = {
-      state: "guessed",
-      failure_reason: null,
-      components: [],
-      unknown_components: [],
-      decoder_version: "army-decoder-v2",
-      catalog_version: "unit-catalog-v1",
-    };
-    const day = {
-      ranked_day_start: "2026-08-06T05:00:00+00:00",
-      ranked_day_end: null,
-      official_season_id: null,
-      season_day_number: null,
-      version: 1,
-      state: "Complete",
-      confidence: null,
-      completeness: { state: "complete", reason: "Complete." },
-      public_confidence: "high",
-      uncertainty_reasons: [],
-      attack_count: 1,
-      attack_three_star_count: 0,
-      attack_gain: 0,
-      defense_count: null,
-      defense_three_star_count: null,
-      defense_loss: null,
-      net_trophy_change: null,
-      offense_events: [
-        {
-          battle_id: "battle-1",
-          battle_timestamp: "2026-08-06T06:00:00Z",
-          opponent: { tag: "#8PP", name: "Opp" },
-          destruction_percentage: 100,
-          stars: 3,
-          trophy_change: 35,
-          army: badArmy,
-        },
-      ],
-      defense_events: [],
-    };
-    const payload = {
-      tag: "#2PP",
-      name: "Nova",
-      clan: null,
-      trophies: 6000,
-      observed_at: "2026-08-06T11:59:00+00:00",
-      age_seconds: 60,
-      freshness: "fresh",
-      public_confidence: "high",
-      eligibility: "eligible",
-      screen_ready: {
-        current_day: day,
-        recent_days: [],
-        season_days: [],
-        season: null,
-        data_quality: [],
-        provenance: {
-          source: "api_player_daily_logs",
-          observed_at: "2026-08-06T11:59:00+00:00",
-          freshness: "fresh",
-          confidence: "high",
-          coverage: "complete",
-          version: "api-player-daily-log-v3",
-        },
-      },
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValueOnce(
-        new Response(JSON.stringify(payload), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
-    process.env.NODE_ENV = "test";
-    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
-    const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
-      status: 502,
-      payload: { error: "malformed" },
-    });
   });
 });

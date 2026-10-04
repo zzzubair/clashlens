@@ -146,7 +146,6 @@ const SAVED_DAY: RankedDaySummary = {
       stars: 3,
       trophyChange: 40,
       perspectiveDisagreement: false,
-      army: null,
       armyShareCode: null,
     },
   ],
@@ -350,7 +349,6 @@ describe("player route historical independence", () => {
         stars: 3,
         trophyChange: slot < 8 ? 40 : -40,
         perspectiveDisagreement: false,
-        army: null,
         armyShareCode: "u1x0-2x1",
       });
       return {

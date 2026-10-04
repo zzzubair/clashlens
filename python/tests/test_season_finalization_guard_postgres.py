@@ -508,6 +508,7 @@ def test_missing_relation_and_timed_out_check_block_close(database_url: str, mon
                 connection.execute("ALTER TABLE python_replay_requests RENAME TO renamed_replay_requests")
                 assert _closes(connection) == {**HISTORY_ONLY, "missing_relations": ["python_replay_requests"]}
                 connection.rollback()
+                caller_limit = connection.execute("SHOW statement_timeout").fetchone()[0]
                 monkeypatch.setattr(season_finalization_guard, "CHECK_TIMEOUT", "200ms")
                 with psycopg.connect(connection_info) as holder:
                     holder.execute("LOCK TABLE boundary_publication_corrections IN ACCESS EXCLUSIVE MODE")
@@ -518,7 +519,7 @@ def test_missing_relation_and_timed_out_check_block_close(database_url: str, mon
                     "failed_checks": [{"check": "boundary_corrections", "error": "QueryCanceled"}],
                 }
                 # The caller's own time limit is untouched afterwards.
-                assert connection.execute("SHOW statement_timeout").fetchone()[0] == "0"
+                assert connection.execute("SHOW statement_timeout").fetchone()[0] == caller_limit
                 connection.rollback()
         finally:
             database.close()

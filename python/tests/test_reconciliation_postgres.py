@@ -797,7 +797,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 api_database.close()
             assert player_page is not None
             assert player_page["coverage"] == "ranked_days"
-            [day] = player_page["screen_ready"]["recent_days"]
+            [day] = player_page["screen_ready"]["days"]
             expected = {
                 "ranked_day_start": DAY_START.isoformat(),
                 "ranked_day_end": DAY_END.isoformat(),
@@ -824,7 +824,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert {key: day[key] for key in expected} == expected
             assert len(day["offense_events"]) == 1 and day["defense_events"] == []
             assert (
-                player_page["screen_ready"]["recent_days"][0]["start_trophies"]
+                player_page["screen_ready"]["days"][0]["start_trophies"]
                 == 6000
             )
         finally:

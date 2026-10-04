@@ -150,9 +150,10 @@ describe("historical player-season client boundary", () => {
         eligibility,
         observed_at: "2026-08-06T12:00:00Z",
         screen_ready: {
-          current_day: null,
-          recent_days: [],
-          season_days: [],
+          days: [],
+          current_day_start: null,
+          recent_day_starts: [],
+          season_day_starts: [],
           season: null,
           data_quality: [],
           provenance: {
@@ -245,9 +246,10 @@ describe("historical player-season client boundary", () => {
         current_league_season_id: seasonId,
         observed_at: observedAt,
         screen_ready: {
-          current_day: day,
-          recent_days: [day],
-          season_days: [day],
+          days: [day],
+          current_day_start: day.ranked_day_start,
+          recent_day_starts: [day.ranked_day_start],
+          season_day_starts: [day.ranked_day_start],
           season: null,
           data_quality: [],
           provenance: {

@@ -90,7 +90,7 @@ def test_raw_battle_reconciles_to_both_player_pages_and_analytics(database_url, 
                     now=DAY_START + timedelta(hours=2), request_key=f"single-{tag}")
                 assert processor.process_job(job, owner=f"single-{tag}").outcome == "processed"
             missing = api_players.get_player_page(api, "#8PP", now=DAY_START + timedelta(hours=3), freshness_seconds=300)
-            missing_day = missing["screen_ready"]["recent_days"][0]
+            missing_day = missing["screen_ready"]["days"][0]
             assert missing_day["offense_events"] == missing_day["defense_events"] == []
             _ingest(ci, archive_server, processor, "trace-2", False, code="u5x58")
             for tag, trophies in (("#2PP", 6040), ("#8PP", 5960)):
@@ -103,7 +103,7 @@ def test_raw_battle_reconciles_to_both_player_pages_and_analytics(database_url, 
                 assert processor.process_job(job, owner=f"complete-{tag}").outcome == "processed"
             pages = [api_players.get_player_page(api, tag, now=DAY_START + timedelta(days=1, hours=1), freshness_seconds=300)
                      for tag in ("#2PP", "#8PP")]
-            logs = [next(day for day in page["screen_ready"]["recent_days"]
+            logs = [next(day for day in page["screen_ready"]["days"]
                          if day["offense_events"] or day["defense_events"]) for page in pages]
             assert [(len(log["offense_events"]), len(log["defense_events"])) for log in logs] == [(1, 0), (0, 1)]
             battles = [logs[0]["offense_events"][0], logs[1]["defense_events"][0]]

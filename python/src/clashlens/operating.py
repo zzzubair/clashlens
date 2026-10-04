@@ -169,7 +169,7 @@ def api_route(path: str) -> str:
         return "leaderboard_live"
     if path.startswith("/v1/leaderboards/frozen"):
         return "leaderboard_frozen"
-    if path.startswith("/v1/analytics/army"):
+    if path == "/v1/analytics/armies" or path.startswith("/v1/analytics/armies/"):
         return "army_analytics"
     if path.startswith("/v1/battles/") and path.endswith("/army"):
         return "battle_army"

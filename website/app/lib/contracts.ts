@@ -151,27 +151,6 @@ export interface UpdateStatus {
   oldestWaitingSavedAt: string | null;
 }
 
-export interface ArmyComponent {
-  typedId: string | null;
-  name: string;
-  quantity: number;
-  origin: string;
-}
-
-export interface BattleArmy {
-  state: "decoded" | "partial" | "failed";
-  failureReason: string | null;
-  components: ArmyComponent[];
-  unknownComponents: Array<{
-    numericId: number;
-    quantity: number;
-    section: string;
-    origin: string;
-  }>;
-  decoderVersion: string;
-  catalogVersion: string;
-}
-
 export interface ArmyAnalytics {
   pagination?: { offset: number; totalRows: number; nextOffset: number | null };
   kind: "army-analytics";
@@ -242,7 +221,6 @@ export interface RankedBattleEvent {
   stars: number;
   trophyChange: number;
   perspectiveDisagreement: boolean;
-  army: BattleArmy | null;
   armyShareCode?: string | null;
 }
 
