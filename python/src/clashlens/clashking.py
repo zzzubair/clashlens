@@ -200,13 +200,11 @@ class ClashKingClient:
         self,
         *,
         enabled: bool = True,
-        origin: str = CLASHKING_ORIGIN,
         transport: Transport = _urllib_transport,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         # Stacks running against a fake Clash API never call the real ClashKing.
         self._enabled = enabled
-        self._origin = origin.rstrip("/")
         self._transport = transport
         self._clock = clock
         self._lock = threading.Lock()
@@ -222,7 +220,7 @@ class ClashKingClient:
             return True
 
     def fetch_legend_history(self, normalized_tag: str) -> bytes:
-        url = f"{self._origin}/v2/player/{quote(normalized_tag, safe='')}/legend-history"
+        url = f"{CLASHKING_ORIGIN}/v2/player/{quote(normalized_tag, safe='')}/legend-history"
         try:
             status, headers, body = self._transport(url, REQUEST_TIMEOUT_SECONDS)
         except OSError as error:
