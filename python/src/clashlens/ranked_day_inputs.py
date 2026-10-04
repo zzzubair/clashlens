@@ -58,19 +58,42 @@ def only_no_opponent_gaps_sql(database: Database, log: str) -> str:
     ), false)"""
 
 
-def load_coverage(
-    database: Database,
-    connection: Any,
-    player_id: int,
-    ranked_day: RankedDay,
-    start_battle_log_observation_id: int | None,
-    end_battle_log_observation_id: int | None,
-) -> tuple[CoverageObservation, ...]:
-    """The player's battle logs from the start to the end Reset log, in order."""
+def _coverage_sql(database: Database, *, shared_read: bool) -> str:
+    """SQL: the player's battle logs between two Reset logs, with each log's
+    coverage and quality read from its saved rows.
+
+    ``shared_read`` reads each log's rows once for both. That is exact only
+    when a row matches at most one battle report, as compact storage's report
+    link guarantees; older joins can match several reports per row, which
+    would multiply the quality counts, so they read the rows a second time.
+    """
     source_rows_relation, source_row_id_column, evidence_join = _source_rows(database)
     no_opponent = battle.no_opponent_row_sql("sr", "blo.parser_version")
-    coverage_rows = connection.execute(
-        f"""
+    quality = f"""
+                count(*) FILTER (
+                    WHERE (sr.outcome = 'malformed_legend_row'
+                           OR sr.failure_category LIKE 'malformed%%'
+                           OR sr.failure_category LIKE 'unsupported%%'
+                           OR sr.failure_category LIKE 'identity%%')
+                      AND NOT {no_opponent}
+                ) AS malformed_count,
+                count(*) FILTER (
+                    WHERE sr.failure_category LIKE 'unclassified%%'
+                ) AS unclassified_count,
+                COALESCE(bool_and({no_opponent}) FILTER (
+                    WHERE sr.outcome = 'malformed_legend_row'
+                ), false) AS only_no_opponent"""
+    if shared_read:
+        evidence_quality, row_flags_read, flags = f",{quality}", "", "evidence"
+    else:
+        evidence_quality, flags = "", "row_flags"
+        row_flags_read = f"""
+        LEFT JOIN LATERAL (
+            SELECT{quality}
+            FROM {source_rows_relation} AS sr
+            WHERE sr.battle_log_observation_id = blo.id
+        ) AS row_flags ON true"""
+    return f"""
         SELECT
             blo.observation_id,
             blo.observed_at,
@@ -78,15 +101,15 @@ def load_coverage(
             -- A log saved before "no opponent, no battle" rows stopped
             -- counting as gaps keeps its saved flag and outcome; its rows
             -- decide instead.
-            blo.has_row_gap AND NOT row_flags.only_no_opponent,
+            blo.has_row_gap AND NOT {flags}.only_no_opponent,
             COALESCE(evidence.battle_identities, ARRAY[]::text[]),
             COALESCE(evidence.source_row_ids, ARRAY[]::bigint[]),
-            COALESCE(row_flags.malformed_count, 0),
-            COALESCE(row_flags.unclassified_count, 0),
+            COALESCE({flags}.malformed_count, 0),
+            COALESCE({flags}.unclassified_count, 0),
             COALESCE(
                 processing.outcome = 'processed'
                 OR (processing.outcome = 'processed_with_gaps'
-                    AND row_flags.only_no_opponent),
+                    AND {flags}.only_no_opponent),
                 false
             ),
             observed.response_hash,
@@ -105,30 +128,12 @@ def load_coverage(
                     AS battle_identities,
                 array_agg(sr.{source_row_id_column} ORDER BY sr.{source_row_id_column})
                     FILTER (WHERE sr.{source_row_id_column} IS NOT NULL)
-                    AS source_row_ids
+                    AS source_row_ids{evidence_quality}
             FROM {source_rows_relation} AS sr
             LEFT JOIN battle_evidence AS be
               ON {evidence_join}
             WHERE sr.battle_log_observation_id = blo.id
-        ) AS evidence ON true
-        LEFT JOIN LATERAL (
-            SELECT
-                count(*) FILTER (
-                    WHERE (sr.outcome = 'malformed_legend_row'
-                           OR sr.failure_category LIKE 'malformed%%'
-                           OR sr.failure_category LIKE 'unsupported%%'
-                           OR sr.failure_category LIKE 'identity%%')
-                      AND NOT {no_opponent}
-                ) AS malformed_count,
-                count(*) FILTER (
-                    WHERE sr.failure_category LIKE 'unclassified%%'
-                ) AS unclassified_count,
-                COALESCE(bool_and({no_opponent}) FILTER (
-                    WHERE sr.outcome = 'malformed_legend_row'
-                ), false) AS only_no_opponent
-            FROM {source_rows_relation} AS sr
-            WHERE sr.battle_log_observation_id = blo.id
-        ) AS row_flags ON true
+        ) AS evidence ON true{row_flags_read}
         WHERE blo.player_id = %s
           AND blo.observed_at >= COALESCE(
               (SELECT start_blo.observed_at
@@ -143,7 +148,23 @@ def load_coverage(
               %s
           )
         ORDER BY blo.observed_at, blo.id
-        """,
+        """
+
+
+def load_coverage(
+    database: Database,
+    connection: Any,
+    player_id: int,
+    ranked_day: RankedDay,
+    start_battle_log_observation_id: int | None,
+    end_battle_log_observation_id: int | None,
+) -> tuple[CoverageObservation, ...]:
+    """The player's battle logs from the start to the end Reset log, in order."""
+    coverage_rows = connection.execute(
+        _coverage_sql(
+            database,
+            shared_read=getattr(database, "_supports_compact_battles", False),
+        ),
         (
             player_id,
             start_battle_log_observation_id,
