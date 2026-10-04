@@ -108,6 +108,10 @@ export default function Home() {
               ? `Daily results, rankings and armies for ${leaderboard.totalTracked.toLocaleString()} tracked players.`
               : "Daily results, rankings and armies for tracked players."}
           </p>
+          <p>
+            To look someone up, enter their full player tag, including the #. Legend I
+            players start tracking automatically.
+          </p>
         </div>
         <div className="player-search-panel">
           <Form
@@ -292,8 +296,8 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
       <section>
         <h3>No players or profiles found</h3>
         <p>
-          Try a Clash Lens username, display name, Clash of Clans name, or full player
-          tag.
+          Name search only finds players and profiles Clash Lens has already saved. To
+          look up anyone else, enter their full player tag, including the #.
         </p>
       </section>
     );

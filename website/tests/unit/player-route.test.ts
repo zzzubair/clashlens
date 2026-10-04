@@ -369,6 +369,9 @@ describe("player route historical independence", () => {
     expect(tracked).toContain("<dt>Final rank</dt><dd>3</dd>");
     expect(tracked).toContain("Final trophies: <!-- -->5812");
     expect(tracked).not.toContain(">12<");
+    expect(tracked).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
+    expect(tracked).toContain('<th scope="col">Trophy change</th>');
+    expect(tracked).not.toContain('<th scope="col">Net</th>');
   });
 
   it("keeps all 28 days and 448 battles in the page for search and print", async () => {
@@ -1164,7 +1167,7 @@ describe("player day honesty", () => {
   }
 
   const net = (value: string) =>
-    new RegExp(`<small>Net</small><strong class="[^"]+">${value}</strong>`);
+    new RegExp(`<small>Trophy change</small><strong class="[^"]+">${value}</strong>`);
 
   it("keeps an unknown daily net unknown while showing recorded battle net", async () => {
     const zero = { ...ENDED_DAY, period: SAVED_DAY.period, trophyChange: 0 };
@@ -1250,6 +1253,7 @@ describe("player day honesty", () => {
     expect(row).toContain("Provisional result");
     expect(row).not.toContain("Incomplete");
     expect(row).not.toContain("so far");
+    expect(await page([DAY_24])).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
     expect(row).toContain("The battle log was not checked at the start of this day.");
 
     // Without every battle recorded, a saved number with gaps stays incomplete.
@@ -1283,7 +1287,7 @@ describe("player day honesty", () => {
     const today = dayHtml(await page([day27], { currentDay: day27 }), "2026-10-03");
     expect(today).toContain("In progress");
     expect(today).toMatch(
-      /<small>Net<\/small><strong class="[^"]+">\+156<\/strong><span>so far<\/span>/,
+      /<small>Trophy change<\/small><strong class="[^"]+">\+156<\/strong><span>so far<\/span>/,
     );
 
     const gap = { ...day27, battlesComplete: false };
