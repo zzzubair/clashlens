@@ -797,32 +797,32 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 api_database.close()
             assert player_page is not None
             assert player_page["coverage"] == "ranked_days"
-            assert player_page["daily_logs"] == [
-                {
-                    "ranked_day_start": DAY_START.isoformat(),
-                    "ranked_day_end": DAY_END.isoformat(),
-                    "official_season_id": "1783918800",
-                    "season_day_number": 23,
-                    "version": 2,
-                    "state": "Partial",
-                    "coverage": "complete",
-                    "confidence": "uncertain",
-                    "attack_count": 1,
-                    "attack_three_star_count": 1,
-                    "attack_gain": 40,
-                    "defense_count": 0,
-                    "defense_three_star_count": 0,
-                    "defense_loss": 0,
-                    "net_trophy_change": 40,
-                    "adjustments": [],
-                    "battles": daily_logs[1][4],
-                    "partial_reasons": [
-                        "trophy_equation_mismatch",
-                        "ranked_day_state:Inconsistent",
-                    ],
-                    "start_trophies": 6000,
-                }
-            ]
+            [day] = player_page["screen_ready"]["recent_days"]
+            expected = {
+                "ranked_day_start": DAY_START.isoformat(),
+                "ranked_day_end": DAY_END.isoformat(),
+                "official_season_id": "1783918800",
+                "season_day_number": 23,
+                "version": 2,
+                "state": "Partial",
+                "coverage": "complete",
+                "confidence": "uncertain",
+                "attack_count": 1,
+                "attack_three_star_count": 1,
+                "attack_gain": 40,
+                "defense_count": 0,
+                "defense_three_star_count": 0,
+                "defense_loss": 0,
+                "net_trophy_change": 40,
+                "adjustments": [],
+                "partial_reasons": [
+                    "trophy_equation_mismatch",
+                    "ranked_day_state:Inconsistent",
+                ],
+                "start_trophies": 6000,
+            }
+            assert {key: day[key] for key in expected} == expected
+            assert len(day["offense_events"]) == 1 and day["defense_events"] == []
             assert (
                 player_page["screen_ready"]["recent_days"][0]["start_trophies"]
                 == 6000

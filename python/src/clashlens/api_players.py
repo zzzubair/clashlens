@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -212,8 +211,7 @@ def get_player_page(
             else []
         )
         armies = {(str(row[0]), _text(row[1])): _public_army(row) for row in army_rows}
-        display_logs = deepcopy(daily_logs)
-        for day in display_logs:
+        for day in daily_logs:
             for battle in day.get("battles", []):
                 if not isinstance(battle, dict):
                     continue
@@ -225,7 +223,7 @@ def get_player_page(
                     battle["army"] = army
         screen_days = [
             _screen_daily_log_with_events(day, public_confidence, now)
-            for day in display_logs
+            for day in daily_logs
         ]
         now_utc = now.astimezone(UTC)
         current_day_pair = next(
@@ -388,7 +386,6 @@ def get_player_page(
             "parser_version": _text(row[9]),
             "clan": None if row[10] is None else _text(row[10]),
             "public_confidence": public_confidence,
-            "daily_logs": daily_logs,
             "screen_ready": {
                 "current_day": current_day,
                 "recent_days": screen_days,
