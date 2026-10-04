@@ -668,3 +668,110 @@ def test_battle_log_takes_its_reset_locks_before_any_army_or_generation_row(
                 ).fetchone()[0] > 0
         finally:
             database.close()
+
+
+@pytest.mark.parametrize(
+    ("state", "reasons", "status", "rejudged"),
+    [
+        ("settled", [], "complete", True),
+        ("provisional", [], "complete", True),
+        ("provisional", ["settlement_check_pending"], "complete", False),
+        ("provisional", ["later_profile_unprocessed"], "failed", True),
+        ("unresolved", ["battle_report_unusable"], "failed", False),
+    ],
+)
+def test_settlement_lookup_skips_its_reads_only_while_none_are_saved(
+    database_url: str, archive_server, state, reasons, status, rejudged
+) -> None:
+    # With no settlements saved, the lookup cost about 137 ms per battle log
+    # on 2026-10-03 while holding the day's Reset lock.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        player, ours = scenario["player"], [(scenario["player"], RESET)]
+        with psycopg.connect(connection_info) as connection:
+            named_profile, named_log = connection.execute(
+                "SELECT profile_observation_id, battle_log_observation_id"
+                " FROM collector_work WHERE id = %s",
+                (scenario["work"],),
+            ).fetchone()
+            later_profile = connection.execute(
+                "SELECT id FROM collector_observations WHERE response_completed_at = %s",
+                (RESET + 40 * MINUTE,),
+            ).fetchone()[0]
+            settled = state == "settled"
+            connection.execute(
+                """
+                UPDATE reset_boundary_settlements
+                SET state = %s, reasons = %s, selected_trophies = %s, proof_kind = %s,
+                    proof_rule_version = 'test', proof_fingerprint = 'test',
+                    proof_json = '{"test": true}'
+                WHERE player_id = %s AND boundary_at = %s
+                """,
+                (state, json.dumps(reasons), START if settled else None,
+                 "observed_adjustment" if settled else None, player, RESET),
+            )
+            connection.execute(
+                "UPDATE collector_work SET status = %s WHERE id = %s",
+                (status, scenario["work"]),
+            )
+            # An unrelated player's settled check is never this player's.
+            other = connection.execute(
+                "INSERT INTO players (normalized_tag) VALUES ('#2YY') RETURNING id"
+            ).fetchone()[0]
+            other_work = connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, sweep_id, due_at,
+                    coalescing_key, status, profile_status, battle_log_status
+                ) SELECT 'reset_settlement', 'ordinary', 'player', %s, '#2YY',
+                         sweep_id, due_at, 'other', 'complete', 'failed', 'failed'
+                  FROM collector_work WHERE id = %s
+                RETURNING id
+                """,
+                (other, scenario["work"]),
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO reset_boundary_settlements (
+                    player_id, boundary_at, delayed_work_id, state, selected_trophies,
+                    proof_kind, proof_rule_version, proof_fingerprint, proof_json
+                ) VALUES (%s, %s, %s, 'settled', %s, 'observed_adjustment', 'test',
+                          'test', '{"test": true}')
+                """,
+                (other, RESET, other_work, START),
+            )
+            connection.commit()
+
+            def lookup(observation: int, *, every: bool = False) -> list:
+                found = reset_settlement._observation_resets(
+                    connection, observation, every=every)
+                connection.commit()
+                return found
+
+            assert lookup(named_profile) == ours
+            assert lookup(named_log) == ours
+            assert lookup(named_log, every=True) == ours
+            assert lookup(later_profile) == (ours if rejudged else [])
+            assert lookup(later_profile, every=True) == ours
+
+            saved = connection.execute(
+                "SELECT player_id, boundary_at, delayed_work_id"
+                " FROM reset_boundary_settlements WHERE boundary_at = %s",
+                (RESET,),
+            ).fetchall()
+            connection.execute("DELETE FROM reset_boundary_settlements")
+            connection.commit()
+            for observation in (named_profile, named_log, later_profile):
+                assert lookup(observation) == []
+                assert lookup(observation, every=True) == []
+            # The first settlements of a Reset count at once.
+            with psycopg.connect(connection_info) as collector:
+                collector.cursor().executemany(
+                    "INSERT INTO reset_boundary_settlements (player_id, boundary_at,"
+                    " delayed_work_id) VALUES (%s, %s, %s)",
+                    saved,
+                )
+            assert lookup(named_log, every=True) == ours
+            assert lookup(named_profile) == ours

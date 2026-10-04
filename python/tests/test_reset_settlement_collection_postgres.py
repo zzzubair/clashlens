@@ -799,3 +799,125 @@ def test_finishing_work_never_waits_on_worker_rows_that_point_at_it(
                 assert time.monotonic() - started < 2
         finally:
             database.close()
+
+
+def _baseline_work(connection_info: str) -> list[tuple]:
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT id, player_id, status FROM collector_work"
+            " WHERE kind = 'reset_baseline' ORDER BY player_id"
+        ).fetchall()
+
+
+def _members(connection_info: str) -> list:
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT id, member_ids, membership_captured_at FROM collector_reset_sweeps"
+        ).fetchall()
+
+
+@contextmanager
+def _publication_pointing_at(connection_info: str, sweep_id: int):
+    """A publication still being built, its generation pointing at the sweep."""
+    with psycopg.connect(connection_info) as publication:
+        publication.execute(
+            """
+            INSERT INTO boundary_publication_generations (
+                boundary_at, target_at, generation, sweep_id, ordering_rule_version,
+                freshness_rule_version, expected_population_count,
+                expected_population_hash
+            ) VALUES (%s, %s, 1, %s, 'test', 'test', 1, %s)
+            """,
+            (WEDNESDAY_RESET, WEDNESDAY_RESET, sweep_id, "0" * 64),
+        )
+        yield
+        publication.rollback()
+
+
+@pytest.mark.parametrize("callers", [1, 2])
+def test_reset_recheck_repairs_missing_work_while_a_publication_points_at_it(
+    database_url: str, callers: int
+) -> None:
+    # On 2026-10-03 the restarted collector's recheck of the existing Reset
+    # waited on such a publication and all collection stopped, twice.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        players = _players(connection_info, TAG, "#2QQ", "#2RR")
+        database = CollectorDatabase(connection_info)
+        try:
+            sweep_id = database.begin_reset(WEDNESDAY_RESET)
+            assert sweep_id is not None
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "DELETE FROM collector_work WHERE kind = 'reset_baseline'"
+                    " AND player_id = %s",
+                    (players[1],),
+                )
+                # Joining later does not join a frozen Reset.
+                connection.execute("UPDATE players SET active = false WHERE id = %s", (players[2],))
+            _players(connection_info, "#2UU")
+            members = _members(connection_info)
+            kept = _baseline_work(connection_info)
+            with (
+                _publication_pointing_at(connection_info, sweep_id),
+                ThreadPoolExecutor(callers) as pool,
+            ):
+                started = time.monotonic()
+                rechecks = [
+                    pool.submit(database.begin_reset, WEDNESDAY_RESET)
+                    for _ in range(callers)
+                ]
+                assert [recheck.result(timeout=10) for recheck in rechecks] == [
+                    sweep_id
+                ] * callers
+                assert time.monotonic() - started < 2
+                assert _members(connection_info) == members
+                repaired = [row for row in _baseline_work(connection_info) if row not in kept]
+                assert [row[1:] for row in repaired] == [(players[1], "pending")]
+                assert len(_baseline_work(connection_info)) == len(kept) + 1
+        finally:
+            database.close()
+
+
+def test_first_reset_freezes_members_once_for_concurrent_callers(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        players = _players(connection_info, TAG, "#2QQ")
+        database = CollectorDatabase(connection_info)
+        try:
+            with ThreadPoolExecutor(2) as pool:
+                starts = [
+                    pool.submit(database.begin_reset, WEDNESDAY_RESET) for _ in range(2)
+                ]
+                sweep_ids = {start.result(timeout=10) for start in starts}
+            assert len(sweep_ids) == 1 and None not in sweep_ids
+            assert [row[1] for row in _members(connection_info)] == [players]
+            assert [row[1] for row in _baseline_work(connection_info)] == players
+        finally:
+            database.close()
+
+
+def test_reset_recheck_still_waits_for_a_real_sweep_edit(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _players(connection_info, TAG)
+        database = CollectorDatabase(connection_info)
+        try:
+            sweep_id = database.begin_reset(WEDNESDAY_RESET)
+            with (
+                ThreadPoolExecutor(1) as pool,
+                psycopg.connect(connection_info) as editor,
+            ):
+                editor.execute(
+                    "UPDATE collector_reset_sweeps SET member_ids = member_ids"
+                    " WHERE id = %s",
+                    (sweep_id,),
+                )
+                started = time.monotonic()
+                recheck = pool.submit(database.begin_reset, WEDNESDAY_RESET)
+                time.sleep(0.5)
+                assert not recheck.done()
+                editor.commit()
+                assert recheck.result(timeout=10) == sweep_id
+                assert time.monotonic() - started >= 0.5
+        finally:
+            database.close()

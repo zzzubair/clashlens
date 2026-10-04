@@ -18,7 +18,7 @@ from clashlens import (
 )
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
-from clashlens.worker import ObservationProcessor
+from clashlens.worker import ObservationProcessor, ProcessResult, process_concurrently
 
 
 def _processor(connection_info: str, archive_server):
@@ -601,6 +601,9 @@ def test_concurrent_battle_logs_spanning_shared_days_both_complete(
                 "_process_claim",
                 ObservationProcessor._process_claim_once,
             )
+        # Each job pauses while holding its Resets, so let the other wait past
+        # the 1 s deadlock check: opposite lock orders must fail as deadlocks.
+        monkeypatch.setattr(battle_ingestion, "RESET_LOCK_WAIT", "10s")
         # Without ORDER BY, PostgreSQL's hash method returns the days unsorted.
         options = psycopg.conninfo.conninfo_to_dict(ci)["options"]
         unsorted_ci = psycopg.conninfo.make_conninfo(
@@ -1078,3 +1081,144 @@ def test_catalog_v2_migration_redecodes_saved_armies_once(
     ) == sorted(
         [tracked_battle, untracked_battle, unpublished_battle, finalized_battle]
     )
+
+
+def _job_state(db: Database, job_id: int) -> tuple[str, int]:
+    with db.pool.connection() as conn:
+        row = conn.execute(
+            "SELECT status, attempt_count FROM python_processing_jobs WHERE id = %s",
+            (job_id,),
+        ).fetchone()
+    return text(row[0]), row[1]
+
+
+@pytest.mark.parametrize(
+    ("limit", "reason"),
+    [
+        ("busy_reset", "database_lock_busy"),
+        ("statement", "database_timeout"),
+        ("idle_in_transaction", "database_session_timeout"),
+        ("transaction", "database_session_timeout"),
+        ("idle_at_commit", "database_session_timeout"),
+    ],
+)
+def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
+    database_url: str, archive_server, monkeypatch, limit: str, reason: str
+) -> None:
+    # On 2026-10-03 one publication held a Reset for 746 seconds while battle
+    # logs waiting on it held their rows, and the collector waited on those.
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        _, limited = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="limited",
+            endpoint="battle_log",
+            body=json.dumps({"items": [_live_row(True, "#8PP", "u1x58", ts)]}).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        db, proc = _processor(ci, archive_server)
+        pending = [limited]
+        lock_resets = army_ingestion.reset_settlement.lock_resets
+        finish_claim = db._finish_claim
+
+        def end_session(connection, setting: str) -> None:
+            connection.execute(f"SET LOCAL {setting} = '50ms'")
+            time.sleep(0.3)
+
+        def limited_lock_resets(database, connection, *args, **kwargs):
+            if pending and limit == "statement":
+                pending.pop()
+                connection.execute("SET LOCAL statement_timeout = '50ms'")
+                connection.execute("SELECT pg_sleep(1)")
+            if pending and limit in {"idle_in_transaction", "transaction"}:
+                pending.pop()
+                end_session(connection, f"{limit}_session_timeout"
+                            if limit == "idle_in_transaction" else "transaction_timeout")
+            return lock_resets(database, connection, *args, **kwargs)
+
+        def limited_finish(connection, *args, **kwargs):
+            finish_claim(connection, *args, **kwargs)
+            if pending and limit == "idle_at_commit":
+                pending.pop()
+                # The session ends before COMMIT reaches the database.
+                end_session(connection, "idle_in_transaction_session_timeout")
+
+        monkeypatch.setattr(army_ingestion.reset_settlement, "lock_resets", limited_lock_resets)
+        monkeypatch.setattr(db, "_finish_claim", limited_finish)
+        try:
+            with psycopg.connect(ci) as publisher:
+                if limit == "busy_reset":
+                    publisher.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        ("boundary-publication:2026-08-05T05:00:00+00:00",),
+                    )
+                # The other observation's Reset is free.
+                other_ts = ts + timedelta(days=2)
+                _, other = store_observation(
+                    ci,
+                    archive_server,
+                    occurrence_key="other",
+                    endpoint="battle_log",
+                    body=json.dumps(
+                        {"items": [_live_row(True, "#9PP", "u2x58", other_ts)]}
+                    ).encode(),
+                    observed_at=other_ts + timedelta(minutes=1),
+                    normalized_tag="#2QQ",
+                )
+                started = time.monotonic()
+                results = process_concurrently(
+                    proc, concurrency=1, owner="limited", max_jobs=2
+                )
+                assert time.monotonic() - started < 5
+                assert sorted(results, key=lambda result: result.job_id) == [
+                    ProcessResult(limited, "retrying", reason),
+                    ProcessResult(other, "processed"),
+                ]
+                # Nothing of the limited log was kept, and its try is refunded.
+                assert _job_state(db, limited) == ("leased", 0)
+                with db.pool.connection() as conn:
+                    assert conn.execute(
+                        "SELECT count(*) FROM legend_battles"
+                        " WHERE ranked_day_start < %s",
+                        (datetime(2026, 8, 5, 5, tzinfo=UTC),),
+                    ).fetchone()[0] == 0
+                publisher.rollback()
+            db.expire_lease(limited)
+            assert db.maintain_queue(max_jobs=1) == 1
+            assert proc.process_job(limited, owner="retry").outcome == "processed"
+            assert _job_state(db, limited) == ("complete", 1)
+        finally:
+            db.close()
+
+
+def test_a_session_ending_after_its_commit_landed_keeps_the_saved_result(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        _, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="committed",
+            endpoint="battle_log",
+            body=json.dumps({"items": [_live_row(True, "#8PP", "u1x58", ts)]}).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        original = battle_ingestion.complete_battle_log
+
+        def committed_then_lost(*args, **kwargs):
+            original(*args, **kwargs)
+            raise psycopg.errors.TransactionTimeout("terminating connection")
+
+        monkeypatch.setattr(battle_ingestion, "complete_battle_log", committed_then_lost)
+        db, proc = _processor(ci, archive_server)
+        try:
+            assert proc.process_job(job_id, owner="committed") == ProcessResult(
+                job_id, "processed"
+            )
+            assert _job_state(db, job_id) == ("complete", 1)
+        finally:
+            db.close()

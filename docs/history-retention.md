@@ -260,9 +260,11 @@ replaced copies with their daily logs and adjustments. It keeps:
   and later cleanup passes need the earlier result to recognise the hash.
 
 A kept copy that named a deleted copy as the one it replaced names the
-nearest older kept copy instead, or none. Each batch covers 200 players of the
-oldest day not yet cleaned, plus the day before it, in its own transaction, and
-each run stops after 2 minutes, so a backlog of many days is worked through
+nearest older kept copy instead, or none. Each batch covers 25 players of the
+oldest day not yet cleaned, plus the day before it, in its own transaction,
+which is cancelled and rolled back after 5 seconds so it never holds those
+player-days for long; the run then stops and the next one retries the batch.
+Each run stops after 2 minutes, so a backlog of many days is worked through
 over several runs. A newer copy saved later, such as a late correction, makes
 that day cleaned again. Nothing that runs later needs the deleted copies: late
 corrections and the next day's recalculation read only the newest copy, and an

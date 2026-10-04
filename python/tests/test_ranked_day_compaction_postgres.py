@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from time import monotonic
 
 import psycopg
 import pytest
@@ -43,7 +44,7 @@ from test_reconciliation_postgres import (
     _store_baseline_pair,
 )
 
-from clashlens import reconciliation_db
+from clashlens import ranked_day_compaction, reconciliation_db
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
 from clashlens.late_battle_sweep import sweep_late_battles
@@ -388,5 +389,54 @@ def test_a_result_made_current_again_before_cleanup_stays_unchanged_after_it(
                     "SELECT count(*) FROM boundary_publication_corrections"
                 ).fetchone()[0] == corrections
             assert _published(connection_info, DAY, OPPONENT)[1] == restored
+        finally:
+            database.close()
+
+
+def test_a_slow_cleanup_batch_gives_its_player_days_back_and_later_finishes(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # On 2026-10-03 one batch held 400 player-day locks for 407 seconds.
+    monkeypatch.setattr(ranked_day_compaction, "BATCH_TIMEOUT", "1s")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _ended_day_with_copies(connection_info, archive_server, database, processor)
+            after_reset = DAY_END + timedelta(minutes=40)
+            # A run already out of time starts no batch.
+            assert _compact(connection_info, after_reset, run_seconds=0)["batches"] == 0
+            with psycopg.connect(connection_info) as holder:
+                player_id = holder.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                copies = _copies(holder, "#2PP", DAY_START)
+                progress_query = (
+                    "SELECT * FROM ranked_day_compactions WHERE ranked_day_start = %s"
+                )
+                progress = holder.execute(progress_query, (DAY_START,)).fetchall()
+                # Deleting a copy waits on this row lock after the batch has
+                # taken its player-day locks, so the batch runs out of time.
+                holder.execute(
+                    "SELECT 1 FROM ranked_day_versions WHERE id = ANY(%s) FOR KEY SHARE",
+                    ([copy[0] for copy in copies[:-1]],),
+                )
+                started = monotonic()
+                result = _compact(connection_info, after_reset)
+                assert monotonic() - started < 1.9  # before its own 2 s lock wait
+                assert result["status"] == "timed_out"
+                # Nothing changed, and the player-day is free for recalculation.
+                with psycopg.connect(connection_info) as reader:
+                    assert _copies(reader, "#2PP", DAY_START) == copies
+                    assert reader.execute(progress_query, (DAY_START,)).fetchall() == progress
+                    reader.execute("SET lock_timeout = '1s'")
+                    reader.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"ranked-day:{player_id}:{ranked_day_for(DAY_START).start.isoformat()}",),
+                    )
+                holder.rollback()
+            result = _compact(connection_info, after_reset)
+            assert result["status"] == "idle" and result["deleted_versions"] > 0
+            with database.pool.connection() as connection:
+                assert len(_copies(connection, "#2PP", DAY_START)) < len(copies)
         finally:
             database.close()

@@ -1059,6 +1059,9 @@ class Database:
         """
         with self._timed_connection() as connection:
             with connection.transaction():
+                # Never queue behind a long holder of the job row; the lease
+                # running out recovers the job instead.
+                connection.execute("SET LOCAL lock_timeout = '1s'")
                 refunded = connection.execute(
                     f"""
                     UPDATE {self._jobs_relation}
@@ -1076,6 +1079,29 @@ class Database:
                 )
                 if refunded.rowcount != 1:
                     raise LeaseLost("job lease was lost while refunding its attempt")
+
+    def finished_attempt_status(self, claim: Claim) -> str | None:
+        """How this claim's attempt ended, or None while nothing committed it.
+
+        A session that ends while committing leaves the outcome unknown, so
+        the saved attempt decides whether its work may run again.
+        """
+        with self._timed_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT state, outcome FROM python_processing_attempts
+                WHERE id = %s AND job_id = %s AND lease_token = %s
+                """,
+                (claim.attempt_id, claim.job_id, claim.lease_token),
+            ).fetchone()
+            connection.commit()
+        if row is None or row[0] == "running":
+            return None
+        if row[0] == "complete":
+            return str(row[1])
+        return {"waiting_retry": "retrying", "stale": "lease_lost"}.get(
+            row[0], "failed"
+        )
 
     def maintain_queue(self, *, max_jobs: int = 100) -> int:
         """Recover a bounded set of expired worker leases.

@@ -29,9 +29,12 @@ import psycopg
 from .domain import ranked_day_for
 from .late_battle_sweep import SWEEP_DELAY, reset_work_finished
 
-# About 200 players' copies of one day and the day before: up to about 4,000
-# deletions, under a second on production's 2026-10-02 sizes.
-PLAYERS_PER_BATCH = 200
+# About 25 players' copies of one day and the day before: 50 player-day
+# locks and a few hundred deletions per batch.
+PLAYERS_PER_BATCH = 25
+# A batch holds its player-day locks until it ends, and on 2026-10-03 one ran
+# for 407 seconds, so it is cancelled and rolled back after this long.
+BATCH_TIMEOUT = "5s"
 PAUSE_SECONDS = 1.0
 RUN_SECONDS = 120.0
 
@@ -59,8 +62,12 @@ def compact(
     with connection.transaction():
         through = ready_through(connection, now or datetime.now(UTC))
     while True:
+        if monotonic() >= deadline:
+            return {**totals, "finished_days": finished_days, "status": "paused"}
         try:
             with connection.transaction():
+                # The function's own lock_timeout limits only its waits.
+                connection.execute(f"SET LOCAL statement_timeout = '{BATCH_TIMEOUT}'")
                 row = connection.execute(
                     "SELECT * FROM clashlens_compact_ranked_days(%s, %s)",
                     (through, players_per_batch),
@@ -68,6 +75,10 @@ def compact(
         except psycopg.errors.LockNotAvailable:
             # A live recalculation held a player-day; the next run retries the batch.
             return {**totals, "finished_days": finished_days, "status": "busy"}
+        except psycopg.errors.QueryCanceled:
+            # The batch ran out of time and rolled back, progress included;
+            # the next run retries it.
+            return {**totals, "finished_days": finished_days, "status": "timed_out"}
         if row is None:
             return {**totals, "finished_days": finished_days, "status": "idle"}
         totals["batches"] += 1

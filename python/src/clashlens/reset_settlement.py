@@ -509,7 +509,12 @@ def refresh_for_observation(database: Database, connection: Any, observation_id:
 
 def _observation_resets(connection: Any, observation_id: int | None, *,
                         every: bool = False) -> list[tuple[int, datetime]]:
-    if observation_id is None:
+    # Every result joins a settlement, so with none saved yet this skips the
+    # battle reads, which took about 137 ms under a hot Reset lock. Checked in
+    # each call: a Reset can save the first settlements at any time.
+    if observation_id is None or not connection.execute(
+        "SELECT EXISTS (SELECT 1 FROM reset_boundary_settlements LIMIT 1)"
+    ).fetchone()[0]:
         return []
     rows = connection.execute(
         """

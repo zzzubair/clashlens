@@ -13,10 +13,13 @@ from psycopg.errors import (
     DataError,
     DeadlockDetected,
     Error,
+    IdleInTransactionSessionTimeout,
     IntegrityError,
+    LockNotAvailable,
     QueryCanceled,
     RaiseException,
     SerializationFailure,
+    TransactionTimeout,
 )
 from psycopg_pool import PoolTimeout, TooManyRequests
 
@@ -189,6 +192,10 @@ DATABASE_REJECTIONS = (RaiseException, IntegrityError, DataError)
 # The shared connection pool had no free connection in time. Only the lane
 # that waited is affected: it retries its claim, or its job, later.
 POOL_BUSY = (PoolTimeout, TooManyRequests)
+
+# Time limits that end the database session, rolling back its open
+# transaction. The pool replaces the closed connection on its next use.
+SESSION_ENDED = (IdleInTransactionSessionTimeout, TransactionTimeout)
 
 # Connections for the maintenance timer, kept apart from the lanes' pool so a
 # slow round never holds a connection a lane is waiting for.
@@ -608,10 +615,27 @@ class ObservationProcessor:
             pass
         except DATABASE_REJECTIONS as error:
             return self._fail_rejected(claim, error)
+        except LockNotAvailable:
+            # A short lock wait limit, such as a battle log's on a busy Reset,
+            # gave up and its transaction rolled back.
+            reason = "database_lock_busy"
         except QueryCanceled:
             # The worker's statement deadline cancelled stuck work and its
             # transaction rolled back.
             reason = "database_timeout"
+        except SESSION_ENDED:
+            # The session ended mid-transaction, even while committing. Trust
+            # the job's saved attempt, not the error: a commit that landed
+            # stays done and is never run again.
+            reason = "database_session_timeout"
+            try:
+                finished = self.database.finished_attempt_status(claim)
+            except (*SESSION_ENDED, QueryCanceled, *POOL_BUSY):
+                # Unknown: leave the lease to run out; maintenance recovers
+                # the job only if it is still unfinished.
+                return ProcessResult(claim.job_id, "retrying", reason)
+            if finished is not None:
+                return ProcessResult(claim.job_id, finished)
         except POOL_BUSY:
             # No pool connection came free in time, so this job's next write
             # never started.
@@ -630,9 +654,10 @@ class ObservationProcessor:
                 return ProcessResult(claim.job_id, "lease_lost")
             except (DeadlockDetected, SerializationFailure, QueryCanceled):
                 continue
-            except POOL_BUSY:
-                # Leave the lease to run out so queue maintenance retries the
-                # job or fails its last try.
+            except (*POOL_BUSY, LockNotAvailable, *SESSION_ENDED):
+                # No connection, or the refund's own short lock wait or
+                # session ran out. Leave the lease to run out so queue
+                # maintenance retries the job or fails its last try.
                 break
         return ProcessResult(claim.job_id, "retrying", reason)
 
@@ -956,6 +981,8 @@ class ObservationProcessor:
             DeadlockDetected,
             SerializationFailure,
             QueryCanceled,
+            LockNotAvailable,
+            *SESSION_ENDED,
             *POOL_BUSY,
         ):
             # Recording the failure was refused, conflicted or timed out too.
