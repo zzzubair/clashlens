@@ -186,7 +186,6 @@ export default function SavedPlayersRoute() {
         </p>
       </section>
 
-      {loaderData.error ? <ErrorNotice error={loaderData.error} /> : null}
       {actionData?.generalError ? <ErrorNotice error={actionData.generalError} /> : null}
 
       <section className="form-panel" aria-label="Add a saved player">
@@ -225,7 +224,12 @@ export default function SavedPlayersRoute() {
 
       <section className="data-section" aria-labelledby="saved-list-title">
         <h2 id="saved-list-title">Your saved players</h2>
-        {loaderData.players.length > 0 ? (
+        {loaderData.error ? (
+          <aside className="notice notice-unavailable" role="alert">
+            <strong>Saved players could not be loaded.</strong>{" "}
+            <a href="/account/saved-players">Try again</a>
+          </aside>
+        ) : loaderData.players.length > 0 ? (
           <ul className="player-action-list">
             {loaderData.players.map((player) => {
               const removeKey =

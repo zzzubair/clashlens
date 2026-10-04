@@ -209,6 +209,8 @@ describe("past-Season view", () => {
       SEASON,
     );
     expect(html).toContain(CURRENT_LINK);
+    expect(html).toContain("Season history could not be loaded.");
+    expect(html).toContain(`href="/players/%232PP?season=${SEASON}">Try again</a>`);
     expect(html).toContain("<td>-30</td>");
   });
 
@@ -225,6 +227,29 @@ describe("past-Season view", () => {
       expect(html).toContain(CURRENT_LINK);
       expect(html).toContain("Results for 5 Oct 2026 are unavailable.");
       expect(html).not.toContain("Saved Legend history");
+    },
+  );
+
+  it.each([
+    ["available", PLAYER],
+    ["unavailable", null],
+  ])(
+    "shows a retryable Season-list failure with current profile %s",
+    async (_, player) => {
+      const client = {
+        getPlayer: vi.fn().mockResolvedValue(player),
+        getPlayerSeasons: vi.fn().mockImplementation(failed),
+        getPlayerSeason: vi.fn(),
+      };
+      const html = await loadAndRender(client, null);
+      expect(html).toContain("Season history could not be loaded.");
+      expect(html).toContain('href="/players/%232PP">Try again</a>');
+      if (player) expect(html).toContain("Nova");
+
+      client.getPlayerSeasons.mockResolvedValue([]);
+      const recoveredHtml = await loadAndRender(client, null);
+      expect(recoveredHtml).not.toContain("Season history could not be loaded.");
+      expect(recoveredHtml).not.toContain("Historical seasons");
     },
   );
 

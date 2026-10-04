@@ -45,11 +45,11 @@ import {
 import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError, type PythonClient } from "../../app/services/python.server";
 import { loader as accountLoader } from "../../app/routes/account";
-import {
+import ProvidersRoute, {
   action as providersAction,
   loader as providersLoader,
 } from "../../app/routes/account.providers";
-import {
+import GroupsRoute, {
   action as groupsAction,
   loader as groupsLoader,
 } from "../../app/routes/account.groups";
@@ -57,7 +57,7 @@ import ProfileRoute, {
   action as profileAction,
   loader as profileLoader,
 } from "../../app/routes/account.profile";
-import {
+import SavedPlayersRoute, {
   action as savedPlayersAction,
   loader as savedPlayersLoader,
 } from "../../app/routes/account.saved-players";
@@ -193,6 +193,163 @@ describe("account routes", () => {
         status: 302,
         headers: { Location: "https://provider.example" },
       }),
+    );
+  });
+
+  describe("account read failures", () => {
+    async function renderAccount(
+      path: string,
+      Component: typeof ProfileRoute,
+      loader: unknown,
+    ) {
+      const handler = createStaticHandler([{ path, Component, loader: loader as never }]);
+      const context = await handler.query(new Request(`${ORIGIN}${path}`));
+      if (context instanceof Response) throw new Error("unexpected route response");
+      return renderToString(
+        createElement(StaticRouterProvider, {
+          router: createStaticRouter(handler.dataRoutes, context),
+          context,
+        }),
+      ).replace(/<script[\s\S]*?<\/script>/g, "");
+    }
+
+    it.each([
+      [
+        "saved-players",
+        SavedPlayersRoute,
+        savedPlayersLoader,
+        "listSavedTags",
+        "Saved players could not be loaded.",
+        "No saved players yet",
+        "Save player",
+      ],
+      [
+        "groups",
+        GroupsRoute,
+        groupsLoader,
+        "listGroups",
+        "Groups could not be loaded.",
+        "No private groups yet",
+        "Create group",
+      ],
+      [
+        "profile",
+        ProfileRoute,
+        profileLoader,
+        "getAccount",
+        "Profile could not be loaded.",
+        'name="displayName"',
+        null,
+      ],
+      [
+        "providers",
+        ProvidersRoute,
+        providersLoader,
+        "getAccount",
+        "Sign-in connections could not be loaded.",
+        'name="intent"',
+        null,
+      ],
+    ] as const)(
+      "shows a retryable read failure and recovers on %s",
+      async (
+        route,
+        Component,
+        loader,
+        read,
+        message,
+        unknownContent,
+        independentAction,
+      ) => {
+        const original = client[read];
+        client[read] = vi
+          .fn()
+          .mockRejectedValueOnce(new PythonApiError(503, { error: "unavailable" }))
+          .mockImplementation(original) as never;
+        const path = `/account/${route}`;
+        const failedHtml = await renderAccount(path, Component, loader);
+        expect(failedHtml).toContain(message);
+        expect(failedHtml).toContain(`href="${path}">Try again</a>`);
+        expect(failedHtml).not.toContain(unknownContent);
+        expect(failedHtml).not.toContain("Saved data is still available");
+        if (independentAction) expect(failedHtml).toContain(independentAction);
+
+        const recoveredHtml = await renderAccount(path, Component, loader);
+        expect(recoveredHtml).not.toContain(message);
+        expect(recoveredHtml).toContain(unknownContent);
+        if (route === "profile") expect(recoveredHtml).toContain('value="Nova"');
+        if (route === "providers") expect(recoveredHtml).toContain("Unlink");
+      },
+    );
+
+    it("keeps link actions for successfully loaded empty connections", async () => {
+      client.getAccount = vi.fn(async () => ({ ...ACCOUNT, providers: [] }));
+      const html = await renderAccount(
+        "/account/providers",
+        ProvidersRoute,
+        providersLoader,
+      );
+      expect(html.match(/>Link<\/button>/g)).toHaveLength(2);
+      expect(html).not.toContain("could not be loaded");
+    });
+
+    it.each([
+      [
+        "saved-players",
+        SavedPlayersRoute,
+        savedPlayersLoader,
+        savedPlayersAction,
+        "addSavedTag",
+        { mode: "add", tag: TAG2 },
+        TAG,
+      ],
+      [
+        "groups",
+        GroupsRoute,
+        groupsLoader,
+        groupsAction,
+        "createGroup",
+        { action: "create", name: "New group" },
+        "Clanmates",
+      ],
+      [
+        "profile",
+        ProfileRoute,
+        profileLoader,
+        profileAction,
+        "updateAccount",
+        { displayName: "New name" },
+        'value="New name"',
+      ],
+    ] as const)(
+      "keeps loaded values after a failed save on %s",
+      async (route, Component, loader, action, write, fields, savedContent) => {
+        client.listSavedTags = vi.fn(async () => [{ tag: TAG, name: "Nova" }]);
+        client.listGroups = vi.fn(async () => [
+          { groupId: GROUP_ID, name: "Clanmates", tags: [], players: [] },
+        ]);
+        client[write] = vi
+          .fn()
+          .mockRejectedValue(new PythonApiError(503, { error: "unavailable" }));
+        const path = `/account/${route}`;
+        const handler = createStaticHandler([
+          { path, Component, loader: loader as never, action: action as never },
+        ]);
+        const context = await handler.query(
+          formRequest(path, { ...fields, idempotencyKey: IDEMPOTENCY_KEY }),
+        );
+        if (context instanceof Response) throw new Error("unexpected route response");
+        const html = renderToString(
+          createElement(StaticRouterProvider, {
+            router: createStaticRouter(handler.dataRoutes, context),
+            context,
+          }),
+        ).replace(/<script[\s\S]*?<\/script>/g, "");
+        expect(html).toContain(savedContent);
+        expect(html).toContain('role="alert"');
+        expect(html).not.toContain("could not be loaded");
+        if (route === "profile") expect(html).toContain("@nova88");
+      },
     );
   });
 

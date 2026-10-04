@@ -49,6 +49,7 @@ export interface PlayerLoaderData {
   refreshError: WebsiteErrorResponse | null;
   noJsIdempotencyKey: string;
   seasons: SummarizedSeasonRef[];
+  seasonsError?: WebsiteErrorResponse | null;
   selectedSeason: string | null;
   historical: HistoricalSeasonSummary | null;
   historicalError: WebsiteErrorResponse | null;
@@ -82,6 +83,7 @@ export async function loader({
       refreshError: null,
       noJsIdempotencyKey,
       seasons: [],
+      seasonsError: null,
       selectedSeason: null,
       historical: null,
       historicalError: null,
@@ -159,6 +161,8 @@ export async function loader({
   const error =
     playerResult.status === "rejected" ? await safeError(playerResult.reason) : null;
   const seasons = seasonsResult.status === "fulfilled" ? seasonsResult.value : [];
+  const seasonsError =
+    seasonsResult.status === "rejected" ? await safeError(seasonsResult.reason) : null;
   const historical =
     historicalResult.status === "fulfilled" ? historicalResult.value : null;
   const historicalError =
@@ -180,6 +184,7 @@ export async function loader({
     refreshError,
     noJsIdempotencyKey,
     seasons,
+    seasonsError,
     selectedSeason,
     historical,
     historicalError,
@@ -603,6 +608,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         <SeasonNav
           tag={data.requestedTag}
           seasons={data.seasons}
+          error={data.seasonsError ?? null}
           selectedSeason={data.selectedSeason}
           currentAvailable={player !== null}
         />
@@ -708,6 +714,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       <SeasonNav
         tag={trackedPlayer.tag}
         seasons={data.seasons}
+        error={data.seasonsError ?? null}
         selectedSeason={data.selectedSeason}
       />
 
@@ -809,21 +816,33 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
 function SeasonNav({
   tag,
   seasons,
+  error,
   selectedSeason,
   currentAvailable = true,
 }: {
   tag: string;
   seasons: SummarizedSeasonRef[];
+  error: WebsiteErrorResponse | null;
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
   // A selected past Season always keeps its way back, even if the list failed.
-  if (seasons.length === 0 && selectedSeason === null) return null;
+  if (seasons.length === 0 && selectedSeason === null && !error) return null;
   return (
     <nav className="data-section" aria-label="Historical seasons">
       <div className="section-heading">
         <h2>Historical seasons</h2>
       </div>
+      {error ? (
+        <aside className="notice notice-unavailable" role="alert">
+          <strong>Season history could not be loaded.</strong>{" "}
+          <a
+            href={`${canonicalPlayerPath(tag)}${selectedSeason === null ? "" : `?season=${encodeURIComponent(selectedSeason)}`}`}
+          >
+            Try again
+          </a>
+        </aside>
+      ) : null}
       <ul className="season-list">
         {currentAvailable || selectedSeason !== null ? (
           <li key="current">
