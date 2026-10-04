@@ -406,7 +406,7 @@
 
 .leaderboard-table {
   width: 100%;
-  min-width: 43rem;
+  min-width: 0;
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
 }
@@ -511,13 +511,11 @@
 .leaderboard-table .player-name {
   display: block;
   max-width: 22rem;
-  overflow: hidden;
   color: var(--cl-ink);
   font-family: var(--cl-font);
   font-size: 0.95rem;
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .leaderboard-table .player-tag {
@@ -1242,12 +1240,8 @@
     grid-column: 2;
   }
 
-  /* Phones: keep rank, player and trophies in view without sideways scrolling. */
-  .leaderboard-table {
-    min-width: 0;
-    table-layout: fixed;
-  }
-
+  /* Phones: keep rank, player and trophies in view without sideways scrolling.
+     Rank and trophies take only what they need. */
   .leaderboard-table :is(th, td):is(:nth-child(3), :nth-child(5)) {
     display: none;
   }
@@ -1264,6 +1258,10 @@
     overflow-wrap: anywhere;
   }
 
+  .leaderboard-table .player-update-mobile time {
+    white-space: normal;
+  }
+
   .player-update-mobile summary {
     min-height: 2.75rem;
     align-content: center;
@@ -1272,7 +1270,7 @@
 
   .leaderboard-table th:nth-child(4),
   .leaderboard-table td:nth-child(4) {
-    width: 6rem;
+    width: 1%;
     padding-right: 0.75rem;
   }
 
@@ -1283,7 +1281,7 @@
 
   .leaderboard-table th:first-child,
   .leaderboard-table td:first-child {
-    width: 3.5rem;
+    width: 1%;
     padding-left: 0.75rem;
   }
 

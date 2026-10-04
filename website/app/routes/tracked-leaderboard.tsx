@@ -316,7 +316,9 @@ export default function TrackedLeaderboardRoute() {
                   <li key={entry.tag}>
                     <Link to={playerRankUrl(entry.tag, entry.rank)}>
                       <span>
-                        <strong>{entry.name}</strong>
+                        <strong>
+                          <bdi>{entry.name}</bdi>
+                        </strong>
                         <small>{entry.tag}</small>
                       </span>
                       <span>
@@ -427,14 +429,14 @@ export default function TrackedLeaderboardRoute() {
                         key={entry.tag}
                       >
                         <td className="rank-cell" data-label="Rank">
-                          <span className="rank-mark">{entry.rank}</span>
+                          <span className="rank-mark">{entry.rank.toLocaleString()}</span>
                         </td>
                         <th scope="row" data-label="Player">
                           <a
                             className="player-name"
                             href={canonicalPlayerPath(entry.tag)}
                           >
-                            {entry.name}
+                            <bdi>{entry.name}</bdi>
                           </a>
                           <span className="player-tag">{entry.tag}</span>
                           <details className="player-update-mobile">
