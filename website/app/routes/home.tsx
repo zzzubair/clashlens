@@ -229,6 +229,16 @@ export default function Home() {
         </div>
         {leaderboard && leaderboard.entries.length > 0 ? (
           <LeaderboardTable entries={leaderboard.entries} />
+        ) : leaderboard?.seasonResetPending ? (
+          <div className="empty-state">
+            <h3>Waiting for the new Season</h3>
+            <p className="rankings-context" role="status">
+              {leaderboard.seasonResetPending.toLocaleString()} tracked{" "}
+              {leaderboard.seasonResetPending === 1 ? "player is" : "players are"} waiting
+              for their Season reset and will be ranked once their profile shows the new
+              Season.
+            </p>
+          </div>
         ) : leaderboard ? (
           <div className="empty-state">
             <h3>No standings available yet</h3>

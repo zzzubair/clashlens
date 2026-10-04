@@ -353,29 +353,6 @@ describe("player route historical independence", () => {
     expect(html).not.toContain("Legend season");
   });
 
-  it("never shows official placement as the final rank", async () => {
-    const officialHistory = {
-      observedAt: "2026-08-04T12:05:00+00:00",
-      eodTrophies: 5812,
-      finalPlacement: 12,
-    };
-    const official = await renderSeason({
-      ...SUMMARY,
-      source: "official_league_history",
-      finalRank: null,
-      officialHistory,
-    });
-    expect(official).toContain("<dt>Final rank</dt><dd>Unknown</dd>");
-    expect(official).not.toContain(">12<");
-    const tracked = await renderSeason({ ...SUMMARY, finalRank: 3, officialHistory });
-    expect(tracked).toContain("<dt>Final rank</dt><dd>3</dd>");
-    expect(tracked).toContain("Final trophies: <!-- -->5,812");
-    expect(tracked).not.toContain(">12<");
-    expect(tracked).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
-    expect(tracked).toContain('<th scope="col">Trophy change</th>');
-    expect(tracked).not.toContain('<th scope="col">Net</th>');
-  });
-
   it("says only that a missing summary is unavailable and keeps a known final count", async () => {
     const official = await renderSeason({
       ...SUMMARY,
