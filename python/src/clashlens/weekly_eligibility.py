@@ -44,7 +44,11 @@ def next_check(
             )
             row = connection.execute(
                 """SELECT work.id, work.player_id, work.normalized_tag, work.due_at,
-                          work.league_history_status = 'pending',
+                          work.league_history_status <> 'not_applicable' AND NOT EXISTS (
+                              SELECT 1 FROM collector_observations AS observation
+                              WHERE observation.id = work.league_history_observation_id
+                                AND (observation.http_status BETWEEN 200 AND 299
+                                     OR observation.http_status = 404)),
                           NOT EXISTS (
                               SELECT 1 FROM collector_observations AS observation
                               WHERE observation.id = work.profile_observation_id

@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from clashlens.profile import (
     PARSER_VERSION,
     PROFILE_PARSER_VERSION,
@@ -140,22 +142,67 @@ def test_profile_parser_keeps_missing_or_conflicting_tier_as_uncertain() -> None
     assert conflicting.eligibility_reason == "known_tier_name_conflict"
 
 
-def test_profile_parser_deactivates_only_an_adapter_recognized_non_legend_tier() -> (
-    None
-):
-    tier_id, tier_name = next(iter(RECOGNIZED_NON_LEGEND_TIERS_V1.items()))
+def _tier_profile(tier: dict[str, object]):
     payload = json.loads(FIXTURE.read_bytes())
-    payload["leagueTier"] = {"id": tier_id, "name": tier_name}
-
-    profile = parse_profile(
+    payload["leagueTier"] = tier
+    return parse_profile(
         json.dumps(payload).encode(),
         expected_tag="#2PP",
         observed_at=datetime.now(UTC),
         endpoint_version="profile-v1",
     )
 
+
+# One tier from each family below Legend I, as official profiles report it.
+@pytest.mark.parametrize(
+    "tier_id,tier_name",
+    [
+        (105000001, "Skeleton League 1"),
+        (105000005, "Barbarian League 5"),
+        (105000009, "Archer League 9"),
+        (105000010, "Wizard League 10"),
+        (105000014, "Valkyrie League 14"),
+        (105000018, "Witch League 18"),
+        (105000019, "Golem League 19"),
+        (105000023, "P.E.K.K.A League 23"),
+        (105000027, "Titan League 27"),
+        (105000028, "Dragon League 28"),
+        (105000033, "Electro League 33"),
+        (105000034, "Legend III"),
+        (105000035, "Legend II"),
+    ],
+)
+def test_profile_parser_recognizes_every_tier_family_below_legend_i(
+    tier_id, tier_name
+) -> None:
+    profile = _tier_profile({"id": tier_id, "name": tier_name})
+
     assert profile.eligibility_state == "ineligible"
+    assert profile.eligibility_reason == "confirmed_non_legend_i"
     assert profile.source_contract_state == "accepted"
+
+
+def test_profile_parser_catalogue_covers_each_lower_tier_once() -> None:
+    assert sorted(RECOGNIZED_NON_LEGEND_TIERS_V1) == list(range(105000001, 105000036))
+    assert len(set(RECOGNIZED_NON_LEGEND_TIERS_V1.values())) == 35
+
+
+@pytest.mark.parametrize(
+    "tier,reason",
+    [
+        ({"id": 105000000, "name": "Unranked"}, "unknown_tier_id"),
+        ({"id": 105000037, "name": "Legend 0"}, "unknown_tier_id"),
+        ({"id": 105000031, "name": "Dragon League 31"}, "known_tier_name_conflict"),
+        ({"id": 105000034, "name": "Legend I"}, "known_tier_name_conflict"),
+        ({"id": 105000036, "name": "Legend II"}, "known_tier_name_conflict"),
+    ],
+)
+def test_profile_parser_keeps_unlisted_tiers_uncertain(tier, reason) -> None:
+    profile = _tier_profile(tier)
+
+    assert profile.eligibility_state == "uncertain"
+    assert profile.eligibility_reason == reason
+    assert profile.source_contract_state == "conflict"
 
 
 def test_profile_parser_preserves_invalid_season_values_as_contract_conflict() -> None:

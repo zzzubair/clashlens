@@ -215,13 +215,15 @@ def test_enqueue_weekly_reuse_terminal_rediscovery_inputs_and_privileges(
                        coalescing_key, status, profile_status, battle_log_status,
                        league_history_status, completed_at)
                    SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag,
-                          clock_timestamp(), 'discovery-profile:' || id,
+                          clock_timestamp(), 'discovery-profile:' || id || ':' ||
+                              to_char(clashlens_eligibility_week(clock_timestamp()) AT TIME ZONE 'UTC',
+                                      'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                           'complete', 'observed', 'not_applicable', 'observed',
                           clock_timestamp()
                    FROM players WHERE id = %s""",
                 (terminal,),
             )
-            # The agreed weekly rule also covers completed legacy checks.
+            # A completed check counts for the week in its key, whatever its due time.
             assert connection.execute(
                 "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
                 ([terminal],),
@@ -230,8 +232,9 @@ def test_enqueue_weekly_reuse_terminal_rediscovery_inputs_and_privileges(
                 "SELECT count(*) FROM collector_work WHERE player_id = %s", (terminal,)
             ).fetchone()[0] == 1
             connection.execute(
-                """UPDATE collector_work SET due_at =
-                       clashlens_eligibility_week(clock_timestamp()) - interval '1 second'
+                """UPDATE collector_work SET coalescing_key = 'discovery-profile:' || player_id || ':' ||
+                       to_char((clashlens_eligibility_week(clock_timestamp()) - interval '7 days')
+                               AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
                    WHERE player_id = %s""", (terminal,),
             )
             assert connection.execute(
@@ -322,7 +325,7 @@ def test_ineligible_profile_cancels_only_ordinary_discovery_and_keeps_evidence(
                    ) VALUES (
                        'discovery_profile', 'ordinary', 'player', %s, '#2PP', %s,
                        'inactive-cancel:discovery', 'observed', 'not_applicable',
-                       'pending', %s
+                       'not_applicable', %s
                    ) RETURNING id""",
                 (player_id, OBSERVED_AT, observation_id),
             ).fetchone()[0]

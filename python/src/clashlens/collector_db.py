@@ -602,7 +602,7 @@ class CollectorDatabase:
                         due_at=row[2],
                         status=str(row[6]),
                         sweep_id=None if row[5] is None else int(row[5]),
-                        league_history_required=(str(row[7]) != "not_applicable" and unanswered(row[10])) if row[1] == "reset_baseline" else str(row[7]) == "pending",
+                        league_history_required=(str(row[7]) != "not_applicable" and unanswered(row[10])) if row[1] in {"reset_baseline", "discovery_profile"} else str(row[7]) == "pending",
                         profile_required=row[1] not in {*paired, "discovery_profile"} or unanswered(row[8]),
                         battle_log_required=row[1] not in paired or unanswered(row[8]) or unanswered(row[9]) or bool(row[12 if row[1] == "reset_settlement" else 11]),
                         collect_before=row[13] + collector_reset.COLLECTION_WINDOW if row[1] == "reset_settlement" else None,
@@ -1087,6 +1087,11 @@ class CollectorDatabase:
             or state[4] not in (handoff.content_fingerprint, handoff.response_hash)
             or work_kind in {"reset_baseline", "reset_settlement"}
         ):
+            return False
+        # Discovery checks reprocess a saved profile whose league went unrecognized.
+        if work_kind == "discovery_profile" and handoff.endpoint == "profile" and connection.execute(
+            "SELECT clashlens_profile_observation_unrecognized(%s)", (state[2],)
+        ).fetchone()[0]:
             return False
         # Unsaved, skip a row another transaction holds (a body players share,
         # or the worker's player): the caller saves, not waits. The rows a
