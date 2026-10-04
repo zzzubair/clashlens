@@ -1,3 +1,10 @@
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createStaticHandler,
+  createStaticRouter,
+  StaticRouterProvider,
+} from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -15,7 +22,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return { ...actual, requestJson: mocks.requestJson };
 });
 
-import { loader } from "../../app/routes/account.groups.$groupId";
+import GroupCompareRoute, { loader } from "../../app/routes/account.groups.$groupId";
 import { PythonApiError } from "../../app/services/python.server";
 import { mapGroupComparison } from "../../app/lib/group-comparison";
 
@@ -162,6 +169,57 @@ describe("group comparison", () => {
     );
     const result = await load(`/account/groups/${GROUP_ID}`);
     expect(result.data.tooLarge).toBe("34 players; compare at most 20");
+  });
+
+  it("returns to the comparison after first-time account setup", async () => {
+    mocks.requestJson.mockRejectedValue(
+      new PythonApiError(403, { error: "account_not_found" }),
+    );
+    const thrown = await load(`/account/groups/${GROUP_ID}?days=3`).catch(
+      (error: unknown) => error,
+    );
+    expect((thrown as Response).headers.get("Location")).toBe(
+      `/account/setup?returnPath=${encodeURIComponent(`/account/groups/${GROUP_ID}`)}`,
+    );
+  });
+
+  it("explains the two trophy totals before the table", async () => {
+    const handler = createStaticHandler([
+      {
+        path: "/account/groups/:groupId",
+        Component: GroupCompareRoute,
+        loader: () => ({
+          comparison: mapGroupComparison(payload()),
+          days: 3,
+          sort: "trophies",
+          notFound: false,
+          tooLarge: null,
+          error: null,
+        }),
+      },
+    ]);
+    const context = await handler.query(
+      new Request(`${ORIGIN}/account/groups/${GROUP_ID}`),
+    );
+    if (context instanceof Response) throw new Error("unexpected response");
+    const text = renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+      }),
+    )
+      .replaceAll("<!-- -->", "")
+      .replaceAll("&#x27;", "'")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ");
+    const explanation =
+      "Last 3 days adds up each player's trophy change on counted days only. Won vs lost adds up trophies won in attacks and lost in defenses across every battle recorded in these days, incomplete days included, so the two can differ.";
+    expect(text).toContain(explanation);
+    expect(text.indexOf(explanation)).toBeLessThan(text.indexOf("Trophies now"));
+    expect(text).toContain(
+      "Some battles are missing. Shown, but left out of the Last 3 days total.",
+    );
+    expect(text).not.toContain("left out of the totals");
   });
 
   it("does not call Python for a malformed group ID", async () => {

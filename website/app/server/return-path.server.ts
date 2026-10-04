@@ -42,3 +42,21 @@ export function safeReturnPath(
   }
   return value;
 }
+
+const ACCOUNT_SETUP_PATH = "/account/setup";
+
+/**
+ * Where account setup sends the user once the account exists: the validated
+ * return path, or the default. Setup itself is never a destination.
+ */
+export function setupReturnPath(value: string | null | undefined, origin: URL): string {
+  const path = safeReturnPath(value, origin);
+  return path === null || path === ACCOUNT_SETUP_PATH ? DEFAULT_RETURN_PATH : path;
+}
+
+/** The account setup page, carrying a validated non-default return path. */
+export function accountSetupPath(value: string | null | undefined, origin: URL): string {
+  const path = setupReturnPath(value, origin);
+  if (path === DEFAULT_RETURN_PATH) return ACCOUNT_SETUP_PATH;
+  return `${ACCOUNT_SETUP_PATH}?returnPath=${encodeURIComponent(path)}`;
+}

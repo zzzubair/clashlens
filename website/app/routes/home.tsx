@@ -81,6 +81,8 @@ export default function Home() {
 
   const leaderboard = data.leaderboard;
   const latestObservedAt = leaderboard ? latestObservation(leaderboard.entries) : null;
+  const staleEntries =
+    leaderboard?.entries.filter((entry) => entry.freshness.state === "stale").length ?? 0;
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell home-page">
@@ -187,7 +189,13 @@ export default function Home() {
                 </span>
                 {latestObservedAt ? (
                   <span>
-                    Last updated <LocalTimestamp value={latestObservedAt} />
+                    Newest player update <LocalTimestamp value={latestObservedAt} />
+                  </span>
+                ) : null}
+                {staleEntries > 0 ? (
+                  <span>
+                    {staleEntries} of {leaderboard.entries.length} more than 10 minutes
+                    old
                   </span>
                 ) : null}
               </p>

@@ -69,7 +69,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     return data<GroupCompareLoaderData>({ ...empty, comparison }, { headers: NO_STORE });
   } catch (cause) {
     const { isAccountNotFoundError } = await import("../server/actions.server");
-    if (isAccountNotFoundError(cause)) throw redirect("/account/setup");
+    if (isAccountNotFoundError(cause)) {
+      const { accountSetupPath } = await import("../server/return-path.server");
+      throw redirect(accountSetupPath(url.pathname, url));
+    }
     const failure = cause as { status?: number; payload?: unknown };
     const payload = (
       typeof failure.payload === "object" && failure.payload !== null
@@ -200,6 +203,12 @@ export default function GroupCompareRoute() {
         </p>
       ) : null}
 
+      <p className="section-note">
+        Last {days} days adds up each player&apos;s trophy change on counted days only.
+        Won vs lost adds up trophies won in attacks and lost in defenses across every
+        battle recorded in these days, incomplete days included, so the two can differ.
+      </p>
+
       <div className="compare-board">
         <table className="compare-table">
           <caption className="sr-only">
@@ -246,7 +255,9 @@ export default function GroupCompareRoute() {
           <dt>
             <span className="day-bar day-partial" aria-hidden="true" /> Incomplete
           </dt>
-          <dd>Some battles are missing. Shown, but left out of the totals.</dd>
+          <dd>
+            Some battles are missing. Shown, but left out of the Last {days} days total.
+          </dd>
         </div>
         <div>
           <dt>
@@ -266,12 +277,12 @@ export default function GroupCompareRoute() {
         </div>
       </dl>
       <p className="section-note">
-        Won vs lost, attack and defense use every battle recorded in these days; the
-        number of battles is shown with each. Attack success is the average stars and
-        average destruction per attack. Attacks a day count only counted days, out of the
-        8 attacks a Legend day allows. Vs the group compares a player with each other
-        group member on the days both have counted results, then averages across those
-        members; your own players outside the group are never part of it.
+        Attack and defense also use every battle recorded in these days; the number of
+        battles is shown with each. Attack success is the average stars and average
+        destruction per attack. Attacks a day count only counted days, out of the 8
+        attacks a Legend day allows. Vs the group compares a player with each other group
+        member on the days both have counted results, then averages across those members;
+        your own players outside the group are never part of it.
       </p>
     </main>
   );

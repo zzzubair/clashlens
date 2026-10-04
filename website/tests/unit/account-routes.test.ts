@@ -292,7 +292,56 @@ describe("account routes", () => {
         request: new Request(`${ORIGIN}/account/setup`),
       } as never);
       expect(UUID_PATTERN.test(result.idempotencyKey)).toBe(true);
+      expect(result.returnPath).toBe("/account");
       assertNoProviderData(result);
+    });
+
+    it("keeps only a safe return path through setup", async () => {
+      const returnPathOf = async (value: string) =>
+        (
+          await setupLoader({
+            request: new Request(
+              `${ORIGIN}/account/setup?returnPath=${encodeURIComponent(value)}`,
+            ),
+          } as never)
+        ).returnPath;
+      expect(await returnPathOf("/account/groups")).toBe("/account/groups");
+      for (const unsafe of [
+        "https://evil.example/account/groups",
+        "//evil.example/account/groups",
+        "/account/groups?days=3&sort=defense",
+        "/account/setup",
+      ]) {
+        expect(await returnPathOf(unsafe)).toBe("/account");
+      }
+
+      const submit = (returnPath: string) =>
+        setupAction({
+          request: formRequest("/account/setup", {
+            idempotencyKey: IDEMPOTENCY_KEY,
+            username: "nova88",
+            displayName: "Nova",
+            returnPath,
+          }),
+        } as never);
+      await expect(submit("/account/groups")).rejects.toSatisfy(
+        expectRedirectTo("/account/groups"),
+      );
+      await expect(submit("https://evil.example/account/groups")).rejects.toSatisfy(
+        expectRedirectTo("/account"),
+      );
+      client.createAccount = vi.fn(async () => {
+        throw new PythonApiError(409, { error: "account_exists" });
+      });
+      await expect(submit("/account/groups")).rejects.toSatisfy(
+        expectRedirectTo("/account/groups"),
+      );
+      client.createAccount = vi.fn(async () => {
+        throw new PythonApiError(403, { error: "account_not_found" });
+      });
+      await expect(submit("/account/groups")).rejects.toSatisfy(
+        expectRedirectTo("/account/setup?returnPath=%2Faccount%2Fgroups"),
+      );
     });
 
     it("creates the account with normalized names and the canonical key, then redirects", async () => {
@@ -788,13 +837,15 @@ describe("account routes", () => {
       assertNoProviderData(result);
     });
 
-    it("redirects an unresolved account to setup", async () => {
+    it("redirects an unresolved account to setup, then back to groups", async () => {
       client.listGroups = vi.fn(async () => {
         throw new PythonApiError(404, { error: "account_not_found" });
       });
       await expect(
         groupsLoader({ request: new Request(`${ORIGIN}/account/groups`) } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
+      ).rejects.toSatisfy(
+        expectRedirectTo("/account/setup?returnPath=%2Faccount%2Fgroups"),
+      );
     });
 
     it("creates and renames groups through Python, then redirects", async () => {

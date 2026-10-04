@@ -94,7 +94,11 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
     return loaded;
   } catch (cause) {
     const { isAccountNotFoundError } = await import("../server/actions.server");
-    if (isAccountNotFoundError(cause)) throw redirect("/account/setup");
+    if (isAccountNotFoundError(cause)) {
+      const { accountSetupPath } = await import("../server/return-path.server");
+      const url = new URL(request.url);
+      throw redirect(accountSetupPath(url.pathname, url));
+    }
     const { safeWebsiteError } = await import("../server/errors.server");
     return { ...empty, error: safeWebsiteError(cause) };
   }
@@ -377,7 +381,8 @@ export default function GroupsRoute() {
         <h1 id="groups-title">Private groups</h1>
         <p className="lede">
           Groups are visible only to you and hold public player tags for your own
-          organization.
+          organization. Compare up to 20 players side by side over 3, 7 or 14 ended Legend
+          days.
         </p>
       </section>
 

@@ -27,6 +27,11 @@ import {
   parseOAuthTransactionCookieValue,
 } from "./auth-cookies.server";
 import { isLoginRevoked } from "./login-session.server";
+import {
+  accountSetupPath,
+  DEFAULT_RETURN_PATH,
+  safeReturnPath,
+} from "./return-path.server";
 import { getWebsiteConfig } from "./config.server";
 import type { WebsiteConfig } from "./config.server";
 import { constantTimeEqual, OAuthCallbackError } from "./google-oidc.server";
@@ -168,7 +173,7 @@ export async function completeProviderCallback(
       if (isAccountNotFoundError(error)) {
         return {
           kind: "redirect",
-          location: "/account/setup",
+          location: accountSetupPath(transaction.returnPath, config.publicOrigin),
           setCookies: [clearTransactionCookie, loginCookie],
         };
       }
@@ -176,7 +181,9 @@ export async function completeProviderCallback(
     }
     return {
       kind: "redirect",
-      location: safeLocalPath(transaction.returnPath),
+      location:
+        safeReturnPath(transaction.returnPath, config.publicOrigin) ??
+        DEFAULT_RETURN_PATH,
       setCookies: [clearTransactionCookie, loginCookie],
     };
   }
@@ -323,11 +330,6 @@ function pythonErrorCode(error: unknown): string | null {
     return null;
   }
   return code;
-}
-
-/** Only same-origin absolute paths survive the round trip. */
-function safeLocalPath(value: string): string {
-  return value.startsWith("/") && !value.startsWith("//") ? value : "/";
 }
 
 function unavailable(setCookie?: string): CallbackErrorView {
