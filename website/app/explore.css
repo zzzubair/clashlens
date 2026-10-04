@@ -437,6 +437,9 @@
 
 .leaderboard-row {
   position: relative;
+  /* Safari before 2026 ignores position on table rows; the transform keeps each
+     row's full-row link inside its row instead of covering the top of the page. */
+  transform: translate(0);
 }
 
 .standings-explanation {

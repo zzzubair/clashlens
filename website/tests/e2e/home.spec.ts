@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Retries until the page's scripts are running and the header search input has focus.
 async function openHeaderSearch(page: Page, open: () => Promise<void>) {
@@ -196,6 +196,54 @@ test("search navigates without rebuilding the document and opens a matching play
   await expect(
     page.getByRole("heading", { name: "Synthetic Clasher 001" }),
   ).toBeVisible();
+});
+
+test.describe("on a touch phone", () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  async function openHome(page: Page) {
+    await page.goto("/");
+    // Safari before 2026 treats a table row's position as static; act the same here.
+    await page.addStyleTag({
+      content: ".leaderboard-row { position: static !important; }",
+    });
+  }
+
+  // A finger on the middle of the element, whatever is drawn on top of it.
+  async function tapMiddle(page: Page, element: Locator) {
+    await element.evaluate((node) => node.scrollIntoView({ block: "center" }));
+    const box = (await element.boundingBox())!;
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 844, height: 390 },
+  ]) {
+    test(`tapping home Search searches and rows open their own player at ${viewport.width}x${viewport.height}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await openHome(page);
+      await page
+        .getByRole("searchbox", { name: "Search players and Clash Lens profiles" })
+        .fill("Synthetic Clasher 001");
+      await expect(
+        page.getByRole("region", { name: "Player and profile search suggestions" }),
+      ).toContainText("Synthetic Clasher 001");
+      await tapMiddle(page, page.getByRole("button", { name: "Search", exact: true }));
+      await expect(page).toHaveURL(/\/\?q=Synthetic(?:\+|%20)Clasher(?:\+|%20)001$/);
+      await expect(
+        page.getByRole("heading", { name: "Clash of Clans players" }),
+      ).toBeVisible();
+
+      await openHome(page);
+      const row = page.getByTestId("tracked-player-row").first();
+      const rowPlayer = await row.locator(".player-name").getAttribute("href");
+      await tapMiddle(page, row.locator(".trophy-cell"));
+      await expect(page).toHaveURL(new RegExp(`${rowPlayer}$`));
+    });
+  }
 });
 
 test("new search does not show suggestions from the previous query", async ({ page }) => {
