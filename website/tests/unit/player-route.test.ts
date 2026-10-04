@@ -369,7 +369,7 @@ describe("player route historical independence", () => {
     expect(official).not.toContain(">12<");
     const tracked = await renderSeason({ ...SUMMARY, finalRank: 3, officialHistory });
     expect(tracked).toContain("<dt>Final rank</dt><dd>3</dd>");
-    expect(tracked).toContain("Final trophies: <!-- -->5,812");
+    expect(tracked).toContain("Final trophies: <!-- -->5812");
     expect(tracked).not.toContain(">12<");
     expect(tracked).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
     expect(tracked).toContain('<th scope="col">Trophy change</th>');
@@ -393,7 +393,7 @@ describe("player route historical independence", () => {
       startTrophies: null,
       endTrophies: 5800,
     });
-    expect(late).toContain("<dt>Trophies</dt><dd>Unknown → 5,800</dd>");
+    expect(late).toContain("<dt>Trophies</dt><dd>Unknown → 5800</dd>");
     const unfinished = await renderSeason({
       ...SUMMARY,
       startTrophies: 5000,
@@ -1436,10 +1436,10 @@ describe("player day honesty", () => {
     expect(rows[0]).toContain("<td>Provisional result</td>");
     // EOD change sits beside End, apart from battle net, and is provisional
     // unless its proof is accepted; an unknown proof state is not accepted.
-    expect(rows[0]).toContain("<td>+26</td><td>+26</td><td>6,026</td><td>+40</td>");
-    expect(rows[1]).toContain("<td>6,026 (provisional)</td><td>Unknown</td>");
-    expect(rows[2]).toContain("<td>6,026 (provisional)</td><td>+40</td>");
-    expect(rows[3]).toContain("<td>6,026</td><td>+40 (provisional)</td>");
+    expect(rows[0]).toContain("<td>+26</td><td>+26</td><td>6026</td><td>+40</td>");
+    expect(rows[1]).toContain("<td>6026 (provisional)</td><td>Unknown</td>");
+    expect(rows[2]).toContain("<td>6026 (provisional)</td><td>+40</td>");
+    expect(rows[3]).toContain("<td>6026</td><td>+40 (provisional)</td>");
     expect(rows[1]).toContain("Incomplete");
     expect(rows[1]).toContain("Trophies at the end of this day were not recorded.");
     expect(rows[1]).toContain(

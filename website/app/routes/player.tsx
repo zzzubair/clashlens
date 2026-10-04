@@ -817,13 +817,6 @@ function SeasonNav({
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
-  // On phones the list scrolls sideways; start it at the selected Season.
-  const list = useRef<HTMLUListElement>(null);
-  useEffect(() => {
-    const selected = list.current?.querySelector<HTMLElement>("[aria-current]");
-    if (list.current && selected)
-      list.current.scrollLeft = selected.offsetLeft - list.current.offsetLeft;
-  }, [selectedSeason]);
   // A selected past Season always keeps its way back, even if the list failed.
   if (seasons.length === 0 && selectedSeason === null) return null;
   return (
@@ -831,7 +824,7 @@ function SeasonNav({
       <div className="section-heading">
         <h2>Historical seasons</h2>
       </div>
-      <ul className="season-list" ref={list}>
+      <ul className="season-list">
         {currentAvailable || selectedSeason !== null ? (
           <li key="current">
             {selectedSeason === null ? (
@@ -950,7 +943,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
             value={
               summary.endTrophies === null
                 ? "Unknown"
-                : `${formatCount(summary.startTrophies)} → ${formatCount(summary.endTrophies)}`
+                : `${summary.startTrophies ?? "Unknown"} → ${summary.endTrophies}`
             }
           />
           <Metric label="Final rank" value={formatCount(summary.finalRank)} />
@@ -1426,7 +1419,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function formatSigned(value: number | null): string {
   if (value === null) return "Unknown";
-  return value > 0 ? `+${formatCount(value)}` : formatCount(value);
+  return value > 0 ? `+${value}` : String(value);
 }
 
 function valueTone(value: number | null): string {
@@ -1439,7 +1432,7 @@ function provisional(value: string, state: string | null): string {
 }
 
 function formatCount(value: number | null): string {
-  return value === null ? "Unknown" : value.toLocaleString("en-GB");
+  return value === null ? "Unknown" : String(value);
 }
 
 function formatAdjustment(day: HistoricalSeasonDayEntry): string {
