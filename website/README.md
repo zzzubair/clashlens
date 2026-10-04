@@ -302,7 +302,7 @@ names, usernames and linked-account counts, never saved players or private group
 Clash Lens profiles in suggestions and results have a tinted background and a
 "Clash Lens profile" label so they are not mistaken for game players.
 Every page except home, including error pages, has the same search behind a
-header icon (or `/`). Enter on an exact player tag opens that player; other
+header icon. Enter on an exact player tag opens that player; other
 text shows suggestions in place without leaving the page.
 
 Two bounded official profile requests fetched the names of `sloothy`'s linked
