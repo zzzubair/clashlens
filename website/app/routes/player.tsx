@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Link,
   redirect,
@@ -277,6 +277,14 @@ export function playerLookupView(
 // later SPA visit/back navigation from replaying the original reload event.
 let documentReloadHandled = false;
 
+const REFRESH_TIMED_OUT: WebsiteErrorResponse = {
+  error: {
+    code: "unavailable",
+    message:
+      "Couldn't refresh within one minute, so the page stopped checking. Showing saved results.",
+  },
+};
+
 export default function PlayerRoute() {
   const data = useLoaderData<typeof loader>();
   const location = useLocation();
@@ -297,7 +305,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const revalidator = useRevalidator();
   const [workId, setWorkId] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<RefreshStatus | RefreshWork | null>(null);
-  const [pollingError, setPollingError] = useState<WebsiteErrorResponse | null>(null);
+  const [refreshFailure, setRefreshFailure] = useState<WebsiteErrorResponse | null>(null);
+  const [deadline, setDeadline] = useState<number | null>(null);
   const [lookupTimedOut, setLookupTimedOut] = useState(false);
   const lookupStartedAt = useRef(Date.now());
   const automaticRefreshHandled = useRef(false);
@@ -306,28 +315,48 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     if (status && status.tag === data.requestedTag) {
       setWorkId(status.workId);
       setLastStatus(status);
-      setPollingError(null);
+      setRefreshFailure(null);
+      setDeadline((current) => current ?? Date.now() + 60_000);
     }
   }, [data.refreshStatus]);
 
   useEffect(() => {
-    const refresh =
-      refreshFetcher.data && "workId" in refreshFetcher.data ? refreshFetcher.data : null;
-    if (refresh && refresh.tag === data.requestedTag) {
-      setWorkId(refresh.workId);
-      setLastStatus(refresh);
-      setPollingError(null);
+    const result = refreshFetcher.data;
+    if (deadline !== null && Date.now() >= deadline) {
+      setRefreshFailure(REFRESH_TIMED_OUT);
+    } else if (result && "error" in result) {
+      setRefreshFailure(result);
+    } else if (result && result.tag === data.requestedTag) {
+      setWorkId(result.workId);
+      setLastStatus(result);
+      setRefreshFailure(null);
     }
   }, [refreshFetcher.data]);
+
+  const { submit: submitRefreshForm, reset: resetRefresh } = refreshFetcher;
+  const startRefresh = useCallback(
+    (form: Record<string, string>, action: string) => {
+      setWorkId(null);
+      setLastStatus(null);
+      setRefreshFailure(null);
+      setDeadline(Date.now() + 60_000);
+      submitRefreshForm(form, { method: "post", action });
+    },
+    [submitRefreshForm],
+  );
 
   const terminalState =
     lastStatus?.state === "complete" ||
     lastStatus?.state === "failed" ||
     lastStatus?.state === "unavailable" ||
-    pollingError !== null;
+    refreshFailure !== null;
+  const refreshSettled =
+    terminalState || (workId === null && refreshFetcher.state === "idle");
   const visibleStatus =
     lastStatus ??
-    (data.refreshStatus?.tag === data.requestedTag ? data.refreshStatus : null);
+    (deadline === null && data.refreshStatus?.tag === data.requestedTag
+      ? data.refreshStatus
+      : null);
   const player = newestPlayer(visibleStatus, data);
   const explained = explainsNoResults(data.lookup);
   const [explainedVisit, setExplainedVisit] = useState(explained);
@@ -430,23 +459,31 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     // Fetcher updates and revalidation must not spend another Refresh allowance.
     automaticRefreshHandled.current = true;
     if (!isDocumentReload && trackedPlayer.profile.freshness.ageSeconds <= 60) return;
-    refreshFetcher.submit(
+    startRefresh(
       isDocumentReload
         ? { idempotencyKey: data.noJsIdempotencyKey }
         : { idempotencyKey: data.noJsIdempotencyKey, trigger: "automatic" },
-      {
-        method: "post",
-        action: `/resources/players/${encodeURIComponent(trackedPlayer.tag)}/refresh`,
-      },
+      `/resources/players/${encodeURIComponent(trackedPlayer.tag)}/refresh`,
     );
-  }, [trackedPlayer, data.noJsIdempotencyKey, refreshFetcher]);
+  }, [trackedPlayer, data.noJsIdempotencyKey, startRefresh]);
 
   useEffect(() => {
-    if (!workId || terminalState || refreshResourcePath === null) return;
+    if (deadline === null || refreshSettled) return;
+    const timer = setTimeout(() => {
+      resetRefresh();
+      setRefreshFailure(REFRESH_TIMED_OUT);
+    }, deadline - Date.now());
+    return () => clearTimeout(timer);
+  }, [deadline, refreshSettled, resetRefresh]);
+
+  useEffect(() => {
+    if (!workId || terminalState || refreshResourcePath === null || deadline === null) {
+      return;
+    }
     let cancelled = false;
     let inFlight = false;
     let controller: AbortController | null = null;
-    const deadline = Date.now() + 60_000;
+    const late = () => cancelled || Date.now() >= deadline;
     const unavailableError: WebsiteErrorResponse = {
       error: {
         code: "unavailable",
@@ -455,11 +492,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     };
 
     const poll = async () => {
-      if (cancelled || inFlight) return;
-      if (Date.now() >= deadline) {
-        setPollingError(unavailableError);
-        return;
-      }
+      if (late() || inFlight) return;
       inFlight = true;
       controller = new AbortController();
       try {
@@ -472,13 +505,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           },
         );
         const payload: unknown = await response.json();
-        if (cancelled) return;
+        if (late()) return;
         if (!response.ok || !isRefreshStatusPayload(payload)) {
-          setPollingError(isWebsiteErrorResponse(payload) ? payload : unavailableError);
+          setRefreshFailure(isWebsiteErrorResponse(payload) ? payload : unavailableError);
           return;
         }
         if (payload.workId !== workId || payload.tag !== player?.tag) {
-          setPollingError({
+          setRefreshFailure({
             error: {
               code: "conflict",
               message: "The request conflicts with current saved data.",
@@ -486,14 +519,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           });
           return;
         }
-        setPollingError(null);
         setLastStatus(payload);
       } catch (error) {
-        if (
-          !cancelled &&
-          !(error instanceof DOMException && error.name === "AbortError")
-        ) {
-          setPollingError(unavailableError);
+        if (!late() && !(error instanceof DOMException && error.name === "AbortError")) {
+          setRefreshFailure(unavailableError);
         }
       } finally {
         inFlight = false;
@@ -508,7 +537,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       clearInterval(timer);
       controller?.abort();
     };
-  }, [player?.tag, refreshResourcePath, terminalState, workId]);
+  }, [deadline, player?.tag, refreshResourcePath, terminalState, workId]);
 
   const completedWorkId = lastStatus?.state === "complete" ? lastStatus.workId : null;
   useEffect(() => {
@@ -608,10 +637,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     );
   }
 
-  const actionError =
-    refreshFetcher.data && "error" in refreshFetcher.data ? refreshFetcher.data : null;
-  const refreshError = data.refreshError;
-  const visibleRefreshError = actionError ?? pollingError ?? refreshError;
+  const visibleRefreshError = refreshFailure ?? data.refreshError;
   const refreshActionPath = `/resources/players/${encodeURIComponent(trackedPlayer.tag)}/refresh`;
 
   return (
@@ -671,9 +697,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               value="public"
               onClick={(event) => {
                 event.preventDefault();
-                refreshFetcher.submit(
+                startRefresh(
                   { idempotencyKey: data.noJsIdempotencyKey },
-                  { method: "post", action: refreshActionPath },
+                  refreshActionPath,
                 );
               }}
             >
@@ -685,7 +711,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
 
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
-      {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
+      {visibleStatus ? (
+        <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
+      ) : null}
       <p role="status">Now tracking in Legend I.</p>
       <SeasonNav
         tag={trackedPlayer.tag}
@@ -1357,11 +1385,23 @@ function BattleColumn({
   );
 }
 
-function RefreshProgress({ status }: { status: RefreshStatus | RefreshWork }) {
-  const inProgress = status.state === "queued" || status.state === "running";
+function RefreshProgress({
+  status,
+  failed,
+}: {
+  status: RefreshStatus | RefreshWork;
+  failed: boolean;
+}) {
+  const inProgress = !failed && (status.state === "queued" || status.state === "running");
+  const message =
+    status.state === "complete"
+      ? "Updated."
+      : inProgress
+        ? "Refreshing…"
+        : "Couldn't refresh right now. Showing saved results.";
   return (
     <section className="refresh-panel" aria-live="polite" aria-label="Player refresh">
-      <p role="status">{inProgress ? "Refreshing…" : "Updated."}</p>
+      <p role="status">{message}</p>
       {inProgress ? (
         <progress aria-label="Refresh progress" value={status.progressPercent} max="100">
           {status.progressPercent}%

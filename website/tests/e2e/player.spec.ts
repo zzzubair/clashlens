@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
 import {
@@ -588,4 +588,260 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   // Its unconfirmed trophies stay out of name search.
   await page.goto("/?q=Lookup%20Season%200%20Clasher");
   await expect(page.locator(".search-results")).not.toContainText("#LQQC");
+});
+
+const TIMED_OUT =
+  "Couldn't refresh within one minute, so the page stopped checking. Showing saved results.";
+const NOT_REFRESHED = "Couldn't refresh right now. Showing saved results.";
+const UNAVAILABLE = "Saved data is still available, but the live service is unavailable.";
+
+function refreshWork() {
+  return {
+    kind: "refresh-work",
+    workId: randomUUID(),
+    tag: "#2PP",
+    state: "queued",
+    progressPercent: 0,
+    message: "Queued.",
+    publishedAt: null,
+  };
+}
+
+// Serves the saved page with a chosen check age, so only an old one refreshes
+// automatically.
+async function serveWithAge(page: Page, request: APIRequestContext, ageSeconds: number) {
+  const html = await (await request.get("/players/%232PP")).text();
+  await page.route("**/players/%232PP", (route) =>
+    route.fulfill({ contentType: "text/html", body: withServerAge(html, ageSeconds) }),
+  );
+}
+
+for (const trigger of ["automatic", "manual"] as const) {
+  test(`a ${trigger} Refresh whose submission hangs stops at the one-minute deadline`, async ({
+    page,
+    request,
+  }) => {
+    await serveWithAge(page, request, trigger === "automatic" ? 120 : 0);
+    // Submissions never answer, so none spends the shared allowance.
+    await page.addInitScript(() => {
+      const realFetch = window.fetch;
+      const submissions: AbortSignal[] = [];
+      Object.assign(window, { submissions });
+      window.fetch = (input, init) => {
+        if (init?.method !== "POST" || !String(input).includes("/refresh")) {
+          return realFetch(input, init);
+        }
+        const signal = init.signal!;
+        submissions.push(signal);
+        return new Promise((_, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason)),
+        );
+      };
+    });
+    const submissions = () =>
+      page.evaluate(() =>
+        (window as unknown as { submissions: AbortSignal[] }).submissions.map(
+          (signal) => signal.aborted,
+        ),
+      );
+    const button = page.locator(".player-refresh-form button");
+    const stopped = page.getByRole("alert").filter({ hasText: TIMED_OUT });
+
+    await page.clock.install();
+    await page.goto("/players/%232PP");
+    if (trigger === "manual") {
+      await page.waitForLoadState("networkidle");
+      await button.click();
+    }
+    await expect.poll(submissions).toEqual([false]);
+    await expect(button).toBeDisabled();
+    await page.clock.runFor(59_000);
+    await expect(stopped).toHaveCount(0);
+    await page.clock.runFor(2_000);
+    await expect(stopped).toBeVisible();
+    await expect(button).toHaveText("Refresh");
+    await expect(button).toBeEnabled();
+    expect(await submissions()).toEqual([true]);
+  });
+}
+
+for (const [stall, read] of [
+  ["headers", "never sends headers"],
+  ["body", "never finishes its body"],
+  ["late", "answers after the deadline but before its timer runs"],
+] as const) {
+  test(`a Refresh status read that ${read} stops at the one-minute deadline`, async ({
+    page,
+    request,
+  }) => {
+    await serveWithAge(page, request, 0);
+    const work = refreshWork();
+    // The Refresh itself is faked, so it spends none of the shared allowance.
+    await page.route("**/resources/players/*/refresh*", (route) =>
+      route.fulfill({
+        status: 202,
+        contentType: "text/x-script",
+        headers: { "X-Remix-Response": "yes" },
+        body: encodePageData({ data: work }),
+      }),
+    );
+    // Status reads never send headers, never finish their body, or answer a
+    // completed Refresh only after the deadline.
+    await page.addInitScript(
+      ({ stall, complete }) => {
+        const realFetch = window.fetch;
+        const reads: AbortSignal[] = [];
+        Object.assign(window, { statusReads: reads });
+        window.fetch = (input, init) => {
+          if (!String(input).includes("/refresh?workId=")) return realFetch(input, init);
+          const signal = init!.signal!;
+          reads.push(signal);
+          const stop = (fail: (reason: unknown) => void) =>
+            signal.addEventListener("abort", () => fail(signal.reason));
+          if (stall === "headers") return new Promise((_, reject) => stop(reject));
+          if (stall === "body") {
+            const body = new ReadableStream({
+              start: (stream) => stop((r) => stream.error(r)),
+            });
+            return Promise.resolve(new Response(body));
+          }
+          return new Promise((resolve) =>
+            Object.assign(window, {
+              answerLate: () => {
+                const response = new Response(JSON.stringify(complete));
+                const json = response.json.bind(response);
+                response.json = () =>
+                  json().finally(() => Object.assign(window, { answered: true }));
+                resolve(response);
+              },
+            }),
+          );
+        };
+      },
+      {
+        stall,
+        complete: {
+          ...work,
+          kind: "refresh-status",
+          state: "complete",
+          progressPercent: 100,
+          message: "Complete.",
+          player: null,
+        },
+      },
+    );
+    const reads = () =>
+      page.evaluate(() =>
+        (window as unknown as { statusReads: AbortSignal[] }).statusReads.map(
+          (signal) => signal.aborted,
+        ),
+      );
+    const stopped = page.getByRole("alert").filter({ hasText: TIMED_OUT });
+    const refresh = page.getByRole("region", { name: "Player refresh" });
+
+    await page.clock.install();
+    await page.goto("/players/%232PP");
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect.poll(reads).toEqual([false]);
+    if (stall === "late") {
+      await page.clock.runFor(30_000);
+      const now = await page.evaluate(() => Date.now());
+      await page.clock.setSystemTime(now + 31_000);
+      await page.evaluate(() =>
+        (window as unknown as { answerLate(): void }).answerLate(),
+      );
+      await expect.poll(() => page.evaluate(() => "answered" in window)).toBe(true);
+      await expect(refresh).toContainText("Refreshing…");
+      await expect(refresh).not.toContainText("Updated.");
+      await page.clock.runFor(31_000);
+    } else {
+      await page.clock.runFor(59_000);
+      await expect(stopped).toHaveCount(0);
+      await page.clock.runFor(2_000);
+    }
+    await expect(stopped).toBeVisible();
+    await expect(refresh).toContainText(NOT_REFRESHED);
+    await expect(refresh.getByRole("progressbar")).toHaveCount(0);
+
+    await page.clock.runFor(240_000);
+    await expect(stopped).toBeVisible();
+    await expect(refresh).not.toContainText("Updated.");
+    expect(await reads()).toEqual([stall !== "late"]);
+  });
+}
+
+test("a failed Refresh status read replaces Refreshing… with saved results", async ({
+  page,
+  request,
+}) => {
+  await serveWithAge(page, request, 0);
+  // The Refresh itself is faked, so it spends none of the shared allowance.
+  await page.route("**/resources/players/*/refresh*", (route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({
+          status: 202,
+          contentType: "text/x-script",
+          headers: { "X-Remix-Response": "yes" },
+          body: encodePageData({ data: refreshWork() }),
+        })
+      : route.fulfill({
+          status: 503,
+          json: { error: { code: "unavailable", message: UNAVAILABLE } },
+        }),
+  );
+  const refresh = page.getByRole("region", { name: "Player refresh" });
+
+  await page.goto("/players/%232PP");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: UNAVAILABLE })).toBeVisible();
+  await expect(refresh).toContainText(NOT_REFRESHED);
+  await expect(refresh).not.toContainText("Refreshing…");
+  await expect(refresh.getByRole("progressbar")).toHaveCount(0);
+});
+
+test("a Refresh that fails after an earlier one completed does not say Updated.", async ({
+  page,
+  request,
+}) => {
+  await serveWithAge(page, request, 0);
+  const work = refreshWork();
+  let submissions = 0;
+  // Both Refreshes are faked, so they spend none of the shared allowance.
+  await page.route("**/resources/players/*/refresh*", (route) => {
+    if (route.request().method() !== "POST") {
+      return route.fulfill({
+        json: {
+          ...work,
+          kind: "refresh-status",
+          state: "complete",
+          progressPercent: 100,
+          message: "Complete.",
+          player: null,
+        },
+      });
+    }
+    submissions++;
+    return route.fulfill({
+      status: submissions === 1 ? 202 : 503,
+      contentType: "text/x-script",
+      headers: { "X-Remix-Response": "yes" },
+      body: encodePageData({
+        data:
+          submissions === 1
+            ? work
+            : { error: { code: "unavailable", message: UNAVAILABLE } },
+      }),
+    });
+  });
+  const refresh = page.getByRole("region", { name: "Player refresh" });
+  const button = page.getByRole("button", { name: "Refresh", exact: true });
+
+  await page.goto("/players/%232PP");
+  await page.waitForLoadState("networkidle");
+  await button.click();
+  await expect(refresh).toContainText("Updated.");
+  await button.click();
+  await expect(page.getByRole("alert").filter({ hasText: UNAVAILABLE })).toBeVisible();
+  await expect(refresh).toHaveCount(0);
+  expect(submissions).toBe(2);
 });
