@@ -256,11 +256,8 @@ describe("login loader", () => {
 
   it("redirects an already-signed-in browser to the validated return path", async () => {
     const config = testConfig();
-    const cookie = createLoginCookieValue(
-      IDENTITY,
-      config.loginSecret,
-      Math.floor(Date.now() / 1000),
-    );
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, issuedAt);
     await expect(
       loginLoader({
         request: new Request(`${ORIGIN}/login?returnPath=%2Faccount%2Fgroups`, {
@@ -273,7 +270,11 @@ describe("login loader", () => {
       expect((thrown as Response).headers.get("Location")).toBe("/account/groups");
       return true;
     });
-    expect(mocks.isLoginRevoked).toHaveBeenCalledWith(IDENTITY, cookie, 250);
+    expect(mocks.isLoginRevoked).toHaveBeenCalledWith(
+      { ...IDENTITY, issuedAt },
+      cookie,
+      250,
+    );
   });
 
   it("shows the sign-in page when the short login check fails", async () => {
@@ -392,7 +393,10 @@ describe("logout route", () => {
       }),
     } as never);
     expect((response as Response).status).toBe(302);
-    expect(mocks.revokeLogin).toHaveBeenCalledWith(IDENTITY, login);
+    expect(mocks.revokeLogin).toHaveBeenCalledWith(
+      { ...IDENTITY, issuedAt: nowSeconds - 60 },
+      login,
+    );
 
     // The same cookie, replayed from another browser, is no longer a login.
     await expect(requireLogin(account())).rejects.toSatisfy((thrown: unknown) => {
@@ -842,9 +846,10 @@ describe("auth.google.callback loader", () => {
       setCookies[1].indexOf("=") + 1,
       setCookies[1].indexOf(";"),
     );
-    expect(parseLoginCookieValue(loginValue, config.loginSecret, now())).toEqual(
-      IDENTITY,
-    );
+    expect(parseLoginCookieValue(loginValue, config.loginSecret, now())).toEqual({
+      ...IDENTITY,
+      issuedAt: expect.any(Number),
+    });
   });
 
   it("redirects a documented account_not_found (403 and defensive 404) to setup with the login cookie", async () => {
@@ -873,7 +878,7 @@ describe("auth.google.callback loader", () => {
           config.loginSecret,
           now(),
         ),
-      ).toEqual(IDENTITY);
+      ).toEqual({ ...IDENTITY, issuedAt: expect.any(Number) });
     }
   });
 

@@ -128,6 +128,12 @@ class LoginSessionBody(StrictBody):
     session: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
+class LoginSessionCheckBody(LoginSessionBody):
+    # When the login cookie was issued, in Unix seconds, so a login made
+    # before its sign-in connection was removed is refused on every browser.
+    issued_at: int = Field(ge=0, le=253_402_300_799)
+
+
 class ProviderUnlinkBody(ProviderLinkBody):
     # The login to end in the same transaction, when it used this provider.
     session: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
@@ -697,14 +703,21 @@ def create_app(
         return JSONResponse(status_code=200, content=result)
 
     # The website asks before trusting a login cookie and records logouts, so
-    # a copied cookie stops working once its login has logged out.
+    # a copied cookie stops working once its login has logged out or its
+    # sign-in connection was removed.
     @app.post("/v1/account/session/check")
-    def check_login_session(body: LoginSessionBody, request: Request) -> JSONResponse:
-        _authorize(
+    def check_login_session(body: LoginSessionCheckBody, request: Request) -> JSONResponse:
+        context = _authorize(
             request, "session.check", production_database, allow_unresolved_identity=True
         )
         assert production_database is not None
-        revoked = api_accounts.login_session_revoked(production_database, body.session)
+        revoked = api_accounts.login_session_revoked(
+            production_database,
+            body.session,
+            context.proof.provider,
+            context.proof.provider_subject,
+            body.issued_at,
+        )
         return JSONResponse(status_code=200, content={"revoked": revoked})
 
     @app.post("/v1/account/session/revoke")

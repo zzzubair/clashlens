@@ -26,6 +26,7 @@ import {
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
 } from "./auth-cookies.server";
+import type { LoginSession } from "./auth-cookies.server";
 import { isLoginRevoked } from "./login-session.server";
 import {
   accountSetupPath,
@@ -115,7 +116,7 @@ export async function completeProviderCallback(
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
-  let session: LoginProviderIdentity | null = null;
+  let session: LoginSession | null = null;
   const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
   if (transaction.intent !== "login") {
     const loginRequired: CallbackErrorView = {

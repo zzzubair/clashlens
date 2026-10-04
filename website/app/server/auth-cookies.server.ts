@@ -45,6 +45,11 @@ export interface LoginIdentity {
   providerSubject: string;
 }
 
+/** A verified login cookie: who signed in and when, in Unix seconds. */
+export interface LoginSession extends LoginIdentity {
+  issuedAt: number;
+}
+
 function isBoundedIntent(value: unknown): value is OAuthIntent {
   return value === "login" || value === "link" || value === "unlink";
 }
@@ -172,14 +177,15 @@ export function createLoginCookieValue(
 }
 
 /**
- * Parse and verify a login cookie value. Returns the identity or null for any
- * missing, malformed, tampered, or expired value. Never throws for input.
+ * Parse and verify a login cookie value. Returns the identity and issue time
+ * or null for any missing, malformed, tampered, or expired value. Never
+ * throws for input.
  */
 export function parseLoginCookieValue(
   value: string | undefined | null,
   key: Buffer,
   nowSeconds: number,
-): LoginIdentity | null {
+): LoginSession | null {
   assertKey(key);
   if (!Number.isSafeInteger(nowSeconds)) return null;
   const parsed = parseValue(value, key, 256);
@@ -203,7 +209,11 @@ export function parseLoginCookieValue(
   ) {
     return null;
   }
-  return { provider: parsed.p as LoginIdentity["provider"], providerSubject: parsed.s };
+  return {
+    provider: parsed.p as LoginIdentity["provider"],
+    providerSubject: parsed.s,
+    issuedAt,
+  };
 }
 
 function canonicalOAuthPayload(transaction: OAuthTransaction): Buffer {

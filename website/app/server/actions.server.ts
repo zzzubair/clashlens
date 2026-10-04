@@ -91,13 +91,13 @@ export async function readLoginIdentity(
   const cookies = parseCookieHeader(request.headers.get("cookie"));
   const value = cookies.get(LOGIN_COOKIE_NAME);
   if (value === undefined) return null;
-  const identity = parseLoginCookieValue(
+  const session = parseLoginCookieValue(
     value,
     config.loginSecret,
     Math.floor(Date.now() / 1000),
   );
-  if (identity === null) return null;
-  return (await isLoginRevoked(identity, value, timeoutMs)) ? null : identity;
+  if (session === null || (await isLoginRevoked(session, value, timeoutMs))) return null;
+  return { provider: session.provider, providerSubject: session.providerSubject };
 }
 
 /**

@@ -1,6 +1,14 @@
 import { createHmac } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({ requestJson: vi.fn() }));
+
+vi.mock("../../app/services/python.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/services/python.server")>();
+  return { ...actual, requestJson: mocks.requestJson };
+});
 
 import {
   LOGIN_COOKIE_LIFETIME_SECONDS,
@@ -11,17 +19,20 @@ import {
   buildSetCookieHeader,
   cookieAttributes,
   createLoginCookieValue,
+  createLoginSessionBinding,
   createOAuthTransactionCookieValue,
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
 } from "../../app/server/auth-cookies.server";
 import type { LoginIdentity } from "../../app/server/auth-cookies.server";
 import { createOAuthTransaction } from "../../app/server/google-oidc.server";
+import { isLoginRevoked, revokeLogin } from "../../app/server/login-session.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const KEY = Buffer.from(TEST_SECRET, "base64url");
 const OTHER_KEY = Buffer.alloc(32, 0x42);
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
+const SESSION = { ...IDENTITY, issuedAt: 1_750_000 };
 
 function oauthTransaction(now = 1_750_000) {
   return createOAuthTransaction("/account", now, (size) => Buffer.alloc(size, 0x2a));
@@ -51,13 +62,13 @@ describe("login cookie values", () => {
     const first = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
     const second = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
     expect(first).not.toBe(second);
-    expect(parseLoginCookieValue(first, KEY, 1_750_100)).toEqual(IDENTITY);
-    expect(parseLoginCookieValue(second, KEY, 1_750_100)).toEqual(IDENTITY);
+    expect(parseLoginCookieValue(first, KEY, 1_750_100)).toEqual(SESSION);
+    expect(parseLoginCookieValue(second, KEY, 1_750_100)).toEqual(SESSION);
   });
 
   it("round-trips a fresh cookie and rejects tampered values", () => {
     const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
-    expect(parseLoginCookieValue(value, KEY, 1_750_100)).toEqual(IDENTITY);
+    expect(parseLoginCookieValue(value, KEY, 1_750_100)).toEqual(SESSION);
 
     const [payloadPart, signaturePart] = value.split(".");
     const tamperedPayload = Buffer.from(
@@ -83,7 +94,7 @@ describe("login cookie values", () => {
     const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
     expect(
       parseLoginCookieValue(value, KEY, 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS - 1),
-    ).toEqual(IDENTITY);
+    ).toEqual(SESSION);
     expect(
       parseLoginCookieValue(value, KEY, 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS),
     ).toBeNull();
@@ -364,5 +375,27 @@ describe("cookie header attributes", () => {
     const transaction = createOAuthTransaction(longReturnPath.slice(0, 200), 1_750_000);
     const value = createOAuthTransactionCookieValue(transaction, KEY);
     expect(Buffer.byteLength(value, "utf8")).toBeLessThan(4096);
+  });
+});
+
+describe("login session requests", () => {
+  it("sends the cookie's issue time with the login check, not with logout", async () => {
+    mocks.requestJson.mockResolvedValue({ revoked: false });
+    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    const session = parseLoginCookieValue(value, KEY, 1_750_100);
+    expect(session).not.toBeNull();
+    expect(await isLoginRevoked(session!, value)).toBe(false);
+    await revokeLogin(session!, value);
+    const [check, logout] = mocks.requestJson.mock.calls;
+    expect(check[0]).toBe("/v1/account/session/check");
+    expect(JSON.parse(check[2].toString("utf8"))).toEqual({
+      session: createLoginSessionBinding(value),
+      issued_at: 1_750_000,
+    });
+    expect(check[5]).toEqual(SESSION);
+    expect(logout[0]).toBe("/v1/account/session/revoke");
+    expect(JSON.parse(logout[2].toString("utf8"))).toEqual({
+      session: createLoginSessionBinding(value),
+    });
   });
 });
