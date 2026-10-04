@@ -288,8 +288,9 @@ tag, clan, current trophies, Live Leaderboard rank ("Unranked" when off the
 board) and today's net so far with attacks and defenses done. The one profile
 read returns every card. An account without current results also shows its
 player page's explanation, with any saved trophies and today's battles from its
-last accepted profile (for example after leaving Legend I) and "Unknown",
-"Unranked" or "Not available yet" where nothing valid is saved.
+last accepted profile (for example after leaving Legend I), its rank whenever
+it is on the board, and "Unknown" or "Not available yet" where nothing valid is
+saved.
 
 Usernames are fixed after signup. Both the website action and private API reject
 rename attempts; display-name edits still work. The form directs username-change

@@ -147,7 +147,9 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
                 {
                     "tag": "#LQ2", "name": "Player #LQ2", "clan": "Synthetic Clan",
                     "state": "tracking", "reason": "no_legend_battles",
-                    "trophies": None, "season_reset_pending": False, "rank": None,
+                    "trophies": None, "season_reset_pending": False,
+                    # Its accepted profile still places it on the board.
+                    "rank": board["#LQ2"],
                     "today": None,
                 },
                 {
@@ -158,6 +160,6 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
                 },
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.
-            assert (board["#8PY"], board["#2PP"]) == (3, 4)
+            assert (board["#LQ2"], board["#8PY"], board["#2PP"]) == (2, 3, 4)
         finally:
             database.close()

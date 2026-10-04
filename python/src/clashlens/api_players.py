@@ -434,10 +434,11 @@ def player_cards(
     battles so far, read for every player at once.
 
     ``players`` holds (player id, tag, name, clan). Every card carries the
-    lookup state and reason its own page explains. Numbers come only from an
-    accepted current profile, including for a player who has left Legend I.
-    While a newer profile goes unaccepted they stay unknown, so Season 0
-    trophies stay on that page alone.
+    lookup state and reason its own page explains, and the player's Live
+    Leaderboard position whenever it is on the board. Trophies and today come
+    only from an accepted current profile, including for a player who has left
+    Legend I. While a newer profile goes unaccepted they stay unknown, so
+    Season 0 trophies stay on that page alone.
     """
     ids = [player[0] for player in players]
     profiles = {
@@ -506,8 +507,9 @@ def player_cards(
                     "defenses": day["defense_count"],
                 }
         cards.append(card)
-    ranked = [card["tag"] for card in cards if card["trophies"] is not None]
-    positions = api_leaderboard.live_positions(connection, ranked, now=now)
+    positions = api_leaderboard.live_positions(
+        connection, [card["tag"] for card in cards], now=now
+    )
     for card in cards:
         card["rank"] = positions.get(card["tag"])
     return cards
