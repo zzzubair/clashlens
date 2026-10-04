@@ -65,6 +65,8 @@ later fetch fails. This reuse applies both before enqueueing and when admitting
 already-queued ordinary discovery or weekly work. Unchanged responses also
 count when they retain an older observation awaiting processing. Reuse does
 not confirm eligibility; only processing recognized tier evidence does that.
+An unchanged answer to discovery work is saved and processed again when the
+retained profile was processed without a recognized league tier.
 
 A fetch completed before Monday Reset cannot satisfy the new week's check
 merely because its processing finishes after Reset. Recognized post-Reset
