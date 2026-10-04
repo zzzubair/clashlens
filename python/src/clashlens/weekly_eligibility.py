@@ -18,7 +18,11 @@ LIVE_DELAY_LIMIT = timedelta(minutes=2)
 
 
 def next_check(
-    database: CollectorDatabase, now: datetime, *, schedule: bool
+    database: CollectorDatabase,
+    now: datetime,
+    *,
+    schedule: bool,
+    held: list[int] | None = None,
 ) -> CollectorIntent | None:
     """Admit at most one check while regular collection has time to spare."""
     with database._connection() as connection:
@@ -49,8 +53,9 @@ def next_check(
                    FROM collector_work AS work
                    WHERE eligibility_recheck
                      AND status IN ('pending', 'waiting_retry') AND due_at <= %s
+                     AND NOT (work.id = ANY(%s::bigint[]))
                    ORDER BY due_at, id LIMIT 1""",
-                (now,),
+                (now, held or []),
             ).fetchone()
     if row is None:
         return None
@@ -69,7 +74,11 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
         started = time.monotonic()
         schedule = started >= next_schedule
         intent = await collector._database_call(
-            next_check, collector.database, datetime.now(UTC), schedule=schedule
+            next_check,
+            collector.database,
+            datetime.now(UTC),
+            schedule=schedule,
+            held=collector.held_work(),
         )
         if schedule:
             next_schedule = started + SCHEDULE_INTERVAL_SECONDS

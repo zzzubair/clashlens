@@ -65,6 +65,8 @@ from .worker import (
 )
 
 MAX_REPORTED_RESULTS = 100
+# Save plus request threads leave 64 of the collector container's 512 for the rest.
+_SAVE_THREADS, _THREAD_BUDGET = 384, 448
 UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
@@ -133,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--concurrency-per-key",
         type=_bounded_int("concurrency per key", 1, 32),
         default=int(os.environ.get("CLASHLENS_CONCURRENCY_PER_KEY", "6")),
+    )
+    collector.add_argument(
+        "--regular-parallelism",
+        type=_bounded_int("regular parallelism", 1, _SAVE_THREADS),
+        default=os.environ.get("CLASHLENS_REGULAR_PARALLELISM"),
+        help="regular checks in flight (default: two seconds of key starts, at least 256)",
     )
     collector.add_argument(
         "--health-listen",
@@ -738,6 +746,10 @@ def _run_collector(arguments: argparse.Namespace) -> int:
     if not isinstance(archive_reader, SpoolFirstReader):
         raise TypeError("collector requires a local spool root")
     concurrency = arguments.concurrency_per_key
+    parallelism = arguments.regular_parallelism or min(_SAVE_THREADS, max(
+        256, 2 * len(regular_keys) * arguments.starts_per_second_per_key
+    ))
+    save_threads = max(256, parallelism)
     collector = Collector(
         database=database,
         spool=archive_reader.spool,
@@ -747,7 +759,8 @@ def _run_collector(arguments: argparse.Namespace) -> int:
             proxy_url=arguments.official_proxy_url,
             allow_insecure_test_origin=arguments.allow_insecure_official_origin,
             max_body_bytes=arguments.archive_max_body_bytes,
-            max_connections=len(regular_keys) * concurrency + concurrency,
+            max_connections=min((len(regular_keys) + 1) * concurrency,
+                                _THREAD_BUDGET - save_threads),
         ),
         regular_keys=KeyPool(
             regular_keys,
@@ -765,14 +778,16 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         max_body_bytes=arguments.archive_max_body_bytes,
         interactive_fingerprint=interactive_fingerprint,
         weekly_eligibility_enabled=arguments.enable_weekly_eligibility,
+        regular_parallelism=parallelism,
     )
 
     async def serve() -> None:
         stop_requested = asyncio.Event()
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(
-            ThreadPoolExecutor(max_workers=256, thread_name_prefix="collector-io")
-        )
+        # A save thread per regular check, up to the cap; intent and uploads share them.
+        loop.set_default_executor(ThreadPoolExecutor(
+            max_workers=save_threads, thread_name_prefix="collector-io"
+        ))
         for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(shutdown_signal, stop_requested.set)
         await collector.run(

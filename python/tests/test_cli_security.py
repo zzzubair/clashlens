@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import json
+import subprocess
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,6 +78,208 @@ def test_collector_loads_four_to_seven_regular_keys(monkeypatch, count: int) -> 
     expected = KeysAccepted if 4 <= count <= 7 else ValueError
     with pytest.raises(expected):
         _run_collector(arguments)
+
+
+@pytest.mark.parametrize(
+    ("keys", "rate", "setting", "in_flight"),
+    [(7, 28, None, 384), (4, 25, None, 256), (7, 28, "300", 300)],
+)
+def test_collector_sizes_checks_in_flight_from_its_keys(
+    monkeypatch, keys: int, rate: int, setting: str | None, in_flight: int
+) -> None:
+    # Two seconds of key starts keeps the keys, not the slots, setting the pace.
+    monkeypatch.delenv("CLASHLENS_REGULAR_PARALLELISM", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("CLASHLENS_REGULAR_PARALLELISM", setting)
+    arguments = build_parser().parse_args(
+        ["collector", "--starts-per-second-per-key", str(rate)]
+    )
+    arguments.regular_api_keys = ",".join(
+        f"regular-{i}=fixture-{i}" for i in range(keys)
+    )
+    arguments.interactive_api_keys = "interactive-1=fixture-interactive"
+
+    class Sized(Exception):
+        pass
+
+    def collector(**kwargs: object) -> None:
+        raise Sized(kwargs["regular_parallelism"])
+
+    database = SimpleNamespace(register_interactive_key=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("clashlens.cli._database_url", lambda _arguments: "")
+    monkeypatch.setattr("clashlens.cli.CollectorDatabase", lambda _url: database)
+    monkeypatch.setattr(
+        "clashlens.cli._archive",
+        lambda *_args, **_kwargs: SimpleNamespace(spool=None, archive=None),
+    )
+    monkeypatch.setattr("clashlens.cli.SpoolFirstReader", SimpleNamespace)
+    monkeypatch.setattr("clashlens.cli.Collector", collector)
+
+    with pytest.raises(Sized) as sized:
+        _run_collector(arguments)
+    assert sized.value.args == (in_flight,)
+
+
+@pytest.mark.parametrize(
+    ("setting", "rate", "concurrency", "threads"),
+    [
+        (None, 25, 6, (350, 48)),
+        ("300", 25, 6, (300, 48)),
+        (None, 29, 6, (384, 48)),
+        # The widest request pool shrinks to what the save threads leave.
+        (None, 28, 32, (384, 64)),
+        ("256", 28, 32, (256, 192)),
+    ],
+)
+def test_collector_threads_stay_under_the_container_limit(
+    monkeypatch, setting: str | None, rate: int, concurrency: int, threads: tuple[int, int]
+) -> None:
+    # Seven keys at 29 a second would size 406 checks; they get 384 save threads.
+    monkeypatch.delenv("CLASHLENS_REGULAR_PARALLELISM", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("CLASHLENS_REGULAR_PARALLELISM", setting)
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["collector", "--regular-parallelism", "385"])
+    arguments = build_parser().parse_args(
+        ["collector", "--starts-per-second-per-key", str(rate),
+         "--concurrency-per-key", str(concurrency)]
+    )
+    arguments.regular_api_keys = ",".join(f"regular-{i}=fixture-{i}" for i in range(7))
+    requests: list[int] = []
+
+    def client(*_args: object, max_connections: int, **_kwargs: object) -> object:
+        requests.append(max_connections)
+        return object()
+
+    arguments.interactive_api_keys = "interactive-1=fixture-interactive"
+
+    class Started(Exception):
+        pass
+
+    class Collector:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, *_args: object, **_kwargs: object) -> None:
+            executor = asyncio.get_running_loop()._default_executor
+            raise Started(executor._max_workers, *requests)
+
+    closed = SimpleNamespace(close=lambda: None)
+    database = SimpleNamespace(
+        register_interactive_key=lambda *_args, **_kwargs: None, close=lambda: None
+    )
+    monkeypatch.setattr("clashlens.cli._database_url", lambda _arguments: "")
+    monkeypatch.setattr("clashlens.cli.CollectorDatabase", lambda _url: database)
+    monkeypatch.setattr(
+        "clashlens.cli._archive",
+        lambda *_args, **_kwargs: SimpleNamespace(spool=closed, archive=None),
+    )
+    monkeypatch.setattr("clashlens.cli.SpoolFirstReader", SimpleNamespace)
+    monkeypatch.setattr("clashlens.cli.Collector", Collector)
+    monkeypatch.setattr("clashlens.cli.OfficialApiClient", client)
+
+    with pytest.raises(Started) as started:
+        _run_collector(arguments)
+    assert started.value.args == threads
+    # 64 of the container's 512 processes and threads stay for everything else.
+    assert sum(started.value.args) <= 448
+
+
+@pytest.mark.parametrize(
+    ("setting", "forwarded"),
+    [
+        (None, None),
+        ("300", "300"),
+        ("384", "384"),
+        ("0", None),
+        ("385", None),
+        ("3x", None),
+    ],
+)
+def test_ops_rejects_a_bad_check_limit_before_stopping_and_forwards_a_good_one(
+    tmp_path: Path, setting: str | None, forwarded: str | None
+) -> None:
+    ops = Path(__file__).resolve().parents[2] / "ops"
+    # `./ops up` runs with host checks stubbed; stopping the running services
+    # is recorded, then the environment is written in its place.
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$1" help >/dev/null
+STATE_DIR="$2"
+MODE=fixture
+[[ -z "$3" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$3
+for step in require_host load_release guard_generated_units guard_existing_resources \
+    guard_trusted_proxy_ip guard_network_subnet cleanup_stale_admin_state ensure_linger \
+    migrate_legacy_units guard_systemd_units write_alert_intent; do
+  eval "$step() { :; }"
+done
+stop_units() { touch "$STATE_DIR/stopped"; write_environment; exit 0; }
+up_stack
+""",
+            "test-ops-environment",
+            str(ops),
+            str(tmp_path),
+            setting or "",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if setting is not None and forwarded is None:
+        assert result.returncode != 0
+        assert "CLASHLENS_REGULAR_PARALLELISM must be a whole number" in result.stderr
+        assert not (tmp_path / "stopped").exists()
+        return
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "stopped").exists()
+    collector = dict(
+        line.split("=", 1)
+        for line in (tmp_path / "env/collector.env").read_text().splitlines()
+    )
+    assert collector.get("CLASHLENS_REGULAR_PARALLELISM") == forwarded
+
+
+@pytest.mark.parametrize(
+    ("pids", "setting", "accepted"),
+    [
+        # Six keys at 25 a second: 300 save and 42 request threads, plus 64.
+        ("512", None, True),
+        ("400", None, False),
+        ("400", "256", True),
+    ],
+)
+def test_ops_refuses_collector_threads_beyond_its_process_limit(
+    tmp_path: Path, pids: str, setting: str | None, accepted: bool
+) -> None:
+    ops = Path(__file__).resolve().parents[2] / "ops"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$1" help >/dev/null
+STATE_DIR="$2"
+load_fixture_config
+COLLECTOR_PIDS=$3
+[[ -z "$4" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$4
+validate_runtime_values
+""",
+            "test-ops-threads",
+            str(ops),
+            str(tmp_path),
+            pids,
+            setting or "",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr
+    if not accepted:
+        assert "exceed CLASHLENS_COLLECTOR_PIDS=400" in result.stderr
 
 
 def test_cli_loads_current_and_previous_hmac_keys_from_files(tmp_path: Path) -> None:
@@ -289,8 +494,7 @@ def test_worker_pool_size_flags_accept_valid_bounds() -> None:
 def test_worker_discovery_defaults_enabled_and_disables_explicitly() -> None:
     assert _worker_arguments().disable_player_discovery is False
     assert (
-        _worker_arguments("--disable-player-discovery").disable_player_discovery
-        is True
+        _worker_arguments("--disable-player-discovery").disable_player_discovery is True
     )
 
 

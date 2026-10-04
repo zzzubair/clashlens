@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import gzip
 import json
 import socket
@@ -8,13 +9,21 @@ import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from itertools import pairwise
 from time import monotonic, sleep
 from typing import ClassVar
 
 import pytest
 
+from clashlens import collector_http
 from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
+
+
+def _most_starts_within(starts: list[float], seconds: float) -> int:
+    ordered = sorted(starts)
+    return max(
+        bisect.bisect_left(ordered, at + seconds) - index
+        for index, at in enumerate(ordered)
+    )
 
 
 @pytest.mark.parametrize("rate", [0, 30, 31])
@@ -46,14 +55,17 @@ def test_regular_keys_limit_starts_and_concurrency_per_key() -> None:
         active[key.label] -= 1
 
     async def run_requests() -> None:
-        await asyncio.gather(*(pool.run(request) for _ in range(12)))
+        await asyncio.gather(*(pool.run(request) for _ in range(48)))
 
     asyncio.run(run_requests())
 
-    assert set(starts) == {"regular-1", "regular-2"}
+    assert {label: len(times) for label, times in starts.items()} == {
+        "regular-1": 24,
+        "regular-2": 24,
+    }
     assert maximum == {"regular-1": 2, "regular-2": 2}
     for key_starts in starts.values():
-        assert all(later - earlier >= 0.04 for earlier, later in pairwise(key_starts))
+        assert _most_starts_within(key_starts, 0.985) <= 20
 
 
 def test_six_keys_each_start_at_most_the_configured_rate() -> None:
@@ -70,16 +82,47 @@ def test_six_keys_each_start_at_most_the_configured_rate() -> None:
         starts[key.label].append(monotonic())
 
     async def run_requests() -> None:
-        await asyncio.gather(*(pool.run(request) for _ in range(6 * 8)))
+        await asyncio.gather(*(pool.run(request) for _ in range(6 * 30)))
 
     asyncio.run(run_requests())
 
     assert pool.starts_per_second == 25
     assert {label: len(times) for label, times in starts.items()} == dict.fromkeys(
-        labels, 8
+        labels, 30
     )
     for key_starts in starts.values():
-        assert all(later - earlier >= 0.039 for earlier, later in pairwise(key_starts))
+        assert _most_starts_within(key_starts, 0.985) <= 25
+
+
+def test_late_wakeups_keep_a_key_at_its_rate_and_no_second_over_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Production woke each paced start ~20 ms late, and each start restarted
+    # its gap from then: keys set to 28 requests a second made 18.
+    clock = [1000.0]
+    starts: list[float] = []
+
+    async def late_sleep(delay: float) -> None:
+        # The 100th wait also stalls 0.6 s, so later starts must catch up.
+        clock[0] += delay + (0.6 if len(starts) == 100 else 0.02)
+
+    monkeypatch.setattr(collector_http, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(collector_http.asyncio, "sleep", late_sleep)
+    limiter = collector_http._StartLimiter(28)
+
+    async def start(count: int) -> None:
+        for _ in range(count):
+            await limiter.wait()
+            limiter.started()
+            starts.append(clock[0])
+
+    asyncio.run(start(280))
+    assert starts[-1] - starts[0] < 10.5
+    assert _most_starts_within(starts, 1.0) <= 28
+    # After a key idles, its next starts are paced again, not caught up.
+    clock[0] += 5.0
+    asyncio.run(start(2))
+    assert starts[-1] - starts[-2] >= 1 / 28
 
 
 def test_shared_permit_is_taken_before_each_interactive_start() -> None:
@@ -520,7 +563,7 @@ def test_actual_network_starts_stay_limited_when_default_executor_is_busy(
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=25,
+        starts_per_second=2,
         concurrency_per_key=3,
     )
     blockers_started = 0
@@ -556,7 +599,7 @@ def test_actual_network_starts_stay_limited_when_default_executor_is_busy(
 
     starts = _OfficialHandler.paths_started["/v1/players/%23SMALL"]
     assert len(starts) == 3
-    assert all(later - earlier >= 0.025 for earlier, later in pairwise(starts))
+    assert _most_starts_within(starts, 0.985) <= 2
 
 
 def test_shared_permits_are_serialized_next_to_actual_network_starts(
@@ -574,7 +617,7 @@ def test_shared_permits_are_serialized_next_to_actual_network_starts(
     )
     pool = KeyPool(
         [ApiKey("interactive-1", "secret")],
-        starts_per_second=25,
+        starts_per_second=2,
         concurrency_per_key=3,
         before_start=permit,
     )
@@ -589,7 +632,7 @@ def test_shared_permits_are_serialized_next_to_actual_network_starts(
 
     starts = _OfficialHandler.paths_started["/v1/players/%23SMALL"]
     assert len(permit_times) == len(starts) == 3
-    assert all(later - earlier >= 0.025 for earlier, later in pairwise(permit_times))
+    assert _most_starts_within(permit_times, 0.985) <= 2
     assert all(0 <= start - permit < 0.025 for permit, start in zip(permit_times, starts))
 
 

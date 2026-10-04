@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -156,18 +157,41 @@ def test_timed_out_unchanged_check_still_saves_the_response(
             spool.close()
 
 
-@pytest.mark.parametrize(
-    "hold",
-    [
-        # Worker rows that point at the last observation key-share it.
-        "SELECT 1 FROM collector_observations FOR KEY SHARE",
-        # The worker locks the player it ingests, as the 0040 trigger would.
-        "SELECT 1 FROM players FOR NO KEY UPDATE",
-    ],
-)
-def test_unchanged_check_saves_at_once_when_the_worker_holds_a_row(
-    database_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hold: str
+def test_saving_never_waits_on_worker_rows_that_point_at_the_observation(
+    database_url: str,
 ) -> None:
+    # On 2026-10-03 one worker transaction held such rows for 14 minutes while
+    # it built a Reset publication, and collection stopped for 4 minutes.
+    with domain_database(database_url) as connection_info:
+        database = CollectorDatabase(connection_info)
+        player_id = _player(connection_info)
+
+        def poll(key: str, days: int) -> ResponseHandoff:
+            return _handoff(
+                occurrence_key=key, response_hash="a" * 64,
+                player_id=player_id, completed_at=NOW + timedelta(days=days),
+            )
+
+        try:
+            database.record_response(poll("first", 0))
+            with ThreadPoolExecutor(1) as pool, psycopg.connect(connection_info) as worker:
+                # Rows a worker inserts that point at an observation key-share
+                # it until the worker commits.
+                worker.execute("SELECT 1 FROM collector_observations FOR KEY SHARE")
+                saved = pool.submit(database.record_response, poll("saved", 1))
+                assert saved.result(timeout=5).changed is False
+                unsaved = pool.submit(database.record_unchanged_response, poll("unsaved", 2))
+                assert unsaved.result(timeout=5) is True
+                assert _sightings(connection_info)[:2] == (3, NOW + timedelta(days=2))
+        finally:
+            database.close()
+
+
+def test_collection_moves_on_while_the_worker_holds_its_player(
+    database_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The worker locks the player it ingests, as the 0040 trigger would.
+    hold = "SELECT 1 FROM players FOR NO KEY UPDATE"
     first, ignored = _profile(1), _profile(2)
     with domain_database(database_url) as connection_info:
         player_id = _player(connection_info)
@@ -197,19 +221,63 @@ def test_unchanged_check_saves_at_once_when_the_worker_holds_a_row(
             assert await poll() == ["recorded"]
             with psycopg.connect(connection_info) as holder:
                 holder.execute(hold)
-                second = poll()
-                while not checks:
-                    await asyncio.sleep(0.05)
-            assert await second == ["recorded"]
+                started = time.monotonic()
+                # The saved response's database update gives up on the lock
+                # after 3 seconds, so the check returns while it is held.
+                assert await asyncio.wait_for(poll(), 10) == ["recorded"]
+                assert time.monotonic() - started < 5
+                assert len(spool.iter_handoffs()) == 1
+                assert _sightings(connection_info)[0] == 1
+            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 15)
 
         try:
             asyncio.run(scenario())
             assert len(checks) == 1
             assert checks[0][0] is False
             assert checks[0][1] < 1
+            assert collector.outcomes["commit_deferred"] == 1
+            assert not collector._handoff_recovery_required
             polls, _, observations = _sightings(connection_info)
             assert (polls, observations) == (2, 1)
             assert hashlib.sha256(ignored).hexdigest() in spool.final_hashes()
+            assert spool.iter_handoffs() == []
+        finally:
+            database.close()
+            spool.close()
+
+
+def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
+    database_url: str, tmp_path: Path
+) -> None:
+    # A Clasher who finished the Legend day is checked less often; that
+    # scheduling update must not wait for the worker either.
+    with domain_database(database_url) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
+        collector = _collector(spool, database, _Profiles([_profile(1), _profile(2)]))  # type: ignore[arg-type]
+        work = CollectorWork(player_id, "#2PP", datetime.now(UTC))
+
+        async def scenario() -> None:
+            first = collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+            assert await first == ["recorded"]
+            schedule = collector.battle_logs
+            schedule.due = lambda *_args, **_kwargs: False  # type: ignore[method-assign]
+            schedule.finished_recheck_at = (  # type: ignore[method-assign]
+                lambda *_args, **_kwargs: datetime.now(UTC) + timedelta(hours=1)
+            )
+            with psycopg.connect(connection_info) as holder:
+                holder.execute("SELECT 1 FROM players FOR NO KEY UPDATE")
+                started = time.monotonic()
+                check = collector.collect_player(work, lane="ordinary")
+                assert await asyncio.wait_for(check, 15) == ["recorded"]
+                assert time.monotonic() - started < 9
+            await asyncio.wait_for(asyncio.gather(*collector._later_commits), 15)
+
+        try:
+            asyncio.run(scenario())
+            assert collector.outcomes["commit_deferred"] == 1
+            assert _sightings(connection_info)[0] == 2
             assert spool.iter_handoffs() == []
         finally:
             database.close()

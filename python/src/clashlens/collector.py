@@ -7,16 +7,23 @@ import json
 import math
 import random
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
 import psycopg
 from psycopg_pool import PoolTimeout
 
-from . import collector_intents, collector_reset, collector_uploads, weekly_eligibility
+from . import (
+    collector_commits,
+    collector_intents,
+    collector_reset,
+    collector_uploads,
+    weekly_eligibility,
+)
 from .archive import ArchiveReadError, S3ArchiveReader
 from .battle_log_schedule import BattleLogSchedule
 from .collector_db import (
@@ -57,14 +64,9 @@ _HANDOFF_PROTOCOL = 2
 _CLEANUP_BATCH_SIZE = 16
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
 # A check fetches its profile, saves it, then maybe its battle log, one after
-# the other. On 2026-10-02 production held 160 checks in flight at 76 checks/s:
-# 2.1 s each, almost all saving, while keys ran at 19 of 25 requests/s. 256
-# slots cover ~125 checks/s (150 requests/s at ~1.2 per check) at up to 2 s
-# each, and hold at most 256 requests at once, fewer than 160 paired checks did.
+# the other, so a check holds at most one request at a time. The collector
+# command sizes this from its keys; see docs/collector-polling.md.
 _REGULAR_PARALLELISM = 256
-# Cold discovery measured 21.21 players/s against 29.27 regular jobs/s.
-# A quarter of regular slots keeps overdue revisits moving until discovery drains.
-_REGULAR_REPEAT_MINIMUM = 64
 _ORDINARY_INTENT_PARALLELISM = 32
 
 
@@ -83,7 +85,10 @@ class Collector:
         max_body_bytes: int,
         interactive_fingerprint: str | None = None,
         weekly_eligibility_enabled: bool = False,
+        regular_parallelism: int = _REGULAR_PARALLELISM,
     ) -> None:
+        if regular_parallelism < 1:
+            raise ValueError("regular parallelism must be positive")
         self.database = database
         self.spool = spool
         self.archive = archive
@@ -95,6 +100,7 @@ class Collector:
         self.max_body_bytes = max_body_bytes
         self.interactive_fingerprint = interactive_fingerprint
         self.weekly_eligibility_enabled = weekly_eligibility_enabled
+        self.regular_parallelism = regular_parallelism
         self.battle_logs = BattleLogSchedule()
         self.outcomes: dict[str, int] = {}
         self.endpoint_outcomes: dict[tuple[str, str, str], int] = {}
@@ -117,9 +123,12 @@ class Collector:
             asyncio.Lock() for _index in range(_HANDOFF_LOCK_STRIPES)
         )
         self._handoff_recovery_required = False
-        # Each stripe's newest saved response; it resolves once that response
-        # has committed or failed, so the next one commits after it.
-        self._handoff_turns: dict[asyncio.Lock, asyncio.Future[None]] = {}
+        # Newest saved response per player and request type, kept while it waits; it
+        # resolves when it commits or fails, or to the task committing it later.
+        self._handoff_turns: dict[collector_commits.Identity, collector_commits.Turn] = {}
+        self._later_commits: dict[asyncio.Task[None], int | None] = {}
+        self._unrecovered: list[tuple[str, ResponseHandoff, bool]] = []
+        self._stopping = asyncio.Event()
         # Newest committed (seen time, field fingerprint) per scope, identity
         # and endpoint, from this process only; empty after a restart.
         self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
@@ -131,6 +140,8 @@ class Collector:
         for attempt in range(3):
             try:
                 return await asyncio.to_thread(operation, *args, **kwargs)
+            except psycopg.errors.LockNotAvailable:
+                raise
             except (psycopg.Error, PoolTimeout):
                 self._count("database_failure")
                 if attempt == 2:
@@ -456,7 +467,7 @@ class Collector:
                 # the check does not compact.
                 identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
                 lock = self._handoff_lock(handoff)
-                pending = self._handoff_turns.get(lock)
+                pending = self._handoff_turns.get(identity)
                 committed = self._committed.get(identity)
                 cancelled = False
                 compacted = False
@@ -466,7 +477,7 @@ class Collector:
                     and committed is not None
                     and committed[1] == handoff.content_fingerprint
                     and not lock.locked()
-                    and (pending is None or pending.done())
+                    and collector_commits.settled(pending)
                     and not self._handoff_recovery_required
                 ):
                     check = asyncio.ensure_future(
@@ -492,6 +503,7 @@ class Collector:
                     )
                 else:
                     published = False
+                    later: asyncio.Task[None] | None = None
                     turn = asyncio.get_running_loop().create_future()
                     try:
                         async with lock:
@@ -512,24 +524,23 @@ class Collector:
                                 current_reservation,
                             )
                             published = True
-                            previous = self._handoff_turns.get(lock)
-                            self._handoff_turns[lock] = turn
+                            previous = self._handoff_turns.get(identity)
+                            self._handoff_turns[identity] = turn
                         # Saved responses commit in publish order, but no
                         # database wait holds the lock, so a later response
                         # always reaches the spool first.
-                        if previous is not None:
-                            await asyncio.shield(previous)
+                        behind = None if previous is None else await asyncio.shield(previous)
                         if self._handoff_recovery_required:
                             if cancelled:
                                 raise asyncio.CancelledError
                             return "capacity_paused"
-                        await _drain_awaitable(
-                            self._database_call(self.database.record_response, handoff)
-                        )
-                        self._committed[identity] = max(
-                            seen, self._committed.get(identity) or seen
-                        )
-                        await _drain_to_thread(self.spool.remove_handoff, name)
+                        committed_now = False
+                        if behind is None or behind.done():
+                            with suppress(psycopg.errors.LockNotAvailable):
+                                await self._commit_saved(handoff, name)
+                                committed_now = True
+                        if not committed_now:
+                            later = collector_commits.commit_later(self, behind, handoff, name)
                     except BaseException as error:
                         if published or self._sidecar_exists(name):
                             self._handoff_recovery_required = True
@@ -539,7 +550,12 @@ class Collector:
                                 ) from error
                         raise
                     finally:
-                        turn.set_result(None)
+                        turn.set_result(later)
+                        collector_commits.forget(self, identity, later)
+                    if later is not None and work.collector_work_id is not None:
+                        await asyncio.wait({later})
+                        if not cancelled and (later.cancelled() or later.exception()):
+                            return "capacity_paused"
                 if cancelled:
                     raise asyncio.CancelledError
                 self._count("recorded")
@@ -597,6 +613,22 @@ class Collector:
                     except (OSError, SpoolError) as error:
                         self._record_spool_failure(error)
         raise AssertionError("unreachable collector retry loop")
+
+    async def _commit_saved(
+        self, handoff: ResponseHandoff, name: str, serialized: bool | None = None
+    ) -> None:
+        record = self.database.record_response if serialized is None else partial(
+            self.database.record_recovered_response, serialized=serialized
+        )
+        await _drain_awaitable(self._database_call(record, handoff))
+        identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
+        seen = (handoff.response_completed_at, handoff.content_fingerprint)
+        self._committed[identity] = max(seen, self._committed.get(identity) or seen)
+        await _drain_to_thread(self.spool.remove_handoff, name)
+
+    def held_work(self) -> list[int]:
+        """Work whose saved responses still wait to commit; it is not fetched again."""
+        return [work for work in self._later_commits.values() if work is not None]
 
     def _make_handoff(
         self,
@@ -703,11 +735,16 @@ class Collector:
                 record[1].response_completed_at,
             )
         )
-        recovered = 0
-        for name, handoff, serialized in records:
+        for _name, handoff, _serialized in records:
             if self.spool.verify(handoff.response_hash, handoff.byte_size) is None:
                 raise SpoolError("handoff raw response is missing or corrupt")
-            self.database.record_recovered_response(handoff, serialized=serialized)
+        recovered = 0
+        for index, (name, handoff, serialized) in enumerate(records):
+            try:
+                self.database.record_recovered_response(handoff, serialized=serialized)
+            except psycopg.errors.LockNotAvailable:
+                self._unrecovered = records[index:]
+                break
             self.spool.remove_handoff(name)
             recovered += 1
         self.spool.remove_unreferenced(self.database.referenced_spool_hashes)
@@ -865,7 +902,9 @@ class Collector:
         idle_seconds: float = 0.1,
     ) -> None:
         """Run admissions, intent work, uploads, cleanup, and health together."""
+        self._stopping = stop_requested
         await _drain_to_thread(self.recover_handoffs)
+        collector_commits.commit_unrecovered(self, self._unrecovered)
         await _drain_to_thread(self.spool.cleanup_stale, 60.0)
         server = await asyncio.start_server(
             self._handle_health, health_host, health_port
@@ -974,13 +1013,16 @@ class Collector:
                         self.regular_inflight += len(items)
 
                     claim_time = datetime.now(UTC)
-                    available = _REGULAR_PARALLELISM - len(pending)
+                    available = self.regular_parallelism - len(pending)
                     repeat_inflight = sum(
                         not item.first_battle_pending for item in pending.values()
                     )
+                    # Cold discovery measured 21.21 players/s against 29.27
+                    # regular jobs/s. A quarter of the slots keeps overdue
+                    # revisits moving until discovery drains.
                     repeat_limit = min(
                         available,
-                        max(0, _REGULAR_REPEAT_MINIMUM - repeat_inflight),
+                        max(1, self.regular_parallelism // 4) - repeat_inflight,
                     )
                     if repeat_limit > 0:
                         admit(
@@ -1090,6 +1132,7 @@ class Collector:
                         limit=limit,
                         now=now,
                         interactive=is_interactive,
+                        held=self.held_work(),
                     )
                     for intent in intents:
                         if intent.work_id is not None and intent.work_id not in active:

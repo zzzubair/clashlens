@@ -5,6 +5,7 @@ import math
 import socket
 import sys
 import threading
+from collections import deque
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -82,14 +83,23 @@ class _StartLimiter:
             raise ValueError("request start rate must be between 1 and 29")
         self._interval = 1.0 / starts_per_second
         self._next_start = 0.0
+        self._recent: deque[float] = deque(maxlen=starts_per_second)
 
     async def wait(self) -> None:
-        delay = self._next_start - monotonic()
+        # No second ever holds more starts than the rate allows.
+        window = self._recent[0] + 1.0 if len(self._recent) == self._recent.maxlen else 0.0
+        delay = max(self._next_start, window) - monotonic()
         if delay > 0:
             await asyncio.sleep(delay)
 
     def started(self) -> None:
-        self._next_start = monotonic() + self._interval
+        # A start that woke late keeps the schedule, so the next starts make up
+        # the lost time instead of each adding its own delay; an idle key
+        # starts a new schedule.
+        now = monotonic()
+        on_schedule = now - self._next_start < 1.0
+        self._next_start = (self._next_start if on_schedule else now) + self._interval
+        self._recent.append(now)
 
 
 @dataclass(slots=True)

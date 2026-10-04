@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import psycopg
 
 from .collector_db import CollectorIntent, CollectorWork
 
@@ -77,7 +81,8 @@ async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
             used = collector._retries_while_answering.get(intent.work_id, 0) + 1
             collector._retries_while_answering[intent.work_id] = used
             retryable = used <= _RETRIES_WHILE_ANSWERING
-        status = await collector._database_call(
+        status = await _finish(
+            collector,
             collector.database.fail_intent,
             intent.work_id,
             category="provider_failure",
@@ -89,8 +94,8 @@ async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
             return "failed"
         return "retrying"
     collector._retries_while_answering.pop(intent.work_id, None)
-    completed = await collector._database_call(
-        collector.database.complete_intent, intent.work_id
+    completed = await _finish(
+        collector, collector.database.complete_intent, intent.work_id
     )
     if completed and intent.kind == "live_refresh":
         collector.refresh_latency_seconds += max(
@@ -98,3 +103,16 @@ async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
         )
         collector.refresh_count += 1
     return "complete" if completed else "incomplete"
+
+
+async def _finish(
+    collector: Collector, operation: Any, *args: Any, **kwargs: Any
+) -> Any:
+    """Update the work row, retrying while a worker's lock holds it, until stopping."""
+    while not collector._stopping.is_set():
+        try:
+            return await collector._database_call(operation, *args, **kwargs)
+        except psycopg.errors.LockNotAvailable:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(collector._stopping.wait(), 2.0)
+    return None

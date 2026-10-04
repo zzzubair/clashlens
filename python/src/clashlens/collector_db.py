@@ -9,6 +9,7 @@ from time import monotonic, sleep
 from typing import Any
 from uuid import uuid4
 
+import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
@@ -34,6 +35,9 @@ _ENDPOINTS = {
     "league_history",
 }
 _PLAYER_ENDPOINTS = {"profile", "battle_log", "league_history"}
+# A worker can hold a player or its work for minutes; these writes give up and
+# are retried later instead of holding collection behind it.
+_WORKER_LOCK_WAIT = "SET LOCAL lock_timeout = '3s'"
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,6 +515,7 @@ class CollectorDatabase:
     def defer_regular_check(self, player_id: int, until: datetime) -> None:
         """Make an active player's next regular check due no earlier than `until`."""
         with self._connection() as connection:
+            connection.execute(_WORKER_LOCK_WAIT)
             connection.execute(
                 """
                 UPDATE players SET next_due_at = %s
@@ -565,6 +570,7 @@ class CollectorDatabase:
         now: datetime | None = None,
         *,
         interactive: bool | None = None,
+        held: list[int] | None = None,
     ) -> list[CollectorIntent]:
         if limit < 1:
             raise ValueError("intent limit must be positive")
@@ -573,8 +579,8 @@ class CollectorDatabase:
             with connection.transaction():
                 connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (intent_time,))
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, battle_log.response_completed_at < profile.response_completed_at, battle_log.request_started_at < profile.response_completed_at, sweep.boundary_at FROM collector_work AS work LEFT JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'reset_settlement', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (work.kind <> 'reset_settlement' OR %s < sweep.boundary_at + %s) AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
-                    (intent_time, intent_time, collector_reset.COLLECTION_WINDOW, interactive, interactive, interactive, limit),
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, battle_log.response_completed_at < profile.response_completed_at, battle_log.request_started_at < profile.response_completed_at, sweep.boundary_at FROM collector_work AS work LEFT JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'reset_settlement', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND NOT (work.id = ANY(%s::bigint[])) AND (work.kind <> 'reset_settlement' OR %s < sweep.boundary_at + %s) AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
+                    (intent_time, held or [], intent_time, collector_reset.COLLECTION_WINDOW, interactive, interactive, interactive, limit),
                 ).fetchall()
 
                 # A Reset retry fetches again only what has no usable answer yet,
@@ -650,8 +656,9 @@ class CollectorDatabase:
             raise ValueError("intent job ID must be positive")
         with self._connection() as connection:
             with connection.transaction():
+                connection.execute(_WORKER_LOCK_WAIT)
                 work = connection.execute(
-                    "SELECT kind, profile_status, battle_log_status, profile_observation_id, battle_log_observation_id, league_history_status, league_history_observation_id FROM collector_work WHERE id = %s AND status IN ('pending', 'waiting_retry') FOR UPDATE",
+                    "SELECT kind, profile_status, battle_log_status, profile_observation_id, battle_log_observation_id, league_history_status, league_history_observation_id FROM collector_work WHERE id = %s AND status IN ('pending', 'waiting_retry') FOR NO KEY UPDATE",
                     (job_id,),
                 ).fetchone()
                 if work is None:
@@ -692,6 +699,7 @@ class CollectorDatabase:
         # Retry until 23h55m after the Reset, or after creation for other work; unfinished Reset work blocks the next Reset.
         with self._connection() as connection:
             with connection.transaction():
+                connection.execute(_WORKER_LOCK_WAIT)
                 row = connection.execute(
                     "UPDATE collector_work AS work SET status = CASE WHEN decision.retry THEN 'waiting_retry' ELSE 'failed' END, due_at = CASE WHEN decision.retry THEN clock_timestamp() + interval '5 seconds' ELSE work.due_at END, failure_category = left(%s, 128), failure_detail = left(%s, 1024), updated_at = clock_timestamp() FROM (SELECT %s AND clock_timestamp() < COALESCE((SELECT sweep.boundary_at FROM collector_reset_sweeps AS sweep WHERE sweep.id = current.sweep_id), current.created_at) + interval '23 hours 55 minutes' AS retry FROM collector_work AS current WHERE current.id = %s) AS decision WHERE work.id = %s AND work.status NOT IN ('complete', 'failed', 'cancelled') RETURNING work.status",
                     (category, detail or "", retryable, job_id, job_id),
@@ -709,7 +717,10 @@ class CollectorDatabase:
                 "regular work must drain before Reset membership freezes"
             )
         with self._connection() as connection:
-            return collector_reset.begin_reset(connection, boundary_at)
+            try:
+                return collector_reset.begin_reset(connection, boundary_at)
+            except psycopg.errors.LockNotAvailable:
+                return None
 
     def expire_settlement_checks(self, now: datetime) -> int:
         with self._connection() as connection:
@@ -1078,11 +1089,13 @@ class CollectorDatabase:
         ):
             return False
         # Unsaved, skip a row another transaction holds (a body players share,
-        # or the worker's observation or player): the caller saves, not waits.
+        # or the worker's player): the caller saves, not waits. The rows a
+        # worker inserts that point at this observation only key-share it, so
+        # NO KEY UPDATE never waits on them; it still blocks updates and deletes.
         skip = "" if saved else " SKIP LOCKED"
         retained = connection.execute(
             """SELECT response_hash, archive_reference
-            FROM collector_observations WHERE id = %s FOR UPDATE""" + skip,
+            FROM collector_observations WHERE id = %s FOR NO KEY UPDATE""" + skip,
             (state[2],),
         ).fetchone()
         if retained is None:
@@ -1140,6 +1153,7 @@ class CollectorDatabase:
         parser_version = self._parser_for(handoff.endpoint)
         with self._connection() as connection:
             with connection.transaction():
+                connection.execute(_WORKER_LOCK_WAIT)
                 if recovering:
                     recorded = self._recorded_observation(
                         connection, handoff, parser_version

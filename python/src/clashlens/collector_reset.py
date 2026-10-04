@@ -34,6 +34,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
         "pending" if is_season_boundary(utc_boundary) else "not_applicable"
     )
     with connection.transaction():
+        connection.execute("SET LOCAL lock_timeout = '3s'")
         older_boundary = connection.execute(
             """
             SELECT sweep.boundary_at
@@ -47,7 +48,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
               )
             ORDER BY sweep.boundary_at
             LIMIT 1
-            FOR UPDATE
+            FOR NO KEY UPDATE
             """,
             (utc_boundary,),
         ).fetchone()
@@ -65,7 +66,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
         first_capture = sweep_row is not None
         if sweep_row is None:
             sweep_row = connection.execute(
-                "SELECT id FROM collector_reset_sweeps WHERE boundary_at = %s FOR UPDATE",
+                "SELECT id FROM collector_reset_sweeps WHERE boundary_at = %s FOR NO KEY UPDATE",
                 (utc_boundary,),
             ).fetchone()
         assert sweep_row is not None
@@ -88,7 +89,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
             _schedule_settlement_checks(connection, sweep_id, utc_boundary, member_ids)
         else:
             member_ids = connection.execute(
-                "SELECT member_ids FROM collector_reset_sweeps WHERE id = %s FOR UPDATE",
+                "SELECT member_ids FROM collector_reset_sweeps WHERE id = %s FOR NO KEY UPDATE",
                 (sweep_id,),
             ).fetchone()[0]
         connection.execute(
@@ -196,7 +197,7 @@ def expire_settlement_checks(
                   AND sweep.boundary_at + %s <= %s
                 ORDER BY unfinished.id
                 LIMIT %s
-                FOR UPDATE OF unfinished
+                FOR NO KEY UPDATE OF unfinished
             )
             """,
             (COLLECTION_WINDOW, now, batch),
