@@ -40,6 +40,11 @@ import type {
   WebsiteErrorResponse,
 } from "../lib/contracts";
 import { isRefreshStatusPayload, isWebsiteErrorResponse } from "../lib/validation";
+import detailsStyles from "../details.css?url";
+
+export function links() {
+  return [{ rel: "stylesheet", href: detailsStyles }];
+}
 
 export interface PlayerLoaderData {
   requestedTag: string | null;
