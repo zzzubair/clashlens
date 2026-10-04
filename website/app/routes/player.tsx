@@ -836,8 +836,8 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           </h2>
         </div>
         <p className="section-note">
-          Season result from Clash of Clans. Daily battle logs were not recorded for this
-          season.
+          Season result from Clash of Clans. A Clash Lens daily summary is not available
+          for this Season.
         </p>
         {summary.officialHistory ? (
           <div className="metric-grid">
@@ -887,9 +887,9 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           <Metric
             label="Trophies"
             value={
-              summary.startTrophies === null || summary.endTrophies === null
+              summary.startTrophies === null && summary.endTrophies === null
                 ? "Unknown"
-                : `${summary.startTrophies} → ${summary.endTrophies}`
+                : `${summary.startTrophies ?? "Unknown"} → ${summary.endTrophies ?? "Unknown"}`
             }
           />
           <Metric label="Final rank" value={formatCount(summary.finalRank)} />
