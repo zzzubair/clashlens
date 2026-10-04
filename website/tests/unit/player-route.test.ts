@@ -1315,6 +1315,9 @@ describe("player day honesty", () => {
       period: "2026-05-01T05:00:00Z – 2026-05-02T05:00:00Z",
       startTrophies: 6000,
       endTrophies: 6026,
+      eodState: "accepted" as const,
+      eodChange: 40,
+      eodChangeState: "accepted" as const,
       attackGain: 310,
       defenseLoss: 284,
       netChange: 26,
@@ -1345,12 +1348,20 @@ describe("player day honesty", () => {
             {
               ...entry,
               dayNumber: 2,
+              eodState: "provisional" as const,
+              eodChange: null,
+              eodChangeState: null,
               state: "Partial",
               coverage: "partial",
               flags: ["missing_end_baseline", "attack_star_total_mismatch"],
             },
-            { ...entry, dayNumber: 3, netChange: null, flags: [] },
-            { ...entry, dayNumber: 4, flags: ["ranked_version_mismatch"] },
+            { ...entry, dayNumber: 3, netChange: null, eodState: null, flags: [] },
+            {
+              ...entry,
+              dayNumber: 4,
+              eodChangeState: "provisional" as const,
+              flags: ["ranked_version_mismatch"],
+            },
             {
               ...entry,
               dayNumber: 5,
@@ -1395,6 +1406,12 @@ describe("player day honesty", () => {
     ).then((value) => value.replaceAll("<!-- -->", ""));
     const rows = html.split("<tbody>")[1].split("</tbody>")[0].split("</tr>");
     expect(rows[0]).toContain("<td>Provisional result</td>");
+    // EOD change sits beside End, apart from battle net, and is provisional
+    // unless its proof is accepted; an unknown proof state is not accepted.
+    expect(rows[0]).toContain("<td>+26</td><td>+26</td><td>6026</td><td>+40</td>");
+    expect(rows[1]).toContain("<td>6026 (provisional)</td><td>Unknown</td>");
+    expect(rows[2]).toContain("<td>6026 (provisional)</td><td>+40</td>");
+    expect(rows[3]).toContain("<td>6026</td><td>+40 (provisional)</td>");
     expect(rows[1]).toContain("Incomplete");
     expect(rows[1]).toContain("Trophies at the end of this day were not recorded.");
     expect(rows[1]).toContain(
@@ -1422,6 +1439,7 @@ describe("player day honesty", () => {
     expect(html).toContain("Attacks recorded");
     expect(html).toContain("Defenses recorded");
     expect(html).toContain("Recorded battle net");
+    expect(html).toContain("EOD change from previous day");
   });
 
   it("shows the received warnings instead of a late-tracking explanation", async () => {
