@@ -106,7 +106,9 @@ export function SearchSuggestions({
       results.length === 0 &&
       users.length === 0 &&
       !unknownExactTag ? (
-        <p className="search-dropdown-status">No players or profiles found.</p>
+        <p className="search-dropdown-status">
+          No saved players or profiles found. Enter a full #tag to look up anyone.
+        </p>
       ) : null}
       {results.length > 0 || users.length > 0 || unknownExactTag ? (
         <ul className="search-dropdown-list">

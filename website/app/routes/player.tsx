@@ -563,6 +563,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {data.selectedSeason === null && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
+            <p className="section-note">{LEGEND_DAY_NOTE}</p>
             {history.map(({ day, inSeason }) => (
               <LegendDay
                 key={legendDayKey(day.period)}
@@ -677,6 +678,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       {data.selectedSeason !== null ? null : (
         <section className="data-section" aria-labelledby="season-days-title">
           <h2 id="season-days-title">Daily Legend log</h2>
+          <p className="section-note">{LEGEND_DAY_NOTE}</p>
           {selectedDay &&
           !history.some(({ day }) => legendDayKey(day.period) === selectedDay) ? (
             <p className="section-note" role="status">
@@ -1090,6 +1092,9 @@ const BATTLE_DOUBT_CODES = new Set([
   "truncated_reasons",
 ]);
 
+const LEGEND_DAY_NOTE =
+  "A Legend day runs from 05:00 to 05:00 UTC. Ended days show “Provisional result” until Clash Lens can prove their trophy change includes the automatic defense loss at Reset.";
+
 // Only Python's calendar check makes a day current; a saved "Live" state can
 // outlast its day. No saved result proves the Reset settled yet, so a finished
 // day with a number is still provisional. A finished day with every battle
@@ -1277,7 +1282,7 @@ function LegendDay({
           <span>{formatCount(day.defense.defenses)} recorded</span>
         </span>
         <span className="legend-day-stat legend-day-net">
-          <small>Net</small>
+          <small>Trophy change</small>
           {isCurrentDay && day.trophyChange === null && day.battlesComplete ? (
             <>
               <strong className={valueTone(battleNet)}>{formatSigned(battleNet)}</strong>

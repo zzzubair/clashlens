@@ -160,6 +160,7 @@ export function headers() {
 export default function TrackedLeaderboardRoute() {
   const { leaderboard, error, pageUnavailableUrl, view, query, search, focusTag } =
     useLoaderData<typeof loader>();
+  const unlistedTag = search?.results.length === 0 ? normalizePlayerTag(query) : null;
   const navigation = useNavigation();
   const selectedRow = useRef<HTMLTableRowElement>(null);
   useEffect(() => {
@@ -294,9 +295,17 @@ export default function TrackedLeaderboardRoute() {
           {search ? (
             <div aria-live="polite" aria-busy={navigation.state !== "idle"}>
               <p>
-                {search.results.length
-                  ? `Players matching “${query}”. Choose a player to see their place on the board.`
-                  : `No tracked players matching “${query}”. Try another name or an exact tag.`}
+                {search.results.length ? (
+                  `Players matching “${query}”. Choose a player to see their place on the board.`
+                ) : unlistedTag ? (
+                  <>
+                    {unlistedTag} isn't on this board.{" "}
+                    <a href={canonicalPlayerPath(unlistedTag)}>Open their player page</a>{" "}
+                    to look them up.
+                  </>
+                ) : (
+                  `No tracked players matching “${query}”. This search only finds players on this board. To look up anyone else, search their full player tag, including the #.`
+                )}
               </p>
               <ul className="rank-search-results">
                 {search.results.map((entry) => (

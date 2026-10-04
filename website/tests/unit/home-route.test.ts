@@ -3,6 +3,7 @@ import { renderToString } from "react-dom/server";
 import {
   createStaticHandler,
   createStaticRouter,
+  MemoryRouter,
   StaticRouterProvider,
 } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +26,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import { PythonApiError } from "../../app/services/python.server";
 import Home, { loader as homeLoader } from "../../app/routes/home";
+import { SearchSuggestions } from "../../app/components/PlayerSearch";
 
 const search = {
   kind: "player-search",
@@ -109,6 +111,31 @@ it("disables the search button and marks results busy while a search loads", asy
   } finally {
     mocks.navigationState = "idle";
   }
+});
+
+it("explains tag lookup and that name search only finds saved players", async () => {
+  const html = await renderHome(
+    { leaderboard: null, query: "Nova", error: null, search },
+    "?q=Nova",
+  );
+  expect(html).toContain("enter their full player tag, including the #. Legend I");
+  expect(html).toContain("players start tracking automatically.");
+  expect(html).toContain("<h3>No players or profiles found</h3>");
+  expect(html).toContain("Name search only finds players and profiles Clash Lens has");
+  const dropdown = renderToString(
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(SearchSuggestions, {
+        id: "suggestions",
+        data: { search, error: null } as never,
+        loading: false,
+      }),
+    ),
+  );
+  expect(dropdown).toContain(
+    "No saved players or profiles found. Enter a full #tag to look up anyone.",
+  );
 });
 
 it("formats the tracked total and explains a logout the server could not record", async () => {

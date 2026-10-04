@@ -7,7 +7,10 @@ import {
 } from "react-router";
 import { beforeEach, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ getTrackedLeaderboard: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  getTrackedLeaderboard: vi.fn(),
+  searchLeaderboard: vi.fn(),
+}));
 vi.mock("../../app/services/python.server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../app/services/python.server")>()),
   createPythonClient: () => mocks,
@@ -264,3 +267,21 @@ it("describes Daily trophies as values saved before the Reset, even with recent 
   // The Live board's Season-reset rule never applies to a frozen day.
   expect(html).not.toContain("waiting for their Season reset");
 });
+
+it.each([
+  ["q=%232pp", "#2PP isn&#x27;t on this board.", '<a href="/players/%232PP">Open their'],
+  ["q=Nova", "This search only finds players on this board.", "full player tag"],
+])(
+  "offers a next step when a board search for %s finds nobody",
+  async (q, text, next) => {
+    mocks.searchLeaderboard.mockResolvedValue({
+      exactTag: null,
+      hasMore: false,
+      results: [],
+    });
+    const { html } = await render(`view=live&page=1&${q}`);
+    expect(html).toContain(text);
+    expect(html).toContain(next);
+    expect(html).not.toContain("Try another name or an exact tag");
+  },
+);
