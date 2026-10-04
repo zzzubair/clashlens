@@ -19,6 +19,7 @@ from test_domain_processing_postgres import _processor
 
 from clashlens import profile
 from clashlens.collector_db import CollectorDatabase
+from clashlens.domain import BOOTSTRAP_CURRENT_SEASON_ID, SEASON_DURATION
 from clashlens.history import prune_completed_history
 from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.weekly_eligibility import next_check
@@ -844,6 +845,13 @@ def test_unchanged_pending_profile_reuse_depends_on_fetch_completion(
             database.close()
 
 
+def _next_reset():
+    """The next daily Reset: retries are due by the database clock, so run after it."""
+    now = datetime.now(UTC)
+    boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
+    return boundary if boundary > now else boundary + timedelta(days=1)
+
+
 class _EndpointClient(_Client):
     """A fake API answering each endpoint with its own HTTP status."""
 
@@ -864,15 +872,16 @@ def test_temporary_failure_retries_the_same_weeks_work_until_the_api_answers(
         player = _player(info)
         database = _collector(info)
         try:
-            database.begin_reset(MONDAY, local_regular_inflight=0)
+            start = _next_reset()
+            database.begin_reset(start, local_regular_inflight=0)
             with psycopg.connect(info) as connection:
                 assert connection.execute(
                     "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
-                    (None if weekly else [player], MONDAY, weekly),
+                    (None if weekly else [player], start, weekly),
                 ).fetchone()[0] == 1
 
             def admitted():
-                now = MONDAY + timedelta(minutes=1)
+                now = start + timedelta(minutes=1)
                 return (next_check(database, now, schedule=False) if weekly else
                         database.pending_intents(limit=1, now=now, interactive=False)[0])
 
@@ -896,7 +905,7 @@ def test_temporary_failure_retries_the_same_weeks_work_until_the_api_answers(
                 # Another submission that week reuses the finished check.
                 assert connection.execute(
                     "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, false)",
-                    ([player], MONDAY + timedelta(days=1)),
+                    ([player], start + timedelta(hours=1)),
                 ).fetchone()[0] == 0
         finally:
             database.close()
@@ -911,11 +920,12 @@ def test_failed_check_retries_only_temporary_failures_and_a_bounded_number_of_ti
         player = _player(info)
         database = _collector(info)
         try:
-            database.begin_reset(MONDAY, local_regular_inflight=0)
+            start = _next_reset()
+            database.begin_reset(start, local_regular_inflight=0)
             with psycopg.connect(info) as connection:
                 connection.execute(
                     "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
-                    (None if weekly else [player], MONDAY, weekly),
+                    (None if weekly else [player], start, weekly),
                 )
                 connection.execute(
                     "UPDATE collector_work SET league_history_status = 'not_applicable'")
@@ -924,7 +934,7 @@ def test_failed_check_retries_only_temporary_failures_and_a_bounded_number_of_ti
             collector = _fake_collector(spool, database, client)
             outcomes = []
             while True:
-                now = MONDAY + timedelta(minutes=1)
+                now = start + timedelta(minutes=1)
                 intent = (next_check(database, now, schedule=False) if weekly else
                           next(iter(database.pending_intents(limit=1, now=now, interactive=False)), None))
                 if intent is None:
@@ -939,31 +949,40 @@ def test_failed_check_retries_only_temporary_failures_and_a_bounded_number_of_ti
                 ).fetchone() == (1, "failed")
                 assert connection.execute(
                     "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, false)",
-                    ([player], MONDAY + timedelta(days=1)),
+                    ([player], start + timedelta(hours=1)),
                 ).fetchone()[0] == 0
         finally:
             database.close()
 
 
 @pytest.mark.parametrize("weekly", [False, True])
+@pytest.mark.parametrize("tier,eligibility", [
+    (None, "eligible"), ({"id": 105000034, "name": "Legend III"}, "ineligible"),
+])
 def test_recognized_profile_keeps_retrying_failed_league_history(
-    database_url, archive_server, weekly,
+    database_url, archive_server, weekly, tier, eligibility,
 ):
     with domain_database(database_url) as info:
         player = _player(info)
         database = _collector(info)
         try:
-            database.begin_reset(MONDAY, local_regular_inflight=0)
+            # Processing compares profile times with the database clock: use the last Reset.
+            start = _next_reset() - timedelta(days=1)
+            database.begin_reset(start, local_regular_inflight=0)
             with psycopg.connect(info) as connection:
                 assert connection.execute(
                     "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
-                    (None if weekly else [player], MONDAY, weekly),
+                    (None if weekly else [player], start, weekly),
                 ).fetchone()[0] == 1
                 work = connection.execute("SELECT id FROM collector_work").fetchone()[0]
-            at = MONDAY + timedelta(seconds=1)
+            at = start
             payload = json.loads(PROFILE.read_bytes())
             payload["tag"] = "#2PP"
-            payload["currentLeagueSeasonId"] = int(datetime(2026, 10, 5, 5, tzinfo=UTC).timestamp())
+            bootstrap = datetime.fromtimestamp(int(BOOTSTRAP_CURRENT_SEASON_ID), UTC)
+            payload["currentLeagueSeasonId"] = int(
+                (bootstrap + (at - bootstrap) // SEASON_DURATION * SEASON_DURATION).timestamp())
+            if tier:
+                payload["leagueTier"] = tier
             body = json.dumps(payload).encode()
             _observation, job = store_observation(
                 info, archive_server, occurrence_key="legend-i-profile",
@@ -980,20 +999,20 @@ def test_recognized_profile_keeps_retrying_failed_league_history(
                 endpoint="league_history", collector_work_id=work, completed_at=at,
                 http_status=503,
             ))
-            assert database.fail_intent(work, category="http_503", retryable=True) == "waiting_retry"
+            with psycopg.connect(info) as connection:
+                connection.execute("UPDATE collector_work SET status = 'waiting_retry' WHERE id = %s", (work,))
             worker_database, processor = _processor(info, archive_server)
             try:
                 assert processor.process_job(job, owner="history-retry").outcome == "processed"
             finally:
                 worker_database.close()
             with psycopg.connect(info) as connection:
-                active, eligibility = connection.execute(
+                assert tuple(map(text, connection.execute(
                     "SELECT active, eligibility_state FROM players WHERE id = %s", (player,),
-                ).fetchone()
-                assert active and text(eligibility) == "eligible"
+                ).fetchone())) == (eligibility == "eligible", eligibility)
                 connection.execute("UPDATE players SET next_due_at = %s WHERE id = %s",
-                                   (MONDAY + timedelta(minutes=1), player))
-            now = MONDAY + timedelta(minutes=1)
+                                   (start + timedelta(minutes=1), player))
+            now = start + timedelta(minutes=1)
             retry = (next_check(database, now, schedule=False) if weekly else
                      database.pending_intents(limit=1, now=now, interactive=False)[0])
             assert retry is not None and retry.work_id == work

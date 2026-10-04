@@ -35,9 +35,11 @@
 --
 -- Discovery work now retries league history after a failed answer. 0037's
 -- admission cancelled such work once its profile was recognized whenever
--- history was marked observed, even when that answer was an error. Admission
--- now counts history as finished only after a successful or not-found
--- answer, so the retry still fetches it.
+-- history was marked observed, even when that answer was an error, and its
+-- processing cancellation (clashlens_cancel_inactive_discovery_work) did so
+-- once the profile was ineligible, even before history was fetched. Both now
+-- count history as finished only after a successful or not-found answer, so
+-- the retry still fetches it.
 --
 -- An unchanged profile answer for discovery work normally reuses the saved
 -- observation. clashlens_profile_observation_unrecognized lets the collector
@@ -185,6 +187,31 @@ AS $$
       );
 $$;
 
+CREATE OR REPLACE FUNCTION clashlens_cancel_inactive_discovery_work(requested_player_id bigint)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+DECLARE cancelled_count integer;
+BEGIN
+    IF requested_player_id IS NULL OR requested_player_id <= 0 THEN
+        RAISE EXCEPTION 'player ID must be positive' USING ERRCODE = '22023';
+    END IF;
+    UPDATE collector_work AS work
+    SET status = 'cancelled', updated_at = clock_timestamp()
+    FROM players AS player
+    WHERE player.id = requested_player_id AND player.id = work.player_id
+      AND NOT player.active AND player.eligibility_state = 'ineligible'
+      AND work.kind = 'discovery_profile' AND work.lane = 'ordinary'
+      AND work.status IN ('pending', 'waiting_retry')
+      AND (work.league_history_status = 'not_applicable' OR EXISTS (
+          SELECT 1 FROM collector_observations AS history
+          WHERE history.id = work.league_history_observation_id
+            AND (history.http_status BETWEEN 200 AND 299 OR history.http_status = 404)))
+      AND clashlens_eligibility_checked_since(
+          player.id, clashlens_eligibility_week(work.due_at), clock_timestamp());
+    GET DIAGNOSTICS cancelled_count = ROW_COUNT;
+    RETURN cancelled_count;
+END $$;
+
 -- True when a saved profile was processed but never as a recognized league.
 CREATE FUNCTION clashlens_profile_observation_unrecognized(requested_observation_id bigint)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
@@ -207,6 +234,7 @@ BEGIN
     FOREACH signature IN ARRAY ARRAY[
         'clashlens_enqueue_eligibility_profiles(bigint[],timestamptz,boolean)',
         'clashlens_admit_discovery_profiles(timestamptz)',
+        'clashlens_cancel_inactive_discovery_work(bigint)',
         'clashlens_profile_observation_unrecognized(bigint)'
     ] LOOP
         EXECUTE format('ALTER FUNCTION %I.%s SET search_path TO pg_catalog, %I, pg_temp',
