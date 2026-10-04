@@ -24,7 +24,7 @@ export async function isLoginRevoked(
   const payload = await requestJson<{ revoked?: unknown }>(
     "/v1/account/session/check",
     "POST",
-    sessionBody(loginCookieValue, session.issuedAt),
+    sessionBody(loginCookieValue, session.issuedAtMs),
     undefined,
     undefined,
     session,
@@ -52,11 +52,11 @@ export async function revokeLogin(
   );
 }
 
-function sessionBody(loginCookieValue: string, issuedAt?: number): Buffer {
+function sessionBody(loginCookieValue: string, issuedAtMs?: number): Buffer {
   return Buffer.from(
     JSON.stringify({
       session: createLoginSessionBinding(loginCookieValue),
-      ...(issuedAt === undefined ? {} : { issued_at: issuedAt }),
+      ...(issuedAtMs === undefined ? {} : { issued_at_ms: issuedAtMs }),
     }),
     "utf8",
   );

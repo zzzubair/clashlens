@@ -32,7 +32,7 @@ const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const KEY = Buffer.from(TEST_SECRET, "base64url");
 const OTHER_KEY = Buffer.alloc(32, 0x42);
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
-const SESSION = { ...IDENTITY, issuedAt: 1_750_000 };
+const SESSION = { ...IDENTITY, issuedAtMs: 1_750_000_000 };
 
 function oauthTransaction(now = 1_750_000) {
   return createOAuthTransaction("/account", now, (size) => Buffer.alloc(size, 0x2a));
@@ -40,7 +40,7 @@ function oauthTransaction(now = 1_750_000) {
 
 describe("login cookie values", () => {
   it("signs a canonical provider+subject payload with a fixed 24-hour lifetime", () => {
-    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     const [payloadPart, signaturePart] = value.split(".");
     const payload = Buffer.from(payloadPart, "base64url").toString("utf8");
     expect(JSON.parse(payload)).toEqual({
@@ -48,6 +48,7 @@ describe("login cookie values", () => {
       p: "google",
       s: "11223344556677889900",
       i: 1_750_000,
+      m: 0,
       e: 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS,
       n: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
     });
@@ -59,15 +60,15 @@ describe("login cookie values", () => {
   });
 
   it("gives two logins of the same identity in the same second different cookies", () => {
-    const first = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
-    const second = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    const first = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
+    const second = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     expect(first).not.toBe(second);
     expect(parseLoginCookieValue(first, KEY, 1_750_100)).toEqual(SESSION);
     expect(parseLoginCookieValue(second, KEY, 1_750_100)).toEqual(SESSION);
   });
 
   it("round-trips a fresh cookie and rejects tampered values", () => {
-    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     expect(parseLoginCookieValue(value, KEY, 1_750_100)).toEqual(SESSION);
 
     const [payloadPart, signaturePart] = value.split(".");
@@ -86,12 +87,12 @@ describe("login cookie values", () => {
   });
 
   it("rejects a cookie signed with a different key", () => {
-    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     expect(parseLoginCookieValue(value, OTHER_KEY, 1_750_100)).toBeNull();
   });
 
   it("rejects expired cookies at the exact expiry second", () => {
-    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     expect(
       parseLoginCookieValue(value, KEY, 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS - 1),
     ).toEqual(SESSION);
@@ -101,7 +102,7 @@ describe("login cookie values", () => {
   });
 
   it("rejects values with a non-canonical lifetime or future issuance", () => {
-    createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     const make = (payload: Buffer) =>
       `${payload.toString("base64url")}.${createHmac("sha256", KEY)
         .update(payload)
@@ -145,7 +146,7 @@ describe("login cookie values", () => {
   });
 
   it("rejects validly signed values with wrong field shapes", () => {
-    createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     const make = (payload: Buffer) =>
       `${payload.toString("base64url")}.${createHmac("sha256", KEY)
         .update(payload)
@@ -179,22 +180,50 @@ describe("login cookie values", () => {
     expect(parseLoginCookieValue(wrongVersion, KEY, 1_750_100)).toBeNull();
   });
 
+  it("keeps the issue millisecond and accepts cookies made before it was stored", () => {
+    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_800);
+    expect(parseLoginCookieValue(value, KEY, 1_750_100)).toEqual({
+      ...IDENTITY,
+      issuedAtMs: 1_750_000_800,
+    });
+    const make = (fields: Record<string, unknown>) => {
+      const payload = Buffer.from(
+        JSON.stringify({
+          v: 1,
+          p: "google",
+          s: IDENTITY.providerSubject,
+          i: 1_750_000,
+          e: 1_750_000 + LOGIN_COOKIE_LIFETIME_SECONDS,
+          n: "A".repeat(22),
+          ...fields,
+        }),
+      );
+      return `${payload.toString("base64url")}.${createHmac("sha256", KEY)
+        .update(payload)
+        .digest("base64url")}`;
+    };
+    expect(parseLoginCookieValue(make({}), KEY, 1_750_100)).toEqual(SESSION);
+    for (const m of [-1, 1000, 1.5, "1", null]) {
+      expect(parseLoginCookieValue(make({ m }), KEY, 1_750_100)).toBeNull();
+    }
+  });
+
   it("requires a 32-byte key and a bounded identity at creation", () => {
-    expect(() => createLoginCookieValue(IDENTITY, Buffer.alloc(16), 1_750_000)).toThrow(
-      "login cookie key must be exactly 32 bytes",
-    );
+    expect(() =>
+      createLoginCookieValue(IDENTITY, Buffer.alloc(16), 1_750_000_000),
+    ).toThrow("login cookie key must be exactly 32 bytes");
     expect(() =>
       createLoginCookieValue(
         { provider: "google", providerSubject: "bad subject" },
         KEY,
-        1_750_000,
+        1_750_000_000,
       ),
     ).toThrow("bounded provider subject");
     expect(() =>
       createLoginCookieValue(
         { provider: "github", providerSubject: "x" } as unknown as LoginIdentity,
         KEY,
-        1_750_000,
+        1_750_000_000,
       ),
     ).toThrow("bounded provider subject");
   });
@@ -381,7 +410,7 @@ describe("cookie header attributes", () => {
 describe("login session requests", () => {
   it("sends the cookie's issue time with the login check, not with logout", async () => {
     mocks.requestJson.mockResolvedValue({ revoked: false });
-    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000);
+    const value = createLoginCookieValue(IDENTITY, KEY, 1_750_000_000);
     const session = parseLoginCookieValue(value, KEY, 1_750_100);
     expect(session).not.toBeNull();
     expect(await isLoginRevoked(session!, value)).toBe(false);
@@ -390,7 +419,7 @@ describe("login session requests", () => {
     expect(check[0]).toBe("/v1/account/session/check");
     expect(JSON.parse(check[2].toString("utf8"))).toEqual({
       session: createLoginSessionBinding(value),
-      issued_at: 1_750_000,
+      issued_at_ms: 1_750_000_000,
     });
     expect(check[5]).toEqual(SESSION);
     expect(logout[0]).toBe("/v1/account/session/revoke");

@@ -47,9 +47,12 @@ the API before trusting any login cookie, so a copied cookie stops working once
 its login logs out. The API keeps each fingerprint for 25 hours, one hour past
 the cookie's own lifetime. Removing a sign-in connection records when it was
 removed, also for 25 hours, and the check then refuses every login cookie
-issued through that connection at or before that second, on every browser. The
-backend sends the cookie's issue time with each check for this, so the website
-and the API must be deployed together. The browser talks only
+issued through that connection at or before that millisecond, on every
+browser. A login cookie records when it was issued to the millisecond, taken
+after the provider confirms the sign-in, so a fresh login is accepted even in
+the same second as the removal; cookies from before that field count from the
+start of their second. The backend sends the cookie's issue time with each
+check for this, so the website and the API must be deployed together. The browser talks only
 to that backend. Neither the browser nor TypeScript may access PostgreSQL or
 the raw archive directly, or reimplement Python-owned domain calculations,
 confidence rules, rankings, or cohort membership.

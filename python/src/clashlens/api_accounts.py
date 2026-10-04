@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -39,10 +39,10 @@ def resolve_account(
 
 
 def login_session_revoked(
-    database, session_hash: str, provider: str, provider_subject: str, issued_at: int
+    database, session_hash: str, provider: str, provider_subject: str, issued_at_ms: int
 ) -> bool:
     """True when this exact login logged out, or when its provider identity
-    was removed at or after the second the login cookie was issued."""
+    was removed at or after the millisecond the login cookie was issued."""
     with database.pool.connection() as connection:
         row = connection.execute(
             """
@@ -51,10 +51,15 @@ def login_session_revoked(
             ) OR EXISTS (
                 SELECT 1 FROM provider_identity_removals
                 WHERE provider = %s AND provider_subject = %s
-                  AND removed_at >= to_timestamp(%s)
+                  AND removed_at >= %s
             )
             """,
-            (session_hash, provider, provider_subject, issued_at),
+            (
+                session_hash,
+                provider,
+                provider_subject,
+                datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=issued_at_ms),
+            ),
         ).fetchone()
         return bool(row and row[0])
 

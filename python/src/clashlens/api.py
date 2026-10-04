@@ -129,9 +129,9 @@ class LoginSessionBody(StrictBody):
 
 
 class LoginSessionCheckBody(LoginSessionBody):
-    # When the login cookie was issued, in Unix seconds, so a login made
+    # When the login cookie was issued, in Unix milliseconds, so a login made
     # before its sign-in connection was removed is refused on every browser.
-    issued_at: int = Field(ge=0, le=253_402_300_799)
+    issued_at_ms: int = Field(ge=0, le=253_402_300_799_999)
 
 
 class ProviderUnlinkBody(ProviderLinkBody):
@@ -716,7 +716,7 @@ def create_app(
             body.session,
             context.proof.provider,
             context.proof.provider_subject,
-            body.issued_at,
+            body.issued_at_ms,
         )
         return JSONResponse(status_code=200, content={"revoked": revoked})
 

@@ -256,8 +256,8 @@ describe("login loader", () => {
 
   it("redirects an already-signed-in browser to the validated return path", async () => {
     const config = testConfig();
-    const issuedAt = Math.floor(Date.now() / 1000);
-    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, issuedAt);
+    const issuedAtMs = Date.now();
+    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, issuedAtMs);
     await expect(
       loginLoader({
         request: new Request(`${ORIGIN}/login?returnPath=%2Faccount%2Fgroups`, {
@@ -271,7 +271,7 @@ describe("login loader", () => {
       return true;
     });
     expect(mocks.isLoginRevoked).toHaveBeenCalledWith(
-      { ...IDENTITY, issuedAt },
+      { ...IDENTITY, issuedAtMs },
       cookie,
       250,
     );
@@ -279,11 +279,7 @@ describe("login loader", () => {
 
   it("shows the sign-in page when the short login check fails", async () => {
     const config = testConfig();
-    const cookie = createLoginCookieValue(
-      IDENTITY,
-      config.loginSecret,
-      Math.floor(Date.now() / 1000),
-    );
+    const cookie = createLoginCookieValue(IDENTITY, config.loginSecret, Date.now());
     mocks.isLoginRevoked.mockRejectedValueOnce(new Error("timed out"));
     const result = await loginLoader({
       request: new Request(`${ORIGIN}/login`, {
@@ -379,7 +375,11 @@ describe("logout route", () => {
   it("stops a copied login cookie from working after logout", async () => {
     const config = testConfig();
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const login = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds - 60);
+    const login = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      (nowSeconds - 60) * 1000,
+    );
     const copied = `${LOGIN_COOKIE_NAME}=${login}`;
     const account = () =>
       new Request(`${ORIGIN}/account`, { headers: { cookie: copied } });
@@ -394,7 +394,7 @@ describe("logout route", () => {
     } as never);
     expect((response as Response).status).toBe(302);
     expect(mocks.revokeLogin).toHaveBeenCalledWith(
-      { ...IDENTITY, issuedAt: nowSeconds - 60 },
+      { ...IDENTITY, issuedAtMs: (nowSeconds - 60) * 1000 },
       login,
     );
 
@@ -410,7 +410,7 @@ describe("logout route", () => {
     } as never);
     expect(loginPage).toEqual({ loginAvailable: true, returnPath: "/account" });
     // A fresh sign-in is a new login and still works.
-    const fresh = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds);
+    const fresh = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds * 1000);
     await expect(
       requireLogin(
         new Request(`${ORIGIN}/account`, {
@@ -423,7 +423,11 @@ describe("logout route", () => {
   it("returns home with a notice and still clears this browser when the logout cannot be recorded", async () => {
     const config = testConfig();
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const login = createLoginCookieValue(IDENTITY, config.loginSecret, nowSeconds - 60);
+    const login = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      (nowSeconds - 60) * 1000,
+    );
     mocks.revokeLogin.mockRejectedValueOnce(new Error("unavailable"));
     const response = (await logoutAction({
       request: new Request(`${ORIGIN}/logout`, {
@@ -677,11 +681,15 @@ describe("auth.google.callback loader", () => {
 
   it("rejects a privileged callback when the initiating login session changed", async () => {
     const issuedAt = now() - 10;
-    const originalLogin = createLoginCookieValue(IDENTITY, config.loginSecret, issuedAt);
+    const originalLogin = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      issuedAt * 1000,
+    );
     const changedLogin = createLoginCookieValue(
       IDENTITY,
       config.loginSecret,
-      issuedAt + 1,
+      (issuedAt + 1) * 1000,
     );
     const transaction = createOAuthTransaction(
       "/account/providers",
@@ -713,7 +721,7 @@ describe("auth.google.callback loader", () => {
     const originalLogin = createLoginCookieValue(
       IDENTITY,
       config.loginSecret,
-      now() - 10,
+      (now() - 10) * 1000,
     );
     mocks.loggedOut.add(originalLogin);
     const transaction = createOAuthTransaction(
@@ -763,7 +771,11 @@ describe("auth.google.callback loader", () => {
   }
 
   it("ends the login in the same API request that removes the provider it used", async () => {
-    const login = createLoginCookieValue(IDENTITY, config.loginSecret, now() - 10);
+    const login = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      (now() - 10) * 1000,
+    );
     const unlinkProvider = vi.fn(async () => ({ providers: ["discord"] }));
     mocks.createPythonClient.mockReturnValue({
       getAccount: vi.fn(async () => ({ providers: ["discord", "google"] })),
@@ -787,7 +799,11 @@ describe("auth.google.callback loader", () => {
   });
 
   it("reports an unlink failure instead of success and keeps the login", async () => {
-    const login = createLoginCookieValue(IDENTITY, config.loginSecret, now() - 10);
+    const login = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      (now() - 10) * 1000,
+    );
     mocks.createPythonClient.mockReturnValue({
       getAccount: vi.fn(async () => ({ providers: ["discord", "google"] })),
       unlinkProvider: vi.fn(async () => {
@@ -820,6 +836,12 @@ describe("auth.google.callback loader", () => {
   });
 
   it("clears the transaction, sets a 24-hour login cookie, and redirects to the safe path for an existing account", async () => {
+    let validatedAtMs = 0;
+    service.validateCallback.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      validatedAtMs = Date.now();
+      return IDENTITY;
+    });
     const { transaction, header } = oauthCookie(config, "/account/saved-players");
     const request = new Request(
       `${ORIGIN}/auth/google/callback?code=provider-code&state=${transaction.state}`,
@@ -846,10 +868,11 @@ describe("auth.google.callback loader", () => {
       setCookies[1].indexOf("=") + 1,
       setCookies[1].indexOf(";"),
     );
-    expect(parseLoginCookieValue(loginValue, config.loginSecret, now())).toEqual({
-      ...IDENTITY,
-      issuedAt: expect.any(Number),
-    });
+    // The login is dated after the provider confirmed it, not when the
+    // callback arrived.
+    const login = parseLoginCookieValue(loginValue, config.loginSecret, now());
+    expect(login).toEqual({ ...IDENTITY, issuedAtMs: expect.any(Number) });
+    expect(login!.issuedAtMs).toBeGreaterThanOrEqual(validatedAtMs);
   });
 
   it("redirects a documented account_not_found (403 and defensive 404) to setup with the login cookie", async () => {
@@ -878,7 +901,7 @@ describe("auth.google.callback loader", () => {
           config.loginSecret,
           now(),
         ),
-      ).toEqual({ ...IDENTITY, issuedAt: expect.any(Number) });
+      ).toEqual({ ...IDENTITY, issuedAtMs: expect.any(Number) });
     }
   });
 

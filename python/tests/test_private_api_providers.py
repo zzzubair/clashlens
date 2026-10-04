@@ -267,14 +267,16 @@ def _session_call(
     session: str,
     *,
     provider: str = "google",
-    issued_at: int | None = None,
+    issued_at_ms: int | None = None,
 ):
     """Check or log out one login. A check sends the login cookie's issue
-    time, a minute ago unless given."""
+    time in milliseconds, a minute ago unless given."""
     target = f"/v1/account/session/{action}"
     fields = {"session": session}
     if action == "check":
-        fields["issued_at"] = int(time.time()) - 60 if issued_at is None else issued_at
+        fields["issued_at_ms"] = (
+            int(time.time() * 1000) - 60_000 if issued_at_ms is None else issued_at_ms
+        )
     body = json.dumps(fields).encode()
     return client.post(
         target,
@@ -314,7 +316,7 @@ def _change_provider(
 def _removed_at(database: ApiDatabase, provider: str) -> int | None:
     with database.pool.connection() as connection:
         row = connection.execute(
-            "SELECT floor(extract(epoch FROM removed_at))::bigint"
+            "SELECT floor(extract(epoch FROM removed_at) * 1000)::bigint"
             " FROM provider_identity_removals WHERE provider = %s",
             (provider,),
         ).fetchone()
@@ -461,7 +463,7 @@ def test_removing_a_connection_ends_its_logins_on_every_browser(
                 # connection again never revives the older logins.
                 removed_at = _removed_at(database, removed)
                 assert removed_at is not None
-                fresh = {"provider": removed, "issued_at": removed_at + 1}
+                fresh = {"provider": removed, "issued_at_ms": removed_at + 1}
                 assert _session_call(client, "check", "f" * 43, **fresh).json() == {
                     "revoked": False
                 }
@@ -512,7 +514,10 @@ def test_removals_over_25_hours_old_are_deleted_and_end_nothing(database_url: st
                         "UPDATE provider_identity_removals"
                         " SET removed_at = now() - interval '26 hours'"
                     )
-                old_login = {"provider": "discord", "issued_at": int(time.time()) - 27 * 3600}
+                old_login = {
+                    "provider": "discord",
+                    "issued_at_ms": int(time.time() * 1000) - 27 * 3_600_000,
+                }
                 assert _session_call(client, "check", "d" * 43, **old_login).json() == {
                     "revoked": True
                 }
@@ -527,5 +532,48 @@ def test_removals_over_25_hours_old_are_deleted_and_end_nothing(database_url: st
                 assert _session_call(client, "check", "d" * 43, **old_login).json() == {
                     "revoked": False
                 }
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("removed", ["google", "discord"])
+def test_a_login_in_the_same_second_as_a_removal_is_judged_by_millisecond(
+    database_url: str, removed: str
+) -> None:
+    other = "discord" if removed == "google" else "google"
+    with migrated_production_database(database_url) as connection_info:
+        migrate_login_tables(connection_info)
+        database = ApiDatabase(connection_info)
+        try:
+            with _app(database) as client:
+                _create_account(
+                    client, provider=other, subject=SUBJECTS[other], username="samesecond"
+                )
+                link = _change_provider(client, "POST", removed, signed_in_with=other)
+                assert link.status_code == 200
+                unlink = _change_provider(client, "DELETE", removed, signed_in_with=other)
+                assert unlink.status_code == 200
+                # Pin the removal to 200 milliseconds into a recent second.
+                second = int(time.time()) - 10
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE provider_identity_removals"
+                        " SET removed_at = to_timestamp(%s) + interval '200 milliseconds'",
+                        (second,),
+                    )
+                assert _removed_at(database, removed) == second * 1000 + 200
+
+                def check(issued_at_ms: int) -> bool:
+                    response = _session_call(
+                        client, "check", "s" * 43, provider=removed, issued_at_ms=issued_at_ms
+                    )
+                    assert response.status_code == 200, response.text
+                    return response.json()["revoked"]
+
+                assert check(second * 1000 + 800) is False
+                assert check(second * 1000 + 201) is False
+                assert check(second * 1000 + 200) is True
+                assert check(second * 1000 + 100) is True
+                assert check(second * 1000 - 1) is True
         finally:
             database.close()

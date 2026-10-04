@@ -163,7 +163,7 @@ export async function completeProviderCallback(
   if (transaction.intent === "login") {
     const loginCookie = buildSetCookieHeader(
       LOGIN_COOKIE_NAME,
-      createLoginCookieValue(validated, config.loginSecret, nowSeconds),
+      createLoginCookieValue(validated, config.loginSecret, Date.now()),
       LOGIN_COOKIE_LIFETIME_SECONDS,
       config.cookieSecure,
     );
