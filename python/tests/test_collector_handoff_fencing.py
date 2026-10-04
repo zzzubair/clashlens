@@ -13,6 +13,7 @@ from typing import Any
 import psycopg
 import pytest
 from test_collector import _Client, _collector, _Reservation, _Spool, _Store
+from test_collector_upload_slots import _handoff_for
 
 from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.collector_http import FetchedResponse, KeyPool
@@ -285,6 +286,48 @@ def test_only_known_unchanged_responses_skip_the_spool() -> None:
         "battle_log",
     ]
     assert spool.handoffs == {}
+
+
+def test_unrelated_players_skip_the_spool_while_a_save_lock_is_held() -> None:
+    class CompactingStore(_Store):
+        checks = 0
+
+        def record_unchanged_response(self, _handoff: Any) -> bool:
+            self.checks += 1
+            return True
+
+    spool = _Spool()
+    store = CompactingStore(spool)
+    collector = _collector(spool, store, _Client(spool))
+    now = datetime.now(UTC)
+    held, other = (CollectorWork(1, tag, now) for tag in ("#200C", "#2022"))
+    # These two players shared one lock when there were only 256.
+    lock = collector._handoff_lock(_handoff_for(collector, "#200C", now))
+
+    async def scenario() -> None:
+        for work in (held, other):
+            await collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+        async with lock:
+            # The unrelated player's unchanged answer skips the spool...
+            assert await asyncio.wait_for(
+                collector.collect_player(other, lane="ordinary", endpoints=("profile",)),
+                1,
+            ) == ["recorded"]
+            assert store.checks == 1
+            # ...but the same player's answer still waits for its lock.
+            same = asyncio.create_task(
+                collector.collect_player(held, lane="ordinary", endpoints=("profile",))
+            )
+            await asyncio.sleep(0.1)
+            assert not same.done()
+        assert await same == ["recorded"]
+
+    asyncio.run(scenario())
+
+    assert store.checks == 1
+    assert [handoff.identity_key for handoff in store.handoffs] == [
+        "#200C", "#2022", "#200C",
+    ]
 
 
 def test_refresh_is_saved_while_an_unchanged_check_waits() -> None:
