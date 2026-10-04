@@ -593,7 +593,10 @@ for (const [stall, read] of [
 ] as const) {
   test(`a Refresh status read that ${read} stops at the one-minute deadline`, async ({
     page,
+    request,
   }) => {
+    // A recent saved check skips the automatic Refresh, so only the click below reads status.
+    await serveWithAge(page, request, 0);
     const work = refreshWork();
     // The Refresh itself is faked, so it spends none of the shared allowance.
     await page.route("**/resources/players/*/refresh*", (route) =>
