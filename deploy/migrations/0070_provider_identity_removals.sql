@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0069.
+-- Clash Lens deployment migration 0070.
 -- Removing a sign-in connection ends every browser login made through it.
 -- The API stores when each provider identity was last removed, in the same
 -- transaction as the removal, and the login check refuses any login cookie
@@ -21,6 +21,6 @@ CREATE TABLE IF NOT EXISTS provider_identity_removals (
 REVOKE ALL PRIVILEGES ON TABLE provider_identity_removals FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE provider_identity_removals TO clashlens_python_api;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (69)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (70)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

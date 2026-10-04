@@ -24,7 +24,7 @@ def migrate_login_tables(connection_info: str) -> None:
     with psycopg.connect(connection_info, autocommit=True) as connection:
         for name in (
             "0054_login_session_revocations.sql",
-            "0069_provider_identity_removals.sql",
+            "0070_provider_identity_removals.sql",
         ):
             connection.execute((ROOT / "deploy/migrations" / name).read_text())
 
