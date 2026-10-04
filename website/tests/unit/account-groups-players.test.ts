@@ -334,8 +334,5 @@ describe("adding and removing one group player", () => {
     ).replaceAll("<!-- -->", "");
     for (const text of ["20 of 20 players", "1 of 20 players", "No players yet"])
       expect(html).toContain(text);
-    // Every group name box stops at the 80 characters Python accepts.
-    expect(html.match(/name="name"/g)).toHaveLength(4);
-    expect(html.match(/<input[^>]*maxLength="80"[^>]*name="name"/g)).toHaveLength(4);
   });
 });

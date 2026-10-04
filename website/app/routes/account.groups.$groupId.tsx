@@ -209,7 +209,7 @@ export default function GroupCompareRoute() {
         </p>
       ) : null}
 
-      {comparison.players.some((player) => player.inGroup) ? (
+      {comparison.players.length > 0 ? (
         <>
           <p className="section-note">
             Last {days} days adds up each player&apos;s trophy change on counted days

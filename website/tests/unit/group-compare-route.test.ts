@@ -278,9 +278,18 @@ describe("group comparison", () => {
     expect(html).not.toContain("No players in this group yet");
   });
 
-  it("says a group without players has nobody to compare", async () => {
+  it("shows your own players alongside a group without members", async () => {
     const comparison = worstComparison(3);
     comparison.players = comparison.players.filter((player) => !player.inGroup);
+    const html = await renderComparison(comparison);
+    expect(html.match(/<tr/g)).toHaveLength(2);
+    expect(html).toContain("not in this group");
+    expect(html).not.toContain("No players in this group yet");
+  });
+
+  it("says a comparison without any players has nobody to compare", async () => {
+    const comparison = worstComparison(3);
+    comparison.players = [];
     const html = await renderComparison(comparison);
     expect(html).toContain("No players in this group yet");
     expect(html).toContain(`href="/account/groups#group-${comparison.groupId}"`);

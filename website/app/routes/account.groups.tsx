@@ -14,7 +14,6 @@ import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
 import {
   isInappropriateName,
   MAX_GROUP_TAGS,
-  MAX_NAME_LENGTH,
   normalizeGroupName,
   normalizeSubmittedPlayerTag,
 } from "../lib/account-validation";
@@ -662,7 +661,6 @@ function NameField({
         id={id}
         name="name"
         type="text"
-        maxLength={MAX_NAME_LENGTH}
         autoComplete="off"
         defaultValue={value}
         aria-invalid={error ? true : undefined}
