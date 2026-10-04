@@ -35,7 +35,7 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
   await expect(page).toHaveURL(/category=spells/);
   await expect(page.getByRole("heading", { name: "Spells", exact: true })).toBeVisible();
 
-  await page.getByLabel("Players").selectOption("top-50");
+  await page.getByLabel("Players", { exact: true }).selectOption("top-50");
   await expect(page).toHaveURL(/population=top-50/);
   await page
     .getByRole("form", { name: "Army analytics filters" })
