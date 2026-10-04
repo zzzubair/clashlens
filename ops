@@ -21,11 +21,12 @@ ADMIN_SECRET_ACTIVE=false
 UP_IN_PROGRESS=false
 OPS_LOCK_FD=
 TIMER_UNITS=(clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service clashlens-archive-retention.timer clashlens-archive-retention.service clashlens-ranked-day-compaction.timer clashlens-ranked-day-compaction.service clashlens-history-retention.timer clashlens-history-retention.service)
+source "$ROOT/ops-keep-running.sh"
 
 usage() {
   cat <<'EOF'
 Usage: ./ops build [--fixture]
-       ./ops up [--fixture]
+       ./ops up [--fixture] [--restart-collector]
        ./ops down
        ./ops status
        ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention|ranked-day-compaction|history-retention]
@@ -41,6 +42,8 @@ Usage: ./ops build [--fixture]
 
 build creates a pinned release. up installs and starts that release; it never
 builds or pulls an image. --fixture is an isolated stack with no live keys.
+up leaves the collector, database, pod and network running when their images
+and configuration are unchanged; --restart-collector restarts them anyway.
 down disables the stack across reboot and keeps all database, spool and archive data.
 EOF
 }
@@ -550,7 +553,7 @@ source_revision() {
 source_fingerprint() {
   local file relative digest listing found_ops=false
   listing=$(mktemp)
-  if ! git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops | LC_ALL=C sort -z > "$listing"; then
+  if ! git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops ops-keep-running.sh | LC_ALL=C sort -z > "$listing"; then
     rm -f "$listing"
     die "cannot enumerate release inputs"
   fi
@@ -666,7 +669,7 @@ promote_active_release() {
   local temporary
   temporary=$(mktemp "$STATE_DIR/active-release.env.XXXXXX")
   chmod 600 "$temporary"
-  cat -- "$RELEASE_FILE" > "$temporary"
+  { grep -v -e '^COLLECTOR_IMAGE=' -e '^POSTGRES_IMAGE=' -- "$RELEASE_FILE"; printf 'COLLECTOR_IMAGE=%s\nPOSTGRES_IMAGE=%s\n' "${RELEASE[COLLECTOR_IMAGE]}" "${RELEASE[POSTGRES_IMAGE]}"; } > "$temporary"
   mv -f "$temporary" "$ACTIVE_RELEASE_FILE"
 }
 
@@ -1095,21 +1098,6 @@ ensure_linger() {
   [[ "$($LOGINCTL_BIN show-user "$USER" --property=Linger --value)" == yes ]] || die "could not enable user lingering for reboot survival"
 }
 
-stop_units() {
-  "$SYSTEMCTL_BIN" --user stop "${TIMER_UNITS[@]}" >/dev/null 2>&1 || true
-  "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
-  local unit state
-  for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
-    "$SYSTEMCTL_BIN" --user stop "$unit.service" >/dev/null 2>&1 || true
-  done
-  state=$($SYSTEMCTL_BIN --user is-enabled clashlens.target 2>/dev/null || true)
-  [[ "$state" != enabled && "$state" != enabled-runtime ]] || die "could not disable clashlens.target"
-  for unit in clashlens-website clashlens-worker clashlens-api clashlens-collector clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
-    state=$($SYSTEMCTL_BIN --user is-active "$unit.service" 2>/dev/null || true)
-    case "$state" in active|activating|deactivating|reloading) die "could not stop $unit.service" ;; esac
-  done
-}
-
 container_name() {
   local prefix=$1 service=$2
   case "$service" in
@@ -1172,6 +1160,7 @@ up_stack() {
   guard_systemd_units
   UP_IN_PROGRESS=true
   write_alert_intent stopped
+  keep_running_plan
   stop_units
   mkdir -p "$STATE_DIR"
   local mode_file
@@ -1182,6 +1171,7 @@ up_stack() {
   write_environment
   prepare_secrets
   render_units
+  keep_running_check
   "$SYSTEMCTL_BIN" --user daemon-reload
   "$SYSTEMCTL_BIN" --user start clashlens-postgres.service
   wait_postgres
@@ -1204,6 +1194,7 @@ up_stack() {
     die "the healthy stack could not be enabled for reboot"
   fi
   promote_active_release
+  keep_running_record
   write_alert_intent running
   UP_IN_PROGRESS=false
   printf 'Clash Lens %s is ready at http://127.0.0.1:%s and is enabled after reboot.\n' "$MODE" "$WEBSITE_PORT"
@@ -1460,7 +1451,11 @@ command=${1:-}
 shift
 case "$command" in
   build) acquire_mutation_lock; parse_mode "$@"; build_release ;;
-  up) acquire_mutation_lock; parse_mode "$@"; up_stack ;;
+  up)
+    acquire_mutation_lock; up_args=()
+    for arg; do if [[ "$arg" == --restart-collector ]]; then RESTART_COLLECTOR=true; else up_args+=("$arg"); fi; done
+    parse_mode "${up_args[@]}"; up_stack
+    ;;
   down)
     (($# == 0)) || die "down takes no arguments"
     acquire_mutation_lock

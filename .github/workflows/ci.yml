@@ -139,7 +139,7 @@ jobs:
       - name: Verify packaged operations and support wrappers
         run: |
           podman run --rm --tmpfs /tmp:rw,mode=1777 clashlens-python-check:ci \
-            uv run --locked pytest -q tests/test_ops_backup.py tests/test_support_wrapper.py
+            uv run --locked pytest -q tests/test_ops_backup.py tests/test_ops_keep_running.py tests/test_support_wrapper.py
 
   packaged-python-tests:
     name: Packaged Python tests, group ${{ matrix.group }}

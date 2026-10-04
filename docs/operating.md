@@ -201,7 +201,10 @@ before that, a one-service restart restarts the whole stack. To check it, run
 it again, and confirm the PostgreSQL and collector start times are unchanged
 (when the restarted service is the collector, only PostgreSQL's). Restarting
 `clashlens-postgres.service` also restarts the worker, API and collector, which
-use the database. `./ops down` and `./ops up` stop and start the whole stack.
+use the database. `./ops down` stops the whole stack. `./ops up` restarts it,
+but leaves the collector, PostgreSQL, pod and network running when none of them
+changed ([rule](deployment.md#when-up-restarts-the-collector));
+`./ops up --restart-collector` restarts them anyway.
 
 Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
 to interpret messages. Confirm both the measurements below and the recovery
