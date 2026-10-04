@@ -39,6 +39,7 @@ from .army_analytics import (
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
 )
+from .clashking import ClashKingClient, get_past_seasons
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .operating import ApiMetrics, elapsed
 from .profile import normalize_player_tag
@@ -168,6 +169,7 @@ def create_app(
     official_credential_fingerprint: str | None = None,
     verification_cooldown_seconds: int = 5,
     api_metrics: ApiMetrics | None = None,
+    clashking_client: ClashKingClient | None = None,
 ) -> FastAPI:
     if not 1 <= max_body_bytes <= _MAX_SUPPORTED_BODY_BYTES:
         raise ValueError("max_body_bytes exceeds the supported maximum")
@@ -190,6 +192,7 @@ def create_app(
     production_database = database
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
     operating_metrics = api_metrics or ApiMetrics()
+    clashking = clashking_client or ClashKingClient()
     freshness_lock = Lock()
     freshness_refresh_after = 0.0
     leaderboard_metrics: dict[str, Any] = {}
@@ -426,6 +429,16 @@ def create_app(
                 }
             ),
         )
+
+    @app.get("/v1/players/{tag}/past-seasons")
+    def player_past_seasons(tag: str, request: Request) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        result = get_past_seasons(
+            production_database, clashking, _safe_tag(tag), now=current_time()
+        )
+        if result is None:
+            raise ApiError(404, "player_not_found")
+        return JSONResponse(status_code=200, content=_json_safe(result))
 
     @app.get("/v1/players/{tag}/seasons/{season_id}")
     def player_season(tag: str, season_id: str, request: Request) -> JSONResponse:

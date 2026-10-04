@@ -824,3 +824,20 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.4rem;
 }
+
+.player-page .past-seasons .table-wrap {
+  max-width: 40rem;
+}
+
+.player-page .past-seasons .data-table {
+  min-width: 0;
+}
+
+.player-page .past-seasons-source {
+  margin: 0 0 0.5rem;
+  font-weight: 650;
+}
+
+.player-page .past-seasons-source a {
+  text-decoration: underline;
+}

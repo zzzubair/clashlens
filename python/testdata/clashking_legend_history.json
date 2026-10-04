@@ -1,0 +1,25 @@
+{
+  "items": [
+    {"season": "v2-2026-08-31T05:00:00Z", "tag": "#2PP", "name": "Fixture", "trophies": 5600, "attackWins": 150, "defenseWins": 0, "rank": 4, "leagueTier": {"id": 105000036, "name": "Legend League I"}},
+    {"season": "v2-2026-08-03T05:00:00Z", "tag": "#2PP", "name": "Fixture", "trophies": 5856, "attackWins": 224, "defenseWins": 0, "rank": 1, "leagueTier": {"id": 105000036, "name": "Legend League I"}},
+    {"season": "v2-2026-07-06T05:00:00Z", "tag": "#2PP", "name": "Fixture", "trophies": 5909, "attackWins": 223, "defenseWins": 0, "rank": 3, "leagueTier": {"id": 105000036, "name": "Legend League I"}},
+    {"season": "v2-2026-05-11T05:00:00Z", "tag": "#2PP", "name": "Fixture", "trophies": 5456, "attackWins": 160, "defenseWins": 1, "rank": 78, "leagueTier": {"id": 105000036, "name": "Legend League I"}},
+    {"season": "2026-05-18", "tag": "#2PP", "name": "Fixture", "trophies": 5456, "attackWins": 228, "defenseWins": 3, "rank": 81, "leagueTier": {"id": 105000036, "name": "Legend League I"}},
+    {"season": "2026-04-20", "tag": "#2PP", "name": "Fixture", "trophies": 5791, "attackWins": 148, "defenseWins": 3, "rank": 100, "leagueTier": {"id": 105000034, "name": "Legend League III"}},
+    {"season": "2026-04-21", "tag": "#2PP", "name": "Fixture", "trophies": 5000, "attackWins": 1, "defenseWins": 0, "rank": 9},
+    {"season": "2025-12-29", "tag": "#2PP", "name": "Fixture", "trophies": 6562, "rank": 8, "leagueTier": {"id": 105000034, "name": "Legend League III"}},
+    {"season": "2025-11-03", "tag": "#2PP", "name": "Fixture", "trophies": 5935, "attackWins": 222, "defenseWins": 0, "rank": 10, "leagueTier": {"id": 105000034, "name": "Legend League III"}},
+    {"season": "2025-10-06", "tag": "#2PP", "name": "Fixture", "trophies": 6232, "attackWins": 263, "defenseWins": 0, "rank": 399, "leagueTier": {"id": 105000000, "name": "Unranked"}},
+    {"season": "2025-10-06", "tag": "#2PP", "name": "Fixture", "trophies": 6232, "attackWins": 263, "defenseWins": 0, "rank": 399, "leagueTier": {"id": 105000034, "name": "Legend League III"}},
+    {"season": "2025-09", "tag": "#2PP", "name": "Fixture", "trophies": 6232, "attackWins": 263, "defenseWins": 0, "rank": 399},
+    {"season": "2024-07", "tag": "#2PP", "name": "Fixture", "trophies": 5011, "attackWins": 67, "defenseWins": 26, "rank": 934651},
+    {"season": "2021-12", "tag": "#2PP", "name": "Fixture", "trophies": 4965, "attackWins": 171, "defenseWins": 2},
+    {"season": "2026-13", "tag": "#2PP", "name": "Fixture", "trophies": 5000, "rank": 1},
+    {"season": "next", "tag": "#2PP", "name": "Fixture", "trophies": 5000, "rank": 1},
+    {"season": "2023-05", "tag": "#2PP", "name": "Fixture", "trophies": "5000", "rank": 1},
+    {"season": "0000-05", "tag": "#2PP", "name": "Fixture", "trophies": 5000, "rank": 1},
+    {"season": "v2-9999-12-31T05:00:00Z", "tag": "#2PP", "name": "Fixture", "trophies": 5000, "rank": 1},
+    {"season": "2022-01", "tag": "#2PP", "name": "Fixture", "trophies": 9999999999, "rank": 1},
+    "not a row"
+  ]
+}
