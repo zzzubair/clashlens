@@ -61,7 +61,10 @@ CONDITIONS = {
         "./ops failed-items",
     ),
     "processing": (
-        "Ordinary saved work, not counting publication builds, has waited over 30 minutes to be processed",
+        (
+            "Daily result calculations have waited at least 15 minutes, or ordinary work"
+            " excluding publication builds has waited at least 30 minutes"
+        ),
         "./ops logs worker",
     ),
     "uploads": (
@@ -71,6 +74,13 @@ CONDITIONS = {
     "publication": (
         "A Reset's frozen leaderboard or army results are over an hour past their publication time",
         "./ops logs worker",
+    ),
+    "monitoring": (
+        (
+            "A disk, restart-history, Live Leaderboard or Reset publication check"
+            " has been unreadable for at least 10 minutes"
+        ),
+        "journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager",
     ),
     # Checked from outside the server by --uptime, not by alert-check.
     "site": (
@@ -86,6 +96,15 @@ WORK_NAMES = {
     "replay_observation": "replayed API responses",
     "reconcile_ranked_day": "daily result calculations",
     "redecode_army": "army re-decoding",
+}
+
+# Checks that would otherwise stay unknown, and so hide their own problem,
+# without any warning. Other unreadable checks already have their own.
+UNREADABLE = {
+    "Spool or data filesystem usage unavailable; disk alert cannot clear",
+    "Restart history unavailable; run ./ops logs",
+    "Live Leaderboard freshness unavailable; run ./ops logs api",
+    "Reset publication status unavailable; run ./ops logs api",
 }
 
 # A recovery is sent only after this long without the problem, so a problem
@@ -441,6 +460,9 @@ def observe(
         ):
             age = metrics.get(f"{prefix}oldest_pending_{kind}_age_seconds")
             findings[name] = None if age is None else age >= limit
+        # Daily result calculations are ordinary work with a shorter limit.
+        if metrics.get(f"{prefix}oldest_job_reconcile_ranked_day_age_seconds", 0) >= 900:
+            findings["processing"] = True
         # Name the oldest ordinary job type so the alert says which work is behind.
         age, work = max(
             (
@@ -580,6 +602,16 @@ def observe(
         else:
             state.pop("leaderboard_stale_since", None)
             findings[name] = False
+    # Each unreadable check keeps its own first-failure time; one readable
+    # run restarts its ten minutes.
+    failing = state.get("monitoring_failing_since", {})
+    failing = {error: failing.get(error, now) for error in errors if error in UNREADABLE}
+    state["monitoring_failing_since"] = failing
+    if failing:
+        since = max(min(failing.values()), state.get("resumed_at", 0))
+        findings["monitoring"] = True if now - since >= 600 else None
+    else:
+        findings["monitoring"] = False
     findings.pop("site")
     return findings, errors
 

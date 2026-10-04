@@ -654,18 +654,18 @@ def test_processing_alert_ignores_builds_and_names_the_oldest_work(runtime):
     prefix = "clashlens_collector_"
     rt.metrics |= {
         f"{prefix}oldest_pending_processing_age_seconds": 1799,
-        f"{prefix}oldest_job_reconcile_ranked_day_age_seconds": 1799,
-        f"{prefix}oldest_job_process_observation_age_seconds": 600,
+        f"{prefix}oldest_job_reconcile_ranked_day_age_seconds": 899,
+        f"{prefix}oldest_job_process_observation_age_seconds": 1799,
         f"{prefix}oldest_job_build_snapshot_age_seconds": 7200,
     }
     assert rt.run() == 0
     assert not rt.posts
     rt.metrics[f"{prefix}oldest_pending_processing_age_seconds"] = 1860
-    rt.metrics[f"{prefix}oldest_job_reconcile_ranked_day_age_seconds"] = 1860
+    rt.metrics[f"{prefix}oldest_job_process_observation_age_seconds"] = 1860
     assert rt.run() == 0
     assert len(rt.posts) == 1
-    assert "over 30 minutes" in rt.posts[0]["content"]
-    assert "Oldest waiting: daily result calculations, 31 minutes." in rt.posts[0]["content"]
+    assert "at least 30 minutes" in rt.posts[0]["content"]
+    assert "Oldest waiting: saved API responses, 31 minutes." in rt.posts[0]["content"]
 
 
 def test_missing_failure_age_is_unknown_unless_nothing_has_failed(runtime):
@@ -1047,7 +1047,11 @@ def test_never_started_or_unreachable_tracker_alerts_after_ten_minutes(
     assert rt.run() == int(missing_metrics)
     rt.now += 600
     assert rt.run() == int(missing_metrics)
-    assert len(rt.posts) == 1
+    # An unreachable collector also leaves spool usage unreadable.
+    assert len(rt.posts) == 1 + int(missing_metrics)
+    assert "No successful official API fetch" in rt.posts[0]["content"]
+    if missing_metrics:
+        assert "unreadable for at least 10 minutes" in rt.posts[1]["content"]
 
 
 def test_unknown_checks_do_not_send_false_recovery(runtime):

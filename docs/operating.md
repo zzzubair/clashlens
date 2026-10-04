@@ -321,7 +321,8 @@ Check collection and leaderboard freshness separately; a processing backlog
 alone does not prove the leaderboard is stale.
 
 **First checks:** `./ops queue-status` and the collector's
-`oldest_due_age_seconds` and `oldest_pending_processing_age_seconds`, then
+`oldest_due_age_seconds`, `oldest_pending_processing_age_seconds` and, for
+daily result calculations, `oldest_job_reconcile_ranked_day_age_seconds`, then
 `./ops logs collector --since '15 minutes ago' --no-pager` for timeouts and
 `./ops logs worker --since '15 minutes ago' --no-pager` for processing errors.
 A growing overdue check with many timeouts points at the official API; a
@@ -602,6 +603,13 @@ SSH, it is powered off or offline.
 **Recovered:** the relay's check answers again and posts its recovery.
 
 ### When alerts themselves fail
+
+The monitoring warning means a disk, restart-history, Live Leaderboard or
+Reset publication check has been unreadable for ten minutes. Run
+`journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager`
+to see which diagnostic repeats. Its recovery only means all four checks can
+be read again; a disk, Live Leaderboard or publication problem they then
+report keeps its own alert open.
 
 Use the daily timer status and alert journal commands. Check connectivity and
 the secret file's owner and permissions through the

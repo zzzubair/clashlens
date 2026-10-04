@@ -709,7 +709,7 @@ without printing configuration files.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the eleven conditions below and posts changes to the
+`./ops alert-check` checks the twelve conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
@@ -823,9 +823,16 @@ use the [operating notes](operating.md#respond-to-alerts).
   A manual retry of a failed item clears the alert early; a repeat failure
   raises a fresh alert.
 - **Saved work waiting too long**, as two separate alerts:
-  - ordinary processing work (saved responses, daily calculations and army
-    re-decoding) waiting at least **30 minutes**, from
-    `oldest_pending_processing_age_seconds`. Leaderboard, analytics and
+  - ordinary processing work waiting too long: daily result calculations
+    waiting at least **15 minutes**, from the collector's
+    `oldest_job_reconcile_ranked_day_age_seconds`, or any ordinary work
+    (saved responses, daily calculations and army re-decoding) waiting at
+    least **30 minutes**, from `oldest_pending_processing_age_seconds`. Both
+    share one alert, so daily work reaching 30 minutes sends no second
+    message, and it recovers only when both are below their limits. A missing
+    daily age on an otherwise complete measurement means no daily work is
+    waiting. There is no Reset exemption, and after an intentional resume
+    work that is already old alerts straight away. Leaderboard, analytics and
     export builds are left out because on Oct 3–4 they routinely ran 24–63
     minutes, which would have kept this alert open and hidden a real backlog.
     The alert names the oldest kind of waiting work and its age, from the
@@ -838,7 +845,11 @@ use the [operating notes](operating.md#respond-to-alerts).
 
   Since the Oct 1 worker fixes, the longest ordinary processing wait was 18
   minutes and the longest upload wait under two minutes; Oct 1's stalls of up
-  to 3.7 hours would have alerted. Expect the 30-minute alert on Reset
+  to 3.7 hours would have alerted. Daily calculations normally finish within
+  11–13 minutes outside Reset, so the 15-minute limit has little margin and
+  measures old work, not proof that the worker stopped. On Oct 4 it would have
+  warned at 10:33, 11:07 and 11:46 UTC, during three near-stalls that the
+  30-minute limit missed. Expect the 30-minute alert on Reset
   mornings whose processing takes longer than that: on Oct 3 ordinary work
   passed 30 minutes at 05:43 and 06:38, and on Oct 4 it would have warned at
   03:15 instead of 03:46.
@@ -857,6 +868,25 @@ use the [operating notes](operating.md#respond-to-alerts).
 Missing collector measurements or a failed publication check never clear these
 alerts, and each recovers only when its own measurement does.
 
+- **A disk, restart-history, Live Leaderboard or Reset publication check
+  unreadable for 10 minutes** (600 seconds). These four checks otherwise
+  only log a diagnostic and stay unknown, which can hide their own problem
+  indefinitely. Each keeps its own first-failure time, so a check that
+  becomes readable and later fails again starts a new ten minutes, and one
+  check's failure never inherits another's. Several unreadable checks send
+  one alert. A readable check that reports a problem is not unreadable; its
+  own alert covers it. A valid Live Leaderboard result ignored during the
+  Reset pause or an unfinished Reset sweep is not unreadable either. The
+  fetch-gap, backup and private-read alerts already cover their own failed
+  checks and are left out, but an unreachable collector also makes spool
+  usage unknown, so it can raise this alert alongside the fetch-gap alert.
+  It recovers after the usual 15 clear minutes with none of the four
+  unreadable, so a different check failing during that time keeps it open.
+  Time deliberately stopped does not count towards the ten minutes. This
+  alert only works while `alert-check` itself runs, saves its state and
+  reaches Discord; it cannot report a dead timer, a crashed checker or a
+  broken webhook.
+
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.
 A recovery is sent only after **15 minutes** (900 seconds) of checks that all
@@ -871,10 +901,10 @@ A problem that never alerted never sends a recovery.
 Missing disk measurements or restart history never clear an existing alert.
 `alerts.json` and `alerts.lock` live under the existing private ops state
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
-replaced with mode 600 and contains eleven condition records with at most one
+replaced with mode 600 and contains twelve condition records with at most one
 pending transition, one first-clear time and one last alert delivery time
 each, plus when backup check timeouts or errors and Live Leaderboard staleness
-began, normally under 4 KiB.
+began, and when each of at most four currently unreadable checks first failed.
 It keeps no growing event history, keys, URLs, player lists or account data.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
