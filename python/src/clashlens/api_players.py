@@ -8,6 +8,7 @@ from .api_db import (
     PLAYER_SCREEN_READY_VERSION,
     ApiDatabase,
     _daily_log,
+    _frozen_trophies_sql,
     _historical_season_summary,
     _json_array,
     _public_confidence,
@@ -17,9 +18,11 @@ from .api_db import (
 )
 from .domain import (
     SEASON_DURATION,
+    SEASON_START_TROPHIES,
     DomainRuleError,
+    awaits_season_reset,
     ranked_day_for,
-    season_is_current,
+    season_opening_reset,
     validate_legend_season_start,
 )
 from .season_summaries import season_final_rank
@@ -132,7 +135,8 @@ def get_player_page(
                    {metadata_columns},
                    profile.profile_json -> 'clan' ->> 'name',
                    player.current_profile_confirmed_at,
-                   profile.current_league_season_id
+                   profile.current_league_season_id,
+                   {_frozen_trophies_sql("player.id", "%s")}
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -140,14 +144,17 @@ def get_player_page(
             WHERE player.normalized_tag = %s
               AND profile.source_contract_state = 'accepted'
             """,
-            (normalized_tag,),
+            (season_opening_reset(now), normalized_tag),
         ).fetchone()
         if row is None:
             return None
         observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
-        # A profile naming an earlier Season shows trophies from before this
-        # player's Season reset, not their total in the current Season.
-        season_reset_pending = not season_is_current(_text(row[12]), now)
+        # A profile naming an earlier Season, or still showing the frozen
+        # pre-Reset trophies on a Season's first day, shows trophies from
+        # before this player's Season reset, not their current Season total.
+        season_reset_pending = awaits_season_reset(
+            _text(row[12]), int(row[4]), row[13], now
+        )
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
         daily_rows = connection.execute(
             """
@@ -408,14 +415,15 @@ def player_cards(
     profiles = {
         int(row[0]): row[1:]
         for row in connection.execute(
-            """
-            SELECT player.id, profile.trophies, profile.current_league_season_id
+            f"""
+            SELECT player.id, profile.trophies, profile.current_league_season_id,
+                   {_frozen_trophies_sql("player.id", "%s")}
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
             WHERE player.id = ANY(%s) AND profile.source_contract_state = 'accepted'
             """,
-            (ids,),
+            (season_opening_reset(now), ids),
         ).fetchall()
     }
     today = {
@@ -455,7 +463,9 @@ def player_cards(
         }
         if reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
-            pending = not season_is_current(_text(profile[1]), now)
+            pending = awaits_season_reset(
+                _text(profile[1]), int(profile[0]), profile[2], now
+            )
             card["trophies"] = None if pending else int(profile[0])
             card["season_reset_pending"] = pending
             day = today.get(player_id)
@@ -644,7 +654,7 @@ def search_known_players(
     escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     with database.pool.connection() as connection:
         rows = connection.execute(
-            """
+            f"""
             -- Match current names before checking history. Without this boundary,
             -- PostgreSQL can scan and decode every player's daily battle JSON.
             WITH matches AS MATERIALIZED (
@@ -652,7 +662,9 @@ def search_known_players(
                        profile.trophies, player.current_observed_at,
                        player.eligibility_state, player.active,
                        profile.profile_json -> 'clan' ->> 'name' AS clan,
-                       profile.current_league_season_id
+                       profile.current_league_season_id,
+                       {_frozen_trophies_sql("player.id", "%(opening_reset)s")}
+                           AS frozen_trophies
                 FROM players AS player
                 JOIN LATERAL (
                     SELECT name, trophies, source_contract_state, profile_json,
@@ -663,12 +675,12 @@ def search_known_players(
                     OFFSET 0
                 ) AS profile ON true
                 WHERE player.current_profile_version_id IS NOT NULL
-                  AND profile.name ILIKE %s ESCAPE '\\'
+                  AND profile.name ILIKE %(pattern)s ESCAPE '\\'
                   AND profile.source_contract_state = 'accepted'
             )
             SELECT player.normalized_tag, player.name, player.trophies,
                    player.current_observed_at, player.eligibility_state, player.clan,
-                   player.current_league_season_id
+                   player.current_league_season_id, player.frozen_trophies
             FROM matches AS player
             -- Scalar subqueries stop after one row and cannot become a hashed
             -- EXISTS subplan that reads the entire history table.
@@ -683,18 +695,24 @@ def search_known_players(
                    OR (SELECT true FROM player_league_history_entries AS history
                        WHERE history.player_id = player.id LIMIT 1))
             -- An exact name match first, then the strongest players.
-            ORDER BY lower(player.name) = lower(%s) DESC,
-                     CASE WHEN player.current_league_season_id = %s
+            ORDER BY lower(player.name) = lower(%(query)s) DESC,
+                     CASE WHEN player.current_league_season_id = %(season_id)s
+                               AND NOT COALESCE(
+                                   player.trophies <> {SEASON_START_TROPHIES}
+                                   AND player.trophies = player.frozen_trophies,
+                                   false
+                               )
                           THEN player.trophies END DESC NULLS LAST,
                      lower(player.name), player.normalized_tag
-            LIMIT %s
+            LIMIT %(limit)s
             """,
-            (
-                f"%{escaped_query}%",
-                query,
-                ranked_day_for(now).official_season_id,
-                limit,
-            ),
+            {
+                "pattern": f"%{escaped_query}%",
+                "query": query,
+                "season_id": ranked_day_for(now).official_season_id,
+                "opening_reset": season_opening_reset(now),
+                "limit": limit,
+            },
         ).fetchall()
         results = []
         for row in rows:
@@ -702,7 +720,7 @@ def search_known_players(
             age_seconds = max(
                 0, int((now.astimezone(UTC) - observed_at).total_seconds())
             )
-            pending = not season_is_current(_text(row[6]), now)
+            pending = awaits_season_reset(_text(row[6]), int(row[2]), row[7], now)
             results.append(
                 {
                     "tag": _text(row[0]),

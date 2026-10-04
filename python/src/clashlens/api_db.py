@@ -457,6 +457,21 @@ def _text(value: Any) -> Any:
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
+def _frozen_trophies_sql(player_id: str, reset_at: str) -> str:
+    """A player's trophies on the published frozen final board of the day
+    that ended at ``reset_at``, or NULL. A NULL ``reset_at`` matches nothing."""
+    return f"""(
+        SELECT frozen_entry.trophies
+        FROM leaderboard_snapshots AS frozen_board
+        JOIN leaderboard_snapshot_entries AS frozen_entry
+          ON frozen_entry.snapshot_id = frozen_board.id
+        WHERE frozen_board.snapshot_kind = 'frozen'
+          AND frozen_board.state = 'published'
+          AND frozen_board.boundary_at = {reset_at}::timestamptz
+          AND frozen_entry.player_id = {player_id}
+    )"""
+
+
 def _public_confidence(active: bool, eligibility_state: str) -> str:
     if eligibility_state == "eligible":
         return "high"

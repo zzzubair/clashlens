@@ -462,8 +462,10 @@ function calculateStartingTrophies(
       continue;
     const netChange = day.trophyChange ?? day.offense.trophyGain - day.defense.trophyLoss;
     let trophies: number | undefined;
-    // A profile naming another Season than this day's is not its day total.
+    // A profile naming another Season than this day's is not its day total,
+    // nor is one still waiting for its Season reset on the Season's first day.
     if (
+      !(profile.seasonResetPending && day.dayNumber === 1) &&
       start >= profileSeasonStart &&
       start < profileSeasonStart + SEASON_MS &&
       observedAt >= start &&

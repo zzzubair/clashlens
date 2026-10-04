@@ -298,17 +298,24 @@ def _season_profile(trophies: int, season_id: int) -> bytes:
 OLD_SEASON, NEW_SEASON = 1783918800, 1786338000  # Seasons around August 10.
 
 
-@pytest.mark.parametrize("kind,season_id,accepted", [
-    ("season", OLD_SEASON, False),
-    ("season", NEW_SEASON, True),
-    ("season_day_2", OLD_SEASON, False),
-    ("monday", OLD_SEASON, True),
+@pytest.mark.parametrize("kind,season_id,trophies,accepted", [
+    ("season", OLD_SEASON, 6400, False),
+    ("season", NEW_SEASON, 5000, True),
+    # A new Season with old trophies is not a Season start; only 5,000 is.
+    ("season", NEW_SEASON, 6400, False),
+    ("season", NEW_SEASON, 4999, False),
+    ("season_day_2", OLD_SEASON, 6400, False),
+    ("monday", OLD_SEASON, 6400, True),
 ])
 def test_reset_start_needs_a_profile_naming_the_resets_season(
-    database_url: str, archive_server, kind: str, season_id: int, accepted: bool
+    database_url: str,
+    archive_server,
+    kind: str,
+    season_id: int,
+    trophies: int,
+    accepted: bool,
 ) -> None:
     boundary = BOUNDARIES[kind]
-    trophies = 5000 if season_id == NEW_SEASON else 6400
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
                            boundary - timedelta(days=1), profile=_profile(6400),

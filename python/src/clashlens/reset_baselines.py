@@ -18,7 +18,13 @@ from .db import (
     Database,
     _text_value,
 )
-from .domain import SEASON_ANCHOR_RULE_VERSION, battle_window, season_is_current
+from .domain import (
+    SEASON_ANCHOR_RULE_VERSION,
+    SEASON_START_TROPHIES,
+    battle_window,
+    is_season_boundary,
+    season_is_current,
+)
 
 # Reset work stops collecting at 04:55 UTC the next day, as in the collector.
 RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
@@ -1084,8 +1090,15 @@ def _load_reset_baseline(
     # An accepted profile read after any Reset that names another Season than
     # the Reset's own shows trophies from before that player's Season reset.
     # It stays evidence, but never becomes that Season's starting total.
-    season_reset_pending = profile_accepted and not season_is_current(
-        _text_value(row[25]), row[14]
+    # Every Legend I player starts a Season at exactly 5,000, so at a
+    # Season-opening Reset a Legend I profile showing anything else is too.
+    season_reset_pending = profile_accepted and (
+        not season_is_current(_text_value(row[25]), row[14])
+        or (
+            is_season_boundary(row[14])
+            and profile_eligible
+            and row[16] != SEASON_START_TROPHIES
+        )
     )
     complete = bool(
         not season_reset_pending

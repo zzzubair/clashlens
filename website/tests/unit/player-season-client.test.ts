@@ -202,6 +202,8 @@ describe("historical player-season client boundary", () => {
     ["2026-10-05", 1, "1791176400", false, "2026-10-05T20:00:00Z", 5000],
     // October day 1 still read from a September profile.
     ["2026-10-05", 1, "1788757200", true, "2026-10-05T20:00:00Z", null],
+    // October day 1 from an October profile still showing pre-Reset trophies.
+    ["2026-10-05", 1, "1791176400", true, "2026-10-05T20:00:00Z", null],
     // September day 28 read from a September profile, seen at October 5 05:10.
     ["2026-10-04", 28, "1788757200", true, "2026-10-04T23:00:00Z", 5000],
   ])(
