@@ -11,12 +11,14 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { PastSeasons } from "../components/PastSeasons";
 import { formatAge, useCurrentTime } from "../components/Provenance";
 import { LOOKUP_MESSAGES, lookupExplanation } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
+  PastSeasonFinish,
   PlayerPage,
   PlayerLookup,
   PlayerProfile,
@@ -43,6 +45,8 @@ export interface PlayerLoaderData {
   historicalError: WebsiteErrorResponse | null;
   lookup: PlayerLookup | null;
   lookupError: WebsiteErrorResponse | null;
+  // Streams in after the page; null when ClashKing finishes are unavailable.
+  pastSeasons?: Promise<PastSeasonFinish[] | null>;
 }
 
 export async function loader({
@@ -91,6 +95,9 @@ export async function loader({
     createPythonClient(),
   );
   const lookupClient = import("../services/player-lookup.server");
+  const pastSeasons = import("../services/past-seasons.server")
+    .then((api) => api.getPastSeasons(normalizedTag))
+    .catch(() => null);
   const [playerResult, seasonsResult, historicalResult, refreshResult, lookupResult] =
     await Promise.allSettled([
       client.then((api) => api.getPlayer(normalizedTag)),
@@ -164,6 +171,7 @@ export async function loader({
     historicalError,
     lookup,
     lookupError,
+    pastSeasons,
   };
 }
 
@@ -527,6 +535,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             ))}
           </section>
         ) : null}
+        <PastSeasons finishes={data.pastSeasons} />
       </main>
     );
   }
@@ -664,6 +673,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           </div>
         </section>
       )}
+      <PastSeasons finishes={data.pastSeasons} />
     </main>
   );
 }

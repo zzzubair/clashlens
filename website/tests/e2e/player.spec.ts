@@ -27,12 +27,14 @@ function refreshSubmitted(page: Page) {
 
 // React Router page data is a flat list of values: objects map "_<key index>"
 // to value indexes, arrays list value indexes, -5 is null and -7 undefined.
+// A streamed value is ["P", its own index], resolved by a later "P<index>:"
+// line; it decodes to undefined, so past Seasons are left out.
 function decodePageData(text: string) {
   const values: unknown[] = JSON.parse(text.split("\n")[0]);
   const decode = (index: number): unknown => {
     if (index < 0) return index === -5 ? null : undefined;
     const value = values[index];
-    if (Array.isArray(value)) return value.map(decode);
+    if (Array.isArray(value)) return value[0] === "P" ? undefined : value.map(decode);
     if (value === null || typeof value !== "object") return value;
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
@@ -74,6 +76,8 @@ function withServerAge(html: string, ageSeconds: number) {
     /streamController\.enqueue\(("(?:[^"\\]|\\.)*")\)/g,
     (call, literal: string) => {
       const [head, ...rest] = (JSON.parse(literal) as string).split("\n");
+      // Later chunks resolve streamed values and carry no page data.
+      if (head.startsWith("P")) return call;
       const values: unknown[] = JSON.parse(head);
       const key = `_${values.indexOf("ageSeconds")}`;
       if (key === "_-1") return call;

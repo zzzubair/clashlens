@@ -33,7 +33,7 @@ from . import (
 from . import (
     db as _db,
 )
-from .api import create_app
+from .api import ClashKingClient, create_app
 from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
 from .collector import Collector
@@ -1355,6 +1355,7 @@ def _serve_app(arguments: argparse.Namespace) -> tuple[Any, ApiDatabase]:
             max_body_bytes=arguments.max_body_bytes,
             verification_client=verification_client,
             official_credential_fingerprint=fingerprint,
+            clashking_client=ClashKingClient(enabled=not arguments.allow_insecure_official_origin),
         )
     except BaseException:
         # Startup failed after the pool opened; the app never reached its
