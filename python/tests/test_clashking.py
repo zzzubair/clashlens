@@ -60,6 +60,25 @@ def test_distinct_seasons_with_the_same_trophies_and_rank_are_all_kept() -> None
     ] + ["2024-07"]
 
 
+def test_legend_rows_are_recognized_by_tier_id_or_name() -> None:
+    rows = [
+        {"season": "v2-2026-08-03T05:00:00Z", "leagueTier": {"id": 105000036}},
+        {"season": "2026-07-13", "leagueTier": {"name": "Legend League II"}},
+        {"season": "2026-06-15"},
+        {"season": "2026-05-18", "leagueTier": {"id": 105000000}},
+        {"season": "2026-04-20", "leagueTier": {"id": 105000000, "name": "Unranked"}},
+    ]
+    payload = json.dumps(
+        {"items": [{**row, "trophies": 5500, "rank": 2} for row in rows]}
+    ).encode()
+
+    assert [f.season_start for f in parse_season_finishes(payload, now=NOW)] == [
+        _start("2026-08-10"),
+        _start("2026-07-13"),
+        _start("2026-06-15"),
+    ]
+
+
 def test_unfinished_off_phase_and_unreadable_rows_are_left_out() -> None:
     finishes = parse_season_finishes(FIXTURE.read_bytes(), now=NOW)
     ids = {finish.season_id for finish in finishes}
@@ -213,5 +232,49 @@ def test_viewed_players_refresh_once_a_day_and_keep_rows_through_failures(
                 # Unknown players are never looked up at ClashKing.
                 assert view("%23QQQ").status_code == 404
                 assert fake.calls == 4
+        finally:
+            database.close()
+
+
+def test_a_view_refused_by_the_request_limit_can_retry_promptly(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "INSERT INTO players (normalized_tag, active, eligibility_state)"
+                    " VALUES ('#2PP', true, 'eligible'), ('#2QQ', true, 'eligible')"
+                )
+            fake = FakeClashKing()
+            clock = FakeClock()
+            app = create_app(
+                database,
+                keys={("typescript-website", "current"): TS_CURRENT},
+                clock=lambda: NOW_SECONDS,
+                now=lambda: NOW,
+                clashking_client=ClashKingClient(transport=fake, clock=clock),
+            )
+
+            def view(tag: str):
+                target = f"/v1/players/{tag}/past-seasons"
+                return client.get(target, headers=signed_headers(target)).json()
+
+            with TestClient(app) as client:
+                assert len(view("%232PP")["seasons"]) == 9
+                clock.now += 0.1
+                refused = view("%232QQ")
+                assert fake.calls == 1
+                assert refused["seasons"] == []
+                assert refused["fetched_at"] is None
+
+                clock.now += 0.5
+                retried = view("%232QQ")
+                assert fake.calls == 2
+                assert len(retried["seasons"]) == 9
+                assert retried["fetched_at"] == NOW.isoformat()
         finally:
             database.close()

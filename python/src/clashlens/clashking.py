@@ -47,6 +47,7 @@ _V2_LABEL = re.compile(r"v2-(\d{4}-\d{2}-\d{2})T05:00:00Z")
 _DATED_LABEL = re.compile(r"\d{4}-\d{2}-\d{2}")
 _MONTH_LABEL = re.compile(r"(\d{4})-(\d{2})")
 _V2_OFFSET = timedelta(days=7)
+_LEGEND_TIER_IDS = frozenset({105000034, 105000035, 105000036})
 # ClashKing repeats the last calendar-month result as the first 28-day Season.
 _LAST_MONTH_SEASON = "2025-09"
 _FIRST_SEASON_ID = str(int(datetime(2025, 10, 6, 5, tzinfo=UTC).timestamp()))
@@ -108,7 +109,9 @@ def parse_season_finishes(payload: bytes, *, now: datetime) -> list[SeasonFinish
         == (first_season[1].trophies, first_season[1].global_rank)
     ):
         del chosen[_FIRST_SEASON_ID]
-    return sorted((finish for _, finish in chosen.values()), key=_sort_key, reverse=True)
+    return sorted(
+        (finish for _, finish in chosen.values()), key=_sort_key, reverse=True
+    )
 
 
 def _map_row(item: Any, *, now: datetime) -> tuple[bool, SeasonFinish] | None:
@@ -120,8 +123,10 @@ def _map_row(item: Any, *, now: datetime) -> tuple[bool, SeasonFinish] | None:
     tier = item.get("leagueTier")
     if not isinstance(label, str) or not _is_int(trophies) or trophies < 0:
         return None
-    if isinstance(tier, dict) and not str(tier.get("name", "")).startswith(
-        "Legend League"
+    if (
+        isinstance(tier, dict)
+        and tier.get("id") not in _LEGEND_TIER_IDS
+        and not str(tier.get("name", "")).startswith("Legend League")
     ):
         return None
     global_rank = rank if _is_int(rank) and rank >= 1 else None
@@ -270,15 +275,18 @@ def get_past_seasons(
     due = (fetched_at is None or fetched_at <= now - REFRESH_AFTER) and (
         attempted_at is None or attempted_at <= now - RETRY_AFTER
     )
-    if due and _claim(database, player_id, now) and client.try_acquire():
-        try:
-            finishes = parse_season_finishes(
-                client.fetch_legend_history(normalized_tag), now=now
-            )
-        except ClashKingUnavailable:
-            pass
+    if due and _claim(database, player_id, now):
+        if not client.try_acquire():
+            _release(database, player_id, now, attempted_at or now - RETRY_AFTER)
         else:
-            _store(database, player_id, finishes, now)
+            try:
+                finishes = parse_season_finishes(
+                    client.fetch_legend_history(normalized_tag), now=now
+                )
+            except ClashKingUnavailable:
+                pass
+            else:
+                _store(database, player_id, finishes, now)
     return _saved(database, player_id, normalized_tag)
 
 
@@ -301,6 +309,19 @@ def _claim(database: Any, player_id: int, now: datetime) -> bool:
             },
         ).fetchone()
     return claimed is not None
+
+
+def _release(
+    database: Any, player_id: int, claimed_at: datetime, previous: datetime
+) -> None:
+    with database.pool.connection() as connection:
+        connection.execute(
+            """
+            UPDATE clashking_history_fetches SET attempted_at = %s
+            WHERE player_id = %s AND attempted_at = %s
+            """,
+            (previous, player_id, claimed_at),
+        )
 
 
 def _store(
