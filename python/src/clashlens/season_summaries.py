@@ -383,7 +383,13 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
         and season_start is not None
         and season_end is not None
     )
-    final_rank = _season_final_rank(connection, player_id, last)
+    final_boundary = season_end
+    if final_boundary is None:
+        from .season_retirement import _canonical_season_bounds
+
+        bounds = _canonical_season_bounds(connection, season_id)
+        final_boundary = None if bounds is None else bounds[1]
+    final_rank = season_final_rank(connection, player_id, final_boundary)
     resolved_totals = {
         field: (totals[field] if totals_complete[field] else None) for field in _TOTAL_FIELDS
     }
@@ -436,35 +442,37 @@ def _add_eod_changes(entries: list[dict[str, Any]]) -> None:
         )
 
 
-def _season_final_rank(
-    connection: Any, player_id: int, last: dict[str, Any] | None
+def season_final_rank(
+    connection: Any, player_id: int, season_end: datetime | str | None
 ) -> int | None:
-    """Final rank only from official season-final evidence.
+    """Clash Lens final rank: the player's position on the Season's last board.
 
-    The day-28 ranked-day end must exist and match a frozen leaderboard
-    boundary. The newest board for that boundary wins: when it omits the
-    player or carries a NULL rank, the rank stays NULL instead of falling
-    back to an older board or inventing a value.
+    The Season's end must be known and match the boundary of a published
+    frozen leaderboard snapshot whose publication generation is not
+    superseded, the same choice the public frozen board makes. Daily detail
+    is not needed. The newest such board wins: when it omits the player the
+    rank stays NULL instead of falling back to an older board. Official
+    placement is never used here.
     """
-    if last is None or not last.get("ranked_day_end"):
-        return None
-    board = connection.execute(
-        """
-        SELECT id FROM api_frozen_leaderboards
-        WHERE boundary_at = %s
-        ORDER BY version DESC
-        LIMIT 1
-        """,
-        (last["ranked_day_end"],),
-    ).fetchone()
-    if board is None:
+    if season_end is None:
         return None
     row = connection.execute(
         """
-        SELECT official_rank FROM api_frozen_leaderboard_entries
-        WHERE leaderboard_id = %s AND player_id = %s
+        SELECT entry.position
+        FROM leaderboard_snapshots AS snapshot
+        LEFT JOIN leaderboard_snapshot_entries AS entry
+          ON entry.snapshot_id = snapshot.id AND entry.player_id = %s
+        WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+          AND snapshot.boundary_at = %s
+          AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS g
+                           WHERE g.snapshot_id = snapshot.id)
+               OR EXISTS (SELECT 1 FROM boundary_publication_generations AS g
+                          WHERE g.snapshot_id = snapshot.id
+                            AND g.snapshot_state <> 'superseded'))
+        ORDER BY snapshot.version DESC, snapshot.id DESC
+        LIMIT 1
         """,
-        (board[0], player_id),
+        (player_id, season_end),
     ).fetchone()
     if row is None or row[0] is None:
         return None

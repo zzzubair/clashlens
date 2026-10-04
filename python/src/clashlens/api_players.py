@@ -22,6 +22,7 @@ from .domain import (
     season_is_current,
     validate_legend_season_start,
 )
+from .season_summaries import season_final_rank
 
 _LEGEND_I_TIER_ID = 105000036
 
@@ -584,6 +585,10 @@ def get_player_season_summary(
             return result
         if history is None:
             return None
+        player_id = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (normalized_tag,)
+        ).fetchone()[0]
+        final_rank = season_final_rank(connection, int(player_id), history["season_end"])
         return {
             "kind": "player-season-summary",
             "tag": normalized_tag,
@@ -592,7 +597,7 @@ def get_player_season_summary(
             "season_end": history["season_end"].isoformat(),
             "start_trophies": None,
             "end_trophies": history["eod_trophies"],
-            "final_rank": history["final_placement"],
+            "final_rank": final_rank,
             "attack_count": None,
             "attack_gain": None,
             "attack_three_star_count": None,

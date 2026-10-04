@@ -262,7 +262,7 @@ def test_public_season_reader_uses_only_valid_legend_history(
     assert detail["season_start"] == "2026-06-15T05:00:00+00:00"
     assert detail["season_end"] == "2026-07-13T05:00:00+00:00"
     assert detail["end_trophies"] == 5812
-    assert detail["final_rank"] == 12
+    assert detail["final_rank"] is None
     assert detail["days_observed"] == 0
     assert detail["missing_days"] == list(range(1, 29))
     assert detail["attack_count"] is None
@@ -271,6 +271,84 @@ def test_public_season_reader_uses_only_valid_legend_history(
     assert "account" not in serialized
     assert "provider" not in serialized
     assert "source_json" not in serialized
+
+
+def test_partial_day_28_on_final_board_shows_board_rank(
+    database_url: str, archive_server
+) -> None:
+    season_end = datetime(2026, 7, 13, 5, 0, tzinfo=UTC)
+    body = _payload(_entry())
+    with domain_database(database_url) as connection_info:
+        observation_id, job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="league-history:final-board",
+            endpoint="league_history",
+            body=body,
+            observed_at=OBSERVED_AT,
+            normalized_tag="#2PP",
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+        )
+        worker = Database(connection_info)
+        try:
+            claim = worker.claim_job(owner="league-history-worker", job_id=job_id)
+            assert claim is not None
+            complete_league_history(
+                worker,
+                claim,
+                parse_league_history(body, expected_tag="#2PP", observed_at=OBSERVED_AT),
+            )
+        finally:
+            worker.close()
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO api_player_daily_logs (
+                    player_id, ranked_day_start, version, state, coverage,
+                    ranked_day_end, official_season_id, season_day_number,
+                    adjustments, battles, partial_reasons
+                ) VALUES (%s, %s, 1, 'Partial', 'partial', %s, '1781499600', 28,
+                          '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                """,
+                (player_id, season_end - timedelta(days=1), season_end),
+            )
+            snapshot_id = connection.execute(
+                """
+                INSERT INTO leaderboard_snapshots (
+                    snapshot_kind, boundary_at, version, ordering_rule_version,
+                    freshness_rule_version, state, measured_coverage, stale_entry_count
+                ) VALUES ('frozen', %s, 1, 'ordering-v1', 'freshness-v1', 'published', 1.0, 0)
+                RETURNING id
+                """,
+                (season_end,),
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO leaderboard_snapshot_entries (
+                    snapshot_id, position, player_id, trophies, trophy_observation_id,
+                    trophy_observed_at, observation_age_seconds, freshness,
+                    confidence, tie_hash, official_rank
+                ) VALUES (%s, 3, %s, 5812, %s, %s, 0, 'fresh', 'confirmed',
+                          repeat('c', 64), 12)
+                """,
+                (snapshot_id, player_id, observation_id, season_end),
+            )
+
+        api = ApiDatabase(connection_info)
+        try:
+            detail = api_players.get_player_season_summary(api, "#2PP", "1781499600")
+        finally:
+            api.close()
+
+    assert detail is not None
+    assert detail["source"] == "official_league_history"
+    assert detail["final_rank"] == 3
+    assert detail["official_history"]["final_placement"] == 12
 
 
 def test_complete_league_history_upserts_repeated_seasons(

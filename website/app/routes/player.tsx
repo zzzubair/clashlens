@@ -814,10 +814,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 label="Final trophies"
                 value={formatCount(summary.officialHistory.eodTrophies)}
               />
-              <Metric
-                label="Final rank"
-                value={formatCount(summary.officialHistory.finalPlacement)}
-              />
+              <Metric label="Final rank" value={formatCount(summary.finalRank)} />
             </MetricCard>
           </div>
         ) : null}
@@ -834,8 +831,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
       <p className="section-note">{summary.daysObserved} of 28 Legend days recorded</p>
       {summary.officialHistory ? (
         <p className="section-note">
-          Final trophies: {formatCount(summary.officialHistory.eodTrophies)} · Final rank:{" "}
-          {formatCount(summary.officialHistory.finalPlacement)}
+          Final trophies: {formatCount(summary.officialHistory.eodTrophies)}
         </p>
       ) : null}
       <div className="metric-grid">
@@ -864,10 +860,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 : `${summary.startTrophies} → ${summary.endTrophies}`
             }
           />
-          <Metric
-            label="Final rank"
-            value={summary.finalRank === null ? "Unknown" : String(summary.finalRank)}
-          />
+          <Metric label="Final rank" value={formatCount(summary.finalRank)} />
         </MetricCard>
         <MetricCard title="Attack stars">
           <Metric label="Three-star" value={formatCount(summary.attackStars["3"])} />

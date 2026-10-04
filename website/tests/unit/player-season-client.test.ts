@@ -66,7 +66,7 @@ function officialSeasonPayload(overrides: Record<string, unknown> = {}) {
     source: "official_league_history",
     start_trophies: null,
     end_trophies: 5812,
-    final_rank: 12,
+    final_rank: null,
     attack_count: null,
     attack_gain: null,
     defense_count: null,

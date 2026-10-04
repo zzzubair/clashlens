@@ -759,143 +759,97 @@ def test_retry_is_noop_correction_replaces_and_failure_preserves(
             database.close()
 
 
-def test_final_rank_from_season_final_freeze(database_url: str) -> None:
+def _frozen_board(connection, observation_id, positions, *, version=1, state="published"):
+    """Save one frozen board at the Season end; positions maps player to (position, official)."""
+    snapshot_id = connection.execute(
+        """
+        INSERT INTO leaderboard_snapshots (
+            snapshot_kind, boundary_at, version, ordering_rule_version,
+            freshness_rule_version, state, measured_coverage, stale_entry_count
+        ) VALUES ('frozen', %s, %s, 'ordering-v1', 'freshness-v1', %s, 1.0, 0)
+        RETURNING id
+        """,
+        (SEASON_END, version, state),
+    ).fetchone()[0]
+    for player_id, (position, official_rank) in positions.items():
+        connection.execute(
+            """
+            INSERT INTO leaderboard_snapshot_entries (
+                snapshot_id, position, player_id, trophies, trophy_observation_id,
+                trophy_observed_at, observation_age_seconds, freshness,
+                confidence, tie_hash, official_rank
+            ) VALUES (%s, %s, %s, 6280, %s, %s, 0, 'fresh', 'confirmed',
+                      repeat('c', 64), %s)
+            """,
+            (snapshot_id, position, player_id, observation_id, SEASON_END, official_rank),
+        )
+    return snapshot_id
+
+
+def _final_rank_case(database_url, archive_server, build_boards):
+    """Materialize one full Season after build_boards and return its final rank."""
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        database = ApiDatabase(connection_info)
-        try:
-            with database.pool.connection() as connection:
-                player_id = _player(connection)
-                _full_season(connection, player_id)
-                board_id = connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboards (
-                        public_id, boundary_at, version, ordering_rule_version,
-                        coverage
-                    ) VALUES (gen_random_uuid(), %s, 1, 'tracked-trophies-md5-v1',
-                              '{}'::jsonb)
-                    RETURNING id
-                    """,
-                    (SEASON_END,),
-                ).fetchone()[0]
-                connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboard_entries (
-                        leaderboard_id, position, player_id, trophies,
-                        observed_at, freshness, confidence, official_rank
-                    ) VALUES (%s, 7, %s, 6280, %s, 'fresh', 'exact', 7)
-                    """,
-                    (board_id, player_id, SEASON_END),
-                )
-                connection.commit()
-                materialize_player_season(connection, player_id, SEASON)
-                connection.commit()
-                assert _summary(connection, player_id)["final_rank"] == 7
-        finally:
-            database.close()
+        observation_id, _job = store_observation(
+            connection_info, archive_server, occurrence_key="final-board",
+            endpoint="profile", body=b"{}", observed_at=SEASON_END,
+            normalized_tag="#2PP",
+        )
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+            ).fetchone()[0]
+            _full_season(connection, player_id)
+            build_boards(connection, observation_id, player_id)
+            connection.commit()
+            materialize_player_season(connection, player_id, SEASON)
+            connection.commit()
+            return _summary(connection, player_id)["final_rank"]
 
 
-def test_final_rank_ignores_older_board_when_newest_omits_player(
-    database_url: str,
+def test_final_rank_is_tracked_position_not_official_rank(
+    database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        database = ApiDatabase(connection_info)
-        try:
-            with database.pool.connection() as connection:
-                player_id = _player(connection)
-                _full_season(connection, player_id)
-                old_board_id = connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboards (
-                        public_id, boundary_at, version, ordering_rule_version,
-                        coverage
-                    ) VALUES (gen_random_uuid(), %s, 1, 'tracked-trophies-md5-v1',
-                              '{}'::jsonb)
-                    RETURNING id
-                    """,
-                    (SEASON_END,),
-                ).fetchone()[0]
-                connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboard_entries (
-                        leaderboard_id, position, player_id, trophies,
-                        observed_at, freshness, confidence, official_rank
-                    ) VALUES (%s, 7, %s, 6280, %s, 'fresh', 'exact', 7)
-                    """,
-                    (old_board_id, player_id, SEASON_END),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboards (
-                        public_id, boundary_at, version, ordering_rule_version,
-                        coverage
-                    ) VALUES (gen_random_uuid(), %s, 2, 'tracked-trophies-md5-v1',
-                              '{}'::jsonb)
-                    """,
-                    (SEASON_END,),
-                )
-                connection.commit()
-                materialize_player_season(connection, player_id, SEASON)
-                connection.commit()
-                assert _summary(connection, player_id)["final_rank"] is None
-        finally:
-            database.close()
+    def boards(connection, observation_id, player_id):
+        _frozen_board(connection, observation_id, {player_id: (1, 7)})
+
+    assert _final_rank_case(database_url, archive_server, boards) == 1
 
 
-def test_final_rank_null_when_newest_board_rank_is_null(
-    database_url: str,
+def test_final_rank_unknown_without_board_or_when_newest_omits_player(
+    database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        database = ApiDatabase(connection_info)
-        try:
-            with database.pool.connection() as connection:
-                player_id = _player(connection)
-                _full_season(connection, player_id)
-                old_board_id = connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboards (
-                        public_id, boundary_at, version, ordering_rule_version,
-                        coverage
-                    ) VALUES (gen_random_uuid(), %s, 1, 'tracked-trophies-md5-v1',
-                              '{}'::jsonb)
-                    RETURNING id
-                    """,
-                    (SEASON_END,),
-                ).fetchone()[0]
-                connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboard_entries (
-                        leaderboard_id, position, player_id, trophies,
-                        observed_at, freshness, confidence, official_rank
-                    ) VALUES (%s, 7, %s, 6280, %s, 'fresh', 'exact', 7)
-                    """,
-                    (old_board_id, player_id, SEASON_END),
-                )
-                new_board_id = connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboards (
-                        public_id, boundary_at, version, ordering_rule_version,
-                        coverage
-                    ) VALUES (gen_random_uuid(), %s, 2, 'tracked-trophies-md5-v1',
-                              '{}'::jsonb)
-                    RETURNING id
-                    """,
-                    (SEASON_END,),
-                ).fetchone()[0]
-                connection.execute(
-                    """
-                    INSERT INTO api_frozen_leaderboard_entries (
-                        leaderboard_id, position, player_id, trophies,
-                        observed_at, freshness, confidence, official_rank
-                    ) VALUES (%s, 7, %s, 6280, %s, 'fresh', 'exact', NULL)
-                    """,
-                    (new_board_id, player_id, SEASON_END),
-                )
-                connection.commit()
-                materialize_player_season(connection, player_id, SEASON)
-                connection.commit()
-                assert _summary(connection, player_id)["final_rank"] is None
-        finally:
-            database.close()
+    assert _final_rank_case(database_url, archive_server, lambda *_: None) is None
+
+    def omitted(connection, observation_id, player_id):
+        _frozen_board(connection, observation_id, {player_id: (4, None)}, state="superseded")
+        _frozen_board(connection, observation_id, {}, version=2)
+
+    assert _final_rank_case(database_url, archive_server, omitted) is None
+
+
+def test_final_rank_follows_the_board_through_corrections(
+    database_url: str, archive_server
+) -> None:
+    def corrected(connection, observation_id, player_id):
+        _frozen_board(connection, observation_id, {player_id: (4, None)}, state="superseded")
+        _frozen_board(connection, observation_id, {player_id: (2, None)}, version=2)
+
+    assert _final_rank_case(database_url, archive_server, corrected) == 2
+
+    def superseded_generation(connection, observation_id, player_id):
+        snapshot_id = _frozen_board(connection, observation_id, {player_id: (2, None)})
+        connection.execute(
+            """
+            INSERT INTO boundary_publication_generations (
+                boundary_at, target_at, generation, ordering_rule_version,
+                freshness_rule_version, expected_population_count,
+                expected_population_hash, snapshot_state, snapshot_id
+            ) VALUES (%s, %s, 1, 'test', 'test', 1, %s, 'superseded', %s)
+            """,
+            (SEASON_END, SEASON_END, "0" * 64, snapshot_id),
+        )
+
+    assert _final_rank_case(database_url, archive_server, superseded_generation) is None
 
 
 def test_historical_read_is_detail_independent(database_url: str) -> None:
