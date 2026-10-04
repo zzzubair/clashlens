@@ -1247,8 +1247,7 @@ def test_background_cleanup_spool_io_failure_pauses_without_stopping() -> None:
     collector = _collector(spool, _Store(spool), _Client(spool))
     stop = asyncio.Event()
 
-    def failed_cleanup(*, limit: int) -> int:
-        del limit
+    def failed_cleanup(**_kwargs: object) -> tuple[int, int]:
         raise OSError(errno.EIO, "spool unavailable")
 
     collector.cleanup_uploaded = failed_cleanup  # type: ignore[method-assign]
@@ -1488,6 +1487,6 @@ def test_cleanup_finishes_database_ack_after_a_crash_already_removed_file() -> N
     store.deletable = ["a" * 64]
     collector = _collector(spool, store, _Client(spool))
 
-    assert collector.cleanup_uploaded() == 1
+    assert collector.cleanup_uploaded() == (1, 1)
     assert store.marked == ["a" * 64]
     assert spool.events == ["locked"]

@@ -440,3 +440,64 @@ def test_a_slow_cleanup_batch_gives_its_player_days_back_and_later_finishes(
                 assert len(_copies(connection, "#2PP", DAY_START)) < len(copies)
         finally:
             database.close()
+
+
+def _late_copy(connection: psycopg.Connection, copy_id: int, day) -> None:
+    """Save another copy of a saved copy's player-day on `day`, as a late correction does."""
+    names = ", ".join(row[0] for row in connection.execute(
+        """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'ranked_day_versions'
+          AND is_generated = 'NEVER' AND column_name NOT IN (
+              'id', 'ranked_day_start', 'ranked_day_end', 'version', 'result_hash'
+          )
+        """
+    ))
+    connection.execute(
+        f"""
+        INSERT INTO ranked_day_versions (
+            ranked_day_start, ranked_day_end, version, result_hash, {names}
+        )
+        SELECT %(day)s, %(day)s + interval '24 hours',
+               coalesce((SELECT max(other.version) FROM ranked_day_versions AS other
+                         WHERE other.player_id = copy.player_id
+                           AND other.ranked_day_start = %(day)s), 0) + 1,
+               encode(sha256(convert_to(clock_timestamp()::text, 'UTF8')), 'hex'),
+               {names}
+        FROM ranked_day_versions AS copy WHERE copy.id = %(copy)s
+        """,
+        {"day": day, "copy": copy_id},
+    )
+
+
+def test_late_corrections_to_an_older_day_do_not_keep_later_days_waiting(
+    database_url: str, archive_server
+) -> None:
+    # On 2026-10-04 late corrections kept restarting the cleanup of September
+    # 30 and October 1, and October 2 and 3 were never reached.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _ended_day_with_copies(connection_info, archive_server, database, processor)
+            older_day = DAY_START - timedelta(days=1)
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                copies = _copies(connection, "#2PP", DAY_START)
+                players = connection.execute("SELECT count(*) FROM players").fetchone()[0]
+                cleaned_days = set()
+                # One player per batch, so a pass over a day takes `players`
+                # batches, and before each batch the older day gets a new copy.
+                for _ in range(3 * players):
+                    _late_copy(connection, copies[-1][0], older_day)
+                    cleaned_days.add(connection.execute(
+                        "SELECT compacted_day FROM clashlens_compact_ranked_days(%s, 1)",
+                        (DAY_END,),
+                    ).fetchone()[0])
+                assert cleaned_days == {older_day, DAY_START}
+                assert connection.execute(
+                    "SELECT pass_through_id IS NULL AND compacted_through_id >= %s"
+                    " FROM ranked_day_compactions WHERE ranked_day_start = %s",
+                    (copies[-1][0], DAY_START),
+                ).fetchone()[0]
+                assert len(_copies(connection, "#2PP", DAY_START)) < len(copies)
+        finally:
+            database.close()
