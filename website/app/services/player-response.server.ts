@@ -145,7 +145,7 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
       !isSeasonDuration(payload.season_start, payload.season_end) ||
       !isCanonicalSeasonId(payload.official_season_id, payload.season_start) ||
       payload.end_trophies !== officialHistory.eodTrophies ||
-      payload.final_rank !== officialHistory.finalPlacement ||
+      payload.final_rank !== null ||
       payload.attack_stars_unknown !== null ||
       payload.defense_stars_unknown !== null ||
       ![payload.attack_stars, payload.defense_stars].every((stars) =>

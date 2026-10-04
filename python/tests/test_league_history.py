@@ -262,7 +262,7 @@ def test_public_season_reader_uses_only_valid_legend_history(
     assert detail["season_start"] == "2026-06-15T05:00:00+00:00"
     assert detail["season_end"] == "2026-07-13T05:00:00+00:00"
     assert detail["end_trophies"] == 5812
-    assert detail["final_rank"] == 12
+    assert detail["final_rank"] is None
     assert detail["days_observed"] == 0
     assert detail["missing_days"] == list(range(1, 29))
     assert detail["attack_count"] is None

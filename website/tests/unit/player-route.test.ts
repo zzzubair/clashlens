@@ -333,6 +333,44 @@ describe("player route historical independence", () => {
     expect(html).not.toContain("Legend season");
   });
 
+  it("never shows official placement as the final rank", async () => {
+    const officialHistory = {
+      observedAt: "2026-08-04T12:05:00+00:00",
+      eodTrophies: 5812,
+      finalPlacement: 12,
+    };
+    const render = (historical: HistoricalSeasonSummary) =>
+      renderRoute(
+        {
+          requestedTag: TAG,
+          player: null,
+          error: null,
+          refreshStatus: null,
+          refreshError: null,
+          noJsIdempotencyKey: "test-idempotency-key",
+          lookup: null,
+          lookupError: null,
+          seasons: SEASONS,
+          selectedSeason: SEASON,
+          historical,
+          historicalError: null,
+        },
+        `?season=${SEASON}`,
+      );
+    const official = await render({
+      ...SUMMARY,
+      source: "official_league_history",
+      finalRank: null,
+      officialHistory,
+    });
+    expect(official).toContain("<dt>Final rank</dt><dd>Unknown</dd>");
+    expect(official).not.toContain(">12<");
+    const tracked = await render({ ...SUMMARY, finalRank: 3, officialHistory });
+    expect(tracked).toContain("<dt>Final rank</dt><dd>3</dd>");
+    expect(tracked).toContain("Final trophies: <!-- -->5812");
+    expect(tracked).not.toContain(">12<");
+  });
+
   it("keeps all 28 days and 448 battles in the page for search and print", async () => {
     const seasonStart = Date.parse("2026-09-07T05:00:00Z");
     const days: RankedDaySummary[] = Array.from({ length: 28 }, (_, dayIndex) => {

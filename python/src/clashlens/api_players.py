@@ -592,7 +592,7 @@ def get_player_season_summary(
             "season_end": history["season_end"].isoformat(),
             "start_trophies": None,
             "end_trophies": history["eod_trophies"],
-            "final_rank": history["final_placement"],
+            "final_rank": None,
             "attack_count": None,
             "attack_gain": None,
             "attack_three_star_count": None,
