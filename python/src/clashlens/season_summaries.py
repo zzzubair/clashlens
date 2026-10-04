@@ -25,7 +25,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .domain import SEASON_ANCHOR_RULE_VERSION
+from .domain import SEASON_ANCHOR_RULE_VERSION, is_season_boundary
 
 # v2 added eod_change and its evidence states; readers report them unknown for v1.
 PROJECTION_VERSION = "player-season-summary-v2"
@@ -223,7 +223,9 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
                 "defense_loss": _int_or_none(version_row[6]),
                 "next_start_trophies": _int_or_none(version_row[7]),
             }
-    # A Reset's trophies are accepted only once its boundary is settled.
+    # A Reset's trophies are accepted only once its boundary is settled. A
+    # Season-opening Reset lands on 5,000 from any old ending, so it never
+    # proves the previous Season's EOD.
     settled = {
         row[0]: _int_or_none(row[1])
         for row in connection.execute(
@@ -233,6 +235,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
             """,
             (player_id, [day["ranked_day_end"] for day in days if day["ranked_day_end"] is not None]),
         ).fetchall()
+        if not is_season_boundary(row[0])
     }
 
     entries: list[dict[str, Any]] = []

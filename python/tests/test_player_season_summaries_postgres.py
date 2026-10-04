@@ -389,6 +389,37 @@ def test_day28_and_boundary_adjustment_keep_battle_net_separate(database_url: st
             database.close()
 
 
+def test_season_opening_proof_never_accepts_day28_eod(database_url: str) -> None:
+    """Every Day 28 ending above 5,000 opens the next Season on 5,000, so a
+    settled Season-opening Reset proves nothing about the old Season's EOD."""
+    boundary = DAY0 + timedelta(days=17)  # a real Season boundary
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                for day, trophies in ((27, (5920, 5940)), (28, (5940, 5960))):
+                    start = boundary - timedelta(days=29 - day)
+                    ranked = _ranked(
+                        connection, player_id, day, start, start + timedelta(days=1),
+                        trophies=trophies,
+                    )
+                    _log(connection, player_id, day, ranked, start)
+                connection.execute(
+                    "UPDATE ranked_day_versions SET next_start_trophies = 5000"
+                    " WHERE player_id = %s AND season_day_number = 28",
+                    (player_id,),
+                )
+                _settle(connection, player_id, 16, 5940)  # ordinary Reset after day 27
+                _settle(connection, player_id, 17, 5000)  # Season-opening Reset
+                connection.commit()
+                assert {
+                    day: movement[2] for day, movement in _movement(connection, player_id).items()
+                } == {27: "accepted", 28: "provisional"}
+        finally:
+            database.close()
+
+
 def test_migration_is_reentrant(database_url: str) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:
