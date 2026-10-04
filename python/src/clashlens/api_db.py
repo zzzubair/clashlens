@@ -15,6 +15,7 @@ from .catalog import catalog_name
 from .operating import database_pool_health
 from .profile import normalize_player_tag
 from .reconciliation import (
+    COVERAGE_GAP_REASONS,
     MAX_DAILY_ATTACKS,
     MAX_DAILY_DEFENSES,
     all_battles_recorded,
@@ -790,11 +791,28 @@ def _shown_total(
 ) -> int | None:
     """A saved EOD or net change, unless the day's battles were not all
     captured. Rows saved before that rule still carry the numbers."""
-    if value is None or not day_totals_supported(
-        coverage == "complete", attack_count, defense_count, reasons
+    if value is None or not _saved_totals_supported(
+        coverage, attack_count, defense_count, reasons
     ):
         return None
     return int(value)
+
+
+def _saved_totals_supported(
+    coverage: Any, attack_count: Any, defense_count: Any, reasons: list[Any]
+) -> bool:
+    """A saved row without the coverage or battle counts needed to decide is
+    withheld only when its stored reasons name a battle log gap."""
+    if coverage not in {"complete", "partial"} or (
+        coverage == "partial" and (attack_count is None or defense_count is None)
+    ):
+        return not any(
+            isinstance(reason, str) and reason in COVERAGE_GAP_REASONS
+            for reason in reasons
+        )
+    return day_totals_supported(
+        coverage == "complete", attack_count, defense_count, reasons
+    )
 
 
 def _withhold_unsupported_entries(entries: list[Any]) -> set[Any]:
@@ -802,8 +820,8 @@ def _withhold_unsupported_entries(entries: list[Any]) -> set[Any]:
     numbers withheld. A day's EOD change also needs the EOD of the day before."""
     hidden: set[Any] = set()
     for entry in entries:
-        if not isinstance(entry, dict) or day_totals_supported(
-            entry.get("coverage") == "complete",
+        if not isinstance(entry, dict) or _saved_totals_supported(
+            entry.get("coverage"),
             entry.get("attack_count"),
             entry.get("defense_count"),
             _json_array(entry.get("flags")),

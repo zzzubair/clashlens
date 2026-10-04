@@ -310,6 +310,28 @@ def test_saved_summary_hides_eod_and_net_for_days_missing_battles(
                 season["end_trophies"]
                 for season in api_players.list_player_seasons(database, "#2PP")
             ] == [None]
+            # Days saved without their coverage or battle counts are withheld
+            # only when their stored reasons name a battle log gap.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE player_season_summaries
+                    SET daily_entries = (
+                        SELECT jsonb_agg(
+                            entry - 'coverage' - 'attack_count' - 'defense_count'
+                            ORDER BY position
+                        )
+                        FROM jsonb_array_elements(daily_entries)
+                            WITH ORDINALITY AS item(entry, position)
+                    )
+                    """
+                )
+                connection.commit()
+            page = api_players.get_player_season_summary(database, "#2PP", SEASON)
+            assert [
+                (day["season_day_number"], day["end_trophies"], day["net_change"])
+                for day in page["daily_entries"]
+            ] == [(1, 5010, 10), (2, None, None), (3, 5040, 10), (28, None, None)]
         finally:
             database.close()
 

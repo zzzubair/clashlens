@@ -177,6 +177,18 @@ class ReconciliationResult:
         return self.observed_defense_loss
 
 
+# Any of these means the battle logs may have missed a battle.
+COVERAGE_GAP_REASONS = frozenset(
+    {
+        "missing_start_battle_log_baseline",
+        "missing_end_battle_log_baseline",
+        "battle_log_row_gap",
+        "battle_log_overlap_gap",
+        "battle_log_stale_window",
+        "battle_log_row_count_exceeds_fifty",
+        "unclassified_rows",
+    }
+)
 DISPUTED_BATTLE_REASONS = frozenset(
     {"perspective_disagreement", "duplicate_contribution_disagreement"}
 )
@@ -830,16 +842,7 @@ def _coverage_is_continuous(
         ):
             failures.append("battle_log_overlap_gap")
 
-    hard_coverage_reasons = {
-        "missing_start_battle_log_baseline",
-        "missing_end_battle_log_baseline",
-        "battle_log_row_gap",
-        "battle_log_overlap_gap",
-        "battle_log_stale_window",
-        "battle_log_row_count_exceeds_fifty",
-        "unclassified_rows",
-    }
-    complete = not any(reason in hard_coverage_reasons for reason in failures)
+    complete = not any(reason in COVERAGE_GAP_REASONS for reason in failures)
     return complete, evidence, malformed
 
 
