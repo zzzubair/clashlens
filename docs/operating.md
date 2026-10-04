@@ -210,7 +210,7 @@ Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
 to interpret messages. Confirm both the measurements below and the recovery
 message in the private operator channel. `./ops alert-check` can run the check
 immediately, but **sends real Discord messages** and saves alert state.
-A successful exit means the check and delivery worked, not that all eleven
+A successful exit means the check and delivery worked, not that all
 conditions are healthy. The website-unreachable alert comes from the
 [outside check](deployment.md#outside-availability-check) on the Paris relay.
 
