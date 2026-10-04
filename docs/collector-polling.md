@@ -47,7 +47,7 @@ Migration `0037_weekly_eligibility.sql` makes the shared
 as soon as the migration is applied, independently of the switch. First-time
 tags still enqueue immediately. Pending profile checks across older cycles are
 reused, and terminal routine attempts do not restart on every repeat sighting.
-Migration `0067_weekly_eligibility_direct_selection.sql` keeps that selection
+Migration `0068_weekly_eligibility_direct_selection.sql` keeps that selection
 but finds due players with plain lookups, so a finished week costs one cheap
 lookup per inactive player instead of the per-player evidence checks.
 

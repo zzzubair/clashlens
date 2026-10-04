@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0067.
+-- Clash Lens deployment migration 0068.
 -- Pick the players due a weekly eligibility check directly, and keep a
 -- week's check retrying after a temporary failure.
 -- 0037's search called two per-player helper functions on every inactive
@@ -246,6 +246,6 @@ REVOKE ALL ON FUNCTION clashlens_profile_observation_unrecognized(bigint)
 GRANT EXECUTE ON FUNCTION clashlens_profile_observation_unrecognized(bigint)
     TO clashlens_collector;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (67)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (68)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;
