@@ -628,14 +628,9 @@ class ObservationProcessor:
             # the job's saved attempt, not the error: a commit that landed
             # stays done and is never run again.
             reason = "database_session_timeout"
-            try:
-                finished = self.database.finished_attempt_status(claim)
-            except (*SESSION_ENDED, QueryCanceled, *POOL_BUSY):
-                # Unknown: leave the lease to run out; maintenance recovers
-                # the job only if it is still unfinished.
-                return ProcessResult(claim.job_id, "retrying", reason)
-            if finished is not None:
-                return ProcessResult(claim.job_id, finished)
+            saved = self._saved_result(claim, reason)
+            if saved is not None:
+                return saved
         except POOL_BUSY:
             # No pool connection came free in time, so this job's next write
             # never started.
@@ -976,19 +971,33 @@ class ObservationProcessor:
         detail = error.diag.message_primary or type(error).__name__
         try:
             return self._fail(claim, "database_rejected", detail=detail, retryable=True)
+        except SESSION_ENDED:
+            saved = self._saved_result(claim, "database_rejected")
+            if saved is not None:
+                return saved
         except (
             *DATABASE_REJECTIONS,
             DeadlockDetected,
             SerializationFailure,
             QueryCanceled,
             LockNotAvailable,
-            *SESSION_ENDED,
             *POOL_BUSY,
         ):
-            # Recording the failure was refused, conflicted or timed out too.
-            # Leave the lease to run out so queue maintenance retries the job
-            # or fails its last try.
-            return ProcessResult(claim.job_id, "retrying", "database_rejected")
+            pass
+        # Recording the failure was refused, conflicted or timed out too.
+        # Leave the lease to run out so queue maintenance retries the job
+        # or fails its last try.
+        return ProcessResult(claim.job_id, "retrying", "database_rejected")
+
+    def _saved_result(self, claim: Claim, reason: str) -> ProcessResult | None:
+        # None while nothing committed this attempt's outcome.
+        try:
+            finished = self.database.finished_attempt_status(claim)
+        except (*SESSION_ENDED, QueryCanceled, *POOL_BUSY):
+            # Unknown: leave the lease to run out; maintenance recovers
+            # the job only if it is still unfinished.
+            return ProcessResult(claim.job_id, "retrying", reason)
+        return None if finished is None else ProcessResult(claim.job_id, finished)
 
     def _complete_retired(self, claim: Claim, error: DomainRuleError) -> ProcessResult:
         if error.category != "season_detail_retired":

@@ -1258,3 +1258,45 @@ def test_a_session_ending_after_a_storage_wait_landed_reports_retrying(
             assert _job_state(db, job_id)[0] == "waiting_dependency"
         finally:
             db.close()
+
+
+def test_a_session_ending_after_a_final_rejection_landed_reports_failed(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        _, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="final-rejection",
+            endpoint="battle_log",
+            body=json.dumps({"items": [_live_row(True, "#8PP", "u1x58", ts)]}).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        with psycopg.connect(ci) as conn:
+            conn.execute(
+                "UPDATE python_processing_jobs SET max_attempts = 1 WHERE id = %s",
+                (job_id,),
+            )
+        original = job_outcomes.fail_claim
+
+        def rejected(*args, **kwargs):
+            raise psycopg.errors.RaiseException("reset evidence rejected")
+
+        def committed_then_lost(*args, **kwargs):
+            original(*args, **kwargs)
+            raise psycopg.errors.TransactionTimeout("terminating connection")
+
+        monkeypatch.setattr(battle_ingestion, "complete_battle_log", rejected)
+        monkeypatch.setattr(job_outcomes, "fail_claim", committed_then_lost)
+        db, proc = _processor(ci, archive_server)
+        try:
+            assert proc.process_job(job_id, owner="rejected") == ProcessResult(
+                job_id, "failed"
+            )
+            assert _job_state(db, job_id) == ("failed", 1)
+            assert db.maintain_queue(max_jobs=1) == 0
+            assert proc.process_job(job_id, owner="again") is None
+        finally:
+            db.close()
