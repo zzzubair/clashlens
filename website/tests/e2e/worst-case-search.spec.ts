@@ -140,8 +140,11 @@ test("a long profile name wraps in search results on a 320 px phone", async ({
   // Suggestions showing means the page is ready to search without reloading.
   await typeSearch(page, input);
   await input.press("Enter");
-  const result = page.locator(".search-result-profile");
-  await expect(result).toContainText("@" + "m".repeat(32));
+  // Other tests may have saved profiles that match too; check only the long one.
+  const result = page.locator(".search-result-profile", {
+    hasText: "@" + "m".repeat(32),
+  });
+  await expect(result).toBeVisible();
   await expectNoSidewaysScroll(page);
   const card = (await result.boundingBox())!;
   expect(card.x + card.width).toBeLessThanOrEqual(320);
