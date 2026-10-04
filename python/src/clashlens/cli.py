@@ -698,9 +698,9 @@ def _run_collector(arguments: argparse.Namespace) -> int:
     regular_keys = _parse_api_keys(arguments.regular_api_keys)
     interactive_keys = _parse_api_keys(arguments.interactive_api_keys)
     if not arguments.allow_reduced_key_pools and (
-        not 4 <= len(regular_keys) <= 7 or len(interactive_keys) != 1
+        not 4 <= len(regular_keys) <= 9 or len(interactive_keys) != 1
     ):
-        raise ValueError("collector requires 4 to 7 regular keys and one interactive key")
+        raise ValueError("collector requires 4 to 9 regular keys and one interactive key")
     if not regular_keys or len(interactive_keys) != 1:
         raise ValueError("collector requires regular keys and one interactive key")
     host, separator, port_text = arguments.health_listen.rpartition(":")

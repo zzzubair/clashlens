@@ -225,8 +225,8 @@ load_production_config() {
   [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "PostgreSQL names are invalid"
   # Each name is one Clash API key file, clashlens-<name>, in CLASHLENS_API_KEY_HOST_DIR.
   REGULAR_KEY_NAMES=$(setting CLASHLENS_REGULAR_API_KEY_NAMES normal-1,normal-2,normal-3,normal-4,extra-1,extra-2)
-  [[ "$REGULAR_KEY_NAMES" =~ ^[a-z0-9][a-z0-9-]*(,[a-z0-9][a-z0-9-]*){3,6}$ && ",$REGULAR_KEY_NAMES," != *,interactive-1,* ]] || \
-    die "CLASHLENS_REGULAR_API_KEY_NAMES must list 4 to 7 comma-separated key names other than interactive-1"
+  [[ "$REGULAR_KEY_NAMES" =~ ^[a-z0-9][a-z0-9-]*(,[a-z0-9][a-z0-9-]*){3,8}$ && ",$REGULAR_KEY_NAMES," != *,interactive-1,* ]] || \
+    die "CLASHLENS_REGULAR_API_KEY_NAMES must list 4 to 9 comma-separated key names other than interactive-1"
   local -A seen_keys=()
   for name in ${REGULAR_KEY_NAMES//,/ }; do
     [[ -z "${seen_keys[$name]-}" ]] || die "CLASHLENS_REGULAR_API_KEY_NAMES lists $name twice"

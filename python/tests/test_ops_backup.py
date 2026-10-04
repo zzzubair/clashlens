@@ -296,15 +296,15 @@ def test_six_regular_keys_and_key_rate_reach_the_collector(tmp_path, mode_config
 @pytest.mark.parametrize(
     ("setting", "message"),
     [
-        ("CLASHLENS_REGULAR_API_KEY_NAMES=normal-1,normal-2,normal-3", "4 to 7"),
+        ("CLASHLENS_REGULAR_API_KEY_NAMES=normal-1,normal-2,normal-3", "4 to 9"),
         (
             "CLASHLENS_REGULAR_API_KEY_NAMES="
-            + ",".join([*REGULAR_KEYS, "extra-3", "extra-4"]),
-            "4 to 7",
+            + ",".join([*REGULAR_KEYS, "normal-5", "normal-6", "extra-3", "extra-4"]),
+            "4 to 9",
         ),
         (
             "CLASHLENS_REGULAR_API_KEY_NAMES=normal-1,normal-2,normal-3,interactive-1",
-            "4 to 7",
+            "4 to 9",
         ),
         (
             "CLASHLENS_REGULAR_API_KEY_NAMES=normal-1,normal-2,normal-3,normal-1",
@@ -331,6 +331,26 @@ def test_production_refuses_unsafe_key_settings(mode_config, setting, message):
     )
     assert result.returncode != 0
     assert message in result.stderr
+
+
+def test_production_accepts_nine_regular_keys(mode_config):
+    names = [*REGULAR_KEYS, "normal-5", "normal-6", "extra-3"]
+    secrets = Path(mode_config["OPS_ENV_FILE"]).parent.parent / "secrets"
+    for label in names[len(REGULAR_KEYS):]:
+        (secrets / f"clashlens-{label}").write_text("a" * 43 + "\n")
+        (secrets / f"clashlens-{label}").chmod(0o600)
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write("CLASHLENS_REGULAR_API_KEY_NAMES=" + ",".join(names) + "\n")
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + 'echo "$REGULAR_KEY_NAMES"', "nine-keys-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ",".join(names)
 
 
 @pytest.mark.parametrize(("memory", "accepted"), [("3g", False), ("4096m", True)])

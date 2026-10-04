@@ -117,24 +117,25 @@ has the required reads; the collector receives no additional permissions.
 
 ## Clash API keys
 
-Clash Lens keeps to a budget of **8** Clash API keys. The Clash API allows up
-to 10 keys per address, and every key is tied to the Paris relay's address.
+The Clash API allows **10** keys per developer account, and every Clash Lens
+key is tied to the Paris relay's address. Clash Lens uses up to 9 regular
+collection keys plus one interactive key. Any account key not in the regular
+list or used as `interactive-1` may be used for player discovery.
 
 | Slot | File in `CLASHLENS_API_KEY_HOST_DIR` | Used for |
 | --- | --- | --- |
 | `normal-1` to `normal-4` | `clashlens-normal-1` to `clashlens-normal-4` | Regular collection |
 | `extra-1`, `extra-2` | `clashlens-extra-1`, `clashlens-extra-2` | Regular collection |
 | `interactive-1` | `clashlens-interactive-1` | Refresh, first-time lookups and player verification |
-| 8th key | not created | Free; add it to regular collection when needed |
 
 Each configured slot needs a private mode-600 file containing only its key.
 
 `CLASHLENS_REGULAR_API_KEY_NAMES` in `app.env` lists the regular slots. Its
-default is the six names above. `./ops` accepts 4 to 7 names, so regular keys
-plus `interactive-1` never exceed the budget. To use an 8th key, create it in
-the developer portal for the relay address, save it as a mode-600 file named
-`clashlens-<name>`, add `<name>` to that list, and deploy through the approved
-release procedure. No code change is needed.
+default is the six regular names above. `./ops` and the collector accept 4 to 9
+names, so regular keys plus `interactive-1` never exceed the account's 10. To add
+one, create it in the developer portal for the relay address, save it as a
+mode-600 file named `clashlens-<name>`, add `<name>` to that list, and deploy
+through the approved release procedure. No code change is needed.
 
 `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY` caps how many requests each key may
 start in any one second across all callers, the interactive key included. It accepts
