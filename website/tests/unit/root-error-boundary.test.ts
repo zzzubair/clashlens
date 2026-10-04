@@ -16,7 +16,8 @@ async function renderFailure(path: string, status: number) {
     {
       id: "root",
       path: "/",
-      ErrorBoundary: () => createElement(ErrorBoundary, { error: useRouteError() } as never),
+      ErrorBoundary: () =>
+        createElement(ErrorBoundary, { error: useRouteError() } as never),
       children: [
         {
           path: "*",
