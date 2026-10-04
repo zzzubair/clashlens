@@ -11,14 +11,18 @@ import {
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark } from "../components/LeaderboardShared";
-import { formatAge, LocalTimestamp, useCurrentTime } from "../components/Provenance";
+import {
+  formatAge,
+  LocalTimestamp,
+  OLD_UPDATE_SECONDS,
+  useCurrentTime,
+} from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { SnapshotSelector, WebsiteErrorResponse } from "../lib/contracts";
 import "../leaderboard-search.css";
 
 const PAGE_SIZE = 100;
-const OLD_UPDATE_SECONDS = 600;
 // A saved Daily board is incomplete when none of its players was saved in the
 // 30 minutes before Reset. Collection pauses at 04:55, so normal boards end about
 // 5 minutes before Reset; the Oct 3, 2026 outage board ended 5 hours before.

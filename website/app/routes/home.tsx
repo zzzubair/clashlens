@@ -12,7 +12,11 @@ import {
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
 import { SearchSuggestions, usePlayerSuggestions } from "../components/PlayerSearch";
-import { LocalTimestamp } from "../components/Provenance";
+import {
+  LocalTimestamp,
+  OLD_UPDATE_SECONDS,
+  useCurrentTime,
+} from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type {
@@ -83,8 +87,13 @@ export default function Home() {
 
   const leaderboard = data.leaderboard;
   const latestObservedAt = leaderboard ? latestObservation(leaderboard.entries) : null;
+  const now = useCurrentTime(leaderboard?.generatedAt);
   const staleEntries =
-    leaderboard?.entries.filter((entry) => entry.freshness.state === "stale").length ?? 0;
+    leaderboard?.entries.filter(
+      (entry) =>
+        Math.floor((now - Date.parse(entry.freshness.observedAt)) / 1000) >
+        OLD_UPDATE_SECONDS,
+    ).length ?? 0;
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell home-page">

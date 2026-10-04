@@ -72,6 +72,9 @@ export function formatAge(seconds: number): string {
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 
+/** A player update older than this is shown as old. */
+export const OLD_UPDATE_SECONDS = 600;
+
 /** Starts at the server's time so the first render matches, then ticks every 30 seconds. */
 export function useCurrentTime(loadedAt: string | undefined) {
   const [now, setNow] = useState(() => (loadedAt ? Date.parse(loadedAt) : 0));
