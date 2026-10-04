@@ -7,7 +7,7 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
@@ -24,6 +24,15 @@ import { dayRangeProblem } from "../../app/lib/validation";
 import { PythonApiError } from "../../app/services/python.server";
 
 const SEASON = "1785714000";
+const SEASON_END = (Number(SEASON) + 28 * 86400) * 1000;
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: SEASON_END - 10 * 86_400_000 });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function requestFor(query: string) {
   return new Request(`https://clashlens.example/analytics/armies?${query}`);
@@ -526,6 +535,46 @@ describe("army analytics route historical reads", () => {
     expect(text).toContain("Records included 1,591");
     expect(text).toContain("Records excluded 2");
     expect(text).toContain("1 other battle record had no opponent and was excluded");
+  });
+});
+
+describe("army analytics current season end", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReset();
+  });
+
+  it("shows a current-season result before its 28 days end", async () => {
+    vi.setSystemTime(SEASON_END - 1);
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [27], 100)),
+    });
+    const html = await renderArmyRoute("season=current");
+    expect(html).toContain('aria-label="Army statistics"');
+    expect(renderedText(html)).not.toContain("A new season is underway");
+  });
+
+  it("shows the new season's waiting state for the same result once its season ends", async () => {
+    vi.setSystemTime(SEASON_END);
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue(currentAnalytics("top-100", [27], 100)),
+    });
+    const html = await renderArmyRoute("season=current");
+    expect(html).not.toContain('aria-label="Army statistics"');
+    expect(renderedText(html)).toContain("A new season is underway");
+    expect(html).toContain(`href="/analytics/armies?season=${SEASON}&amp;`);
+  });
+
+  it("does not show a reply that arrives after its season ended", async () => {
+    vi.setSystemTime(SEASON_END - 1000);
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockImplementation(async () => {
+        vi.setSystemTime(SEASON_END + 1000);
+        return currentAnalytics("top-100", [27], 100);
+      }),
+    });
+    const html = await renderArmyRoute("season=current");
+    expect(html).not.toContain('aria-label="Army statistics"');
+    expect(renderedText(html)).toContain("A new season is underway");
   });
 });
 

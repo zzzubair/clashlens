@@ -465,7 +465,22 @@ const ArmyBreakdownRow = memo(function ArmyBreakdownRow({ row }: { row: ArmyRow 
 
 export default function ArmyAnalyticsRoute() {
   const result = useLoaderData<typeof loader>();
-  const { analytics, error, seasonEmpty, historicalSummary, requestedSeason } = result;
+  const { error, historicalSummary, requestedSeason } = result;
+  const [clock, setClock] = useState(0);
+  // A current-season result stops being current when its 28 days end, even
+  // if the page stays open or the reply arrives after the Reset.
+  const currentSeasonEnd =
+    requestedSeason === "current" &&
+    historicalSummary !== true &&
+    !("snapshot" in result) &&
+    result.analytics
+      ? (Number(result.analytics.selection.season) + 28 * 86400) * 1000
+      : NaN;
+  const seasonEnded = Date.now() >= currentSeasonEnd;
+  const analytics = seasonEnded ? null : result.analytics;
+  const seasonEmpty = seasonEnded
+    ? { previousSeasonId: result.analytics!.selection.season }
+    : result.seasonEmpty;
   const [params] = useSearchParams();
   const navigation = useNavigation();
   const submit = useSubmit();
@@ -558,6 +573,15 @@ export default function ArmyAnalyticsRoute() {
       if (pendingChange.current !== null) clearTimeout(pendingChange.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!Number.isFinite(currentSeasonEnd) || seasonEnded) return;
+    const timer = setTimeout(
+      () => setClock((tick) => tick + 1),
+      Math.min(currentSeasonEnd - Date.now(), 2 ** 31 - 1),
+    );
+    return () => clearTimeout(timer);
+  }, [currentSeasonEnd, seasonEnded, clock]);
 
   // Leaving through a link must cancel a day edit that is still waiting.
   useEffect(() => {
