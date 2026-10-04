@@ -38,7 +38,6 @@ export default defineConfig({
   webServer: externalStack
     ? [blogServer]
     : [
-        blogServer,
         {
           command: "../dev e2e-server",
           cwd: ".",
@@ -49,5 +48,6 @@ export default defineConfig({
           // Let dev's trap stop the pod and remove its disposable volumes.
           gracefulShutdown: { signal: "SIGTERM", timeout: 60_000 },
         },
+        blogServer,
       ],
 });
