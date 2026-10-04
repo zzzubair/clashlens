@@ -19,6 +19,11 @@ import {
   TROPHY_RANGE_LIMITS,
   trophyRangeProblem,
 } from "../lib/validation";
+import detailsStyles from "../details.css?url";
+
+export function links() {
+  return [{ rel: "stylesheet", href: detailsStyles }];
+}
 
 const allowed = {
   lens: ["offense", "defense"],
