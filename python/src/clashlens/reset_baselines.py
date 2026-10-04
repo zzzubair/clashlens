@@ -93,7 +93,15 @@ def repair_current_season_reset_baselines(
                 ), sweep.boundary_at > anchor.current_start,
                 sweep.boundary_at < anchor.current_start + interval '28 days'
                 AND sweep.boundary_at + interval '1 day' <= clock_timestamp(),
-                anchor.current_league_season_id, work.battle_log_observation_id
+                anchor.current_league_season_id, work.battle_log_observation_id,
+                (
+                    SELECT delayed.battle_log_observation_id
+                    FROM reset_boundary_settlements AS settlement
+                    JOIN collector_work AS delayed
+                      ON delayed.id = settlement.delayed_work_id
+                    WHERE settlement.player_id = work.player_id
+                      AND settlement.boundary_at = sweep.boundary_at
+                )
                 FROM collector_work AS work
                 JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
                 JOIN current_anchor AS anchor
@@ -155,10 +163,13 @@ def repair_current_season_reset_baselines(
             starts_ended_day,
             official_season_id,
             battle_log_observation_id,
+            delayed_battle_log_observation_id,
         ) in candidates:
             with connection.transaction():
                 _clear_no_opponent_gaps(
-                    connection, battle_log_observation_id, only_no_opponent
+                    connection,
+                    [battle_log_observation_id, delayed_battle_log_observation_id],
+                    only_no_opponent,
                 )
                 pair_job_ids, reasons = _evaluate_reset_baseline(
                     database,
@@ -186,9 +197,10 @@ def repair_current_season_reset_baselines(
 
 
 def _clear_no_opponent_gaps(
-    connection: Any, observation_id: int | None, only_no_opponent: str
+    connection: Any, observation_ids: list[int | None], only_no_opponent: str
 ) -> None:
-    """Re-derive a Reset battle log's saved gap flag and outcome.
+    """Re-derive the saved gap flag and outcome of a Reset's battle logs, the
+    one read at the Reset and the delayed settlement check's.
 
     A log whose only rejected rows are "no opponent, no battle" rows was saved
     as having a gap before those rows stopped counting. Its rows and response
@@ -200,7 +212,7 @@ def _clear_no_opponent_gaps(
         WITH cleared AS (
             UPDATE battle_log_observations AS battle_log
             SET has_row_gap = false
-            WHERE battle_log.observation_id = %s
+            WHERE battle_log.observation_id = ANY(%s)
               AND battle_log.has_row_gap
               AND {only_no_opponent}
             RETURNING battle_log.observation_id, battle_log.parser_version
@@ -212,7 +224,8 @@ def _clear_no_opponent_gaps(
           AND outcome.parser_version = cleared.parser_version
           AND outcome.outcome = 'processed_with_gaps'
         """,
-        (observation_id,),
+        ([observation_id for observation_id in observation_ids
+          if observation_id is not None],),
     )
 
 

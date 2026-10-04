@@ -200,7 +200,18 @@ def test_canonical_analytics_keeps_owned_perspectives_and_raw_evidence(
         malformed_code["opponentName"] = "Synthetic Malformed Code Defender"
         malformed_code["stars"] = "three"
         malformed_code["armyShareCode"] = "malformed-row-code"
-        attacker_rows = [battle, zero_trophy, missing_code, malformed_code]
+        # Live logs keep this row for days: no opponent, no battle.
+        no_opponent = {
+            "battleType": "legend",
+            "attack": False,
+            "battleTime": 0,
+            "battleTimestamp": "20260804T110000.000Z",
+            "stars": 0,
+            "destructionPercentage": 0,
+            "opponentPlayerTag": None,
+            "armyShareCode": None,
+        }
+        attacker_rows = [battle, zero_trophy, missing_code, malformed_code, no_opponent]
 
         defender = dict(battle)
         defender["attack"] = False

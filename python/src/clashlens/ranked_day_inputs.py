@@ -471,7 +471,9 @@ def load_reading(
     database: Database, connection: Any, player_id: int, observation_id: int | None
 ) -> Reading | None:
     """One saved profile or battle log; usable once processed into an
-    accepted, eligible profile of this player or a saved battle log."""
+    accepted, eligible profile of this player or a saved battle log. A log
+    saved with gaps that were only "no opponent, no battle" rows counts as
+    processed."""
     if observation_id is None:
         return None
     row = connection.execute(
@@ -484,7 +486,10 @@ def load_reading(
                        AND profile.eligibility_state = 'eligible'
                    ELSE log.id IS NOT NULL
                END,
-               profile.trophies
+               profile.trophies,
+               outcome.outcome = 'processed'
+               OR (outcome.outcome = 'processed_with_gaps'
+                   AND {only_no_opponent_gaps_sql(database, "log")})
         FROM collector_observations AS observed
         {_OUTCOME}
         {_profile_join(database)}
@@ -500,7 +505,7 @@ def load_reading(
         return None
     return Reading(
         observation_id, row[0], row[1], row[2], row[3],
-        usable=row[2] == "processed" and bool(row[4]), trophies=row[5],
+        usable=bool(row[6]) and bool(row[4]), trophies=row[5],
     )
 
 

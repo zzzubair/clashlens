@@ -4,6 +4,7 @@ import json
 from datetime import timedelta
 
 import pytest
+import test_reset_settlement_proof_postgres as proof
 from domain_test_support import domain_database, store_observation, text
 from test_reconciliation_postgres import (
     BATTLE_FIXTURE,
@@ -14,7 +15,7 @@ from test_reconciliation_postgres import (
     _seed_reset_collection_identity,
 )
 
-from clashlens import battle, reset_baselines
+from clashlens import battle, reset_baselines, reset_settlement
 
 # Live logs keep this row for days: no opponent, no battle.
 NO_OPPONENT_ROW = {
@@ -203,5 +204,127 @@ def test_republication_recovers_resets_failed_by_no_opponent_rows(
                 database, max_works=10
             )
             assert again["evaluated_count"] == 0
+        finally:
+            database.close()
+
+
+def _log_results(database, observation_id: int) -> tuple[str, bool, int]:
+    with database.pool.connection() as connection:
+        outcome, gap = connection.execute(
+            """
+            SELECT outcome.outcome, log.has_row_gap
+            FROM battle_log_observations AS log
+            JOIN observation_processing_outcomes AS outcome
+              ON outcome.observation_id = log.observation_id
+             AND outcome.parser_version = log.parser_version
+            WHERE log.observation_id = %s
+            """,
+            (observation_id,),
+        ).fetchone()
+        kept = connection.execute(
+            "SELECT count(*) FROM battle_log_observation_source_rows AS row"
+            " JOIN battle_log_observations AS log"
+            "   ON log.id = row.battle_log_observation_id"
+            " WHERE log.observation_id = %s AND row.outcome = 'malformed_legend_row'",
+            (observation_id,),
+        ).fetchone()[0]
+    return text(outcome), gap, kept
+
+
+def test_reset_check_reads_a_delayed_log_saved_with_only_no_opponent_gaps(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    monkeypatch.setenv(proof.SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = proof._scenario(
+            connection_info, archive_server, check_rows=(NO_OPPONENT_ROW,)
+        )
+        # Saved before the row stopped counting as a gap.
+        with monkeypatch.context() as before:
+            before.setattr(battle, "is_no_opponent_row", lambda *_: False)
+            before.setattr(battle, "no_opponent_row_sql", lambda *_: "false")
+            proof._process(connection_info, archive_server,
+                           [scenario[job] for job in proof.ORDERS["named_check_last"]])
+        assert proof._verdict(connection_info)[0] != "settled"
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            with database.pool.connection() as connection:
+                log_id = connection.execute(
+                    "SELECT battle_log_observation_id FROM collector_work WHERE id = %s",
+                    (scenario["work"],),
+                ).fetchone()[0]
+            assert _log_results(database, log_id) == ("processed_with_gaps", True, 1)
+            with database.pool.connection() as connection:
+                reset_settlement.refresh_boundary(
+                    database, connection, scenario["player"], proof.RESET
+                )
+            assert proof._verdict(connection_info)[:3] == (
+                "settled", scenario["target"], []
+            )
+        finally:
+            database.close()
+
+
+def test_republication_clears_no_opponent_gaps_of_the_delayed_reset_log(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        delayed_log, delayed_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="delayed",
+            endpoint="battle_log",
+            body=_log(NO_OPPONENT_ROW, with_battle=False),
+            observed_at=DAY_START + timedelta(minutes=24),
+            normalized_tag="#2PP",
+        )
+        jobs = [
+            *_pair(connection_info, archive_server, "opening",
+                   DAY_START - timedelta(days=22), _profile(5000),
+                   json.dumps({"items": []}).encode()),
+            *_pair(connection_info, archive_server, "start", DAY_START,
+                   _profile(6000), _log(NO_OPPONENT_ROW, with_battle=False)),
+            delayed_job,
+        ]
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            with monkeypatch.context() as before:
+                before.setattr(battle, "is_no_opponent_row", lambda *_: False)
+                before.setattr(battle, "no_opponent_row_sql", lambda *_: "false")
+                _run(database, processor, jobs)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    WITH check_work AS (
+                        INSERT INTO collector_work (
+                            kind, lane, scope, player_id, normalized_tag, sweep_id,
+                            due_at, coalescing_key, status, battle_log_status,
+                            battle_log_observation_id
+                        )
+                        SELECT 'reset_settlement', 'ordinary', 'player',
+                               settlement.player_id, '#2PP', settlement.sweep_id,
+                               %(due)s, 'reset_settlement:delayed', 'complete',
+                               'observed', %(log)s
+                        FROM reset_boundary_settlements AS settlement
+                        WHERE settlement.boundary_at = %(boundary)s
+                        RETURNING id
+                    )
+                    UPDATE reset_boundary_settlements
+                    SET delayed_work_id = (SELECT id FROM check_work)
+                    WHERE boundary_at = %(boundary)s
+                    """,
+                    {"due": DAY_START + timedelta(minutes=20), "log": delayed_log,
+                     "boundary": DAY_START},
+                )
+            assert _log_results(database, delayed_log) == (
+                "processed_with_gaps", True, 1
+            )
+
+            report = reset_baselines.repair_current_season_reset_baselines(
+                database, max_works=10
+            )
+
+            assert report["evaluated_count"] == 1
+            assert _log_results(database, delayed_log) == ("processed", False, 1)
         finally:
             database.close()

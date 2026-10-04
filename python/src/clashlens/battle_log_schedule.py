@@ -26,7 +26,7 @@ import struct
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row
+from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row, is_no_opponent_row
 from .domain import RANKED_DAY_DURATION, battle_day_for, ranked_day_for
 from .profile import PROFILE_PARSER_VERSION, ProfileParseError, parse_profile
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
@@ -419,8 +419,9 @@ def _battles(
     """Each valid Legend battle's time, opponent and side, and malformed rows.
 
     A row is valid when it passes the worker's own row rules with an explicit
-    battleTimestamp. Malformed Legend rows come as joined digests of their
-    content. None means the body is not a battle log at all.
+    battleTimestamp. A "no opponent, no battle" row is skipped. Malformed
+    Legend rows come as joined digests of their content. None means the body
+    is not a battle log at all.
     """
     try:
         payload = json.loads(body)
@@ -432,6 +433,8 @@ def _battles(
     battles = []
     malformed: set[bytes] = set()
     for index, item in enumerate(items):
+        if is_no_opponent_row(item, LIVE_SOURCE_PARSER_VERSION):
+            continue
         try:
             row = _parse_row(index, item, normalized_tag, LIVE_SOURCE_PARSER_VERSION)
         except Exception:  # noqa: BLE001 - one bad row never stops collection
