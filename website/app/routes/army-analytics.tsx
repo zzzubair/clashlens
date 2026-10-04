@@ -14,7 +14,11 @@ import {
 import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
 import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
-import { TROPHY_RANGE_LIMITS, trophyRangeProblem } from "../lib/validation";
+import {
+  dayRangeProblem,
+  TROPHY_RANGE_LIMITS,
+  trophyRangeProblem,
+} from "../lib/validation";
 
 const allowed = {
   lens: ["offense", "defense"],
@@ -485,6 +489,7 @@ export default function ArmyAnalyticsRoute() {
   const playerGroup = population.startsWith("trophies") ? "trophies" : population;
   const [customTrophies, setCustomTrophies] = useState(playerGroup === "trophies");
   const [trophyProblem, setTrophyProblem] = useState<string | null>(null);
+  const [dayProblem, setDayProblem] = useState<string | null>(null);
   const category =
     selected?.category ??
     ((params.get("category") ?? "troops") === "troops" && params.get("cc") === "1"
@@ -577,6 +582,7 @@ export default function ArmyAnalyticsRoute() {
       return;
     setCustomTrophies(playerGroup === "trophies");
     setTrophyProblem(null);
+    setDayProblem(null);
     const values = {
       lens,
       population: isHistorical ? "all" : playerGroup,
@@ -679,8 +685,15 @@ export default function ArmyAnalyticsRoute() {
               values.delete("trophy_min");
               values.delete("trophy_max");
             }
+            // Disabled or absent day fields send nothing and need no check.
+            const startDay = values.get("start_day");
+            const endDay = values.get("end_day");
+            if (startDay !== null && endDay !== null) {
+              const problem = dayRangeProblem(String(startDay), String(endDay));
+              setDayProblem(problem);
+              if (problem !== null) return;
+            }
             if (!form.checkValidity()) return;
-            if (Number(values.get("start_day")) > Number(values.get("end_day"))) return;
             void submit(values, {
               method: "get",
               replace: true,
@@ -935,6 +948,8 @@ export default function ArmyAnalyticsRoute() {
                     max="28"
                     defaultValue={requestedStartDay}
                     disabled={isHistorical}
+                    aria-invalid={dayProblem !== null}
+                    aria-describedby="day-range-help"
                   />
                 </label>
                 <label className="filter-field">
@@ -947,13 +962,20 @@ export default function ArmyAnalyticsRoute() {
                     max="28"
                     defaultValue={requestedEndDay}
                     disabled={isHistorical}
+                    aria-invalid={dayProblem !== null}
+                    aria-describedby="day-range-help"
                   />
                 </label>
               </div>
-              <p className="form-help">
-                {isHistorical
-                  ? "Past seasons include all players across all 28 Legend days."
-                  : "Only completed Legend days are included. Each day starts at 05:00 UTC."}
+              <p
+                id="day-range-help"
+                className={dayProblem ? "field-error" : "form-help"}
+                role={dayProblem ? "alert" : undefined}
+              >
+                {dayProblem ??
+                  (isHistorical
+                    ? "Past seasons include all players across all 28 Legend days."
+                    : "Only completed Legend days are included. Each day starts at 05:00 UTC.")}
               </p>
             </details>
           )}

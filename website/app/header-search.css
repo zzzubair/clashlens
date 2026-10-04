@@ -20,7 +20,7 @@
 /* Same focus ring as the home search: around the whole box, not the bare input. */
 .header-search-panel .search-controls:focus-within {
   border-color: var(--cl-outline);
-  outline: 3px solid color-mix(in srgb, var(--cl-action) 22%, transparent);
+  outline: 2px solid var(--cl-action-text);
   outline-offset: 2px;
 }
 

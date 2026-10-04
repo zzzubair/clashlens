@@ -72,6 +72,29 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test("a reversed day range is explained, not silently ignored", async ({ page }) => {
+  await page.goto("/analytics/armies?saved=1&season=current");
+  const form = page.getByRole("form", { name: "Army analytics filters" });
+  await form.getByText("Season & day range").click();
+  const from = form.getByLabel("From Legend day");
+  const to = form.getByLabel("To Legend day");
+  // Both edits land inside the 350 ms wait, so only the reversed pair is checked.
+  await from.fill("27");
+  await to.fill("26");
+
+  await expect(form.getByRole("alert")).toHaveText(
+    "From Legend day can’t be after To Legend day.",
+  );
+  await expect(from).toHaveAttribute("aria-invalid", "true");
+  await expect(to).toHaveAttribute("aria-invalid", "true");
+  await expect(page).not.toHaveURL(/end_day=26/);
+  await expect(to).toBeEditable();
+
+  await to.fill("28");
+  await expect(form.getByRole("alert")).toHaveCount(0);
+  await expect(to).toHaveAttribute("aria-invalid", "false");
+});
+
 test("Clan Castle switches between individual and regular troop results", async ({
   page,
 }) => {

@@ -457,7 +457,7 @@
   min-height: 2.75rem;
   padding: 0.5rem 0.65rem;
   background: var(--cl-paper);
-  border-color: var(--cl-outline);
+  border-color: var(--cl-input-border);
   font-size: 1rem;
 }
 .analytics-page .filter-footer {
