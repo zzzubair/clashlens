@@ -72,6 +72,23 @@ def _compact(connection_info: str, now, **options) -> dict:
         return compact(connection, now=now, pause_seconds=0, **options)
 
 
+def _generation(connection: psycopg.Connection) -> int:
+    """A publication generation for DAY_END that rows can point at."""
+    return connection.execute(
+        """
+        INSERT INTO boundary_publication_generations (
+            boundary_at, target_at, generation, ordering_rule_version,
+            freshness_rule_version, expected_population_count,
+            expected_population_hash
+        ) SELECT %s, %s, coalesce(max(generation), 0) + 100, 'test',
+                 'test', 1, %s
+        FROM boundary_publication_generations
+        RETURNING id
+        """,
+        (DAY_END, DAY_END, "0" * 64),
+    ).fetchone()[0]
+
+
 def _ended_day_with_copies(
     connection_info: str, archive_server, database, processor
 ) -> None:
@@ -131,19 +148,7 @@ def test_extra_copies_go_once_the_reset_is_done_and_what_players_see_stays(
                 newest = copies[-1][0]
                 # A publication points at an older copy, so it stays.
                 published_copy = copies[1][0]
-                generation = connection.execute(
-                    """
-                    INSERT INTO boundary_publication_generations (
-                        boundary_at, target_at, generation, ordering_rule_version,
-                        freshness_rule_version, expected_population_count,
-                        expected_population_hash
-                    ) SELECT %s, %s, coalesce(max(generation), 0) + 100, 'test',
-                             'test', 1, %s
-                    FROM boundary_publication_generations
-                    RETURNING id
-                    """,
-                    (DAY_END, DAY_END, "0" * 64),
-                ).fetchone()[0]
+                generation = _generation(connection)
                 connection.execute(
                     """
                     INSERT INTO boundary_publication_generation_members (
@@ -499,5 +504,156 @@ def test_late_corrections_to_an_older_day_do_not_keep_later_days_waiting(
                     (copies[-1][0], DAY_START),
                 ).fetchone()[0]
                 assert len(_copies(connection, "#2PP", DAY_START)) < len(copies)
+        finally:
+            database.close()
+
+
+def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
+    database_url: str, archive_server
+) -> None:
+    # On 2026-10-04 every run timed out on October 2's first batch: 25
+    # players with about 500 copies of October 1 and 2, checked against about
+    # 54,000 queued correction inputs. From the 6th batch on one connection
+    # the database could also reuse a plan that checked each copy against
+    # every input in turn, which timed out again.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _ended_day_with_copies(connection_info, archive_server, database, processor)
+            days = (DAY_START - timedelta(days=1), DAY_START)
+            with psycopg.connect(connection_info) as connection:
+                template = _copies(connection, "#2PP", DAY_START)[-1][0]
+                names = ", ".join(row[0] for row in connection.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'ranked_day_versions' AND is_generated = 'NEVER'
+                      AND column_name NOT IN (
+                          'id', 'player_id', 'ranked_day_start', 'ranked_day_end',
+                          'version', 'result_hash', 'replaces_version_id'
+                      )
+                    """
+                ))
+                connection.execute(
+                    "INSERT INTO players (normalized_tag)"
+                    " SELECT '#SIZE' || n FROM generate_series(1, 225) AS n"
+                )
+                # 30 copies of each of the two days for each player, each
+                # replacing the one before, as recalculation saves them, and
+                # one copy of each of the 40 days before, already cleaned. As
+                # on production, a plan made without knowing the days then
+                # expects about one copy per player-day.
+                older = [DAY_START - timedelta(days=n) for n in range(2, 42)]
+                connection.execute(
+                    f"""
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end, version,
+                        result_hash, {names}
+                    )
+                    SELECT player.id, day.start, day.start + interval '24 hours', n,
+                           encode(sha256(convert_to(
+                               player.id || ':' || day.start || ':' || n, 'UTF8'
+                           )), 'hex'),
+                           {names}
+                    FROM players AS player
+                    CROSS JOIN unnest(%s::timestamptz[], %s::integer[]) AS day(start, copies)
+                    CROSS JOIN LATERAL generate_series(1, day.copies) AS n
+                    CROSS JOIN ranked_day_versions AS copy
+                    WHERE player.normalized_tag LIKE '#SIZE%%' AND copy.id = %s
+                    """,
+                    ([*days, *older], [30, 30] + [1] * len(older), template),
+                )
+                connection.execute(
+                    "INSERT INTO ranked_day_compactions (ranked_day_start, compacted_through_id)"
+                    " SELECT start, (SELECT max(id) FROM ranked_day_versions)"
+                    " FROM unnest(%s::timestamptz[]) AS start",
+                    (older,),
+                )
+                connection.execute(
+                    """
+                    UPDATE ranked_day_versions AS version SET replaces_version_id = earlier.id
+                    FROM ranked_day_versions AS earlier
+                    JOIN players AS player ON player.id = earlier.player_id
+                    WHERE player.normalized_tag LIKE '#SIZE%%'
+                      AND earlier.player_id = version.player_id
+                      AND earlier.ranked_day_start = version.ranked_day_start
+                      AND earlier.version = version.version - 1
+                    """
+                )
+                copies = {
+                    (tag, day, version): copy
+                    for tag, day, version, copy in connection.execute(
+                        """
+                        SELECT player.normalized_tag, version.ranked_day_start,
+                               version.version, version.id
+                        FROM ranked_day_versions AS version
+                        JOIN players AS player ON player.id = version.player_id
+                        WHERE player.normalized_tag LIKE '#SIZE%%'
+                          AND version.ranked_day_start = ANY(%s)
+                        """,
+                        (list(days),),
+                    )
+                }
+                kept = {copies[f"#SIZE{n}", day, 30] for n in range(1, 226) for day in days}
+                # #SIZE1's newest copy made its first result current again
+                # over its second, so both stay.
+                connection.execute(
+                    """
+                    UPDATE ranked_day_versions AS restoring
+                    SET replaces_version_id = %(replaced)s,
+                        result_hash = encode(sha256(convert_to(
+                            original.result_hash || ':restores-over:' || %(replaced)s,
+                            'UTF8')), 'hex')
+                    FROM ranked_day_versions AS original
+                    WHERE restoring.id = %(restoring)s AND original.id = %(original)s
+                    """,
+                    {"restoring": copies["#SIZE1", DAY_START, 30],
+                     "replaced": copies["#SIZE1", DAY_START, 2],
+                     "original": copies["#SIZE1", DAY_START, 1]},
+                )
+                kept |= {copies["#SIZE1", DAY_START, 1], copies["#SIZE1", DAY_START, 2]}
+                # Queued corrections list 54,000 inputs, one of them a copy of #SIZE2's.
+                generation = _generation(connection)
+                connection.execute(
+                    """
+                    INSERT INTO boundary_publication_corrections (
+                        boundary_at, source_generation_id, pending_inputs, state
+                    )
+                    SELECT %s, %s, jsonb_agg(jsonb_build_object(
+                        'ranked_day_version_id',
+                        CASE WHEN correction = 1 AND n = 1 THEN %s
+                             ELSE 1000000000 + correction * 1000 + n END
+                    )), 'pending_inputs'
+                    FROM generate_series(1, 90) AS correction
+                    CROSS JOIN generate_series(1, 600) AS n
+                    GROUP BY correction
+                    """,
+                    (DAY_END, generation, copies["#SIZE2", DAY_START, 5]),
+                )
+                kept.add(copies["#SIZE2", DAY_START, 5])
+                players = connection.execute("SELECT count(*) FROM players").fetchone()[0]
+                connection.commit()
+                connection.execute("ANALYZE")
+
+            # One run on one connection, 25 players a batch, and each batch
+            # within its own 5-second limit: a pass over each of the two days.
+            result = _compact(connection_info, DAY_END + timedelta(minutes=40),
+                              run_seconds=600)
+            assert result["status"] == "idle"
+            assert len(result["finished_days"]) == 2
+            assert result["batches"] == 2 * (players // 25 + 1) >= 8
+            with psycopg.connect(connection_info) as connection:
+                assert {row[0] for row in connection.execute(
+                    """
+                    SELECT version.id FROM ranked_day_versions AS version
+                    JOIN players AS player ON player.id = version.player_id
+                    WHERE player.normalized_tag LIKE '#SIZE%%'
+                      AND version.ranked_day_start = ANY(%s)
+                    """,
+                    (list(days),),
+                )} == kept
+                assert _copies(connection, "#SIZE1", DAY_START)[-1][1] == copies[
+                    "#SIZE1", DAY_START, 2
+                ]
         finally:
             database.close()
