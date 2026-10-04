@@ -78,6 +78,12 @@ means both API responses were saved, not that the worker has processed them, so
 processing that takes longer than about 8 seconds appears only after the next
 Refresh or page load.
 
+The page says "Updated." only when the current Refresh reports complete. A
+started Refresh that fails, becomes unavailable or can't be checked says it
+couldn't refresh and that saved results are shown; a refused request shows only
+the refusal reason. Each Refresh gets one minute from when it is submitted; after
+that the page stops checking, says so, and ignores any later answer.
+
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are Markdown files in
 [`blog/`](blog/README.md), built into the website; raw HTML in a post is removed.
