@@ -69,12 +69,7 @@ finish() {
   trap - EXIT HUP INT TERM
   cleanup_admin_secret || result=1
   if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
-    "$SYSTEMCTL_BIN" --user stop "${TIMER_UNITS[@]}" >/dev/null 2>&1 || true
-    "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
-    local unit
-    for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume; do
-      "$SYSTEMCTL_BIN" --user stop "$unit.service" >/dev/null 2>&1 || true
-    done
+    (stop_units) || true
   fi
   exit "$result"
 }

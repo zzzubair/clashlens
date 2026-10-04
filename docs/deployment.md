@@ -422,8 +422,12 @@ They keep running only when all of these hold since the last successful `up`:
 Otherwise, or with `./ops up --restart-collector`, `up` restarts all four as
 before. It prints which happened and why, for example `Restarting the collector
 with the database, pod and network: changed collector settings.` The API,
-worker, website, fixture services and timers always restart. When the four keep
-running, the active release records their running images, so their image
+worker, website, fixture services and timers always restart. Files are compared
+whole, so even a comment-only edit restarts the four; that is deliberate, because
+such edits are rare and a needless restart is safe. When the four keep running, an
+`up` that fails after comparing them, for example because the website is unhealthy, stops only
+the services it restarted and leaves the four running. While they keep running,
+the active release records their running images, so their image
 revision label can name an older commit than the release. The record of what
 they run with is `kept-services.env` in the state directory; it holds only
 hashes.

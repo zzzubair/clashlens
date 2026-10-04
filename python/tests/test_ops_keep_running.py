@@ -42,9 +42,11 @@ source "$1" help >/dev/null
 MODE=production PREFIX=clashlens
 RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 RESTART_COLLECTOR=$RESTART
+UP_IN_PROGRESS=$FAILS
 keep_running_plan
 stop_units
 keep_running_check
+[[ "$FAILS" != true ]] || die "the stack did not become healthy; run ./ops logs"
 keep_running_record
 printf 'keep=%s collector=%s\n' "$KEEP_RUNNING" "${RELEASE[COLLECTOR_IMAGE]}"
 """
@@ -92,6 +94,7 @@ def stack(tmp_path):
             "NEW_COLLECTOR": NEW_COLLECTOR,
             "POSTGRES": POSTGRES,
             "RESTART": "false",
+            "FAILS": "false",
             "IMAGES": json.dumps(
                 {OLD_COLLECTOR: SAME_CONTENTS, NEW_COLLECTOR: SAME_CONTENTS, POSTGRES: "pg"}
             ),
@@ -107,7 +110,7 @@ def stack(tmp_path):
     return stack
 
 
-def deploy(stack, **overrides):
+def deploy(stack, returncode=0, **overrides):
     calls = Path(stack["env"]["CALLS"])
     calls.unlink(missing_ok=True)
     result = subprocess.run(
@@ -118,7 +121,7 @@ def deploy(stack, **overrides):
         timeout=30,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == returncode, result.stderr
     result.stopped = {
         line.split()[2].removesuffix(".service")
         for line in calls.read_text().splitlines()
@@ -175,3 +178,22 @@ def test_restart_collector_flag_restarts(stack):
 def test_stopped_database_restarts(stack):
     result = deploy(stack, INACTIVE="clashlens-postgres.service")
     assert_restarted(result, "clashlens-postgres is not running")
+
+
+def test_failed_up_leaves_the_unchanged_collector_running(stack):
+    result = deploy(stack, returncode=1, FAILS="true")
+    assert "Leaving the collector, database, pod and network running" in result.stdout
+    assert not KEPT & result.stopped
+    assert {"clashlens-api", "clashlens-worker", "clashlens-website"} <= result.stopped
+    assert "--user disable --now clashlens.target" not in Path(stack["env"]["CALLS"]).read_text()
+    # The record still matches what the four run with, so the next up keeps them.
+    assert "keep=true" in deploy(stack).stdout
+
+
+def test_failed_up_after_a_change_stops_everything(stack):
+    collector_env = stack["tmp_path"] / "state" / "clashlens" / "env" / "collector.env"
+    collector_env.write_text("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=35\n")
+    result = deploy(stack, returncode=1, FAILS="true")
+    assert "Restarting the collector with the database, pod and network: changed" in result.stdout
+    assert KEPT <= result.stopped
+    assert "--user disable --now clashlens.target" in Path(stack["env"]["CALLS"]).read_text()
