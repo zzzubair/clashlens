@@ -11,6 +11,7 @@ can make evidence-led decisions.
 - `website/` — the public TypeScript website and browser tests.
 - `deploy/` — migrations, service definitions, and deployment scripts.
 - [`docs/domain.md`](docs/domain.md) — durable Legend I game and evidence rules.
+- [`docs/ranked-leagues.md`](docs/ranked-leagues.md) — sourced Ranked and Legend League rules, history, capacity and shields.
 - [`docs/product-status.md`](docs/product-status.md) — September 25 product decisions,
   implementation gaps and the tracking/website launch order, linked to open issues.
 - [`AGENTS.md`](AGENTS.md) — contribution rules and source authority.
