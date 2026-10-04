@@ -1088,6 +1088,11 @@ class CollectorDatabase:
             or work_kind in {"reset_baseline", "reset_settlement"}
         ):
             return False
+        # Discovery checks reprocess a saved profile whose league went unrecognized.
+        if work_kind == "discovery_profile" and handoff.endpoint == "profile" and connection.execute(
+            "SELECT clashlens_profile_observation_unrecognized(%s)", (state[2],)
+        ).fetchone()[0]:
+            return False
         # Unsaved, skip a row another transaction holds (a body players share,
         # or the worker's player): the caller saves, not waits. The rows a
         # worker inserts that point at this observation only key-share it, so
