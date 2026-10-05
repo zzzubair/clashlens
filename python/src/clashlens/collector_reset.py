@@ -44,7 +44,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
                   SELECT 1 FROM collector_work AS work
                   WHERE work.sweep_id = sweep.id
                     AND work.kind = 'reset_baseline'
-                    AND work.status NOT IN ('complete', 'failed', 'cancelled')
+                    AND work.status IN ('pending', 'waiting_retry')
               )
             ORDER BY sweep.boundary_at
             LIMIT 1
@@ -164,7 +164,7 @@ def reset_ready(connection: Any, sweep_id: int) -> bool:
     if sweep_id < 1:
         raise ValueError("Reset sweep ID must be positive")
     return connection.execute(
-        "SELECT NOT EXISTS (SELECT 1 FROM collector_work WHERE sweep_id = %s AND kind = 'reset_baseline' AND status NOT IN ('complete', 'failed', 'cancelled'))",
+        "SELECT NOT EXISTS (SELECT 1 FROM collector_work WHERE sweep_id = %s AND kind = 'reset_baseline' AND status IN ('pending', 'waiting_retry'))",
         (sweep_id,),
     ).fetchone()[0]
 

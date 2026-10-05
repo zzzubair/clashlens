@@ -549,15 +549,20 @@ class CollectorDatabase:
             is None
         ):
             return False
+        # Asked per sweep so each probe reads only that sweep's unfinished
+        # rows from collector_work_sweep_order, not the whole work table.
         return not bool(
             connection.execute(
                 """
                 SELECT 1
-                FROM collector_work AS work
-                JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
+                FROM collector_reset_sweeps AS sweep
                 WHERE sweep.boundary_at <= %s
-                  AND work.kind = 'reset_baseline'
-                  AND work.status NOT IN ('complete', 'failed', 'cancelled')
+                  AND EXISTS (
+                      SELECT 1 FROM collector_work AS work
+                      WHERE work.sweep_id = sweep.id
+                        AND work.kind = 'reset_baseline'
+                        AND work.status IN ('pending', 'waiting_retry')
+                  )
                 LIMIT 1
                 """,
                 (completed_boundary,),
