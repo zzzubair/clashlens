@@ -675,27 +675,44 @@ def _season_inputs(connection: Any, members: list[Any]) -> dict[str, Any] | None
         (season_row[0],),
     ).fetchall()
     season_version_ids = [int(row[0]) for row in season_versions]
-    season_logs = connection.execute(
+    # The logs' battle lists, about 8 KB each and one per player per Season
+    # day, stay in the database. One statement returns the logs it picks,
+    # each listed battle once in id order, and the sides listed for battles
+    # 0057 repaired: only those sides can have moved.
+    log_ids, battle_ids, repaired_ids, repaired_lenses = connection.execute(
         """
-        SELECT DISTINCT ON (ranked_day_version_id) id, battles
-        FROM api_player_daily_logs
-        WHERE ranked_day_version_id = ANY(%s::bigint[])
-          AND state = 'Complete' AND coverage = 'complete'
-        ORDER BY ranked_day_version_id, version DESC, id DESC
+        WITH log AS (
+            SELECT DISTINCT ON (ranked_day_version_id)
+                   ranked_day_version_id, id, battles
+            FROM api_player_daily_logs
+            WHERE ranked_day_version_id = ANY(%s::bigint[])
+              AND state = 'Complete' AND coverage = 'complete'
+            ORDER BY ranked_day_version_id, version DESC, id DESC
+        ), side AS (
+            SELECT (event ->> 'battle_id')::bigint AS battle_id,
+                   event ->> 'lens' AS lens
+            FROM log
+            CROSS JOIN LATERAL jsonb_array_elements(log.battles) AS event
+            WHERE event ->> 'battle_id' ~ '^[0-9]+$'
+        )
+        SELECT logs.ids, battles.ids, repaired.ids, repaired.lenses
+        FROM (SELECT array_agg(id ORDER BY ranked_day_version_id) AS ids
+              FROM log) AS logs,
+             (SELECT array_agg(DISTINCT battle_id ORDER BY battle_id) AS ids
+              FROM side) AS battles,
+             (SELECT array_agg(battle_id) AS ids, array_agg(lens) AS lenses
+              FROM side
+              WHERE battle_id IN (SELECT from_battle_id FROM battle_day_repairs)
+             ) AS repaired
         """,
         (season_version_ids,),
-    ).fetchall()
-    season_daily_log_ids = [int(row[0]) for row in season_logs]
+    ).fetchone()
+    season_daily_log_ids = [int(log_id) for log_id in log_ids or ()]
+    season_battle_ids = [int(battle_id) for battle_id in battle_ids or ()]
     season_sides = {
-        (int(event["battle_id"]), event.get("lens"))
-        for row in season_logs
-        for event in (row[1] if isinstance(row[1], list) else [])
-        if isinstance(event, dict)
-        and str(event.get("battle_id", "")).isdigit()
+        (int(battle_id), lens)
+        for battle_id, lens in zip(repaired_ids or (), repaired_lenses or ())
     }
-    season_battle_ids = sorted(
-        {battle_id for battle_id, _lens in season_sides}
-    )
     season_evidence_ids = [
         int(row[0])
         for row in connection.execute(
