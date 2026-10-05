@@ -240,7 +240,7 @@ main {
   }
 }
 /* Darker red keeps today's small badge text readable on its light tint. */
-:root:not([data-theme="dark"]) .legend-day-live:not(.legend-day-status) {
+:root:not([data-theme="dark"]) .legend-day-live {
   color: #b3261e;
 }
 @media (prefers-reduced-motion: reduce) {

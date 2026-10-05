@@ -254,7 +254,8 @@ def test_viewed_players_refresh_once_a_day_and_keep_rows_through_failures(
                 body = first.json()
                 assert body["source"] == "clashking"
                 assert body["fetched_at"] == NOW.isoformat()
-                assert len(body["seasons"]) == 9
+                # The page shows only seasons from January 2025 onwards.
+                assert len(body["seasons"]) == 7
                 assert body["seasons"][0] == {
                     "season_id": "1786338000",
                     "season_start": "2026-08-10T05:00:00+00:00",
@@ -262,7 +263,7 @@ def test_viewed_players_refresh_once_a_day_and_keep_rows_through_failures(
                     "trophies": 5856,
                     "global_rank": 1,
                 }
-                assert body["seasons"][-1]["season_id"] == "2021-12"
+                assert body["seasons"][-1]["season_id"] == "2025-09"
 
                 current = NOW + timedelta(hours=23)
                 assert view().json() == body
@@ -338,7 +339,7 @@ def test_a_view_refused_by_the_request_limit_can_retry_promptly(
                     ).fetchall()
 
             with TestClient(app) as client:
-                assert len(view("%232PP")["seasons"]) == 9
+                assert len(view("%232PP")["seasons"]) == 7
                 clock.now += 0.1
                 refused = view("%232QQ")
                 assert fake.calls == 1
@@ -349,7 +350,7 @@ def test_a_view_refused_by_the_request_limit_can_retry_promptly(
                 clock.now += 0.5
                 retried = view("%232QQ")
                 assert fake.calls == 2
-                assert len(retried["seasons"]) == 9
+                assert len(retried["seasons"]) == 7
                 assert retried["fetched_at"] == NOW.isoformat()
 
                 # Two requests already running also refuse without a write.
@@ -427,7 +428,7 @@ def test_a_slow_claim_cannot_send_inside_the_gap_or_a_pause(
                 monkeypatch.setattr(clashking_module, "_claim", real_claim)
                 fake.answer = (200, {}, FIXTURE.read_bytes())
                 clock.now += FIRST_BACKOFF_SECONDS
-                assert len(view()["seasons"]) == 9
+                assert len(view()["seasons"]) == 7
                 assert fake.calls == 3
         finally:
             database.close()

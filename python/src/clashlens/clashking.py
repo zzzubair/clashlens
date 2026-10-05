@@ -54,6 +54,8 @@ _LEGEND_TIER_IDS = frozenset({105000034, 105000035, 105000036})
 # ClashKing repeats the last calendar-month result as the first 28-day Season.
 _LAST_MONTH_SEASON = "2025-09"
 _FIRST_SEASON_ID = str(int(datetime(2025, 10, 6, 5, tzinfo=UTC).timestamp()))
+# Player pages show ClashKing seasons from January 2025 onwards only.
+_FIRST_SHOWN = datetime(2025, 1, 1, tzinfo=UTC)
 
 
 class ClashKingUnavailable(RuntimeError):
@@ -405,6 +407,7 @@ def _saved(database: Any, player_id: int, normalized_tag: str) -> dict[str, Any]
         key=_sort_key,
         reverse=True,
     )
+    finishes = [finish for finish in finishes if _sort_key(finish) >= _FIRST_SHOWN]
     return {
         "tag": normalized_tag,
         "source": "clashking",
