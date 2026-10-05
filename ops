@@ -176,8 +176,8 @@ load_production_config() {
   [[ ! -L "$(setting CLASHLENS_SPOOL_ROOT)" ]] || die "CLASHLENS_SPOOL_ROOT must not be a symlink"
   [[ "$(setting CLASHLENS_API_KEY_HOST_DIR)" == /* && "$(setting CLASHLENS_API_KEY_HOST_DIR)" != / ]] || die "CLASHLENS_API_KEY_HOST_DIR must be an absolute non-root path"
   validate_production_spool
-  [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED false)" == false ]] || \
-    die "production discovery is disabled by issue #110; remove or set CLASHLENS_PLAYER_DISCOVERY_ENABLED=false"
+  [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED true)" =~ ^(true|false)$ ]] || \
+    die "CLASHLENS_PLAYER_DISCOVERY_ENABLED must be true or false"
   [[ "$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" =~ ^(true|false)$ ]] || \
     die "CLASHLENS_GLOBAL_RANKINGS_ENABLED must be true or false"
   [[ "$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY false)" =~ ^(true|false)$ ]] || \
@@ -242,13 +242,15 @@ load_production_config() {
   POSTGRES_VOLUME=clashlens-postgres-data
   SPOOL_ROOT=$(setting CLASHLENS_SPOOL_ROOT)
   ARCHIVE_ROOT=
+  BLOG_DIR=$(setting CLASHLENS_BLOG_DIR)
+  [[ -z "$BLOG_DIR" || "$BLOG_DIR" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "CLASHLENS_BLOG_DIR must be an absolute path without spaces"
   WEBSITE_PORT=$(setting CLASHLENS_WEBSITE_PORT 3000)
   HEALTH_PORT=$(setting CLASHLENS_HEALTH_PORT 8081)
   WORKER_LEASE=$(setting CLASHLENS_WORKER_LEASE_SECONDS 60)
   WORKER_CONCURRENCY=$(setting CLASHLENS_WORKER_CONCURRENCY 12)
   WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE 12)
   WORKER_ARCHIVE_POOL=$(setting CLASHLENS_WORKER_ARCHIVE_POOL_SIZE 12)
-  POSTGRES_MEMORY=$(setting CLASHLENS_POSTGRES_MEMORY 4g)
+  POSTGRES_MEMORY=$(setting CLASHLENS_POSTGRES_MEMORY 6g)
   POSTGRES_SHARED_BUFFERS=2048MB
   POSTGRES_SHM=$(setting CLASHLENS_POSTGRES_SHM_SIZE 1g)
   POSTGRES_CPUS=$(setting CLASHLENS_POSTGRES_CPUS 4)
@@ -267,7 +269,8 @@ load_production_config() {
   WEBSITE_PIDS=$(setting CLASHLENS_WEBSITE_PIDS 256)
   COLLECTOR_ARGS=
   API_ARGS=
-  WORKER_ARGS=--disable-player-discovery
+  WORKER_ARGS=
+  [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED true)" == true ]] || WORKER_ARGS=--disable-player-discovery
 }
 
 load_fixture_config() {
@@ -278,6 +281,7 @@ load_fixture_config() {
   POSTGRES_VOLUME=clashlens-ops-fixture-postgres-data
   SPOOL_ROOT="$STATE_DIR/fixture/spool"
   ARCHIVE_ROOT="$STATE_DIR/fixture/archive"
+  BLOG_DIR=
   WEBSITE_PORT=15174
   HEALTH_PORT=18081
   POSTGRES_DB=clashlens
@@ -706,7 +710,7 @@ render_units() {
     render "$template" "$QUADLET_DIR/$base" \
       PREFIX "$PREFIX" NETWORK_NAME "$NETWORK_NAME" POSTGRES_VOLUME "$POSTGRES_VOLUME" \
       BACKUP_SECRET "$backup_secret" POSTGRES_ARCHIVE_ARGS "$archive_args" \
-      FIXTURE_PORTS "$fixture_ports" NETWORK_SUBNET "${NETWORK_SUBNET:+Subnet=$NETWORK_SUBNET}" POD_ADDRESS "${POD_IP:+IP=$POD_IP}" \
+      FIXTURE_PORTS "$fixture_ports" BLOG_VOLUME "${BLOG_DIR:+Volume=$BLOG_DIR:/blog:ro,z}" NETWORK_SUBNET "${NETWORK_SUBNET:+Subnet=$NETWORK_SUBNET}" POD_ADDRESS "${POD_IP:+IP=$POD_IP}" \
       ENV_DIR "$STATE_DIR/env" SPOOL_ROOT "$SPOOL_ROOT" ARCHIVE_ROOT "$ARCHIVE_ROOT" \
       POSTGRES_IMAGE "${RELEASE[POSTGRES_IMAGE]}" COLLECTOR_IMAGE "${RELEASE[COLLECTOR_IMAGE]}" \
       PYTHON_IMAGE "${RELEASE[PYTHON_IMAGE]}" WEBSITE_IMAGE "${RELEASE[WEBSITE_IMAGE]}" \
@@ -829,6 +833,8 @@ write_environment() {
     local trusted_proxy_ip website_environment=()
     trusted_proxy_ip=$(setting CLASHLENS_TRUSTED_PROXY_IP "$POD_IP")
     [[ -z "$trusted_proxy_ip" ]] || website_environment+=("CLASHLENS_TRUSTED_PROXY_IP=$trusted_proxy_ip")
+    [[ -z "$BLOG_DIR" ]] || website_environment+=(CLASHLENS_BLOG_DIR=/blog)
+    [[ -z "$(setting CLASHLENS_BLOG_OWNER)" ]] || website_environment+=("CLASHLENS_BLOG_OWNER=$(setting CLASHLENS_BLOG_OWNER)")
     write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
       "${website_environment[@]}" \

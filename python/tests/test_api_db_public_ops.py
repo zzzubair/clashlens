@@ -804,6 +804,92 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
             database.close()
 
 
+def test_player_page_shows_each_day_rank_on_its_reset_board(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            seed_profile(database, "#9Q2", 6100)
+            with database.pool.connection() as connection:
+                player, other = (
+                    connection.execute(
+                        "SELECT id FROM players WHERE normalized_tag = %s", (tag,)
+                    ).fetchone()[0]
+                    for tag in ("#2PP", "#9Q2")
+                )
+                observation = connection.execute(
+                    "SELECT min(id) FROM collector_observations"
+                ).fetchone()[0]
+                for day in (3, 4, 5):
+                    connection.execute(
+                        """
+                        INSERT INTO api_player_daily_logs (
+                            player_id, ranked_day_start, ranked_day_end, version,
+                            state, coverage, adjustments, battles, partial_reasons
+                        ) VALUES (%s, %s, %s, 1, 'Complete', 'complete',
+                                  '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+                        """,
+                        (
+                            player,
+                            datetime(2026, 8, day, 5, tzinfo=UTC),
+                            datetime(2026, 8, day + 1, 5, tzinfo=UTC),
+                        ),
+                    )
+
+                def board(reset_day, positions, *, version=1, state="published"):
+                    snapshot = connection.execute(
+                        """
+                        INSERT INTO leaderboard_snapshots (
+                            snapshot_kind, boundary_at, version,
+                            ordering_rule_version, freshness_rule_version, state,
+                            measured_coverage, stale_entry_count
+                        ) VALUES ('frozen', %s, %s, 'test', 'test', %s, 1.0, 0)
+                        RETURNING id
+                        """,
+                        (datetime(2026, 8, reset_day, 5, tzinfo=UTC), version, state),
+                    ).fetchone()[0]
+                    for player_id, position in positions.items():
+                        connection.execute(
+                            """
+                            INSERT INTO leaderboard_snapshot_entries (
+                                snapshot_id, position, player_id, trophies,
+                                trophy_observation_id, trophy_observed_at,
+                                observation_age_seconds, freshness, confidence,
+                                tie_hash
+                            ) VALUES (%s, %s, %s, 6000, %s, %s, 0, 'fresh',
+                                      'confirmed', repeat('c', 64))
+                            """,
+                            (snapshot, position, player_id, observation, NOW),
+                        )
+
+                board(4, {other: 1, player: 3})
+                board(5, {other: 1})
+                board(6, {player: 2}, state="superseded")
+                board(6, {other: 1, player: 5}, version=2)
+                connection.commit()
+
+            page = api_players.get_player_page(
+                database, "#2PP", now=NOW, freshness_seconds=900
+            )
+
+            assert page is not None
+            assert {
+                day["ranked_day_start"][:10]: day["reset_rank"]
+                for day in page["screen_ready"]["days"]
+            } == {
+                "2026-08-03": 3,
+                "2026-08-04": None,
+                "2026-08-05": 5,
+                "2026-08-06": None,
+            }
+        finally:
+            database.close()
+
+
 def test_player_page_hides_saved_net_for_days_missing_battles(
     database_url: str,
 ) -> None:

@@ -27,7 +27,9 @@ import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
   PlayerPage,
+  RankedDaySummary,
 } from "../../app/lib/contracts";
+import { selectPlayerHistory } from "../../app/lib/player-lookup-text";
 import { PythonApiError } from "../../app/services/python.server";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 
@@ -114,9 +116,17 @@ const PLAYER = {
 
 const CURRENT_LINK = '<a href="/players/%232PP" data-discover="true">Current Season</a>';
 
-async function loadAndRender(client: Record<string, unknown>, season: string | null) {
+async function loadAndRender(
+  client: Record<string, unknown>,
+  season: string | null,
+  day?: string,
+) {
   mocks.createPythonClient.mockReturnValue(client);
-  const search = season === null ? "" : `?season=${season}`;
+  const params = new URLSearchParams({
+    ...(season !== null && { season }),
+    ...(day !== undefined && { day }),
+  });
+  const search = params.size === 0 ? "" : `?${params}`;
   const request = new Request(`https://clashlens.example/players/%232PP${search}`);
   const data = await playerLoader({ request, params: { tag: TAG } } as never);
   const handler = createStaticHandler([
@@ -133,11 +143,138 @@ async function loadAndRender(client: Record<string, unknown>, season: string | n
 const missing = () => Promise.reject(new PythonApiError(404, { error: "missing" }));
 const failed = () => Promise.reject(new PythonApiError(503, { error: "unavailable" }));
 
+// Day `number` of the September Season, or of October's after Day 28.
+const legendDay = (number: number): RankedDaySummary => {
+  const start = Date.parse("2026-09-07T05:00:00Z") + (number - 1) * 86_400_000;
+  return {
+    dayNumber: number > 28 ? number - 28 : number,
+    label: "Ranked day",
+    period: `${new Date(start).toISOString()} – ${new Date(start + 86_400_000).toISOString()}`,
+    state: number > 28 ? "Live" : "Complete",
+    offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
+    defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
+    trophyChange: 0,
+    offenseEvents: [],
+    defenseEvents: [],
+    completeness: { state: "complete", reason: "Complete" },
+    uncertainty: [],
+  };
+};
+
+describe("Daily Legend log days", () => {
+  const ended = [28, 27, 26, 25, 24].map(legendDay);
+  const septemberSeason = {
+    id: SEASON,
+    anchor: "2026-09-07T05:00:00Z",
+    currentDayNumber: 28,
+    dayCount: 28,
+    anchorSource: "official_league_history",
+    anchorObservedAt: "2026-09-07T05:10:00Z",
+  } as const;
+  const afterReset = Date.parse("2026-10-05T05:10:00Z");
+
+  it.each([
+    ["no saved Season", null, [legendDay(29), ...ended]],
+    ["an expired Season anchor", septemberSeason, ended],
+  ])("keeps only the current Season's days with %s", (_, season, recentDays) => {
+    const history = selectPlayerHistory(
+      { ...PLAYER, season, currentDay: null, recentDays, seasonDays: [] },
+      afterReset,
+    );
+    expect(history.map(({ seasonDay }) => seasonDay)).toEqual(
+      season === null ? ["Day 1"] : [],
+    );
+  });
+
+  it("keeps the saved Season's days before its Reset", () => {
+    const history = selectPlayerHistory(
+      { ...PLAYER, season: septemberSeason, currentDay: null, recentDays: ended },
+      afterReset - 60 * 60 * 1000,
+    );
+    expect(history.map(({ seasonDay }) => seasonDay)).toEqual([
+      "Day 28",
+      "Day 27",
+      "Day 26",
+      "Day 25",
+      "Day 24",
+    ]);
+  });
+
+  it("drops the ended Season's days once the device clock passes Reset", async () => {
+    const loadedAt = "2026-10-05T04:00:00Z";
+    mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
+    const client = {
+      getPlayer: vi.fn().mockResolvedValue({
+        ...PLAYER,
+        profile: {
+          ...PLAYER.profile,
+          freshness: { ...PLAYER.profile.freshness, observedAt: loadedAt },
+        },
+        season: septemberSeason,
+        recentDays: ended,
+      }),
+      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+    };
+    expect(await loadAndRender(client, null)).toContain("Day 28");
+
+    // A sleeping device wakes after Reset, before the page's data is reread.
+    let wall = Date.parse(loadedAt);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (wall += 5 * 3_600_000));
+    try {
+      const html = await loadAndRender(client, null);
+      for (const number of [24, 25, 26, 27, 28])
+        expect(html).not.toContain(`Day ${number}`);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
 describe("past-Season view", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();
     mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
   });
+
+  it.each([
+    ["official_league_history", null, "Not available yet"],
+    ["official_league_history", 180, "180"],
+    ["tracked_summary", null, "Not available yet"],
+    ["tracked_summary", 1340, "1,340"],
+  ] as const)(
+    "shows %s official placement %s as the final rank",
+    async (source, finalPlacement, expected) => {
+      const html = await loadAndRender(
+        {
+          getPlayer: vi.fn().mockResolvedValue(PLAYER),
+          getPlayerSeasons: vi.fn().mockResolvedValue([]),
+          getPlayerSeason: vi.fn().mockResolvedValue({
+            ...SUMMARY,
+            source,
+            // Clash Lens's own board rank is never the final rank.
+            finalRank: 183,
+            officialHistory: {
+              observedAt: "2026-10-05T05:08:00Z",
+              eodTrophies: 5812,
+              finalPlacement,
+            },
+          }),
+        },
+        SEASON,
+      );
+      expect(html).toContain(`<dt>Final rank</dt><dd>${expected}</dd>`);
+      expect(html).toContain("Final rank is the in-game rank from Clash of Clans,");
+      expect(html).not.toContain("Clash Lens final rank");
+      expect(html).not.toContain(">183<");
+      expect(html).toContain("<dt>Final trophies</dt><dd>5,812</dd>");
+      if (source === "tracked_summary") {
+        expect(html).not.toContain("Final trophies:");
+        expect(html).not.toContain("A Legend day runs from 05:00 to 05:00 UTC.");
+        expect(html).toContain('<th scope="col">Trophy change</th>');
+        expect(html).not.toContain('<th scope="col">Net</th>');
+      }
+    },
+  );
 
   it("says a partial total covers 5 of 28 days and includes automatic losses", async () => {
     const html = await loadAndRender(
@@ -148,12 +285,12 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toContain("records cover 5 of 28 Legend days");
-    expect(html).toContain("Totals below cover the recorded days only.");
+    expect(html).toContain("Totals cover the 5 of 28 Legend days with records.");
+    expect(html).not.toContain("Partial Season history");
     expect(html).toContain(
       "<dt>Sum of daily trophy changes (5 of 28 days)</dt><dd>+300</dd>",
     );
-    expect(html).toContain("includes automatic defense losses at Reset");
+    expect(html).toContain('title="Recorded attacks minus recorded defenses, without');
     expect(html).not.toContain("Net change");
     // Missing days alone do not make any known total unavailable.
     expect(html).not.toContain("Some daily totals are unavailable.");
@@ -161,7 +298,28 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>-30</td><td>+10</td>");
   });
 
-  it("says a total is unavailable only when one is unknown", async () => {
+  it("shows each day's Reset rank, or Unknown when the board lacks the player", async () => {
+    const html = await loadAndRender(
+      {
+        getPlayer: vi.fn().mockResolvedValue(PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+        getPlayerSeason: vi.fn().mockResolvedValue({
+          ...SUMMARY,
+          dailyEntries: [
+            { ...DAY, resetRank: 1042 },
+            { ...DAY, dayNumber: 23 },
+          ],
+        }),
+      },
+      SEASON,
+    );
+    expect(html).toContain('<th scope="col">Reset rank</th>');
+    // EOD change, then Reset rank, then attacks recorded.
+    expect(html).toContain("<td>Unknown</td><td>1,042</td><td>8</td>");
+    expect(html).toContain("<td>Unknown</td><td>Unknown</td><td>8</td>");
+  });
+
+  it("shows an unknown total as Unknown without a separate note", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -177,7 +335,7 @@ describe("past-Season view", () => {
     expect(html).toContain(
       "<dt>Sum of daily trophy changes (5 of 28 days)</dt><dd>Unknown</dd>",
     );
-    expect(html).toContain("Some daily totals are unavailable.");
+    expect(html).not.toContain("Some daily totals are unavailable.");
   });
 
   it("names complete coverage without a partial warning", async () => {
@@ -195,7 +353,7 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toContain("Records cover all 28 Legend days.");
+    expect(html).not.toContain("Totals cover the");
     expect(html).not.toContain("Partial Season history");
   });
 
@@ -249,7 +407,7 @@ describe("past-Season view", () => {
       client.getPlayerSeasons.mockResolvedValue([]);
       const recoveredHtml = await loadAndRender(client, null);
       expect(recoveredHtml).not.toContain("Season history could not be loaded.");
-      expect(recoveredHtml).not.toContain("Historical seasons");
+      expect(recoveredHtml).not.toContain('aria-label="Seasons"');
     },
   );
 
@@ -262,7 +420,108 @@ describe("past-Season view", () => {
       },
       null,
     );
-    expect(html).not.toContain("Historical seasons");
+    expect(html).not.toContain('aria-label="Seasons"');
     expect(html).not.toContain("Current Season");
+  });
+
+  // Day 1 of the Season starting 5 Oct, after the September Season ended.
+  const newSeasonClient = () => {
+    const today = legendDay(29);
+    const ended = [28, 27, 26, 25, 24].map(legendDay);
+    const ref = { coverageState: "partial", daysObserved: 5, daysMissing: 23 } as const;
+    return {
+      getPlayer: vi.fn().mockResolvedValue({
+        ...PLAYER,
+        season: {
+          id: "1791176400",
+          anchor: "2026-10-05T05:00:00Z",
+          currentDayNumber: 1,
+          dayCount: 28,
+          anchorSource: "official_league_history",
+          anchorObservedAt: "2026-10-05T05:10:00Z",
+        },
+        currentDay: today,
+        recentDays: [today, ...ended],
+        seasonDays: [today],
+      }),
+      getPlayerSeasons: vi.fn().mockResolvedValue([
+        // The Season ending 7 Sep has only the game's result, no Clash Lens days.
+        {
+          ...ref,
+          seasonId: "1786338000",
+          daysObserved: 0,
+          daysMissing: 28,
+          source: "official_league_history",
+          officialHistory: { observedAt: "2026-09-07T06:00:00Z", eodTrophies: 5600 },
+        },
+        { ...ref, seasonId: SEASON, source: "tracked_summary", officialHistory: null },
+      ]),
+      getPlayerSeason: vi.fn().mockResolvedValue({
+        ...SUMMARY,
+        dailyEntries: ended.map((day) => ({
+          ...DAY,
+          dayNumber: day.dayNumber,
+          period: day.period,
+        })),
+      }),
+    };
+  };
+
+  it("keeps only the new Season's Day 1 in the log and the ended Season in Seasons", async () => {
+    const client = newSeasonClient();
+    const current = (await loadAndRender(client, null)).replace(/<[^>]*>/g, " ");
+    expect(current).toContain("Day 1");
+    for (const hidden of ["Date only", "Day 24", "Day 28", "30 Sep 2026", "4 Oct 2026"])
+      expect(current).not.toContain(hidden);
+    expect(current).toMatch(/Seasons\s+Current Season\s+5 Oct 2026/);
+    expect(current).not.toContain("7 Sep 2026");
+
+    const past = await loadAndRender(client, SEASON);
+    for (const number of [24, 25, 26, 27, 28])
+      expect(past).toContain(`<summary>${number}<span class="day-mark`);
+    expect(past).toContain('<strong aria-current="page">5 Oct 2026</strong>');
+  });
+
+  it("sends an ended Season's day link to that Season with the day marked", async () => {
+    mocks.createPythonClient.mockReturnValue(newSeasonClient());
+    const request = new Request(
+      "https://clashlens.example/players/%232PP?day=2026-10-04",
+    );
+    const response = await playerLoader({ request, params: { tag: TAG } } as never).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+    expect(response).toBeInstanceOf(Response);
+    expect((response as Response).headers.get("Location")).toBe(
+      `/players/%232PP?day=2026-10-04&season=${SEASON}#legend-day-2026-10-04`,
+    );
+
+    const html = await loadAndRender(newSeasonClient(), SEASON, "2026-10-04");
+    expect(html.match(/aria-current="date"/g)).toHaveLength(1);
+    expect(html).toContain(
+      '<tr id="legend-day-2026-10-04" aria-current="date"><td><details class="day-status"><summary>28<',
+    );
+    expect(html).toContain('<strong aria-current="page">5 Oct 2026</strong>');
+  });
+
+  it("says when an ended Season has no saved log for the linked day", async () => {
+    const html = await loadAndRender(newSeasonClient(), SEASON, "2026-09-15");
+    expect(html).toContain("No saved Legend log for 15 Sep 2026.");
+    expect(html).not.toContain('aria-current="date"');
+    expect(html).toContain('<details class="day-status"><summary>28<');
+  });
+
+  it("opens a current Season day link in the Daily Legend log", async () => {
+    const html = await loadAndRender(newSeasonClient(), null, "2026-10-05");
+    expect(html).toContain('id="legend-day-2026-10-05" open=""');
+    expect(html).toContain("Daily Legend log");
+    expect(html).not.toContain("No saved Legend log");
+  });
+
+  it("keeps the no-log message for a day outside every tracked Season", async () => {
+    // 20 Aug falls in the Season with only the game's result, not Clash Lens days.
+    const html = await loadAndRender(newSeasonClient(), null, "2026-08-20");
+    expect(html).toContain("No saved Legend log for 20 Aug 2026.");
+    expect(html).toContain("Daily Legend log");
   });
 });

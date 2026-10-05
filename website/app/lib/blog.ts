@@ -9,9 +9,11 @@ export interface BlogPostSummary {
   /** One line shown in the list, link previews and the feed. */
   summary: string;
   author: string | null;
-  /** A site path such as `/images/blog/x.png`, or an https URL. */
+  /** A site path such as `/blog/media/x.png`, or an https URL. */
   cover: string | null;
   coverAlt: string;
+  /** Seen only by the signed-in site owner, never listed in the feed or indexed. */
+  draft: boolean;
 }
 
 export interface BlogPost extends BlogPostSummary {

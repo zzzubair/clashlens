@@ -405,3 +405,46 @@ def test_live_reset_correction_rebuilds_at_once(database_url: str, monkeypatch) 
                 assert _latest(connection, LIVE)[1:] == (2, corrected_version)
         finally:
             database.close()
+
+
+def test_maintenance_releases_each_reset_before_taking_the_next(
+    database_url: str, monkeypatch
+) -> None:
+    Clock(monkeypatch, NOON)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                _published_resets(database, connection)
+                _created(connection, PAST, NOON - timedelta(hours=10))
+                for boundary_at in (PAST, LIVE):
+                    boundary_publication._queue_boundary_army_correction(
+                        database,
+                        connection,
+                        boundary_at=boundary_at,
+                        generation_id=_latest(connection, boundary_at)[0],
+                    )
+                connection.commit()
+
+            held_before_live: list[int] = []
+            lock = boundary.lock_boundary_publication
+
+            def spy(connection, boundary_at, wait=None):
+                if boundary_at == LIVE and not held_before_live:
+                    held_before_live.append(
+                        connection.execute(
+                            """
+                            SELECT count(*) FROM pg_locks
+                            WHERE locktype = 'advisory' AND granted
+                              AND pid = pg_backend_pid()
+                            """
+                        ).fetchone()[0]
+                    )
+                lock(connection, boundary_at, wait)
+
+            monkeypatch.setattr(boundary, "lock_boundary_publication", spy)
+            assert boundary_publication.reevaluate_boundary_publications(database) == 2
+            # The past Reset's lock was released before the newest was taken.
+            assert held_before_live == [0]
+        finally:
+            database.close()

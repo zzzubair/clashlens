@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -12,6 +13,10 @@ BOOTSTRAP_CURRENT_SEASON_ID = "1783918800"
 BOOTSTRAP_PREVIOUS_SEASON_ID = "1781499600"
 RANKED_DAY_DURATION = timedelta(days=1)
 SEASON_DURATION = timedelta(days=28)
+# Every Legend I player starts a Season at exactly this many trophies.
+SEASON_START_TROPHIES = 5000
+# One attack or defense moves trophies by at most this many.
+MAX_BATTLE_TROPHIES = 40
 # No new-day attack can start in the first minutes after the Reset, so a
 # battle reported in the first five minutes finished a previous-day attack.
 # The attacker's report is stamped when the attack ends, often after the
@@ -242,6 +247,48 @@ def season_is_current(profile_season_id: str | None, at: datetime) -> bool:
     ``at``. Otherwise its trophies come from before that player's Season reset
     and are never a total for the calendar Season."""
     return profile_season_id == ranked_day_for(at).official_season_id
+
+
+def season_opening_reset(at: datetime) -> datetime | None:
+    """The Reset that opened the Season when ``at`` is on its first Legend
+    day. Its frozen final board holds each player's pre-Reset trophies."""
+    day = ranked_day_for(at)
+    return day.start if day.day_number == 1 else None
+
+
+def opening_day_trophies_explained(trophies: int, net: int, battles: int) -> bool:
+    """Whether a Legend I profile's trophies on a Season's first Legend day
+    are 5,000 plus what that day's recorded battles moved. When the recorded
+    net change does not match, some battles are missing, so the gap from 5,000
+    may be at most 40 trophies per recorded attack or defense."""
+    gap = trophies - SEASON_START_TROPHIES
+    return gap == net or abs(gap) <= MAX_BATTLE_TROPHIES * battles
+
+
+def awaits_season_reset(
+    profile_season_id: str | None,
+    trophies: int | None,
+    frozen_trophies: int | None,
+    day_battles: Sequence[int] | None,
+    at: datetime,
+) -> bool:
+    """True when a profile's trophies come from before that player's Season
+    reset: it names an earlier Season, or on the Season's first Legend day
+    its trophies are not 5,000 and either still equal the player's frozen
+    pre-Reset final trophies or, for a Legend I player, are not explained by
+    ``day_battles`` (that day's recorded net change and battle count)."""
+    if not season_is_current(profile_season_id, at):
+        return True
+    if (
+        season_opening_reset(at) is None
+        or trophies is None
+        or trophies == SEASON_START_TROPHIES
+    ):
+        return False
+    return trophies == frozen_trophies or (
+        day_battles is not None
+        and not opening_day_trophies_explained(trophies, *day_battles)
+    )
 
 
 def battle_day_for(timestamp: datetime) -> RankedDay:

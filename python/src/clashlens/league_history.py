@@ -3,8 +3,9 @@
 ``/players/{tag}/leaguehistory`` answers one row per past season. These rows
 supply official past-season results; the validated current-season ID from the
 profile anchors the active season. The collector fetches league history at
-initial collection and once after each season-ending Reset; the full raw
-response is archived like every other stored response.
+initial collection, at each season-ending Reset and again 20 minutes later
+(``league_history_refresh``); the full raw response is archived like every
+other stored response.
 """
 
 from __future__ import annotations

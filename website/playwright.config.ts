@@ -1,8 +1,25 @@
 import { defineConfig, devices } from "@playwright/test";
 
-import { websiteOrigin } from "./tests/fixtures/test-values";
+import { blogFixtureOrigin, websiteOrigin } from "./tests/fixtures/test-values";
 
 const externalStack = process.env.CLASHLENS_E2E_EXTERNAL_STACK === "1";
+
+// The built website again, reading tests/fixtures/blog with login off, so the
+// blog tests control which posts exist without touching the shared stack.
+const blogServer = {
+  command: "node server.ts",
+  cwd: ".",
+  url: `${blogFixtureOrigin}/blog`,
+  reuseExistingServer: false,
+  env: {
+    NODE_ENV: "test",
+    HOST: "127.0.0.1",
+    PORT: new URL(blogFixtureOrigin).port,
+    CLASHLENS_PUBLIC_ORIGIN: blogFixtureOrigin,
+    CLASHLENS_BLOG_DIR: "tests/fixtures/blog",
+    CLASHLENS_BLOG_OWNER: "google:blog-owner",
+  },
+};
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -19,7 +36,7 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
   webServer: externalStack
-    ? []
+    ? [blogServer]
     : [
         {
           command: "../dev e2e-server",
@@ -31,5 +48,6 @@ export default defineConfig({
           // Let dev's trap stop the pod and remove its disposable volumes.
           gracefulShutdown: { signal: "SIGTERM", timeout: 60_000 },
         },
+        blogServer,
       ],
 });

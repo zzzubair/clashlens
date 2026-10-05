@@ -8,21 +8,25 @@ from .api_db import (
     PLAYER_SCREEN_READY_VERSION,
     ApiDatabase,
     _daily_log,
+    _frozen_trophies_sql,
     _historical_season_summary,
     _json_array,
+    _opening_day_battles_sql,
     _public_confidence,
     _screen_daily_log_with_events,
+    _season_reset_waiting_sql,
     _text,
     _withhold_unsupported_entries,
 )
 from .domain import (
     SEASON_DURATION,
     DomainRuleError,
+    awaits_season_reset,
     ranked_day_for,
-    season_is_current,
+    season_opening_reset,
     validate_legend_season_start,
 )
-from .season_summaries import season_final_rank
+from .season_summaries import reset_board_ranks, season_final_rank
 
 _LEGEND_I_TIER_ID = 105000036
 
@@ -36,8 +40,12 @@ def _official_history_rows(
     filters = ["player.normalized_tag = %s", "history.league_tier_id = %s"]
     parameters: list[Any] = [normalized_tag, _LEGEND_I_TIER_ID]
     if season_id is not None:
+        if not (season_id.isascii() and season_id.isdigit()):
+            return []
         filters.append("history.league_season_id = %s")
-        parameters.append(season_id)
+        parameters.append(
+            str(int(season_id) + int(SEASON_DURATION.total_seconds()))
+        )
     rows = connection.execute(
         f"""
         SELECT history.league_season_id, history.observed_at,
@@ -52,26 +60,26 @@ def _official_history_rows(
     valid = []
     for row in rows:
         observed_at = row[1].astimezone(UTC)
+        # League history names a Season by the Reset that ended it, which is
+        # the next Season's start: the row for 5 Oct 2026 05:00 holds the
+        # results of the Season that started 7 Sep 2026.
         try:
-            season_start = validate_legend_season_start(
+            season_end = validate_legend_season_start(
                 _text(row[0]), observed_at=observed_at
             )
         except DomainRuleError:
             # Old rows predate reader-side validation. They stay retained as
             # evidence, but an invalid boundary never reaches a season page.
             continue
-        if season_start + SEASON_DURATION > observed_at:
-            # Official league history describes completed seasons. A row for
-            # the season still in progress cannot be presented as its EOD.
-            continue
+        season_start = season_end - SEASON_DURATION
         trophies = None if row[2] is None else int(row[2])
         placement = None if row[3] is None else int(row[3])
         valid.append(
             {
-                "official_season_id": _text(row[0]),
+                "official_season_id": str(int(season_start.timestamp())),
                 "observed_at": observed_at,
                 "season_start": season_start,
-                "season_end": season_start + SEASON_DURATION,
+                "season_end": season_end,
                 "eod_trophies": trophies
                 if trophies is not None and trophies >= 0
                 else None,
@@ -132,7 +140,10 @@ def get_player_page(
                    {metadata_columns},
                    profile.profile_json -> 'clan' ->> 'name',
                    player.current_profile_confirmed_at,
-                   profile.current_league_season_id
+                   profile.current_league_season_id,
+                   {_frozen_trophies_sql("player.id", "%s")},
+                   {_opening_day_battles_sql("player.id", "%s")},
+                   player.id
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -140,14 +151,17 @@ def get_player_page(
             WHERE player.normalized_tag = %s
               AND profile.source_contract_state = 'accepted'
             """,
-            (normalized_tag,),
+            (season_opening_reset(now), season_opening_reset(now), normalized_tag),
         ).fetchone()
         if row is None:
             return None
         observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
-        # A profile naming an earlier Season shows trophies from before this
-        # player's Season reset, not their total in the current Season.
-        season_reset_pending = not season_is_current(_text(row[12]), now)
+        # A profile naming an earlier Season, or still showing the frozen
+        # pre-Reset trophies on a Season's first day, shows trophies from
+        # before this player's Season reset, not their current Season total.
+        season_reset_pending = awaits_season_reset(
+            _text(row[12]), int(row[4]), row[13], row[14], now
+        )
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
         daily_rows = connection.execute(
             """
@@ -156,7 +170,7 @@ def get_player_page(
                    attack_count, attack_three_star_count, attack_gain,
                    defense_count, defense_three_star_count, defense_loss,
                    net_trophy_change, adjustments, battles, partial_reasons,
-                   start_trophies, published_at
+                   start_trophies, start_trophies_source, published_at
             FROM (
                 SELECT DISTINCT ON (daily.ranked_day_start)
                        daily.ranked_day_start, daily.ranked_day_end,
@@ -167,6 +181,11 @@ def get_player_page(
                        daily.defense_three_star_count, daily.defense_loss,
                        daily.net_trophy_change, daily.adjustments, daily.battles,
                        daily.partial_reasons, ranked_day.start_trophies,
+                       -- Only Day 1 can start by the Season rule.
+                       CASE WHEN daily.season_day_number = 1
+                           THEN ranked_day.input_evidence
+                           #>> '{start_baseline_evidence,start_trophies_source}' END
+                           AS start_trophies_source,
                        daily.published_at
                 FROM api_player_daily_logs AS daily
                 LEFT JOIN ranked_day_versions AS ranked_day
@@ -182,7 +201,7 @@ def get_player_page(
             (normalized_tag,),
         ).fetchall()
         history_updated_at = max(
-            (day[19].astimezone(UTC) for day in daily_rows), default=None
+            (day[20].astimezone(UTC) for day in daily_rows), default=None
         )
         public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
         # The page never shows decoded armies; Copy army uses each event's
@@ -226,7 +245,7 @@ def get_player_page(
                 "start": season_start,
                 "end": season_start + SEASON_DURATION,
                 "anchor_source": "daily_publication",
-                "anchor_observed_at": current_day_raw[19].astimezone(UTC),
+                "anchor_observed_at": current_day_raw[20].astimezone(UTC),
             }
         season_rows = []
         if season_context is not None and not season_anchor_conflict:
@@ -241,7 +260,7 @@ def get_player_page(
                        attack_count, attack_three_star_count, attack_gain,
                        defense_count, defense_three_star_count, defense_loss,
                        net_trophy_change, adjustments, battles, partial_reasons,
-                       start_trophies
+                       start_trophies, start_trophies_source
                 FROM (
                     SELECT DISTINCT ON (daily.ranked_day_start)
                            daily.ranked_day_start, daily.ranked_day_end,
@@ -252,7 +271,11 @@ def get_player_page(
                            daily.defense_count, daily.defense_three_star_count,
                            daily.defense_loss, daily.net_trophy_change,
                            daily.adjustments, daily.battles, daily.partial_reasons,
-                           ranked_day.start_trophies
+                           ranked_day.start_trophies,
+                           CASE WHEN daily.season_day_number = 1
+                           THEN ranked_day.input_evidence
+                           #>> '{start_baseline_evidence,start_trophies_source}' END
+                               AS start_trophies_source
                     FROM api_player_daily_logs AS daily
                     LEFT JOIN ranked_day_versions AS ranked_day
                         ON ranked_day.id = daily.ranked_day_version_id
@@ -286,6 +309,16 @@ def get_player_page(
                     _daily_log(season_row), public_confidence, now
                 )
             season_day_starts.append(start)
+        # Each day's Clash Lens rank on the frozen board saved at its closing
+        # Reset; unknown until that board exists or when it omits the player.
+        ranks = reset_board_ranks(
+            connection,
+            int(row[15]),
+            [day["ranked_day_end"] for day in days.values() if day["ranked_day_end"]],
+        )
+        for day in days.values():
+            end = day["ranked_day_end"]
+            day["reset_rank"] = None if end is None else ranks.get(datetime.fromisoformat(end))
         data_quality = []
         if age_seconds > freshness_seconds:
             data_quality.append(
@@ -408,14 +441,16 @@ def player_cards(
     profiles = {
         int(row[0]): row[1:]
         for row in connection.execute(
-            """
-            SELECT player.id, profile.trophies, profile.current_league_season_id
+            f"""
+            SELECT player.id, profile.trophies, profile.current_league_season_id,
+                   {_frozen_trophies_sql("player.id", "%s")},
+                   {_opening_day_battles_sql("player.id", "%s")}
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
             WHERE player.id = ANY(%s) AND profile.source_contract_state = 'accepted'
             """,
-            (ids,),
+            (season_opening_reset(now), season_opening_reset(now), ids),
         ).fetchall()
     }
     today = {
@@ -427,7 +462,7 @@ def player_cards(
                    season_day_number, version, state, coverage, confidence,
                    attack_count, attack_three_star_count, attack_gain,
                    defense_count, defense_three_star_count, defense_loss,
-                   net_trophy_change, adjustments, battles, partial_reasons, NULL
+                   net_trophy_change, adjustments, battles, partial_reasons, NULL, NULL
             FROM api_player_daily_logs
             WHERE player_id = ANY(%s) AND ranked_day_start = %s
             ORDER BY player_id, version DESC
@@ -455,7 +490,9 @@ def player_cards(
         }
         if reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
-            pending = not season_is_current(_text(profile[1]), now)
+            pending = awaits_season_reset(
+                _text(profile[1]), int(profile[0]), profile[2], profile[3], now
+            )
             card["trophies"] = None if pending else int(profile[0])
             card["season_reset_pending"] = pending
             day = today.get(player_id)
@@ -575,9 +612,20 @@ def get_player_season_summary(
             columns = [d.name for d in cursor.description]
             record = dict(zip(columns, row))
             result = _historical_season_summary(record)
+            ranks = reset_board_ranks(
+                connection,
+                int(record["player_id"]),
+                [
+                    entry["ranked_day_end"]
+                    for entry in result["daily_entries"]
+                    if entry.get("ranked_day_end")
+                ],
+            )
             for entry in result["daily_entries"]:
                 for key in ("eod_state", "eod_change", "eod_change_state"):
                     entry.setdefault(key, None)
+                end = entry.get("ranked_day_end")
+                entry["reset_rank"] = None if not end else ranks.get(datetime.fromisoformat(end))
             # Summaries can be written before the Season's newest final board
             # is published; that board's rank wins once it exists.
             result["final_rank"] = season_final_rank(
@@ -644,7 +692,7 @@ def search_known_players(
     escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     with database.pool.connection() as connection:
         rows = connection.execute(
-            """
+            f"""
             -- Match current names before checking history. Without this boundary,
             -- PostgreSQL can scan and decode every player's daily battle JSON.
             WITH matches AS MATERIALIZED (
@@ -652,7 +700,14 @@ def search_known_players(
                        profile.trophies, player.current_observed_at,
                        player.eligibility_state, player.active,
                        profile.profile_json -> 'clan' ->> 'name' AS clan,
-                       profile.current_league_season_id
+                       profile.current_league_season_id,
+                       {_frozen_trophies_sql("player.id", "%(opening_reset)s")}
+                           AS frozen_trophies,
+                       {_opening_day_battles_sql("player.id", "%(opening_reset)s")}
+                           AS day_battles,
+                       {_season_reset_waiting_sql(
+                           "player.id", "profile.trophies", "%(opening_reset)s"
+                       )} AS opening_day_waiting
                 FROM players AS player
                 JOIN LATERAL (
                     SELECT name, trophies, source_contract_state, profile_json,
@@ -663,12 +718,13 @@ def search_known_players(
                     OFFSET 0
                 ) AS profile ON true
                 WHERE player.current_profile_version_id IS NOT NULL
-                  AND profile.name ILIKE %s ESCAPE '\\'
+                  AND profile.name ILIKE %(pattern)s ESCAPE '\\'
                   AND profile.source_contract_state = 'accepted'
             )
             SELECT player.normalized_tag, player.name, player.trophies,
                    player.current_observed_at, player.eligibility_state, player.clan,
-                   player.current_league_season_id
+                   player.current_league_season_id, player.frozen_trophies,
+                   player.day_battles
             FROM matches AS player
             -- Scalar subqueries stop after one row and cannot become a hashed
             -- EXISTS subplan that reads the entire history table.
@@ -683,18 +739,20 @@ def search_known_players(
                    OR (SELECT true FROM player_league_history_entries AS history
                        WHERE history.player_id = player.id LIMIT 1))
             -- An exact name match first, then the strongest players.
-            ORDER BY lower(player.name) = lower(%s) DESC,
-                     CASE WHEN player.current_league_season_id = %s
+            ORDER BY lower(player.name) = lower(%(query)s) DESC,
+                     CASE WHEN player.current_league_season_id = %(season_id)s
+                               AND NOT player.opening_day_waiting
                           THEN player.trophies END DESC NULLS LAST,
                      lower(player.name), player.normalized_tag
-            LIMIT %s
+            LIMIT %(limit)s
             """,
-            (
-                f"%{escaped_query}%",
-                query,
-                ranked_day_for(now).official_season_id,
-                limit,
-            ),
+            {
+                "pattern": f"%{escaped_query}%",
+                "query": query,
+                "season_id": ranked_day_for(now).official_season_id,
+                "opening_reset": season_opening_reset(now),
+                "limit": limit,
+            },
         ).fetchall()
         results = []
         for row in rows:
@@ -702,7 +760,9 @@ def search_known_players(
             age_seconds = max(
                 0, int((now.astimezone(UTC) - observed_at).total_seconds())
             )
-            pending = not season_is_current(_text(row[6]), now)
+            pending = awaits_season_reset(
+                _text(row[6]), int(row[2]), row[7], row[8], now
+            )
             results.append(
                 {
                     "tag": _text(row[0]),

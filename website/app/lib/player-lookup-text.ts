@@ -1,4 +1,10 @@
-import type { PlayerLookup, RankedDaySummary } from "./contracts";
+import { seasonStartAt } from "../components/SeasonReread";
+import type {
+  PlayerLookup,
+  PlayerPage,
+  RankedDaySummary,
+  SummarizedSeasonRef,
+} from "./contracts";
 
 /** What a player page says about a tag without current results. */
 export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
@@ -228,4 +234,55 @@ function excessNote(count: number | null, kind: "attacks" | "defenses"): string 
   return count === null
     ? `Clash of Clans returned more than the usual 8 ${kind} for this day, so this day is marked partial.`
     : `Clash of Clans returned ${count} ${kind} for this day, more than the usual 8, so this day is marked partial.`;
+}
+
+export function legendDayKey(period: string): string {
+  return period.split(" – ")[0].slice(0, 10);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The log keeps only the current Season's days at the server time, numbered
+// from its start; an ended Season's days are under that Season in Seasons.
+export function selectPlayerHistory(player: PlayerPage | null, now: number) {
+  const anchor = player?.season ? Date.parse(player.season.anchor) : null;
+  const seasonStart =
+    anchor !== null && now < anchor + 28 * DAY_MS ? anchor : seasonStartAt(now);
+  const seasonDay = (day: RankedDaySummary) =>
+    Math.floor((Date.parse(day.period.split(" – ")[0]) - seasonStart) / DAY_MS) + 1;
+  const days = [
+    ...(player?.seasonDays ?? []),
+    ...(player?.currentDay ? [player.currentDay] : []),
+    ...(player?.recentDays ?? []),
+  ].filter(
+    (day) =>
+      seasonDay(day) >= 1 &&
+      seasonDay(day) <= 28 &&
+      (!day.uncertainty.includes("player_not_eligible") ||
+        day.offenseEvents.length > 0 ||
+        day.defenseEvents.length > 0),
+  );
+  return days
+    .filter(
+      (day, index) =>
+        days.findIndex(
+          (saved) => legendDayKey(saved.period) === legendDayKey(day.period),
+        ) === index,
+    )
+    .sort((a, b) => legendDayKey(b.period).localeCompare(legendDayKey(a.period)))
+    .map((day) => ({ day, seasonDay: `Day ${seasonDay(day)}` }));
+}
+
+// The ended Season whose saved days include this Legend day (YYYY-MM-DD).
+export function seasonForDay(seasons: SummarizedSeasonRef[], day: string): string | null {
+  const start = Date.parse(`${day}T05:00:00Z`);
+  const season = seasons.find(({ seasonId, source }) => {
+    const seasonStart = Number(seasonId) * 1000;
+    return (
+      source === "tracked_summary" &&
+      seasonStart <= start &&
+      start < seasonStart + 28 * DAY_MS
+    );
+  });
+  return season?.seasonId ?? null;
 }

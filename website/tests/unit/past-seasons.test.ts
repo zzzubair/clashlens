@@ -139,7 +139,7 @@ describe("past Seasons from ClashKing on the player page", () => {
     expect(html).toMatch(/7 Sep 2026<\/th><td>5,856<\/td><td>#1<\/td>/);
     expect(html).toMatch(/Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td>/);
     expect(html).toMatch(/Dec 2021<\/th><td>4,965<\/td><td>Not recorded<\/td>/);
-    expect(html).toMatch(/Source:.*<a href="https:\/\/clashk.ing"[^>]*>ClashKing<\/a>/);
+    expect(html).toMatch(/from.*<a href="https:\/\/clashk.ing"[^>]*>ClashKing<\/a>/);
   });
 
   it("keeps the player page working when ClashKing finishes are unavailable", async () => {

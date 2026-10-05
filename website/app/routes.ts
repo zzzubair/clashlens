@@ -10,6 +10,7 @@ export default [
   route("analytics/armies", "routes/army-analytics.tsx"),
   route("blog", "routes/blog.tsx"),
   route("blog/rss.xml", "routes/blog.rss.ts"),
+  route("blog/media/:file", "routes/blog.media.ts"),
   route("blog/:slug", "routes/blog.$slug.tsx"),
   route("login", "routes/login.tsx"),
   route("auth/google", "routes/auth.google.ts"),

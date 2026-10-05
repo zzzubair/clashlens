@@ -229,6 +229,83 @@ it("keeps worst-case names readable: one player, right-to-left text and no clan"
   expect(dropdown).toContain("1 linked account<");
 });
 
+it.each([
+  [11869, "11,869 tracked players are"],
+  [1, "1 tracked player is"],
+])("explains an empty Season-reset board with %i waiting", async (waiting, count) => {
+  const html = await renderHome(
+    {
+      leaderboard: {
+        entries: [],
+        totalTracked: 13263,
+        seasonResetPending: waiting,
+        generatedAt: "2026-10-05T05:00:01Z",
+      },
+      query: "",
+      error: null,
+      search: null,
+    },
+    "",
+  );
+  expect(html).not.toContain("Top 0");
+  expect(html).toContain("Waiting for the new Season");
+  expect(html).toContain(`${count} waiting`);
+  expect(html).toContain("will be ranked once their profile shows the new Season");
+  expect(html).toContain('role="status"');
+  expect(html).not.toContain("<table");
+  expect(html).not.toContain("No standings available yet");
+  expect(html).not.toContain("could not be loaded");
+});
+
+it("shows ranked players without the waiting note once the board has entries", async () => {
+  const html = await renderHome(
+    {
+      leaderboard: {
+        entries: [
+          {
+            rank: 1,
+            tag: "#2PP",
+            name: "Nova",
+            clan: "Example",
+            trophies: 5000,
+            freshness: {
+              state: "fresh",
+              observedAt: "2026-10-05T05:10:00Z",
+              ageSeconds: 0,
+            },
+          },
+        ],
+        totalTracked: 13263,
+        seasonResetPending: 11868,
+        generatedAt: "2026-10-05T05:10:00Z",
+      },
+      query: "",
+      error: null,
+      search: null,
+    },
+    "",
+  );
+  expect(html).toContain('<table aria-label="Latest saved standings"');
+  expect(html).toContain('data-testid="tracked-player-row"');
+  expect(html).not.toContain("Waiting for the new Season");
+  expect(html).not.toContain("waiting for their Season reset");
+});
+
+it("keeps the empty-board message when no players are waiting for the Season reset", async () => {
+  const html = await renderHome(
+    {
+      leaderboard: { entries: [], totalTracked: 0, seasonResetPending: 0 },
+      query: "",
+      error: null,
+      search: null,
+    },
+    "",
+  );
+  expect(html).toContain("<h3>No standings available yet</h3>");
+  expect(html).not.toContain("Waiting for the new Season");
+  expect(html).not.toContain("could not be loaded");
+});
+
 it("counts the shown rankings that are more than 10 minutes old", async () => {
   const entry = (rank: number, state: string, observedAt: string) => ({
     rank,

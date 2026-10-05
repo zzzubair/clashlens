@@ -151,8 +151,9 @@ stop before importing; leave all source files and receipts for review.
 
 **Get Zubair's approval for the exact release, service interruption, supplied
 counts, subsequent real requests and simultaneous alert deployment.** Record
-it before these production-changing commands. Keep global rankings and automatic
-discovery at their existing disabled settings. Candidates alone cause requests.
+it before these production-changing commands. Keep global rankings at its
+existing disabled setting. Automatic discovery is on by default; see
+[collector polling](collector-polling.md). Candidates alone cause requests.
 Do not display `app.env` or the webhook file.
 
 ```sh

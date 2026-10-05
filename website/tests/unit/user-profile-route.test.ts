@@ -8,6 +8,7 @@ import {
 import { expect, it } from "vitest";
 
 import UserRoute from "../../app/routes/users.$username";
+import { worstPublicUser } from "../fixtures/worst-case-accounts";
 
 const data = {
   user: {
@@ -131,4 +132,22 @@ it("says a failed profile read could not load instead of showing no linked accou
   expect(html).toContain('<a href="/users/nova88">Try again</a>');
   expect(html).not.toContain("No linked accounts yet");
   expect(html).not.toContain("Linked accounts");
+});
+
+it("shows worst-case linked players with separators and every missing value named", async () => {
+  const html = (
+    await renderProfile("", { user: worstPublicUser(), notFound: false, error: null })
+  ).replaceAll("&#x27;", "'");
+  expect(html.match(/<a class="linked-player-card"/g)).toHaveLength(6);
+  for (const text of [
+    "#13,204",
+    "6,499",
+    "#1<",
+    "0/8 attacks · 0/8 defenses",
+    "1/8 attacks · 8/8 defenses",
+    "Waiting for this player's Season reset",
+    "Not available yet",
+    "4,812",
+  ])
+    expect(html).toContain(text);
 });

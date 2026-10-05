@@ -36,3 +36,9 @@ gap = |attacker trophies - defender trophies|
 ```
 
 ![The Legend League badge](/images/legend-league.webp)
+
+![Trophy gap by band](../media/gap-chart.png)
+
+[Data](../media/gap-chart.csv), and a chart with no dark version:
+
+![A plain badge](../media/badge.png)

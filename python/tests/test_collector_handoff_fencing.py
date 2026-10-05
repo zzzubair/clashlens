@@ -15,6 +15,7 @@ import pytest
 from test_collector import _Client, _collector, _Reservation, _Spool, _Store
 from test_collector_upload_slots import _handoff_for
 
+from clashlens.collector import _CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE
 from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.collector_http import FetchedResponse, KeyPool
 from clashlens.spool import Spool
@@ -99,7 +100,7 @@ def test_cleanup_pauses_between_turns_and_reports_every_found_file(
 ) -> None:
     spool = _Spool()
     store = _Store(spool)
-    store.deletable = [f"{index:064x}" for index in range(17)]
+    store.deletable = [f"{index:064x}" for index in range(_CLEANUP_BATCH_SIZE + 1)]
     kept = store.deletable[3]
 
     def delete_if_unreferenced(digest: str) -> bool:
@@ -111,7 +112,7 @@ def test_cleanup_pauses_between_turns_and_reports_every_found_file(
     )
     collector = _collector(spool, store, _Client(spool))
 
-    assert collector.cleanup_uploaded() == (16, 17)
+    assert collector.cleanup_uploaded() == (_CLEANUP_BATCH_SIZE, _CLEANUP_BATCH_SIZE + 1)
     assert spool.events == ["locked", "paused", "locked"]
     assert kept not in store.marked
 
@@ -122,7 +123,7 @@ def test_full_cleanup_lookup_while_spool_is_full_clears_an_earlier_rest(
     spool = _Spool()
     collector = _collector(spool, _Store(spool), _Client(spool))
     stop = asyncio.Event()
-    found = iter((0, 256, 0, 0))
+    found = iter((0, _CLEANUP_LOOKUP_SIZE, 0, 0))
     lookups: list[dict[str, object]] = []
     waits = 0
 
@@ -155,6 +156,58 @@ def test_full_cleanup_lookup_while_spool_is_full_clears_an_earlier_rest(
 
     asyncio.run(asyncio.wait_for(collector._upload_loop(stop, 0.01), timeout=2))
     assert lookups == [{}, {}, {}, {"limit": 32}]
+
+
+def test_cleanup_keeps_looking_every_second_while_a_burst_keeps_arriving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    stop = asyncio.Event()
+    serial = iter(range(10**6))
+    pending = [f"{next(serial):064x}" for _index in range(_CLEANUP_BATCH_SIZE)]
+    # Each second a full turn of new files becomes deletable, then the burst ends.
+    arrivals = iter((_CLEANUP_BATCH_SIZE,) * 2 + (_CLEANUP_BATCH_SIZE - 1, 1))
+    found: list[int] = []
+    left_at_wait: list[int] = []
+
+    def deletable_hashes(*, limit: int) -> list[str]:
+        found.append(min(limit, len(pending)))
+        return pending[:limit]
+
+    def delete_spool_if_deletable(digests: list[str], delete: Any) -> int:
+        for digest in digests:
+            pending.remove(digest)
+        return len(digests)
+
+    async def one_second(stop_requested: asyncio.Event, _seconds: float) -> None:
+        if stop_requested.is_set():
+            return
+        left_at_wait.append(len(pending))
+        if (count := next(arrivals, None)) is None:
+            stop_requested.set()
+        else:
+            pending.extend(f"{next(serial):064x}" for _index in range(count))
+        await asyncio.sleep(0)
+
+    async def idle_upload(*, owner: str) -> bool:
+        del owner
+        await stop.wait()
+        return False
+
+    store.deletable_hashes = deletable_hashes  # type: ignore[method-assign]
+    store.delete_spool_if_deletable = delete_spool_if_deletable  # type: ignore[method-assign]
+    collector.upload_once = idle_upload  # type: ignore[method-assign]
+    monkeypatch.setattr("clashlens.collector._wait_or_stop", one_second)
+
+    asyncio.run(asyncio.wait_for(collector._upload_loop(stop, 0.01), timeout=2))
+
+    # Full turns never rest; the first short lookup rests and leaves one file
+    # for the shutdown pass.
+    assert found == [_CLEANUP_BATCH_SIZE] * 3 + [_CLEANUP_BATCH_SIZE - 1, 1]
+    assert left_at_wait == [0, 0, 0, 0, 1]
+    assert pending == []
 
 
 def test_normal_upload_shutdown_finishes_owned_upload_and_removes_its_raw_body(

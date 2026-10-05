@@ -2,7 +2,9 @@
 
 At each Reset the sweep freezes the active members, then schedules two
 pieces of work for each of them in one transaction: the Reset pair, due at
-once, and one settlement check, due 20 minutes later. The Reset pair holds
+once, and one settlement check, due 20 minutes later. A Season-opening Reset
+also adds one league-history refresh each, due 20 minutes later
+(``league_history_refresh``). The Reset pair holds
 ordinary collection until it finishes; the settlement check never does. It
 fetches a fresh profile, then the battle log that must cover it, and stops
 making requests 23h55m after the Reset.
@@ -14,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .domain import is_season_boundary
+from .league_history_refresh import REFRESH_DELAY, schedule_refresh
 
 SETTLEMENT_DELAY = timedelta(minutes=20)
 COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
@@ -44,7 +47,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
                   SELECT 1 FROM collector_work AS work
                   WHERE work.sweep_id = sweep.id
                     AND work.kind = 'reset_baseline'
-                    AND work.status NOT IN ('complete', 'failed', 'cancelled')
+                    AND work.status IN ('pending', 'waiting_retry')
               )
             ORDER BY sweep.boundary_at
             LIMIT 1
@@ -87,6 +90,13 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
             # Only the sweep's first capture schedules settlement checks, so a
             # sweep an older release captured never gets them hours late.
             _schedule_settlement_checks(connection, sweep_id, utc_boundary, member_ids)
+            if is_season_boundary(utc_boundary):
+                schedule_refresh(
+                    connection,
+                    utc_boundary,
+                    due_at=utc_boundary + REFRESH_DELAY,
+                    player_ids=member_ids,
+                )
         else:
             member_ids = connection.execute(
                 "SELECT member_ids FROM collector_reset_sweeps WHERE id = %s FOR NO KEY UPDATE",
@@ -164,7 +174,7 @@ def reset_ready(connection: Any, sweep_id: int) -> bool:
     if sweep_id < 1:
         raise ValueError("Reset sweep ID must be positive")
     return connection.execute(
-        "SELECT NOT EXISTS (SELECT 1 FROM collector_work WHERE sweep_id = %s AND kind = 'reset_baseline' AND status NOT IN ('complete', 'failed', 'cancelled'))",
+        "SELECT NOT EXISTS (SELECT 1 FROM collector_work WHERE sweep_id = %s AND kind = 'reset_baseline' AND status IN ('pending', 'waiting_retry'))",
         (sweep_id,),
     ).fetchone()[0]
 

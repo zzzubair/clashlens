@@ -389,8 +389,9 @@ the already-built release:
 ```
 
 The website and collector health endpoints bind to `127.0.0.1`; PostgreSQL and
-the private API have no host port. Production discovery and the global Top-200
-request remain disabled until real collection is approved.
+the private API have no host port. Production discovery is on unless
+`CLASHLENS_PLAYER_DISCOVERY_ENABLED=false`; see
+[collector polling](collector-polling.md) for its limit and request cost.
 
 `up` first checks configuration and existing resources without stopping services.
 Once those checks pass, it disables and stops the whole target, except as described in
@@ -431,6 +432,102 @@ the active release records their running images, so their image
 revision label can name an older commit than the release. The record of what
 they run with is `kept-services.env` in the state directory; it holds only
 hashes.
+
+## Blog posts
+
+The website reads blog posts from a copy of the private repo
+`zzzubair/clashlens-blog` on the server. A timer pulls that repo every five
+minutes with a read-only deploy key, `./ops` mounts the copy into the website
+container read-only at `/blog`, and the website rereads it at most once a
+minute. Publishing a post is a merge to the blog repo's `main`; it shows up
+within about six minutes. The format is in
+[`website/blog/README.md`](../website/blog/README.md).
+
+Run these once, as the service account, from the checkout:
+
+1. Make a key that can only read the blog repo, and register it as a
+   read-only deploy key (approve the `gh` step from an account that owns the
+   repo):
+
+   ```sh
+   ssh-keygen -t ed25519 -N '' -C clashlens-blog-sync -f ~/.ssh/clashlens-blog
+   gh repo deploy-key add ~/.ssh/clashlens-blog.pub -R zzzubair/clashlens-blog \
+     --title "rogue blog sync"
+   ```
+
+2. Clone the repo outside the checkout and make it readable by the website
+   container's user:
+
+   ```sh
+   GIT_SSH_COMMAND='ssh -i ~/.ssh/clashlens-blog -o IdentitiesOnly=yes' \
+     git clone --branch main git@github.com:zzzubair/clashlens-blog.git ~/clashlens-blog
+   git -C ~/clashlens-blog config core.sshCommand \
+     'ssh -i ~/.ssh/clashlens-blog -o IdentitiesOnly=yes'
+   chmod -R a+rX ~/clashlens-blog
+   ```
+
+3. Pull every five minutes. Save as
+   `~/.config/systemd/user/clashlens-blog-sync.service`:
+
+   ```ini
+   [Unit]
+   Description=Pull Clash Lens blog posts
+
+   [Service]
+   Type=oneshot
+   UMask=0022
+   ExecStart=/usr/bin/git -C %h/clashlens-blog pull --ff-only --quiet
+   ```
+
+   and as `~/.config/systemd/user/clashlens-blog-sync.timer`:
+
+   ```ini
+   [Unit]
+   Description=Pull Clash Lens blog posts every five minutes
+
+   [Timer]
+   OnBootSec=1min
+   OnUnitActiveSec=5min
+
+   [Install]
+   WantedBy=timers.target
+   ```
+
+   then start it:
+
+   ```sh
+   systemctl --user daemon-reload
+   systemctl --user enable --now clashlens-blog-sync.timer
+   ```
+
+4. Find the owner's sign-in, which is the only one that sees drafts. Replace
+   `<username>` with the owner's Clash Lens username:
+
+   ```sh
+   podman exec --user postgres clashlens-postgres psql -X -At -d clashlens -c \
+     "SELECT i.provider || ':' || i.provider_subject
+        FROM account_provider_identities AS i
+        JOIN clash_lens_accounts AS a ON a.id = i.account_id
+       WHERE a.normalized_username = lower('<username>')"
+   ```
+
+5. Add both settings to `app.env`, using the full path of the copy and one or
+   more of the lines printed above, comma-separated:
+
+   ```sh
+   CLASHLENS_BLOG_DIR=/home/<service-account>/clashlens-blog
+   CLASHLENS_BLOG_OWNER=google:<subject>
+   ```
+
+6. Run `./ops up`. It restarts the website with the folder mounted.
+
+Check it: `curl -s http://127.0.0.1:3000/blog/rss.xml` lists published posts
+only, and `systemctl --user list-timers clashlens-blog-sync.timer` shows the
+next pull. A failed pull leaves the last good copy in place; see it with
+`journalctl --user -u clashlens-blog-sync.service`. A post that fails to parse
+is left off the site, and `./ops logs website` says why. Leaving
+`CLASHLENS_BLOG_DIR` unset keeps the blog empty; leaving `CLASHLENS_BLOG_OWNER`
+unset hides every draft from everyone.
 
 ## PostgreSQL backups and recovery
 
@@ -507,7 +604,7 @@ checkpoint, and the old 1 GB `max_wal_size` forced a checkpoint every three
 minutes. The 128 MB page cache also wrote 8.6 MB/s of table pages as it evicted
 them.
 
-The PostgreSQL unit now sets `shared_buffers=2GB` (inside the 4 GB memory cap;
+The PostgreSQL unit now sets `shared_buffers=2GB` (inside the 6 GB memory cap;
 128 MB for fake-service runs; `./ops` refuses a `CLASHLENS_POSTGRES_MEMORY`
 below twice the cache), `checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
 Commit flushing, full-page writes, checksums and archiving are unchanged. A

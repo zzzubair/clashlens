@@ -5,6 +5,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -17,8 +18,10 @@ from development.fixtures import (
     ARCHIVE_MARKER_KEY,
     ArchiveHandler,
     ClashHandler,
+    legend_trophies,
     profile_payload,
     ranking_payload,
+    season_opening_attack_time,
     tags_for,
 )
 
@@ -91,13 +94,32 @@ def test_fake_profiles_carry_the_counts_the_collector_watches() -> None:
 
     try:
         quiet = counts()
-        assert quiet == (7_000, 0, 0, [1_767])
+        expected = profile_payload("#2PP", 0)
+        assert quiet == (expected["trophies"], expected["attackWins"], 0, [1_767])
         assert counts({"profile": "ignored"}) == quiet
-        assert counts({"profile": "relevant"}) == (7_001, 0, 0, [1_767])
+        assert counts({"profile": "relevant"}) == (quiet[0] + 1, *quiet[1:])
     finally:
         server.shutdown()
         thread.join(timeout=2)
         server.server_close()
+
+
+def test_season_opening_day_trophies_are_ones_its_attack_explains() -> None:
+    # Clash Lens hides first-day trophies that are not 5,000 plus at most 40
+    # per battle recorded that day, so the fake players must follow suit.
+    opening = datetime(2026, 10, 5, 5, tzinfo=UTC)
+    ordinary = datetime(2026, 10, 6, 12, tzinfo=UTC)
+
+    assert legend_trophies(0, opening) == 5_000
+    assert season_opening_attack_time(opening) is None
+    later = opening.replace(hour=12)
+    attack_at = season_opening_attack_time(later)
+    assert attack_at is not None and opening < attack_at < later
+    assert [legend_trophies(index, later) for index in (0, 1, 40, 199)] == [
+        5_040, 5_039, 5_000, 5_000
+    ]
+    assert season_opening_attack_time(ordinary) is None
+    assert legend_trophies(0, ordinary) == 7_000
 
 
 def test_clash_fixture_serves_rankings_profiles_and_verification() -> None:

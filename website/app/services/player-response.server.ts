@@ -212,6 +212,7 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
       hasAdjustment: value.has_adjustment as boolean,
       adjustmentTotal: value.adjustment_total as number | null,
       flags: value.flags as string[],
+      resetRank: mapResetRank(value.reset_rank),
     };
   });
   return {
@@ -327,6 +328,11 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         : value.ranked_day_start,
       state: value.state,
       startTrophies: (value.start_trophies as number | null | undefined) ?? null,
+      // The Season rule's 5,000 is the game's rule, not a reading.
+      startTrophiesSource:
+        value.start_trophies_source === "season_rule"
+          ? ("Season rule" as const)
+          : undefined,
       offense: {
         attacks: value.attack_count as number | null,
         threeStars: value.attack_three_star_count as number | null,
@@ -338,6 +344,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         trophyLoss: value.defense_loss as number | null,
       },
       trophyChange: value.net_trophy_change as number | null,
+      resetRank: mapResetRank(value.reset_rank),
       battlesComplete: value.battles_complete === true,
       offenseEvents: value.offense_events.map((event) => mapEvent(event, "offense")),
       defenseEvents: value.defense_events.map((event) => mapEvent(event, "defense")),
@@ -424,6 +431,9 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
 // before it, as BATTLE_DAY_GRACE in python/src/clashlens/domain.py.
 const BATTLE_DAY_GRACE_MS = 5 * 60 * 1000;
 const SEASON_MS = 28 * 24 * 60 * 60 * 1000;
+// Every Legend I player starts a Season at exactly this many trophies, as
+// SEASON_START_TROPHIES in python/src/clashlens/domain.py.
+const SEASON_START_TROPHIES = 5000;
 
 function calculateStartingTrophies(
   days: RankedDaySummary[],
@@ -438,6 +448,8 @@ function calculateStartingTrophies(
     const [start, end] = bounds(day);
     const next = nextDay;
     nextDay = day;
+    if (day.dayNumber === 1 && day.startTrophies !== SEASON_START_TROPHIES)
+      day.startTrophies = null;
     if (day.startTrophies != null || !Number.isFinite(start) || !Number.isFinite(end))
       continue;
     const events = [...day.offenseEvents, ...day.defenseEvents];
@@ -462,8 +474,10 @@ function calculateStartingTrophies(
       continue;
     const netChange = day.trophyChange ?? day.offense.trophyGain - day.defense.trophyLoss;
     let trophies: number | undefined;
-    // A profile naming another Season than this day's is not its day total.
+    // A profile naming another Season than this day's is not its day total,
+    // nor is one still waiting for its Season reset on the Season's first day.
     if (
+      !(profile.seasonResetPending && day.dayNumber === 1) &&
       start >= profileSeasonStart &&
       start < profileSeasonStart + SEASON_MS &&
       observedAt >= start &&
@@ -488,11 +502,13 @@ function calculateStartingTrophies(
     if (
       trophies === undefined ||
       !Number.isSafeInteger(trophies - netChange) ||
-      trophies - netChange < 0
+      trophies - netChange < 0 ||
+      (day.dayNumber === 1 && trophies - netChange !== SEASON_START_TROPHIES)
     )
       continue;
     day.startTrophies = trophies - netChange;
     day.startTrophiesCalculation = { trophies, netChange };
+    day.startTrophiesSource = "Calculated";
   }
 }
 
@@ -595,6 +611,13 @@ function mapDataQuality(value: unknown): PlayerPage["dataQuality"] {
   )
     malformed();
   return value as PlayerPage["dataQuality"];
+}
+
+// A day's rank on its Reset board; absent or null means unknown.
+function mapResetRank(value: unknown): number | null {
+  if (value == null) return null;
+  if (!isInteger(value) || value < 1) malformed();
+  return value;
 }
 
 function malformed(): never {

@@ -23,7 +23,18 @@ through existing database/eligibility functions. No reusable import feature is
 required. The legacy `bootstrap-population` command caps input at 20,000,
 rejects duplicate lines and refuses a later new import; it remains unchanged.
 Automatic discovery requirements remain in [#125](https://github.com/zzzubair/clashlens/issues/125).
-Production still rejects the discovery-enabled flag.
+Production discovery is on: `CLASHLENS_PLAYER_DISCOVERY_ENABLED` defaults to
+`true` in `ops`, and `false` turns it off. Each battle-log opponent or Top-200
+player who is not tracked and has not had this week's check gets one check:
+one profile request and one league-history request. Unlike the scheduled weekly
+check, it does not reuse saved league history. At most 500 such checks wait at
+once. A player skipped while the queue is full or busy gets no saved retry;
+they are tried again only when a later changed battle log or ranking names
+them. Legend I gains about 2,000 players a week, so this costs about 570
+requests a day, plus about 4,000 once for the roughly 2,000 Legend I players
+not yet tracked. Each player found
+eligible is then tracked like any other, so revisits slow in proportion to the
+added players while the keys set the pace.
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to
 verification without treating all known tags as live players.
@@ -523,7 +534,8 @@ usable profile: a retry fetches only what has no usable answer yet, plus a
 battle log whose request started before that profile arrived. Both responses
 are always saved with their real request times, even when unchanged, and the
 work row keeps pointing at them, so the worker processes them behind newer
-responses instead of skipping them. Season Resets fetch no league history.
+responses instead of skipping them. Settlement checks fetch no league history;
+a Season-opening Reset schedules a separate refresh for that (below).
 
 The checks run in the 32 ordinary intent slots behind any unfinished Reset
 work, with the same retries as Reset work. They never block regular
@@ -637,9 +649,14 @@ is flushed to disk before the database records local deletion.
 The publication barrier prevents the same body from being republished meanwhile.
 Missing files still let cleanup finish a deletion interrupted by a crash.
 
-League history is collected initially and after each season-ending Reset. It
-is stored in full and parsed separately from profiles and battle logs. Raw
-response deadlines and recovery protection belong in
+League history is collected initially, at each season-ending Reset and again
+20 minutes later in a separate `league_history_refresh` work row per frozen
+member on the ordinary lane, because the ended Season's official results
+appear minutes after the Reset. The
+[Season final ranks missing](operating.md#season-final-ranks-missing) runbook
+owns the manual recovery command. It is stored in full and parsed separately
+from profiles and battle logs. Raw response deadlines and recovery protection
+belong in
 [history-retention.md](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
 The [deployment runbook](deployment.md#raw-response-cleanup) owns cleanup
 credentials, scheduling and enablement.

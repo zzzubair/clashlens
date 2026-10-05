@@ -157,12 +157,14 @@ def test_complete_league_history_stores_season_rows(
 def test_public_season_reader_uses_only_valid_legend_history(
     database_url: str, archive_server
 ) -> None:
+    # League history names each Season by the Reset that ended it.
     weekly_id = str(int(datetime(2026, 6, 22, 5, 0, tzinfo=UTC).timestamp()))
     off_phase_legend_id = str(int(datetime(2026, 6, 29, 5, 0, tzinfo=UTC).timestamp()))
-    incomplete_legend_id = str(int(datetime(2026, 7, 13, 5, 0, tzinfo=UTC).timestamp()))
+    incomplete_legend_id = str(int(datetime(2026, 8, 10, 5, 0, tzinfo=UTC).timestamp()))
     older_legend_id = str(int(datetime(2026, 5, 18, 5, 0, tzinfo=UTC).timestamp()))
+    older_season_id = str(int(datetime(2026, 4, 20, 5, 0, tzinfo=UTC).timestamp()))
     body = _payload(
-        _entry(),
+        _entry(leagueSeasonId="1783918800"),
         _entry(
             leagueSeasonId=weekly_id,
             leagueTierId=105000035,
@@ -208,13 +210,16 @@ def test_public_season_reader_uses_only_valid_legend_history(
             seasons = api_players.list_player_seasons(api, "#2PP")
             detail = api_players.get_player_season_summary(api, "#2PP", "1781499600")
             assert (
-                api_players.get_player_season_summary(api, "#2PP", off_phase_legend_id)
+                api_players.get_player_season_summary(
+                    api, "#2PP", str(int(off_phase_legend_id) - 28 * 86400)
+                )
                 is None
             )
             assert (
-                api_players.get_player_season_summary(api, "#2PP", incomplete_legend_id)
+                api_players.get_player_season_summary(api, "#2PP", "1783918800")
                 is None
             )
+            assert api_players.get_player_season_summary(api, "#2PP", "²") is None
             with api.pool.connection() as connection:
                 retained = connection.execute(
                     "SELECT count(*) FROM player_league_history_entries"
@@ -225,7 +230,7 @@ def test_public_season_reader_uses_only_valid_legend_history(
     assert retained == (5,)
     assert seasons == [
         {
-            "official_season_id": older_legend_id,
+            "official_season_id": older_season_id,
             "coverage_state": "partial",
             "days_observed": 0,
             "days_missing": 28,
@@ -277,7 +282,7 @@ def test_partial_day_28_on_final_board_shows_board_rank(
     database_url: str, archive_server
 ) -> None:
     season_end = datetime(2026, 7, 13, 5, 0, tzinfo=UTC)
-    body = _payload(_entry())
+    body = _payload(_entry(leagueSeasonId="1783918800"))
     with domain_database(database_url) as connection_info:
         observation_id, job_id = store_observation(
             connection_info,

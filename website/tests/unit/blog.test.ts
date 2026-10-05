@@ -1,3 +1,17 @@
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
@@ -5,40 +19,53 @@ import {
   createStaticRouter,
   StaticRouterProvider,
 } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  publishedBlogPosts: vi.fn(),
+  readLoginIdentity: vi.fn(),
 }));
 
-vi.mock("../../app/server/blog.server", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../app/server/blog.server")>();
-  return { ...actual, publishedBlogPosts: mocks.publishedBlogPosts };
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: vi.fn(actual.open),
+    readFile: vi.fn(actual.readFile),
+    stat: vi.fn(actual.stat),
+  };
 });
+vi.mock("../../app/server/actions.server", () => ({
+  readLoginIdentity: mocks.readLoginIdentity,
+}));
+vi.mock("../../app/server/config.server", () => ({
+  getWebsiteConfig: () => ({ publicOrigin: new URL("https://clashlens.example") }),
+}));
 
-import { blogMeta } from "../../app/lib/blog";
+import { absoluteBlogUrl, blogMeta } from "../../app/lib/blog";
 import BlogPostRoute, {
   loader as postLoader,
   meta as postMeta,
 } from "../../app/routes/blog.$slug";
 import BlogIndex, { loader as indexLoader } from "../../app/routes/blog";
+import { loader as mediaLoader } from "../../app/routes/blog.media";
 import { loader as feedLoader } from "../../app/routes/blog.rss";
 import {
+  BLOG_CACHE_MS,
   BlogPostError,
   blogFeed,
+  blogFolder,
   loadBlogPosts,
   parseBlogPost,
+  readBlogFolder,
   renderBlogMarkdown,
+  visibleBlogPosts,
 } from "../../app/server/blog.server";
 
-// Test-only posts; none of these are published on the site.
-const FIXTURES = import.meta.glob<string>("../fixtures/blog/*.md", {
-  query: "?raw",
-  import: "default",
-  eager: true,
-});
-const fixturePosts = loadBlogPosts(FIXTURES);
+// A test-only blog folder laid out like the private blog repo: posts/ and media/.
+const FIXTURE_DIR = resolve(import.meta.dirname, "../fixtures/blog");
+const fixturePosts = (await readBlogFolder(FIXTURE_DIR)).posts;
 const ORIGIN = "https://clashlens.example";
+const OWNER = { provider: "google", providerSubject: "owner-subject" };
 
 function fixture(slug: string) {
   return fixturePosts.find((post) => post.slug === slug)!;
@@ -65,14 +92,24 @@ async function render(path: string) {
   return { html, status: context.statusCode };
 }
 
+function signIn(identity: typeof OWNER | null) {
+  mocks.readLoginIdentity.mockResolvedValue(identity);
+}
+
 beforeEach(() => {
-  mocks.publishedBlogPosts.mockReset();
-  mocks.publishedBlogPosts.mockReturnValue(fixturePosts);
+  vi.stubEnv("CLASHLENS_BLOG_DIR", FIXTURE_DIR);
+  vi.stubEnv("CLASHLENS_BLOG_OWNER", "discord:123, google:owner-subject");
+  signIn(null);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("blog posts", () => {
-  it("lists posts newest first", () => {
+  it("reads every post in posts/, drafts included, newest first", () => {
     expect(fixturePosts.map((post) => [post.date, post.slug])).toEqual([
+      ["2026-09-30", "draft-preview"],
       ["2026-09-28", "meta-after-balance-changes"],
       ["2026-09-20", "how-matchmaking-works"],
       ["2026-09-01", "unsafe-html"],
@@ -91,7 +128,108 @@ describe("blog posts", () => {
       author: "Clash Lens",
       cover: "/images/legend-league.webp",
       coverAlt: "The Legend League badge",
+      draft: false,
     });
+    expect(fixture("draft-preview")).toMatchObject({
+      title: "Draft preview",
+      draft: true,
+    });
+  });
+
+  it("skips the template, other files, and the media folder's hidden or odd names", async () => {
+    const folder = await readBlogFolder(FIXTURE_DIR);
+    expect(folder.posts.map((post) => post.slug)).not.toContain("_template");
+    expect([...folder.media].sort()).toEqual([
+      "badge.png",
+      "gap-chart-dark.png",
+      "gap-chart.csv",
+      "gap-chart.png",
+    ]);
+    const empty = { posts: [], media: new Set(), publicMedia: new Set() };
+    expect(await readBlogFolder(null)).toEqual(empty);
+    expect(await readBlogFolder(join(FIXTURE_DIR, "missing"))).toEqual(empty);
+  });
+
+  it("leaves out a post a sync removes between listing and reading", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-sync-"));
+    try {
+      await mkdir(join(directory, "posts"));
+      for (const slug of ["kept", "gone"]) {
+        await writeFile(
+          join(directory, "posts", `${slug}.md`),
+          "---\ntitle: T\ndate: 2026-01-01\nsummary: S\n---\n",
+        );
+      }
+      const read = vi.mocked(readFile);
+      const realRead = read.getMockImplementation()!;
+      read.mockImplementationOnce(async (...args) => {
+        await rm(join(directory, "posts", "gone.md"));
+        return realRead(...args);
+      });
+      const folder = await readBlogFolder(directory);
+      expect(folder.posts.map((post) => post.slug)).toEqual(["kept"]);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  });
+
+  it("leaves out a broken post and logs why", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const posts = loadBlogPosts({
+      "good.md": "---\ntitle: T\ndate: 2026-01-01\nsummary: S\n---\n",
+      "bad.md": "---\ntitle: T\n---\n",
+    });
+    expect(posts.map((post) => post.slug)).toEqual(["good"]);
+    expect(log).toHaveBeenCalledWith('blog post bad.md: "date" is required');
+    log.mockRestore();
+  });
+
+  it("allows comment lines and trailing comments in front matter", () => {
+    const post = parseBlogPost(
+      "notes.md",
+      [
+        "---",
+        '# author: "Your name"    # optional',
+        'title: "Gems # and gold"   # quoted, so the # stays',
+        "coverAlt: 'Badge' # rename to 'Shield'",
+        'author: "T" # rename to "U"',
+        "date: 2026-10-04          # YYYY-MM-DD",
+        "summary: Plain text # comment",
+        "cover: badge.png",
+        "draft: false",
+        "---",
+      ].join("\n"),
+    );
+    expect(post).toMatchObject({
+      title: "Gems # and gold",
+      date: "2026-10-04",
+      summary: "Plain text",
+      author: "T",
+      cover: "/blog/media/badge.png",
+      coverAlt: "Badge",
+      draft: false,
+    });
+  });
+
+  it("rereads the folder once the cache expires", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-cache-"));
+    try {
+      await mkdir(join(directory, "posts"));
+      const write = (slug: string) =>
+        writeFile(
+          join(directory, "posts", `${slug}.md`),
+          "---\ntitle: T\ndate: 2026-01-01\nsummary: S\n---\n",
+        );
+      await write("first");
+      vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
+      const now = Date.now();
+      expect((await blogFolder(now)).posts.map((post) => post.slug)).toEqual(["first"]);
+      await write("second");
+      expect((await blogFolder(now + BLOG_CACHE_MS - 1)).posts).toHaveLength(1);
+      expect((await blogFolder(now + BLOG_CACHE_MS)).posts).toHaveLength(2);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
   });
 
   it("renders headings below the page title, lists, links, images, tables, quotes and code", () => {
@@ -111,6 +249,36 @@ describe("blog posts", () => {
     );
     expect(html).toContain(
       '<img src="/images/legend-league.webp" alt="The Legend League badge">',
+    );
+  });
+
+  it("pairs a chart with its -dark sibling and serves media/ links from /blog/media", () => {
+    const html = fixture("how-matchmaking-works").html;
+    expect(html).toContain(
+      '<img src="/blog/media/gap-chart.png" alt="Trophy gap by band" class="blog-img-light" loading="lazy">' +
+        '<img src="/blog/media/gap-chart-dark.png" alt="Trophy gap by band" class="blog-img-dark" loading="lazy">',
+    );
+    expect(html).toContain('<img src="/blog/media/badge.png" alt="A plain badge">');
+    expect(html).toContain('<a href="/blog/media/gap-chart.csv">Data</a>');
+    expect(html.match(/<img/g)).toHaveLength(4);
+  });
+
+  it("pairs only files found in media/", () => {
+    const media = new Set(["x.png", "x-dark.png"]);
+    expect(renderBlogMarkdown("![A](../media/x-dark.png)", media)).toBe(
+      '<p><img src="/blog/media/x-dark.png" alt="A"></p>\n',
+    );
+    expect(renderBlogMarkdown("![A](media/x.png)", media)).toBe(
+      '<p><img src="media/x.png" alt="A"></p>\n',
+    );
+    expect(renderBlogMarkdown("![A](../media/x.png)")).toBe(
+      '<p><img src="/blog/media/x.png" alt="A"></p>\n',
+    );
+    expect(renderBlogMarkdown("![A](/images/x.png)", media)).toBe(
+      '<p><img src="/images/x.png" alt="A"></p>\n',
+    );
+    expect(renderBlogMarkdown("![A](../media/../posts/x.png)", media)).toBe(
+      '<p><img src="../media/../posts/x.png" alt="A"></p>\n',
     );
   });
 
@@ -146,6 +314,11 @@ describe("blog posts", () => {
       "unknown front matter",
     ],
     ["twice.md", "---\ntitle: T\ntitle: U\ndate: 2026-01-01\nsummary: S\n---\n", "twice"],
+    [
+      "draft.md",
+      "---\ntitle: T\ndate: 2026-01-01\nsummary: S\ndraft: yes\n---\n",
+      "draft must be true or false",
+    ],
   ])("rejects %s", (file, source, reason) => {
     expect(() => parseBlogPost(file, source)).toThrow(BlogPostError);
     expect(() => parseBlogPost(file, source)).toThrow(reason);
@@ -169,12 +342,13 @@ describe("blog posts", () => {
   it.each([
     ["/images/blog/cover.png", `${ORIGIN}/images/blog/cover.png`],
     ["https://images.example/cover.png", "https://images.example/cover.png"],
+    ["cover.png", `${ORIGIN}/blog/media/cover.png`],
   ])("accepts the cover address %s", (cover, absolute) => {
     const post = parseBlogPost(
       "cover.md",
       `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ncover: ${cover}\n---\n`,
     );
-    expect(post.cover).toBe(cover);
+    expect(absoluteBlogUrl(post.cover!, ORIGIN)).toBe(absolute);
     const tags = blogMeta({
       title: post.title,
       description: post.summary,
@@ -191,13 +365,6 @@ describe("blog posts", () => {
       "<p>&quot;Quotes&quot; -- it's (c) 2026...</p>\n",
     );
   });
-
-  it("parses every committed post", async () => {
-    const actual = await vi.importActual<typeof import("../../app/server/blog.server")>(
-      "../../app/server/blog.server",
-    );
-    expect(() => actual.publishedBlogPosts()).not.toThrow();
-  });
 });
 
 describe("blog pages", () => {
@@ -212,6 +379,7 @@ describe("blog pages", () => {
       "how-matchmaking-works",
       "unsafe-html",
     ]);
+    expect(html).not.toContain("Draft");
     expect(html).toContain('<time dateTime="2026-09-20">20 September 2026</time>');
     expect(html).toContain("What 40,000 recorded attacks say");
     expect(html).not.toContain("First post coming soon");
@@ -219,7 +387,7 @@ describe("blog pages", () => {
   });
 
   it("shows a friendly empty state when nothing is published", async () => {
-    mocks.publishedBlogPosts.mockReturnValue([]);
+    vi.stubEnv("CLASHLENS_BLOG_DIR", "");
     const { html, status } = await render("/blog");
     expect(status).toBe(200);
     expect(html).toContain("First post coming soon");
@@ -309,5 +477,257 @@ describe("blog feed", () => {
     expect(xml).toContain("<title>Gems &amp; &lt;Gold&gt;</title>");
     expect(xml).toContain("<description>&quot;Quotes&quot; &amp; more</description>");
     expect(blogFeed([], ORIGIN)).not.toContain("<item>");
+  });
+});
+
+describe("blog drafts", () => {
+  const slugs = async () =>
+    (await visibleBlogPosts(new Request(`${ORIGIN}/blog`))).map((post) => post.slug);
+
+  it("hides drafts from visitors, other accounts and when no owner is set", async () => {
+    expect(await slugs()).not.toContain("draft-preview");
+    signIn({ provider: "google", providerSubject: "someone-else" });
+    expect(await slugs()).not.toContain("draft-preview");
+    signIn(OWNER);
+    vi.stubEnv("CLASHLENS_BLOG_OWNER", "");
+    expect(await slugs()).not.toContain("draft-preview");
+  });
+
+  it("hides drafts when the sign-in cannot be checked", async () => {
+    mocks.readLoginIdentity.mockRejectedValue(new Error("private API down"));
+    expect(await slugs()).not.toContain("draft-preview");
+  });
+
+  it("shows drafts to the signed-in owner", async () => {
+    signIn(OWNER);
+    expect(await slugs()).toContain("draft-preview");
+  });
+
+  it("returns 404 for a draft's address unless the owner is signed in", async () => {
+    expect((await render("/blog/draft-preview")).status).toBe(404);
+    signIn(OWNER);
+    const { html, status } = await render("/blog/draft-preview");
+    expect(status).toBe(200);
+    expect(html).toContain("30 September 2026</time> · Draft");
+    expect((await render("/blog")).html).toContain(
+      '<a href="/blog/draft-preview" data-discover="true">Draft preview</a></h2><p class="blog-date"><time dateTime="2026-09-30">30 September 2026</time> · Draft</p>',
+    );
+  });
+
+  it("tells search engines not to index a draft", async () => {
+    signIn(OWNER);
+    const loaderData = await postLoader({
+      params: { slug: "draft-preview" },
+      request: new Request(`${ORIGIN}/blog/draft-preview`),
+    } as Parameters<typeof postLoader>[0]);
+    const tags = postMeta({ loaderData } as Parameters<typeof postMeta>[0]);
+    expect(tags).toContainEqual({ name: "robots", content: "noindex" });
+    const published = await postLoader({
+      params: { slug: "how-matchmaking-works" },
+      request: new Request(`${ORIGIN}/blog/how-matchmaking-works`),
+    } as Parameters<typeof postLoader>[0]);
+    expect(
+      postMeta({ loaderData: published } as Parameters<typeof postMeta>[0]),
+    ).not.toContainEqual({ name: "robots", content: "noindex" });
+  });
+
+  it("never puts a draft in the feed, even for the owner", async () => {
+    signIn(OWNER);
+    const response = (await feedLoader({
+      request: new Request(`${ORIGIN}/blog/rss.xml`),
+    } as Parameters<typeof feedLoader>[0])) as Response;
+    expect(await response.text()).not.toContain("draft-preview");
+  });
+});
+
+describe("blog media", () => {
+  async function get(file: string, headers: HeadersInit = {}) {
+    try {
+      return (await mediaLoader({
+        params: { file },
+        request: new Request(`${ORIGIN}/blog/media/${encodeURIComponent(file)}`, {
+          headers,
+        }),
+      } as Parameters<typeof mediaLoader>[0])) as Response;
+    } catch (thrown) {
+      if (thrown instanceof Response) return thrown;
+      throw thrown;
+    }
+  }
+
+  it("serves a chart with its type and caching headers", async () => {
+    const response = await get("gap-chart-dark.png");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(new Uint8Array(await response.arrayBuffer()).slice(1, 4)).toEqual(
+      new TextEncoder().encode("PNG"),
+    );
+    const etag = response.headers.get("ETag")!;
+    expect(etag).toMatch(/^W\/"\d+-[\d.]+"$/);
+    expect((await get("gap-chart-dark.png", { "If-None-Match": etag })).status).toBe(304);
+    expect((await get("gap-chart.csv")).headers.get("Content-Type")).toBe(
+      "text/csv; charset=utf-8",
+    );
+  });
+
+  it("serves media a published cover uses by file name on this site only", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-cover-media-"));
+    try {
+      await mkdir(join(directory, "posts"));
+      await mkdir(join(directory, "media"));
+      const covers = {
+        query: "/blog/media/x.png?v=2#top",
+        absolute: `${ORIGIN}/blog/media/y.png`,
+        external: "https://images.example/blog/media/z.png",
+      };
+      for (const [slug, cover] of Object.entries(covers)) {
+        await writeFile(
+          join(directory, "posts", `${slug}.md`),
+          `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ncover: ${cover}\n---\n`,
+        );
+      }
+      for (const name of ["x.png", "y.png", "z.png"]) {
+        await writeFile(join(directory, "media", name), name);
+      }
+      vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
+      expect((await get("x.png")).status).toBe(200);
+      expect((await get("y.png")).status).toBe(200);
+      expect((await get("z.png")).status).toBe(404);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  });
+
+  it("serves the version it opened, and rechecks a file a sync replaced", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-sync-media-"));
+    const post = (draft: boolean) =>
+      `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ndraft: ${draft}\n---\n[Data](../media/chart.csv)\n`;
+    try {
+      await mkdir(join(directory, "posts"));
+      await mkdir(join(directory, "media"));
+      const chart = join(directory, "media", "chart.csv");
+      await writeFile(join(directory, "posts", "chart.md"), post(false));
+      await writeFile(chart, "published");
+      const hourAgo = new Date(Date.now() - 3_600_000);
+      await utimes(chart, hourAgo, hourAgo);
+      vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
+      await blogFolder(Date.now() - 10_000);
+      let synced = false;
+      const sync = async () => {
+        if (synced) return;
+        synced = true;
+        await writeFile(join(directory, "posts", "chart.md"), post(true));
+        await writeFile(`${chart}.new`, "unpublished");
+        await rename(`${chart}.new`, chart);
+      };
+      for (const read of [open, stat] as unknown as Mock<
+        (...args: unknown[]) => Promise<unknown>
+      >[]) {
+        const real = read.getMockImplementation()!;
+        read.mockImplementationOnce(async (...args) => {
+          const result = await real(...args);
+          await sync();
+          return result;
+        });
+      }
+      const first = await get("chart.csv");
+      expect(synced).toBe(true);
+      expect(first.headers.get("Cache-Control")).toBe("public, max-age=300");
+      expect(await first.text()).toBe("published");
+      expect((await get("chart.csv")).status).toBe(404);
+    } finally {
+      vi.mocked(open).mockReset();
+      vi.mocked(stat).mockReset();
+      await rm(directory, { recursive: true });
+    }
+  });
+
+  it("serves media only drafts use to the signed-in owner alone, never cached", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-draft-media-"));
+    const post = (draft: boolean, cover: string, body: string) =>
+      `---\ntitle: T\ndate: 2026-01-01\nsummary: S\ncover: ${cover}\ndraft: ${draft}\n---\n${body}\n`;
+    try {
+      await mkdir(join(directory, "posts"));
+      await mkdir(join(directory, "media"));
+      for (const name of [
+        "shared.png",
+        "cover.png",
+        "secret.png",
+        "secret-dark.png",
+        "secret.csv",
+        "secret-cover.png",
+        "unused.png",
+      ]) {
+        await writeFile(join(directory, "media", name), name);
+      }
+      await writeFile(
+        join(directory, "posts", "published.md"),
+        post(false, "cover.png", "![A](../media/shared.png)"),
+      );
+      await writeFile(
+        join(directory, "posts", "draft.md"),
+        post(
+          true,
+          "secret-cover.png",
+          "![A](../media/shared.png) ![B](../media/secret.png) [Data](../media/secret.csv)",
+        ),
+      );
+      vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
+      for (const name of ["shared.png", "cover.png"]) {
+        const response = await get(name);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+      }
+      const ownerOnly = [
+        "secret.png",
+        "secret-dark.png",
+        "secret.csv",
+        "secret-cover.png",
+        "unused.png",
+      ];
+      signIn({ provider: "google", providerSubject: "someone-else" });
+      for (const name of ownerOnly) expect((await get(name)).status).toBe(404);
+      signIn(OWNER);
+      for (const name of ownerOnly) {
+        const response = await get(name);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Cache-Control")).toBe("no-store");
+        expect(await response.text()).toBe(name);
+      }
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  });
+
+  it.each([
+    "../posts/how-matchmaking-works.md",
+    "..",
+    "../../package.json",
+    "/etc/passwd",
+    "gap-chart.png/..",
+    "missing.png",
+    "_template.md",
+    ".gitkeep",
+  ])("refuses %s", async (file) => {
+    expect((await get(file)).status).toBe(404);
+  });
+
+  it("refuses files without a known type and serves nothing without a folder", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "blog-media-"));
+    try {
+      await mkdir(join(directory, "media"));
+      await writeFile(join(directory, "media", "page.html"), "<script></script>");
+      await writeFile(join(directory, "secret.png"), "outside media/");
+      await symlink(join(directory, "secret.png"), join(directory, "media", "link.png"));
+      vi.stubEnv("CLASHLENS_BLOG_DIR", directory);
+      expect((await get("page.html")).status).toBe(404);
+      expect((await get("link.png")).status).toBe(404);
+      vi.stubEnv("CLASHLENS_BLOG_DIR", "");
+      expect((await get("gap-chart.png")).status).toBe(404);
+    } finally {
+      await rm(directory, { recursive: true });
+    }
   });
 });

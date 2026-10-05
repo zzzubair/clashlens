@@ -104,9 +104,10 @@ jobs:
       - name: Install rootless Podman
         working-directory: website
         run: sudo apt-get update && sudo apt-get install -y podman
-      - name: Install Chromium
+      - name: Install Chromium and WebKit
         working-directory: website
-        run: npx playwright install --with-deps chromium
+        # WebKit runs the iPhone search tests.
+        run: npx playwright install --with-deps chromium webkit
       - name: Production build and development stack browser tests
         working-directory: website
         run: npm run test:e2e

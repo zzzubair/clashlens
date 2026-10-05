@@ -447,7 +447,10 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     }:
         confidence = "uncertain"
     if state == "Complete" and (
-        shield_state == "inferred_shielded" or end_hidden_by_reset
+        shield_state == "inferred_shielded"
+        or end_hidden_by_reset
+        # A start from the Season rule is the game's rule, not a reading.
+        or data.start_baseline_evidence.get("start_trophies_source") == "season_rule"
     ):
         confidence = "inferred"
 

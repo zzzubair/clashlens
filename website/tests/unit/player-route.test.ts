@@ -103,7 +103,7 @@ const PLAYER = {
     name: "Nova",
     clan: "Example",
     trophies: 6000,
-    freshness: { state: "fresh", observedAt: "2026-08-06T12:00:00Z", ageSeconds: 0 },
+    freshness: { state: "fresh", observedAt: "2026-09-07T12:00:00Z", ageSeconds: 0 },
     confidence: "high",
     coverage: "complete",
     eligibility: "legend-i",
@@ -115,7 +115,7 @@ const PLAYER = {
   dataQuality: [],
   provenance: {
     source: "api_player_daily_logs",
-    observedAt: "2026-08-06T12:00:00Z",
+    observedAt: "2026-09-07T12:00:00Z",
     freshness: "fresh",
     confidence: "high",
     coverage: "complete",
@@ -125,7 +125,7 @@ const PLAYER = {
 
 const NEWER_PROFILE = {
   ...PLAYER.profile,
-  freshness: { ...PLAYER.profile.freshness, observedAt: "2026-08-06T12:00:01Z" },
+  freshness: { ...PLAYER.profile.freshness, observedAt: "2026-09-07T12:00:01Z" },
 };
 
 const SAVED_DAY: RankedDaySummary = {
@@ -161,7 +161,7 @@ const REFRESH_STATUS: RefreshStatus = {
   state: "complete",
   progressPercent: 100,
   message: "Complete",
-  publishedAt: "2026-08-06T12:00:00Z",
+  publishedAt: "2026-09-07T12:00:00Z",
   player: PLAYER,
 };
 
@@ -353,29 +353,6 @@ describe("player route historical independence", () => {
     expect(html).not.toContain("Legend season");
   });
 
-  it("never shows official placement as the final rank", async () => {
-    const officialHistory = {
-      observedAt: "2026-08-04T12:05:00+00:00",
-      eodTrophies: 5812,
-      finalPlacement: 12,
-    };
-    const official = await renderSeason({
-      ...SUMMARY,
-      source: "official_league_history",
-      finalRank: null,
-      officialHistory,
-    });
-    expect(official).toContain("<dt>Final rank</dt><dd>Unknown</dd>");
-    expect(official).not.toContain(">12<");
-    const tracked = await renderSeason({ ...SUMMARY, finalRank: 3, officialHistory });
-    expect(tracked).toContain("<dt>Final rank</dt><dd>3</dd>");
-    expect(tracked).toContain("Final trophies: <!-- -->5,812");
-    expect(tracked).not.toContain(">12<");
-    expect(tracked).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
-    expect(tracked).toContain('<th scope="col">Trophy change</th>');
-    expect(tracked).not.toContain('<th scope="col">Net</th>');
-  });
-
   it("says only that a missing summary is unavailable and keeps a known final count", async () => {
     const official = await renderSeason({
       ...SUMMARY,
@@ -386,7 +363,7 @@ describe("player route historical independence", () => {
         finalPlacement: 12,
       },
     });
-    expect(official).toContain("A Clash Lens daily summary is not available");
+    expect(official).toContain("<dt>Final trophies</dt><dd>5,800</dd>");
     expect(official).not.toContain("not recorded");
     const late = await renderSeason({
       ...SUMMARY,
@@ -564,7 +541,7 @@ describe("automatic tag lookup", () => {
       expect(html).toContain(message);
       const visible = html.split("<script")[0];
       expect(visible).not.toContain("The requested player data is not available.");
-      expect(html).toContain("Historical seasons");
+      expect(html).toContain('aria-label="Seasons"');
       expect(html).not.toContain("Current trophies");
       expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
     },
@@ -596,7 +573,7 @@ describe("automatic tag lookup", () => {
     expect(html).toContain("not in Legend I");
     expect(html).not.toContain("Current trophies");
     expect(html).not.toContain('class="player-refresh-form"');
-    expect(html).toContain("Historical seasons");
+    expect(html).toContain('aria-label="Seasons"');
   });
 
   it.each([null, SEASON])(
@@ -619,7 +596,7 @@ describe("automatic tag lookup", () => {
       const html = await renderRoute(result);
       expect(html).toContain(result.lookupError!.error.message);
       expect(html).toContain("could not confirm they are in Legend I");
-      expect(html).toContain("Historical seasons");
+      expect(html).toContain('aria-label="Seasons"');
       expect(html).toContain(
         season === null ? "Saved Legend history" : "Daily trophy totals",
       );
@@ -770,10 +747,10 @@ describe("automatic tag lookup", () => {
         ...PLAYER.profile,
         freshness: {
           state: "stale",
-          observedAt: "2026-08-06T12:00:00Z",
+          observedAt: "2026-09-07T12:00:00Z",
           ageSeconds: 7_300,
         },
-        battleHistoryUpdatedAt: "2026-08-06T11:40:00Z",
+        battleHistoryUpdatedAt: "2026-09-07T11:40:00Z",
       },
     } satisfies PlayerPage;
     const render = async (player: PlayerPage) => {
@@ -789,21 +766,21 @@ describe("automatic tag lookup", () => {
       return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
     };
     expect(await render(stale)).toContain(
-      "Updated 6 Aug 2026, 12:00 UTC · 2 hours oldBattle history updated 6 Aug 2026, 11:40 UTC · 2 hours old",
+      "Updated 7 Sep 2026, 12:00 UTC · 2 hours oldBattle history updated 7 Sep 2026, 11:40 UTC · 2 hours old",
     );
     const fresh = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: null },
     });
     expect(fresh).toContain(
-      "Updated 6 Aug 2026, 12:00 UTCBattle history updated not yet",
+      "Updated 7 Sep 2026, 12:00 UTCBattle history updated not yet",
     );
     const oldHistory = await render({
       ...PLAYER,
-      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-08-06T11:40:00Z" },
+      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-09-07T11:40:00Z" },
     });
     expect(oldHistory).toContain(
-      "Updated 6 Aug 2026, 12:00 UTCBattle history updated 6 Aug 2026, 11:40 UTC · 20 minutes old",
+      "Updated 7 Sep 2026, 12:00 UTCBattle history updated 7 Sep 2026, 11:40 UTC · 20 minutes old",
     );
   });
 
@@ -903,7 +880,9 @@ describe("automatic tag lookup", () => {
       expect(markup).not.toContain("No saved Legend log");
       const text = markup.replace(/<[^>]*>/g, "");
       expect(text).toContain("Day 2");
-      expect(text).toContain("Date only");
+      // The unconfirmed day is numbered from the current Season's start.
+      expect(text).toContain("Day 1");
+      expect(text).not.toContain("Date only");
       expect(text).not.toContain("Day 17");
       expect(displayed.seasonDays).toEqual([confirmedDay]);
       if (trackingState === "tracking") {
@@ -1433,13 +1412,13 @@ describe("player day honesty", () => {
       `?season=${SEASON}`,
     ).then((value) => value.replaceAll("<!-- -->", ""));
     const rows = html.split("<tbody>")[1].split("</tbody>")[0].split("</tr>");
-    expect(rows[0]).toContain("<td>Provisional result</td>");
+    expect(rows[0]).toContain('<summary>1<span class="day-mark" title="Provisional');
     // EOD change sits beside End, apart from battle net, and is provisional
     // unless its proof is accepted; an unknown proof state is not accepted.
     expect(rows[0]).toContain("<td>+26</td><td>+26</td><td>6,026</td><td>+40</td>");
-    expect(rows[1]).toContain("<td>6,026 (provisional)</td><td>Unknown</td>");
-    expect(rows[2]).toContain("<td>6,026 (provisional)</td><td>+40</td>");
-    expect(rows[3]).toContain("<td>6,026</td><td>+40 (provisional)</td>");
+    expect(rows[1]).toContain('<td>6,026<span class="day-mark" title="Provisional">');
+    expect(rows[2]).toContain("(provisional)</span></span></td><td>+40</td>");
+    expect(rows[3]).toContain('<td>6,026</td><td>+40<span class="day-mark"');
     expect(rows[1]).toContain("Incomplete");
     expect(rows[1]).toContain("Trophies at the end of this day were not recorded.");
     expect(rows[1]).toContain(
@@ -1455,7 +1434,7 @@ describe("player day honesty", () => {
       "Clash of Clans returned 9 defenses for this day, more than the usual 8, so this day is marked partial.",
     );
     expect(rows[4]).toContain("<td>+310</td><td>0</td><td>0</td><td>+310</td>");
-    expect(rows[5]).toContain("<td>Provisional result");
+    expect(rows[5]).toContain("<strong>Provisional result.</strong>");
     expect(rows[5]).not.toContain("Incomplete");
     expect(rows[5]).toContain("<td>-11</td><td>-11</td>");
     expect(rows[5]).toContain("The battle log was not checked at the start of this day.");
@@ -1463,7 +1442,7 @@ describe("player day honesty", () => {
     expect(rows[6]).toContain(
       "The two players&#x27; battle logs disagree about a result.",
     );
-    expect(rows[7]).toContain("Incomplete");
+    expect(rows[7]).toContain('<span class="day-mark day-mark-gap" title="Incomplete">');
     expect(html).toContain("Attacks recorded");
     expect(html).toContain("Defenses recorded");
     expect(html).toContain("Recorded battle net");

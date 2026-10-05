@@ -98,6 +98,10 @@ export function SearchSuggestions({
       aria-label="Player and profile search suggestions"
       aria-live="polite"
       aria-busy={loading}
+      // Safari never focuses a tapped or clicked link, so the search box would
+      // blur with nowhere to go and close this list before the tap lands. Keep
+      // focus in the search box instead; Tab still reaches the links.
+      onMouseDown={(event) => event.preventDefault()}
     >
       {loading && !search ? <p className="search-dropdown-status">Searching…</p> : null}
       {data?.error ? <p className="search-dropdown-status">Search unavailable.</p> : null}

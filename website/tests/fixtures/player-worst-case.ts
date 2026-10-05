@@ -130,7 +130,7 @@ export function worstCasePlayer(tag = WORST_TAG, now = Date.now()): PlayerPage {
       freshness: {
         state: "stale",
         observedAt: new Date(now - 1284 * DAY_MS).toISOString(),
-        ageSeconds: 30,
+        ageSeconds: (1284 * DAY_MS) / 1000,
       },
       battleHistoryUpdatedAt: null,
       confidence: "partial",

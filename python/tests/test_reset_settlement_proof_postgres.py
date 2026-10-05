@@ -417,6 +417,17 @@ def test_terminal_work_refresh_and_fence_use_dependency_days(
                 assert len(blocking.get("reset_settlement_checks", [])) == 2
                 assert "reset_settlement_checks" not in close_blockers(
                     connection, "season", recent + DAY, recent + 2 * DAY)
+                connection.execute(
+                    "UPDATE reset_boundary_settlements SET state = 'unresolved'"
+                    " WHERE delayed_work_id = %s", (checks[recent - DAY],))
+                for status, held in (("pending", 1), ("waiting_retry", 1), ("complete", 0),
+                                     ("failed", 0), ("cancelled", 0)):
+                    connection.execute(
+                        "UPDATE collector_work SET status = %s WHERE id = %s",
+                        (status, checks[recent - DAY]))
+                    assert len(close_blockers(
+                        connection, "season", recent - 2 * DAY, recent - 2 * DAY
+                    ).get("reset_settlement_checks", [])) == held
                 # A finished check with nothing saved, or any other still
                 # provisional one, holds its days; a judged candidate does not.
                 for reasons, held in (([], 1), (["early_reading_pending"], 1),

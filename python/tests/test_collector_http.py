@@ -554,8 +554,11 @@ def test_cancellation_keeps_key_permit_until_blocking_request_ends(
 
 
 def test_actual_network_starts_stay_limited_when_default_executor_is_busy(
-    official_server: str,
+    official_server: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    clock = 1000.0
+    starts: list[float] = []
+    monkeypatch.setattr(collector_http, "monotonic", lambda: clock)
     client = OfficialApiClient(
         official_server,
         allow_insecure_test_origin=True,
@@ -566,40 +569,59 @@ def test_actual_network_starts_stay_limited_when_default_executor_is_busy(
         starts_per_second=2,
         concurrency_per_key=3,
     )
-    blockers_started = 0
-    blockers_lock = threading.Lock()
     blocker_release = threading.Event()
 
     async def run() -> None:
-        nonlocal blockers_started
         loop = asyncio.get_running_loop()
         loop.set_default_executor(ThreadPoolExecutor(max_workers=3))
+        blockers_started: asyncio.Queue[None] = asyncio.Queue()
+        requests_started: asyncio.Queue[None] = asyncio.Queue()
+
+        original_request = collector_http._DeadlineHTTPConnection.request
+
+        def tracked_request(connection, *args, **kwargs):
+            starts.append(clock)
+            loop.call_soon_threadsafe(requests_started.put_nowait, None)
+            return original_request(connection, *args, **kwargs)
+
+        async def advance_clock(delay: float) -> None:
+            nonlocal clock
+            # Do not advance past a permitted request still waiting for its
+            # network thread. Runner delays must not change its recorded time.
+            await requests_started.get()
+            clock += delay
+
+        monkeypatch.setattr(
+            collector_http._DeadlineHTTPConnection, "request", tracked_request
+        )
+        monkeypatch.setattr(collector_http.asyncio, "sleep", advance_clock)
 
         def block_executor() -> None:
-            nonlocal blockers_started
-            with blockers_lock:
-                blockers_started += 1
-            blocker_release.wait(1)
+            loop.call_soon_threadsafe(blockers_started.put_nowait, None)
+            blocker_release.wait()
 
         blockers = [
-            asyncio.create_task(asyncio.to_thread(block_executor)) for _ in range(3)
+            loop.run_in_executor(None, block_executor) for _ in range(3)
         ]
-        while blockers_started < 3:
-            await asyncio.sleep(0.001)
         try:
-            responses = await asyncio.gather(
-                *(client.fetch_player(pool, "#SMALL", "profile") for _ in range(3))
-            )
+            # The timeout only bounds a broken test; it does not measure pacing.
+            async with asyncio.timeout(30):
+                for _ in blockers:
+                    await blockers_started.get()
+                responses = await asyncio.gather(
+                    *(client.fetch_player(pool, "#SMALL", "profile") for _ in range(3))
+                )
             assert [response.body for response in responses] == [b"ok"] * 3
+            assert all(not blocker.done() for blocker in blockers)
         finally:
             blocker_release.set()
             await asyncio.gather(*blockers)
 
     asyncio.run(run())
 
-    starts = _OfficialHandler.paths_started["/v1/players/%23SMALL"]
-    assert len(starts) == 3
-    assert _most_starts_within(starts, 0.985) <= 2
+    assert len(_OfficialHandler.paths_started["/v1/players/%23SMALL"]) == 3
+    assert starts == [1000.0, 1000.5, 1001.0]
+    assert _most_starts_within(starts, 1.0) <= 2
 
 
 def test_shared_permits_are_serialized_next_to_actual_network_starts(

@@ -7,9 +7,10 @@ from .api_db import (
     ApiDatabase,
     _public_confidence,
     _public_snapshot_confidence,
+    _season_reset_waiting_sql,
     _text,
 )
-from .domain import ranked_day_for
+from .domain import ranked_day_for, season_opening_reset
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
@@ -19,7 +20,13 @@ _FOCUS_NEIGHBORS = 5
 # Shared membership and confirmation rule for the page and operator measurements.
 # A profile still naming an earlier Season than the calendar shows trophies from
 # before that player's Season reset, so it waits off the board until it updates.
-_LIVE_CANDIDATES_SQL = """
+# On a Season's first Legend day, trophies other than 5,000 that still equal
+# the player's frozen pre-Reset final trophies, or that the day's recorded
+# battles cannot explain, wait the same way.
+_OPENING_DAY_WAITING_SQL = _season_reset_waiting_sql(
+    "player.id", "profile.trophies", "%(opening_reset)s"
+)
+_LIVE_CANDIDATES_SQL = f"""
 SELECT player.normalized_tag, profile.name, profile.trophies,
        greatest(
            player.current_observed_at, player.current_profile_confirmed_at
@@ -27,7 +34,7 @@ SELECT player.normalized_tag, profile.name, profile.trophies,
        player.eligibility_state,
        profile.profile_json -> 'clan' ->> 'name' AS clan,
        COALESCE(profile.current_league_season_id = %(season_id)s, false)
-           AS season_current
+           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
 FROM players AS player
 JOIN LATERAL (
     SELECT name, trophies, profile_json, source_contract_state,
@@ -60,8 +67,11 @@ FROM ({_LIVE_PLAYERS_SQL}) AS live
 """
 
 
-def _season_id(now: datetime) -> str:
-    return ranked_day_for(now).official_season_id
+def _season_params(now: datetime) -> dict[str, Any]:
+    return {
+        "season_id": ranked_day_for(now).official_season_id,
+        "opening_reset": season_opening_reset(now),
+    }
 
 
 def search_live_leaderboard(
@@ -92,7 +102,7 @@ def search_live_leaderboard(
                 "tag": tag,
                 "explicit_tag": explicit_tag,
                 "query": query,
-                "season_id": _season_id(now),
+                **_season_params(now),
             },
         ).fetchall()
     return {
@@ -119,7 +129,7 @@ def live_positions(connection: Any, tags: list[str], *, now: datetime) -> dict[s
         SELECT normalized_tag, position FROM ({_LIVE_RANKED_SQL}) AS ranked
         WHERE normalized_tag = ANY(%(tags)s)
         """,
-        {"tags": tags, "season_id": _season_id(now)},
+        {"tags": tags, **_season_params(now)},
     ).fetchall()
     return {_text(row[0]): int(row[1]) for row in rows}
 
@@ -144,7 +154,7 @@ def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str,
             {
                 "now": now,
                 "fresh": _LIVE_FRESHNESS_SECONDS,
-                "season_id": _season_id(now),
+                **_season_params(now),
             },
         ).fetchone()
     return {
@@ -220,7 +230,7 @@ def get_live_leaderboard(
                 "now": now,
                 "fresh": _LIVE_FRESHNESS_SECONDS,
                 "neighbors": _FOCUS_NEIGHBORS,
-                "season_id": _season_id(now),
+                **_season_params(now),
             },
         ).fetchall()
         if rows[0][12] is None:
