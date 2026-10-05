@@ -45,7 +45,7 @@ describe("player trophy trends", () => {
     expect(result.seven).toContain("<dd>7 of 7</dd>");
     expect(result.fourteen).toContain("<dd>+110</dd>");
     expect(result.fourteen).toContain("<dd>14 of 14</dd>");
-    expect(result.html).toContain("the reset to 5,000 is excluded");
+    expect(result.html).toContain("the Season reset to 5,000 never counts as a drop");
   });
 
   it("counts calendar days, excluding today, future days and older history", () => {

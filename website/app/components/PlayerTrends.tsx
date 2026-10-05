@@ -16,9 +16,9 @@ export function PlayerTrends({ days, now }: { days: RankedDaySummary[]; now: num
     <section className="data-section" aria-labelledby="player-trends-title">
       <h2 id="player-trends-title">Trophy trend</h2>
       <p className="section-note">
-        Finished Legend days only, ending at 05:00 UTC. Adds complete daily trophy changes
-        across Seasons; the reset to 5,000 is excluded. Missing or uncertain days are left
-        out. The latest day may still change.
+        Finished Legend days only, ending at 05:00 UTC. Adds up each day&apos;s own trophy
+        change, so the Season reset to 5,000 never counts as a drop. Missing or uncertain
+        days are left out. The latest day may still change.
       </p>
       <div className="metric-grid">
         {[7, 14].map((window) => {

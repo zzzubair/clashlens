@@ -186,6 +186,8 @@ def test_weekly_and_season_reset_adjustments_reconcile_against_5000_baseline() -
     assert season.final_trophies_before_reset == 6020
     assert season.boundary_adjustment == -1020
     assert season.boundary_adjustment_type == "season_reset"
+    # The day's own change leaves out the reset, so trends see no fake drop.
+    assert weekly.net_trophy_change == season.net_trophy_change == 20
 
 
 def test_5000_after_a_reset_does_not_confirm_the_automatic_loss_or_final_total() -> (

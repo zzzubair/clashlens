@@ -51,8 +51,8 @@ tracks the remaining launch work.
 
 Tracked players' current pages show a Trophy trend for the last 7 and 14 finished
 Legend days. Each window ends at the latest Reset at 05:00 UTC and excludes today.
-The cards sum complete saved daily trophy changes across Seasons, excluding the
-Season reset to 5,000. Missing, partial or uncertain days and unknown changes are
+The cards sum complete saved daily trophy changes across Seasons; each day's own
+change leaves out the Season reset to 5,000, so it never counts as a drop. Missing, partial or uncertain days and unknown changes are
 omitted. Days counted shows the coverage, such as 5 of 7; no counted days shows
 Unavailable, while a known zero displays 0. The latest finished day's result may
 still change. Selecting a past Season hides these cards.
