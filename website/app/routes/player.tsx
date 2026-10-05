@@ -14,10 +14,10 @@ import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { SavePlayer } from "../components/SavePlayer";
-import { Metric, MetricCard } from "../components/MetricCard";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { PlayerTrends } from "../components/PlayerTrends";
+import { SeasonSummary, per, type SummarySide } from "../components/SeasonSummary";
 import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
 import {
@@ -645,7 +645,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           />
         ) : null}
         {data.selectedSeason === null && player ? (
-          <BattleStatistics player={player} now={statisticsTime} />
+          <BattleStatistics
+            player={player}
+            now={statisticsTime}
+            trophies={formatCount(lookup?.profile?.trophies ?? null)}
+          />
         ) : null}
         {data.selectedSeason === null && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
@@ -765,7 +769,15 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       ) : null}
 
       {data.selectedSeason === null ? (
-        <BattleStatistics player={trackedPlayer} now={statisticsTime} />
+        <BattleStatistics
+          player={trackedPlayer}
+          now={statisticsTime}
+          trophies={
+            seasonExpired || trackedPlayer.profile.seasonResetPending
+              ? "Waiting for Reset"
+              : formatCount(trackedPlayer.profile.trophies)
+          }
+        />
       ) : null}
       {data.selectedSeason !== null ? null : (
         <section className="data-section" aria-labelledby="season-days-title">
@@ -928,7 +940,16 @@ function SelectedSeason({
   summary: HistoricalSeasonSummary | null;
   error: WebsiteErrorResponse | null;
 }) {
-  if (summary !== null) return <HistoricalSeasonPanel summary={summary} />;
+  if (summary !== null) {
+    return (
+      <>
+        <SeasonFinish summary={summary} />
+        {summary.source === "tracked_summary" ? (
+          <HistoricalSeasonPanel summary={summary} />
+        ) : null}
+      </>
+    );
+  }
   return (
     <section className="data-section" aria-labelledby="historical-title">
       <div className="section-heading">
@@ -940,96 +961,60 @@ function SelectedSeason({
   );
 }
 
-function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
-  const selectedDay = validDay(useSearchParams()[0].get("day"));
-  if (summary.source === "official_league_history") {
-    return (
-      <section className="data-section" aria-labelledby="historical-season-title">
-        <div className="section-heading">
-          <h2 id="historical-season-title">
-            {seasonLabel(summary.seasonId, summary.seasonEnd)}
-          </h2>
-        </div>
-        {summary.officialHistory ? (
-          <div className="metric-grid">
-            <MetricCard title="Season finish">
-              <Metric
-                label="Final trophies"
-                value={formatCount(summary.officialHistory.eodTrophies)}
-              />
-              <Metric label="Final rank" value={finalRank(summary)} />
-            </MetricCard>
-          </div>
-        ) : null}
-        <p className="section-note">{FINAL_RANK_NOTE}</p>
-      </section>
-    );
-  }
+function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
+  const tracked = summary.source === "tracked_summary";
+  const side = (
+    count: number | null,
+    stars: Record<string, number | null>,
+    unknown: number | null,
+    trophies: number | null,
+  ): SummarySide => ({
+    count,
+    stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
+    unknown,
+    trophies,
+    perDay: per(trophies, summary.daysObserved),
+  });
   return (
-    <section className="data-section" aria-labelledby="historical-season-title">
-      <div className="section-heading">
-        <h2 id="historical-season-title">
-          {seasonLabel(summary.seasonId, summary.seasonEnd)}
-        </h2>
-      </div>
-      {summary.coverageState === "complete" ? null : (
+    <SeasonSummary
+      title={seasonLabel(summary.seasonId, summary.seasonEnd)}
+      rank={["Final rank", finalRank(summary)]}
+      finalRank
+      trophies={[
+        "Final trophies",
+        formatCount(summary.officialHistory?.eodTrophies ?? summary.endTrophies),
+      ]}
+      {...(tracked && {
+        attack: side(
+          summary.attackCount,
+          summary.attackStars,
+          summary.attackStarsUnknown,
+          summary.attackGain,
+        ),
+        defense: side(
+          summary.defenseCount,
+          summary.defenseStars,
+          summary.defenseStarsUnknown,
+          summary.defenseLoss,
+        ),
+      })}
+    >
+      {tracked && summary.coverageState !== "complete" ? (
         <p className="section-note">
           Totals cover the {summary.daysObserved} of 28 Legend days with records.
         </p>
-      )}
-      <div className="metric-grid">
-        <MetricCard title="Offense">
-          <Metric label="Attacks recorded" value={formatCount(summary.attackCount)} />
-          <Metric label="Trophy gain" value={formatSigned(summary.attackGain)} />
-        </MetricCard>
-        <MetricCard title="Defense">
-          <Metric label="Defenses recorded" value={formatCount(summary.defenseCount)} />
-          <Metric
-            label="Trophy loss"
-            value={
-              summary.defenseLoss === null
-                ? "Unknown"
-                : formatSigned(-summary.defenseLoss)
-            }
-          />
-        </MetricCard>
-        <MetricCard title="Season">
-          <Metric
-            label={`Sum of daily trophy changes (${summary.daysObserved} of 28 days)`}
-            value={formatSigned(summary.netTrophyChange)}
-          />
-          <Metric
-            label="Trophies"
-            value={
-              summary.endTrophies === null
-                ? "Unknown"
-                : `${formatCount(summary.startTrophies)} → ${formatCount(summary.endTrophies)}`
-            }
-          />
-          {summary.officialHistory ? (
-            <Metric
-              label="Final trophies"
-              value={formatCount(summary.officialHistory.eodTrophies)}
-            />
-          ) : null}
-          <Metric label="Final rank" value={finalRank(summary)} />
-        </MetricCard>
-        <MetricCard title="Attack stars">
-          <Metric label="Three-star" value={formatCount(summary.attackStars["3"])} />
-          <Metric label="Two-star" value={formatCount(summary.attackStars["2"])} />
-          <Metric label="One-star" value={formatCount(summary.attackStars["1"])} />
-          <Metric label="No-star" value={formatCount(summary.attackStars["0"])} />
-          <Metric label="Unknown" value={formatCount(summary.attackStarsUnknown)} />
-        </MetricCard>
-        <MetricCard title="Defense stars">
-          <Metric label="Three-star" value={formatCount(summary.defenseStars["3"])} />
-          <Metric label="Two-star" value={formatCount(summary.defenseStars["2"])} />
-          <Metric label="One-star" value={formatCount(summary.defenseStars["1"])} />
-          <Metric label="No-star" value={formatCount(summary.defenseStars["0"])} />
-          <Metric label="Unknown" value={formatCount(summary.defenseStarsUnknown)} />
-        </MetricCard>
-      </div>
-      <p className="section-note">{FINAL_RANK_NOTE}</p>
+      ) : null}
+      {summary.officialHistory?.finalPlacement == null ? (
+        <p className="section-note">{FINAL_RANK_NOTE}</p>
+      ) : null}
+    </SeasonSummary>
+  );
+}
+
+function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
+  const selectedDay = validDay(useSearchParams()[0].get("day"));
+  return (
+    <section className="data-section" aria-label="Daily trophy totals">
       {selectedDay &&
       !summary.dailyEntries.some((day) => legendDayKey(day.period) === selectedDay) ? (
         <p className="section-note" role="status">
@@ -1466,7 +1451,7 @@ const FINAL_RANK_NOTE =
 // The official in-game placement, never Clash Lens's own leaderboard position.
 function finalRank(summary: HistoricalSeasonSummary): string {
   const placement = summary.officialHistory?.finalPlacement ?? null;
-  return placement === null ? "Not available yet" : formatCount(placement);
+  return placement === null ? "Not available yet" : `#${formatCount(placement)}`;
 }
 
 function formatCount(value: number | null): string {

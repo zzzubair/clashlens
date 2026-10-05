@@ -58,32 +58,37 @@ shows the coverage, such as 5 of 7; no counted days shows Unavailable, while a
 known zero displays 0. The latest finished day's result may still change.
 Selecting a past Season hides these cards.
 
-The current player view shows attack and defense stats for This Season,
-Last 7 days and Last 14 days when saved player data is available. Selecting a
-past Season opens its saved summary instead of these period stats.
-Attack stats show triple rate, average stars, average destruction and trophies
-per attack. Defense stats show hold rate, average stars and destruction given
-up, trophies given up per defense, and counts of 0-, 1-, 2- and 3-star defenses.
-Recent windows include the current Legend day and the previous 6 or 13 days,
-crossing a Season boundary when saved battle details remain. This Season starts
-at its opening Reset and includes the current Legend day so far.
-Each view shows its dates, saved-day coverage, and separate attack and defense
-sample counts. All averages use individual recorded battles, not averages of
-daily averages. Triple rate is the percentage of recorded attacks with three
-stars; hold rate is the percentage of actual recorded defenses with fewer than
-three stars. Empty samples show Unavailable for averages and rates, with zero
-sample counts and zero defense star counts. Trophies given up are positive losses per recorded
-defense. Automatic Reset losses and missing or unplayed battles are excluded.
-Partial history and conflicting reports are flagged; retained past-Season totals
-cannot fill missing battle details.
+Each Season shows one Season summary box. A past Season's box leads with its
+official in-game final rank, highlighted as the standout number, and final
+trophies; the current Season's leads with
+the Clash Lens rank at the latest Reset this Season (the page has no live rank),
+shown as Not ranked yet when that Reset's board has no rank for the player, and
+current trophies. Below that: hit rate, the percentage of all attacks that got
+three stars; attacks and defenses by 3, 2, 1 and 0 stars; and
+trophies per day on offense and defense, per attack, per defense, and total
+trophies lost. A note names stars of unknown battles only when there are some.
+The Season trophy change and total trophies gained are not shown, because the
+change is just ending trophies minus 5,000.
 
-With JavaScript enabled, changing Period uses battle details already loaded with
+A past Season's box uses its saved summary, with per-day averages over its
+saved days; a Season known only from in-game history shows just the rank and
+trophies. The current Season's box uses recorded battles and can show This
+Season, Last 7 days or Last 14 days. Recent windows include the current Legend
+day and the previous 6 or 13 days, crossing a Season boundary when saved battle
+details remain. Per-day averages leave out the Legend day in progress; per-battle
+averages use individual recorded battles. Automatic Reset losses and missing or
+unplayed battles are excluded. Empty samples show Unavailable for rates and
+averages. Partial history and conflicting reports are flagged; retained
+past-Season totals cannot fill missing battle details.
+
+With JavaScript enabled, changing the period uses battle details already loaded with
 the player page and makes no request or additional database read. It adds no stored data; the
 [saved-history limits](../docs/history-retention.md) still apply. The calculations
 are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 
 The separate Past Seasons table shows saved finishes from January 2025 onwards,
-newest first, with three columns: Season ended, Final trophies and Global rank.
+newest first, with three columns: Season ended, Global rank and Final trophies.
+The rank is highlighted as the standout number.
 28-day Seasons are dated by their closing Reset; older calendar-month results
 keep their month label. Saved in-game Legend I history wins for each Season,
 even when a trophy count or rank is missing: those cells say "Not recorded"

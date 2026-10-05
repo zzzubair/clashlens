@@ -418,9 +418,9 @@ test("battle stats switch periods without requests at iPhone width", async ({ pa
   await page.setViewportSize({ width: 375, height: 812 });
   await refuseRefreshes(page);
   await page.goto("/players/%232PP");
-  const stats = page.getByRole("region", { name: "Attack and defense stats" });
-  await expect(stats.getByText("Attacks in sample", { exact: true })).toBeVisible();
-  await expect(stats.getByText("Defenses in sample", { exact: true })).toBeVisible();
+  const stats = page.getByRole("region", { name: "Season summary" });
+  await expect(stats.getByText("Hit rate", { exact: true })).toBeVisible();
+  await expect(stats.getByRole("rowheader", { name: "Defenses" })).toBeVisible();
   await page.waitForLoadState("networkidle");
   const requests: string[] = [];
   page.on("request", (request) => requests.push(request.url()));
@@ -428,12 +428,12 @@ test("battle stats switch periods without requests at iPhone width", async ({ pa
     ["7", 7],
     ["14", 14],
   ] as const) {
-    await stats.getByLabel("Period").selectOption(period);
-    await expect(stats).toContainText(`of ${days} Legend days have saved logs.`);
-    await expect(stats.getByText("0-star defenses", { exact: true })).toBeVisible();
+    await stats.getByLabel("Showing").selectOption(period);
+    await expect(stats).toContainText(`of ${days} Legend days saved.`);
+    await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
   }
-  await stats.getByLabel("Period").selectOption("season");
-  await expect(stats.getByLabel("Period")).toHaveValue("season");
+  await stats.getByLabel("Showing").selectOption("season");
+  await expect(stats.getByLabel("Showing")).toHaveValue("season");
   expect(requests).toEqual([]);
   expect(
     await page.evaluate(
@@ -499,8 +499,9 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   await page.getByRole("searchbox").press("Enter");
   const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
   await seasons.getByRole("link").first().click();
-  await expect(page.getByText("Unknown → 6,498", { exact: true })).toBeVisible();
-  await expect(page.getByText("-12,880", { exact: true })).toBeVisible();
+  const finish = page.locator(".season-summary");
+  await expect(finish.getByText("6,498", { exact: true })).toBeVisible();
+  await expect(page.getByText("Stars unknown for 1 attack.")).toBeVisible();
   await expectUsableLayout(page);
 
   await seasons.getByRole("link", { name: "Current Season" }).click();

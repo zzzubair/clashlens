@@ -136,9 +136,13 @@ describe("past Seasons on the player page", () => {
 
     expect(mocks.getPastSeasons).toHaveBeenCalledWith(TAG);
     expect(html).toContain("Past Seasons");
-    expect(html).toMatch(/10 Aug 2026<\/th><td>5,856<\/td><td>#1<\/td>/);
-    expect(html).toMatch(/Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td>/);
-    expect(html).toMatch(/Dec 2021<\/th><td>4,965<\/td><td>Not recorded<\/td>/);
+    expect(html).toMatch(
+      /10 Aug 2026<\/th><td class="past-season-rank">#1<\/td><td>5,856<\/td>/,
+    );
+    expect(html).toMatch(
+      /Jul 2024<\/th><td class="past-season-rank">#934,651<\/td><td>5,011<\/td>/,
+    );
+    expect(html).toMatch(/Dec 2021<\/th><td>Not recorded<\/td><td>4,965<\/td>/);
     expect(html).toMatch(/from.*<a href="https:\/\/clashk.ing"[^>]*>ClashKing<\/a>/);
   });
 
@@ -176,14 +180,18 @@ describe("past Seasons on the player page", () => {
     const pastSeasons = section.slice(0, section.indexOf("</section>"));
     expect(pastSeasons.match(/<th scope="col">[^<]*<\/th>/g)).toEqual([
       '<th scope="col">Season ended</th>',
-      '<th scope="col">Final trophies</th>',
       '<th scope="col">Global rank</th>',
+      '<th scope="col">Final trophies</th>',
     ]);
-    expect(html).toMatch(/5 Oct 2026<\/th><td>5,437<\/td><td>#180<\/td><\/tr>/);
+    expect(html).toMatch(
+      /5 Oct 2026<\/th><td class="past-season-rank">#180<\/td><td>5,437<\/td><\/tr>/,
+    );
     expect(html).toMatch(
       /10 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><\/tr>/,
     );
-    expect(html).toMatch(/Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td><\/tr>/);
+    expect(html).toMatch(
+      /Jul 2024<\/th><td class="past-season-rank">#934,651<\/td><td>5,011<\/td><\/tr>/,
+    );
   });
 
   it("does not wait for ClashKing before the rest of the page loads", async () => {

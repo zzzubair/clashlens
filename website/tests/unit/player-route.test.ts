@@ -370,13 +370,15 @@ describe("player route historical independence", () => {
       startTrophies: null,
       endTrophies: 5800,
     });
-    expect(late).toContain("<dt>Trophies</dt><dd>Unknown → 5,800</dd>");
+    expect(late).toContain("<dt>Final trophies</dt><dd>5,800</dd>");
     const unfinished = await renderSeason({
       ...SUMMARY,
       startTrophies: 5000,
       endTrophies: null,
     });
-    expect(unfinished).toContain("<dt>Trophies</dt><dd>Unknown</dd>");
+    expect(unfinished).toContain(
+      '<dt>Final trophies</dt><dd class="summary-words">Unknown</dd>',
+    );
   });
 
   it("keeps all 28 days and 448 battles in the page for search and print", async () => {
@@ -1411,7 +1413,7 @@ describe("player day honesty", () => {
       },
       `?season=${SEASON}`,
     ).then((value) => value.replaceAll("<!-- -->", ""));
-    const rows = html.split("<tbody>")[1].split("</tbody>")[0].split("</tr>");
+    const rows = html.split("<tbody>").at(-1)!.split("</tbody>")[0].split("</tr>");
     expect(rows[0]).toContain('<summary>1<span class="day-mark" title="Provisional');
     // EOD change sits beside End, apart from battle net, and is provisional
     // unless its proof is accepted; an unknown proof state is not accepted.

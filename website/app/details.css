@@ -876,13 +876,124 @@
 .player-page .past-seasons .data-table {
   min-width: 0;
 }
-
-.battle-statistics .metric-grid {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+/* The final rank is an ended Season's standout number. */
+.player-page .past-seasons .past-season-rank {
+  color: var(--cl-accent-contrast);
+  font-family: var(--cl-font-heading);
+  font-size: 1.15rem;
+  font-weight: 750;
 }
 
-.battle-statistics select {
+/* The one Season summary box */
+.player-page > .season-summary {
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border: 1px solid var(--cl-border);
+  background: var(--cl-surface);
+}
+.season-summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+.season-summary-head h2 {
+  margin: 0;
+}
+.season-summary select {
   max-width: 100%;
   min-height: 2.75rem;
   font: inherit;
+}
+.season-summary :is(.season-summary-headline, .season-summary-averages) {
+  display: grid;
+  margin: 1rem 0;
+  gap: 0.75rem;
+}
+.season-summary-headline {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr));
+}
+.season-summary-averages {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  padding-top: 1rem;
+  border-top: 1px solid var(--cl-border);
+}
+.season-summary dt {
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+.season-summary dd {
+  margin: 0.15rem 0 0;
+  font-size: 1.15rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.season-summary-headline dd {
+  font-family: var(--cl-font-heading);
+  font-size: clamp(1.5rem, 5vw, 2rem);
+  line-height: 1.1;
+}
+.season-summary-headline > div {
+  min-width: 0;
+}
+.season-summary-headline > .season-summary-rank {
+  grid-column: 1 / -1;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--cl-accent);
+  background: var(--cl-panel);
+}
+.season-summary-rank dd {
+  color: var(--cl-accent-contrast);
+  font-size: clamp(2.5rem, 10vw, 3.5rem);
+}
+@media (min-width: 48rem) {
+  .season-summary-headline:has(> .season-summary-rank) {
+    grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr));
+    align-items: center;
+  }
+  .season-summary-headline > .season-summary-rank {
+    grid-column: auto;
+  }
+}
+.season-summary-headline dd.summary-words {
+  font-family: var(--cl-font);
+  font-size: 1.05rem;
+}
+.season-summary dd small {
+  display: block;
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+/* Relative keeps the hidden star labels inside the scroll area. */
+.season-summary-table {
+  position: relative;
+  overflow-x: auto;
+}
+.season-summary-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.season-summary-table :is(th, td) {
+  padding: 0.55rem 0.4rem;
+  border-bottom: 1px solid var(--cl-border);
+  text-align: right;
+}
+.season-summary-table thead th {
+  color: var(--cl-muted);
+  font-size: 0.8rem;
+}
+.season-summary-table tbody td {
+  font-weight: 750;
+}
+.season-summary-table tbody th {
+  padding-left: 0;
+  text-align: left;
+}
+.player-page > .season-summary > .section-note {
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
 }
