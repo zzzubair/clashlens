@@ -382,6 +382,10 @@
 .player-page .data-table td:has(> .table-note) {
   min-width: 12rem;
 }
+/* The Legend day a day link names. */
+.player-page .data-table tr[aria-current] {
+  background: var(--cl-action-soft);
+}
 /* Analytics query bar and results */
 .analytics-page .hero {
   max-width: none;

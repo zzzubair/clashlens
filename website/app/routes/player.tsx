@@ -25,6 +25,7 @@ import {
   liveDayNotice,
   lookupExplanation,
   presentDay,
+  seasonForDay,
   selectPlayerHistory,
 } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
@@ -172,6 +173,18 @@ export async function loader({
   const seasons = seasonsResult.status === "fulfilled" ? seasonsResult.value : [];
   const seasonsError =
     seasonsResult.status === "rejected" ? await safeError(seasonsResult.reason) : null;
+  // A day link from an ended Season opens that Season at the day.
+  const day = url.searchParams.get("day") ?? "";
+  const daySeason =
+    selectedSeason === null && /^\d{4}-\d{2}-\d{2}$/.test(day)
+      ? seasonForDay(seasons, day)
+      : null;
+  if (daySeason !== null) {
+    url.searchParams.set("season", daySeason);
+    throw redirect(`${canonicalPath}${url.search}#legend-day-${day}`, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
   const historical =
     historicalResult.status === "fulfilled" ? historicalResult.value : null;
   const historicalError =
@@ -308,13 +321,7 @@ export default function PlayerRoute() {
 function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const requestedDay = searchParams.get("day");
-  const selectedDay =
-    requestedDay &&
-    /^\d{4}-\d{2}-\d{2}$/.test(requestedDay) &&
-    !Number.isNaN(Date.parse(requestedDay))
-      ? requestedDay
-      : null;
+  const selectedDay = validDay(searchParams.get("day"));
   const refreshFetcher = useFetcher<RefreshWork | RefreshError | null>();
   const revalidator = useRevalidator();
   const [workId, setWorkId] = useState<string | null>(null);
@@ -920,6 +927,7 @@ function SelectedSeason({
 }
 
 function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
+  const selectedDay = validDay(useSearchParams()[0].get("day"));
   if (summary.source === "official_league_history") {
     return (
       <section className="data-section" aria-labelledby="historical-season-title">
@@ -1026,6 +1034,12 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
         <p className="section-note">Some daily totals are unavailable.</p>
       ) : null}
       <p className="section-note">{LEGEND_DAY_NOTE}</p>
+      {selectedDay &&
+      !summary.dailyEntries.some((day) => legendDayKey(day.period) === selectedDay) ? (
+        <p className="section-note" role="status">
+          No saved Legend log for {legendDayDate(selectedDay)}.
+        </p>
+      ) : null}
       <div
         className="table-wrap top-space"
         tabIndex={0}
@@ -1066,7 +1080,13 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 false,
               );
               return (
-                <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
+                <tr
+                  key={`${day.period}-${day.dayNumber ?? "unknown"}`}
+                  {...(legendDayKey(day.period) === selectedDay && {
+                    id: `legend-day-${selectedDay}`,
+                    "aria-current": "date",
+                  })}
+                >
                   <td>{day.dayNumber ?? "Unknown"}</td>
                   <td>
                     {status}
@@ -1122,6 +1142,12 @@ const playerTimeFormatter = new Intl.DateTimeFormat("en-GB", {
 
 function formatPlayerDate(date: Date): string {
   return playerDateFormatter.format(date).replace("Sept", "Sep");
+}
+
+function validDay(day: string | null): string | null {
+  return day && /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day))
+    ? day
+    : null;
 }
 
 function legendDayDate(period: string): string {

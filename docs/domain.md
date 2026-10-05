@@ -148,7 +148,8 @@ A domain change is complete only when every affected source observation, derived
   numbered from that Season's start. An ended Season's saved days appear under
   that Season in the page's Seasons list, dated by its end. That list offers
   only Seasons with Clash Lens days; one known only from the game's league
-  history is left out.
+  history is left out. A link to a day of an ended Season opens that Season
+  with the day marked, or says no Legend log is saved for that date.
 - Public completed-season final rank means the official in-game placement from
   Clash of Clans league history, which names a Season by the Reset that ended
   it. Until that placement is saved, show it as not available yet; never fall
