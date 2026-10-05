@@ -136,7 +136,7 @@ _CHECKS = {
         JOIN collector_work AS work ON work.id = settlement.delayed_work_id
         WHERE settlement.boundary_at > %(season_start)s
           AND settlement.boundary_at - interval '2 days' < %(season_end)s
-          AND (work.status NOT IN ('complete', 'failed', 'cancelled')
+          AND (work.status IN ('pending', 'waiting_retry')
                OR (settlement.state = 'provisional'
                    AND settlement.reasons <> '["new_reset_proofs_disabled"]'::jsonb)
                OR EXISTS (

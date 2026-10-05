@@ -5,7 +5,7 @@ from typing import Any
 
 def health_metrics(connection: Any) -> dict[str, int | float]:
     row = connection.execute(
-        """WITH active_reset AS (SELECT sweep.id FROM collector_reset_sweeps AS sweep JOIN collector_work AS work ON work.sweep_id = sweep.id WHERE work.kind = 'reset_baseline' AND work.status NOT IN ('complete', 'failed', 'cancelled') ORDER BY sweep.boundary_at DESC, sweep.id DESC LIMIT 1),
+        """WITH active_reset AS (SELECT sweep.id FROM collector_reset_sweeps AS sweep JOIN collector_work AS work ON work.sweep_id = sweep.id WHERE work.kind = 'reset_baseline' AND work.status IN ('pending', 'waiting_retry') ORDER BY sweep.boundary_at DESC, sweep.id DESC LIMIT 1),
         processing AS (
             SELECT job.work_type, count(*) AS pending_count,
                    greatest(0, extract(epoch FROM clock_timestamp()
