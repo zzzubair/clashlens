@@ -594,6 +594,22 @@ podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
 **Recovered:** every Reset since the first one has published its frozen
 leaderboard and army results.
 
+### Season final ranks missing
+
+Ended-Season pages show "Not available yet" until Clash of Clans league history
+holds that Season's row, which appears minutes after the Season-opening Reset.
+The Reset fetches league history again 20 minutes later; when that came too
+early, or before this existed, schedule one more request per tracked player:
+
+```sh
+podman exec clashlens-collector \
+  python -m clashlens.cli refresh-league-history --database-url-file /run/secrets/database-url
+```
+
+It reports how many it `scheduled` for the latest ended Season; a second run
+schedules 0. The collector sends them on the ordinary lane within the normal key
+budget, about 13,000 requests at October 2026 membership.
+
 ### Website unreachable from outside
 
 **First checks:** `ssh fedora`, then `./ops status` and

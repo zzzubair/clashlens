@@ -1,4 +1,4 @@
-"""Run one durable collector work row: Reset, settlement, interactive, ranking or discovery."""
+"""Run one durable collector work row: Reset, settlement, interactive, ranking, discovery or league-history refresh."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 # Player work kept for retry when every failure was transient.
 _RETRIED_INTENTS = frozenset({
     "reset_baseline", "reset_settlement", "initial_collection", "live_refresh",
-    "discovery_profile",
+    "discovery_profile", "league_history_refresh",
 })
 # Failed runs allowed outside a provider-outage pause before such work settles
 # as missing, so a few failing players cannot hold ordinary collection.
