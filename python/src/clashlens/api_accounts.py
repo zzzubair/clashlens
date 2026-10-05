@@ -814,6 +814,7 @@ def remove_saved_player(
 def list_saved_players(
     database: ApiDatabase, account_id: int, *, normalized_tag: str | None = None
 ) -> list[dict[str, Any]]:
+    """Filter profile state before the list cap so every saved tag stays removable."""
     with database.pool.connection() as connection:
         rows = connection.execute(
             f"""

@@ -4,6 +4,18 @@ Clash Lens makes competitive Clash of Clans ranked data accessible to all. It
 turns official observations into trustworthy tracking and analysis so players
 can make evidence-led decisions.
 
+## Saved Players
+
+When signed in, use "Add to Saved Players" on a player page, then "Remove from
+Saved Players" to undo it. These controls need JavaScript and are hidden when
+signed out. "View Saved Players" opens your private list at
+`/account/saved-players`, where the player-tag box still lets you add players
+directly.
+
+The list shows at most 500 players, ordered by tag. A saved player outside that
+list still has the correct save/remove state on their profile. If that state
+cannot load, the profile stays visible and "Retry saved players" retries it.
+
 ## Repository map
 
 - `python/` — the single Python asyncio collector, domain processing, the

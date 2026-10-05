@@ -39,8 +39,9 @@ export interface SavedPlayersActionData {
 }
 
 /**
- * GET /account/saved-players — list saved public player tags with explicit
- * add and per-player remove forms, each bound to its own idempotency key.
+ * Saved state stays private even on a public player profile: keep the optional
+ * tag filter inside the authenticated account read. An unavailable login check must
+ * return retryable error data without reading private state or hiding the profile.
  */
 export async function loader({
   request,
