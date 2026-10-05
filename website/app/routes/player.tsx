@@ -937,17 +937,11 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 label="Final trophies"
                 value={formatCount(summary.officialHistory.eodTrophies)}
               />
-              <Metric
-                label="Clash Lens final rank"
-                value={formatCount(summary.finalRank)}
-              />
+              <Metric label="Final rank" value={finalRank(summary)} />
             </MetricCard>
           </div>
         ) : null}
-        <p className="section-note">
-          Rank on Clash Lens’s saved final leaderboard, using each player’s last trophies
-          saved before the Season Reset.
-        </p>
+        <p className="section-note">{FINAL_RANK_NOTE}</p>
       </section>
     );
   }
@@ -997,7 +991,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 : `${formatCount(summary.startTrophies)} → ${formatCount(summary.endTrophies)}`
             }
           />
-          <Metric label="Clash Lens final rank" value={formatCount(summary.finalRank)} />
+          <Metric label="Final rank" value={finalRank(summary)} />
         </MetricCard>
         <MetricCard title="Attack stars">
           <Metric label="Three-star" value={formatCount(summary.attackStars["3"])} />
@@ -1014,10 +1008,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           <Metric label="Unknown" value={formatCount(summary.defenseStarsUnknown)} />
         </MetricCard>
       </div>
-      <p className="section-note">
-        Rank on Clash Lens’s saved final leaderboard, using each player’s last trophies
-        saved before the Season Reset.
-      </p>
+      <p className="section-note">{FINAL_RANK_NOTE}</p>
       <p className="section-note">
         The sum of daily trophy changes includes automatic defense losses at Reset; it
         shows Unknown if any recorded day&apos;s change is unknown. Recorded battle net
@@ -1444,6 +1435,15 @@ function valueTone(value: number | null): string {
 
 function provisional(value: string, state: string | null): string {
   return value === "Unknown" || state === "accepted" ? value : `${value} (provisional)`;
+}
+
+const FINAL_RANK_NOTE =
+  "Final rank is the in-game rank from Clash of Clans. It shows once Clash of Clans publishes it after the Season ends.";
+
+// The official in-game placement, never Clash Lens's own leaderboard position.
+function finalRank(summary: HistoricalSeasonSummary): string {
+  const placement = summary.officialHistory?.finalPlacement ?? null;
+  return placement === null ? "Not available yet" : formatCount(placement);
 }
 
 function formatCount(value: number | null): string {

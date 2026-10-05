@@ -139,7 +139,8 @@ def test_player_season_routes_publish_only_public_history_fields(
         database = ApiDatabase(connection_info)
         try:
             seed_profile(database, "#2PP", 6000)
-            seed_league_history(database, "#2PP", "1781499600")
+            # League history names the Season starting 1781499600 by its end.
+            seed_league_history(database, "#2PP", "1783918800")
             app = create_app(
                 database=database,
                 keys={("typescript-website", "current"): TS_CURRENT},

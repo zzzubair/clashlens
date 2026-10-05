@@ -260,7 +260,8 @@ def league_history_payload(index: int) -> dict[str, object]:
     return {
         "items": [
             {
-                "leagueSeasonId": str(season - SEASON_SECONDS),
+                # Like the real API: the ended Season is named by its end.
+                "leagueSeasonId": str(season),
                 "leagueTrophies": 5_812 - index % 400,
                 "leagueTierId": 105000036,
                 "placement": index % 400 + 1,
