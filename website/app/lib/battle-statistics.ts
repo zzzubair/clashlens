@@ -6,24 +6,23 @@ const DAY_MS = 86_400_000;
 const RESET_MS = 5 * 3_600_000;
 
 // Use recorded battles, never daily trophy adjustments or unplayed defenses.
-function summarize(events: RankedBattleEvent[]) {
-  const count = events.length;
+// Daily totals leave out today, which is still being played.
+function summarize(events: RankedBattleEvent[], today: number) {
   const stars = [0, 0, 0, 0];
-  let destruction = 0;
   let trophies = 0;
+  let finishedTrophies = 0;
   for (const event of events) {
     stars[event.stars]++;
-    destruction += event.destructionPercentage;
     trophies += Math.abs(event.trophyChange);
+    if (Date.parse(event.battleTimestamp) < today) {
+      finishedTrophies += Math.abs(event.trophyChange);
+    }
   }
   return {
-    count,
+    count: events.length,
     stars,
-    averageStars: count ? (stars[1] + 2 * stars[2] + 3 * stars[3]) / count : null,
-    averageDestruction: count ? destruction / count : null,
-    averageTrophies: count ? trophies / count : null,
-    tripleRate: count ? (100 * stars[3]) / count : null,
-    holdRate: count ? (100 * (count - stars[3])) / count : null,
+    trophies,
+    finishedTrophies,
     disputed: events.some((event) => event.perspectiveDisagreement),
   };
 }
@@ -62,8 +61,9 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
     end: now,
     daysSaved: days.size,
     daysExpected: Math.round((today - start) / DAY_MS) + 1,
+    finishedDays: [...days.keys()].filter((time) => time < today).length,
     incomplete: [...days.values()].some((day) => !day.battlesComplete),
-    attack: summarize(events("offenseEvents")),
-    defense: summarize(events("defenseEvents")),
+    attack: summarize(events("offenseEvents"), today),
+    defense: summarize(events("defenseEvents"), today),
   };
 }

@@ -262,8 +262,11 @@ describe("past-Season view", () => {
         },
         SEASON,
       );
-      expect(html).toContain(`<dt>Final rank</dt><dd>${expected}</dd>`);
-      expect(html).toContain("Final rank is the in-game rank from Clash of Clans,");
+      expect(html).toMatch(new RegExp(`<dt>Final rank</dt><dd[^>]*>${expected}</dd>`));
+      // The note explains a rank only while it is missing.
+      expect(html.includes("Final rank is the in-game rank from Clash of Clans,")).toBe(
+        finalPlacement === null,
+      );
       expect(html).not.toContain("Clash Lens final rank");
       expect(html).not.toContain(">183<");
       expect(html).toContain("<dt>Final trophies</dt><dd>5,812</dd>");
@@ -287,9 +290,15 @@ describe("past-Season view", () => {
     );
     expect(html).toContain("Totals cover the 5 of 28 Legend days with records.");
     expect(html).not.toContain("Partial Season history");
-    expect(html).toContain(
-      "<dt>Sum of daily trophy changes (5 of 28 days)</dt><dd>+300</dd>",
-    );
+    // The summary drops the Season trophy change; it is ending trophies minus 5,000.
+    expect(html).not.toContain("Sum of daily trophy changes");
+    expect(html).toContain("50.0%<small>20 of 40 attacks</small>");
+    expect(html).toContain("<dt>Offense per day</dt><dd>+320</dd>");
+    expect(html).toContain("<dt>Defense per day</dt><dd>-260</dd>");
+    expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
+    expect(html).toContain("<dt>Per defense</dt><dd>-32.5</dd>");
+    expect(html).toContain("<dt>Trophies lost</dt><dd>-1,300</dd>");
+    expect(html).not.toContain("Stars unknown");
     expect(html).toContain('title="Recorded attacks minus recorded defenses, without');
     expect(html).not.toContain("Net change");
     // Missing days alone do not make any known total unavailable.
@@ -332,9 +341,7 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toContain(
-      "<dt>Sum of daily trophy changes (5 of 28 days)</dt><dd>Unknown</dd>",
-    );
+    expect(html).toContain("<td>Unknown</td>");
     expect(html).not.toContain("Some daily totals are unavailable.");
   });
 
