@@ -221,7 +221,9 @@ _SEED = [
     FROM generate_series(1, 200) AS rank
     """,
     # Each ranked day's log lists 4-12 battles, the odd ones attacks. Every
-    # 31st also lists events that are not battles; every 13th has an older log.
+    # 31st also lists events that are not battles, or whose ids are text,
+    # signed, fractional, written with an exponent or not numbers; every 13th
+    # has an older log.
     """
     INSERT INTO api_player_daily_logs (
         id, player_id, ranked_day_start, version, state, coverage, battles,
@@ -238,7 +240,12 @@ _SEED = [
                ) ORDER BY k)
                FROM generate_series(1, version.id %% 9 + 4 - copy) AS k
            ) || CASE WHEN version.id %% 31 = 0
-               THEN '["junk", {"battle_id": "abc"}, {"battle_id": 7}]'::jsonb
+               THEN '["junk", 5, null, [1], {"battle_id": "abc"}, {"battle_id": 7},
+                      {"battle_id": "0712", "lens": "offense"}, {"battle_id": -3},
+                      {"battle_id": 1.5}, {"battle_id": 2.0}, {"battle_id": 1e2},
+                      {"battle_id": true}, {"battle_id": null}, {"battle_id": " 9"},
+                      {"battle_id": [8]}, {"battle_id": 4101, "lens": null},
+                      {"lens": "defense"}]'::jsonb
                ELSE '[]'::jsonb END,
            %(season)s, version.id
     FROM ranked_day_versions AS version
