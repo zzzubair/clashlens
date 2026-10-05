@@ -103,7 +103,7 @@ const PLAYER = {
     name: "Nova",
     clan: "Example",
     trophies: 6000,
-    freshness: { state: "fresh", observedAt: "2026-08-06T12:00:00Z", ageSeconds: 0 },
+    freshness: { state: "fresh", observedAt: "2026-09-07T12:00:00Z", ageSeconds: 0 },
     confidence: "high",
     coverage: "complete",
     eligibility: "legend-i",
@@ -115,7 +115,7 @@ const PLAYER = {
   dataQuality: [],
   provenance: {
     source: "api_player_daily_logs",
-    observedAt: "2026-08-06T12:00:00Z",
+    observedAt: "2026-09-07T12:00:00Z",
     freshness: "fresh",
     confidence: "high",
     coverage: "complete",
@@ -125,7 +125,7 @@ const PLAYER = {
 
 const NEWER_PROFILE = {
   ...PLAYER.profile,
-  freshness: { ...PLAYER.profile.freshness, observedAt: "2026-08-06T12:00:01Z" },
+  freshness: { ...PLAYER.profile.freshness, observedAt: "2026-09-07T12:00:01Z" },
 };
 
 const SAVED_DAY: RankedDaySummary = {
@@ -161,7 +161,7 @@ const REFRESH_STATUS: RefreshStatus = {
   state: "complete",
   progressPercent: 100,
   message: "Complete",
-  publishedAt: "2026-08-06T12:00:00Z",
+  publishedAt: "2026-09-07T12:00:00Z",
   player: PLAYER,
 };
 
@@ -747,10 +747,10 @@ describe("automatic tag lookup", () => {
         ...PLAYER.profile,
         freshness: {
           state: "stale",
-          observedAt: "2026-08-06T12:00:00Z",
+          observedAt: "2026-09-07T12:00:00Z",
           ageSeconds: 7_300,
         },
-        battleHistoryUpdatedAt: "2026-08-06T11:40:00Z",
+        battleHistoryUpdatedAt: "2026-09-07T11:40:00Z",
       },
     } satisfies PlayerPage;
     const render = async (player: PlayerPage) => {
@@ -766,21 +766,21 @@ describe("automatic tag lookup", () => {
       return html.replaceAll("<!-- -->", "").replace(/<[^>]+>/g, "");
     };
     expect(await render(stale)).toContain(
-      "Updated 6 Aug 2026, 12:00 UTC · 2 hours oldBattle history updated 6 Aug 2026, 11:40 UTC · 2 hours old",
+      "Updated 7 Sep 2026, 12:00 UTC · 2 hours oldBattle history updated 7 Sep 2026, 11:40 UTC · 2 hours old",
     );
     const fresh = await render({
       ...PLAYER,
       profile: { ...PLAYER.profile, battleHistoryUpdatedAt: null },
     });
     expect(fresh).toContain(
-      "Updated 6 Aug 2026, 12:00 UTCBattle history updated not yet",
+      "Updated 7 Sep 2026, 12:00 UTCBattle history updated not yet",
     );
     const oldHistory = await render({
       ...PLAYER,
-      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-08-06T11:40:00Z" },
+      profile: { ...PLAYER.profile, battleHistoryUpdatedAt: "2026-09-07T11:40:00Z" },
     });
     expect(oldHistory).toContain(
-      "Updated 6 Aug 2026, 12:00 UTCBattle history updated 6 Aug 2026, 11:40 UTC · 20 minutes old",
+      "Updated 7 Sep 2026, 12:00 UTCBattle history updated 7 Sep 2026, 11:40 UTC · 20 minutes old",
     );
   });
 

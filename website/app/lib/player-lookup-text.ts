@@ -1,3 +1,4 @@
+import { seasonStartAt } from "../components/SeasonReread";
 import type { PlayerLookup, PlayerPage, RankedDaySummary } from "./contracts";
 
 /** What a player page says about a tag without current results. */
@@ -236,20 +237,22 @@ export function legendDayKey(period: string): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Once the current Season is known the log keeps only its days, numbered from
-// its start; an ended Season's days are under that Season in Seasons.
-export function selectPlayerHistory(player: PlayerPage | null) {
-  const seasonDays = player?.seasonDays ?? [];
-  const seasonStart = player?.season ? Date.parse(player.season.anchor) : null;
+// The log keeps only the current Season's days at the server time, numbered
+// from its start; an ended Season's days are under that Season in Seasons.
+export function selectPlayerHistory(player: PlayerPage | null, now: number) {
+  const anchor = player?.season ? Date.parse(player.season.anchor) : null;
+  const seasonStart =
+    anchor !== null && now < anchor + 28 * DAY_MS ? anchor : seasonStartAt(now);
   const seasonDay = (day: RankedDaySummary) =>
-    Math.floor((Date.parse(day.period.split(" – ")[0]) - seasonStart!) / DAY_MS) + 1;
+    Math.floor((Date.parse(day.period.split(" – ")[0]) - seasonStart) / DAY_MS) + 1;
   const days = [
-    ...seasonDays,
+    ...(player?.seasonDays ?? []),
     ...(player?.currentDay ? [player.currentDay] : []),
     ...(player?.recentDays ?? []),
   ].filter(
     (day) =>
-      (seasonStart === null || (seasonDay(day) >= 1 && seasonDay(day) <= 28)) &&
+      seasonDay(day) >= 1 &&
+      seasonDay(day) <= 28 &&
       (!day.uncertainty.includes("player_not_eligible") ||
         day.offenseEvents.length > 0 ||
         day.defenseEvents.length > 0),
@@ -262,16 +265,5 @@ export function selectPlayerHistory(player: PlayerPage | null) {
         ) === index,
     )
     .sort((a, b) => legendDayKey(b.period).localeCompare(legendDayKey(a.period)))
-    .map((day) => ({
-      day,
-      // "Day N", or "Date only" when the day's Season is unknown.
-      seasonDay:
-        seasonStart !== null
-          ? `Day ${seasonDay(day)}`
-          : seasonDays.some(
-                (saved) => legendDayKey(saved.period) === legendDayKey(day.period),
-              )
-            ? `Day ${day.dayNumber ?? "—"}`
-            : "Date only",
-    }));
+    .map((day) => ({ day, seasonDay: `Day ${seasonDay(day)}` }));
 }

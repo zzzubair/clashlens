@@ -379,8 +379,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     data.lookup,
     explainedVisit,
   );
-  const history = selectPlayerHistory(player);
   const now = useServerTime(player ? profileLoadedAt(player.profile) : undefined);
+  const history = selectPlayerHistory(player, now);
   const seasonExpired = useSeasonReread(
     player ? profileLoadedAt(player.profile) : undefined,
     minuteChecks || !!trackedPlayer?.profile.seasonResetPending,

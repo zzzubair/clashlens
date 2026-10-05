@@ -29,6 +29,7 @@ import type {
   PlayerPage,
   RankedDaySummary,
 } from "../../app/lib/contracts";
+import { selectPlayerHistory } from "../../app/lib/player-lookup-text";
 import { PythonApiError } from "../../app/services/python.server";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 
@@ -133,6 +134,64 @@ async function loadAndRender(client: Record<string, unknown>, season: string | n
 
 const missing = () => Promise.reject(new PythonApiError(404, { error: "missing" }));
 const failed = () => Promise.reject(new PythonApiError(503, { error: "unavailable" }));
+
+// Day `number` of the September Season, or of October's after Day 28.
+const legendDay = (number: number): RankedDaySummary => {
+  const start = Date.parse("2026-09-07T05:00:00Z") + (number - 1) * 86_400_000;
+  return {
+    dayNumber: number > 28 ? number - 28 : number,
+    label: "Ranked day",
+    period: `${new Date(start).toISOString()} – ${new Date(start + 86_400_000).toISOString()}`,
+    state: number > 28 ? "Live" : "Complete",
+    offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
+    defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
+    trophyChange: 0,
+    offenseEvents: [],
+    defenseEvents: [],
+    completeness: { state: "complete", reason: "Complete" },
+    uncertainty: [],
+  };
+};
+
+describe("Daily Legend log days", () => {
+  const ended = [28, 27, 26, 25, 24].map(legendDay);
+  const septemberSeason = {
+    id: SEASON,
+    anchor: "2026-09-07T05:00:00Z",
+    currentDayNumber: 28,
+    dayCount: 28,
+    anchorSource: "official_league_history",
+    anchorObservedAt: "2026-09-07T05:10:00Z",
+  } as const;
+  const afterReset = Date.parse("2026-10-05T05:10:00Z");
+
+  it.each([
+    ["no saved Season", null, [legendDay(29), ...ended]],
+    ["an expired Season anchor", septemberSeason, ended],
+  ])("keeps only the current Season's days with %s", (_, season, recentDays) => {
+    const history = selectPlayerHistory(
+      { ...PLAYER, season, currentDay: null, recentDays, seasonDays: [] },
+      afterReset,
+    );
+    expect(history.map(({ seasonDay }) => seasonDay)).toEqual(
+      season === null ? ["Day 1"] : [],
+    );
+  });
+
+  it("keeps the saved Season's days before its Reset", () => {
+    const history = selectPlayerHistory(
+      { ...PLAYER, season: septemberSeason, currentDay: null, recentDays: ended },
+      afterReset - 60 * 60 * 1000,
+    );
+    expect(history.map(({ seasonDay }) => seasonDay)).toEqual([
+      "Day 28",
+      "Day 27",
+      "Day 26",
+      "Day 25",
+      "Day 24",
+    ]);
+  });
+});
 
 describe("past-Season view", () => {
   beforeEach(() => {
@@ -309,23 +368,6 @@ describe("past-Season view", () => {
   });
 
   it("keeps only the new Season's Day 1 in the log and the ended Season in Seasons", async () => {
-    // Day `number` of the September Season, or of October's after Day 28.
-    const legendDay = (number: number): RankedDaySummary => {
-      const start = Date.parse("2026-09-07T05:00:00Z") + (number - 1) * 86_400_000;
-      return {
-        dayNumber: number > 28 ? number - 28 : number,
-        label: "Ranked day",
-        period: `${new Date(start).toISOString()} – ${new Date(start + 86_400_000).toISOString()}`,
-        state: number > 28 ? "Live" : "Complete",
-        offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
-        defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
-        trophyChange: 0,
-        offenseEvents: [],
-        defenseEvents: [],
-        completeness: { state: "complete", reason: "Complete" },
-        uncertainty: [],
-      };
-    };
     const today = legendDay(29);
     const ended = [28, 27, 26, 25, 24].map(legendDay);
     const ref = { coverageState: "partial", daysObserved: 5, daysMissing: 23 } as const;

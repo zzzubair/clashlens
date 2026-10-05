@@ -28,12 +28,12 @@ function advanceClock(clock: Clock) {
   return clock.now;
 }
 
+export function seasonStartAt(time: number) {
+  return SEASON_ANCHOR_MS + Math.floor((time - SEASON_ANCHOR_MS) / SEASON_MS) * SEASON_MS;
+}
+
 export function nextSeasonReset(loadedAt: string) {
-  const loaded = Date.parse(loadedAt);
-  return (
-    SEASON_ANCHOR_MS +
-    (Math.floor((loaded - SEASON_ANCHOR_MS) / SEASON_MS) + 1) * SEASON_MS
-  );
+  return seasonStartAt(Date.parse(loadedAt)) + SEASON_MS;
 }
 
 /** Reread saved data at Season Reset and once a minute while awaiting recovery. */
