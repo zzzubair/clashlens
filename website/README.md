@@ -71,7 +71,8 @@ The Season trophy change and total trophies gained are not shown, because the
 change is just ending trophies minus 5,000.
 
 A past Season's box uses its saved summary, with per-day averages over its
-saved days. The current Season's box uses recorded battles and can show This
+saved days; a Season known only from in-game history shows just the rank and
+trophies. The current Season's box uses recorded battles and can show This
 Season, Last 7 days or Last 14 days. Recent windows include the current Legend
 day and the previous 6 or 13 days, crossing a Season boundary when saved battle
 details remain. Per-day averages leave out the Legend day in progress; per-battle
