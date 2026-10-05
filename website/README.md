@@ -380,6 +380,13 @@ back to Barlow or the system font. Its SIL Open Font License is in
 
 ## Game art
 
+The site icons reuse the existing `../assets/icon.png` artwork. No new mark was
+generated. `public/favicon.ico` is 32 × 32; `public/apple-touch-icon.png` and
+`public/apple-touch-icon-precomposed.png` are 180 × 180;
+`public/apple-touch-icon-120x120-precomposed.png` is 120 × 120. These were resized
+with FFmpeg's Lanczos filter and are served by the existing static-file handler,
+with no API calls or database queries.
+
 `public/images/legend-league.webp` is the Legend I tier badge from the official
 API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved
 in a profile response on October 2, 2026), resized to 160 pixels high. It is used under the Supercell Fan Content Policy,

@@ -72,7 +72,8 @@ export function Layout({ children }: { children: ReactNode }) {
         <meta name="theme-color" content="#ffffff" suppressHydrationWarning />
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
-        <link rel="icon" href="data:," />
+        <link rel="icon" href="/favicon.ico" sizes="32x32" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
         <link rel="manifest" href="/site.webmanifest" />
         <Meta />
         <Links />
