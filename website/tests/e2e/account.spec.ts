@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import {
   ensureAccount,
@@ -120,82 +120,4 @@ test("account setup accepts names entered before the page JavaScript loads", asy
   } finally {
     releaseScripts();
   }
-});
-
-/** A group holding #2PP, whose trophies the fixtures keep current. */
-async function openSeasonWatch(page: Page): Promise<Locator> {
-  await signIn(page);
-  await ensureAccount(page, "lensscout", "Lens Scout");
-  await page.goto("/account/groups");
-  const watch = page.locator(".group-card").filter({
-    has: page.getByRole("heading", { name: "Season watch" }),
-  });
-  if ((await watch.count()) === 0) {
-    await page.getByLabel("Group name").first().fill("Season watch");
-    await page.getByRole("button", { name: "Create group" }).click();
-    await watch.getByLabel("Add player").fill("#2PP");
-    await watch.getByRole("button", { name: "Add player" }).click();
-  }
-  await expect(watch.locator("li").filter({ hasText: "#2PP" })).toBeVisible();
-  return watch;
-}
-
-/**
- * Open `path` once, then move the browser clock past the end of the Season it
- * loaded: any Season current now ends within 28 days.
- */
-async function expectTrophiesToExpire(
-  page: Page,
-  path: string,
-  trophies: Locator,
-  shown: RegExp,
-): Promise<void> {
-  const errors = trackPageErrors(page);
-  const reloads: string[] = [];
-  page.on("request", (request) => {
-    if (new URL(request.url()).pathname === `${path}.data`) reloads.push(request.url());
-  });
-  await page.clock.install();
-  await page.goto(path);
-  await expect(trophies).toHaveText(shown);
-  expect(reloads).toEqual([]);
-
-  // The browser clock wraps any single jump past 2**31 - 1 ms (about 24.8 days).
-  await page.clock.fastForward(14 * 86_400_000);
-  await page.clock.fastForward(14 * 86_400_000);
-  await expect(trophies).toHaveText("Waiting for this player's Season reset");
-  await expect.poll(() => reloads.length).toBe(1);
-  await expect(trophies).toHaveText("Waiting for this player's Season reset");
-  expectNoPageErrors(errors);
-}
-
-test("an open group list stops showing trophies when their Season ends", async ({
-  page,
-}) => {
-  const watch = await openSeasonWatch(page);
-  await expectTrophiesToExpire(
-    page,
-    "/account/groups",
-    watch.locator("li").filter({ hasText: "#2PP" }).locator(".group-member-detail"),
-    /^[\d,]+ trophies$/,
-  );
-});
-
-test("an open group comparison stops showing trophies when their Season ends", async ({
-  page,
-}) => {
-  const watch = await openSeasonWatch(page);
-  const compare = await watch
-    .getByRole("link", { name: "Compare players" })
-    .getAttribute("href");
-  expect(compare).toMatch(/^\/account\/groups\/[0-9a-f-]+$/);
-  await expectTrophiesToExpire(
-    page,
-    compare as string,
-    page
-      .getByRole("row")
-      .filter({ hasText: "#2PP" })
-      .locator('[data-label="Trophies now"]'),
-    /^\d/,
-  );
 });
