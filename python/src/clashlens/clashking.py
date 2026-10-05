@@ -1,8 +1,8 @@
-"""Past Legend Season finishes from ClashKing's public API.
+"""Past Legend Season finishes for the player's history table.
 
 ClashKing agreed on 2026-10-04 that Clash Lens may show a player's past Legend
 Season finishes from its public API, credited with a link. Nothing else from
-ClashKing is used. A player's history is fetched only when someone views
+ClashKing is used. ClashKing history is fetched only when someone views
 their page, at most once a day per player and at most two requests a second
 in total. The rows are third-party reports kept in their own table; they never
 feed our daily logs or totals.
@@ -54,7 +54,7 @@ _LAST_MONTH_SEASON = "2025-09"
 _FIRST_SEASON_ID = str(
     int((datetime(2025, 10, 6, 5, tzinfo=UTC) - SEASON_DURATION).timestamp())
 )
-# Player pages show ClashKing seasons from January 2025 onwards only.
+# Player-page history cutoff; see website/README.md.
 _FIRST_SHOWN = datetime(2025, 1, 1, tzinfo=UTC)
 
 
@@ -83,7 +83,7 @@ def parse_season_finishes(payload: bytes, *, now: datetime) -> list[SeasonFinish
     Rows outside Legend, off our 28-day Season phase or not yet finished are
     left out. When two rows describe the same Season, the v2 row wins: its rank
     matches official results, and the dated copy's win counts can exceed what
-    28 days allow. A first 28-day Season (2025-10-06) row repeating the
+    28 days allow. A row ending 2025-10-06 and repeating the
     2025-09 row's trophies and rank is a copy of that month and is left out.
     """
     try:

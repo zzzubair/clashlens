@@ -8,8 +8,7 @@ import {
   isString,
 } from "./python-response.server";
 
-// Under the page's five-second streaming limit; a slow ClashKing only hides
-// the section.
+// Under the page's five-second streaming limit; a timeout hides only this section.
 const PAST_SEASONS_TIMEOUT_MS = 4_000;
 
 export async function getPastSeasons(tag: string): Promise<PastSeasonFinish[]> {
