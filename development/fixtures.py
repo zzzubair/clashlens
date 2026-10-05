@@ -60,6 +60,60 @@ def completed_legend_battle_time(now: datetime | None = None) -> datetime:
     return reset - timedelta(hours=17)
 
 
+def season_opening_attack_time(now: datetime | None = None) -> datetime | None:
+    """When each synthetic player's one attack of a Season's first Legend day
+    finished, or None on any other day and in that day's first ten minutes."""
+    observed = (now or datetime.now(UTC)).astimezone(UTC)
+    season_start = datetime.fromtimestamp(current_season_id(observed), UTC)
+    attack_at = season_start + timedelta(minutes=10)
+    if not attack_at <= observed < season_start + timedelta(days=1):
+        return None
+    return attack_at
+
+
+def legend_trophies(index: int, now: datetime | None = None) -> int:
+    observed = (now or datetime.now(UTC)).astimezone(UTC)
+    if not 0 <= observed.timestamp() - current_season_id(observed) < 24 * 60 * 60:
+        return 7_000 - index % 1_500
+    # Every Legend I player restarts the Season on 5,000, and Clash Lens hides
+    # first-day trophies that day's battles cannot explain. One attack moves
+    # at most 40, so the top 40 stay in a clear order and the rest tie.
+    if season_opening_attack_time(observed) is None:
+        return 5_000
+    return 5_000 + max(0, 40 - index)
+
+
+def legend_attack(
+    index: int, population: tuple[str, ...], battle_at: datetime
+) -> dict[str, object]:
+    opponent = (index + 1) % len(population)
+    return {
+        "battleType": "legend",
+        "attack": True,
+        # Real shape: battleTime is epoch seconds, battleTimestamp the
+        # text form; both are present on live Legend entries.
+        "battleTime": int(battle_at.timestamp()),
+        "battleTimestamp": battle_at.strftime("%Y%m%dT%H%M%S.000Z"),
+        "stars": 3,
+        "destructionPercentage": 100,
+        "opponentPlayerTag": population[opponent],
+        "opponentName": f"Synthetic Clasher {opponent + 1:03d}",
+        "opponentTownHallLevel": 18,
+        "lootedResources": [
+            {"resource": "gold", "amount": 525_000},
+            {"resource": "elixir", "amount": 525_000},
+            {"resource": "darkElixir", "amount": 4_000},
+        ],
+        "extraLootedResources": [],
+        "availableLoot": [
+            {"resource": "gold", "amount": 1_000_000},
+            {"resource": "elixir", "amount": 1_000_000},
+            {"resource": "darkElixir", "amount": 8_000},
+        ],
+        "armyShareCode": "u1x0-2x1",
+    }
+
+
 # Live responses carry many fields Clash Lens ignores. Padding with them keeps
 # trial parsing, hashing and disk costs near live traffic, which on 2026-10-01
 # averaged about 23 KB per profile and 74 KB per battle log.
@@ -143,7 +197,7 @@ def ranking_payload(tags: tuple[str, ...]) -> dict[str, object]:
                 "tag": tag,
                 "name": f"Synthetic Clasher {index + 1:03d}",
                 "rank": index + 1,
-                "trophies": 7_000 - index,
+                "trophies": legend_trophies(index),
                 "leagueTier": {"id": 105000036, "name": "Legend I"},
             }
             for index, tag in enumerate(tags[:200])
@@ -154,11 +208,12 @@ def ranking_payload(tags: tuple[str, ...]) -> dict[str, object]:
 
 def profile_payload(tag: str, index: int) -> dict[str, object]:
     season = current_season_id()
+    trophies = legend_trophies(index)
     return {
         "tag": tag,
         "name": f"Synthetic Clasher {index + 1:03d}",
         "expLevel": 250 + index % 40,
-        "trophies": 7_000 - index % 1_500,
+        "trophies": trophies,
         "bestTrophies": 7_100 - index % 1_500,
         "leagueTier": {"id": 105000036, "name": "Legend I"},
         "currentLeagueSeasonId": season,
@@ -169,10 +224,10 @@ def profile_payload(tag: str, index: int) -> dict[str, object]:
         "role": "member",
         "legendStatistics": {
             "legendTrophies": 200 + index % 500,
-            "currentSeason": {"trophies": 7_000 - index % 1_500},
+            "currentSeason": {"trophies": trophies},
         },
         # The collector skips the battle log while these counts stay the same.
-        "attackWins": 0,
+        "attackWins": int(season_opening_attack_time() is not None),
         "defenseWins": 0,
         **PROFILE_PADDING,
         "achievements": [*PROFILE_PADDING["achievements"], UNBREAKABLE],
@@ -182,36 +237,20 @@ def profile_payload(tag: str, index: int) -> dict[str, object]:
 def battle_log_payload(
     tag: str, index: int, population: tuple[str, ...]
 ) -> dict[str, object]:
-    opponent = population[(index + 1) % len(population)]
-    battle_at = completed_legend_battle_time()
+    opening_attack_at = season_opening_attack_time()
+    if opening_attack_at is None:
+        return {
+            "items": [
+                legend_attack(index, population, completed_legend_battle_time()),
+                *NON_LEGEND_BATTLES,
+            ]
+        }
+    # Drop one old entry so a trial mutation still stays within 50.
     return {
         "items": [
-            {
-                "battleType": "legend",
-                "attack": True,
-                # Real shape: battleTime is epoch seconds, battleTimestamp the
-                # text form; both are present on live Legend entries.
-                "battleTime": int(battle_at.timestamp()),
-                "battleTimestamp": battle_at.strftime("%Y%m%dT%H%M%S.000Z"),
-                "stars": 3,
-                "destructionPercentage": 100,
-                "opponentPlayerTag": opponent,
-                "opponentName": f"Synthetic Clasher {(index + 1) % len(population) + 1:03d}",
-                "opponentTownHallLevel": 18,
-                "lootedResources": [
-                    {"resource": "gold", "amount": 525_000},
-                    {"resource": "elixir", "amount": 525_000},
-                    {"resource": "darkElixir", "amount": 4_000},
-                ],
-                "extraLootedResources": [],
-                "availableLoot": [
-                    {"resource": "gold", "amount": 1_000_000},
-                    {"resource": "elixir", "amount": 1_000_000},
-                    {"resource": "darkElixir", "amount": 8_000},
-                ],
-                "armyShareCode": "u1x0-2x1",
-            },
-            *NON_LEGEND_BATTLES,
+            legend_attack(index, population, opening_attack_at),
+            legend_attack(index, population, completed_legend_battle_time()),
+            *NON_LEGEND_BATTLES[:-1],
         ]
     }
 
