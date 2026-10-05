@@ -49,37 +49,29 @@ only instead of a season day number. This adds no weekly recheck or clan discove
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
-Player pages show attack and defense averages for This Season, Last 7 days,
-and Last 14 days. Recent windows include the current Legend day and the previous
-6 or 13 days, crossing a Season boundary when saved battle details remain.
+The current player view shows attack and defense stats for This Season,
+Last 7 days and Last 14 days when saved player data is available. Selecting a
+past Season opens its saved summary instead of these period stats.
+Attack stats show triple rate, average stars, average destruction and trophies
+per attack. Defense stats show hold rate, average stars and destruction given
+up, trophies given up per defense, and counts of 0-, 1-, 2- and 3-star defenses.
+Recent windows include the current Legend day and the previous 6 or 13 days,
+crossing a Season boundary when saved battle details remain. This Season starts
+at its opening Reset and includes the current Legend day so far.
 Each view shows its dates, saved-day coverage, and separate attack and defense
 sample counts. All averages use individual recorded battles, not averages of
-daily averages. Triple rate counts three-star attacks; hold rate counts actual
-defenses with fewer than three stars. Empty samples show Unavailable for averages
-and rates. Defense star counts include zero-star defenses, and trophies given up
-are positive losses per recorded defense. Automatic Reset losses and missing or
-unplayed battles are excluded. Partial history and conflicting reports are
-flagged; retained past-Season totals cannot fill missing battle details.
+daily averages. Triple rate is the percentage of recorded attacks with three
+stars; hold rate is the percentage of actual recorded defenses with fewer than
+three stars. Empty samples show Unavailable for averages and rates, with zero
+sample counts and zero defense star counts. Trophies given up are positive losses per recorded
+defense. Automatic Reset losses and missing or unplayed battles are excluded.
+Partial history and conflicting reports are flagged; retained past-Season totals
+cannot fill missing battle details.
 
-Query cost for these summaries is **zero additional database reads**. The browser
-uses the existing player response's recent, Season and current-day battle arrays,
-deduplicated by day and battle identity. The existing reads fetch at most 28
-recent days and 28 current-Season days from `api_player_daily_logs`, with the
-`(player_id, ranked_day_start DESC, version DESC)` index; this change adds no
-battle-table scans, response fields, polling, Reset work or stored data.
-Period selection changes local page state without a request. The separate
-summary component keeps `routes/player.tsx` below 1,500 lines. The added lines
-provide new display behavior and boundary/empty-sample tests; no existing
-feature is replaced or safe to delete for this addition.
-
-Local validation for period statistics: 137 tests passed across
-`battle-statistics.test.ts`, `player-season-history.test.ts`, `player-route.test.ts`
-and `player-live-day.test.ts`. Type checking, lint and formatting of the changed
-files, and `npm run build:verify` passed. A Chromium component preview using
-the existing worst-case player data had zero horizontal overflow at 375 pixels;
-switching to 7 and 14 days changed the dates and coverage without requests.
-The full-stack browser test in `player.spec.ts` remains for CI because this
-host lacks Podman. Native iPhone Safari and live production data were not checked.
+With JavaScript enabled, changing Period uses battle details already loaded with
+the player page and makes no request or additional database read. It adds no stored data; the
+[saved-history limits](../docs/history-retention.md) still apply. The calculations
+are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 
 Opening a tracked player's profile with JavaScript enabled automatically submits
 the existing Refresh request once when the server reports its saved check is
