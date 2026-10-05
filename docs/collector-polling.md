@@ -27,8 +27,9 @@ Production discovery is on: `CLASHLENS_PLAYER_DISCOVERY_ENABLED` defaults to
 `true` in `ops`, and `false` turns it off. Each battle-log opponent or Top-200
 player who is not tracked and has not had this week's check gets one profile
 check, plus one league-history request when none is saved. At most 500 such
-checks wait at once; a player skipped while the queue is full or busy is tried
-again the next time a battle log or ranking names them. Legend I gains about
+checks wait at once. A player skipped while the queue is full or busy gets no
+saved retry; they are tried again only when a later changed battle log or
+ranking names them. Legend I gains about
 2,000 players a week, so this costs about 570 requests a day, plus about 4,000
 once for the roughly 2,000 Legend I players not yet tracked. Each player found
 eligible is then tracked like any other, so revisits slow in proportion to the

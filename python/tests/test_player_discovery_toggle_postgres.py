@@ -108,16 +108,31 @@ def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
 ) -> None:
     with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
-            new_id, known_id, *others = [
+            new_id, known_id, blocked_id, *others = [
                 row[0]
                 for row in connection.execute(
                     """
                     INSERT INTO players (normalized_tag, active, eligibility_state)
                     SELECT '#Q' || n, n = 1, CASE n WHEN 1 THEN 'eligible' ELSE 'unknown' END
-                    FROM generate_series(0, 502) AS n ORDER BY n RETURNING id
+                    FROM generate_series(0, 503) AS n ORDER BY n RETURNING id
                     """
                 ).fetchall()
             ]
+            # An older unfinished weekly check makes the database refuse this player.
+            connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
+                    profile_status, battle_log_status, league_history_status,
+                    eligibility_recheck
+                )
+                SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag,
+                       now() - interval '8 days', 'discovery-profile:' || id || ':old',
+                       'pending', 'not_applicable', 'pending', true
+                FROM players WHERE id = %s
+                """,
+                (blocked_id,),
+            )
         options = conninfo_to_dict(connection_info).get("options", "")
         database = Database(
             make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
@@ -134,7 +149,8 @@ def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
                     row[0]
                     for row in connection.execute(
                         "SELECT player_id FROM collector_work"
-                        " WHERE kind = 'discovery_profile' ORDER BY player_id"
+                        " WHERE kind = 'discovery_profile' AND NOT eligibility_recheck"
+                        " ORDER BY player_id"
                     )
                 ]
 
@@ -156,6 +172,16 @@ def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
                 )
             discover(others)
             assert len(queued()) == DISCOVERY_QUEUE_CAP + 1
-            assert len(set(others) - set(queued())) == 1
+            (left_out,) = set(others) - set(queued())
+
+            # A refused player does not use up the last free place.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_work SET status = 'cancelled' WHERE player_id = %s",
+                    (others[0],),
+                )
+            discover([blocked_id, left_out])
+            assert left_out in queued()
+            assert blocked_id not in queued()
         finally:
             database.close()

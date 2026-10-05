@@ -1358,8 +1358,8 @@ def enqueue_discovered_players(
     Players already tracked or already given this week's check are skipped
     before anything else. The remaining ones are queued only while fewer than
     DISCOVERY_QUEUE_CAP such checks wait. One transaction at a time may add
-    checks; a busy or full queue skips them, and the next battle log or
-    ranking naming the player tries again.
+    checks; a busy or full queue skips them with no saved retry, so only a
+    later changed battle log or ranking naming the player tries again.
     """
     if not database.player_discovery_enabled or claim.work_type != "process_observation":
         return
@@ -1373,10 +1373,11 @@ def enqueue_discovered_players(
               AND (NOT player.active OR player.eligibility_state <> 'eligible')
               AND NOT EXISTS (
                   SELECT 1 FROM collector_work AS work
-                  WHERE work.coalescing_key = 'discovery-profile:' || player.id || ':'
-                      || to_char(date_bin(interval '7 days', clock_timestamp(),
-                                          timestamptz '2000-01-03 05:00:00+00')
-                                 AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+                  WHERE work.kind = 'discovery_profile'
+                    AND work.coalescing_key = 'discovery-profile:' || player.id || ':'
+                      || (SELECT to_char(date_bin(interval '7 days', clock_timestamp(),
+                                                  timestamptz '2000-01-03 05:00:00+00')
+                                         AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')))
             ORDER BY player.id
             """,
             (sorted(set(player_ids)),),
@@ -1394,11 +1395,11 @@ def enqueue_discovered_players(
         """
     ).fetchone()[0]
     room = DISCOVERY_QUEUE_CAP - int(waiting)
-    if room > 0:
-        connection.execute(
-            "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
-            (candidates[:room],),
-        )
+    while room > 0 and candidates:
+        batch, candidates = candidates[:room], candidates[room:]
+        room -= connection.execute(
+            "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])", (batch,)
+        ).fetchone()[0]
 
 
 def _positive_int_input(values: dict[str, Any], name: str) -> int:
