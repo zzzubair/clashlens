@@ -13,9 +13,9 @@ for deadlines and the full product map.
   Legend day. Day 1 uses 5,000; Day 28 EOD supplies the season-ending trophies.
   EOD 5,050 followed by 4,950 means -100. Missing EOD stays unknown. This is
   distinct from the existing stored battle-result `net_change`.
-- For completed-Season final rank, follow the
-  [domain contract](domain.md#completed-season-player-history). Keep official
-  evidence and existing integrity fields.
+- Show final Clash Lens rank among tracked players on completed-season pages.
+  The current summary reads official-rank evidence; that must not substitute
+  for the new public rank. Keep official evidence and existing integrity fields.
 - Keep both all-tracked and final-season Top 100 army statistics. Fix Top 100
   membership from final Clash Lens standings and include those players' recorded
   battles across the whole season, not changing daily membership.

@@ -212,9 +212,8 @@ details and their historical evidence:
   only. Non-Legend-I direct pages show explanation/history. Daily clan scans and
   clan moves add new players without duplicates or starving normal collection.
 - Trophy history: Day 1 EOD 5,050 means +50; Day 2 EOD 4,950 means -100. Check
-  missing previous EOD, late arrival, boundary adjustments and Day 28. Follow
-  the domain rules for [final-rank display](domain.md#completed-season-player-history)
-  and [final Top 100 membership](domain.md#completed-season-army-statistics).
+  missing previous EOD, late arrival, boundary adjustments and Day 28. Official
+  rank must not replace unknown Clash Lens rank or determine final Top 100.
 - Army history: a player entering final Top 100 contributes their recorded
   earlier-season battles. All-player and Top 100 samples differ correctly;
   regular/individual Clan Castle and BY/AGAINST counts retain their denominators.
