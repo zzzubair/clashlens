@@ -67,7 +67,7 @@ export interface PlayerLoaderData {
   historicalError: WebsiteErrorResponse | null;
   lookup: PlayerLookup | null;
   lookupError: WebsiteErrorResponse | null;
-  // Streams in after the page; null when ClashKing finishes are unavailable.
+  // Streams in after the page; null when the history response is unavailable.
   pastSeasons?: Promise<PastSeasonFinish[] | null>;
   // The site's public address, for absolute links in link previews.
   origin?: string;
@@ -865,7 +865,7 @@ function SeasonNav({
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
-  // Only Seasons with Clash Lens days; ClashKing's Past Seasons covers the rest.
+  // Only Seasons with Clash Lens days; the separate Past Seasons table covers the rest.
   seasons = seasons.filter((season) => season.source === "tracked_summary");
   // A selected past Season always keeps its way back, even if the list failed.
   if (seasons.length === 0 && selectedSeason === null && !error) return null;
