@@ -11,6 +11,8 @@ import pytest
 from domain_test_support import domain_database, store_observation, text
 from test_domain_processing_postgres import _processor
 
+from clashlens.db import DISCOVERY_QUEUE_CAP
+
 BATTLE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKINGS = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
 PROFILE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -125,7 +127,7 @@ def test_partial_ranking_rank_values_do_not_corrupt_source_row_provenance(
             database.close()
 
 
-def test_contract_changed_rankings_enqueue_more_than_500_valid_discoveries(
+def test_contract_changed_rankings_keep_all_501_discoveries_and_queue_up_to_the_cap(
     database_url: str, archive_server
 ) -> None:
     tags = ["#" + "".join(value) for value in product("0289PYLQGRJCUV", repeat=3)][:501]
@@ -163,7 +165,7 @@ def test_contract_changed_rankings_enqueue_more_than_500_valid_discoveries(
                         connection.execute(
                             "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
                         ).fetchone()[0]
-                    == 501
+                    == DISCOVERY_QUEUE_CAP
                 )
                 assert text(
                     connection.execute(

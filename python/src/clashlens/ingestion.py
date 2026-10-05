@@ -6,7 +6,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import job_outcomes, reset_baselines
-from .db import Claim, Database, _text_value
+from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     DomainRuleError,
@@ -568,17 +568,9 @@ def complete_rankings(
                         [entry.source_row_index for entry in rankings.entries],
                     ),
                 )
-            if (
-                database.player_discovery_enabled
-                and claim.work_type == "process_observation"
-                and player_ids
-            ):
-                discovery_ids = sorted(set(player_ids.values()))
-                for offset in range(0, len(discovery_ids), 500):
-                    connection.execute(
-                        "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
-                        (discovery_ids[offset : offset + 500],),
-                    )
+            enqueue_discovered_players(
+                connection, database, claim, player_ids.values()
+            )
             official_entries = [
                 entry for entry in rankings.entries if 1 <= entry.rank <= 200
             ]
@@ -804,17 +796,9 @@ def _complete_rankings_legacy(
                 player_ids = {
                     _text_value(tag): int(player_id) for tag, player_id in rows
                 }
-            if (
-                database.player_discovery_enabled
-                and claim.work_type == "process_observation"
-                and player_ids
-            ):
-                discovery_ids = sorted(set(player_ids.values()))
-                for offset in range(0, len(discovery_ids), 500):
-                    connection.execute(
-                        "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
-                        (discovery_ids[offset : offset + 500],),
-                    )
+            enqueue_discovered_players(
+                connection, database, claim, player_ids.values()
+            )
             if rankings.outcome == "official_observed":
                 version = connection.execute(
                     """
