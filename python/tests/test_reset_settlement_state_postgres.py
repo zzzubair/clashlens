@@ -621,15 +621,20 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         assert (built, rebuilt_again) == (0, 0)
 
 
-@pytest.mark.parametrize("reading,login", [
-    # A rejected Season 0 reading stays unused, but the Season rule still
-    # gives the start.
-    (_conflicting_profile("season_zero"), timedelta(hours=2)),
+@pytest.mark.parametrize("reading,login,log_ok", [
+    # A rejected Season 0 or unrecognised-league reading stays unused, but
+    # the Season rule still gives the start and counts the player Legend I.
+    (_conflicting_profile("season_zero"), timedelta(hours=2), True),
+    (_conflicting_profile("tier_name"), timedelta(hours=2), True),
     # So does a Legend I profile first seen after the next Monday's Reset.
-    (_season_profile(6400, OLD_SEASON), timedelta(days=7, hours=1)),
+    (_season_profile(6400, OLD_SEASON), timedelta(days=7, hours=1), True),
+    # A failed Reset battle log still gives the start, but the ended day
+    # stays incomplete.
+    (_season_profile(6400, OLD_SEASON), timedelta(hours=2), False),
 ])
 def test_season_rule_starts_day_1_at_5000_once_a_new_season_profile_exists(
-    database_url: str, archive_server, reading: bytes, login: timedelta
+    database_url: str, archive_server, reading: bytes, login: timedelta,
+    log_ok: bool,
 ) -> None:
     boundary = BOUNDARIES["season"]
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -637,7 +642,8 @@ def test_season_rule_starts_day_1_at_5000_once_a_new_season_profile_exists(
                            boundary - timedelta(days=1), profile=_profile(6400),
                            log=_battle_log(empty=True))
         jobs += _reset_work(connection_info, archive_server, boundary,
-                            profile=reading, log=_battle_log(empty=True))
+                            profile=reading,
+                            log=_battle_log(empty=True) if log_ok else None)
         jobs.append(store_observation(
             connection_info, archive_server, occurrence_key="login",
             endpoint="profile", body=_season_profile(5000, NEW_SEASON),
@@ -655,5 +661,6 @@ def test_season_rule_starts_day_1_at_5000_once_a_new_season_profile_exists(
         finally:
             database.close()
         days = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
-    assert days[boundary - timedelta(days=1)][3] == 5000
+    ended = days[boundary - timedelta(days=1)]
+    assert (ended[0], ended[3]) == ("Complete" if log_ok else "Partial", 5000)
     assert days[boundary][2:] == (5000, None, "season_rule")

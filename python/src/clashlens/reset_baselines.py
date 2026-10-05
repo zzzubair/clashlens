@@ -713,8 +713,9 @@ def _evaluate_reset_baseline(
     # the Season-opening Reset, often before the player's first new-Season
     # profile let the Season rule give their totals. The first Reset in that
     # Season that finds the rule holds rebuilds them and every saved day
-    # since, once per player: the ended day's newest saved result, always
-    # kept, then records the Season rule.
+    # since, once per player: the newest saved results, always kept, then
+    # show Day 1 starting by the Season rule and built on the ended day's
+    # newest result, which ends by it.
     opening = ranked_day_for(boundary_at - timedelta(days=1)).season_start
     if ends_day:
         opening_baseline = _load_reset_baseline(
@@ -729,21 +730,34 @@ def _evaluate_reset_baseline(
                 SELECT EXISTS (
                     SELECT 1
                     FROM (
+                        SELECT id, input_evidence
+                        FROM ranked_day_versions
+                        WHERE player_id = %(player_id)s
+                          AND ranked_day_start = %(opening)s - interval '1 day'
+                          AND reconciliation_rule_version = %(rule)s
+                        ORDER BY version DESC, id DESC LIMIT 1
+                    ) AS ended,
+                    (
                         SELECT input_evidence
                         FROM ranked_day_versions
-                        WHERE player_id = %s AND ranked_day_start = %s
-                          AND reconciliation_rule_version = %s
-                        ORDER BY version DESC LIMIT 1
-                    ) AS latest
-                    WHERE latest.input_evidence -> 'end_baseline_evidence'
+                        WHERE player_id = %(player_id)s
+                          AND ranked_day_start = %(opening)s
+                          AND reconciliation_rule_version = %(rule)s
+                        ORDER BY version DESC, id DESC LIMIT 1
+                    ) AS opened
+                    WHERE ended.input_evidence -> 'end_baseline_evidence'
                           ->> 'start_trophies_source' = 'season_rule'
+                      AND opened.input_evidence -> 'start_baseline_evidence'
+                          ->> 'start_trophies_source' = 'season_rule'
+                      AND opened.input_evidence -> 'previous_day'
+                          ->> 'version_id' = ended.id::text
                 )
                 """,
-                (
-                    int(player_id),
-                    opening - timedelta(days=1),
-                    RECONCILIATION_RULE_VERSION,
-                ),
+                {
+                    "player_id": int(player_id),
+                    "opening": opening,
+                    "rule": RECONCILIATION_RULE_VERSION,
+                },
             ).fetchone()[0]
         ):
             rebuild_id = _enqueue_reset_reconciliation(
@@ -1163,28 +1177,27 @@ def _load_reset_baseline(
         and row[6] is not None
         and row[8] is not None
     )
-    complete = bool(
+    reading_starts = bool(
         not season_reset_pending
-        and state == "complete"
-        and battle_log_usable
         and profile_valid
         and profile_accepted
         and profile_eligible
     )
+    complete = state == "complete" and battle_log_usable and reading_starts
     failure_reasons = row[11] if isinstance(row[11], list) else []
     # A Season's first Reset whose reading cannot give the start itself,
     # whatever the reason, starts the Season at 5,000 by the Season rule once
     # the player has a Legend I profile for the new Season. The reading's
-    # trophies stay unused; its battle log still has to prove the day's
-    # battles from the Reset.
+    # trophies stay unused; the Reset is complete only once its battle log
+    # proves the day's battles from the Reset.
     season_rule = bool(
-        not complete
-        and battle_log_usable
+        not reading_starts
         and is_season_boundary(row[14])
-        and state in {"complete", "failed"}
         and _season_rule_holds(connection, player_id, row[14])
     )
-    complete = complete or season_rule
+    complete = complete or bool(
+        season_rule and battle_log_usable and state in {"complete", "failed"}
+    )
     stored_evidence = row[12] if isinstance(row[12], dict) else {}
     evidence = {
         "id": int(row[0]),
@@ -1247,7 +1260,11 @@ def _load_reset_baseline(
             else None
         ),
         "eligibility_state": (
-            _text_value(row[17]) if row[17] is not None else None
+            "eligible"
+            if season_rule
+            else _text_value(row[17])
+            if row[17] is not None
+            else None
         ),
         "evidence": evidence,
     }
