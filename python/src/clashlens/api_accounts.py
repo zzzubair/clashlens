@@ -811,20 +811,23 @@ def remove_saved_player(
             return result
 
 
-def list_saved_players(database: ApiDatabase, account_id: int) -> list[dict[str, Any]]:
+def list_saved_players(
+    database: ApiDatabase, account_id: int, *, normalized_tag: str | None = None
+) -> list[dict[str, Any]]:
     with database.pool.connection() as connection:
         rows = connection.execute(
-            """
+            f"""
             SELECT player.normalized_tag, profile.name
             FROM account_saved_players AS saved
             JOIN players AS player ON player.id = saved.player_id
             LEFT JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
             WHERE saved.account_id = %s
+            {"AND player.normalized_tag = %s" if normalized_tag else ""}
             ORDER BY player.normalized_tag
             LIMIT 500
             """,
-            (account_id,),
+            (account_id, normalized_tag) if normalized_tag else (account_id,),
         ).fetchall()
         return [
             {

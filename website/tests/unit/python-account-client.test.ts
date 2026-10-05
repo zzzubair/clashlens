@@ -301,6 +301,16 @@ describe("server-only Python account client", () => {
     expect(removeInit.method).toBe("DELETE");
   });
 
+  it("can read only the profile's saved state through the signed account API", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ players: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = await importClient();
+    await expect(client.listSavedTags("#2PP")).resolves.toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toEqual(
+      new URL("/v1/account/saved-tags?tag=%232PP", "http://python-fixture.test/"),
+    );
+  });
+
   it("rejects invalid saved tags before contacting the service", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

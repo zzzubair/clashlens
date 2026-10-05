@@ -1,4 +1,10 @@
-import { data, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  redirect,
+  useActionData,
+  useLoaderData,
+  type ShouldRevalidateFunctionArgs,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { SavedPlayer } from "../lib/account-contracts";
@@ -19,6 +25,7 @@ export interface SavedPlayersLoaderData {
 }
 
 export interface SavedPlayersActionData {
+  saved?: boolean;
   mode: "add" | "remove";
   /** The player tag the fresh remove key belongs to. */
   tag: string | null;
@@ -41,9 +48,12 @@ export async function loader({
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
+  const rawTag = new URL(request.url).searchParams.get("tag");
+  const tag = rawTag === null ? undefined : normalizeSubmittedPlayerTag(rawTag);
+  if (tag === null) throw new Response(null, { status: 400, headers: NO_STORE });
   try {
     const { createPythonClient } = await import("../services/python.server");
-    const players = await createPythonClient(identity).listSavedTags();
+    const players = await createPythonClient(identity).listSavedTags(tag);
     const removeIdempotencyKeys: Record<string, string> = {};
     for (const player of players) {
       removeIdempotencyKeys[player.tag] = freshIdempotencyKey();
@@ -136,7 +146,34 @@ export async function action({ request }: Route.ActionArgs) {
       { status: 422, headers: NO_STORE },
     );
   }
+  if (form["source"] === "player") {
+    return data<SavedPlayersActionData>(
+      {
+        mode,
+        tag,
+        saved: mode === "add",
+        addIdempotencyKey: actions.freshIdempotencyKey(),
+        removeIdempotencyKey: actions.freshIdempotencyKey(),
+        fieldErrors: {},
+        generalError: null,
+        values: { tag: rawTag, mode },
+      },
+      { headers: NO_STORE },
+    );
+  }
   throw redirect("/account/saved-players");
+}
+
+export function shouldRevalidate({
+  currentUrl,
+  formAction,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  // Profile refreshes and Reset must not poll the private saved list.
+  if (currentUrl.pathname.startsWith("/players/")) {
+    return formAction?.split("?")[0] === "/account/saved-players";
+  }
+  return defaultShouldRevalidate;
 }
 
 async function errorResponse(status: number, generalError: WebsiteErrorResponse) {
