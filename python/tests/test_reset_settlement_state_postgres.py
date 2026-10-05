@@ -593,6 +593,21 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         )
         _process(connection_info, archive_server, jobs)
         after = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
+        # Finished jobs are deleted after 48 hours; the next Reset still does
+        # not rebuild the Season again.
+        rebuilds = ("SELECT count(*) FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:season-rule:%'")
+        built = _rows(connection_info, rebuilds)[0][0]
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                "DELETE FROM python_processing_jobs WHERE status = 'complete'"
+            )
+        _process(connection_info, archive_server, _reset_work(
+            connection_info, archive_server,
+            boundary + timedelta(days=login_day + 1),
+            profile=later, log=_battle_log(empty=True),
+        ))
+        rebuilt_again = _rows(connection_info, rebuilds)[0][0]
     day_28, day_1 = boundary - timedelta(days=1), boundary
     # Until then September's last day has no end and Day 1 no start.
     assert before[day_28][0] == "Partial" and before[day_28][3] is None
@@ -600,19 +615,21 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
     if later_tier == "Legend I":
         assert after[day_28][:4] == ("Complete", "inferred", 6400, 5000)
         assert after[day_1][2:] == (5000, None, "season_rule")
+        assert (built, rebuilt_again) == (1, 0)
     else:
         assert after[day_28][3] is None and after[day_1][2] is None
+        assert (built, rebuilt_again) == (0, 0)
 
 
-@pytest.mark.parametrize("reading,login,start", [
-    # A Season 0 reading never proves Legend I at the Reset.
-    (_conflicting_profile("season_zero"), timedelta(hours=2), None),
-    # A Legend I profile first seen after the next Monday's Reset still does.
-    (_season_profile(6400, OLD_SEASON), timedelta(days=7, hours=1), 5000),
+@pytest.mark.parametrize("reading,login", [
+    # A rejected Season 0 reading stays unused, but the Season rule still
+    # gives the start.
+    (_conflicting_profile("season_zero"), timedelta(hours=2)),
+    # So does a Legend I profile first seen after the next Monday's Reset.
+    (_season_profile(6400, OLD_SEASON), timedelta(days=7, hours=1)),
 ])
-def test_season_rule_needs_a_legend_i_reading_and_a_new_season_profile(
-    database_url: str, archive_server, reading: bytes, login: timedelta,
-    start: int | None,
+def test_season_rule_starts_day_1_at_5000_once_a_new_season_profile_exists(
+    database_url: str, archive_server, reading: bytes, login: timedelta
 ) -> None:
     boundary = BOUNDARIES["season"]
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -638,5 +655,5 @@ def test_season_rule_needs_a_legend_i_reading_and_a_new_season_profile(
         finally:
             database.close()
         days = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
-    assert days[boundary - timedelta(days=1)][3] == start
-    assert days[boundary][2] == start
+    assert days[boundary - timedelta(days=1)][3] == 5000
+    assert days[boundary][2:] == (5000, None, "season_rule")
