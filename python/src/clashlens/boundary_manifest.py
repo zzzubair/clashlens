@@ -632,6 +632,7 @@ def _moved(
                 moved[(battle_id, lens)] = to_id
     return moved
 
+
 def _reports(connection: Any, battle_ids: list[int]) -> dict[tuple[int, str], int]:
     """The selected report of each side of these battles."""
     if not battle_ids:
