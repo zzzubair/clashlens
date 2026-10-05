@@ -383,12 +383,15 @@ async function expectUsableLayout(page: Page) {
 test("player page holds worst-case player data on a phone", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await refuseRefreshes(page);
-  await page.goto("/players/%232PP");
+  // Day 6 of a Season, so every worst-case day belongs to the current Season.
+  const now = Date.parse("2026-10-10T12:00:00Z");
+  await page.clock.install({ time: now });
+  await page.goto("/about");
   const saved = await page.request.get("/players/%232PP.data");
   const dataType = saved.headers()["content-type"];
   const decoded = decodePageData(await saved.text());
   const data = Object.values(decoded).find((route) => route.data?.player)!.data!;
-  Object.assign(data, { player: worstCasePlayer("#2PP"), seasons: WORST_SEASONS });
+  Object.assign(data, { player: worstCasePlayer("#2PP", now), seasons: WORST_SEASONS });
   const current = encodePageData(decoded);
   Object.assign(data, {
     selectedSeason: WORST_SEASON_SUMMARY.seasonId,
@@ -403,6 +406,9 @@ test("player page holds worst-case player data on a phone", async ({ page }) => 
   );
 
   // Client navigation reads the replaced page data.
+  await page.getByRole("button", { name: "Search players" }).click();
+  await page.getByRole("searchbox").fill("#2PP");
+  await page.getByRole("searchbox").press("Enter");
   const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
   await seasons.getByRole("link").first().click();
   await expect(page.getByText("Unknown → 6,498", { exact: true })).toBeVisible();
