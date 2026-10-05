@@ -1140,9 +1140,11 @@ Reset publication locks of its days (`RESET_LOCK_WAIT` in
 slow publication holds one, its whole transaction rolls back, so it stops
 holding its battles and the collector's response, and the worker gives its
 attempt back and logs it as `retrying` with `database_lock_busy`. A daily
-calculation waits the same 250 milliseconds for each day's Reset, so one that
-spans several days does not keep earlier Resets locked while a later one is
-busy; the late-battle sweep retries such a player at its next run. Any other job
+calculation, from a job or the late-battle sweep, waits the same 250
+milliseconds for any lock, such as each day's Reset or another calculation of
+the same player and day, so one that spans several days does not keep earlier
+Resets locked while a later one is busy; the late-battle sweep retries such a
+player at its next run. Any other job
 that hits a short lock-wait limit is handled the same way. If a database time
 limit ends the worker's whole session mid-job
 (`idle_in_transaction_session_timeout` or `transaction_timeout`), the worker
