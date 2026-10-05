@@ -31,9 +31,11 @@ The existing `worker_health` log records and configured operating snapshot file
 include seven additional `stages`: `python_process_observation`,
 `python_replay_observation`, `python_build_snapshot`, `python_build_analytics`,
 `python_build_army_analytics`, `python_redecode_army`, and
-`python_reconcile_ranked_day`. Each covers a complete job after claiming,
-including retries and failed attempts. Existing parse/domain stages are nested
-inside response jobs; do not add their elapsed times to the job totals.
+`python_reconcile_ranked_day`. Each sample covers one claimed job attempt,
+from after claiming until it returns or raises an error, including retries
+under that claim. An attempt claimed again later adds a new sample. Existing
+parse/domain stages are nested inside response jobs; do not add their elapsed
+times to the job totals.
 
 For each new stage, `elapsed_seconds` and `thread_cpu_seconds` are accumulated
 elapsed and thread computation seconds. Divide `thread_cpu_seconds` by
@@ -44,7 +46,8 @@ are excluded. `thread_cpu_count` counts paired samples; older elapsed-only stage
 have zero paired samples, not proof of zero computation. Compare changes between
 two snapshots from the same process for a recent interval, and avoid dividing
 by zero. Counts reset on restart; active jobs appear only when they finish.
-Storage stays fixed at 15 collector counters and seven worker stage summaries;
+The change adds 15 collector counters and seven worker stage summaries, plus
+fixed timing fields on existing stages. The number of measurements stays fixed;
 there are no per-player labels, new queries, files per job, or polling loops.
 
 ## Daily health check
