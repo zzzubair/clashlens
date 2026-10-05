@@ -58,86 +58,94 @@ def reevaluate_boundary_publications(database) -> int:
                     """
                 ).fetchall()
             ]
-            for boundary_at in boundaries:
-                boundary.lock_boundary_publication(connection, boundary_at)
-            # A Reset that needed work only after the read above waits for
-            # the next pass rather than take its lock out of order.
-            generations = connection.execute(
-                """
-                SELECT id, boundary_at
-                FROM boundary_publication_generations
-                WHERE (snapshot_state IN ('pending', 'ready')
-                       OR army_state IN ('pending', 'ready'))
-                  AND boundary_at = ANY(%s::timestamptz[])
-                ORDER BY boundary_at, generation
-                FOR UPDATE
-                """,
-                (boundaries,),
-            ).fetchall()
-            for generation_id, boundary_at in generations:
-                # A player 0057 moved a battle of may have been saved pending
-                # before readiness followed the move; check them again.
-                for player_id, version_id, snapshot_status in connection.execute(
+        # One Reset per transaction: a freeze takes minutes, and holding
+        # every Reset's lock until the last one finished blocked them all.
+        # A Reset that needed work only after the read above waits for the
+        # next pass.
+        handled = 0
+        for boundary_at in boundaries:
+            with connection.transaction():
+                handled += _reevaluate_boundary(database, connection, boundary_at)
+        return handled
+
+
+def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> int:
+    boundary.lock_boundary_publication(connection, boundary_at)
+    generations = connection.execute(
+        """
+        SELECT id
+        FROM boundary_publication_generations
+        WHERE (snapshot_state IN ('pending', 'ready')
+               OR army_state IN ('pending', 'ready'))
+          AND boundary_at = %s
+        ORDER BY generation
+        FOR UPDATE
+        """,
+        (boundary_at,),
+    ).fetchall()
+    for (generation_id,) in generations:
+        # A player 0057 moved a battle of may have been saved pending
+        # before readiness followed the move; check them again.
+        for player_id, version_id, snapshot_status in connection.execute(
+            """
+            SELECT member.player_id, member.ranked_day_version_id,
+                   member.snapshot_status
+            FROM boundary_publication_generation_members AS member
+            JOIN boundary_publication_generations AS generation
+              ON generation.id = member.generation_id
+            WHERE member.generation_id = %s
+              AND generation.army_state = 'pending'
+              AND member.army_status = 'pending'
+              AND member.ranked_day_version_id IS NOT NULL
+              AND member.player_id IN (
+                  SELECT attacker_player_id FROM battle_day_repairs
+                  UNION
+                  SELECT defender_player_id FROM battle_day_repairs
+              )
+            ORDER BY member.player_id
+            FOR UPDATE OF member
+            """,
+            (generation_id,),
+        ).fetchall():
+            army_status = boundary._boundary_army_status(
+                database,
+                connection,
+                player_id=int(player_id),
+                ranked_day_version_id=int(version_id),
+                snapshot_status=_text_value(snapshot_status),
+            )
+            if army_status != "pending":
+                connection.execute(
                     """
-                    SELECT member.player_id, member.ranked_day_version_id,
-                           member.snapshot_status
-                    FROM boundary_publication_generation_members AS member
-                    JOIN boundary_publication_generations AS generation
-                      ON generation.id = member.generation_id
-                    WHERE member.generation_id = %s
-                      AND generation.army_state = 'pending'
-                      AND member.army_status = 'pending'
-                      AND member.ranked_day_version_id IS NOT NULL
-                      AND member.player_id IN (
-                          SELECT attacker_player_id FROM battle_day_repairs
-                          UNION
-                          SELECT defender_player_id FROM battle_day_repairs
-                      )
-                    ORDER BY member.player_id
-                    FOR UPDATE OF member
+                    UPDATE boundary_publication_generation_members
+                    SET army_status = %s, updated_at = clock_timestamp()
+                    WHERE generation_id = %s AND player_id = %s
                     """,
-                    (generation_id,),
-                ).fetchall():
-                    army_status = boundary._boundary_army_status(
-                        database,
-                        connection,
-                        player_id=int(player_id),
-                        ranked_day_version_id=int(version_id),
-                        snapshot_status=_text_value(snapshot_status),
-                    )
-                    if army_status != "pending":
-                        connection.execute(
-                            """
-                            UPDATE boundary_publication_generation_members
-                            SET army_status = %s, updated_at = clock_timestamp()
-                            WHERE generation_id = %s AND player_id = %s
-                            """,
-                            (army_status, int(generation_id), int(player_id)),
-                        )
-                boundary._try_enqueue_boundary_artifacts(
-                    database,
-                    connection,
-                    boundary_at=boundary_at,
-                    generation_id=int(generation_id),
+                    (army_status, int(generation_id), int(player_id)),
                 )
-            corrections = connection.execute(
-                """
-                SELECT source_generation_id, boundary_at
-                FROM boundary_publication_corrections
-                WHERE state IN ('queued', 'pending_inputs')
-                  AND boundary_at = ANY(%s::timestamptz[])
-                ORDER BY requested_at, id
-                FOR UPDATE SKIP LOCKED
-                """,
-                (boundaries,),
-            ).fetchall()
-            for source_generation_id, boundary_at in corrections:
-                if past_reset_correction_waits(connection, boundary_at):
-                    continue
-                _maybe_emit_boundary_signal(
-                    database, connection, generation_id=int(source_generation_id)
-                )
-            return len(generations) + len(corrections)
+        boundary._try_enqueue_boundary_artifacts(
+            database,
+            connection,
+            boundary_at=boundary_at,
+            generation_id=int(generation_id),
+        )
+    corrections = connection.execute(
+        """
+        SELECT source_generation_id
+        FROM boundary_publication_corrections
+        WHERE state IN ('queued', 'pending_inputs') AND boundary_at = %s
+        ORDER BY requested_at, id
+        FOR UPDATE SKIP LOCKED
+        """,
+        (boundary_at,),
+    ).fetchall()
+    for (source_generation_id,) in corrections:
+        if past_reset_correction_waits(connection, boundary_at):
+            continue
+        _maybe_emit_boundary_signal(
+            database, connection, generation_id=int(source_generation_id)
+        )
+    return len(generations) + len(corrections)
 
 
 def _maybe_emit_boundary_signal(
