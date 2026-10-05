@@ -108,6 +108,26 @@ const todayEntry = (html: string) =>
   html.split('id="legend-day-2026-10-08"')[1].split("</details>")[0];
 
 describe("today's Legend day wording", () => {
+  it("shows recent trophy trends even when a saved day belongs to the previous Season", async () => {
+    const previousSeasonDay: RankedDaySummary = {
+      ...TODAY,
+      dayNumber: 28,
+      period: "2026-10-04T05:00:00Z – 2026-10-05T05:00:00Z",
+      state: "Complete",
+      trophyChange: 35,
+      completeness: { state: "complete", reason: "Complete evidence." },
+      uncertainty: [],
+    };
+    const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
+    const trends = html.split('id="player-trends-title"')[1].split("</section>")[0];
+    expect(trends).toContain("Last 7 days");
+    expect(trends).toContain("Last 14 days");
+    expect(trends.match(/<dd>\+35<\/dd>/g)).toHaveLength(2);
+    expect(trends).toContain("1 of 7");
+    expect(trends).toContain("1 of 14");
+    expect(html).not.toContain('id="legend-day-2026-10-04"');
+  });
+
   it("shows a normal wait for Reset as a day in progress, not a fault", async () => {
     const html = await page(WAITING);
     expect(note(html)).toContain(

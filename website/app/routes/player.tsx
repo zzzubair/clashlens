@@ -17,6 +17,7 @@ import { SavePlayer } from "../components/SavePlayer";
 import { Metric, MetricCard } from "../components/MetricCard";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
+import { PlayerTrends } from "../components/PlayerTrends";
 import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
 import {
@@ -745,6 +746,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
       ) : null}
       <p role="status">Now tracking in Legend I.</p>
+      {data.selectedSeason === null ? (
+        <PlayerTrends days={trackedPlayer.recentDays} now={now} />
+      ) : null}
       <SeasonNav
         tag={trackedPlayer.tag}
         seasons={data.seasons}
