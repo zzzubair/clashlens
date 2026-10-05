@@ -8,8 +8,7 @@ import {
   isString,
 } from "./python-response.server";
 
-// Under the page's five-second streaming limit; a slow ClashKing only hides
-// the section.
+// Under the page's five-second streaming limit; a timeout hides only this section.
 const PAST_SEASONS_TIMEOUT_MS = 4_000;
 
 export async function getPastSeasons(tag: string): Promise<PastSeasonFinish[]> {
@@ -41,8 +40,7 @@ export async function getPastSeasons(tag: string): Promise<PastSeasonFinish[]> {
     if (
       !isRecord(item) ||
       !(dated || monthly) ||
-      !isInteger(item.trophies) ||
-      item.trophies < 0 ||
+      !(item.trophies === null || (isInteger(item.trophies) && item.trophies >= 0)) ||
       !(
         item.global_rank === null ||
         (isInteger(item.global_rank) && item.global_rank >= 1)

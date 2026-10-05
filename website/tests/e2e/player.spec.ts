@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { UNSAFE_decodeViaTurboStream } from "react-router";
 
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
 import {
@@ -75,33 +76,85 @@ function pagePlayer(data: ReturnType<typeof decodePageData>) {
   return player!;
 }
 
-// Sets the server-calculated check age in React Router's serialized page data.
-function withServerAge(html: string, ageSeconds: number) {
-  const served = html.replace(
-    /streamController\.enqueue\(("(?:[^"\\]|\\.)*")\)/g,
-    (call, literal: string) => {
-      const [head, ...rest] = (JSON.parse(literal) as string).split("\n");
-      // Later chunks resolve streamed values and carry no page data.
-      if (head.startsWith("P")) return call;
-      const values: unknown[] = JSON.parse(head);
-      const key = `_${values.indexOf("ageSeconds")}`;
-      if (key === "_-1") return call;
-      const age = values.push(ageSeconds) - 1;
-      for (const value of values) {
-        if (value && typeof value === "object" && key in value)
-          (value as Record<string, number>)[key] = age;
-      }
-      const text = [JSON.stringify(values), ...rest].join("\n");
-      const escaped = JSON.stringify(text).replace(
-        /[&<>\u2028\u2029]/g,
-        (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-      );
-      return `streamController.enqueue(${escaped})`;
-    },
+// Read the complete response before changing its age. Adding a value to only
+// the first chunk shifts the references used by later streamed values.
+async function withServerAge(html: string, ageSeconds: number) {
+  const enqueue =
+    /window\.__reactRouterContext\.streamController\.enqueue\(("(?:[^"\\]|\\.)*")\);/g;
+  const stream = [...html.matchAll(enqueue)]
+    .map((match) => JSON.parse(match[1]) as string)
+    .join("");
+  const decoded = await UNSAFE_decodeViaTurboStream(
+    new Response(stream).body!,
+    globalThis,
   );
+  await decoded.done;
+  const data = decoded.value as {
+    loaderData: Record<string, { player: PlayerPage; pastSeasons: unknown }>;
+  };
+  const saved = data.loaderData["routes/player"];
+  saved.player.profile.freshness.ageSeconds = ageSeconds;
+  saved.pastSeasons = await saved.pastSeasons;
+  const escaped = JSON.stringify(encodePageData(data)).replace(
+    /[&<>\u2028\u2029]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  let first = true;
+  const served = html.replace(enqueue, () => {
+    if (!first) return "";
+    first = false;
+    return `window.__reactRouterContext.streamController.enqueue(${escaped});`;
+  });
   expect(served).not.toBe(html);
   return served;
 }
+
+test("saved-page age override preserves streamed history and unrelated counts", async () => {
+  const values: unknown[] = JSON.parse(
+    encodePageData({
+      loaderData: {
+        "routes/player": {
+          player: { profile: { freshness: { ageSeconds: 1 } }, attacks: 1 },
+          pastSeasons: [],
+        },
+      },
+    }),
+  );
+  const historyIndex = values.findIndex((value) => Array.isArray(value));
+  values[historyIndex] = ["P", historyIndex];
+  const chunks = [
+    `${JSON.stringify(values)}\n`,
+    `P${historyIndex}:[[${values.length + 1}],42]\n`,
+  ];
+  const html = chunks
+    .map(
+      (chunk) =>
+        `window.__reactRouterContext.streamController.enqueue(${JSON.stringify(chunk)});`,
+    )
+    .join("");
+  const served = await withServerAge(html, 120);
+  const stream = [...served.matchAll(/streamController\.enqueue\(("(?:[^"\\]|\\.)*")\)/g)]
+    .map((match) => JSON.parse(match[1]) as string)
+    .join("");
+  const decoded = await UNSAFE_decodeViaTurboStream(
+    new Response(stream).body!,
+    globalThis,
+  );
+  await decoded.done;
+  const data = decoded.value as {
+    loaderData: Record<
+      string,
+      {
+        player: { profile: { freshness: { ageSeconds: number } }; attacks: number };
+        pastSeasons: Promise<number[]> | number[];
+      }
+    >;
+  };
+  const saved = data.loaderData["routes/player"];
+  expect(saved.player.profile.freshness.ageSeconds).toBe(120);
+  expect(saved.player.attacks).toBe(1);
+  expect(await saved.pastSeasons).toEqual([42]);
+});
 
 for (const ageSeconds of [30, 60, 61, 120]) {
   test(`profile visit refreshes once only when the server says its saved check is older than 60 seconds (${ageSeconds}s)`, async ({
@@ -123,7 +176,7 @@ for (const ageSeconds of [30, 60, 61, 120]) {
       await savedContext.close();
     }
     const automaticCount = ageSeconds > 60 ? 1 : 0;
-    const served = withServerAge(html.toString(), ageSeconds);
+    const served = await withServerAge(html.toString(), ageSeconds);
     await page.route("**/players/%232PP", (route) =>
       route.fulfill({ contentType: "text/html", body: served }),
     );
@@ -185,10 +238,10 @@ test("a skipped automatic refresh leaves saved data and its time without an aler
 }) => {
   const saved = await request.get("/players/%232PP");
   const savedHtml = await saved.text();
-  await page.route("**/players/%232PP", (route) =>
+  await page.route("**/players/%232PP", async (route) =>
     route.fulfill({
       contentType: "text/html",
-      body: withServerAge(savedHtml, 120),
+      body: await withServerAge(savedHtml, 120),
     }),
   );
   let submissions = 0;
@@ -280,10 +333,10 @@ test("a battle processed shortly after a completed Refresh reaches the open page
   };
   let completed = false;
   let readsAfterCompletion = 0;
-  await page.route("**/players/%232PP", (route) =>
+  await page.route("**/players/%232PP", async (route) =>
     route.fulfill({
       contentType: "text/html",
-      body: withServerAge(html.replaceAll(observedAt, earlierAt), 120),
+      body: await withServerAge(html.replaceAll(observedAt, earlierAt), 120),
     }),
   );
   await page.route("**/players/%232PP.data*", (route) => {
@@ -621,8 +674,11 @@ function refreshWork() {
 // automatically.
 async function serveWithAge(page: Page, request: APIRequestContext, ageSeconds: number) {
   const html = await (await request.get("/players/%232PP")).text();
-  await page.route("**/players/%232PP", (route) =>
-    route.fulfill({ contentType: "text/html", body: withServerAge(html, ageSeconds) }),
+  await page.route("**/players/%232PP", async (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: await withServerAge(html, ageSeconds),
+    }),
   );
 }
 

@@ -52,10 +52,21 @@ tracks the remaining launch work.
 Tracked players' current pages show a Trophy trend for the last 7 and 14 finished
 Legend days. Each window ends at the latest Reset at 05:00 UTC and excludes today.
 The cards sum complete saved daily trophy changes across Seasons; each day's own
-change leaves out the Season reset to 5,000, so it never counts as a drop. Missing, partial or uncertain days and unknown changes are
-omitted. Days counted shows the coverage, such as 5 of 7; no counted days shows
-Unavailable, while a known zero displays 0. The latest finished day's result may
-still change. Selecting a past Season hides these cards.
+change leaves out the Season reset to 5,000, so it never counts as a drop.
+Missing, partial or uncertain days and unknown changes are omitted. Days counted
+shows the coverage, such as 5 of 7; no counted days shows Unavailable, while a
+known zero displays 0. The latest finished day's result may still change.
+Selecting a past Season hides these cards.
+
+The separate Past Seasons table shows saved finishes from January 2025 onwards,
+newest first, with three columns: Season ended, Final trophies and Global rank.
+28-day Seasons are dated by their closing Reset; older calendar-month results
+keep their month label. Saved in-game Legend I history wins for each Season,
+even when a trophy count or rank is missing: those cells say "Not recorded"
+instead of borrowing ClashKing's values. ClashKing fills Seasons with no saved
+in-game row and gets one linked credit line. This table needs JavaScript and
+loads after the rest of the page; absent or unavailable history hides only the
+table. It is separate from the Seasons links that open Clash Lens's saved days.
 
 Opening a tracked player's profile with JavaScript enabled automatically submits
 the existing Refresh request once when the server reports its saved check is
@@ -387,6 +398,13 @@ back to Barlow or the system font. Its SIL Open Font License is in
 `public/fonts/OFL-BricolageGrotesque.txt`.
 
 ## Game art
+
+The site icons reuse the existing `../assets/icon.png` artwork. No new mark was
+generated. `public/favicon.ico` is 32 × 32; `public/apple-touch-icon.png` and
+`public/apple-touch-icon-precomposed.png` are 180 × 180;
+`public/apple-touch-icon-120x120-precomposed.png` is 120 × 120. These were resized
+with FFmpeg's Lanczos filter and are served by the existing static-file handler,
+with no API calls or database queries.
 
 `public/images/legend-league.webp` is the Legend I tier badge from the official
 API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved

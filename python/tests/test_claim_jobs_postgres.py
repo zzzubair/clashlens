@@ -938,6 +938,7 @@ def test_stuck_repair_is_cancelled_and_retried_without_using_its_last_attempt(
 ) -> None:
     # The 2026-10-03 audit held a lock a repair needed: the repair waited
     # forever, kept its job row locked, and looked healthy the whole time.
+    # Its short lock wait limit now gives up instead.
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             _insert_observation(connection, occurrence_key="stuck-repair-source")
@@ -982,7 +983,7 @@ def test_stuck_repair_is_cancelled_and_retried_without_using_its_last_attempt(
             lane.join(timeout=15)
 
             assert not stuck, "the stuck repair was never cancelled"
-            assert results == [ProcessResult(job_id, "retrying", "database_timeout")]
+            assert results == [ProcessResult(job_id, "retrying", "database_lock_busy")]
             # Its partial work was rolled back and its only attempt is unused.
             assert (
                 database.scalar(

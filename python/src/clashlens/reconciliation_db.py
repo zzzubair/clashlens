@@ -35,10 +35,24 @@ from .reconciliation import (
 from .season_summaries import acquire_player_season_lock, materialize_player_season
 
 
+def limit_lock_waits(connection: Any) -> None:
+    """Make each lock the rest of this transaction waits for give up after
+    RESET_LOCK_WAIT.
+
+    A daily calculation that cannot take a lock in time rolls back and is
+    retried later, rather than holding its player's days, and any Resets it
+    already took, while it waits.
+    """
+    connection.execute(
+        "SELECT set_config('lock_timeout', %s, true)", (RESET_LOCK_WAIT,)
+    )
+
+
 def complete_reconciliation(database: Database, claim: Claim) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim)
+            limit_lock_waits(connection)
             player_id = int(claim.input_json["player_id"])
             day_start = datetime.fromisoformat(str(claim.input_json["ranked_day_start"]))
             day_starts = {day_start}

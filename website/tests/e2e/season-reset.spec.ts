@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
+import type { GroupsLoaderData } from "../../app/routes/account.groups";
+import type { GroupCompareLoaderData } from "../../app/routes/account.groups.$groupId";
 import type { HomeLoaderData } from "../../app/routes/home";
 import type { PlayerLoaderData } from "../../app/routes/player";
+import { worstComparison } from "../fixtures/worst-case-accounts";
+import { expectNoPageErrors, trackPageErrors } from "./helpers/account";
 
 // Decode and encode the actual React Router single-fetch response. Streamed
 // past Seasons are omitted; these checks concern saved current data only.
@@ -96,6 +100,103 @@ function encode(data: unknown) {
 
 const BEFORE = "2026-10-05T04:59:30Z";
 const AFTER = "2026-10-05T05:00:30Z";
+
+for (const view of ["list", "comparison"] as const) {
+  test(`an open group ${view} stops showing trophies when their Season ends`, async ({
+    page,
+  }) => {
+    const errors = trackPageErrors(page);
+    const comparison = worstComparison(7);
+    comparison.season = String(Date.parse("2026-09-07T05:00:00Z") / 1000);
+    comparison.players = [
+      {
+        ...comparison.players[0],
+        tag: "#2PP",
+        trophies: 6400,
+        seasonResetPending: false,
+      },
+    ];
+    const path =
+      view === "list" ? "/account/groups" : `/account/groups/${comparison.groupId}`;
+    const routeId =
+      view === "list" ? "routes/account.groups" : "routes/account.groups.$groupId";
+    const key = "3be934b5-68fa-4741-8c7b-e03592e4ad70";
+    const data: GroupsLoaderData | GroupCompareLoaderData =
+      view === "list"
+        ? {
+            season: comparison.season,
+            groups: [
+              {
+                groupId: comparison.groupId,
+                name: "Season watch",
+                tags: ["#2PP"],
+                players: [{ ...comparison.players[0], state: "tracking" }],
+              },
+            ],
+            createIdempotencyKey: key,
+            updateIdempotencyKeys: { [comparison.groupId]: key },
+            deleteIdempotencyKeys: { [comparison.groupId]: key },
+            addIdempotencyKeys: { [comparison.groupId]: key },
+            removeIdempotencyKeys: { [comparison.groupId]: { "#2PP": key } },
+            error: null,
+          }
+        : {
+            comparison,
+            days: 7,
+            sort: "trophies",
+            notFound: false,
+            tooLarge: null,
+            error: null,
+          };
+    // These checks concern the browser's expiry, not when the collector finishes
+    // accepting a fake player's opening-day battles. Keep the saved Season on reread.
+    let reads = 0;
+    const saved = {
+      root: {
+        data: {
+          loggedIn: false,
+          accountLabel: null,
+          accountUsername: null,
+          logoutIdempotencyKey: null,
+          updateStatus: null,
+        },
+      },
+      [routeId]: { data },
+    };
+    await page.route(`**${path}.data*`, (route) => {
+      reads++;
+      return route.fulfill({
+        contentType: "text/x-script",
+        body: encode(saved),
+      });
+    });
+    await page.goto("/about");
+    await page.clock.install({ time: new Date("2026-09-07T05:00:00Z") });
+    await page.evaluate((path) => {
+      history.pushState(null, "", path);
+      dispatchEvent(new PopStateEvent("popstate"));
+    }, path);
+    const trophies =
+      view === "list"
+        ? page.locator("li").filter({ hasText: "#2PP" }).locator(".group-member-detail")
+        : page
+            .getByRole("row")
+            .filter({ hasText: "#2PP" })
+            .locator('[data-label="Trophies now"]');
+    await expect(trophies).toContainText("6,400");
+    expect(reads).toBe(1);
+
+    // Each jump stays below the browser clock's 2**31 - 1 ms limit.
+    await page.clock.fastForward(14 * 86_400_000);
+    await expect(trophies).toContainText("6,400");
+    expect(reads).toBe(1);
+    await page.clock.fastForward(14 * 86_400_000);
+    await expect(trophies).toHaveText("Waiting for this player's Season reset");
+    await expect.poll(() => reads).toBe(2);
+    await expect(trophies).toHaveText("Waiting for this player's Season reset");
+    expectNoPageErrors(errors);
+  });
+}
 
 for (const path of ["/", "/leaderboards/tracked?view=live&page=1", "/players/%232PP"]) {
   test(`${path} withholds expired current trophies during Reset and follows October recovery`, async ({
