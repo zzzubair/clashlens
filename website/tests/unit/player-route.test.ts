@@ -541,7 +541,7 @@ describe("automatic tag lookup", () => {
       expect(html).toContain(message);
       const visible = html.split("<script")[0];
       expect(visible).not.toContain("The requested player data is not available.");
-      expect(html).toContain("Historical seasons");
+      expect(html).toContain('aria-label="Seasons"');
       expect(html).not.toContain("Current trophies");
       expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
     },
@@ -573,7 +573,7 @@ describe("automatic tag lookup", () => {
     expect(html).toContain("not in Legend I");
     expect(html).not.toContain("Current trophies");
     expect(html).not.toContain('class="player-refresh-form"');
-    expect(html).toContain("Historical seasons");
+    expect(html).toContain('aria-label="Seasons"');
   });
 
   it.each([null, SEASON])(
@@ -596,7 +596,7 @@ describe("automatic tag lookup", () => {
       const html = await renderRoute(result);
       expect(html).toContain(result.lookupError!.error.message);
       expect(html).toContain("could not confirm they are in Legend I");
-      expect(html).toContain("Historical seasons");
+      expect(html).toContain('aria-label="Seasons"');
       expect(html).toContain(
         season === null ? "Saved Legend history" : "Daily trophy totals",
       );
@@ -880,7 +880,9 @@ describe("automatic tag lookup", () => {
       expect(markup).not.toContain("No saved Legend log");
       const text = markup.replace(/<[^>]*>/g, "");
       expect(text).toContain("Day 2");
-      expect(text).toContain("Date only");
+      // The unconfirmed day is numbered from the current Season's start.
+      expect(text).toContain("Day 1");
+      expect(text).not.toContain("Date only");
       expect(text).not.toContain("Day 17");
       expect(displayed.seasonDays).toEqual([confirmedDay]);
       if (trackingState === "tracking") {

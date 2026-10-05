@@ -432,7 +432,9 @@ def create_app(
             content=_json_safe(
                 {
                     "tag": normalized_tag,
-                    "seasons": api_players.list_player_seasons(production_database, normalized_tag),
+                    "seasons": api_players.list_player_seasons(
+                        production_database, normalized_tag, now=current_time()
+                    ),
                 }
             ),
         )
@@ -454,7 +456,7 @@ def create_app(
         if not 1 <= len(season_id) <= 128:
             raise ApiError(422, "invalid_request")
         result = api_players.get_player_season_summary(production_database,
-            normalized_tag, season_id
+            normalized_tag, season_id, now=current_time()
         )
         if result is None:
             raise ApiError(404, "season_not_found")

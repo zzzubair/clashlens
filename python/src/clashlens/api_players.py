@@ -26,7 +26,7 @@ from .domain import (
     season_opening_reset,
     validate_legend_season_start,
 )
-from .season_summaries import season_final_rank
+from .season_summaries import _project, season_final_rank
 
 _LEGEND_I_TIER_ID = 105000036
 
@@ -117,6 +117,59 @@ def _current_history_season(
         "anchor_source": "official_league_history",
         "anchor_observed_at": latest["observed_at"],
     }
+
+
+def _unsummarized_ended_seasons(
+    connection: Any, normalized_tag: str, now: datetime, season_id: str | None = None
+) -> list[tuple[int, str, datetime]]:
+    """Ended Seasons with saved Legend days but no stored summary yet.
+
+    A summary is stored only by Day 28's Complete publication or a backfill,
+    so these days are summarized on read until then. A Season counts as
+    ended once its 28 days from a canonical start have passed.
+    """
+    rows = connection.execute(
+        """
+        SELECT DISTINCT daily.player_id, daily.official_season_id
+        FROM api_player_daily_logs AS daily
+        JOIN players AS player ON player.id = daily.player_id
+        WHERE player.normalized_tag = %s
+          AND daily.official_season_id = COALESCE(%s, daily.official_season_id)
+          AND NOT EXISTS (
+              SELECT 1 FROM player_season_summaries AS summary
+              WHERE summary.player_id = daily.player_id
+                AND summary.official_season_id = daily.official_season_id
+          )
+        """,
+        (normalized_tag, season_id),
+    ).fetchall()
+    ended = []
+    for player_id, official_season_id in rows:
+        try:
+            start = validate_legend_season_start(
+                _text(official_season_id), observed_at=now.astimezone(UTC)
+            )
+        except DomainRuleError:
+            continue
+        if start + SEASON_DURATION <= now:
+            ended.append((int(player_id), _text(official_season_id), start))
+    return ended
+
+
+def _projected_season_summary(
+    connection: Any, normalized_tag: str, player_id: int, season_id: str
+) -> dict[str, Any] | None:
+    projected = _project(player_id, season_id, connection)
+    if projected is None:
+        return None
+    # The projection keeps its boundaries as text, as its daily entries do.
+    bounds = {
+        key: None if projected[key] is None else datetime.fromisoformat(projected[key])
+        for key in ("season_start", "season_end")
+    }
+    return _historical_season_summary(
+        {**projected, **bounds, "normalized_tag": normalized_tag, "published_at": None}
+    )
 
 
 def get_player_page(
@@ -493,9 +546,10 @@ def player_cards(
 
 
 def list_player_seasons(
-    database: ApiDatabase, normalized_tag: str
+    database: ApiDatabase, normalized_tag: str, *, now: datetime | None = None
 ) -> list[dict[str, Any]]:
     """List compact summaries plus official history-only seasons."""
+    now = datetime.now(UTC) if now is None else now
     with database.pool.connection() as connection:
         rows = connection.execute(
             """
@@ -528,6 +582,31 @@ def list_player_seasons(
             }
             for row in rows
         }
+        for player_id, season_id, start in _unsummarized_ended_seasons(
+            connection, normalized_tag, now
+        ):
+            summary = _projected_season_summary(
+                connection, normalized_tag, player_id, season_id
+            )
+            if summary is None:
+                continue
+            seasons[season_id] = {
+                **{
+                    key: summary[key]
+                    for key in (
+                        "official_season_id",
+                        "coverage_state",
+                        "days_observed",
+                        "days_missing",
+                        "start_trophies",
+                        "end_trophies",
+                        "published_at",
+                    )
+                },
+                "source": "tracked_summary",
+                "official_history": None,
+                "_sort_start": start,
+            }
         for history in _official_history_rows(connection, normalized_tag):
             season_id = history["official_season_id"]
             if season_id in seasons:
@@ -561,7 +640,11 @@ def list_player_seasons(
 
 
 def get_player_season_summary(
-    database, normalized_tag: str, official_season_id: str
+    database,
+    normalized_tag: str,
+    official_season_id: str,
+    *,
+    now: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Read tracked detail when retained, with honest official fallback.
 
@@ -584,6 +667,7 @@ def get_player_season_summary(
             connection, normalized_tag, season_id=official_season_id
         )
         history = history_rows[0] if history_rows else None
+        result = None
         if row is not None:
             columns = [d.name for d in cursor.description]
             record = dict(zip(columns, row))
@@ -600,6 +684,18 @@ def get_player_season_summary(
                 official_season_id,
                 without_board=result["final_rank"],
             )
+        else:
+            ended = _unsummarized_ended_seasons(
+                connection,
+                normalized_tag,
+                datetime.now(UTC) if now is None else now,
+                official_season_id,
+            )
+            if ended:
+                result = _projected_season_summary(
+                    connection, normalized_tag, ended[0][0], official_season_id
+                )
+        if result is not None:
             result["source"] = "tracked_summary"
             result["official_history"] = (
                 None if history is None else _official_history_payload(history)

@@ -224,6 +224,10 @@ reported `next_after_player_id` until it is null:
 python -m clashlens.cli materialize-season-summaries --season-id 1785714000 --max-players 100 --after-player-id 12345 --apply
 ```
 
+Until a summary is stored, the player API builds the same summary on read
+for any Season whose 28 days from its canonical start have passed, so the
+Season that just ended is never missing from a player page.
+
 A season is completed when it matches the confirmed anchor's current
 season id with its exact 28 days elapsed, matches the previous season
 id, or — for noncanonical legacy ids — has a completed day-28
