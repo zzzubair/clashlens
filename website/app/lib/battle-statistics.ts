@@ -6,24 +6,23 @@ const DAY_MS = 86_400_000;
 const RESET_MS = 5 * 3_600_000;
 
 // Use recorded battles, never daily trophy adjustments or unplayed defenses.
-// Daily totals leave out today, which is still being played.
-function summarize(events: RankedBattleEvent[], today: number) {
+// Daily totals leave out today, which is still being played, and count each
+// battle on the saved Legend day it belongs to.
+function summarize(events: (readonly [RankedBattleEvent, boolean])[]) {
   const stars = [0, 0, 0, 0];
   let trophies = 0;
   let finishedTrophies = 0;
-  for (const event of events) {
+  for (const [event, finished] of events) {
     stars[event.stars]++;
     trophies += Math.abs(event.trophyChange);
-    if (Date.parse(event.battleTimestamp) < today) {
-      finishedTrophies += Math.abs(event.trophyChange);
-    }
+    if (finished) finishedTrophies += Math.abs(event.trophyChange);
   }
   return {
     count: events.length,
     stars,
     trophies,
     finishedTrophies,
-    disputed: events.some((event) => event.perspectiveDisagreement),
+    disputed: events.some(([event]) => event.perspectiveDisagreement),
   };
 }
 
@@ -47,13 +46,13 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
   );
   const events = (side: "offenseEvents" | "defenseEvents") => [
     ...new Map(
-      [...days.values()]
-        .flatMap((day) => day[side])
-        .filter((event) => {
+      [...days]
+        .flatMap(([day, saved]) => saved[side].map((event) => [event, day] as const))
+        .filter(([event]) => {
           const time = Date.parse(event.battleTimestamp);
           return time >= start && time <= now;
         })
-        .map((event) => [event.battleId, event]),
+        .map(([event, day]) => [event.battleId, [event, day < today] as const]),
     ).values(),
   ];
   return {
@@ -64,7 +63,7 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
     daysExpected: Math.round((today - start) / DAY_MS) + 1,
     finishedDays: [...days.keys()].filter((time) => time < today).length,
     incomplete: [...days.values()].some((day) => !day.battlesComplete),
-    attack: summarize(events("offenseEvents"), today),
-    defense: summarize(events("defenseEvents"), today),
+    attack: summarize(events("offenseEvents")),
+    defense: summarize(events("defenseEvents")),
   };
 }

@@ -101,6 +101,25 @@ describe("recorded battle period statistics", () => {
     expect(stats.daysExpected).toBe(7);
   });
 
+  it("counts a battle reported just after Reset on the finished day it belongs to", () => {
+    const yesterday = TODAY - DAY;
+    const stats = battleStatistics(
+      player([
+        day(0),
+        day(
+          1,
+          [event("a1", 3, 100, 40, yesterday), event("late", 3, 100, 40, TODAY + 60_000)],
+          [event("d1", 3, 100, -40, TODAY + 60_000)],
+        ),
+      ]),
+      "7",
+      NOW,
+    );
+    expect(stats.attack).toMatchObject({ trophies: 80, finishedTrophies: 80 });
+    expect(stats.defense).toMatchObject({ trophies: 40, finishedTrophies: 40 });
+    expect(stats.finishedDays).toBe(1);
+  });
+
   it.each([
     ["7", 7],
     ["14", 14],
