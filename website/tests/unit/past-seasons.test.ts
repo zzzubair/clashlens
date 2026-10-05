@@ -179,15 +179,11 @@ describe("past Seasons on the player page", () => {
       '<th scope="col">Final trophies</th>',
       '<th scope="col">Global rank</th>',
     ]);
-    expect(html).toMatch(
-      /5 Oct 2026<\/th><td>5,437<\/td><td>#180<\/td><\/tr>/,
-    );
+    expect(html).toMatch(/5 Oct 2026<\/th><td>5,437<\/td><td>#180<\/td><\/tr>/);
     expect(html).toMatch(
       /10 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><\/tr>/,
     );
-    expect(html).toMatch(
-      /Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td><\/tr>/,
-    );
+    expect(html).toMatch(/Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td><\/tr>/);
   });
 
   it("does not wait for ClashKing before the rest of the page loads", async () => {
