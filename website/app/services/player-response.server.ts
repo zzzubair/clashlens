@@ -212,6 +212,7 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
       hasAdjustment: value.has_adjustment as boolean,
       adjustmentTotal: value.adjustment_total as number | null,
       flags: value.flags as string[],
+      resetRank: mapResetRank(value.reset_rank),
     };
   });
   return {
@@ -338,6 +339,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         trophyLoss: value.defense_loss as number | null,
       },
       trophyChange: value.net_trophy_change as number | null,
+      resetRank: mapResetRank(value.reset_rank),
       battlesComplete: value.battles_complete === true,
       offenseEvents: value.offense_events.map((event) => mapEvent(event, "offense")),
       defenseEvents: value.defense_events.map((event) => mapEvent(event, "defense")),
@@ -603,6 +605,13 @@ function mapDataQuality(value: unknown): PlayerPage["dataQuality"] {
   )
     malformed();
   return value as PlayerPage["dataQuality"];
+}
+
+// A day's rank on its Reset board; absent or null means unknown.
+function mapResetRank(value: unknown): number | null {
+  if (value == null) return null;
+  if (!isInteger(value) || value < 1) malformed();
+  return value;
 }
 
 function malformed(): never {

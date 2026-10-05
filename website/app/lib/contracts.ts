@@ -242,6 +242,8 @@ export interface RankedDaySummary {
     trophyLoss: number | null;
   };
   trophyChange: number | null;
+  // Clash Lens rank on the frozen board saved at this day's closing Reset.
+  resetRank?: number | null;
   // Python found every battle of the day among the recorded ones: so far for
   // the day in progress, or all 8 of each for a finished day.
   battlesComplete?: boolean;
@@ -347,6 +349,7 @@ export interface HistoricalSeasonDayEntry {
   hasAdjustment: boolean;
   adjustmentTotal: number | null;
   flags: string[];
+  resetRank?: number | null;
 }
 
 export interface HistoricalSeasonSummary {

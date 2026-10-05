@@ -462,27 +462,41 @@ def season_final_rank(
         season_end = None if bounds is None else bounds[1]
     if season_end is None:
         return without_board
-    row = connection.execute(
+    ranks = reset_board_ranks(connection, player_id, [season_end])
+    return next(iter(ranks.values())) if ranks else without_board
+
+
+def reset_board_ranks(
+    connection: Any, player_id: int, resets: list[datetime | str]
+) -> dict[datetime, int | None]:
+    """The player's position on each Reset's frozen board, keyed by Reset.
+
+    Each Reset uses the board season_final_rank describes. A Reset with no
+    such board is left out; one whose board omits the player maps to None.
+    """
+    rows = connection.execute(
         """
-        SELECT entry.position
-        FROM leaderboard_snapshots AS snapshot
-        LEFT JOIN leaderboard_snapshot_entries AS entry
-          ON entry.snapshot_id = snapshot.id AND entry.player_id = %s
-        WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-          AND snapshot.boundary_at = %s
-          AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS g
-                           WHERE g.snapshot_id = snapshot.id)
-               OR EXISTS (SELECT 1 FROM boundary_publication_generations AS g
-                          WHERE g.snapshot_id = snapshot.id
-                            AND g.snapshot_state <> 'superseded'))
-        ORDER BY snapshot.version DESC, snapshot.id DESC
-        LIMIT 1
+        SELECT reset.at, board.position
+        FROM unnest(%s::timestamptz[]) AS reset(at)
+        JOIN LATERAL (
+            SELECT entry.position
+            FROM leaderboard_snapshots AS snapshot
+            LEFT JOIN leaderboard_snapshot_entries AS entry
+              ON entry.snapshot_id = snapshot.id AND entry.player_id = %s
+            WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+              AND snapshot.boundary_at = reset.at
+              AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS g
+                               WHERE g.snapshot_id = snapshot.id)
+                   OR EXISTS (SELECT 1 FROM boundary_publication_generations AS g
+                              WHERE g.snapshot_id = snapshot.id
+                                AND g.snapshot_state <> 'superseded'))
+            ORDER BY snapshot.version DESC, snapshot.id DESC
+            LIMIT 1
+        ) AS board ON true
         """,
-        (player_id, season_end),
-    ).fetchone()
-    if row is None:
-        return without_board
-    return None if row[0] is None else int(row[0])
+        (resets, player_id),
+    ).fetchall()
+    return {row[0]: None if row[1] is None else int(row[1]) for row in rows}
 
 
 _SUMMARY_COLUMNS = (

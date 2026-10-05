@@ -142,9 +142,9 @@
 .player-page .legend-day > summary {
   display: grid;
   grid-template-columns:
-    minmax(10rem, 1.3fr) minmax(8rem, 1fr) repeat(3, minmax(6.25rem, 0.8fr))
+    minmax(10rem, 1.3fr) minmax(8rem, 1fr) repeat(4, minmax(6.25rem, 0.8fr))
     auto;
-  grid-template-areas: "date start offense defense net toggle";
+  grid-template-areas: "date start offense defense net rank toggle";
   gap: 0.8rem;
   align-items: center;
   min-height: 4.75rem;
@@ -202,20 +202,24 @@
   color: var(--cl-muted);
   font-size: 0.8125rem;
 }
+/* The recorded count drops under its number when the column is too narrow. */
 .player-page .legend-day-stat {
-  grid-template-columns: auto 1fr;
-  gap: 0 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  align-content: center;
+  column-gap: 0.45rem;
   padding-left: 0.65rem;
   border-left: 2px solid var(--cl-border);
 }
 .player-page .legend-day-stat small {
-  grid-column: 1 / -1;
+  flex-basis: 100%;
 }
 .player-page .legend-day-stat strong {
   font-size: 1.08rem;
 }
 .player-page .legend-day-stat .stat-unavailable {
-  grid-column: 1 / -1;
+  flex-basis: 100%;
   color: var(--cl-muted);
   font-size: 0.875rem;
   font-weight: 500;
@@ -228,7 +232,7 @@
   grid-area: start;
 }
 .player-page .legend-day-start-source {
-  grid-column: 1 / -1;
+  flex-basis: 100%;
 }
 .player-page .legend-day-offense {
   grid-area: offense;
@@ -240,6 +244,9 @@
 }
 .player-page .legend-day-net {
   grid-area: net;
+}
+.player-page .legend-day-rank {
+  grid-area: rank;
 }
 .player-page .score-positive {
   color: var(--detail-positive);
@@ -651,7 +658,7 @@
   }
   .player-page .legend-day > summary {
     grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
-    grid-template-areas: "date date date date toggle" "start offense defense net .";
+    grid-template-areas: "date date date rank toggle" "start offense defense net .";
     gap: 0.75rem;
     padding-block: 0.85rem;
   }
@@ -805,7 +812,7 @@
   }
   .player-page .legend-day > summary {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-    grid-template-areas: "date date toggle" "start net ." "offense defense .";
+    grid-template-areas: "date date toggle" "start net ." "offense defense ." "rank . .";
     gap: 0.65rem;
     padding: 0.7rem;
   }

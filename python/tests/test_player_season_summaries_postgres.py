@@ -759,8 +759,10 @@ def test_retry_is_noop_correction_replaces_and_failure_preserves(
             database.close()
 
 
-def _frozen_board(connection, observation_id, positions, *, version=1, state="published"):
-    """Save one frozen board at the Season end; positions maps player to (position, official)."""
+def _frozen_board(
+    connection, observation_id, positions, *, version=1, state="published", reset=SEASON_END
+):
+    """Save one frozen board at reset; positions maps player to (position, official)."""
     snapshot_id = connection.execute(
         """
         INSERT INTO leaderboard_snapshots (
@@ -769,7 +771,7 @@ def _frozen_board(connection, observation_id, positions, *, version=1, state="pu
         ) VALUES ('frozen', %s, %s, 'ordering-v1', 'freshness-v1', %s, 1.0, 0)
         RETURNING id
         """,
-        (SEASON_END, version, state),
+        (reset, version, state),
     ).fetchone()[0]
     for player_id, (position, official_rank) in positions.items():
         connection.execute(
@@ -781,7 +783,7 @@ def _frozen_board(connection, observation_id, positions, *, version=1, state="pu
             ) VALUES (%s, %s, %s, 6280, %s, %s, 0, 'fresh', 'confirmed',
                       repeat('c', 64), %s)
             """,
-            (snapshot_id, position, player_id, observation_id, SEASON_END, official_rank),
+            (snapshot_id, position, player_id, observation_id, reset, official_rank),
         )
     return snapshot_id
 
@@ -900,6 +902,35 @@ def test_summary_written_before_final_board_shows_rank_once_published(
                 )
             assert rank("#2PP") == 3
             assert rank("#9Q2") == 5
+        finally:
+            database.close()
+
+
+def test_season_days_show_rank_on_each_reset_board(database_url: str, archive_server) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        observation_id, _job = store_observation(
+            connection_info, archive_server, occurrence_key="day-boards",
+            endpoint="profile", body=b"{}", observed_at=SEASON_END,
+            normalized_tag="#2PP",
+        )
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                other = _player(connection, "#9Q2")
+                _full_season(connection, player_id)
+                materialize_player_season(connection, player_id, SEASON)
+                day_end = {day: DAY0 + timedelta(days=day) for day in (1, 2, 28)}
+                _frozen_board(connection, observation_id, {player_id: (7, 1)}, reset=day_end[1])
+                _frozen_board(connection, observation_id, {other: (1, None)}, reset=day_end[2])
+                _frozen_board(connection, observation_id, {player_id: (2, None)})
+            entries = api_players.get_player_season_summary(database, "#2PP", SEASON)[
+                "daily_entries"
+            ]
+            ranks = {entry["season_day_number"]: entry["reset_rank"] for entry in entries}
+            assert ranks == {day: None for day in range(1, 29)} | {1: 7, 28: 2}
         finally:
             database.close()
 
