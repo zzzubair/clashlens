@@ -52,13 +52,16 @@ function SignedInSavePlayer({ tag }: { tag: string }) {
             type="submit"
             className="button button-secondary"
             disabled={busy || !key}
-            aria-pressed={saved ?? false}
           >
             {mutation.state !== "idle"
-              ? "Saving…"
-              : saved
-                ? "Remove from Saved Players"
-                : "Add to Saved Players"}
+              ? saved
+                ? "Removing…"
+                : "Saving…"
+              : saved === undefined
+                ? "Checking Saved Players…"
+                : saved
+                  ? "Remove from Saved Players"
+                  : "Add to Saved Players"}
           </button>
         </mutation.Form>
       )}

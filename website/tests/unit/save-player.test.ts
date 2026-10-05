@@ -231,3 +231,24 @@ it.each([
     expect(mocks.getPlayer).toHaveBeenCalledWith(tag);
   }
 });
+
+it.each([
+  ["?tag=%232PP", false],
+  ["", true],
+])(
+  "sends an unfinished account to setup only from the list%s",
+  async (search, redirects) => {
+    mocks.listSavedTags.mockRejectedValue({
+      status: 404,
+      payload: { error: "account_not_found" },
+    });
+    const read = loader({
+      request: new Request(`https://clashlens.example/account/saved-players${search}`),
+    } as never);
+    if (redirects) {
+      await expect(read).rejects.toMatchObject({ status: 302 });
+      return;
+    }
+    await expect(read).resolves.toMatchObject({ players: [], error: null });
+  },
+);

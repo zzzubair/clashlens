@@ -68,13 +68,17 @@ export async function loader({
   } catch (cause) {
     if (cause instanceof Response && cause.status !== 503) throw cause;
     const { isAccountNotFoundError } = await import("../server/actions.server");
-    if (isAccountNotFoundError(cause)) throw redirect("/account/setup");
+    // Viewing a profile must not pull an unfinished account into setup; saving does.
+    const unfinished = isAccountNotFoundError(cause);
+    if (unfinished && !new URL(request.url).searchParams.has("tag")) {
+      throw redirect("/account/setup");
+    }
     const { safeWebsiteError } = await import("../server/errors.server");
     return {
       players: [],
       addIdempotencyKey: freshIdempotencyKey(),
       removeIdempotencyKeys: {},
-      error: safeWebsiteError(cause),
+      error: unfinished ? null : safeWebsiteError(cause),
     };
   }
 }

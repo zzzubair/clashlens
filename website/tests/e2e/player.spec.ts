@@ -273,6 +273,7 @@ test("a skipped automatic refresh leaves saved data and its time without an aler
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Player refresh" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+  await expect(page.getByRole("region", { name: "Save player" })).toHaveCount(0);
 });
 
 test("a battle processed shortly after a completed Refresh reaches the open page", async ({
