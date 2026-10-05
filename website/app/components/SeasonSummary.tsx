@@ -46,7 +46,7 @@ export function SeasonSummary({
   defense?: SummarySide;
   children?: React.ReactNode;
 }) {
-  const known = attack?.count == null ? null : attack.count - (attack.unknown ?? 0);
+  const total = attack?.count ?? null;
   const triples = attack?.stars[3] ?? null;
   const unknown = [
     [attack?.unknown, "attack"],
@@ -78,13 +78,13 @@ export function SeasonSummary({
         {attack ? (
           <div>
             <dt>Hit rate</dt>
-            <dd className={triples === null || !known ? "summary-words" : undefined}>
-              {triples === null || !known
+            <dd className={triples === null || !total ? "summary-words" : undefined}>
+              {triples === null || !total
                 ? "Unavailable"
-                : `${((100 * triples) / known).toFixed(1)}%`}
-              {triples === null || !known ? null : (
+                : `${((100 * triples) / total).toFixed(1)}%`}
+              {triples === null || !total ? null : (
                 <small>
-                  {count(triples)} of {count(known)} attacks
+                  {count(triples)} of {count(total)} attacks
                 </small>
               )}
             </dd>

@@ -222,6 +222,24 @@ describe("recorded battle period statistics", () => {
     expect(html).toContain("<dt>Trophies lost</dt><dd>-45</dd>");
   });
 
+  it("shows a missing latest Reset rank instead of an older one", () => {
+    const html = renderToStaticMarkup(
+      createElement(BattleStatistics, {
+        player: player([
+          day(0),
+          { ...day(1), resetRank: null },
+          { ...day(2), resetRank: 1042 },
+        ]),
+        now: NOW,
+        trophies: "6,100",
+      }),
+    );
+    expect(html).toContain(
+      '<dt>Rank at last Reset</dt><dd class="summary-words">Not ranked yet</dd>',
+    );
+    expect(html).not.toContain("1,042");
+  });
+
   it("names unknown stars only when some are unknown", () => {
     const side = { count: 4, stars: [0, 1, 1, 1], trophies: 60, perDay: 60 };
     const render = (unknown: number | null) =>
@@ -237,7 +255,7 @@ describe("recorded battle period statistics", () => {
     expect(render(0)).not.toContain("unknown");
     expect(render(null)).not.toContain("unknown");
     expect(render(1)).toContain("Stars unknown for 1 attack.");
-    // Hit rate counts only attacks with known stars.
-    expect(render(1)).toContain("33.3%<small>1 of 3 attacks</small>");
+    // Hit rate counts every attack, including ones with unknown stars.
+    expect(render(1)).toContain("25.0%<small>1 of 4 attacks</small>");
   });
 });

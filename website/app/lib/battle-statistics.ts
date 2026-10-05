@@ -59,6 +59,7 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
   return {
     start,
     end: now,
+    today,
     daysSaved: days.size,
     daysExpected: Math.round((today - start) / DAY_MS) + 1,
     finishedDays: [...days.keys()].filter((time) => time < today).length,

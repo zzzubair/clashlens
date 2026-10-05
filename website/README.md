@@ -61,9 +61,10 @@ Selecting a past Season hides these cards.
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final
 trophies; the current Season's leads with
-the Clash Lens rank at the latest Reset this Season (the page has no live rank)
-and current trophies. Below that: hit rate, the percentage of attacks with known
-stars that got three stars; attacks and defenses by 3, 2, 1 and 0 stars; and
+the Clash Lens rank at the latest Reset this Season (the page has no live rank),
+shown as Not ranked yet when that Reset's board has no rank for the player, and
+current trophies. Below that: hit rate, the percentage of all attacks that got
+three stars; attacks and defenses by 3, 2, 1 and 0 stars; and
 trophies per day on offense and defense, per attack, per defense, and total
 trophies lost. A note names stars of unknown battles only when there are some.
 The Season trophy change and total trophies gained are not shown, because the

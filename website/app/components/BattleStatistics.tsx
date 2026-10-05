@@ -12,7 +12,7 @@ const dateFormatter = new Intl.DateTimeFormat("en-GB", {
 const date = (time: number) => dateFormatter.format(time).replace("Sept", "Sep");
 
 // The current Season's summary. Rank is Clash Lens's board at the latest Reset
-// this Season, because the page has no live rank.
+// this Season, from the day that Reset ended, because the page has no live rank.
 export function BattleStatistics({
   player,
   now,
@@ -26,10 +26,13 @@ export function BattleStatistics({
   const stats = battleStatistics(player, period, now);
   const seasonStart =
     period === "season" ? stats.start : battleStatistics(player, "season", now).start;
-  const rank = [...player.seasonDays, ...player.recentDays]
-    .filter((day) => Date.parse(day.period.split(" – ")[0]) >= seasonStart)
-    .sort((a, b) => b.period.localeCompare(a.period))
-    .find((day) => day.resetRank != null)?.resetRank;
+  const lastDay = stats.today - 86_400_000;
+  const rank =
+    lastDay >= seasonStart
+      ? [...player.seasonDays, ...player.recentDays].find(
+          (day) => Date.parse(day.period.split(" – ")[0]) === lastDay,
+        )?.resetRank
+      : null;
   const side = ({ count, stars, trophies, finishedTrophies }: typeof stats.attack) => ({
     count,
     stars,
