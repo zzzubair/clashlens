@@ -523,7 +523,8 @@ usable profile: a retry fetches only what has no usable answer yet, plus a
 battle log whose request started before that profile arrived. Both responses
 are always saved with their real request times, even when unchanged, and the
 work row keeps pointing at them, so the worker processes them behind newer
-responses instead of skipping them. Season Resets fetch no league history.
+responses instead of skipping them. Settlement checks fetch no league history;
+a Season-opening Reset schedules a separate refresh for that (below).
 
 The checks run in the 32 ordinary intent slots behind any unfinished Reset
 work, with the same retries as Reset work. They never block regular
@@ -637,9 +638,14 @@ is flushed to disk before the database records local deletion.
 The publication barrier prevents the same body from being republished meanwhile.
 Missing files still let cleanup finish a deletion interrupted by a crash.
 
-League history is collected initially and after each season-ending Reset. It
-is stored in full and parsed separately from profiles and battle logs. Raw
-response deadlines and recovery protection belong in
+League history is collected initially, at each season-ending Reset and again
+20 minutes later in a separate `league_history_refresh` work row per frozen
+member on the ordinary lane, because the ended Season's official results
+appear minutes after the Reset. The
+[Season final ranks missing](operating.md#season-final-ranks-missing) runbook
+owns the manual recovery command. It is stored in full and parsed separately
+from profiles and battle logs. Raw response deadlines and recovery protection
+belong in
 [history-retention.md](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
 The [deployment runbook](deployment.md#raw-response-cleanup) owns cleanup
 credentials, scheduling and enablement.
