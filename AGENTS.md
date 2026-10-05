@@ -56,6 +56,7 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Webhook**: a secret Discord URL the alert check posts messages to.
 - **Quadlet**: Podman's text-file way of running a container as a system service.
 - **Provider-outage pause**: a shared wait for all API keys after the Clash API keeps failing, with occasional test requests until it answers again.
+- **Season rule**: a Season's Day 1 start of 5,000, taken from the game's rule that every Legend I player starts a Season there, used when the Reset reading can't give the start itself.
 - **Boundary settlement**: whether a Reset's trophy count is proven to include the previous day's automatic defense loss; until then it is provisional.
 
 If you introduce a new term, add it here in the same PR. One plain sentence.

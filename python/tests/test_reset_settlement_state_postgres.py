@@ -298,14 +298,16 @@ def _season_profile(trophies: int, season_id: int) -> bytes:
 OLD_SEASON, NEW_SEASON = 1783918800, 1786338000  # Seasons around August 10.
 
 
-@pytest.mark.parametrize("kind,season_id,trophies,accepted", [
-    ("season", OLD_SEASON, 6400, False),
-    ("season", NEW_SEASON, 5000, True),
-    # A new Season with old trophies is not a Season start; only 5,000 is.
-    ("season", NEW_SEASON, 6400, False),
-    ("season", NEW_SEASON, 4999, False),
-    ("season_day_2", OLD_SEASON, 6400, False),
-    ("monday", OLD_SEASON, 6400, True),
+@pytest.mark.parametrize("kind,season_id,trophies,start", [
+    # An old Season with no new-Season Legend I profile gives no start.
+    ("season", OLD_SEASON, 6400, None),
+    ("season", NEW_SEASON, 5000, 5000),
+    # A new Season still showing the old total starts at 5,000 by the Season
+    # rule; any other value before a battle contradicts it and gives none.
+    ("season", NEW_SEASON, 6400, 5000),
+    ("season", NEW_SEASON, 4999, None),
+    ("season_day_2", OLD_SEASON, 6400, None),
+    ("monday", OLD_SEASON, 6400, 6400),
 ])
 def test_reset_start_needs_a_profile_naming_the_resets_season(
     database_url: str,
@@ -313,7 +315,7 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
     kind: str,
     season_id: int,
     trophies: int,
-    accepted: bool,
+    start: int | None,
 ) -> None:
     boundary = BOUNDARIES[kind]
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -346,7 +348,6 @@ def test_reset_start_needs_a_profile_naming_the_resets_season(
             WHERE boundary_at = (SELECT max(boundary_at) FROM reset_baseline_evidence)
             ORDER BY boundary_at, version DESC""")
         settlements = {row[1:3] for row in _rows(connection_info, BOUNDARY_ROWS)}
-    start = trophies if accepted else None
     previous_day = boundary - timedelta(days=1)
     by_start = {row[0]: row[1:] for row in days}
     assert by_start[previous_day][3] == start
@@ -434,11 +435,16 @@ def test_rejected_reset_profile_gives_no_start(
     assert current == [(6400, "accepted")]
 
 
+@pytest.mark.parametrize("kind", ["ordinary", "season"])
 def test_reset_profile_read_after_the_first_battle_gives_no_start(
-    database_url: str, archive_server
+    database_url: str, archive_server, kind: str
 ) -> None:
     # Eight attacks (+320) and eight defenses (-280) from 05:06 come before
-    # a delayed 05:30 Reset profile of 6,040.
+    # a delayed 05:30 Reset profile of 6,040. At a Season-opening Reset that
+    # profile names the new Season, so the start is 5,000 by the Season rule.
+    boundary = BOUNDARIES[kind]
+    reading = _profile(6040) if kind == "ordinary" else _season_profile(6040, NEW_SEASON)
+    rule_start = None if kind == "ordinary" else 5000
     log = json.loads(_battle_log())
     template = log["items"][0]
     log["items"] = [
@@ -446,25 +452,25 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
          "stars": 0 if index == 15 else 3,
          "destructionPercentage": 0 if index == 15 else 100,
          "opponentPlayerTag": f"#{tag}P{'Y' if index < 8 else 'L'}",
-         "battleTimestamp": (DAY_END + timedelta(minutes=6 + index)).strftime(
+         "battleTimestamp": (boundary + timedelta(minutes=6 + index)).strftime(
              "%Y%m%dT%H%M%S.000Z")}
         for index, tag in enumerate("89QGRJCU" * 2)
     ]
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(connection_info, archive_server,
-                           DAY_END - timedelta(days=1), profile=_profile(6000),
+                           boundary - timedelta(days=1), profile=_profile(6000),
                            log=_battle_log(empty=True))
-        jobs += _reset_work(connection_info, archive_server, DAY_END,
-                            profile=_profile(6040), log=json.dumps(log).encode(),
-                            profile_at=DAY_END + timedelta(minutes=30),
-                            log_at=DAY_END + timedelta(minutes=31))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=reading, log=json.dumps(log).encode(),
+                            profile_at=boundary + timedelta(minutes=30),
+                            log_at=boundary + timedelta(minutes=31))
         _process(connection_info, archive_server, jobs)
         database, processor = _processor(connection_info, archive_server)
         try:
-            for day_start in (DAY_END - timedelta(days=1), DAY_END):
+            for day_start in (boundary - timedelta(days=1), boundary):
                 job = reconciliation_db.enqueue_reconciliation(
                     database, player_tag=TAG, day_start=day_start,
-                    now=DAY_END + timedelta(hours=1),
+                    now=boundary + timedelta(hours=1),
                     request_key=day_start.isoformat(),
                 )
                 assert processor.process_job(job, owner="day") is not None
@@ -483,7 +489,7 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
               ON effect.observation_id = evidence.profile_observation_id
             JOIN player_profile_versions AS profile
               ON profile.id = effect.profile_version_id
-            WHERE evidence.boundary_at = '{DAY_END.isoformat()}'
+            WHERE evidence.boundary_at = '{boundary.isoformat()}'
             ORDER BY evidence.version DESC, evidence.id DESC LIMIT 1""")
         current = _rows(connection_info, CURRENT_PROFILE)
     # The accepted 6,040 is kept as evidence but starts neither day. It is
@@ -492,9 +498,9 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
     assert evidence == [
         (False, ["profile_after_first_event"], "accepted", 6040)
     ]
-    assert days[DAY_END - timedelta(days=1)][:2] == (6000, None)
-    assert days[DAY_END][0] is None
-    assert days[DAY_END][2:] == (8, 8, 320, 280)
+    assert days[boundary - timedelta(days=1)][:2] == (6000, rule_start)
+    assert days[boundary][0] == rule_start
+    assert days[boundary][2:] == (8, 8, 320, 280)
     assert current == [(6040, "accepted")]
 
 
@@ -531,3 +537,104 @@ def test_legend_ii_reset_profile_is_current_but_gives_no_start(
     assert days[DAY_END - timedelta(days=1)] == (6000, None)
     assert days[DAY_END][0] is None
     assert current == [(4900, "accepted")]
+
+
+DAY_ROWS = """
+    SELECT DISTINCT ON (ranked_day_start) ranked_day_start, state, confidence,
+           start_trophies, next_start_trophies,
+           input_evidence -> 'start_baseline_evidence' ->> 'start_trophies_source'
+    FROM ranked_day_versions ORDER BY ranked_day_start, version DESC"""
+
+
+@pytest.mark.parametrize("later_tier", ["Legend I", "Legend II", None])
+def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears(
+    database_url: str, archive_server, later_tier: str | None
+) -> None:
+    # The Season-opening Reset still reads the old Season's 6,400. On Day 3
+    # the player logs in: still in Legend I, demoted, or never seen again.
+    boundary = BOUNDARIES["season"]
+    old_reading = _season_profile(6400, OLD_SEASON)
+    later = old_reading
+    if later_tier is not None:
+        payload = json.loads(_season_profile(5000, NEW_SEASON))
+        payload["leagueTier"] = {
+            "id": 105000036 if later_tier == "Legend I" else 105000035,
+            "name": later_tier,
+        }
+        later = json.dumps(payload).encode()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           boundary - timedelta(days=1), profile=_profile(6400),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=old_reading, log=_battle_log(empty=True))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=boundary,
+                now=boundary + timedelta(days=1), request_key="day-1",
+            )
+            assert processor.process_job(job, owner="day-1") is not None
+        finally:
+            database.close()
+        before = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
+        login = boundary + timedelta(days=2, hours=5)
+        _, login_job = store_observation(
+            connection_info, archive_server, occurrence_key="day-3-login",
+            endpoint="profile", body=later, observed_at=login, normalized_tag=TAG,
+        )
+        # The Reset ending Day 3 finds the new profile.
+        jobs = [login_job] + _reset_work(
+            connection_info, archive_server, boundary + timedelta(days=3),
+            profile=later, log=_battle_log(empty=True),
+        )
+        _process(connection_info, archive_server, jobs)
+        after = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
+    day_28, day_1 = boundary - timedelta(days=1), boundary
+    # Until then September's last day has no end and Day 1 no start.
+    assert before[day_28][0] == "Partial" and before[day_28][3] is None
+    assert before[day_1][2] is None
+    if later_tier == "Legend I":
+        assert after[day_28][:4] == ("Complete", "inferred", 6400, 5000)
+        assert after[day_1][2:] == (5000, None, "season_rule")
+    else:
+        assert after[day_28][3] is None and after[day_1][2] is None
+
+
+@pytest.mark.parametrize("reading,login", [
+    # A Season 0 reading never proves Legend I at the Reset.
+    (_conflicting_profile("season_zero"), timedelta(hours=2)),
+    # A Legend I profile first seen after the next Monday's Reset could
+    # follow a move down at the Season-opening Reset and a move back up.
+    (_season_profile(6400, OLD_SEASON), timedelta(days=7, hours=1)),
+])
+def test_season_rule_needs_a_legend_i_reading_and_a_profile_that_week(
+    database_url: str, archive_server, reading: bytes, login: timedelta
+) -> None:
+    boundary = BOUNDARIES["season"]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server,
+                           boundary - timedelta(days=1), profile=_profile(6400),
+                           log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=reading, log=_battle_log(empty=True))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="login",
+            endpoint="profile", body=_season_profile(5000, NEW_SEASON),
+            observed_at=boundary + login, normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for day_start in (boundary - timedelta(days=1), boundary):
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start,
+                    now=boundary + login, request_key=f"{day_start.isoformat()}-late",
+                )
+                assert processor.process_job(job, owner="day") is not None
+        finally:
+            database.close()
+        days = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
+    assert days[boundary - timedelta(days=1)][3] is None
+    assert days[boundary][2] is None
