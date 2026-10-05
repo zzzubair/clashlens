@@ -25,13 +25,14 @@ rejects duplicate lines and refuses a later new import; it remains unchanged.
 Automatic discovery requirements remain in [#125](https://github.com/zzzubair/clashlens/issues/125).
 Production discovery is on: `CLASHLENS_PLAYER_DISCOVERY_ENABLED` defaults to
 `true` in `ops`, and `false` turns it off. Each battle-log opponent or Top-200
-player who is not tracked and has not had this week's check gets one profile
-check, plus one league-history request when none is saved. At most 500 such
-checks wait at once. A player skipped while the queue is full or busy gets no
-saved retry; they are tried again only when a later changed battle log or
-ranking names them. Legend I gains about
-2,000 players a week, so this costs about 570 requests a day, plus about 4,000
-once for the roughly 2,000 Legend I players not yet tracked. Each player found
+player who is not tracked and has not had this week's check gets one check:
+one profile request and one league-history request. Unlike the scheduled weekly
+check, it does not reuse saved league history. At most 500 such checks wait at
+once. A player skipped while the queue is full or busy gets no saved retry;
+they are tried again only when a later changed battle log or ranking names
+them. Legend I gains about 2,000 players a week, so this costs about 570
+requests a day, plus about 4,000 once for the roughly 2,000 Legend I players
+not yet tracked. Each player found
 eligible is then tracked like any other, so revisits slow in proportion to the
 added players while the keys set the pace.
 [Local development](../README.md#local-development) owns supported fake-player
