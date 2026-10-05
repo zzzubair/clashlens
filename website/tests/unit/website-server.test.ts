@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import type { Server } from "node:http";
 import { join } from "node:path";
@@ -23,6 +23,13 @@ let port: number;
 let releaseStream: () => void;
 const pageText = "Player page content. ".repeat(200);
 const routeData = "Player route data. ".repeat(200);
+// Browsers request these paths on their own, whether or not a page links them.
+const icons = {
+  "/favicon.ico": 32,
+  "/apple-touch-icon.png": 180,
+  "/apple-touch-icon-precomposed.png": 180,
+  "/apple-touch-icon-120x120-precomposed.png": 120,
+};
 
 beforeEach(async () => {
   clearPublicRefreshLimits();
@@ -31,6 +38,8 @@ beforeEach(async () => {
   await writeFile(join(directory, "assets", "app.js"), "window.example = true;");
   await writeFile(join(directory, "site.webmanifest"), '{"name":"Clash Lens"}');
   await writeFile(join(directory, ".secret"), "must not be served");
+  for (const icon of Object.keys(icons))
+    await copyFile(join("public", icon), join(directory, icon));
   const streamFinished = new Promise<void>((resolve) => {
     releaseStream = resolve;
   });
@@ -188,6 +197,23 @@ it.each(["/players/%232PP", "/players/%232PP.data"])(
     expect(head.status).toBe(200);
     expect(head.body.byteLength).toBe(0);
     expect(head.headers["content-encoding"]).toBeUndefined();
+  },
+);
+
+it.each(Object.entries(icons))(
+  "serves the real %s at %i pixels",
+  async (path, pixels) => {
+    const response = await getResponse(path, "identity");
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toBe(
+      path.endsWith(".ico") ? "image/x-icon" : "image/png",
+    );
+    expect(response.body.equals(await readFile(join("public", path)))).toBe(true);
+    // ICO stores its first image's width in byte 6; PNG stores width at byte 16.
+    const width = path.endsWith(".ico")
+      ? response.body[6]
+      : response.body.readUInt32BE(16);
+    expect(width).toBe(pixels);
   },
 );
 
