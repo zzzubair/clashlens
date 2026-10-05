@@ -314,6 +314,7 @@ describe("historical player-season client boundary", () => {
         defense_three_star_count: dayNumber === 1 ? 8 : 0,
         defense_loss: dayNumber === 1 ? 320 : 0,
         net_trophy_change: null,
+        reset_rank: dayNumber === 1 ? 7 : null,
         offense_events:
           dayNumber === 1 ? Array.from({ length: 8 }, (_, i) => event(`a${i}`, 40)) : [],
         defense_events:
@@ -358,6 +359,12 @@ describe("historical player-season client boundary", () => {
       const player = await createPythonClient().getPlayer("#2PP");
       expect(player.seasonDays[0].startTrophies).toBe(expected);
       expect(player.recentDays[0].startTrophies).toBe(expected);
+      expect(player.recentDays.map((d) => [d.dayNumber, d.resetRank])).toEqual(
+        expect.arrayContaining([
+          [1, 7],
+          [2, null],
+        ]),
+      );
     },
   );
 
@@ -429,6 +436,7 @@ describe("historical player-season client boundary", () => {
           eod_state: "provisional",
           eod_change: 1010,
           eod_change_state: "accepted",
+          reset_rank: 42,
         },
       ],
     };
@@ -466,6 +474,9 @@ describe("historical player-season client boundary", () => {
       eodChange: 1010,
       eodChangeState: "accepted",
     });
+    // A Reset rank the summary does not send stays unknown.
+    expect(completeDay.resetRank).toBeNull();
+    expect(partialDay.resetRank).toBe(42);
   });
 
   it("keeps official history separate when tracked day detail is unavailable", async () => {
@@ -536,7 +547,7 @@ describe("historical player-season client boundary", () => {
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
-  it("rejects malformed seasons, oversized days, bad EOD states, and embedded battles", async () => {
+  it("rejects malformed seasons, oversized days, bad EOD states and ranks, and embedded battles", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -574,6 +585,15 @@ describe("historical player-season client boundary", () => {
       )
       .mockResolvedValueOnce(
         new Response(
+          JSON.stringify({
+            ...seasonPayload(),
+            daily_entries: [{ ...seasonPayload().daily_entries[0], reset_rank: 0 }],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
           JSON.stringify(
             officialSeasonPayload({ season_end: "2026-06-16T05:00:00+00:00" }),
           ),
@@ -605,6 +625,9 @@ describe("historical player-season client boundary", () => {
       status: 502,
       payload: { error: "malformed" },
     });
+    await expect(
+      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
       createPythonClient().getPlayerSeason("#2PP", "1785714000"),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });

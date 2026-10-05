@@ -34,7 +34,11 @@ const TODAY: RankedDaySummary = {
 };
 
 // Renders the page as the server would, with the page's clock at `now`.
-function page(codes: string[], now = "2026-10-08T12:00:00Z") {
+function page(
+  codes: string[],
+  now = "2026-10-08T12:00:00Z",
+  endedDays: RankedDaySummary[] = [],
+) {
   const today = {
     ...TODAY,
     completeness: { state: "partial" as const, reason: codes.join("; ") },
@@ -56,7 +60,7 @@ function page(codes: string[], now = "2026-10-08T12:00:00Z") {
     },
     season: null,
     currentDay: today,
-    recentDays: [today],
+    recentDays: [today, ...endedDays],
     seasonDays: [],
     dataQuality: [
       { code: "partial", label: "Incomplete ranked-day data", detail: codes.join("; ") },
@@ -163,5 +167,24 @@ describe("today's Legend day wording", () => {
     const entry = todayEntry(html);
     expect(entry).not.toContain("In progress");
     expect(entry).toContain("Part of a battle log reply could not be read.");
+  });
+
+  it("shows each ended day's Reset rank and leaves today's until Reset", async () => {
+    const ended = (day: number, resetRank: number | null): RankedDaySummary => ({
+      ...TODAY,
+      dayNumber: day,
+      period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
+      state: "Complete",
+      resetRank,
+    });
+    const html = await page(WAITING, undefined, [ended(7, 1234), ended(6, null)]);
+    const rank = (key: string) =>
+      html
+        .split(`id="legend-day-${key}"`)[1]
+        .split("<small>Reset rank</small>")[1]
+        .split("</strong>")[0];
+    expect(rank("2026-10-07")).toMatch(/>1,234$/);
+    expect(rank("2026-10-06")).toMatch(/>Unknown$/);
+    expect(rank("2026-10-08")).toMatch(/>After Reset$/);
   });
 });

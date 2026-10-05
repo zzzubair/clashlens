@@ -26,7 +26,7 @@ from .domain import (
     season_opening_reset,
     validate_legend_season_start,
 )
-from .season_summaries import season_final_rank
+from .season_summaries import reset_board_ranks, season_final_rank
 
 _LEGEND_I_TIER_ID = 105000036
 
@@ -138,7 +138,8 @@ def get_player_page(
                    player.current_profile_confirmed_at,
                    profile.current_league_season_id,
                    {_frozen_trophies_sql("player.id", "%s")},
-                   {_opening_day_battles_sql("player.id", "%s")}
+                   {_opening_day_battles_sql("player.id", "%s")},
+                   player.id
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -295,6 +296,16 @@ def get_player_page(
                     _daily_log(season_row), public_confidence, now
                 )
             season_day_starts.append(start)
+        # Each day's Clash Lens rank on the frozen board saved at its closing
+        # Reset; unknown until that board exists or when it omits the player.
+        ranks = reset_board_ranks(
+            connection,
+            int(row[15]),
+            [day["ranked_day_end"] for day in days.values() if day["ranked_day_end"]],
+        )
+        for day in days.values():
+            end = day["ranked_day_end"]
+            day["reset_rank"] = None if end is None else ranks.get(datetime.fromisoformat(end))
         data_quality = []
         if age_seconds > freshness_seconds:
             data_quality.append(
@@ -588,9 +599,20 @@ def get_player_season_summary(
             columns = [d.name for d in cursor.description]
             record = dict(zip(columns, row))
             result = _historical_season_summary(record)
+            ranks = reset_board_ranks(
+                connection,
+                int(record["player_id"]),
+                [
+                    entry["ranked_day_end"]
+                    for entry in result["daily_entries"]
+                    if entry.get("ranked_day_end")
+                ],
+            )
             for entry in result["daily_entries"]:
                 for key in ("eod_state", "eod_change", "eod_change_state"):
                     entry.setdefault(key, None)
+                end = entry.get("ranked_day_end")
+                entry["reset_rank"] = None if not end else ranks.get(datetime.fromisoformat(end))
             # Summaries can be written before the Season's newest final board
             # is published; that board's rank wins once it exists.
             result["final_rank"] = season_final_rank(

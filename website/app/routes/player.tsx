@@ -11,6 +11,7 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { Metric, MetricCard } from "../components/MetricCard";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
@@ -1050,6 +1051,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
               <th scope="col">Recorded battle net</th>
               <th scope="col">End</th>
               <th scope="col">EOD change from previous day</th>
+              <th scope="col">Reset rank</th>
               <th scope="col">Attacks recorded</th>
               <th scope="col">Defenses recorded</th>
               <th scope="col">Adjustment</th>
@@ -1092,6 +1094,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                   <td>{formatSigned(battleNet)}</td>
                   <td>{provisional(formatCount(day.endTrophies), day.eodState)}</td>
                   <td>{provisional(formatSigned(day.eodChange), day.eodChangeState)}</td>
+                  <td>{formatCount(day.resetRank ?? null)}</td>
                   <td>{formatCount(day.attacks)}</td>
                   <td>{formatCount(day.defenses)}</td>
                   <td>{formatAdjustment(day)}</td>
@@ -1270,6 +1273,12 @@ function LegendDay({
             </strong>
           )}
         </span>
+        <span className="legend-day-stat legend-day-rank">
+          <small>Reset rank</small>
+          <strong className={day.resetRank == null ? "stat-unavailable" : undefined}>
+            {isCurrentDay ? "After Reset" : formatCount(day.resetRank ?? null)}
+          </strong>
+        </span>
       </summary>
       {reasons.map((reason) => (
         <p className="section-note" key={reason}>
@@ -1420,24 +1429,6 @@ function RefreshProgress({
         Work ID: {status.workId}
       </span>
     </section>
-  );
-}
-
-function MetricCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <article className="metric-card">
-      <h3>{title}</h3>
-      <dl>{children}</dl>
-    </article>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric-row">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
   );
 }
 

@@ -291,6 +291,27 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>-30</td><td>+10</td>");
   });
 
+  it("shows each day's Reset rank, or Unknown when the board lacks the player", async () => {
+    const html = await loadAndRender(
+      {
+        getPlayer: vi.fn().mockResolvedValue(PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+        getPlayerSeason: vi.fn().mockResolvedValue({
+          ...SUMMARY,
+          dailyEntries: [
+            { ...DAY, resetRank: 1042 },
+            { ...DAY, dayNumber: 23 },
+          ],
+        }),
+      },
+      SEASON,
+    );
+    expect(html).toContain('<th scope="col">Reset rank</th>');
+    // EOD change, then Reset rank, then attacks recorded.
+    expect(html).toContain("<td>Unknown</td><td>1,042</td><td>8</td>");
+    expect(html).toContain("<td>Unknown</td><td>Unknown</td><td>8</td>");
+  });
+
   it("says a total is unavailable only when one is unknown", async () => {
     const html = await loadAndRender(
       {
