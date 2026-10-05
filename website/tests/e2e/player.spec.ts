@@ -354,6 +354,34 @@ test("player page stays within a narrow viewport", async ({ page }) => {
   ).toBe(0);
 });
 
+test("battle stats switch periods without requests at iPhone width", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await refuseRefreshes(page);
+  await page.goto("/players/%232PP");
+  const stats = page.getByRole("region", { name: "Attack and defense stats" });
+  await expect(stats.getByText("Attacks in sample", { exact: true })).toBeVisible();
+  await expect(stats.getByText("Defenses in sample", { exact: true })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(request.url()));
+  for (const [period, days] of [
+    ["7", 7],
+    ["14", 14],
+  ] as const) {
+    await stats.getByLabel("Period").selectOption(period);
+    await expect(stats).toContainText(`of ${days} Legend days have saved logs.`);
+    await expect(stats.getByText("0-star defenses", { exact: true })).toBeVisible();
+  }
+  await stats.getByLabel("Period").selectOption("season");
+  await expect(stats.getByLabel("Period")).toHaveValue("season");
+  expect(requests).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBe(0);
+});
+
 // Nothing may widen the page, and every visible control must take a tap at its
 // own center. Safari once let full-row link overlays cover other controls.
 async function expectUsableLayout(page: Page) {
