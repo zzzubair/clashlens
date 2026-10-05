@@ -1026,8 +1026,24 @@ def _job(connection_info: str, job_id: int) -> tuple[str, int]:
     return str(status), int(attempts)
 
 
-def test_busy_reset_releases_earlier_resets_and_retries_next_run(
-    database_url: str, archive_server
+def _hold(connection: psycopg.Connection, busy: str, day_start: datetime) -> None:
+    """Hold a lock recalculating the day from ``day_start`` waits for: the
+    Reset ending it, or the player-day lock another calculation holds."""
+    if busy == "reset":
+        boundary.lock_boundary_publication(connection, day_start + timedelta(days=1))
+        return
+    player_id = connection.execute(
+        "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+    ).fetchone()[0]
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"ranked-day:{player_id}:{day_start.isoformat()}",),
+    )
+
+
+@pytest.mark.parametrize("busy", ["reset", "player_day"])
+def test_busy_lock_releases_earlier_resets_and_retries_next_run(
+    database_url: str, archive_server, busy: str
 ) -> None:
     # On 2026-10-04 one calculation held the October 1-3 Resets for minutes
     # while it waited for October 4, and other daily work queued behind it.
@@ -1042,9 +1058,9 @@ def test_busy_reset_releases_earlier_resets_and_retries_next_run(
             _finish_reset_sweep(connection_info, boundary_at)
             before = _published(connection_info, DAY)
             with psycopg.connect(connection_info) as publisher:
-                boundary.lock_boundary_publication(publisher, boundary_at)
+                _hold(publisher, busy, DAY + timedelta(days=1))
                 started = time.monotonic()
-                # DAY's result takes its Reset, then the next day's is busy.
+                # DAY's result takes its Reset, then the next day is busy.
                 assert sweep_late_battles(
                     database, now=boundary_at + timedelta(minutes=31)
                 ) == (0, 1)
@@ -1061,8 +1077,9 @@ def test_busy_reset_releases_earlier_resets_and_retries_next_run(
             database.close()
 
 
-def test_daily_job_on_a_busy_reset_retries_without_using_an_attempt(
-    database_url: str, archive_server
+@pytest.mark.parametrize("busy", ["reset", "player_day"])
+def test_daily_job_on_a_busy_lock_retries_without_using_an_attempt(
+    database_url: str, archive_server, busy: str
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
@@ -1080,7 +1097,7 @@ def test_daily_job_on_a_busy_reset_retries_without_using_an_attempt(
                 request_key="busy-reset",
             )
             with psycopg.connect(connection_info) as publisher:
-                boundary.lock_boundary_publication(publisher, DAY + timedelta(days=1))
+                _hold(publisher, busy, DAY)
                 started = time.monotonic()
                 result = processor.process_job(job_id, owner="busy")
                 assert time.monotonic() - started < 5
