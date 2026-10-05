@@ -505,6 +505,13 @@ describe("past-Season view", () => {
     expect(html).toContain('<strong aria-current="page">5 Oct 2026</strong>');
   });
 
+  it("says when an ended Season has no saved log for the linked day", async () => {
+    const html = await loadAndRender(newSeasonClient(), SEASON, "2026-09-15");
+    expect(html).toContain("No saved Legend log for 15 Sep 2026.");
+    expect(html).not.toContain('aria-current="date"');
+    expect(html).toContain("<td>28</td>");
+  });
+
   it("opens a current Season day link in the Daily Legend log", async () => {
     const html = await loadAndRender(newSeasonClient(), null, "2026-10-05");
     expect(html).toContain('id="legend-day-2026-10-05" open=""');

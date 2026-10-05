@@ -321,13 +321,7 @@ export default function PlayerRoute() {
 function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const requestedDay = searchParams.get("day");
-  const selectedDay =
-    requestedDay &&
-    /^\d{4}-\d{2}-\d{2}$/.test(requestedDay) &&
-    !Number.isNaN(Date.parse(requestedDay))
-      ? requestedDay
-      : null;
+  const selectedDay = validDay(searchParams.get("day"));
   const refreshFetcher = useFetcher<RefreshWork | RefreshError | null>();
   const revalidator = useRevalidator();
   const [workId, setWorkId] = useState<string | null>(null);
@@ -933,7 +927,7 @@ function SelectedSeason({
 }
 
 function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
-  const selectedDay = useSearchParams()[0].get("day");
+  const selectedDay = validDay(useSearchParams()[0].get("day"));
   if (summary.source === "official_league_history") {
     return (
       <section className="data-section" aria-labelledby="historical-season-title">
@@ -1040,6 +1034,12 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
         <p className="section-note">Some daily totals are unavailable.</p>
       ) : null}
       <p className="section-note">{LEGEND_DAY_NOTE}</p>
+      {selectedDay &&
+      !summary.dailyEntries.some((day) => legendDayKey(day.period) === selectedDay) ? (
+        <p className="section-note" role="status">
+          No saved Legend log for {legendDayDate(selectedDay)}.
+        </p>
+      ) : null}
       <div
         className="table-wrap top-space"
         tabIndex={0}
@@ -1142,6 +1142,12 @@ const playerTimeFormatter = new Intl.DateTimeFormat("en-GB", {
 
 function formatPlayerDate(date: Date): string {
   return playerDateFormatter.format(date).replace("Sept", "Sep");
+}
+
+function validDay(day: string | null): string | null {
+  return day && /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(day))
+    ? day
+    : null;
 }
 
 function legendDayDate(period: string): string {
