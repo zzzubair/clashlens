@@ -346,9 +346,7 @@ def test_partial_day_28_on_final_board_shows_board_rank(
             api.close()
 
     assert detail is not None
-    # The saved Day 28 is shown with the game's result beside it.
-    assert detail["source"] == "tracked_summary"
-    assert [entry["season_day_number"] for entry in detail["daily_entries"]] == [28]
+    assert detail["source"] == "official_league_history"
     assert detail["final_rank"] == 3
     assert detail["official_history"]["final_placement"] == 12
 

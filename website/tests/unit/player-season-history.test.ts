@@ -191,6 +191,35 @@ describe("Daily Legend log days", () => {
       "Day 24",
     ]);
   });
+
+  it("drops the ended Season's days once the device clock passes Reset", async () => {
+    const loadedAt = "2026-10-05T04:00:00Z";
+    mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
+    const client = {
+      getPlayer: vi.fn().mockResolvedValue({
+        ...PLAYER,
+        profile: {
+          ...PLAYER.profile,
+          freshness: { ...PLAYER.profile.freshness, observedAt: loadedAt },
+        },
+        season: septemberSeason,
+        recentDays: ended,
+      }),
+      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+    };
+    expect(await loadAndRender(client, null)).toContain("Day 28");
+
+    // A sleeping device wakes after Reset, before the page's data is reread.
+    let wall = Date.parse(loadedAt);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (wall += 5 * 3_600_000));
+    try {
+      const html = await loadAndRender(client, null);
+      for (const number of [24, 25, 26, 27, 28])
+        expect(html).not.toContain(`Day ${number}`);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });
 
 describe("past-Season view", () => {

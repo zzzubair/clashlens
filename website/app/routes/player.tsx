@@ -11,7 +11,7 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import { useSeasonReread } from "../components/SeasonReread";
+import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
@@ -379,13 +379,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     data.lookup,
     explainedVisit,
   );
-  const now = useServerTime(player ? profileLoadedAt(player.profile) : undefined);
-  const history = selectPlayerHistory(player, now);
+  const loadedAt = player ? profileLoadedAt(player.profile) : undefined;
+  const now = useServerTime(loadedAt);
   const seasonExpired = useSeasonReread(
-    player ? profileLoadedAt(player.profile) : undefined,
+    loadedAt,
     minuteChecks || !!trackedPlayer?.profile.seasonResetPending,
     data.selectedSeason === null,
     !!data.lookup && !["checking", "tracking"].includes(data.lookup.state),
+  );
+  const history = selectPlayerHistory(
+    player,
+    seasonExpired && loadedAt ? Math.max(now, nextSeasonReset(loadedAt)) : now,
   );
   const todayEnded =
     player?.currentDay != null &&
