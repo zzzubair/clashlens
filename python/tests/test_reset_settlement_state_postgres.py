@@ -302,10 +302,10 @@ OLD_SEASON, NEW_SEASON = 1783918800, 1786338000  # Seasons around August 10.
     # An old Season with no new-Season Legend I profile gives no start.
     ("season", OLD_SEASON, 6400, None),
     ("season", NEW_SEASON, 5000, 5000),
-    # A new Season still showing the old total starts at 5,000 by the Season
-    # rule; any other value before a battle contradicts it and gives none.
+    # A new-Season Legend I reading that is not 5,000 starts at 5,000 by the
+    # Season rule.
     ("season", NEW_SEASON, 6400, 5000),
-    ("season", NEW_SEASON, 4999, None),
+    ("season", NEW_SEASON, 4999, 5000),
     ("season_day_2", OLD_SEASON, 6400, None),
     ("monday", OLD_SEASON, 6400, 6400),
 ])
@@ -546,12 +546,14 @@ DAY_ROWS = """
     FROM ranked_day_versions ORDER BY ranked_day_start, version DESC"""
 
 
-@pytest.mark.parametrize("later_tier", ["Legend I", "Legend II", None])
+@pytest.mark.parametrize("later_tier,login_day", [
+    ("Legend I", 3), ("Legend I", 10), ("Legend II", 3), (None, 3),
+])
 def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears(
-    database_url: str, archive_server, later_tier: str | None
+    database_url: str, archive_server, later_tier: str | None, login_day: int
 ) -> None:
-    # The Season-opening Reset still reads the old Season's 6,400. On Day 3
-    # the player logs in: still in Legend I, demoted, or never seen again.
+    # The Season-opening Reset still reads the old Season's 6,400. On a later
+    # day the player logs in: still in Legend I, demoted, or never seen again.
     boundary = BOUNDARIES["season"]
     old_reading = _season_profile(6400, OLD_SEASON)
     later = old_reading
@@ -579,14 +581,14 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         finally:
             database.close()
         before = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
-        login = boundary + timedelta(days=2, hours=5)
+        login = boundary + timedelta(days=login_day - 1, hours=5)
         _, login_job = store_observation(
-            connection_info, archive_server, occurrence_key="day-3-login",
+            connection_info, archive_server, occurrence_key="later-login",
             endpoint="profile", body=later, observed_at=login, normalized_tag=TAG,
         )
-        # The Reset ending Day 3 finds the new profile.
+        # The Reset ending the login day finds the new profile.
         jobs = [login_job] + _reset_work(
-            connection_info, archive_server, boundary + timedelta(days=3),
+            connection_info, archive_server, boundary + timedelta(days=login_day),
             profile=later, log=_battle_log(empty=True),
         )
         _process(connection_info, archive_server, jobs)
@@ -602,15 +604,15 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         assert after[day_28][3] is None and after[day_1][2] is None
 
 
-@pytest.mark.parametrize("reading,login", [
+@pytest.mark.parametrize("reading,login,start", [
     # A Season 0 reading never proves Legend I at the Reset.
-    (_conflicting_profile("season_zero"), timedelta(hours=2)),
-    # A Legend I profile first seen after the next Monday's Reset could
-    # follow a move down at the Season-opening Reset and a move back up.
-    (_season_profile(6400, OLD_SEASON), timedelta(days=7, hours=1)),
+    (_conflicting_profile("season_zero"), timedelta(hours=2), None),
+    # A Legend I profile first seen after the next Monday's Reset still does.
+    (_season_profile(6400, OLD_SEASON), timedelta(days=7, hours=1), 5000),
 ])
-def test_season_rule_needs_a_legend_i_reading_and_a_profile_that_week(
-    database_url: str, archive_server, reading: bytes, login: timedelta
+def test_season_rule_needs_a_legend_i_reading_and_a_new_season_profile(
+    database_url: str, archive_server, reading: bytes, login: timedelta,
+    start: int | None,
 ) -> None:
     boundary = BOUNDARIES["season"]
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -636,5 +638,5 @@ def test_season_rule_needs_a_legend_i_reading_and_a_profile_that_week(
         finally:
             database.close()
         days = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
-    assert days[boundary - timedelta(days=1)][3] is None
-    assert days[boundary][2] is None
+    assert days[boundary - timedelta(days=1)][3] == start
+    assert days[boundary][2] == start

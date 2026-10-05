@@ -29,10 +29,6 @@ from .domain import (
 
 # Reset work stops collecting at 04:55 UTC the next day, as in the collector.
 RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
-# Legend I players below the top 10,000 are moved down every Monday at the
-# Reset, so a new-Season Legend I profile proves the player was not moved
-# down at a Season's first Reset only when seen before the next Monday's.
-SEASON_RULE_PROFILE_WINDOW = timedelta(days=7)
 # Reset checks on the profile alone, which the Season rule replaces.
 _SEASON_RULE_REASONS = {"profile_after_first_event", "battle_log_before_profile"}
 
@@ -716,11 +712,11 @@ def _evaluate_reset_baseline(
     job_ids = [job_id] if job_id is not None else []
     # The ended Season's last day and the new Season's first were built at
     # the Season-opening Reset, often before the player's first new-Season
-    # profile let the Season rule give their totals. The first Reset in the
-    # Season's first week that finds the rule holds rebuilds them and every
-    # saved day since, once per player.
+    # profile let the Season rule give their totals. The first Reset in that
+    # Season that finds the rule holds rebuilds them and every saved day
+    # since, once per player.
     opening = ranked_day_for(boundary_at - timedelta(days=1)).season_start
-    if ends_day and boundary_at <= opening + SEASON_RULE_PROFILE_WINDOW:
+    if ends_day:
         opening_baseline = _load_reset_baseline(
             database, connection, int(player_id), opening, processing_version
         )
@@ -1155,12 +1151,11 @@ def _load_reset_baseline(
     )
     failure_reasons = row[11] if isinstance(row[11], list) else []
     # A Legend I reading at a Season's first Reset that cannot give the start
-    # itself, because it still shows the ended Season, still shows the
-    # player's pre-Reset trophies, or came after their first battle or after
-    # its battle log, starts the Season at 5,000 by the Season rule once the
-    # player has a Legend I profile for the new Season. Its battle log still
-    # proves the day's battles from the Reset. Any other value stays without
-    # a start.
+    # itself, because it still shows the ended Season, does not show 5,000,
+    # or came after the player's first battle or after its battle log, starts
+    # the Season at 5,000 by the Season rule once the player has a Legend I
+    # profile for the new Season. Its battle log still proves the day's
+    # battles from the Reset.
     season_rule = bool(
         not complete
         and battle_log_usable
@@ -1174,8 +1169,6 @@ def _load_reset_baseline(
             player_id,
             row[14],
             _text_value(row[25]) if row[25] is not None else None,
-            int(row[16]),
-            after_first_battle="profile_after_first_event" in failure_reasons,
         )
     )
     complete = complete or season_rule
@@ -1252,38 +1245,17 @@ def _season_rule_holds(
     player_id: int,
     boundary_at: datetime,
     season_id: str | None,
-    trophies: int,
-    *,
-    after_first_battle: bool,
 ) -> bool:
     """Whether a Legend I reading at the Season-opening ``boundary_at`` that
     cannot give the start lets the Season rule give it: the reading names the
-    ended or the new Season, a reading before any battle naming the new
-    Season still shows the player's last pre-Reset trophies, and the player
-    has a new-Season Legend I profile from before the next weekly move down."""
+    new Season, or names the ended Season and the player has a new-Season
+    Legend I profile since the Reset."""
     new_season = ranked_day_for(boundary_at).official_season_id
-    if season_id not in {
-        new_season,
-        ranked_day_for(boundary_at - timedelta(days=1)).official_season_id,
-    }:
-        return False
+    ended_season = ranked_day_for(boundary_at - timedelta(days=1)).official_season_id
     if season_id == new_season:
-        if after_first_battle:
-            return True
-        last = connection.execute(
-            """
-            SELECT profile.trophies
-            FROM player_profile_versions AS profile
-            JOIN players AS player
-              ON player.normalized_tag = profile.normalized_tag
-            WHERE player.id = %s AND profile.observed_at < %s
-              AND profile.source_contract_state = 'accepted'
-            ORDER BY profile.observed_at DESC, profile.id DESC
-            LIMIT 1
-            """,
-            (player_id, boundary_at),
-        ).fetchone()
-        return last is not None and int(last[0]) == trophies
+        return True
+    if season_id != ended_season:
+        return False
     return bool(
         connection.execute(
             """
@@ -1292,19 +1264,13 @@ def _season_rule_holds(
                 FROM player_profile_versions AS profile
                 JOIN players AS player
                   ON player.normalized_tag = profile.normalized_tag
-                WHERE player.id = %s
-                  AND profile.observed_at >= %s AND profile.observed_at < %s
+                WHERE player.id = %s AND profile.observed_at >= %s
                   AND profile.current_league_season_id = %s
                   AND profile.eligibility_state = 'eligible'
                   AND profile.source_contract_state = 'accepted'
             )
             """,
-            (
-                player_id,
-                boundary_at,
-                boundary_at + SEASON_RULE_PROFILE_WINDOW,
-                new_season,
-            ),
+            (player_id, boundary_at, new_season),
         ).fetchone()[0]
     )
 
