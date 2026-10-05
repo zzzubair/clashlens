@@ -5,12 +5,12 @@ from typing import Any
 
 from .api_db import (
     ApiDatabase,
-    _frozen_trophies_sql,
     _public_confidence,
     _public_snapshot_confidence,
+    _season_reset_waiting_sql,
     _text,
 )
-from .domain import SEASON_START_TROPHIES, ranked_day_for, season_opening_reset
+from .domain import ranked_day_for, season_opening_reset
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
@@ -20,9 +20,12 @@ _FOCUS_NEIGHBORS = 5
 # Shared membership and confirmation rule for the page and operator measurements.
 # A profile still naming an earlier Season than the calendar shows trophies from
 # before that player's Season reset, so it waits off the board until it updates.
-# On a Season's first Legend day, trophies still equal to the player's frozen
-# pre-Reset final trophies (other than 5,000) wait the same way.
-_FROZEN_TROPHIES_SQL = _frozen_trophies_sql("player.id", "%(opening_reset)s")
+# On a Season's first Legend day, trophies other than 5,000 that still equal
+# the player's frozen pre-Reset final trophies, or that the day's recorded
+# battles cannot explain, wait the same way.
+_OPENING_DAY_WAITING_SQL = _season_reset_waiting_sql(
+    "player.id", "profile.trophies", "%(opening_reset)s"
+)
 _LIVE_CANDIDATES_SQL = f"""
 SELECT player.normalized_tag, profile.name, profile.trophies,
        greatest(
@@ -31,11 +34,7 @@ SELECT player.normalized_tag, profile.name, profile.trophies,
        player.eligibility_state,
        profile.profile_json -> 'clan' ->> 'name' AS clan,
        COALESCE(profile.current_league_season_id = %(season_id)s, false)
-           AND NOT COALESCE(
-               profile.trophies <> {SEASON_START_TROPHIES}
-               AND profile.trophies = {_FROZEN_TROPHIES_SQL},
-               false
-           ) AS season_current
+           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
 FROM players AS player
 JOIN LATERAL (
     SELECT name, trophies, profile_json, source_contract_state,
