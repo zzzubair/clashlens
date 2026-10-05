@@ -46,12 +46,12 @@ export async function loader({
   request,
 }: Route.LoaderArgs): Promise<SavedPlayersLoaderData> {
   const { requireLogin } = await import("../server/auth-guard.server");
-  const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
-  const rawTag = new URL(request.url).searchParams.get("tag");
-  const tag = rawTag === null ? undefined : normalizeSubmittedPlayerTag(rawTag);
-  if (tag === null) throw new Response(null, { status: 400, headers: NO_STORE });
   try {
+    const identity = await requireLogin(request);
+    const rawTag = new URL(request.url).searchParams.get("tag");
+    const tag = rawTag === null ? undefined : normalizeSubmittedPlayerTag(rawTag);
+    if (tag === null) throw new Response(null, { status: 400, headers: NO_STORE });
     const { createPythonClient } = await import("../services/python.server");
     const players = await createPythonClient(identity).listSavedTags(tag);
     const removeIdempotencyKeys: Record<string, string> = {};
@@ -65,6 +65,7 @@ export async function loader({
       error: null,
     };
   } catch (cause) {
+    if (cause instanceof Response && cause.status !== 503) throw cause;
     const { isAccountNotFoundError } = await import("../server/actions.server");
     if (isAccountNotFoundError(cause)) throw redirect("/account/setup");
     const { safeWebsiteError } = await import("../server/errors.server");
@@ -84,7 +85,14 @@ export async function loader({
  */
 export async function action({ request }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
-  const identity = await requireLogin(request);
+  let identity;
+  try {
+    identity = await requireLogin(request);
+  } catch (cause) {
+    if (cause instanceof Response && cause.status !== 503) throw cause;
+    const { safeWebsiteError } = await import("../server/errors.server");
+    return errorResponse(503, safeWebsiteError(cause));
+  }
   const actions = await import("../server/actions.server");
   const { getWebsiteConfig } = await import("../server/config.server");
 
