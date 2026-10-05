@@ -10,6 +10,7 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Metric, MetricCard } from "../components/MetricCard";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
@@ -918,7 +919,7 @@ function SelectedSeason({
   return (
     <section className="data-section" aria-labelledby="historical-title">
       <div className="section-heading">
-        <h2 id="historical-title">Historical season</h2>
+        <h2 id="historical-title">{seasonLabel(seasonId)}</h2>
       </div>
       {error ? <ErrorNotice error={error} /> : null}
       <p className="section-note">Results for {seasonLabel(seasonId)} are unavailable.</p>
@@ -936,10 +937,6 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
             {seasonLabel(summary.seasonId, summary.seasonEnd)}
           </h2>
         </div>
-        <p className="section-note">
-          Season result from Clash of Clans. A Clash Lens daily summary is not available
-          for this Season.
-        </p>
         {summary.officialHistory ? (
           <div className="metric-grid">
             <MetricCard title="Season finish">
@@ -962,16 +959,11 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           {seasonLabel(summary.seasonId, summary.seasonEnd)}
         </h2>
       </div>
-      <p className="section-note">
-        {summary.coverageState === "complete"
-          ? "Records cover all 28 Legend days."
-          : `Partial Season history: records cover ${summary.daysObserved} of 28 Legend days, and some of those may be incomplete. Totals below cover the recorded days only.`}
-      </p>
-      {summary.officialHistory ? (
+      {summary.coverageState === "complete" ? null : (
         <p className="section-note">
-          Final trophies: {formatCount(summary.officialHistory.eodTrophies)}
+          Totals cover the {summary.daysObserved} of 28 Legend days with records.
         </p>
-      ) : null}
+      )}
       <div className="metric-grid">
         <MetricCard title="Offense">
           <Metric label="Attacks recorded" value={formatCount(summary.attackCount)} />
@@ -1001,6 +993,12 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 : `${formatCount(summary.startTrophies)} → ${formatCount(summary.endTrophies)}`
             }
           />
+          {summary.officialHistory ? (
+            <Metric
+              label="Final trophies"
+              value={formatCount(summary.officialHistory.eodTrophies)}
+            />
+          ) : null}
           <Metric label="Final rank" value={finalRank(summary)} />
         </MetricCard>
         <MetricCard title="Attack stars">
@@ -1019,21 +1017,6 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
         </MetricCard>
       </div>
       <p className="section-note">{FINAL_RANK_NOTE}</p>
-      <p className="section-note">
-        The sum of daily trophy changes includes automatic defense losses at Reset; it
-        shows Unknown if any recorded day&apos;s change is unknown. Recorded battle net
-        leaves those losses out.
-      </p>
-      {[
-        summary.attackCount,
-        summary.attackGain,
-        summary.defenseCount,
-        summary.defenseLoss,
-        summary.netTrophyChange,
-      ].includes(null) ? (
-        <p className="section-note">Some daily totals are unavailable.</p>
-      ) : null}
-      <p className="section-note">{LEGEND_DAY_NOTE}</p>
       {selectedDay &&
       !summary.dailyEntries.some((day) => legendDayKey(day.period) === selectedDay) ? (
         <p className="section-note" role="status">
@@ -1050,12 +1033,16 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           <thead>
             <tr>
               <th scope="col">Day</th>
-              <th scope="col">Status</th>
               <th scope="col">Start</th>
               <th scope="col">Attack</th>
               <th scope="col">Defense</th>
               <th scope="col">Trophy change</th>
-              <th scope="col">Recorded battle net</th>
+              <th
+                scope="col"
+                title="Recorded attacks minus recorded defenses, without the automatic defense loss at Reset."
+              >
+                Recorded battle net
+              </th>
               <th scope="col">End</th>
               <th scope="col">EOD change from previous day</th>
               <th scope="col">Reset rank</th>
@@ -1087,14 +1074,14 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                     "aria-current": "date",
                   })}
                 >
-                  <td>{day.dayNumber ?? "Unknown"}</td>
                   <td>
-                    {status}
-                    {reasons.map((reason) => (
-                      <small className="table-note" key={reason}>
-                        {reason}
-                      </small>
-                    ))}
+                    <details className="day-status">
+                      <summary>
+                        {day.dayNumber ?? "Unknown"}
+                        <DayMark status={status} />
+                      </summary>
+                      <DayStatusNote status={status} reasons={reasons} />
+                    </details>
                   </td>
                   <td>{formatCount(day.startTrophies)}</td>
                   <td>{formatSigned(day.attackGain)}</td>
@@ -1206,8 +1193,7 @@ function formatPlayerTimestamp(value: string): string {
   return `${formatPlayerDate(date)}, ${playerTimeFormatter.format(date)} UTC`;
 }
 
-const LEGEND_DAY_NOTE =
-  "A Legend day runs from 05:00 to 05:00 UTC. Ended days show “Provisional result” until Clash Lens can prove their trophy change includes the automatic defense loss at Reset.";
+const LEGEND_DAY_NOTE = "A Legend day runs from 05:00 to 05:00 UTC.";
 
 function isCurrentDay(today: RankedDaySummary | null, day: RankedDaySummary): boolean {
   return today != null && legendDayKey(today.period) === legendDayKey(day.period);
@@ -1234,11 +1220,7 @@ function LegendDay({
           <strong>{dayLabel}</strong>
           <span className="legend-day-meta">
             <small>{seasonDay}</small>
-            {isCurrentDay ? (
-              <LiveBadge />
-            ) : (
-              <span className="legend-day-live legend-day-status">{status}</span>
-            )}
+            {isCurrentDay ? <LiveBadge /> : <DayMark status={status} />}
           </span>
         </span>
         <span className="legend-day-stat legend-day-start">
@@ -1299,11 +1281,15 @@ function LegendDay({
           </strong>
         </span>
       </summary>
-      {reasons.map((reason) => (
-        <p className="section-note" key={reason}>
-          {reason}
-        </p>
-      ))}
+      {isCurrentDay ? (
+        reasons.map((reason) => (
+          <p className="section-note" key={reason}>
+            {reason}
+          </p>
+        ))
+      ) : (
+        <DayStatusNote status={status} reasons={reasons} />
+      )}
       <p className="section-note">
         {`Recorded battle net ${formatSigned(battleNet)}: recorded attacks minus recorded defenses, without the automatic defense loss at Reset.`}
       </p>
@@ -1461,12 +1447,8 @@ function valueTone(value: number | null): string {
   return value > 0 ? "score-positive" : "score-negative";
 }
 
-function provisional(value: string, state: string | null): string {
-  return value === "Unknown" || state === "accepted" ? value : `${value} (provisional)`;
-}
-
 const FINAL_RANK_NOTE =
-  "Final rank is the in-game rank from Clash of Clans. It shows once Clash of Clans publishes it after the Season ends.";
+  "Final rank is the in-game rank from Clash of Clans, shown once it is published after the Season ends.";
 
 // The official in-game placement, never Clash Lens's own leaderboard position.
 function finalRank(summary: HistoricalSeasonSummary): string {

@@ -191,10 +191,33 @@
   align-items: center;
   gap: 0.75rem;
 }
-.player-page .legend-day-status {
-  border-color: var(--cl-border);
-  color: var(--cl-muted);
-  background: var(--cl-surface);
+/* An ended day's status: a hollow dot when provisional, a filled one when
+   evidence is missing. */
+.player-page .day-mark {
+  /* Keeps its hidden label inside a scrolling table. */
+  position: relative;
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-left: 0.4rem;
+  border: 1.5px solid var(--cl-muted);
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.player-page .day-mark-gap {
+  border-color: var(--cl-gold);
+  background: var(--cl-gold);
+}
+.player-page .day-status summary {
+  list-style: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.player-page .day-status summary::-webkit-details-marker {
+  display: none;
+}
+.player-page .day-status[open] {
+  min-width: 14rem;
 }
 .player-page .legend-day-date small,
 .player-page .legend-day-stat small,
@@ -374,13 +397,6 @@
   align-items: center;
   color: var(--cl-muted);
   font-size: 0.8125rem;
-}
-.player-page .table-note {
-  display: block;
-  color: var(--cl-muted);
-}
-.player-page .data-table td:has(> .table-note) {
-  min-width: 12rem;
 }
 /* The Legend day a day link names. */
 .player-page .data-table tr[aria-current] {
@@ -857,19 +873,6 @@
   gap: 0.4rem;
 }
 
-.player-page .past-seasons .table-wrap {
-  max-width: 40rem;
-}
-
 .player-page .past-seasons .data-table {
   min-width: 0;
-}
-
-.player-page .past-seasons-source {
-  margin: 0 0 0.5rem;
-  font-weight: 650;
-}
-
-.player-page .past-seasons-source a {
-  text-decoration: underline;
 }

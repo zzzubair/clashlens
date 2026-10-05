@@ -363,7 +363,7 @@ describe("player route historical independence", () => {
         finalPlacement: 12,
       },
     });
-    expect(official).toContain("A Clash Lens daily summary is not available");
+    expect(official).toContain("<dt>Final trophies</dt><dd>5,800</dd>");
     expect(official).not.toContain("not recorded");
     const late = await renderSeason({
       ...SUMMARY,
@@ -1412,13 +1412,13 @@ describe("player day honesty", () => {
       `?season=${SEASON}`,
     ).then((value) => value.replaceAll("<!-- -->", ""));
     const rows = html.split("<tbody>")[1].split("</tbody>")[0].split("</tr>");
-    expect(rows[0]).toContain("<td>Provisional result</td>");
+    expect(rows[0]).toContain('<summary>1<span class="day-mark" title="Provisional');
     // EOD change sits beside End, apart from battle net, and is provisional
     // unless its proof is accepted; an unknown proof state is not accepted.
     expect(rows[0]).toContain("<td>+26</td><td>+26</td><td>6,026</td><td>+40</td>");
-    expect(rows[1]).toContain("<td>6,026 (provisional)</td><td>Unknown</td>");
-    expect(rows[2]).toContain("<td>6,026 (provisional)</td><td>+40</td>");
-    expect(rows[3]).toContain("<td>6,026</td><td>+40 (provisional)</td>");
+    expect(rows[1]).toContain('<td>6,026<span class="day-mark" title="Provisional">');
+    expect(rows[2]).toContain("(provisional)</span></span></td><td>+40</td>");
+    expect(rows[3]).toContain('<td>6,026</td><td>+40<span class="day-mark"');
     expect(rows[1]).toContain("Incomplete");
     expect(rows[1]).toContain("Trophies at the end of this day were not recorded.");
     expect(rows[1]).toContain(
@@ -1434,7 +1434,7 @@ describe("player day honesty", () => {
       "Clash of Clans returned 9 defenses for this day, more than the usual 8, so this day is marked partial.",
     );
     expect(rows[4]).toContain("<td>+310</td><td>0</td><td>0</td><td>+310</td>");
-    expect(rows[5]).toContain("<td>Provisional result");
+    expect(rows[5]).toContain("<strong>Provisional result.</strong>");
     expect(rows[5]).not.toContain("Incomplete");
     expect(rows[5]).toContain("<td>-11</td><td>-11</td>");
     expect(rows[5]).toContain("The battle log was not checked at the start of this day.");
@@ -1442,7 +1442,7 @@ describe("player day honesty", () => {
     expect(rows[6]).toContain(
       "The two players&#x27; battle logs disagree about a result.",
     );
-    expect(rows[7]).toContain("Incomplete");
+    expect(rows[7]).toContain('<span class="day-mark day-mark-gap" title="Incomplete">');
     expect(html).toContain("Attacks recorded");
     expect(html).toContain("Defenses recorded");
     expect(html).toContain("Recorded battle net");

@@ -263,14 +263,13 @@ describe("past-Season view", () => {
         SEASON,
       );
       expect(html).toContain(`<dt>Final rank</dt><dd>${expected}</dd>`);
-      expect(html).toContain("Final rank is the in-game rank from Clash of Clans.");
+      expect(html).toContain("Final rank is the in-game rank from Clash of Clans,");
       expect(html).not.toContain("Clash Lens final rank");
       expect(html).not.toContain(">183<");
-      if (source === "official_league_history") {
-        expect(html).toContain("<dt>Final trophies</dt><dd>5,812</dd>");
-      } else {
-        expect(html).toContain("Final trophies: 5,812");
-        expect(html).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
+      expect(html).toContain("<dt>Final trophies</dt><dd>5,812</dd>");
+      if (source === "tracked_summary") {
+        expect(html).not.toContain("Final trophies:");
+        expect(html).not.toContain("A Legend day runs from 05:00 to 05:00 UTC.");
         expect(html).toContain('<th scope="col">Trophy change</th>');
         expect(html).not.toContain('<th scope="col">Net</th>');
       }
@@ -286,12 +285,12 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toContain("records cover 5 of 28 Legend days");
-    expect(html).toContain("Totals below cover the recorded days only.");
+    expect(html).toContain("Totals cover the 5 of 28 Legend days with records.");
+    expect(html).not.toContain("Partial Season history");
     expect(html).toContain(
       "<dt>Sum of daily trophy changes (5 of 28 days)</dt><dd>+300</dd>",
     );
-    expect(html).toContain("includes automatic defense losses at Reset");
+    expect(html).toContain('title="Recorded attacks minus recorded defenses, without');
     expect(html).not.toContain("Net change");
     // Missing days alone do not make any known total unavailable.
     expect(html).not.toContain("Some daily totals are unavailable.");
@@ -320,7 +319,7 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>Unknown</td><td>Unknown</td><td>8</td>");
   });
 
-  it("says a total is unavailable only when one is unknown", async () => {
+  it("shows an unknown total as Unknown without a separate note", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -336,7 +335,7 @@ describe("past-Season view", () => {
     expect(html).toContain(
       "<dt>Sum of daily trophy changes (5 of 28 days)</dt><dd>Unknown</dd>",
     );
-    expect(html).toContain("Some daily totals are unavailable.");
+    expect(html).not.toContain("Some daily totals are unavailable.");
   });
 
   it("names complete coverage without a partial warning", async () => {
@@ -354,7 +353,7 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toContain("Records cover all 28 Legend days.");
+    expect(html).not.toContain("Totals cover the");
     expect(html).not.toContain("Partial Season history");
   });
 
@@ -479,7 +478,7 @@ describe("past-Season view", () => {
 
     const past = await loadAndRender(client, SEASON);
     for (const number of [24, 25, 26, 27, 28])
-      expect(past).toContain(`<td>${number}</td>`);
+      expect(past).toContain(`<summary>${number}<span class="day-mark`);
     expect(past).toContain('<strong aria-current="page">5 Oct 2026</strong>');
   });
 
@@ -500,7 +499,7 @@ describe("past-Season view", () => {
     const html = await loadAndRender(newSeasonClient(), SEASON, "2026-10-04");
     expect(html.match(/aria-current="date"/g)).toHaveLength(1);
     expect(html).toContain(
-      '<tr id="legend-day-2026-10-04" aria-current="date"><td>28</td>',
+      '<tr id="legend-day-2026-10-04" aria-current="date"><td><details class="day-status"><summary>28<',
     );
     expect(html).toContain('<strong aria-current="page">5 Oct 2026</strong>');
   });
@@ -509,7 +508,7 @@ describe("past-Season view", () => {
     const html = await loadAndRender(newSeasonClient(), SEASON, "2026-09-15");
     expect(html).toContain("No saved Legend log for 15 Sep 2026.");
     expect(html).not.toContain('aria-current="date"');
-    expect(html).toContain("<td>28</td>");
+    expect(html).toContain('<details class="day-status"><summary>28<');
   });
 
   it("opens a current Season day link in the Daily Legend log", async () => {

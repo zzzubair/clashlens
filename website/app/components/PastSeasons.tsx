@@ -41,19 +41,15 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
       <div className="section-heading">
         <h2 id="past-seasons-title">Past Seasons</h2>
       </div>
-      <p className="past-seasons-source">
-        Source:{" "}
+      <p className="section-note">
+        Final trophies and global rank since January 2025, from{" "}
         <a href="https://clashk.ing" rel="noopener">
           ClashKing
         </a>
-      </p>
-      <p className="section-note">
-        Final trophies and global rank from earlier Legend seasons, as recorded by
-        ClashKing. They are not Clash Lens tracking and are never added to the daily log
-        or totals. Dates show when each Season ended; older seasons ran by calendar month.
+        .
       </p>
       <div
-        className="table-wrap"
+        className="table-wrap top-space"
         tabIndex={0}
         role="region"
         aria-label="Past Seasons table"
