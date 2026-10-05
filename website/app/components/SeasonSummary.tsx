@@ -25,11 +25,13 @@ export const per = (total: number | null, by: number | null) =>
   total === null || !by ? null : total / by;
 
 // The one Season box: rank and trophies first, then hit rate, battles by
-// stars and averages. Without battles it shows only the headline.
+// stars and averages. Without battles it shows only the headline. An ended
+// Season's final rank is its standout number.
 export function SeasonSummary({
   title,
   controls,
   rank,
+  finalRank = false,
   trophies,
   attack,
   defense,
@@ -38,6 +40,7 @@ export function SeasonSummary({
   title: string;
   controls?: React.ReactNode;
   rank: [label: string, value: string];
+  finalRank?: boolean;
   trophies: [label: string, value: string];
   attack?: SummarySide;
   defense?: SummarySide;
@@ -64,7 +67,10 @@ export function SeasonSummary({
       </div>
       <dl className="season-summary-headline">
         {[rank, trophies].map(([label, value]) => (
-          <div key={label}>
+          <div
+            key={label}
+            className={finalRank && label === rank[0] ? "season-summary-rank" : undefined}
+          >
             <dt>{label}</dt>
             <dd className={words(value)}>{value}</dd>
           </div>

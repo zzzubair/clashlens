@@ -876,6 +876,13 @@
 .player-page .past-seasons .data-table {
   min-width: 0;
 }
+/* The final rank is an ended Season's standout number. */
+.player-page .past-seasons .past-season-rank {
+  color: var(--cl-accent-contrast);
+  font-family: var(--cl-font-heading);
+  font-size: 1.15rem;
+  font-weight: 750;
+}
 
 /* The one Season summary box */
 .player-page > .season-summary {
@@ -929,6 +936,25 @@
 }
 .season-summary-headline > div {
   min-width: 0;
+}
+.season-summary-headline > .season-summary-rank {
+  grid-column: 1 / -1;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--cl-accent);
+  background: var(--cl-panel);
+}
+.season-summary-rank dd {
+  color: var(--cl-accent-contrast);
+  font-size: clamp(2.5rem, 10vw, 3.5rem);
+}
+@media (min-width: 48rem) {
+  .season-summary-headline:has(> .season-summary-rank) {
+    grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr));
+    align-items: center;
+  }
+  .season-summary-headline > .season-summary-rank {
+    grid-column: auto;
+  }
 }
 .season-summary-headline dd.summary-words {
   font-family: var(--cl-font);

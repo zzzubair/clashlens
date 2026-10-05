@@ -238,9 +238,9 @@ describe("past-Season view", () => {
 
   it.each([
     ["official_league_history", null, "Not available yet"],
-    ["official_league_history", 180, "180"],
+    ["official_league_history", 180, "#180"],
     ["tracked_summary", null, "Not available yet"],
-    ["tracked_summary", 1340, "1,340"],
+    ["tracked_summary", 1340, "#1,340"],
   ] as const)(
     "shows %s official placement %s as the final rank",
     async (source, finalPlacement, expected) => {

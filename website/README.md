@@ -59,7 +59,8 @@ known zero displays 0. The latest finished day's result may still change.
 Selecting a past Season hides these cards.
 
 Each Season shows one Season summary box. A past Season's box leads with its
-official in-game final rank and final trophies; the current Season's leads with
+official in-game final rank, highlighted as the standout number, and final
+trophies; the current Season's leads with
 the Clash Lens rank at the latest Reset this Season (the page has no live rank)
 and current trophies. Below that: hit rate, the percentage of attacks with known
 stars that got three stars; attacks and defenses by 3, 2, 1 and 0 stars; and
@@ -84,7 +85,8 @@ the player page and makes no request or additional database read. It adds no sto
 are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 
 The separate Past Seasons table shows saved finishes from January 2025 onwards,
-newest first, with three columns: Season ended, Final trophies and Global rank.
+newest first, with three columns: Season ended, Global rank and Final trophies.
+The rank is highlighted as the standout number.
 28-day Seasons are dated by their closing Reset; older calendar-month results
 keep their month label. Saved in-game Legend I history wins for each Season,
 even when a trophy count or rank is missing: those cells say "Not recorded"

@@ -58,20 +58,22 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
           <thead>
             <tr>
               <th scope="col">Season ended</th>
-              <th scope="col">Final trophies</th>
               <th scope="col">Global rank</th>
+              <th scope="col">Final trophies</th>
             </tr>
           </thead>
           <tbody>
             {finishes.map((finish) => (
               <tr key={finish.seasonId}>
                 <th scope="row">{pastSeasonLabel(finish)}</th>
+                {finish.globalRank === null ? (
+                  <td>Not recorded</td>
+                ) : (
+                  <td className="past-season-rank">
+                    {`#${finish.globalRank.toLocaleString("en-GB")}`}
+                  </td>
+                )}
                 <td>{finish.trophies?.toLocaleString("en-GB") ?? "Not recorded"}</td>
-                <td>
-                  {finish.globalRank === null
-                    ? "Not recorded"
-                    : `#${finish.globalRank.toLocaleString("en-GB")}`}
-                </td>
               </tr>
             ))}
           </tbody>

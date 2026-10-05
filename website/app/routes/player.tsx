@@ -979,6 +979,7 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
     <SeasonSummary
       title={seasonLabel(summary.seasonId, summary.seasonEnd)}
       rank={["Final rank", finalRank(summary)]}
+      finalRank
       trophies={[
         "Final trophies",
         formatCount(summary.officialHistory?.eodTrophies ?? summary.endTrophies),
@@ -1450,7 +1451,7 @@ const FINAL_RANK_NOTE =
 // The official in-game placement, never Clash Lens's own leaderboard position.
 function finalRank(summary: HistoricalSeasonSummary): string {
   const placement = summary.officialHistory?.finalPlacement ?? null;
-  return placement === null ? "Not available yet" : formatCount(placement);
+  return placement === null ? "Not available yet" : `#${formatCount(placement)}`;
 }
 
 function formatCount(value: number | null): string {
