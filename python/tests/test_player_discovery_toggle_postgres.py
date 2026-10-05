@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
+import psycopg
 from domain_test_support import domain_database, store_observation
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_domain_processing_postgres import _processor
 
-from clashlens.db import Database
+from clashlens.db import DISCOVERY_QUEUE_CAP, Database, enqueue_discovered_players
 
 BATTLE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKINGS = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
@@ -96,5 +99,63 @@ def test_player_discovery_disabled_retains_evidence_without_enqueue(
             assert battles >= 1
             assert active == 0
             assert inactive_outside > 0
+        finally:
+            database.close()
+
+
+def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
+    database_url: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            new_id, known_id, *others = [
+                row[0]
+                for row in connection.execute(
+                    """
+                    INSERT INTO players (normalized_tag, active, eligibility_state)
+                    SELECT '#Q' || n, n = 1, CASE n WHEN 1 THEN 'eligible' ELSE 'unknown' END
+                    FROM generate_series(0, 502) AS n ORDER BY n RETURNING id
+                    """
+                ).fetchall()
+            ]
+        options = conninfo_to_dict(connection_info).get("options", "")
+        database = Database(
+            make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
+        )
+        claim = SimpleNamespace(work_type="process_observation")
+
+        def discover(player_ids: list[int]) -> None:
+            with database.pool.connection() as connection, connection.transaction():
+                enqueue_discovered_players(connection, database, claim, player_ids)
+
+        def queued() -> list[int]:
+            with database.pool.connection() as connection:
+                return [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT player_id FROM collector_work"
+                        " WHERE kind = 'discovery_profile' ORDER BY player_id"
+                    )
+                ]
+
+        try:
+            discover([new_id, known_id])
+            discover([new_id, known_id])
+            assert queued() == [new_id]
+
+            # 501 more unknown players fill the queue to its cap of 500.
+            discover(others[:250])
+            discover(others[250:])
+            assert len(queued()) == DISCOVERY_QUEUE_CAP
+
+            # Once a waiting check finishes, exactly one more fits.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_work SET status = 'cancelled' WHERE player_id = %s",
+                    (new_id,),
+                )
+            discover(others)
+            assert len(queued()) == DISCOVERY_QUEUE_CAP + 1
+            assert len(set(others) - set(queued())) == 1
         finally:
             database.close()

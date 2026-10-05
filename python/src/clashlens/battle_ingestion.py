@@ -9,7 +9,13 @@ from psycopg.types.json import Jsonb
 
 from . import army_ingestion, job_outcomes, reconciliation_db, reset_baselines
 from .battle import ParsedBattleLog, ParsedBattleRow
-from .db import RESET_LOCK_WAIT, Claim, Database, _text_value
+from .db import (
+    RESET_LOCK_WAIT,
+    Claim,
+    Database,
+    _text_value,
+    enqueue_discovered_players,
+)
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
@@ -240,14 +246,12 @@ def complete_battle_log(
                     """,
                     (Jsonb(discoveries), observation_id, battle_log.observed_at),
                 )
-                if (
-                    database.player_discovery_enabled
-                    and claim.work_type == "process_observation"
-                ):
-                    connection.execute(
-                        "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
-                        (sorted({item["player_id"] for item in discoveries}),),
-                    )
+                enqueue_discovered_players(
+                    connection,
+                    database,
+                    claim,
+                    (item["player_id"] for item in discoveries),
+                )
                 canonical_rows = connection.execute(
                     """
                     WITH input AS (
@@ -704,14 +708,12 @@ def _complete_battle_log_legacy(
                     """,
                     (Jsonb(discoveries), observation_id, battle_log.observed_at),
                 )
-                if (
-                    database.player_discovery_enabled
-                    and claim.work_type == "process_observation"
-                ):
-                    connection.execute(
-                        "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
-                        (sorted({item["player_id"] for item in discoveries}),),
-                    )
+                enqueue_discovered_players(
+                    connection,
+                    database,
+                    claim,
+                    (item["player_id"] for item in discoveries),
+                )
                 canonical_rows = connection.execute(
                     """
                     WITH input AS (

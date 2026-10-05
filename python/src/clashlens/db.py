@@ -35,6 +35,10 @@ WORKER_STATEMENT_TIMEOUT_SECONDS = 900
 # Otherwise it keeps its own rows, and any earlier Resets it already took,
 # locked for as long as a slow publication holds that Reset.
 RESET_LOCK_WAIT = "250ms"
+# At most this many profile checks for newly discovered players wait at once.
+# Legend I gains about 2,000 players a week; a full queue drains in under a
+# minute at the measured 21 discovery checks per second.
+DISCOVERY_QUEUE_CAP = 500
 
 # Work types this worker image may claim. Unsupported work types (for example
 # build_export) and unknown or future contracts stay pending and unclaimed so a
@@ -1344,6 +1348,57 @@ def lock_wait(connection: Any, wait: str | None) -> Iterator[None]:
     connection.execute("SELECT set_config('lock_timeout', %s, true)", (wait,))
     yield
     connection.execute("SELECT set_config('lock_timeout', %s, true)", (previous,))
+
+
+def enqueue_discovered_players(
+    connection: Any, database: Database, claim: Claim, player_ids: Iterable[int]
+) -> None:
+    """Queue one profile check per new player named by a battle log or ranking.
+
+    Players already tracked or already given this week's check are skipped
+    before anything else. The remaining ones are queued only while fewer than
+    DISCOVERY_QUEUE_CAP such checks wait. One transaction at a time may add
+    checks; a busy or full queue skips them, and the next battle log or
+    ranking naming the player tries again.
+    """
+    if not database.player_discovery_enabled or claim.work_type != "process_observation":
+        return
+    # The week key matches clashlens_eligibility_week, which this role cannot run.
+    candidates = [
+        int(row[0])
+        for row in connection.execute(
+            """
+            SELECT player.id FROM players AS player
+            WHERE player.id = ANY(%s::bigint[])
+              AND (NOT player.active OR player.eligibility_state <> 'eligible')
+              AND NOT EXISTS (
+                  SELECT 1 FROM collector_work AS work
+                  WHERE work.coalescing_key = 'discovery-profile:' || player.id || ':'
+                      || to_char(date_bin(interval '7 days', clock_timestamp(),
+                                          timestamptz '2000-01-03 05:00:00+00')
+                                 AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+            ORDER BY player.id
+            """,
+            (sorted(set(player_ids)),),
+        )
+    ]
+    if not candidates or not connection.execute(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended('discovery-queue', 0))"
+    ).fetchone()[0]:
+        return
+    waiting = connection.execute(
+        """
+        SELECT count(*) FROM collector_work
+        WHERE lane = 'ordinary' AND status IN ('pending', 'waiting_retry')
+          AND kind = 'discovery_profile' AND NOT eligibility_recheck
+        """
+    ).fetchone()[0]
+    room = DISCOVERY_QUEUE_CAP - int(waiting)
+    if room > 0:
+        connection.execute(
+            "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
+            (candidates[:room],),
+        )
 
 
 def _positive_int_input(values: dict[str, Any], name: str) -> int:

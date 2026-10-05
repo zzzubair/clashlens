@@ -389,8 +389,9 @@ the already-built release:
 ```
 
 The website and collector health endpoints bind to `127.0.0.1`; PostgreSQL and
-the private API have no host port. Production discovery and the global Top-200
-request remain disabled until real collection is approved.
+the private API have no host port. Production discovery is on unless
+`CLASHLENS_PLAYER_DISCOVERY_ENABLED=false`; see
+[collector polling](collector-polling.md) for its limit and request cost.
 
 `up` first checks configuration and existing resources without stopping services.
 Once those checks pass, it disables and stops the whole target, except as described in

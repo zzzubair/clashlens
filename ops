@@ -176,8 +176,8 @@ load_production_config() {
   [[ ! -L "$(setting CLASHLENS_SPOOL_ROOT)" ]] || die "CLASHLENS_SPOOL_ROOT must not be a symlink"
   [[ "$(setting CLASHLENS_API_KEY_HOST_DIR)" == /* && "$(setting CLASHLENS_API_KEY_HOST_DIR)" != / ]] || die "CLASHLENS_API_KEY_HOST_DIR must be an absolute non-root path"
   validate_production_spool
-  [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED false)" == false ]] || \
-    die "production discovery is disabled by issue #110; remove or set CLASHLENS_PLAYER_DISCOVERY_ENABLED=false"
+  [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED true)" =~ ^(true|false)$ ]] || \
+    die "CLASHLENS_PLAYER_DISCOVERY_ENABLED must be true or false"
   [[ "$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" =~ ^(true|false)$ ]] || \
     die "CLASHLENS_GLOBAL_RANKINGS_ENABLED must be true or false"
   [[ "$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY false)" =~ ^(true|false)$ ]] || \
@@ -269,7 +269,8 @@ load_production_config() {
   WEBSITE_PIDS=$(setting CLASHLENS_WEBSITE_PIDS 256)
   COLLECTOR_ARGS=
   API_ARGS=
-  WORKER_ARGS=--disable-player-discovery
+  WORKER_ARGS=
+  [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED true)" == true ]] || WORKER_ARGS=--disable-player-discovery
 }
 
 load_fixture_config() {
