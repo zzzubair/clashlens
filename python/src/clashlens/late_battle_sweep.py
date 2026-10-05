@@ -246,6 +246,7 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
     for player_id, first_day in first_days.items():
         try:
             with database.pool.connection() as connection, connection.transaction():
+                reconciliation_db.limit_lock_waits(connection)
                 saved_days = connection.execute(
                     """
                     SELECT DISTINCT ranked_day_start

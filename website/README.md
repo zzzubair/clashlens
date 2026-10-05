@@ -49,6 +49,16 @@ only instead of a season day number. This adds no weekly recheck or clan discove
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
+The separate Past Seasons table shows saved finishes from January 2025 onwards,
+newest first, with three columns: Season ended, Final trophies and Global rank.
+28-day Seasons are dated by their closing Reset; older calendar-month results
+keep their month label. Saved in-game Legend I history wins for each Season,
+even when a trophy count or rank is missing: those cells say "Not recorded"
+instead of borrowing ClashKing's values. ClashKing fills Seasons with no saved
+in-game row and gets one linked credit line. This table needs JavaScript and
+loads after the rest of the page; absent or unavailable history hides only the
+table. It is separate from the Seasons links that open Clash Lens's saved days.
+
 Opening a tracked player's profile with JavaScript enabled automatically submits
 the existing Refresh request once when the server reports its saved check is
 more than 60 seconds old. Saved data stays visible while the existing Refresh
