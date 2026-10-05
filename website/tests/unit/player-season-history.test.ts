@@ -116,9 +116,17 @@ const PLAYER = {
 
 const CURRENT_LINK = '<a href="/players/%232PP" data-discover="true">Current Season</a>';
 
-async function loadAndRender(client: Record<string, unknown>, season: string | null) {
+async function loadAndRender(
+  client: Record<string, unknown>,
+  season: string | null,
+  day?: string,
+) {
   mocks.createPythonClient.mockReturnValue(client);
-  const search = season === null ? "" : `?season=${season}`;
+  const params = new URLSearchParams({
+    ...(season !== null && { season }),
+    ...(day !== undefined && { day }),
+  });
+  const search = params.size === 0 ? "" : `?${params}`;
   const request = new Request(`https://clashlens.example/players/%232PP${search}`);
   const data = await playerLoader({ request, params: { tag: TAG } } as never);
   const handler = createStaticHandler([
@@ -417,11 +425,12 @@ describe("past-Season view", () => {
     expect(html).not.toContain("Current Season");
   });
 
-  it("keeps only the new Season's Day 1 in the log and the ended Season in Seasons", async () => {
+  // Day 1 of the Season starting 5 Oct, after the September Season ended.
+  const newSeasonClient = () => {
     const today = legendDay(29);
     const ended = [28, 27, 26, 25, 24].map(legendDay);
     const ref = { coverageState: "partial", daysObserved: 5, daysMissing: 23 } as const;
-    const client = {
+    return {
       getPlayer: vi.fn().mockResolvedValue({
         ...PLAYER,
         season: {
@@ -450,9 +459,17 @@ describe("past-Season view", () => {
       ]),
       getPlayerSeason: vi.fn().mockResolvedValue({
         ...SUMMARY,
-        dailyEntries: ended.map((day) => ({ ...DAY, dayNumber: day.dayNumber })),
+        dailyEntries: ended.map((day) => ({
+          ...DAY,
+          dayNumber: day.dayNumber,
+          period: day.period,
+        })),
       }),
     };
+  };
+
+  it("keeps only the new Season's Day 1 in the log and the ended Season in Seasons", async () => {
+    const client = newSeasonClient();
     const current = (await loadAndRender(client, null)).replace(/<[^>]*>/g, " ");
     expect(current).toContain("Day 1");
     for (const hidden of ["Date only", "Day 24", "Day 28", "30 Sep 2026", "4 Oct 2026"])
@@ -464,5 +481,41 @@ describe("past-Season view", () => {
     for (const number of [24, 25, 26, 27, 28])
       expect(past).toContain(`<td>${number}</td>`);
     expect(past).toContain('<strong aria-current="page">5 Oct 2026</strong>');
+  });
+
+  it("sends an ended Season's day link to that Season with the day marked", async () => {
+    mocks.createPythonClient.mockReturnValue(newSeasonClient());
+    const request = new Request(
+      "https://clashlens.example/players/%232PP?day=2026-10-04",
+    );
+    const response = await playerLoader({ request, params: { tag: TAG } } as never).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+    expect(response).toBeInstanceOf(Response);
+    expect((response as Response).headers.get("Location")).toBe(
+      `/players/%232PP?day=2026-10-04&season=${SEASON}#legend-day-2026-10-04`,
+    );
+
+    const html = await loadAndRender(newSeasonClient(), SEASON, "2026-10-04");
+    expect(html.match(/aria-current="date"/g)).toHaveLength(1);
+    expect(html).toContain(
+      '<tr id="legend-day-2026-10-04" aria-current="date"><td>28</td>',
+    );
+    expect(html).toContain('<strong aria-current="page">5 Oct 2026</strong>');
+  });
+
+  it("opens a current Season day link in the Daily Legend log", async () => {
+    const html = await loadAndRender(newSeasonClient(), null, "2026-10-05");
+    expect(html).toContain('id="legend-day-2026-10-05" open=""');
+    expect(html).toContain("Daily Legend log");
+    expect(html).not.toContain("No saved Legend log");
+  });
+
+  it("keeps the no-log message for a day outside every tracked Season", async () => {
+    // 20 Aug falls in the Season with only the game's result, not Clash Lens days.
+    const html = await loadAndRender(newSeasonClient(), null, "2026-08-20");
+    expect(html).toContain("No saved Legend log for 20 Aug 2026.");
+    expect(html).toContain("Daily Legend log");
   });
 });

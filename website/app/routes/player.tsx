@@ -25,6 +25,7 @@ import {
   liveDayNotice,
   lookupExplanation,
   presentDay,
+  seasonForDay,
   selectPlayerHistory,
 } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
@@ -172,6 +173,18 @@ export async function loader({
   const seasons = seasonsResult.status === "fulfilled" ? seasonsResult.value : [];
   const seasonsError =
     seasonsResult.status === "rejected" ? await safeError(seasonsResult.reason) : null;
+  // A day link from an ended Season opens that Season at the day.
+  const day = url.searchParams.get("day") ?? "";
+  const daySeason =
+    selectedSeason === null && /^\d{4}-\d{2}-\d{2}$/.test(day)
+      ? seasonForDay(seasons, day)
+      : null;
+  if (daySeason !== null) {
+    url.searchParams.set("season", daySeason);
+    throw redirect(`${canonicalPath}${url.search}#legend-day-${day}`, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
   const historical =
     historicalResult.status === "fulfilled" ? historicalResult.value : null;
   const historicalError =
@@ -920,6 +933,7 @@ function SelectedSeason({
 }
 
 function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
+  const selectedDay = useSearchParams()[0].get("day");
   if (summary.source === "official_league_history") {
     return (
       <section className="data-section" aria-labelledby="historical-season-title">
@@ -1066,7 +1080,13 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 false,
               );
               return (
-                <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
+                <tr
+                  key={`${day.period}-${day.dayNumber ?? "unknown"}`}
+                  {...(legendDayKey(day.period) === selectedDay && {
+                    id: `legend-day-${selectedDay}`,
+                    "aria-current": "date",
+                  })}
+                >
                   <td>{day.dayNumber ?? "Unknown"}</td>
                   <td>
                     {status}

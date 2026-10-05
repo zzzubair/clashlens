@@ -1,5 +1,10 @@
 import { seasonStartAt } from "../components/SeasonReread";
-import type { PlayerLookup, PlayerPage, RankedDaySummary } from "./contracts";
+import type {
+  PlayerLookup,
+  PlayerPage,
+  RankedDaySummary,
+  SummarizedSeasonRef,
+} from "./contracts";
 
 /** What a player page says about a tag without current results. */
 export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
@@ -266,4 +271,18 @@ export function selectPlayerHistory(player: PlayerPage | null, now: number) {
     )
     .sort((a, b) => legendDayKey(b.period).localeCompare(legendDayKey(a.period)))
     .map((day) => ({ day, seasonDay: `Day ${seasonDay(day)}` }));
+}
+
+// The ended Season whose saved days include this Legend day (YYYY-MM-DD).
+export function seasonForDay(seasons: SummarizedSeasonRef[], day: string): string | null {
+  const start = Date.parse(`${day}T05:00:00Z`);
+  const season = seasons.find(({ seasonId, source }) => {
+    const seasonStart = Number(seasonId) * 1000;
+    return (
+      source === "tracked_summary" &&
+      seasonStart <= start &&
+      start < seasonStart + 28 * DAY_MS
+    );
+  });
+  return season?.seasonId ?? null;
 }
