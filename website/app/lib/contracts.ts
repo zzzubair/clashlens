@@ -396,12 +396,12 @@ export interface SummarizedSeasonRef {
   officialHistory: OfficialSeasonHistory | null;
 }
 
-// A past Legend season finish reported by ClashKing, never our own evidence.
+// Official Legend history takes precedence over ClashKing for each Season.
 // Calendar-month seasons from before 28-day Seasons have no start or end.
 export interface PastSeasonFinish {
   seasonId: string;
   seasonStart: string | null;
   seasonEnd: string | null;
-  trophies: number;
+  trophies: number | null;
   globalRank: number | null;
 }

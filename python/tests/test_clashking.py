@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from domain_test_support import store_observation
 from fastapi.testclient import TestClient
 from test_api_migration import migrated_production_database
 from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
@@ -21,6 +22,12 @@ from clashlens.clashking import (
     ClashKingUnavailable,
     _urllib_transport,
     parse_season_finishes,
+)
+from clashlens.db import Database
+from clashlens.league_history import (
+    LEAGUE_HISTORY_PARSER_VERSION,
+    complete_league_history,
+    parse_league_history,
 )
 
 FIXTURE = Path(__file__).parents[1] / "testdata" / "clashking_legend_history.json"
@@ -38,14 +45,15 @@ def test_rows_map_to_our_seasons_without_duplicates() -> None:
         (f.season_id, f.season_start, f.season_end, f.trophies, f.global_rank)
         for f in finishes
     ] == [
-        # A v2 label is one week before its Season starts.
-        ("1786338000", _start("2026-08-10"), _start("2026-09-07"), 5856, 1),
-        ("1783918800", _start("2026-07-13"), _start("2026-08-10"), 5909, 3),
+        # A v2 label is one week before its Season ends.
+        ("1786338000", _start("2026-08-10"), _start("2026-09-07"), 5600, 4),
+        ("1783918800", _start("2026-07-13"), _start("2026-08-10"), 5856, 1),
+        ("1781499600", _start("2026-06-15"), _start("2026-07-13"), 5909, 3),
         # The v2 row wins over the dated row for the same Season.
-        ("1779080400", _start("2026-05-18"), _start("2026-06-15"), 5456, 78),
-        ("1776661200", _start("2026-04-20"), _start("2026-05-18"), 5791, 100),
-        ("1766984400", _start("2025-12-29"), _start("2026-01-26"), 6562, 8),
-        ("1762146000", _start("2025-11-03"), _start("2025-12-01"), 5935, 10),
+        ("1776661200", _start("2026-04-20"), _start("2026-05-18"), 5456, 78),
+        ("1774242000", _start("2026-03-23"), _start("2026-04-20"), 5791, 100),
+        ("1764565200", _start("2025-12-01"), _start("2025-12-29"), 6562, 8),
+        ("1759726800", _start("2025-10-06"), _start("2025-11-03"), 5935, 10),
         # The 2025-10-06 rows only repeat September's calendar-month result.
         ("2025-09", None, None, 6232, 399),
         ("2024-07", None, None, 5011, 934651),
@@ -62,7 +70,7 @@ def test_distinct_seasons_with_the_same_trophies_and_rank_are_all_kept() -> None
 
     assert [f.season_id for f in parse_season_finishes(payload, now=NOW)] == [
         str(int(_start(day).timestamp()))
-        for day in ("2026-04-20", "2025-12-29", "2025-10-06")
+        for day in ("2026-03-23", "2025-12-01", "2025-09-08")
     ] + ["2024-07"]
 
 
@@ -79,9 +87,9 @@ def test_legend_rows_are_recognized_by_tier_id_or_name() -> None:
     ).encode()
 
     assert [f.season_start for f in parse_season_finishes(payload, now=NOW)] == [
-        _start("2026-08-10"),
         _start("2026-07-13"),
         _start("2026-06-15"),
+        _start("2026-05-18"),
     ]
 
 
@@ -89,7 +97,13 @@ def test_unfinished_off_phase_and_unreadable_rows_are_left_out() -> None:
     finishes = parse_season_finishes(FIXTURE.read_bytes(), now=NOW)
     ids = {finish.season_id for finish in finishes}
 
-    assert "1788757200" not in ids  # Season of 2026-09-07 is still running
+    assert any(
+        finish.source_season == "v2-2026-08-31T05:00:00Z"
+        and finish.season_end == _start("2026-09-07")
+        for finish in finishes
+    )
+    future = b'{"items":[{"season":"v2-2026-09-28T05:00:00Z","trophies":5400}]}'
+    assert parse_season_finishes(future, now=NOW) == []
     assert str(int(_start("2026-04-21").timestamp())) not in ids  # off our phase
     assert {"2026-13", "2023-05"}.isdisjoint(ids)
     assert parse_season_finishes(b'{"items":[]}', now=NOW) == []
@@ -252,16 +266,15 @@ def test_viewed_players_refresh_once_a_day_and_keep_rows_through_failures(
                 first = view()
                 assert first.status_code == 200
                 body = first.json()
-                assert body["source"] == "clashking"
                 assert body["fetched_at"] == NOW.isoformat()
                 # The page shows only seasons from January 2025 onwards.
-                assert len(body["seasons"]) == 7
+                assert len(body["seasons"]) == 8
                 assert body["seasons"][0] == {
                     "season_id": "1786338000",
                     "season_start": "2026-08-10T05:00:00+00:00",
                     "season_end": "2026-09-07T05:00:00+00:00",
-                    "trophies": 5856,
-                    "global_rank": 1,
+                    "trophies": 5600,
+                    "global_rank": 4,
                 }
                 assert body["seasons"][-1]["season_id"] == "2025-09"
 
@@ -339,7 +352,7 @@ def test_a_view_refused_by_the_request_limit_can_retry_promptly(
                     ).fetchall()
 
             with TestClient(app) as client:
-                assert len(view("%232PP")["seasons"]) == 7
+                assert len(view("%232PP")["seasons"]) == 8
                 clock.now += 0.1
                 refused = view("%232QQ")
                 assert fake.calls == 1
@@ -350,7 +363,7 @@ def test_a_view_refused_by_the_request_limit_can_retry_promptly(
                 clock.now += 0.5
                 retried = view("%232QQ")
                 assert fake.calls == 2
-                assert len(retried["seasons"]) == 7
+                assert len(retried["seasons"]) == 8
                 assert retried["fetched_at"] == NOW.isoformat()
 
                 # Two requests already running also refuse without a write.
@@ -428,7 +441,178 @@ def test_a_slow_claim_cannot_send_inside_the_gap_or_a_pause(
                 monkeypatch.setattr(clashking_module, "_claim", real_claim)
                 fake.answer = (200, {}, FIXTURE.read_bytes())
                 clock.now += FIRST_BACKOFF_SECONDS
-                assert len(view()["seasons"]) == 7
+                assert len(view()["seasons"]) == 8
                 assert fake.calls == 3
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize(
+    ("tag", "results"),
+    [
+        ("#RPYP0QUC", [(5437, 180), (5430, 194), (5164, 2703)]),
+        ("#L2LJ9QLU", [(5049, 6542), (5222, 1771), (4980, 8485)]),
+        ("#PC2QRC9QY", [(5200, 2359), (5325, 674), (5394, 290)]),
+    ],
+)
+def test_past_seasons_use_official_results_and_remap_old_cached_finishes(
+    database_url: str, archive_server, tag: str, results: list[tuple[int, int]]
+) -> None:
+    current = _start("2026-10-05") + timedelta(hours=7)
+    ends = ["2026-10-05", "2026-09-07", "2026-08-10"]
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        fake = FakeClashKing()
+        clock = FakeClock()
+        try:
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "INSERT INTO players (normalized_tag) VALUES (%s) RETURNING id",
+                    (tag,),
+                ).fetchone()[0]
+                connection.execute(
+                    "INSERT INTO clashking_history_fetches VALUES (%s, %s, %s)",
+                    (player_id, current, current),
+                )
+                # Cache the pre-fix IDs. Both source label styles must re-map,
+                # including older rows with no official replacement.
+                for source, wrong_start, trophies, rank in [
+                    ("v2-2026-08-03T05:00:00Z", "2026-08-10", *results[2]),
+                    ("2026-07-13", "2026-07-13", 5205, 1852),
+                ]:
+                    start = _start(wrong_start)
+                    connection.execute(
+                        "INSERT INTO clashking_season_finishes VALUES"
+                        " (%s, %s, %s, %s, %s, %s, %s)",
+                        (
+                            player_id,
+                            str(int(start.timestamp())),
+                            start,
+                            start + timedelta(days=28),
+                            source,
+                            trophies,
+                            rank,
+                        ),
+                    )
+            app = create_app(
+                database,
+                keys={("typescript-website", "current"): TS_CURRENT},
+                clock=lambda: NOW_SECONDS,
+                now=lambda: current,
+                clashking_client=ClashKingClient(transport=fake, clock=clock),
+            )
+            with TestClient(app) as client:
+                target = f"/v1/players/{tag.replace('#', '%23')}/past-seasons"
+
+                def view():
+                    response = client.get(target, headers=signed_headers(target))
+                    assert response.status_code == 200
+                    return response.json()
+
+                cached = view()["seasons"]
+                assert cached[0]["season_end"] == _start("2026-08-10").isoformat()
+                assert cached[0]["season_id"] == "1783918800"
+                assert cached[0]["trophies"] == results[2][0]
+                assert cached[1]["season_end"] == _start("2026-07-13").isoformat()
+                assert fake.calls == 0
+                # Deliberately disagree, proving that the official row wins.
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE clashking_season_finishes SET trophies=1, global_rank=999"
+                        " WHERE player_id=%s AND source_season LIKE 'v2-%%'",
+                        (player_id,),
+                    )
+                items = [
+                    {
+                        "leagueSeasonId": str(int(_start(end).timestamp())),
+                        "leagueTrophies": trophies,
+                        "placement": rank,
+                        "leagueTierId": 105000036,
+                    }
+                    for end, (trophies, rank) in zip(ends, results, strict=True)
+                ]
+                items += [
+                    {
+                        **items[0],
+                        "leagueSeasonId": str(int(_start(end).timestamp())),
+                        "leagueTierId": tier,
+                    }
+                    for end, tier in [
+                        ("2026-07-06", 105000036),
+                        ("2026-06-15", 105000035),
+                        ("2026-11-02", 105000036),
+                    ]
+                ]
+                body = json.dumps({"items": items}).encode()
+                _, job_id = store_observation(
+                    connection_info,
+                    archive_server,
+                    occurrence_key="official-finishes",
+                    endpoint="league_history",
+                    body=body,
+                    observed_at=current,
+                    normalized_tag=tag,
+                    parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+                    processing_version="clashlens-domain-processing-v1",
+                    domain_rule_version="clashlens-domain-rules-v1",
+                )
+                worker = Database(connection_info)
+                try:
+                    claim = worker.claim_job(owner="past-seasons-test", job_id=job_id)
+                    assert claim is not None
+                    complete_league_history(
+                        worker,
+                        claim,
+                        parse_league_history(
+                            body, expected_tag=tag, observed_at=current
+                        ),
+                    )
+                finally:
+                    worker.close()
+                merged = view()
+                assert [
+                    (
+                        row["season_end"],
+                        row["trophies"],
+                        row["global_rank"],
+                    )
+                    for row in merged["seasons"]
+                ] == [
+                    (_start(end).isoformat(), *result)
+                    for end, result in zip(ends, results, strict=True)
+                ] + [(_start("2026-07-13").isoformat(), 5205, 1852)]
+                assert fake.calls == 0
+
+                current += timedelta(days=1)
+                fake.answer = (503, {}, b"")
+                assert view() == merged  # official and cached data survive failure
+                assert fake.calls == 1
+                current += timedelta(hours=1)
+                clock.now += 3600
+                fake.answer = (200, {}, b'{"items":[]}')
+                assert view()["seasons"] == merged["seasons"][:3]
+                # Missing official fields stay unknown, never borrowed from CK.
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE player_league_history_entries"
+                        " SET league_trophies=NULL, placement=NULL WHERE player_id=%s",
+                        (player_id,),
+                    )
+                current += timedelta(days=1)
+                clock.now += 3600
+                fake.answer = (200, {}, FIXTURE.read_bytes())
+                unknown = next(
+                    row for row in view()["seasons"] if row["season_id"] == "1783918800"
+                )
+                assert unknown["trophies"] is None and unknown["global_rank"] is None
+                with database.pool.connection() as connection:
+                    stored = connection.execute(
+                        "SELECT season_id, season_end FROM clashking_season_finishes"
+                        " WHERE player_id=%s AND source_season='v2-2026-08-03T05:00:00Z'",
+                        (player_id,),
+                    ).fetchone()
+                assert stored == ("1783918800", _start("2026-08-10"))
         finally:
             database.close()
