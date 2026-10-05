@@ -169,6 +169,36 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
             database.close()
 
 
+def test_profile_saved_state_is_private_even_beyond_the_list_limit(database_url: str) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            owner_id = create_owner(database)
+            tags = ["#P" + "".join(parts) for parts in islice(product("0289", repeat=5), 501)]
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "INSERT INTO players (normalized_tag) SELECT unnest(%s::text[])",
+                    (tags,),
+                )
+                connection.execute(
+                    """INSERT INTO account_saved_players (account_id, player_id)
+                    SELECT %s, id FROM players WHERE normalized_tag = ANY(%s)""",
+                    (owner_id, tags),
+                )
+            assert len(api_accounts.list_saved_players(database, owner_id)) == 500
+            assert api_accounts.list_saved_players(
+                database, owner_id, normalized_tag=tags[-1]
+            ) == [{"tag": tags[-1], "name": None}]
+            assert api_accounts.list_saved_players(
+                database, owner_id + 1, normalized_tag=tags[-1]
+            ) == []
+            assert api_accounts.list_saved_players(
+                database, owner_id, normalized_tag="#QQQ"
+            ) == []
+        finally:
+            database.close()
+
+
 def test_group_update_and_delete_require_the_owning_account(
     database_url: str,
 ) -> None:

@@ -760,14 +760,14 @@ def create_app(
         return _operation_response(result)
 
     @app.get("/v1/account/saved-tags")
-    def saved_tags(request: Request) -> JSONResponse:
+    def saved_tags(request: Request, tag: str | None = None) -> JSONResponse:
         context = _authorize(request, "saved_tags.read", production_database)
         assert production_database is not None and context.account is not None
         return JSONResponse(
             status_code=200,
             content={
                 "players": api_accounts.list_saved_players(production_database,
-                    context.account.internal_id
+                    context.account.internal_id, normalized_tag=_safe_tag(tag) if tag else None
                 )
             },
         )

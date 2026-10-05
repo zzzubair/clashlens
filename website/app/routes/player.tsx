@@ -13,6 +13,7 @@ import {
 import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { SavePlayer } from "../components/SavePlayer";
 import { Metric, MetricCard } from "../components/MetricCard";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
@@ -615,6 +616,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         ) : (
           <h1>{data.requestedTag}</h1>
         )}
+        <SavePlayer tag={data.requestedTag} />
         {lookup ? (
           <LookupNotice lookup={lookup} timedOut={lookupTimedOut} />
         ) : (
@@ -737,6 +739,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         </div>
       </header>
 
+      <SavePlayer tag={trackedPlayer.tag} />
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
       {visibleStatus ? (

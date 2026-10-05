@@ -344,6 +344,19 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
                     subject="google-api-owner",
                 ),
             )
+            for encoded_tag, players in (
+                ("%232PP", [{"tag": "#2PP", "name": "Player #2PP"}]),
+                ("%238PY", []),
+            ):
+                target = f"/v1/account/saved-tags?tag={encoded_tag}"
+                state = client.get(
+                    target,
+                    headers=signed_headers(
+                        target, provider="google", subject="google-api-owner"
+                    ),
+                )
+                assert state.status_code == 200
+                assert state.json() == {"players": players}
             group_data = json_body({"name": "Main", "tags": ["#2PP"]})
             group = client.post(
                 "/v1/account/groups",

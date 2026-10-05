@@ -1,4 +1,10 @@
-import { data, redirect, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  redirect,
+  useActionData,
+  useLoaderData,
+  type ShouldRevalidateFunctionArgs,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { SavedPlayer } from "../lib/account-contracts";
@@ -19,6 +25,7 @@ export interface SavedPlayersLoaderData {
 }
 
 export interface SavedPlayersActionData {
+  saved?: boolean;
   mode: "add" | "remove";
   /** The player tag the fresh remove key belongs to. */
   tag: string | null;
@@ -32,18 +39,22 @@ export interface SavedPlayersActionData {
 }
 
 /**
- * GET /account/saved-players — list saved public player tags with explicit
- * add and per-player remove forms, each bound to its own idempotency key.
+ * Saved state stays private even on a public player profile: keep the optional
+ * tag filter inside the authenticated account read. An unavailable login check must
+ * return retryable error data without reading private state or hiding the profile.
  */
 export async function loader({
   request,
 }: Route.LoaderArgs): Promise<SavedPlayersLoaderData> {
   const { requireLogin } = await import("../server/auth-guard.server");
-  const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
   try {
+    const identity = await requireLogin(request);
+    const rawTag = new URL(request.url).searchParams.get("tag");
+    const tag = rawTag === null ? undefined : normalizeSubmittedPlayerTag(rawTag);
+    if (tag === null) throw new Response(null, { status: 400, headers: NO_STORE });
     const { createPythonClient } = await import("../services/python.server");
-    const players = await createPythonClient(identity).listSavedTags();
+    const players = await createPythonClient(identity).listSavedTags(tag);
     const removeIdempotencyKeys: Record<string, string> = {};
     for (const player of players) {
       removeIdempotencyKeys[player.tag] = freshIdempotencyKey();
@@ -55,14 +66,19 @@ export async function loader({
       error: null,
     };
   } catch (cause) {
+    if (cause instanceof Response && cause.status !== 503) throw cause;
     const { isAccountNotFoundError } = await import("../server/actions.server");
-    if (isAccountNotFoundError(cause)) throw redirect("/account/setup");
+    // Viewing a profile must not pull an unfinished account into setup; saving does.
+    const unfinished = isAccountNotFoundError(cause);
+    if (unfinished && !new URL(request.url).searchParams.has("tag")) {
+      throw redirect("/account/setup");
+    }
     const { safeWebsiteError } = await import("../server/errors.server");
     return {
       players: [],
       addIdempotencyKey: freshIdempotencyKey(),
       removeIdempotencyKeys: {},
-      error: safeWebsiteError(cause),
+      error: unfinished ? null : safeWebsiteError(cause),
     };
   }
 }
@@ -74,7 +90,14 @@ export async function loader({
  */
 export async function action({ request }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
-  const identity = await requireLogin(request);
+  let identity;
+  try {
+    identity = await requireLogin(request);
+  } catch (cause) {
+    if (cause instanceof Response && cause.status !== 503) throw cause;
+    const { safeWebsiteError } = await import("../server/errors.server");
+    return errorResponse(503, safeWebsiteError(cause));
+  }
   const actions = await import("../server/actions.server");
   const { getWebsiteConfig } = await import("../server/config.server");
 
@@ -136,7 +159,34 @@ export async function action({ request }: Route.ActionArgs) {
       { status: 422, headers: NO_STORE },
     );
   }
+  if (form["source"] === "player") {
+    return data<SavedPlayersActionData>(
+      {
+        mode,
+        tag,
+        saved: mode === "add",
+        addIdempotencyKey: actions.freshIdempotencyKey(),
+        removeIdempotencyKey: actions.freshIdempotencyKey(),
+        fieldErrors: {},
+        generalError: null,
+        values: { tag: rawTag, mode },
+      },
+      { headers: NO_STORE },
+    );
+  }
   throw redirect("/account/saved-players");
+}
+
+export function shouldRevalidate({
+  currentUrl,
+  formAction,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  // Profile refreshes and Reset must not poll the private saved list.
+  if (currentUrl.pathname.startsWith("/players/")) {
+    return formAction?.split("?")[0] === "/account/saved-players";
+  }
+  return defaultShouldRevalidate;
 }
 
 async function errorResponse(status: number, generalError: WebsiteErrorResponse) {

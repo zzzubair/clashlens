@@ -109,7 +109,7 @@ export interface PythonClient {
     input: AccountNameInput & { preferences: Record<string, unknown> },
     idempotencyKey: string,
   ): Promise<ClashLensAccount>;
-  listSavedTags(): Promise<SavedPlayer[]>;
+  listSavedTags(tag?: string): Promise<SavedPlayer[]>;
   addSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
   removeSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
   listGroups(): Promise<GroupList>;
@@ -1100,7 +1100,7 @@ function createAccountOperations(
     getAccount: () => getAccount(identity, accountReadTimeoutMs),
     updateAccount: (input, idempotencyKey) =>
       updateAccount(input, idempotencyKey, identity),
-    listSavedTags: () => listSavedTags(identity),
+    listSavedTags: (tag) => listSavedTags(identity, tag),
     addSavedTag: (tag, idempotencyKey) => addSavedTag(tag, idempotencyKey, identity),
     removeSavedTag: (tag, idempotencyKey) =>
       removeSavedTag(tag, idempotencyKey, identity),
@@ -1234,17 +1234,14 @@ async function updateAccount(
 
 async function listSavedTags(
   identity: GoogleAccountIdentity | undefined,
+  tag?: string,
 ): Promise<SavedPlayer[]> {
   requireIdentity(identity);
-  const payload = await requestJson<unknown>(
-    "/v1/account/saved-tags",
-    "GET",
-    undefined,
-    undefined,
-    undefined,
-    identity,
-  );
-  return mappedOrMalformed(mapSavedTags(payload));
+  const path = tag
+    ? `/v1/account/saved-tags?tag=${encodeURIComponent(tag)}`
+    : "/v1/account/saved-tags";
+  const raw = await requestJson(path, "GET", undefined, undefined, undefined, identity);
+  return mappedOrMalformed(mapSavedTags(raw));
 }
 
 async function addSavedTag(

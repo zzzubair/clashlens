@@ -36,6 +36,32 @@ test("a Clasher can sign in and use account features against the real backend", 
   }
   await expect(savedPlayer).toBeVisible();
 
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/players/%232PP");
+  const removeSaved = page.getByRole("button", { name: "Remove from Saved Players" });
+  const addSaved = page.getByRole("button", { name: "Add to Saved Players" });
+  await expect(removeSaved).toBeEnabled();
+  await removeSaved.click();
+  await expect(addSaved).toBeEnabled();
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  await page.getByRole("link", { name: "View Saved Players" }).click();
+  await expect(page.getByRole("heading", { name: "No saved players yet" })).toBeVisible();
+  await expect(page.getByLabel("Player tag")).toBeVisible();
+  await page.goto("/players/%232PP");
+  await addSaved.click();
+  await expect(removeSaved).toBeEnabled();
+  await page.reload();
+  await expect(removeSaved).toBeEnabled();
+  expect(
+    await removeSaved.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return box.left >= 0 && box.right <= window.innerWidth;
+    }),
+  ).toBe(true);
+  await page.getByRole("link", { name: "View Saved Players" }).click();
+  await expect(savedPlayer).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await page.goto("/account/groups");
   if (await page.getByRole("heading", { name: "No private groups yet" }).isVisible()) {
     await page.getByLabel("Group name").first().fill("War plan");
