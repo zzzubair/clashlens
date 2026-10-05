@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page,
+  type Request,
+} from "@playwright/test";
 
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
 import {
@@ -559,21 +565,26 @@ test("a Legend I player without a Season is explained, not prepared forever", as
 
   // A later visit shows it at once, never reads saved data every second or
   // calls the check slow, but rereads it about once a minute.
-  const reloads: string[] = [];
+  const reloads: Request[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("/players/%23LQQC.data")) reloads.push(request.url());
+    if (request.url().includes("/players/%23LQQC.data")) reloads.push(request);
   });
   await page.clock.install();
   await page.goto("/players/%23LQQC");
   await expect(lookup).toContainText(headline);
   await expect(lookup).toContainText("Taking part in Legend League battles is optional.");
+  // Finish loading and each reread before advancing time: while a response is
+  // in flight, the page correctly skips the next minute's check.
+  await page.waitForLoadState("networkidle");
   await page.clock.runFor(10_000);
   expect(reloads).toEqual([]);
   await page.clock.runFor(51_000);
   await expect.poll(() => reloads.length).toBe(1);
+  await expect.poll(() => reloads.at(-1)!.timing().responseEnd).toBeGreaterThanOrEqual(0);
   await expect(lookup).toContainText(headline);
   await page.clock.runFor(61_000);
   await expect.poll(() => reloads.length).toBe(2);
+  await expect.poll(() => reloads.at(-1)!.timing().responseEnd).toBeGreaterThanOrEqual(0);
   await expect(lookup).not.toContainText("taking longer");
 
   // A hidden tab pauses the rereads.
@@ -587,6 +598,7 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   );
   await page.clock.runFor(61_000);
   await expect.poll(() => reloads.length).toBe(3);
+  await expect.poll(() => reloads.at(-1)!.timing().responseEnd).toBeGreaterThanOrEqual(0);
   await expect(
     page.getByRole("heading", { name: "Lookup Season 0 Clasher" }),
   ).toBeVisible();
