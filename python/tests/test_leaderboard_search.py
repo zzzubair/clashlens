@@ -219,6 +219,20 @@ def test_players_waiting_for_their_season_reset_stay_off_the_live_board(
 
             name_season("#PP0", old_season)
             name_season("#PP9", old_season)
+            # #PP8's 5,040 on the Season's first day comes from one recorded attack.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, ranked_day_end, version,
+                        state, coverage, net_trophy_change, attack_gain,
+                        defense_loss, attack_count, defense_count
+                    )
+                    SELECT id, %s, %s, 1, 'Live', 'partial', 40, 40, 0, 1, 0
+                    FROM players WHERE normalized_tag = '#PP8'
+                    """,
+                    (season_start, season_start + timedelta(days=1)),
+                )
             now = season_start + timedelta(minutes=20)
 
             def ranks():
@@ -284,7 +298,7 @@ def test_players_waiting_for_their_season_reset_stay_off_the_live_board(
             database.close()
 
 
-def test_first_day_trophies_equal_to_the_frozen_final_board_wait_for_the_season_reset(
+def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
     database_url: str,
 ):
     from datetime import UTC, datetime, timedelta
@@ -294,21 +308,25 @@ def test_first_day_trophies_equal_to_the_frozen_final_board_wait_for_the_season_
     season_start = datetime(2026, 10, 5, 5, tzinfo=UTC)
     old_season = str(int((season_start - timedelta(days=28)).timestamp()))
     new_season = str(int(season_start.timestamp()))
-    # (profile Season, trophies now, frozen September final trophies or None)
+    # (profile Season, trophies now, frozen September final trophies or None,
+    #  day 1 recorded net change and attack count or None)
     players = {
-        "#PH1": (new_season, 5000, 5957),  # reset by the game
-        "#PH2": (old_season, 5957, 5957),  # still names September
-        "#PH3": (new_season, 5957, 5957),  # names October, old trophies
-        "#P50": (new_season, 5000, 5000),  # finished September on 5,000
-        "#PMV": (new_season, 5040, 5957),  # battled since the Reset
-        "#PNF": (new_season, 5100, None),  # missing from the frozen board
+        "#PH1": (new_season, 5000, 5957, None),  # reset by the game
+        "#PH2": (old_season, 5957, 5957, None),  # still names September
+        "#PH3": (new_season, 5957, 5957, None),  # names October, old trophies
+        "#P50": (new_season, 5000, 5000, None),  # finished September on 5,000
+        "#PMV": (new_season, 5040, 5957, (40, 1)),  # battled since the Reset
+        # Missing from the frozen board, old trophies and no battles today.
+        "#PNF": (new_season, 5745, None, None),
+        # One recorded attack cannot explain 120 trophies.
+        "#PXB": (new_season, 5120, None, (40, 1)),
     }
     with migrated_production_database(
         database_url, include_compact_collector=True
     ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
-            for tag, (season, trophies, _frozen) in players.items():
+            for tag, (season, trophies, _frozen, _day) in players.items():
                 seed_profile(
                     database, tag, trophies, observed_at=season_start + timedelta(minutes=10)
                 )
@@ -325,12 +343,34 @@ def test_first_day_trophies_equal_to_the_frozen_final_board_wait_for_the_season_
                     (season_start, season_start),
                 ).fetchone()[0]
                 position = 0
-                for tag, (season, _trophies, frozen) in players.items():
+                for tag, (season, _trophies, frozen, day) in players.items():
                     connection.execute(
                         "UPDATE player_profile_versions SET current_league_season_id = %s"
                         " WHERE normalized_tag = %s",
                         (season, tag),
                     )
+                    if day is not None:
+                        connection.execute(
+                            """
+                            INSERT INTO api_player_daily_logs (
+                                player_id, ranked_day_start, ranked_day_end,
+                                version, state, coverage, net_trophy_change,
+                                attack_gain, defense_loss, attack_count,
+                                defense_count
+                            )
+                            SELECT id, %s, %s, 1, 'Live', 'partial', %s, %s, 0,
+                                   %s, 0
+                            FROM players WHERE normalized_tag = %s
+                            """,
+                            (
+                                season_start,
+                                season_start + timedelta(days=1),
+                                day[0],
+                                day[0],
+                                day[1],
+                                tag,
+                            ),
+                        )
                     if frozen is None:
                         continue
                     position += 1
@@ -388,8 +428,11 @@ def test_first_day_trophies_equal_to_the_frozen_final_board_wait_for_the_season_
                 )
                 assert average["sample_size"] == len(players) - len(waiting)
 
-            # Day 1: the frozen September trophies, other than 5,000, still wait.
-            check(season_start + timedelta(minutes=20), {"#PH2", "#PH3"})
+            # Day 1: the frozen September trophies, other than 5,000, still
+            # wait, and so do trophies the day's recorded battles cannot explain.
+            check(
+                season_start + timedelta(minutes=20), {"#PH2", "#PH3", "#PNF", "#PXB"}
+            )
             # Day 2 compares the Season id alone.
             check(season_start + timedelta(days=1, minutes=20), {"#PH2"})
         finally:

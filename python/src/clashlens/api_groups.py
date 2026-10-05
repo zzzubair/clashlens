@@ -17,6 +17,7 @@ from .api_db import (
     ApiDatabase,
     _battles_so_far_complete,
     _frozen_trophies_sql,
+    _opening_day_battles_sql,
     _screen_daily_log,
     _screen_events,
     _shown_total,
@@ -98,14 +99,15 @@ def get_group_comparison(
                 SELECT player.id, player.active, profile.name, profile.trophies,
                        player.current_observed_at, player.current_profile_confirmed_at,
                        profile.current_league_season_id,
-                       {_frozen_trophies_sql("player.id", "%s")}
+                       {_frozen_trophies_sql("player.id", "%s")},
+                       {_opening_day_battles_sql("player.id", "%s")}
                 FROM players AS player
                 LEFT JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id
                    AND profile.source_contract_state = 'accepted'
                 WHERE player.id = ANY(%s)
                 """,
-                (season_opening_reset(now), ids),
+                (season_opening_reset(now), season_opening_reset(now), ids),
             ).fetchall()
         }
         logs: dict[tuple[int, datetime], Any] = {}
@@ -179,7 +181,9 @@ def _current(profile: Any, now: datetime, freshness_seconds: int) -> dict[str, A
         }
     observed_at = max(profile[4], profile[5] or profile[4]).astimezone(UTC)
     age_seconds = max(0, int((now - observed_at).total_seconds()))
-    pending = awaits_season_reset(_text(profile[6]), int(profile[3]), profile[7], now)
+    pending = awaits_season_reset(
+        _text(profile[6]), int(profile[3]), profile[7], profile[8], now
+    )
     return {
         "name": _text(profile[2]),
         "trophies": None if pending else int(profile[3]),

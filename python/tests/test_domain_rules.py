@@ -224,25 +224,43 @@ def test_season_anchor_off_the_28_day_phase_is_refused() -> None:
 OCTOBER, SEPTEMBER = "1791176400", "1788757200"
 
 
+DAY_1 = datetime(2026, 10, 5, 5, 10, tzinfo=UTC)
+
+
 @pytest.mark.parametrize(
-    "at,season_id,trophies,frozen,waiting",
+    "at,season_id,trophies,frozen,battles,waiting",
     [
         # Day 1 of October, frozen September final trophies 5,957.
-        (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5000, 5957, False),
-        (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), SEPTEMBER, 5957, 5957, True),
-        (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5957, 5957, True),
-        (datetime(2026, 10, 6, 4, 59, tzinfo=UTC), OCTOBER, 5957, 5957, True),
+        (DAY_1, OCTOBER, 5000, 5957, (0, 0), False),
+        (DAY_1, SEPTEMBER, 5957, 5957, (0, 0), True),
+        (DAY_1, OCTOBER, 5957, 5957, (0, 0), True),
+        (datetime(2026, 10, 6, 4, 59, tzinfo=UTC), OCTOBER, 5957, 5957, (0, 0), True),
+        # Frozen trophies still wait even when today's battles would explain them.
+        (DAY_1, OCTOBER, 5040, 5040, (40, 1), True),
         # A player whose frozen final trophies were exactly 5,000.
-        (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5000, 5000, False),
-        # Moved since the Reset, or no frozen value saved for this player.
-        (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5040, 5957, False),
-        (datetime(2026, 10, 5, 5, 10, tzinfo=UTC), OCTOBER, 5957, None, False),
+        (DAY_1, OCTOBER, 5000, 5000, (0, 0), False),
+        # Moved since the Reset by exactly the recorded battles.
+        (DAY_1, OCTOBER, 5040, 5957, (40, 1), False),
+        (DAY_1, OCTOBER, 4968, None, (-32, 1), False),
+        # New Season id, old trophies, no frozen board yet and no battles today.
+        (DAY_1, OCTOBER, 5745, None, (0, 0), True),
+        # Recorded battles that do not add up allow 40 trophies per battle.
+        (DAY_1, OCTOBER, 5040, None, (0, 1), False),
+        (DAY_1, OCTOBER, 5120, None, (40, 1), True),
+        (DAY_1, OCTOBER, 5120, None, (40, 3), False),
+        # A player outside Legend I has no battle check, only the frozen one.
+        (DAY_1, OCTOBER, 5745, None, None, False),
         # Day 2 and an ordinary daily Reset use the Season id alone.
-        (datetime(2026, 10, 6, 5, 10, tzinfo=UTC), OCTOBER, 5957, 5957, False),
-        (datetime(2026, 10, 4, 5, 10, tzinfo=UTC), SEPTEMBER, 5957, 5957, False),
+        (datetime(2026, 10, 6, 5, 10, tzinfo=UTC), OCTOBER, 5957, 5957, (0, 0), False),
+        (datetime(2026, 10, 4, 5, 10, tzinfo=UTC), SEPTEMBER, 5957, 5957, (0, 0), False),
     ],
 )
-def test_first_day_trophies_equal_to_the_frozen_final_board_await_the_season_reset(
-    at: datetime, season_id: str, trophies: int, frozen: int | None, waiting: bool
+def test_first_day_trophies_from_before_the_reset_await_the_season_reset(
+    at: datetime,
+    season_id: str,
+    trophies: int,
+    frozen: int | None,
+    battles: tuple[int, int] | None,
+    waiting: bool,
 ) -> None:
-    assert awaits_season_reset(season_id, trophies, frozen, at) is waiting
+    assert awaits_season_reset(season_id, trophies, frozen, battles, at) is waiting

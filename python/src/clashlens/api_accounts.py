@@ -15,6 +15,7 @@ from .api_db import (
     RequestBinding,
     _account_context,
     _frozen_trophies_sql,
+    _opening_day_battles_sql,
     _text,
 )
 from .domain import awaits_season_reset, season_opening_reset
@@ -1064,7 +1065,8 @@ def list_groups(
             SELECT group_row.public_id, group_row.name, player.normalized_tag,
                    player.active, COALESCE(accepted.name, latest.name),
                    accepted.trophies, accepted.current_league_season_id,
-                   {_frozen_trophies_sql("player.id", "%s")}
+                   {_frozen_trophies_sql("player.id", "%s")},
+                   {_opening_day_battles_sql("player.id", "%s")}
             FROM account_groups AS group_row
             LEFT JOIN account_group_players AS member ON member.group_id = group_row.id
             {_MEMBER_JOINS}
@@ -1072,7 +1074,7 @@ def list_groups(
             ORDER BY group_row.normalized_name, group_row.public_id, player.normalized_tag
             LIMIT 10000
             """,
-            (season_opening_reset(now), account_id),
+            (season_opening_reset(now), season_opening_reset(now), account_id),
         ).fetchall()
         groups: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -1263,24 +1265,26 @@ def _group_players(
         SELECT player.normalized_tag, player.active,
                COALESCE(accepted.name, latest.name), accepted.trophies,
                accepted.current_league_season_id,
-               {_frozen_trophies_sql("player.id", "%s")}
+               {_frozen_trophies_sql("player.id", "%s")},
+               {_opening_day_battles_sql("player.id", "%s")}
         FROM account_group_players AS member
         {_MEMBER_JOINS}
         WHERE member.group_id = %s
         ORDER BY player.normalized_tag
         LIMIT 101
         """,
-        (season_opening_reset(now), group_id),
+        (season_opening_reset(now), season_opening_reset(now), group_id),
     ).fetchall()
     return [_group_player(connection, row, now) for row in rows]
 
 
 def _group_player(connection: Any, row: Any, now: datetime) -> dict[str, Any]:
-    tag, active, name, trophies, season_id, frozen_trophies = row
+    tag, active, name, trophies, season_id, frozen_trophies, day_battles = row
     pending = trophies is not None and awaits_season_reset(
         None if season_id is None else _text(season_id),
         int(trophies),
         frozen_trophies,
+        day_battles,
         now,
     )
     return {

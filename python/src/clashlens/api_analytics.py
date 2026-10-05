@@ -21,9 +21,9 @@ from .api_db import (
     ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS,
     ARMY_ANALYTICS_QUERY_WORK_MEM,
     ApiDatabase,
-    _frozen_trophies_sql,
     _json_array,
     _public_army,
+    _season_reset_waiting_sql,
     _text,
 )
 from .army_analytics import (
@@ -47,7 +47,6 @@ from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
     SEASON_DURATION,
-    SEASON_START_TROPHIES,
     ranked_day_for,
     season_opening_reset,
 )
@@ -792,14 +791,13 @@ def get_basic_analytics(
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
             -- Trophies from before a player's Season reset are left out,
-            -- including first-day trophies still equal to the frozen final board.
+            -- including first-day trophies equal to the frozen final board or
+            -- not explained by the day's recorded battles.
             WHERE player.active = true
               AND profile.current_league_season_id = %s
-              AND NOT COALESCE(
-                  profile.trophies <> {SEASON_START_TROPHIES}
-                  AND profile.trophies = {_frozen_trophies_sql("player.id", "%s")},
-                  false
-              )
+              AND NOT {_season_reset_waiting_sql(
+                  "player.id", "profile.trophies", "%s"
+              )}
             """,
             (
                 now,
