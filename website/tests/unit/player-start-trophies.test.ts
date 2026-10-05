@@ -65,6 +65,8 @@ describe("calculated starting trophies on the player page", () => {
     ["incomplete older day", "2026-09-21T21:41:20Z", "partial-older", 5632, 5462, null],
     ["gap between days", "2026-09-21T21:41:20Z", "gap", 5632, 5462, null],
     ["season reset", "2026-09-21T21:41:20Z", "season-reset", 5170, 5000, null],
+    // A saved Day 1 start from the Season rule is shown as saved and labelled.
+    ["Season rule start", "2026-09-21T21:41:20Z", "season-rule", 5632, 5000, null],
     ["zero starting total", "2026-09-21T21:41:20Z", "normal", 170, 0, null],
     ["impossible negative total", "2026-09-21T21:41:20Z", "normal", 100, null, null],
     ["negative daily change", "2026-09-21T21:41:20Z", "negative-net", 5632, 5792, 5757],
@@ -143,9 +145,13 @@ describe("calculated starting trophies on the player page", () => {
       if (variant === "uncertain-current") day.completeness.state = "uncertain";
       if (variant === "missing-count") day.attack_count = null;
       if (variant === "stored") day.start_trophies = 5500;
-      if (variant === "season-reset") {
+      if (variant === "season-reset" || variant === "season-rule") {
         day.season_day_number = 1;
         older.season_day_number = 28;
+      }
+      if (variant === "season-rule") {
+        day.start_trophies = 5000;
+        Object.assign(day, { start_trophies_source: "season_rule" });
       }
       const payload = {
         tag: "#2PP",
@@ -187,8 +193,13 @@ describe("calculated starting trophies on the player page", () => {
         expected,
         olderExpected,
       ]);
+      const calculated =
+        expected !== null && !["stored", "season-rule"].includes(variant);
       expect(player.currentDay?.startTrophiesCalculation?.trophies).toBe(
-        expected !== null && variant !== "stored" ? trophies : undefined,
+        calculated ? trophies : undefined,
+      );
+      expect(player.currentDay?.startTrophiesSource).toBe(
+        calculated ? "Calculated" : variant === "season-rule" ? "Season rule" : undefined,
       );
     },
   );

@@ -166,7 +166,7 @@ def get_player_page(
                    attack_count, attack_three_star_count, attack_gain,
                    defense_count, defense_three_star_count, defense_loss,
                    net_trophy_change, adjustments, battles, partial_reasons,
-                   start_trophies, published_at
+                   start_trophies, start_trophies_source, published_at
             FROM (
                 SELECT DISTINCT ON (daily.ranked_day_start)
                        daily.ranked_day_start, daily.ranked_day_end,
@@ -177,6 +177,11 @@ def get_player_page(
                        daily.defense_three_star_count, daily.defense_loss,
                        daily.net_trophy_change, daily.adjustments, daily.battles,
                        daily.partial_reasons, ranked_day.start_trophies,
+                       -- Only Day 1 can start by the Season rule.
+                       CASE WHEN daily.season_day_number = 1
+                           THEN ranked_day.input_evidence
+                           #>> '{start_baseline_evidence,start_trophies_source}' END
+                           AS start_trophies_source,
                        daily.published_at
                 FROM api_player_daily_logs AS daily
                 LEFT JOIN ranked_day_versions AS ranked_day
@@ -192,7 +197,7 @@ def get_player_page(
             (normalized_tag,),
         ).fetchall()
         history_updated_at = max(
-            (day[19].astimezone(UTC) for day in daily_rows), default=None
+            (day[20].astimezone(UTC) for day in daily_rows), default=None
         )
         public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
         # The page never shows decoded armies; Copy army uses each event's
@@ -236,7 +241,7 @@ def get_player_page(
                 "start": season_start,
                 "end": season_start + SEASON_DURATION,
                 "anchor_source": "daily_publication",
-                "anchor_observed_at": current_day_raw[19].astimezone(UTC),
+                "anchor_observed_at": current_day_raw[20].astimezone(UTC),
             }
         season_rows = []
         if season_context is not None and not season_anchor_conflict:
@@ -251,7 +256,7 @@ def get_player_page(
                        attack_count, attack_three_star_count, attack_gain,
                        defense_count, defense_three_star_count, defense_loss,
                        net_trophy_change, adjustments, battles, partial_reasons,
-                       start_trophies
+                       start_trophies, start_trophies_source
                 FROM (
                     SELECT DISTINCT ON (daily.ranked_day_start)
                            daily.ranked_day_start, daily.ranked_day_end,
@@ -262,7 +267,11 @@ def get_player_page(
                            daily.defense_count, daily.defense_three_star_count,
                            daily.defense_loss, daily.net_trophy_change,
                            daily.adjustments, daily.battles, daily.partial_reasons,
-                           ranked_day.start_trophies
+                           ranked_day.start_trophies,
+                           CASE WHEN daily.season_day_number = 1
+                           THEN ranked_day.input_evidence
+                           #>> '{start_baseline_evidence,start_trophies_source}' END
+                               AS start_trophies_source
                     FROM api_player_daily_logs AS daily
                     LEFT JOIN ranked_day_versions AS ranked_day
                         ON ranked_day.id = daily.ranked_day_version_id
@@ -449,7 +458,7 @@ def player_cards(
                    season_day_number, version, state, coverage, confidence,
                    attack_count, attack_three_star_count, attack_gain,
                    defense_count, defense_three_star_count, defense_loss,
-                   net_trophy_change, adjustments, battles, partial_reasons, NULL
+                   net_trophy_change, adjustments, battles, partial_reasons, NULL, NULL
             FROM api_player_daily_logs
             WHERE player_id = ANY(%s) AND ranked_day_start = %s
             ORDER BY player_id, version DESC

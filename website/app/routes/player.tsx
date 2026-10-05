@@ -776,11 +776,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             );
           })}
           {history.some(
-            ({ day }) => day.startTrophiesCalculation || day.startTrophies == null,
+            ({ day }) => day.startTrophiesSource || day.startTrophies == null,
           ) ? (
             <p className="section-note">
-              Calculated totals use saved trophies minus recorded changes. Unavailable
-              means the saved history is incomplete.
+              Calculated totals use saved trophies minus recorded changes. Season rule
+              starts are the 5,000 every Legend I player starts a Season on, used when the
+              Season reset reading was unusable. Unavailable means the saved history is
+              incomplete.
             </p>
           ) : null}
           {history.length === 0 ? (
@@ -1236,8 +1238,8 @@ function LegendDay({
               ? "Unavailable"
               : day.startTrophies.toLocaleString("en-GB")}
           </strong>
-          {day.startTrophiesCalculation ? (
-            <span className="legend-day-start-source">Calculated</span>
+          {day.startTrophiesSource ? (
+            <span className="legend-day-start-source">{day.startTrophiesSource}</span>
           ) : null}
         </span>
         <span className="legend-day-stat legend-day-offense">

@@ -328,6 +328,11 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         : value.ranked_day_start,
       state: value.state,
       startTrophies: (value.start_trophies as number | null | undefined) ?? null,
+      // The Season rule's 5,000 is the game's rule, not a reading.
+      startTrophiesSource:
+        value.start_trophies_source === "season_rule"
+          ? ("Season rule" as const)
+          : undefined,
       offense: {
         attacks: value.attack_count as number | null,
         threeStars: value.attack_three_star_count as number | null,
@@ -503,6 +508,7 @@ function calculateStartingTrophies(
       continue;
     day.startTrophies = trophies - netChange;
     day.startTrophiesCalculation = { trophies, netChange };
+    day.startTrophiesSource = "Calculated";
   }
 }
 

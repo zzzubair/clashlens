@@ -843,6 +843,8 @@ def _daily_log(day: Any) -> dict[str, Any]:
         "battles": _json_array(day[16]),
         "partial_reasons": _json_array(day[17]),
         "start_trophies": None if day[18] is None else int(day[18]),
+        # "season_rule" when Day 1 starts at the Season rule's 5,000.
+        "start_trophies_source": None if day[19] is None else _text(day[19]),
     }
 
 

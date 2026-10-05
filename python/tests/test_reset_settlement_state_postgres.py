@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import as_api_role, domain_database, store_observation
 from test_domain_processing_postgres import _role_connection
 from test_reconciliation_postgres import (
     BATTLE_FIXTURE,
@@ -23,7 +23,8 @@ from test_reconciliation_postgres import (
     _profile,
 )
 
-from clashlens import reconciliation_db, reset_baselines, reset_settlement
+from clashlens import api_players, reconciliation_db, reset_baselines, reset_settlement
+from clashlens.api_db import ApiDatabase
 
 TAG = "#2PP"
 # The fixture profiles report the Season that ends at the August 10 Reset.
@@ -593,6 +594,16 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         )
         _process(connection_info, archive_server, jobs)
         after = {row[0]: row[1:] for row in _rows(connection_info, DAY_ROWS)}
+        # The player page reads the start's source as the data-service role.
+        api = ApiDatabase(as_api_role(connection_info))
+        try:
+            page = api_players.get_player_page(api, TAG, now=login, freshness_seconds=900)
+        finally:
+            api.close()
+        opening_day = next(
+            day for day in page["screen_ready"]["days"]
+            if day["ranked_day_start"] == boundary.isoformat()
+        )
         # Finished jobs are deleted after 48 hours; the next Reset still does
         # not rebuild the Season again.
         rebuilds = ("SELECT count(*) FROM python_processing_jobs"
@@ -616,9 +627,15 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         assert after[day_28][:4] == ("Complete", "inferred", 6400, 5000)
         assert after[day_1][2:] == (5000, None, "season_rule")
         assert (built, rebuilt_again) == (1, 0)
+        assert (opening_day["start_trophies"], opening_day["start_trophies_source"]) == (
+            5000, "season_rule"
+        )
     else:
         assert after[day_28][3] is None and after[day_1][2] is None
         assert (built, rebuilt_again) == (0, 0)
+        assert (opening_day["start_trophies"], opening_day["start_trophies_source"]) == (
+            None, None
+        )
 
 
 @pytest.mark.parametrize("reading,login,log_ok", [

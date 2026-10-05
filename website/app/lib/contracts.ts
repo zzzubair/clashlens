@@ -231,6 +231,7 @@ export interface RankedDaySummary {
   state: "Live" | "Complete" | "Partial" | "Uncertain";
   startTrophies?: number | null;
   startTrophiesCalculation?: { trophies: number; netChange: number };
+  startTrophiesSource?: "Calculated" | "Season rule";
   offense: {
     attacks: number | null;
     threeStars: number | null;
