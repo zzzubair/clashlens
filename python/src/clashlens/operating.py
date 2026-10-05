@@ -64,7 +64,16 @@ WORKER_OUTCOMES = (
     "superseded",
     "other",
 )
+WORKER_JOB_STAGES = {
+    work_type: f"python_{work_type}"
+    for work_type in (
+        "process_observation", "replay_observation", "build_snapshot",
+        "build_analytics", "build_army_analytics", "redecode_army",
+        "reconcile_ranked_day",
+    )
+}
 WORKER_STAGES = (
+    *WORKER_JOB_STAGES.values(),
     "python_archive_get_verify",
     "python_archive_local_verify",
     "python_archive_pool_acquire",
@@ -96,6 +105,28 @@ POOL_FIELDS = (
 )
 POOL_MEASURE_FIELDS = POOL_FIELDS[:5]
 POOL_COUNTER_FIELDS = POOL_FIELDS[5:]
+
+
+class SchedulingDelayMetrics:
+    """Fixed, disjoint counts, used only by the collector's event loop."""
+
+    _ranges = ("lt_1", "1_to_5", "5_to_30", "30_to_120", "ge_120")
+
+    def __init__(self) -> None:
+        self._counts = {lane: [0] * 5 for lane in ("ordinary", "reset", "interactive")}
+
+    def record(self, lane: str, due_at: datetime, started_at: datetime) -> None:
+        delay = max(0.0, (started_at - due_at).total_seconds())
+        bucket = sum(delay >= boundary for boundary in (1, 5, 30, 120))
+        self._counts[lane][bucket] += 1
+
+    def lines(self) -> list[str]:
+        return [
+            "clashlens_collector_scheduling_delay_total"
+            f'{{lane="{lane}",range="{label}"}} {count}'
+            for lane, counts in self._counts.items()
+            for label, count in zip(self._ranges, counts, strict=True)
+        ]
 
 
 def process_identity(
@@ -299,6 +330,10 @@ class WorkerMetrics:
             raise ValueError("worker metrics contain an unknown stage")
         empty_stage = {
             "count": 0,
+            "elapsed_seconds": 0.0,
+            "thread_cpu_count": 0,
+            "thread_cpu_seconds": 0.0,
+            "paired_elapsed_seconds": 0.0,
             "average_ms": None,
             "p50_upper_ms": None,
             "p95_upper_ms": None,

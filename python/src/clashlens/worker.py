@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from threading import Event, Lock, Semaphore
-from time import monotonic
+from time import monotonic, thread_time
 from typing import Any
 
 from psycopg.errors import (
@@ -58,6 +59,7 @@ from .league_history import (
     complete_league_history,
     parse_league_history,
 )
+from .operating import WORKER_JOB_STAGES
 from .profile import ProfileParseError, parse_profile
 from .rankings import (
     RankingParseError,
@@ -111,18 +113,36 @@ class StageMetrics:
         self._lock = Lock()
         self._stages: dict[str, dict[str, Any]] = {}
 
-    def record(self, stage: str, duration_seconds: float) -> None:
+    @contextmanager
+    def measure(self, stage: str) -> Iterator[None]:
+        started, cpu_started = monotonic(), thread_time()
+        try:
+            yield
+        finally:
+            cpu_seconds = max(0.0, thread_time() - cpu_started)
+            self.record(stage, max(0.0, monotonic() - started), cpu_seconds)
+
+    def record(
+        self, stage: str, duration_seconds: float, cpu_seconds: float | None = None
+    ) -> None:
         with self._lock:
             values = self._stages.setdefault(
                 stage,
                 {
                     "count": 0,
                     "sum_seconds": 0.0,
+                    "thread_cpu_count": 0,
+                    "thread_cpu_seconds": 0.0,
+                    "paired_elapsed_seconds": 0.0,
                     "buckets": [0] * (len(STAGE_DURATION_BUCKETS_SECONDS) + 1),
                 },
             )
             values["count"] += 1
             values["sum_seconds"] += duration_seconds
+            if cpu_seconds is not None:
+                values["thread_cpu_count"] += 1
+                values["thread_cpu_seconds"] += cpu_seconds
+                values["paired_elapsed_seconds"] += duration_seconds
             for index, upper_bound in enumerate(STAGE_DURATION_BUCKETS_SECONDS):
                 if duration_seconds <= upper_bound:
                     values["buckets"][index] += 1
@@ -134,6 +154,9 @@ class StageMetrics:
                 stage: {
                     "count": values["count"],
                     "sum_seconds": values["sum_seconds"],
+                    "thread_cpu_count": values["thread_cpu_count"],
+                    "thread_cpu_seconds": values["thread_cpu_seconds"],
+                    "paired_elapsed_seconds": values["paired_elapsed_seconds"],
                     "buckets": list(values["buckets"]),
                 }
                 for stage, values in self._stages.items()
@@ -156,6 +179,10 @@ class StageMetrics:
 
             report[stage] = {
                 "count": count,
+                "elapsed_seconds": values["sum_seconds"],
+                "thread_cpu_count": values["thread_cpu_count"],
+                "thread_cpu_seconds": values["thread_cpu_seconds"],
+                "paired_elapsed_seconds": values["paired_elapsed_seconds"],
                 "average_ms": float(values["sum_seconds"]) * 1000 / count,
                 "p50_upper_ms": percentile(0.50),
                 "p95_upper_ms": percentile(0.95),
@@ -601,6 +628,16 @@ class ObservationProcessor:
         return self._process_claim(claim, lease_seconds=lease_seconds)
 
     def _process_claim(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
+        stage = WORKER_JOB_STAGES.get(claim.work_type)
+        timing = (
+            self.stage_metrics.measure(stage)
+            if self.stage_metrics is not None and stage is not None
+            else nullcontext()
+        )
+        with timing:
+            return self._process_claim_with_retries(claim, lease_seconds=lease_seconds)
+
+    def _process_claim_with_retries(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
         # PostgreSQL rolls back only one side of a deadlock. Rerun that job under
         # the same claim so it neither stops the worker nor uses up an attempt.
         reason = "database_deadlock"

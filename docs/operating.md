@@ -9,6 +9,44 @@ On 2026-09-30, the five production containers were healthy and the weekly
 backup timer was active. The Discord alert service and timer were **not installed**.
 The alert-specific checks below apply after their approved deployment.
 
+## Reading timing measurements
+
+After deploying the timing measurements, read the collector's existing endpoint:
+
+```sh
+curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8081/metrics \
+  | grep '^clashlens_collector_scheduling_delay_total'
+```
+
+These are counts since this collector started, split by `ordinary`, `reset`,
+and `interactive` lanes. Each admitted check attempt adds one count after local
+storage is reserved, before fetching its first response. Time is measured from
+the work's due time. Checks paused before admission add nothing; a later retry
+that starts adds another sample. The ranges are disjoint: `lt_1` is below 1 s,
+`1_to_5` is at least 1 s and below 5 s, then `5_to_30`, `30_to_120`, and
+`ge_120` for at least 120 s. Early starts count in `lt_1`. This measures check
+admission delay, excluding later waits for an API key or a response.
+
+The existing `worker_health` log records and configured operating snapshot file
+include seven additional `stages`: `python_process_observation`,
+`python_replay_observation`, `python_build_snapshot`, `python_build_analytics`,
+`python_build_army_analytics`, `python_redecode_army`, and
+`python_reconcile_ranked_day`. Each covers a complete job after claiming,
+including retries and failed attempts. Existing parse/domain stages are nested
+inside response jobs; do not add their elapsed times to the job totals.
+
+For each new stage, `elapsed_seconds` and `thread_cpu_seconds` are accumulated
+elapsed and thread computation seconds. Divide `thread_cpu_seconds` by
+`paired_elapsed_seconds` to see its computation share, for example 2 / 10 = 20%.
+The remainder includes database/network waits and time waiting to run, so it is
+not a direct measure of database time. Other threads' and PostgreSQL's computation
+are excluded. `thread_cpu_count` counts paired samples; older elapsed-only stages
+have zero paired samples, not proof of zero computation. Compare changes between
+two snapshots from the same process for a recent interval, and avoid dividing
+by zero. Counts reset on restart; active jobs appear only when they finish.
+Storage stays fixed at 15 collector counters and seven worker stage summaries;
+there are no per-player labels, new queries, files per job, or polling loops.
+
 ## Daily health check
 
 These checks read local status or stored data. They do not request new Clash data.
