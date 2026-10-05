@@ -6,8 +6,9 @@ placement, minutes after the Season-opening Reset (about 05:13 UTC on
 schedules one league-history-only request per frozen member, due 20 minutes
 after it, on the ordinary lane and normal key budget. The
 ``refresh-league-history`` command schedules the same for every tracked
-player, for a Season whose Reset fetch came too early. Each player gets at
-most one per Season, however often either runs.
+player, for a Season whose Reset fetch came too early. Each player has at
+most one unfinished request per Season; once it finishes, running the
+command again schedules another.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ def schedule_refresh(
     """Add one refresh per player for the Season ending at ``season_end``.
 
     Without ``player_ids`` every active player gets one. Returns how many
-    were added; players that already have one for this Season are skipped.
+    were added; players with an unfinished one for this Season are skipped.
     """
     return connection.execute(
         """

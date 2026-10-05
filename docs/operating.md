@@ -607,7 +607,8 @@ podman exec clashlens-collector \
 ```
 
 It reports how many it `scheduled` for the latest ended Season; a second run
-schedules 0. The collector sends them on the ordinary lane within the normal key
+schedules 0 while the first run's requests are still waiting, and a fresh set
+once they finished. The collector sends them on the ordinary lane within the normal key
 budget, about 13,000 requests at October 2026 membership.
 
 ### Website unreachable from outside

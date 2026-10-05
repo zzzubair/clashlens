@@ -77,7 +77,7 @@ def test_season_opening_reset_fetches_league_history_again_after_20_minutes(
         assert _refreshes(connection_info)[0][2] == "complete"
 
 
-def test_refresh_command_schedules_each_tracked_player_once_per_season(
+def test_refresh_command_skips_players_whose_refresh_is_still_waiting(
     database_url: str,
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -85,9 +85,10 @@ def test_refresh_command_schedules_each_tracked_player_once_per_season(
         _players(connection_info, "#9QQ", active=False)
         with psycopg.connect(connection_info) as connection:
             assert schedule_refresh(connection, SEASON_RESET, due_at=SEASON_RESET) == 2
+            assert schedule_refresh(connection, SEASON_RESET, due_at=SEASON_RESET) == 0
             connection.execute(
                 "UPDATE collector_work SET status = 'complete', completed_at = now()"
                 " WHERE kind = 'league_history_refresh'"
             )
-            # Running it again, even after they finished, adds nothing.
-            assert schedule_refresh(connection, SEASON_RESET, due_at=SEASON_RESET) == 0
+            # Once they finished, a later run fetches again.
+            assert schedule_refresh(connection, SEASON_RESET, due_at=SEASON_RESET) == 2

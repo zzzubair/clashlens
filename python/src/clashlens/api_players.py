@@ -40,7 +40,7 @@ def _official_history_rows(
     filters = ["player.normalized_tag = %s", "history.league_tier_id = %s"]
     parameters: list[Any] = [normalized_tag, _LEGEND_I_TIER_ID]
     if season_id is not None:
-        if not season_id.isdigit():
+        if not (season_id.isascii() and season_id.isdigit()):
             return []
         filters.append("history.league_season_id = %s")
         parameters.append(

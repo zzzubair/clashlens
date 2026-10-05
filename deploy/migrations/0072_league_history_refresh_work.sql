@@ -5,9 +5,10 @@
 -- Reset pair has already asked. The Season-opening Reset schedules one per
 -- frozen member, due 20 minutes after it; an operator command can schedule
 -- the same for every tracked player. The coalescing key names the ended
--- Season, so each player gets at most one per Season. About 13,000 rows
--- every 28 days at October 2026 membership; finished rows are kept as the
--- work reference that protects their responses.
+-- Season, so each player has at most one unfinished request for it. About
+-- 13,000 rows every 28 days at October 2026 membership, plus one per player
+-- each time the command runs; finished rows are kept as the work reference
+-- that protects their responses.
 BEGIN;
 
 ALTER TABLE collector_work
@@ -46,11 +47,6 @@ ALTER TABLE collector_work
             AND battle_log_status = 'not_applicable'
             AND league_history_status IN ('pending', 'observed'))
     );
-
--- Finished refreshes keep their row, so scheduling again adds nothing.
-CREATE UNIQUE INDEX IF NOT EXISTS collector_work_one_league_history_refresh
-    ON collector_work (coalescing_key)
-    WHERE kind = 'league_history_refresh';
 
 INSERT INTO clash_lens_schema_migrations(version) VALUES (72)
 ON CONFLICT (version) DO NOTHING;

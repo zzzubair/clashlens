@@ -219,6 +219,7 @@ def test_public_season_reader_uses_only_valid_legend_history(
                 api_players.get_player_season_summary(api, "#2PP", "1783918800")
                 is None
             )
+            assert api_players.get_player_season_summary(api, "#2PP", "²") is None
             with api.pool.connection() as connection:
                 retained = connection.execute(
                     "SELECT count(*) FROM player_league_history_entries"
