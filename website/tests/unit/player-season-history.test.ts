@@ -229,13 +229,13 @@ describe("past-Season view", () => {
   });
 
   it.each([
-    ["official_league_history", null, "Unknown"],
-    ["official_league_history", 321, "321"],
-    ["tracked_summary", null, "Unknown"],
-    ["tracked_summary", 3, "3"],
+    ["official_league_history", null, "Not available yet"],
+    ["official_league_history", 180, "180"],
+    ["tracked_summary", null, "Not available yet"],
+    ["tracked_summary", 1340, "1,340"],
   ] as const)(
-    "identifies %s rank %s as the saved Clash Lens board rank",
-    async (source, finalRank, expected) => {
+    "shows %s official placement %s as the final rank",
+    async (source, finalPlacement, expected) => {
       const html = await loadAndRender(
         {
           getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -243,21 +243,21 @@ describe("past-Season view", () => {
           getPlayerSeason: vi.fn().mockResolvedValue({
             ...SUMMARY,
             source,
-            finalRank,
+            // Clash Lens's own board rank is never the final rank.
+            finalRank: 183,
             officialHistory: {
               observedAt: "2026-10-05T05:08:00Z",
               eodTrophies: 5812,
-              finalPlacement: 12,
+              finalPlacement,
             },
           }),
         },
         SEASON,
       );
-      expect(html).toContain(`<dt>Clash Lens final rank</dt><dd>${expected}</dd>`);
-      expect(html).toContain("Rank on Clash Lens’s saved final leaderboard");
-      expect(html).toContain("last trophies saved before the Season Reset");
-      expect(html).not.toContain("<dt>Final rank</dt>");
-      expect(html).not.toContain(">12<");
+      expect(html).toContain(`<dt>Final rank</dt><dd>${expected}</dd>`);
+      expect(html).toContain("Final rank is the in-game rank from Clash of Clans.");
+      expect(html).not.toContain("Clash Lens final rank");
+      expect(html).not.toContain(">183<");
       if (source === "official_league_history") {
         expect(html).toContain("<dt>Final trophies</dt><dd>5,812</dd>");
       } else {

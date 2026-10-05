@@ -29,6 +29,7 @@ from . import (
     api_accounts,
     api_verification,
     battle_day_repair,
+    league_history_refresh,
 )
 from . import (
     db as _db,
@@ -282,6 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     battle_day_repair.add_republish_command(
         subparsers, _database_argument, _bounded_int
     )
+    league_history_refresh.add_command(subparsers, _database_argument)
 
     materialize_seasons = subparsers.add_parser(
         "materialize-season-summaries",
@@ -539,6 +541,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return battle_day_repair.run_republish_command(
                 _database_url(arguments), arguments
             )
+        if arguments.command == "refresh-league-history":
+            return league_history_refresh.run_command(_database_url(arguments))
         if arguments.command == "materialize-season-summaries":
             import psycopg
 

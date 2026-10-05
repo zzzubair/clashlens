@@ -149,9 +149,10 @@ A domain change is complete only when every affected source observation, derived
   that Season in the page's Seasons list, dated by its end. That list offers
   only Seasons with Clash Lens days; one known only from the game's league
   history is left out.
-- Public completed-season rank means final Clash Lens position among tracked
-  players only. Official rank remains supporting evidence. Unknown final
-  Clash Lens position must not fall back to official rank.
+- Public completed-season final rank means the official in-game placement from
+  Clash of Clans league history, which names a Season by the Reset that ended
+  it. Until that placement is saved, show it as not available yet; never fall
+  back to the Clash Lens leaderboard position.
 
 ### Live Leaderboard ordering
 
