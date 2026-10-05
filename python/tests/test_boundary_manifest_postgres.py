@@ -1,0 +1,828 @@
+"""A Reset's manifest frozen for the whole population at once is the one the
+per-player freeze built: the same rows and the same digest, so nothing a
+published board froze changes."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
+
+import psycopg
+from domain_test_support import domain_database, store_observation, text
+
+from clashlens import battle_day_repair, boundary
+from clashlens.army_decoder import DECODER_VERSION
+from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
+from clashlens.catalog import CATALOG_VERSION
+from clashlens.db import Database, _text_value
+from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
+
+BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
+DAY = BOUNDARY - RANKED_DAY_DURATION
+# Enough players that every modulus below picks several of them.
+PLAYERS = 400
+
+
+def seed_population(connection_info: str, players: int) -> int:
+    """Seed ``players`` members of one Reset generation and their inputs.
+
+    Player ``i`` varies by ``i`` modulo small numbers: statuses, missing,
+    mismatched and non-Complete ranked days, newer and older profiles and
+    effects, ineligible and old-Season profiles, no accepted profile with
+    and without a failed or conflicting response, official ranks, extra and
+    junk daily-log events, missing reports, inactive and old decodes, and
+    battle sides 0057 moved or left. Returns the generation id.
+    """
+    season = ranked_day_for(DAY).official_season_id
+    unprofiled = [i for i in range(1, players + 1) if i % 17 == 0]
+    archive = (None, None, None, SimpleNamespace(objects={}))
+    with psycopg.connect(connection_info) as connection:
+        connection.execute(
+            """
+            INSERT INTO players (id, normalized_tag, active)
+            OVERRIDING SYSTEM VALUE
+            SELECT i, '#P' || i, true FROM generate_series(1, %s) AS i
+            """,
+            (players,),
+        )
+        for i in unprofiled:
+            if i // 17 % 3 == 0:
+                continue
+            store_observation(
+                connection_info,
+                archive,
+                occurrence_key=f"profile-{i}",
+                endpoint="profile",
+                body=f"profile {i}".encode(),
+                observed_at=BOUNDARY - timedelta(minutes=10),
+                normalized_tag=f"#P{i}",
+                existing_connection=connection,
+                commit=False,
+            )
+        # Inputs whose parents this test does not need skip their checks.
+        connection.execute("SET LOCAL session_replication_role = replica")
+        connection.execute(
+            """
+            UPDATE python_processing_jobs AS job
+            SET status = 'failed', completed_at = clock_timestamp(),
+                failure_category = CASE WHEN player.id / 17 % 3 = 1
+                    THEN 'malformed_json' ELSE 'archive_timeout' END
+            FROM collector_observations AS observation, players AS player
+            WHERE job.observation_id = observation.id
+              AND observation.player_id = player.id
+            """
+        )
+        sweep = connection.execute(
+            """
+            INSERT INTO collector_reset_sweeps
+                (boundary_at, member_ids, membership_captured_at)
+            VALUES (%s, %s, clock_timestamp())
+            RETURNING id
+            """,
+            (BOUNDARY, list(range(1, players + 1))),
+        ).fetchone()[0]
+        generation_id, _ = boundary._create_boundary_generation(
+            None,
+            connection,
+            boundary_at=BOUNDARY,
+            sweep_id=sweep,
+            player_ids=list(range(1, players + 1)),
+            generation=1,
+            supersedes_id=None,
+        )
+        parameters = {
+            "players": players,
+            "generation": generation_id,
+            "boundary": BOUNDARY,
+            "day": DAY,
+            "season": season,
+        }
+        for statement in _SEED:
+            connection.execute(statement, parameters)
+    return generation_id
+
+
+_STATUSES = "ARRAY['pending','partial','failed','missing','unavailable','inconsistent','malformed']"
+_SEED = [
+    # Every 23rd player has no ranked day; every 97th's names another player.
+    # Players with no accepted profile (every 17th) cover each status.
+    """
+    INSERT INTO ranked_day_versions (
+        id, player_id, ranked_day_start, ranked_day_end, official_season_id,
+        season_day_number, season_anchor_rule_version,
+        reconciliation_rule_version, result_hash, version, state, confidence,
+        input_hash, evidence_complete, coverage_complete,
+        start_baseline_id, end_baseline_id
+    ) OVERRIDING SYSTEM VALUE
+    SELECT i, CASE WHEN i %% 97 = 0 THEN i + 1 ELSE i END, %(day)s, %(boundary)s,
+           %(season)s, 5, 'anchor', 'rules', encode(sha256(i::text::bytea), 'hex'),
+           CASE WHEN i %% 97 = 0 THEN 2 ELSE 1 END, state, 'exact',
+           repeat('b', 64), true, state = 'Complete',
+           CASE WHEN i %% 6 = 0 THEN NULL ELSE i * 10 END,
+           CASE WHEN i %% 8 = 0 THEN NULL ELSE i * 10 + 1 END
+    FROM generate_series(1, %(players)s) AS i
+    CROSS JOIN LATERAL (
+        SELECT CASE
+            WHEN i %% 17 = 0 AND i / 17 %% 7 = 1 THEN 'Partial'
+            WHEN i %% 13 < 4
+            THEN (ARRAY['Partial','Inconsistent','Malformed','Live'])[i %% 13 + 1]
+            ELSE 'Complete' END
+    ) AS chosen (state)
+    WHERE i %% 23 <> 0
+    """,
+    f"""
+    UPDATE boundary_publication_generation_members
+    SET ranked_day_version_id = CASE WHEN player_id %% 23 = 0 THEN NULL ELSE player_id END,
+        ranked_day_input_hash = CASE WHEN player_id %% 23 = 0 THEN NULL
+            ELSE encode(sha256(player_id::text::bytea), 'hex') END,
+        status = 'terminal',
+        snapshot_status = CASE
+            WHEN player_id %% 17 = 0 THEN ({_STATUSES})[player_id / 17 %% 7 + 1]
+            WHEN player_id %% 10 < 6 THEN 'complete'
+            ELSE ({_STATUSES})[player_id %% 7 + 1] END,
+        army_status = CASE WHEN player_id %% 11 < 7 THEN 'complete'
+            ELSE ({_STATUSES})[player_id / 3 %% 7 + 1] END
+    WHERE generation_id = %(generation)s
+    """,
+    # Accepted profiles; every 7th player also has one after the Reset, every
+    # 11th an older one and every 13th a second one seen at the same time.
+    """
+    INSERT INTO player_profile_versions (
+        id, player_id, observation_id, normalized_tag, endpoint_version,
+        schema_version, parser_version, observed_at, source_http_status, name,
+        trophies, league_tier_id, league_tier_name, eligibility_state,
+        profile_json, source_contract_state, current_league_season_id
+    ) OVERRIDING SYSTEM VALUE
+    SELECT copy * %(players)s + i, i, copy * %(players)s + i, '#P' || i, 'v1',
+           'v1', 'parser', %(boundary)s + make_interval(mins => offset_minutes),
+           200, 'Player ' || i, 5000 + i, 105000034, 'Legend League',
+           CASE WHEN i %% 19 = 0 THEN 'ineligible' ELSE 'eligible' END,
+           jsonb_build_object('tag', '#P' || i, 'trophies', 5000 + i,
+                              'copy', copy),
+           'accepted',
+           CASE WHEN i %% 29 = 0 THEN '2026-07' ELSE %(season)s END
+    FROM generate_series(1, %(players)s) AS i
+    CROSS JOIN LATERAL (
+        VALUES (0, -(i %% 50) - 1), (1, 1), (2, -120), (3, -(i %% 50) - 1)
+    ) AS version (copy, offset_minutes)
+    WHERE i %% 17 <> 0
+      AND (copy = 0 OR copy = 1 AND i %% 7 = 0 OR copy = 2 AND i %% 11 = 0
+           OR copy = 3 AND i %% 13 = 0)
+    """,
+    # Effects re-observe a profile: before the Reset for every 5th player,
+    # after it on the older profile for every 22nd.
+    """
+    INSERT INTO player_profile_effects (
+        profile_version_id, observation_id, effect_kind, observed_at,
+        source_http_status, endpoint_version, schema_version, parser_version
+    )
+    SELECT i, 10 * %(players)s + i, 'current_profile',
+           %(boundary)s - interval '30 seconds', 200, 'v1', 'v1', 'parser'
+    FROM generate_series(1, %(players)s) AS i
+    WHERE i %% 5 = 0 AND i %% 17 <> 0
+    UNION ALL
+    SELECT 2 * %(players)s + i, 11 * %(players)s + i, 'current_profile',
+           %(boundary)s + interval '1 minute', 200, 'v1', 'v1', 'parser'
+    FROM generate_series(1, %(players)s) AS i
+    WHERE i %% 22 = 0 AND i %% 17 <> 0
+    """,
+    # Every 51st player's only profile conflicts with its source.
+    """
+    INSERT INTO player_profile_versions (
+        id, player_id, observation_id, normalized_tag, endpoint_version,
+        schema_version, parser_version, observed_at, source_http_status, name,
+        trophies, league_tier_id, league_tier_name, eligibility_state,
+        profile_json, source_contract_state
+    ) OVERRIDING SYSTEM VALUE
+    SELECT 3 * %(players)s + i, i, 3 * %(players)s + i, '#P' || i, 'v1', 'v1',
+           'parser', %(boundary)s - interval '5 minutes', 200, 'Player ' || i,
+           5000, 105000034, 'Legend League', 'eligible', '{}', 'conflict'
+    FROM generate_series(1, %(players)s) AS i
+    WHERE i %% 51 = 0
+    """,
+    """
+    INSERT INTO official_top200_attempts (id, observation_id, parser_version, outcome, observed_at)
+    OVERRIDING SYSTEM VALUE
+    VALUES (1, 1, 'parser', 'official_observed', %(boundary)s - interval '30 minutes')
+    """,
+    """
+    INSERT INTO official_top200_versions (id, attempt_id, observation_id, observed_at, parser_version)
+    OVERRIDING SYSTEM VALUE
+    VALUES (1, 1, 1, %(boundary)s - interval '30 minutes', 'parser')
+    """,
+    """
+    INSERT INTO official_top200_version_entries (
+        version_id, source_row_id, rank, player_id, normalized_tag, source_row_index
+    )
+    SELECT 1, rank, rank, 3 * rank, '#P' || 3 * rank, rank - 1
+    FROM generate_series(1, 200) AS rank
+    """,
+    # Each ranked day's log lists 4-12 battles, the odd ones attacks. Every
+    # 31st also lists events that are not battles; every 13th has an older log.
+    """
+    INSERT INTO api_player_daily_logs (
+        id, player_id, ranked_day_start, version, state, coverage, battles,
+        official_season_id, ranked_day_version_id
+    ) OVERRIDING SYSTEM VALUE
+    SELECT copy * %(players)s + version.id, version.player_id, %(day)s,
+           CASE WHEN copy = 0 THEN version.version ELSE version.version + 5 END,
+           CASE WHEN version.state = 'Complete' THEN 'Complete' ELSE 'Partial' END,
+           CASE WHEN version.state = 'Complete' THEN 'complete' ELSE 'partial' END,
+           (
+               SELECT jsonb_agg(jsonb_build_object(
+                   'battle_id', version.id * 100 + k,
+                   'lens', CASE WHEN k %% 2 = 1 THEN 'offense' ELSE 'defense' END
+               ) ORDER BY k)
+               FROM generate_series(1, version.id %% 9 + 4 - copy) AS k
+           ) || CASE WHEN version.id %% 31 = 0
+               THEN '["junk", {"battle_id": "abc"}, {"battle_id": 7}]'::jsonb
+               ELSE '[]'::jsonb END,
+           %(season)s, version.id
+    FROM ranked_day_versions AS version
+    CROSS JOIN generate_series(0, 1) AS copy
+    WHERE copy = 0 OR version.id %% 13 = 0
+    """,
+    """
+    INSERT INTO legend_battles (id, ranked_day_start, attacker_player_id, defender_player_id)
+    OVERRIDING SYSTEM VALUE
+    SELECT version.id * 100 + k, %(day)s, version.player_id, 1000000 + version.id * 100 + k
+    FROM ranked_day_versions AS version, generate_series(1, 12) AS k
+    WHERE k <= version.id %% 9 + 4
+    UNION ALL
+    SELECT 9000000 + id, %(day)s, player_id, 1000000 + 9000000 + id
+    FROM ranked_day_versions WHERE id %% 41 = 0
+    """,
+    """
+    INSERT INTO battle_evidence (
+        id, battle_id, source_row_id, observation_id, reporting_player_id,
+        perspective, battle_timestamp, stars, destruction_percentage,
+        attacker_gain, defender_loss, trophy_rule_version, source_observed_at,
+        parser_version
+    ) OVERRIDING SYSTEM VALUE
+    SELECT battle.id * 2 + side.offset_id, battle.id, battle.id * 2 + side.offset_id,
+           battle.id * 2 + side.offset_id,
+           battle.attacker_player_id, side.perspective, %(day)s, 2, 80, 30, 30,
+           'rule', %(day)s, 'parser'
+    FROM legend_battles AS battle
+    CROSS JOIN (VALUES (0, 'attacker'), (1, 'defender')) AS side (offset_id, perspective)
+    """,
+    # Every 5th battle has no defender report selected.
+    """
+    INSERT INTO battle_perspectives (battle_id, perspective, evidence_id, source_observed_at)
+    SELECT battle_id, perspective, id, %(day)s
+    FROM battle_evidence
+    WHERE NOT (perspective = 'defender' AND battle_id %% 5 = 0)
+    """,
+    # Every 3rd defender decode is inactive, every 4th battle also has an old
+    # decoder's decode.
+    """
+    INSERT INTO battle_army_decodes (
+        id, battle_id, evidence_id, decoder_version, catalog_version,
+        catalog_hash, status, failure_category, is_active, perspective
+    ) OVERRIDING SYSTEM VALUE
+    SELECT evidence.id, evidence.battle_id, evidence.id, 'army-decoder-v2',
+           'unit-catalog-v2', repeat('c', 64), 'failed', 'fixture',
+           NOT (evidence.perspective = 'defender' AND evidence.battle_id %% 3 = 0),
+           evidence.perspective
+    FROM battle_evidence AS evidence
+    UNION ALL
+    SELECT 100000000 + evidence.id, evidence.battle_id, evidence.id,
+           'army-decoder-v1', 'unit-catalog-v2', repeat('c', 64), 'failed',
+           'fixture', true, evidence.perspective
+    FROM battle_evidence AS evidence
+    WHERE evidence.battle_id %% 4 = 0
+    """,
+    # 0057 moved both sides of every 41st day's first attack to another
+    # battle and dropped their reports there; the day lists only the attack.
+    # Every 41st + 1 day's repair left its report in place.
+    """
+    INSERT INTO battle_day_repairs (
+        from_battle_id, to_battle_id, perspective, evidence_id,
+        attacker_player_id, defender_player_id, from_day, to_day
+    )
+    SELECT id * 100 + 1, 9000000 + id - id %% 41, side.perspective,
+           (id * 100 + 1) * 2 + side.offset_id, player_id, player_id + 1,
+           %(day)s, %(day)s
+    FROM ranked_day_versions
+    CROSS JOIN (VALUES (0, 'attacker'), (1, 'defender')) AS side (offset_id, perspective)
+    WHERE id %% 41 = 0 OR id %% 41 = 1 AND side.perspective = 'attacker'
+    """,
+    """
+    DELETE FROM battle_perspectives
+    WHERE battle_id IN (SELECT id * 100 + 1 FROM ranked_day_versions WHERE id %% 41 = 0)
+    """,
+]
+
+
+def per_player_inputs(
+    connection: Any, *, generation_id: int, artifact_kind: str
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """The rows and Season inputs the per-player freeze built, reading one
+    player at a time.
+
+    Kept verbatim from boundary._freeze_boundary_manifest before it read
+    the whole population at once.
+    """
+    generation = connection.execute(
+        "SELECT boundary_at, generation FROM boundary_publication_generations WHERE id = %s",
+        (generation_id,),
+    ).fetchone()
+    official_version_id = None
+    if artifact_kind == "snapshot":
+        official_version = connection.execute(
+            """
+            SELECT v.id
+            FROM official_top200_versions AS v
+            JOIN official_top200_attempts AS a ON a.id = v.attempt_id
+            JOIN official_top200_version_entries AS e ON e.version_id = v.id
+            WHERE a.outcome = 'official_observed' AND v.observed_at <= %s
+            GROUP BY v.id, v.observed_at
+            HAVING count(*) = 200 AND count(DISTINCT e.rank) = 200
+               AND min(e.rank) = 1 AND max(e.rank) = 200
+            ORDER BY v.observed_at DESC, v.id DESC
+            LIMIT 1
+            """,
+            (generation[0],),
+        ).fetchone()
+        official_version_id = int(official_version[0]) if official_version else None
+    members = connection.execute(
+        """
+        SELECT player_id, ranked_day_version_id, ranked_day_input_hash,
+               snapshot_status, army_status
+        FROM boundary_publication_generation_members
+        WHERE generation_id = %s
+        ORDER BY player_id, ranked_day_version_id NULLS FIRST, ranked_day_input_hash NULLS FIRST
+        """,
+        (generation_id,),
+    ).fetchall()
+    manifest_rows: list[dict[str, Any]] = []
+    for ordinal, row in enumerate(members, start=1):
+        player_id = int(row[0])
+        version_id = int(row[1]) if row[1] is not None else None
+        input_hash = _text_value(row[2]) if row[2] is not None else None
+        status = _text_value(row[3] if artifact_kind == "snapshot" else row[4])
+        classification = {
+            "complete": "Complete",
+            "partial": "Partial",
+            "failed": "Failed",
+            "missing": "Missing",
+            "unavailable": "Unavailable",
+            "inconsistent": "Inconsistent",
+            "malformed": "Malformed",
+        }.get(status, "Pending")
+        if (
+            status in {"complete", "partial", "inconsistent", "malformed"}
+            and version_id is not None
+        ):
+            if artifact_kind == "snapshot":
+                classification = {
+                    "complete": "Complete",
+                    "partial": "Partial",
+                    "missing": "Missing",
+                    "unavailable": "Unavailable",
+                    "inconsistent": "Inconsistent",
+                    "malformed": "Malformed",
+                }.get(
+                    boundary._boundary_snapshot_status(
+                        connection,
+                        player_id=player_id,
+                        ranked_day_version_id=version_id,
+                        boundary_at=generation[0],
+                    ),
+                    "Missing",
+                )
+            elif status == "partial":
+                classification = "Partial"
+            else:
+                state_row = connection.execute(
+                    "SELECT state FROM ranked_day_versions WHERE id = %s",
+                    (version_id,),
+                ).fetchone()
+                state = (
+                    _text_value(state_row[0])
+                    if state_row is not None
+                    else "Malformed"
+                )
+                classification = (
+                    state
+                    if state in {"Complete", "Partial", "Malformed", "Inconsistent"}
+                    else "Partial"
+                )
+        identity = {
+            "artifact_kind": artifact_kind,
+            "generation": int(generation[1]),
+            "player_id": player_id,
+            "ranked_day_version_id": version_id,
+            "input_hash": input_hash,
+            "classification": classification,
+        }
+        if artifact_kind == "snapshot":
+            identity["official_top200_version_id"] = official_version_id
+            official_entry = None
+            if official_version_id is not None:
+                official_entry = connection.execute(
+                    """
+                    SELECT entry.rank, version.observed_at
+                    FROM official_top200_version_entries AS entry
+                    JOIN official_top200_versions AS version
+                      ON version.id = entry.version_id
+                    WHERE entry.version_id = %s AND entry.player_id = %s
+                    """,
+                    (official_version_id, player_id),
+                ).fetchone()
+            identity["official_rank"] = (
+                int(official_entry[0]) if official_entry else None
+            )
+            identity["official_rank_observed_at"] = (
+                official_entry[1].astimezone(UTC).isoformat()
+                if official_entry
+                else None
+            )
+            profile = connection.execute(
+                """
+                SELECT profile.id,
+                       COALESCE(effect.observation_id, profile.observation_id),
+                       COALESCE(effect.observed_at, profile.observed_at),
+                       profile.profile_json, profile.normalized_tag,
+                       profile.name, profile.trophies, profile.eligibility_state,
+                       profile.current_league_season_id
+                FROM player_profile_versions AS profile
+                LEFT JOIN player_profile_effects AS effect
+                  ON effect.profile_version_id = profile.id
+                WHERE profile.player_id = %s
+                  AND COALESCE(effect.observed_at, profile.observed_at) <= %s
+                  AND profile.source_contract_state = 'accepted'
+                ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC,
+                         COALESCE(effect.id, profile.id) DESC
+                LIMIT 1
+                """,
+                (player_id, generation[0]),
+            ).fetchone()
+            if profile is not None:
+                identity["profile_version_id"] = int(profile[0])
+                identity["profile_input_hash"] = hashlib.sha256(
+                    json.dumps(
+                        profile[3], sort_keys=True, separators=(",", ":")
+                    ).encode("utf-8")
+                ).hexdigest()
+                identity["profile_snapshot"] = {
+                    "observation_id": int(profile[1]),
+                    "tag": _text_value(profile[4]),
+                    "name": profile[5],
+                    "trophies": int(profile[6]),
+                    "observed_at": profile[2].astimezone(UTC).isoformat(),
+                    "eligibility_state": _text_value(profile[7]),
+                    "profile_json": profile[3],
+                }
+                if _text_value(profile[7]) != "eligible":
+                    identity["snapshot_quality"] = "invalid"
+                elif season_is_current(
+                    _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
+                ):
+                    identity["snapshot_quality"] = "eligible"
+                else:
+                    # Trophies from before this player's Season reset never
+                    # stand for the ended day's Season.
+                    identity["snapshot_quality"] = "season_reset_pending"
+            else:
+                identity["profile_version_id"] = None
+                identity["profile_input_hash"] = None
+                latest = connection.execute(
+                    """
+                    SELECT (
+                        SELECT profile.source_contract_state
+                        FROM player_profile_versions AS profile
+                        LEFT JOIN player_profile_effects AS effect
+                          ON effect.profile_version_id = profile.id
+                        WHERE profile.player_id = %s
+                          AND COALESCE(effect.observed_at, profile.observed_at) <= %s
+                        ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC,
+                                 COALESCE(effect.id, profile.id) DESC
+                        LIMIT 1
+                    ), (
+                        SELECT job.failure_category
+                        FROM collector_observations AS observation
+                        LEFT JOIN python_processing_jobs_worker AS job
+                          ON job.observation_id = observation.id
+                        WHERE observation.player_id = %s
+                          AND observation.endpoint = 'profile'
+                          AND observation.response_completed_at <= %s
+                        ORDER BY observation.response_completed_at DESC,
+                                 observation.id DESC
+                        LIMIT 1
+                    )
+                    """,
+                    (player_id, generation[0], player_id, generation[0]),
+                ).fetchone()
+                source_state = _text_value(latest[0]) if latest and latest[0] else None
+                failure = _text_value(latest[1]) if latest and latest[1] else None
+                if failure in {
+                    "malformed_json",
+                    "unsupported_profile_schema",
+                    "source_identity_mismatch",
+                    "invalid_player_tag",
+                }:
+                    snapshot_quality = "malformed"
+                elif source_state == "conflict":
+                    snapshot_quality = "conflicting"
+                else:
+                    snapshot_quality = {
+                        "Unavailable": "unavailable",
+                        "Failed": "unavailable",
+                        "Partial": "partial",
+                        "Inconsistent": "inconsistent",
+                        "Malformed": "malformed",
+                    }.get(classification, "missing")
+                identity["snapshot_quality"] = snapshot_quality
+        if artifact_kind == "army" and version_id is not None:
+            # The day's evidence stays in ranked_day_versions and input_hash
+            # pins it; copying it here made army rows ~46 KB each.
+            ranked_identity = connection.execute(
+                "SELECT start_baseline_id, end_baseline_id FROM ranked_day_versions WHERE id = %s",
+                (version_id,),
+            ).fetchone()
+            if ranked_identity is not None:
+                identity.update(
+                    {
+                        "start_baseline_id": ranked_identity[0],
+                        "end_baseline_id": ranked_identity[1],
+                    }
+                )
+            daily_log = connection.execute(
+                "SELECT id, battles FROM api_player_daily_logs WHERE ranked_day_version_id = %s ORDER BY id DESC LIMIT 1",
+                (version_id,),
+            ).fetchone()
+            identity["daily_log_id"] = int(daily_log[0]) if daily_log else None
+            battle_ids, decode_ids, moved = boundary._army_decode_selection(
+                connection, daily_log[1] if daily_log is not None else None
+            )
+            evidence_ids: list[int] = []
+            if daily_log is not None and isinstance(daily_log[1], list):
+                for event in daily_log[1]:
+                    if (
+                        not isinstance(event, dict)
+                        or not str(event.get("battle_id", "")).isdigit()
+                    ):
+                        continue
+                    perspective = (
+                        "attacker" if event.get("lens") == "offense" else "defender"
+                    )
+                    evidence_row = connection.execute(
+                        """
+                        SELECT perspective.evidence_id
+                        FROM battle_perspectives AS perspective
+                        WHERE perspective.battle_id = %s
+                          AND perspective.perspective = %s
+                        """,
+                        (
+                            moved.get(
+                                (int(event["battle_id"]), event.get("lens")),
+                                int(event["battle_id"]),
+                            ),
+                            perspective,
+                        ),
+                    ).fetchone()
+                    if evidence_row is not None:
+                        evidence_ids.append(int(evidence_row[0]))
+            identity["battle_ids"] = sorted(set(battle_ids))
+            identity["decode_ids"] = decode_ids
+            identity["evidence_ids"] = sorted(set(evidence_ids))
+        manifest_rows.append(identity)
+    season_inputs = None
+    if artifact_kind == "army":
+        season_row = connection.execute(
+            """
+            SELECT official_season_id
+            FROM ranked_day_versions
+            WHERE id = ANY(%s::bigint[])
+            ORDER BY id
+            LIMIT 1
+            """,
+            ([row[1] for row in members if row[1] is not None],),
+        ).fetchone()
+        if season_row is not None:
+            season_versions = connection.execute(
+                """
+                SELECT id
+                FROM ranked_day_versions
+                WHERE official_season_id = %s
+                  AND state = 'Complete' AND coverage_complete
+                ORDER BY id
+                """,
+                (season_row[0],),
+            ).fetchall()
+            season_version_ids = [int(row[0]) for row in season_versions]
+            season_logs = connection.execute(
+                """
+                SELECT DISTINCT ON (ranked_day_version_id) id, battles
+                FROM api_player_daily_logs
+                WHERE ranked_day_version_id = ANY(%s::bigint[])
+                  AND state = 'Complete' AND coverage = 'complete'
+                ORDER BY ranked_day_version_id, version DESC, id DESC
+                """,
+                (season_version_ids,),
+            ).fetchall()
+            season_daily_log_ids = [int(row[0]) for row in season_logs]
+            season_sides = {
+                (int(event["battle_id"]), event.get("lens"))
+                for row in season_logs
+                for event in (row[1] if isinstance(row[1], list) else [])
+                if isinstance(event, dict)
+                and str(event.get("battle_id", "")).isdigit()
+            }
+            season_battle_ids = sorted(
+                {battle_id for battle_id, _lens in season_sides}
+            )
+            season_evidence_ids = [
+                int(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT evidence_id
+                    FROM battle_perspectives
+                    WHERE battle_id = ANY(%s::bigint[])
+                    ORDER BY evidence_id
+                    """,
+                    (season_battle_ids,),
+                ).fetchall()
+            ]
+            season_moved = {
+                side: to_id
+                for side, to_id in battle_day_repair.merged_battles(
+                    connection, season_battle_ids, season_evidence_ids
+                )[0].items()
+                if side in season_sides
+            }
+            season_decode_ids = sorted(
+                {
+                    *(
+                        int(row[0])
+                        for row in connection.execute(
+                            """
+                            SELECT id
+                            FROM battle_army_decodes
+                            WHERE battle_id = ANY(%s::bigint[])
+                              AND decoder_version = %s AND catalog_version = %s
+                              AND is_active
+                            """,
+                            (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                        ).fetchall()
+                    ),
+                    *_moved_decode_ids(connection, season_moved),
+                }
+            )
+            season_evidence_ids = sorted(
+                {
+                    *season_evidence_ids,
+                    *(
+                        int(row[0])
+                        for row in connection.execute(
+                            """
+                            SELECT perspective.evidence_id
+                            FROM battle_perspectives AS perspective
+                            JOIN unnest(%s::bigint[], %s::text[])
+                              AS side (battle_id, perspective)
+                              USING (battle_id, perspective)
+                            """,
+                            _moved_side_arrays(season_moved),
+                        ).fetchall()
+                    ),
+                }
+            )
+            season_inputs = {
+                "ranked_version_ids": season_version_ids,
+                "daily_log_ids": season_daily_log_ids,
+                "battle_ids": season_battle_ids,
+                "decode_ids": season_decode_ids,
+                "evidence_ids": season_evidence_ids,
+            }
+    return manifest_rows, season_inputs
+
+
+def _digest(generation: int, artifact_kind: str, rule_versions: Any, rows: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "generation": generation,
+                "artifact_kind": artifact_kind,
+                "rule_versions": rule_versions,
+                "rows": rows,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def test_whole_population_freeze_matches_the_per_player_freeze(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = seed_population(connection_info, PLAYERS)
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                for artifact_kind in ("snapshot", "army"):
+                    expected, season_inputs = per_player_inputs(
+                        connection,
+                        generation_id=generation_id,
+                        artifact_kind=artifact_kind,
+                    )
+                    manifest_id, digest = boundary._freeze_boundary_manifest(
+                        database,
+                        connection,
+                        generation_id=generation_id,
+                        artifact_kind=artifact_kind,
+                    )
+                    rule_versions = connection.execute(
+                        "SELECT rule_versions FROM boundary_publication_manifests WHERE id = %s",
+                        (manifest_id,),
+                    ).fetchone()[0]
+                    assert rule_versions == {
+                        **{
+                            key: rule_versions[key]
+                            for key in (
+                                "ordering_rule_version",
+                                "freshness_rule_version",
+                                "analytics_rule_version",
+                            )
+                        },
+                        **(
+                            {"season_inputs": season_inputs}
+                            if season_inputs is not None
+                            else {}
+                        ),
+                    }
+                    assert digest == _digest(1, artifact_kind, rule_versions, expected)
+                    stored = connection.execute(
+                        """
+                        SELECT ordinal, player_id, ranked_day_version_id,
+                               input_hash, classification, unavailable_reason,
+                               input_identity
+                        FROM boundary_publication_manifest_rows
+                        WHERE manifest_id = %s ORDER BY ordinal
+                        """,
+                        (manifest_id,),
+                    ).fetchall()
+                    assert [
+                        (
+                            row[0], row[1], row[2], text(row[3]), text(row[4]),
+                            text(row[5]), _canonical(row[6]),
+                        )
+                        for row in stored
+                    ] == [
+                        (
+                            ordinal,
+                            identity["player_id"],
+                            identity["ranked_day_version_id"],
+                            identity["input_hash"],
+                            identity["classification"],
+                            "reset_baseline_failed"
+                            if identity["classification"] == "Unavailable"
+                            else None,
+                            _canonical(identity),
+                        )
+                        for ordinal, identity in enumerate(expected, start=1)
+                    ]
+                    _assert_every_case_seeded(artifact_kind, expected)
+                    if artifact_kind == "army":
+                        # Reports on the battles moved sides are on now.
+                        assert season_inputs is not None and any(
+                            evidence_id >= 2 * 9000000
+                            for evidence_id in season_inputs["evidence_ids"]
+                        )
+        finally:
+            database.close()
+
+
+def _assert_every_case_seeded(
+    artifact_kind: str, rows: list[dict[str, Any]]
+) -> None:
+    classifications = {row["classification"] for row in rows}
+    if artifact_kind == "snapshot":
+        assert classifications == {
+            "Complete", "Partial", "Failed", "Missing", "Unavailable",
+            "Inconsistent", "Malformed", "Pending",
+        }
+        assert {row["snapshot_quality"] for row in rows} >= {
+            "eligible", "invalid", "season_reset_pending", "malformed",
+            "conflicting", "missing", "unavailable", "partial",
+        }
+        assert sum(row["official_rank"] is not None for row in rows) > 50
+        return
+    assert classifications >= {
+        "Complete", "Partial", "Failed", "Missing", "Unavailable",
+        "Inconsistent", "Malformed", "Pending",
+    }
+    assert any(
+        (9000000 + row["player_id"]) * 2 in row.get("evidence_ids", []) for row in rows
+    )
+    assert any(
+        (9000000 + row["player_id"]) * 2 in row.get("decode_ids", []) for row in rows
+    )

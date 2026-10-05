@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import threading
 from collections import deque
@@ -635,6 +636,13 @@ class ObservationProcessor:
             # No pool connection came free in time, so this job's next write
             # never started.
             reason = "database_pool_timeout"
+        finally:
+            if claim.work_type in POPULATION_BUILD_WORK_TYPES:
+                # Return freed build buffers to the OS instead of retaining them.
+                try:
+                    ctypes.CDLL("libc.so.6").malloc_trim(ctypes.c_size_t(0))
+                except (OSError, AttributeError):
+                    pass  # glibc or malloc_trim is unavailable on this platform.
         # The failed or cancelled transaction recorded no outcome. Restore its
         # retry slot so queue maintenance can recover it later, rather than
         # failing it if this was its last attempt, even if conflicts outlast
