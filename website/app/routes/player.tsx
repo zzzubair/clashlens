@@ -11,6 +11,7 @@ import {
 } from "react-router";
 
 import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
+import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { SavePlayer } from "../components/SavePlayer";
 import { Metric, MetricCard } from "../components/MetricCard";
@@ -397,10 +398,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     data.selectedSeason === null,
     !!data.lookup && !["checking", "tracking"].includes(data.lookup.state),
   );
-  const history = selectPlayerHistory(
-    player,
-    seasonExpired && loadedAt ? Math.max(now, nextSeasonReset(loadedAt)) : now,
-  );
+  const statisticsTime =
+    seasonExpired && loadedAt ? Math.max(now, nextSeasonReset(loadedAt)) : now;
+  const history = selectPlayerHistory(player, statisticsTime);
   const todayEnded =
     player?.currentDay != null &&
     Date.parse(player.currentDay.period.split(" – ")[1]) <= now;
@@ -643,6 +643,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             error={data.historicalError}
           />
         ) : null}
+        {data.selectedSeason === null && player ? (
+          <BattleStatistics player={player} now={statisticsTime} />
+        ) : null}
         {data.selectedSeason === null && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
@@ -757,6 +760,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         />
       ) : null}
 
+      {data.selectedSeason === null ? (
+        <BattleStatistics player={trackedPlayer} now={statisticsTime} />
+      ) : null}
       {data.selectedSeason !== null ? null : (
         <section className="data-section" aria-labelledby="season-days-title">
           <h2 id="season-days-title">Daily Legend log</h2>
