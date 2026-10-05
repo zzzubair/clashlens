@@ -331,7 +331,7 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
     ]
     expected = [
         ("react-router", ["typegen"]),
-        ("npx", ["playwright", "install", "--with-deps", "chromium"]),
+        ("npx", ["playwright", "install", "--with-deps", "chromium", "webkit"]),
         ("react-router", ["build"]),
     ]
     if failure != ["react-router", "build"]:
