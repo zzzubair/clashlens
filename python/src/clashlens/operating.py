@@ -331,9 +331,7 @@ class WorkerMetrics:
         empty_stage = {
             "count": 0,
             "elapsed_seconds": 0.0,
-            "thread_cpu_count": 0,
-            "thread_cpu_seconds": 0.0,
-            "paired_elapsed_seconds": 0.0,
+            "thread_cpu_seconds": None,
             "average_ms": None,
             "p50_upper_ms": None,
             "p95_upper_ms": None,

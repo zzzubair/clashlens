@@ -131,18 +131,17 @@ class StageMetrics:
                 {
                     "count": 0,
                     "sum_seconds": 0.0,
-                    "thread_cpu_count": 0,
-                    "thread_cpu_seconds": 0.0,
-                    "paired_elapsed_seconds": 0.0,
+                    # Only job stages are measured with thread time, never a mix.
+                    "thread_cpu_seconds": None,
                     "buckets": [0] * (len(STAGE_DURATION_BUCKETS_SECONDS) + 1),
                 },
             )
             values["count"] += 1
             values["sum_seconds"] += duration_seconds
             if cpu_seconds is not None:
-                values["thread_cpu_count"] += 1
-                values["thread_cpu_seconds"] += cpu_seconds
-                values["paired_elapsed_seconds"] += duration_seconds
+                values["thread_cpu_seconds"] = (
+                    values["thread_cpu_seconds"] or 0.0
+                ) + cpu_seconds
             for index, upper_bound in enumerate(STAGE_DURATION_BUCKETS_SECONDS):
                 if duration_seconds <= upper_bound:
                     values["buckets"][index] += 1
@@ -154,9 +153,7 @@ class StageMetrics:
                 stage: {
                     "count": values["count"],
                     "sum_seconds": values["sum_seconds"],
-                    "thread_cpu_count": values["thread_cpu_count"],
                     "thread_cpu_seconds": values["thread_cpu_seconds"],
-                    "paired_elapsed_seconds": values["paired_elapsed_seconds"],
                     "buckets": list(values["buckets"]),
                 }
                 for stage, values in self._stages.items()
@@ -180,9 +177,7 @@ class StageMetrics:
             report[stage] = {
                 "count": count,
                 "elapsed_seconds": values["sum_seconds"],
-                "thread_cpu_count": values["thread_cpu_count"],
                 "thread_cpu_seconds": values["thread_cpu_seconds"],
-                "paired_elapsed_seconds": values["paired_elapsed_seconds"],
                 "average_ms": float(values["sum_seconds"]) * 1000 / count,
                 "p50_upper_ms": percentile(0.50),
                 "p95_upper_ms": percentile(0.95),
@@ -637,7 +632,9 @@ class ObservationProcessor:
         with timing:
             return self._process_claim_with_retries(claim, lease_seconds=lease_seconds)
 
-    def _process_claim_with_retries(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
+    def _process_claim_with_retries(
+        self, claim: Claim, *, lease_seconds: int
+    ) -> ProcessResult:
         # PostgreSQL rolls back only one side of a deadlock. Rerun that job under
         # the same claim so it neither stops the worker nor uses up an attempt.
         reason = "database_deadlock"

@@ -39,11 +39,11 @@ times to the job totals.
 
 For each new stage, `elapsed_seconds` and `thread_cpu_seconds` are accumulated
 elapsed and thread computation seconds. Divide `thread_cpu_seconds` by
-`paired_elapsed_seconds` to see its computation share, for example 2 / 10 = 20%.
+`elapsed_seconds` to see its computation share, for example 2 / 10 = 20%.
 The remainder includes database/network waits and time waiting to run, so it is
 not a direct measure of database time. Other threads' and PostgreSQL's computation
-are excluded. `thread_cpu_count` counts paired samples; older elapsed-only stages
-have zero paired samples, not proof of zero computation. Compare changes between
+are excluded. Older stages are not measured this way and show
+`thread_cpu_seconds` as `null`, not zero. Compare changes between
 two snapshots from the same process for a recent interval, and avoid dividing
 by zero. Counts reset on restart; active jobs appear only when they finish.
 The change adds 15 collector counters and seven worker stage summaries, plus
