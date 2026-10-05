@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page,
+  type Request,
+} from "@playwright/test";
 import { UNSAFE_decodeViaTurboStream } from "react-router";
 
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
@@ -407,6 +413,34 @@ test("player page stays within a narrow viewport", async ({ page }) => {
   ).toBe(0);
 });
 
+test("battle stats switch periods without requests at iPhone width", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await refuseRefreshes(page);
+  await page.goto("/players/%232PP");
+  const stats = page.getByRole("region", { name: "Attack and defense stats" });
+  await expect(stats.getByText("Attacks in sample", { exact: true })).toBeVisible();
+  await expect(stats.getByText("Defenses in sample", { exact: true })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(request.url()));
+  for (const [period, days] of [
+    ["7", 7],
+    ["14", 14],
+  ] as const) {
+    await stats.getByLabel("Period").selectOption(period);
+    await expect(stats).toContainText(`of ${days} Legend days have saved logs.`);
+    await expect(stats.getByText("0-star defenses", { exact: true })).toBeVisible();
+  }
+  await stats.getByLabel("Period").selectOption("season");
+  await expect(stats.getByLabel("Period")).toHaveValue("season");
+  expect(requests).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBe(0);
+});
+
 // Nothing may widen the page, and every visible control must take a tap at its
 // own center. Safari once let full-row link overlays cover other controls.
 async function expectUsableLayout(page: Page) {
@@ -612,21 +646,26 @@ test("a Legend I player without a Season is explained, not prepared forever", as
 
   // A later visit shows it at once, never reads saved data every second or
   // calls the check slow, but rereads it about once a minute.
-  const reloads: string[] = [];
+  const reloads: Request[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("/players/%23LQQC.data")) reloads.push(request.url());
+    if (request.url().includes("/players/%23LQQC.data")) reloads.push(request);
   });
   await page.clock.install();
   await page.goto("/players/%23LQQC");
   await expect(lookup).toContainText(headline);
   await expect(lookup).toContainText("Taking part in Legend League battles is optional.");
+  // Finish loading and each reread before advancing time: while a response is
+  // in flight, the page correctly skips the next minute's check.
+  await page.waitForLoadState("networkidle");
   await page.clock.runFor(10_000);
   expect(reloads).toEqual([]);
   await page.clock.runFor(51_000);
   await expect.poll(() => reloads.length).toBe(1);
+  await expect.poll(() => reloads.at(-1)!.timing().responseEnd).toBeGreaterThanOrEqual(0);
   await expect(lookup).toContainText(headline);
   await page.clock.runFor(61_000);
   await expect.poll(() => reloads.length).toBe(2);
+  await expect.poll(() => reloads.at(-1)!.timing().responseEnd).toBeGreaterThanOrEqual(0);
   await expect(lookup).not.toContainText("taking longer");
 
   // A hidden tab pauses the rereads.
@@ -640,6 +679,7 @@ test("a Legend I player without a Season is explained, not prepared forever", as
   );
   await page.clock.runFor(61_000);
   await expect.poll(() => reloads.length).toBe(3);
+  await expect.poll(() => reloads.at(-1)!.timing().responseEnd).toBeGreaterThanOrEqual(0);
   await expect(
     page.getByRole("heading", { name: "Lookup Season 0 Clasher" }),
   ).toBeVisible();

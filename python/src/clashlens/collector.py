@@ -43,6 +43,7 @@ from .collector_http import (
     ProviderFailure,
     retry_after_seconds,
 )
+from .operating import SchedulingDelayMetrics
 from .response_fields import content_fingerprint
 from .spool import Spool, SpoolError
 
@@ -108,6 +109,7 @@ class Collector:
         self.latency_seconds: dict[tuple[str, str], float] = {}
         self.refresh_latency_seconds = 0.0
         self.refresh_count = 0
+        self.scheduling_delay = SchedulingDelayMetrics()
         self.regular_inflight = 0
         self._retries_while_answering: dict[int, int] = {}
         self._regular_admission_lock = asyncio.Lock()
@@ -181,11 +183,10 @@ class Collector:
             stack, reservations = await self._reserve_endpoints_safely(
                 endpoints[:1] if profile_first else endpoints
             )
+            self.scheduling_delay.record(lane, work.due_at, datetime.now(UTC))
             if profile_first:
                 try:
-                    return await self._collect_profile_first(
-                        work, pool, reservations[0]
-                    )
+                    return await self._collect_profile_first(work, pool, reservations[0])
                 finally:
                     await _drain_to_thread(stack.close)
             selected_endpoints = endpoints
@@ -1399,9 +1400,8 @@ class Collector:
             "clashlens_collector_refresh_latency_seconds_sum "
             f"{self.refresh_latency_seconds:.6f}"
         )
-        lines.append(
-            f"clashlens_collector_refresh_latency_seconds_count {self.refresh_count}"
-        )
+        lines.append(f"clashlens_collector_refresh_latency_seconds_count {self.refresh_count}")
+        lines.extend(self.scheduling_delay.lines())
         for name, value in sorted(database_metrics.items()):
             lines.append(f"clashlens_collector_{name} {value}")
         return 200, "text/plain; version=0.0.4", ("\n".join(lines) + "\n").encode()

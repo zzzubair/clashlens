@@ -876,3 +876,13 @@
 .player-page .past-seasons .data-table {
   min-width: 0;
 }
+
+.battle-statistics .metric-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+
+.battle-statistics select {
+  max-width: 100%;
+  min-height: 2.75rem;
+  font: inherit;
+}
