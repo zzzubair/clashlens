@@ -25,6 +25,7 @@ from urllib.parse import quote
 
 import certifi
 
+from .api_players import _official_history_rows
 from .domain import SEASON_DURATION, DomainRuleError, validate_legend_season_start
 from .verification import _NoRedirectHandler
 
@@ -40,12 +41,9 @@ MAX_CONCURRENT_REQUESTS = 2
 FIRST_BACKOFF_SECONDS = 60.0
 MAX_BACKOFF_SECONDS = 3600.0
 
-# ClashKing labels rows three ways. Checked 2026-10-04 against our official
-# league history: its `v2-2026-08-03T05:00:00Z` row (5,856 trophies, rank 1)
-# is the Season that started 2026-08-10, and its dated `2026-05-18` row repeats
-# `v2-2026-05-11T05:00:00Z`. So a dated label is a Season start and a v2 label
-# is a week before one. `YYYY-MM` rows are the calendar-month Legend seasons
-# from before 28-day Seasons.
+# ClashKing's v2 label is a week before the Season END. Confirmed against
+# official history for three players on 2026-10-05. Dated copies name that
+# same end; YYYY-MM rows retain the old calendar-month season labels.
 _V2_LABEL = re.compile(r"v2-(\d{4}-\d{2}-\d{2})T05:00:00Z")
 _DATED_LABEL = re.compile(r"\d{4}-\d{2}-\d{2}")
 _MONTH_LABEL = re.compile(r"(\d{4})-(\d{2})")
@@ -53,7 +51,9 @@ _V2_OFFSET = timedelta(days=7)
 _LEGEND_TIER_IDS = frozenset({105000034, 105000035, 105000036})
 # ClashKing repeats the last calendar-month result as the first 28-day Season.
 _LAST_MONTH_SEASON = "2025-09"
-_FIRST_SEASON_ID = str(int(datetime(2025, 10, 6, 5, tzinfo=UTC).timestamp()))
+_FIRST_SEASON_ID = str(
+    int((datetime(2025, 10, 6, 5, tzinfo=UTC) - SEASON_DURATION).timestamp())
+)
 # Player pages show ClashKing seasons from January 2025 onwards only.
 _FIRST_SHOWN = datetime(2025, 1, 1, tzinfo=UTC)
 
@@ -67,8 +67,9 @@ class SeasonFinish:
     season_id: str
     season_start: datetime | None
     source_season: str
-    trophies: int
+    trophies: int | None
     global_rank: int | None
+    source: str = "clashking"
 
     @property
     def season_end(self) -> datetime | None:
@@ -93,6 +94,10 @@ def parse_season_finishes(payload: bytes, *, now: datetime) -> list[SeasonFinish
     items = document.get("items") if isinstance(document, dict) else None
     if not isinstance(items, list):
         raise ClashKingUnavailable("malformed legend history")
+    return _season_finishes(items, now=now)
+
+
+def _season_finishes(items: list[Any], *, now: datetime) -> list[SeasonFinish]:
     chosen: dict[str, tuple[bool, SeasonFinish]] = {}
     for item in items:
         try:
@@ -143,11 +148,12 @@ def _map_row(item: Any, *, now: datetime) -> tuple[bool, SeasonFinish] | None:
     v2 = _V2_LABEL.fullmatch(label)
     if v2 is None and not _DATED_LABEL.fullmatch(label):
         return None
-    start = _reset_on(label if v2 is None else v2[1])
-    if start is not None and v2 is not None:
-        start += _V2_OFFSET
-    if start is None or start + SEASON_DURATION > now:
+    end = _reset_on(label if v2 is None else v2[1])
+    if end is not None and v2 is not None:
+        end += _V2_OFFSET
+    if end is None or end > now:
         return None
+    start = end - SEASON_DURATION
     season_id = str(int(start.timestamp()))
     try:
         validate_legend_season_start(season_id, observed_at=now)
@@ -169,8 +175,8 @@ def _is_int(value: Any) -> bool:
 
 
 def _sort_key(finish: SeasonFinish) -> datetime:
-    if finish.season_start is not None:
-        return finish.season_start
+    if finish.season_end is not None:
+        return finish.season_end
     year, month = finish.season_id.split("-")
     return datetime(int(year), int(month), 1, tzinfo=UTC)
 
@@ -279,7 +285,7 @@ class ClashKingClient:
 def get_past_seasons(
     database: Any, client: ClashKingClient, normalized_tag: str, *, now: datetime
 ) -> dict[str, Any] | None:
-    """A tracked player's saved ClashKing finishes, refreshed first when due.
+    """Official finishes with saved ClashKing history filling older gaps.
 
     None means we do not know the player, so nothing is fetched for them. The
     database connection is returned before any request to ClashKing.
@@ -315,7 +321,7 @@ def get_past_seasons(
             pass
         finally:
             client.release()
-    return _saved(database, player_id, normalized_tag)
+    return _saved(database, player_id, normalized_tag, now=now)
 
 
 def _claim(database: Any, player_id: int, now: datetime) -> bool:
@@ -388,7 +394,9 @@ def _store(
             )
 
 
-def _saved(database: Any, player_id: int, normalized_tag: str) -> dict[str, Any]:
+def _saved(
+    database: Any, player_id: int, normalized_tag: str, *, now: datetime
+) -> dict[str, Any]:
     with database.pool.connection() as connection:
         fetched = connection.execute(
             "SELECT fetched_at FROM clashking_history_fetches WHERE player_id = %s",
@@ -396,21 +404,36 @@ def _saved(database: Any, player_id: int, normalized_tag: str) -> dict[str, Any]
         ).fetchone()
         rows = connection.execute(
             """
-            SELECT season_id, season_start, trophies, global_rank
+            SELECT source_season, trophies, global_rank
             FROM clashking_season_finishes
             WHERE player_id = %s
             """,
             (player_id,),
         ).fetchall()
-    finishes = sorted(
-        (SeasonFinish(row[0], row[1], "", row[2], row[3]) for row in rows),
-        key=_sort_key,
-        reverse=True,
+        official = _official_history_rows(connection, normalized_tag)
+    # Re-map retained source labels on every read so old cached IDs are also
+    # correct immediately. The normal 24-hour refresh rewrites stored IDs.
+    finishes = _season_finishes(
+        [{"season": row[0], "trophies": row[1], "rank": row[2]} for row in rows],
+        now=now,
     )
+    by_season = {finish.season_id: finish for finish in finishes}
+    for row in official:
+        if row["season_end"] <= now:
+            by_season[row["official_season_id"]] = SeasonFinish(
+                row["official_season_id"],
+                row["season_start"],
+                "",
+                row["eod_trophies"],
+                row["final_placement"],
+                "official_league_history",
+            )
+    finishes = sorted(by_season.values(), key=_sort_key, reverse=True)
     finishes = [finish for finish in finishes if _sort_key(finish) >= _FIRST_SHOWN]
+    sources = {finish.source for finish in finishes}
     return {
         "tag": normalized_tag,
-        "source": "clashking",
+        "source": "mixed" if len(sources) > 1 else next(iter(sources), "clashking"),
         "fetched_at": None if fetched is None else fetched[0],
         "seasons": [
             {
@@ -419,6 +442,7 @@ def _saved(database: Any, player_id: int, normalized_tag: str) -> dict[str, Any]
                 "season_end": finish.season_end,
                 "trophies": finish.trophies,
                 "global_rank": finish.global_rank,
+                "source": finish.source,
             }
             for finish in finishes
         ],

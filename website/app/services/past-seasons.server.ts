@@ -41,8 +41,8 @@ export async function getPastSeasons(tag: string): Promise<PastSeasonFinish[]> {
     if (
       !isRecord(item) ||
       !(dated || monthly) ||
-      !isInteger(item.trophies) ||
-      item.trophies < 0 ||
+      !(item.source === "official_league_history" || item.source === "clashking") ||
+      !(item.trophies === null || (isInteger(item.trophies) && item.trophies >= 0)) ||
       !(
         item.global_rank === null ||
         (isInteger(item.global_rank) && item.global_rank >= 1)
@@ -55,6 +55,7 @@ export async function getPastSeasons(tag: string): Promise<PastSeasonFinish[]> {
       seasonEnd: item.season_end as string | null,
       trophies: item.trophies,
       globalRank: item.global_rank,
+      source: item.source,
     };
   });
 }

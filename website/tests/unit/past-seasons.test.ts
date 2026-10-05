@@ -36,11 +36,12 @@ import { PythonApiError } from "../../app/services/python.server";
 const TAG = "#2PP";
 const FINISHES: PastSeasonFinish[] = [
   {
-    seasonId: "1786338000",
-    seasonStart: "2026-08-10T05:00:00+00:00",
-    seasonEnd: "2026-09-07T05:00:00+00:00",
+    seasonId: "1783918800",
+    seasonStart: "2026-07-13T05:00:00+00:00",
+    seasonEnd: "2026-08-10T05:00:00+00:00",
     trophies: 5856,
     globalRank: 1,
+    source: "clashking",
   },
   {
     seasonId: "2024-07",
@@ -48,6 +49,7 @@ const FINISHES: PastSeasonFinish[] = [
     seasonEnd: null,
     trophies: 5011,
     globalRank: 934651,
+    source: "clashking",
   },
   {
     seasonId: "2021-12",
@@ -55,6 +57,7 @@ const FINISHES: PastSeasonFinish[] = [
     seasonEnd: null,
     trophies: 4965,
     globalRank: null,
+    source: "clashking",
   },
 ];
 
@@ -120,7 +123,7 @@ function renderAll(element: ReactElement): Promise<string> {
   });
 }
 
-describe("past Seasons from ClashKing on the player page", () => {
+describe("past Seasons on the player page", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset().mockReturnValue({
       getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -136,7 +139,7 @@ describe("past Seasons from ClashKing on the player page", () => {
 
     expect(mocks.getPastSeasons).toHaveBeenCalledWith(TAG);
     expect(html).toContain("Past Seasons");
-    expect(html).toMatch(/7 Sep 2026<\/th><td>5,856<\/td><td>#1<\/td>/);
+    expect(html).toMatch(/10 Aug 2026<\/th><td>5,856<\/td><td>#1<\/td>/);
     expect(html).toMatch(/Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td>/);
     expect(html).toMatch(/Dec 2021<\/th><td>4,965<\/td><td>Not recorded<\/td>/);
     expect(html).toMatch(/from.*<a href="https:\/\/clashk.ing"[^>]*>ClashKing<\/a>/);
@@ -155,13 +158,44 @@ describe("past Seasons from ClashKing on the player page", () => {
     expect(html).not.toContain("Past Seasons");
   });
 
+  it("labels official results and preserves unknown official values", async () => {
+    mocks.getPastSeasons.mockResolvedValue([
+      {
+        seasonId: "1788757200",
+        seasonStart: "2026-09-07T05:00:00Z",
+        seasonEnd: "2026-10-05T05:00:00Z",
+        trophies: 5437,
+        globalRank: 180,
+        source: "official_league_history",
+      },
+      {
+        ...FINISHES[0],
+        trophies: null,
+        globalRank: null,
+        source: "official_league_history",
+      },
+      FINISHES[1],
+    ]);
+    const html = await renderStreamed(await loadPage());
+    expect(html).toContain("Season ended");
+    expect(html).toMatch(
+      /5 Oct 2026<\/th><td>5,437<\/td><td>#180<\/td><td>Official<\/td>/,
+    );
+    expect(html).toMatch(
+      /10 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><td>Official<\/td>/,
+    );
+    expect(html).toMatch(
+      /Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td><td>ClashKing<\/td>/,
+    );
+  });
+
   it("does not wait for ClashKing before the rest of the page loads", async () => {
     mocks.getPastSeasons.mockReturnValue(new Promise(() => {}));
     const data = await loadPage();
     expect(data.player?.tag).toBe(TAG);
   });
 
-  it("shows no section for a player without ClashKing finishes", async () => {
+  it("shows no section for a player without saved finishes", async () => {
     mocks.getPastSeasons.mockResolvedValue([]);
     const html = await renderStreamed(await loadPage());
     expect(html).toContain("Nova");
@@ -175,6 +209,7 @@ describe("past Seasons from ClashKing on the player page", () => {
       seasonEnd: null,
       trophies: 5000 + index,
       globalRank: index + 1,
+      source: "clashking",
     }));
     mocks.getPastSeasons.mockResolvedValue(months);
     const html = await renderStreamed(await loadPage());
@@ -222,11 +257,12 @@ describe("past Seasons client boundary", () => {
       fetched_at: "2026-10-04T12:00:00+00:00",
       seasons: [
         {
-          season_id: "1786338000",
-          season_start: "2026-08-10T05:00:00+00:00",
-          season_end: "2026-09-07T05:00:00+00:00",
+          season_id: "1783918800",
+          season_start: "2026-07-13T05:00:00+00:00",
+          season_end: "2026-08-10T05:00:00+00:00",
           trophies: 5856,
           global_rank: 1,
+          source: "clashking",
         },
         {
           season_id: "2021-12",
@@ -234,6 +270,7 @@ describe("past Seasons client boundary", () => {
           season_end: null,
           trophies: 4965,
           global_rank: null,
+          source: "clashking",
         },
       ],
     });
@@ -243,6 +280,31 @@ describe("past Seasons client boundary", () => {
     );
   });
 
+  it("accepts unknown official trophies and rejects unrecognized sources", async () => {
+    const row = {
+      season_id: "1783918800",
+      season_start: "2026-07-13T05:00:00+00:00",
+      season_end: "2026-08-10T05:00:00+00:00",
+      trophies: null,
+      global_rank: null,
+      source: "official_league_history",
+    };
+    const { result } = await fetchWith({ tag: TAG, seasons: [row] });
+    await expect(result).resolves.toEqual([
+      {
+        ...FINISHES[0],
+        trophies: null,
+        globalRank: null,
+        source: "official_league_history",
+      },
+    ]);
+    const invalid = await fetchWith({
+      tag: TAG,
+      seasons: [{ ...row, source: "unknown" }],
+    });
+    await expect(invalid.result).rejects.toBeInstanceOf(Error);
+  });
+
   it.each([
     { tag: "#OTHER", seasons: [] },
     { tag: TAG, seasons: [{ season_id: "2021-12", trophies: -1, global_rank: null }] },
@@ -250,11 +312,12 @@ describe("past Seasons client boundary", () => {
       tag: TAG,
       seasons: [
         {
-          season_id: "1786338000",
+          season_id: "1783918800",
           season_start: "2026-08-10T06:00:00+00:00",
-          season_end: "2026-09-07T05:00:00+00:00",
+          season_end: "2026-08-10T05:00:00+00:00",
           trophies: 5856,
           global_rank: 1,
+          source: "clashking",
         },
       ],
     },

@@ -15,8 +15,8 @@ const monthFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-// Past Season finishes reported by ClashKing. They stream in after the rest
-// of the page and show nothing when ClashKing has none or is slow or down.
+// Official and ClashKing finishes stream in after the rest of the page.
+// An unavailable history response leaves the rest of the page usable.
 // Visitors without JavaScript never see them; that is accepted for this section.
 export function PastSeasons({
   finishes,
@@ -42,7 +42,8 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
         <h2 id="past-seasons-title">Past Seasons</h2>
       </div>
       <p className="section-note">
-        Final trophies and global rank since January 2025, from{" "}
+        Final trophies and global rank since January 2025. Official results take
+        precedence, with older history from{" "}
         <a href="https://clashk.ing" rel="noopener">
           ClashKing
         </a>
@@ -57,20 +58,24 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
         <table className="data-table" aria-label="Past Seasons">
           <thead>
             <tr>
-              <th scope="col">Season</th>
+              <th scope="col">Season ended</th>
               <th scope="col">Final trophies</th>
               <th scope="col">Global rank</th>
+              <th scope="col">Source</th>
             </tr>
           </thead>
           <tbody>
             {finishes.map((finish) => (
               <tr key={finish.seasonId}>
                 <th scope="row">{pastSeasonLabel(finish)}</th>
-                <td>{finish.trophies.toLocaleString("en-GB")}</td>
+                <td>{finish.trophies?.toLocaleString("en-GB") ?? "Not recorded"}</td>
                 <td>
                   {finish.globalRank === null
                     ? "Not recorded"
                     : `#${finish.globalRank.toLocaleString("en-GB")}`}
+                </td>
+                <td>
+                  {finish.source === "official_league_history" ? "Official" : "ClashKing"}
                 </td>
               </tr>
             ))}
