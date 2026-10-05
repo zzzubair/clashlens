@@ -476,7 +476,7 @@ def _late_copy(connection: psycopg.Connection, copy_id: int, day) -> None:
 
 
 def test_late_corrections_to_an_older_day_do_not_keep_later_days_waiting(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # On 2026-10-04 late corrections kept restarting the cleanup of September
     # 30 and October 1, and October 2 and 3 were never reached.
@@ -509,13 +509,16 @@ def test_late_corrections_to_an_older_day_do_not_keep_later_days_waiting(
 
 
 def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # On 2026-10-04 every run timed out on October 2's first batch: 25
     # players with about 500 copies of October 1 and 2, checked against about
     # 54,000 queued correction inputs. From the 6th batch on one connection
     # the database could also reuse a plan that checked each copy against
-    # every input in turn, which timed out again.
+    # every input in turn, which timed out again. From 2026-10-05 02:08 every
+    # run timed out on one batch of 25 players with about 7 copies of each
+    # day, checked against 70,236 inputs: a plan made for that batch also
+    # read every input again for each copy.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
@@ -538,7 +541,7 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
                     "INSERT INTO players (normalized_tag)"
                     " SELECT '#SIZE' || n FROM generate_series(1, 225) AS n"
                 )
-                # 30 copies of each of the two days for each player, each
+                # 7 copies of each of the two days for each player, each
                 # replacing the one before, as recalculation saves them, and
                 # one copy of each of the 40 days before, already cleaned. As
                 # on production, a plan made without knowing the days then
@@ -561,8 +564,25 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
                     CROSS JOIN ranked_day_versions AS copy
                     WHERE player.normalized_tag LIKE '#SIZE%%' AND copy.id = %s
                     """,
-                    ([*days, *older], [30, 30] + [1] * len(older), template),
+                    ([*days, *older], [7, 7] + [1] * len(older), template),
                 )
+                # Each earlier day was published, so publications point at
+                # thousands of other copies, and the database expects few
+                # copies of a batch to get past that check.
+                for day in older:
+                    connection.execute(
+                        """
+                        INSERT INTO boundary_publication_generation_members (
+                            generation_id, player_id, ranked_day_version_id
+                        )
+                        SELECT %s, version.player_id, version.id
+                        FROM ranked_day_versions AS version
+                        JOIN players AS player ON player.id = version.player_id
+                        WHERE player.normalized_tag LIKE '#SIZE%%'
+                          AND version.ranked_day_start = %s
+                        """,
+                        (_generation(connection), day),
+                    )
                 connection.execute(
                     "INSERT INTO ranked_day_compactions (ranked_day_start, compacted_through_id)"
                     " SELECT start, (SELECT max(id) FROM ranked_day_versions)"
@@ -594,7 +614,7 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
                         (list(days),),
                     )
                 }
-                kept = {copies[f"#SIZE{n}", day, 30] for n in range(1, 226) for day in days}
+                kept = {copies[f"#SIZE{n}", day, 7] for n in range(1, 226) for day in days}
                 # #SIZE1's newest copy made its first result current again
                 # over its second, so both stay.
                 connection.execute(
@@ -607,12 +627,12 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
                     FROM ranked_day_versions AS original
                     WHERE restoring.id = %(restoring)s AND original.id = %(original)s
                     """,
-                    {"restoring": copies["#SIZE1", DAY_START, 30],
+                    {"restoring": copies["#SIZE1", DAY_START, 7],
                      "replaced": copies["#SIZE1", DAY_START, 2],
                      "original": copies["#SIZE1", DAY_START, 1]},
                 )
                 kept |= {copies["#SIZE1", DAY_START, 1], copies["#SIZE1", DAY_START, 2]}
-                # Queued corrections list 54,000 inputs, one of them a copy of #SIZE2's.
+                # Queued corrections list 70,200 inputs, one of them a copy of #SIZE2's.
                 generation = _generation(connection)
                 connection.execute(
                     """
@@ -620,11 +640,13 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
                         boundary_at, source_generation_id, pending_inputs, state
                     )
                     SELECT %s, %s, jsonb_agg(jsonb_build_object(
+                        'player_id', n,
+                        'input_hash', encode(sha256(convert_to(n || ':' || correction, 'UTF8')), 'hex'),
                         'ranked_day_version_id',
                         CASE WHEN correction = 1 AND n = 1 THEN %s
                              ELSE 1000000000 + correction * 1000 + n END
                     )), 'pending_inputs'
-                    FROM generate_series(1, 90) AS correction
+                    FROM generate_series(1, 117) AS correction
                     CROSS JOIN generate_series(1, 600) AS n
                     GROUP BY correction
                     """,
@@ -636,9 +658,16 @@ def test_a_cleanup_run_finishes_every_batch_of_production_sized_days(
                 connection.execute("ANALYZE")
 
             # One run on one connection, 25 players a batch, and each batch
-            # within its own 5-second limit: a pass over each of the two days.
-            result = _compact(connection_info, DAY_END + timedelta(minutes=40),
-                              run_seconds=600)
+            # within 2 seconds, well inside its 5-second limit: a pass over each
+            # of the two days. Hash joins are off so that every batch gets the
+            # plan production chose for its stuck batch, which checks one copy
+            # at a time; reading every queued input again for each copy took
+            # about 4 s a batch here.
+            monkeypatch.setattr(ranked_day_compaction, "BATCH_TIMEOUT", "2s")
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("SET enable_hashjoin = off")
+                result = compact(connection, now=DAY_END + timedelta(minutes=40),
+                                 pause_seconds=0, run_seconds=600)
             assert result["status"] == "idle"
             assert len(result["finished_days"]) == 2
             assert result["batches"] == 2 * (players // 25 + 1) >= 8
