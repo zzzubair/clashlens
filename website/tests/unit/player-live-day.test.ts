@@ -20,7 +20,7 @@ const WAITING = [
 const TODAY: RankedDaySummary = {
   dayNumber: 4,
   label: "Ranked day",
-  period: "2026-10-04T05:00:00Z – 2026-10-05T05:00:00Z",
+  period: "2026-10-08T05:00:00Z – 2026-10-09T05:00:00Z",
   state: "Live",
   startTrophies: 6000,
   offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
@@ -34,7 +34,7 @@ const TODAY: RankedDaySummary = {
 };
 
 // Renders the page as the server would, with the page's clock at `now`.
-function page(codes: string[], now = "2026-10-04T12:00:00Z") {
+function page(codes: string[], now = "2026-10-08T12:00:00Z") {
   const today = {
     ...TODAY,
     completeness: { state: "partial" as const, reason: codes.join("; ") },
@@ -101,7 +101,7 @@ function page(codes: string[], now = "2026-10-04T12:00:00Z") {
 const note = (html: string) =>
   html.split('id="season-days-title"')[1].split('class="legend-days"')[0];
 const todayEntry = (html: string) =>
-  html.split('id="legend-day-2026-10-04"')[1].split("</details>")[0];
+  html.split('id="legend-day-2026-10-08"')[1].split("</details>")[0];
 
 describe("today's Legend day wording", () => {
   it("shows a normal wait for Reset as a day in progress, not a fault", async () => {
@@ -140,7 +140,7 @@ describe("today's Legend day wording", () => {
   });
 
   it("stops calling the day in progress once the page's clock passes Reset", async () => {
-    const html = await page(WAITING, "2026-10-05T05:00:00Z");
+    const html = await page(WAITING, "2026-10-09T05:00:00Z");
     expect(note(html)).toContain(
       "<strong>Day ended:</strong> This Legend day has ended. Updated results are not on this page yet.",
     );
@@ -149,17 +149,17 @@ describe("today's Legend day wording", () => {
     expect(entry).not.toContain("In progress");
     expect(entry).not.toContain("Ending evidence arrives after Reset.");
     expect(entry).toContain("Result unknown");
-    expect(html).not.toContain('id="legend-day-2026-10-04" open=""');
+    expect(html).not.toContain('id="legend-day-2026-10-08" open=""');
   });
 
   it("keeps a real problem visible and its day open after Reset", async () => {
-    const html = await page([...WAITING, "battle_log_row_gap"], "2026-10-05T05:00:00Z");
+    const html = await page([...WAITING, "battle_log_row_gap"], "2026-10-09T05:00:00Z");
     expect(note(html)).toContain(
       "<strong>Incomplete ranked-day data:</strong> Part of a battle log reply could not be read.",
     );
     expect(html).not.toContain("Day ended");
     expect(html).not.toContain("Day in progress");
-    expect(html).toContain('id="legend-day-2026-10-04" open=""');
+    expect(html).toContain('id="legend-day-2026-10-08" open=""');
     const entry = todayEntry(html);
     expect(entry).not.toContain("In progress");
     expect(entry).toContain("Part of a battle log reply could not be read.");

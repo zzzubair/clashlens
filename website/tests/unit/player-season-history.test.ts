@@ -27,7 +27,9 @@ import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
   PlayerPage,
+  RankedDaySummary,
 } from "../../app/lib/contracts";
+import { selectPlayerHistory } from "../../app/lib/player-lookup-text";
 import { PythonApiError } from "../../app/services/python.server";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 
@@ -132,6 +134,93 @@ async function loadAndRender(client: Record<string, unknown>, season: string | n
 
 const missing = () => Promise.reject(new PythonApiError(404, { error: "missing" }));
 const failed = () => Promise.reject(new PythonApiError(503, { error: "unavailable" }));
+
+// Day `number` of the September Season, or of October's after Day 28.
+const legendDay = (number: number): RankedDaySummary => {
+  const start = Date.parse("2026-09-07T05:00:00Z") + (number - 1) * 86_400_000;
+  return {
+    dayNumber: number > 28 ? number - 28 : number,
+    label: "Ranked day",
+    period: `${new Date(start).toISOString()} – ${new Date(start + 86_400_000).toISOString()}`,
+    state: number > 28 ? "Live" : "Complete",
+    offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
+    defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
+    trophyChange: 0,
+    offenseEvents: [],
+    defenseEvents: [],
+    completeness: { state: "complete", reason: "Complete" },
+    uncertainty: [],
+  };
+};
+
+describe("Daily Legend log days", () => {
+  const ended = [28, 27, 26, 25, 24].map(legendDay);
+  const septemberSeason = {
+    id: SEASON,
+    anchor: "2026-09-07T05:00:00Z",
+    currentDayNumber: 28,
+    dayCount: 28,
+    anchorSource: "official_league_history",
+    anchorObservedAt: "2026-09-07T05:10:00Z",
+  } as const;
+  const afterReset = Date.parse("2026-10-05T05:10:00Z");
+
+  it.each([
+    ["no saved Season", null, [legendDay(29), ...ended]],
+    ["an expired Season anchor", septemberSeason, ended],
+  ])("keeps only the current Season's days with %s", (_, season, recentDays) => {
+    const history = selectPlayerHistory(
+      { ...PLAYER, season, currentDay: null, recentDays, seasonDays: [] },
+      afterReset,
+    );
+    expect(history.map(({ seasonDay }) => seasonDay)).toEqual(
+      season === null ? ["Day 1"] : [],
+    );
+  });
+
+  it("keeps the saved Season's days before its Reset", () => {
+    const history = selectPlayerHistory(
+      { ...PLAYER, season: septemberSeason, currentDay: null, recentDays: ended },
+      afterReset - 60 * 60 * 1000,
+    );
+    expect(history.map(({ seasonDay }) => seasonDay)).toEqual([
+      "Day 28",
+      "Day 27",
+      "Day 26",
+      "Day 25",
+      "Day 24",
+    ]);
+  });
+
+  it("drops the ended Season's days once the device clock passes Reset", async () => {
+    const loadedAt = "2026-10-05T04:00:00Z";
+    mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
+    const client = {
+      getPlayer: vi.fn().mockResolvedValue({
+        ...PLAYER,
+        profile: {
+          ...PLAYER.profile,
+          freshness: { ...PLAYER.profile.freshness, observedAt: loadedAt },
+        },
+        season: septemberSeason,
+        recentDays: ended,
+      }),
+      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+    };
+    expect(await loadAndRender(client, null)).toContain("Day 28");
+
+    // A sleeping device wakes after Reset, before the page's data is reread.
+    let wall = Date.parse(loadedAt);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (wall += 5 * 3_600_000));
+    try {
+      const html = await loadAndRender(client, null);
+      for (const number of [24, 25, 26, 27, 28])
+        expect(html).not.toContain(`Day ${number}`);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
 
 describe("past-Season view", () => {
   beforeEach(() => {
@@ -290,7 +379,7 @@ describe("past-Season view", () => {
       client.getPlayerSeasons.mockResolvedValue([]);
       const recoveredHtml = await loadAndRender(client, null);
       expect(recoveredHtml).not.toContain("Season history could not be loaded.");
-      expect(recoveredHtml).not.toContain("Historical seasons");
+      expect(recoveredHtml).not.toContain('aria-label="Seasons"');
     },
   );
 
@@ -303,7 +392,56 @@ describe("past-Season view", () => {
       },
       null,
     );
-    expect(html).not.toContain("Historical seasons");
+    expect(html).not.toContain('aria-label="Seasons"');
     expect(html).not.toContain("Current Season");
+  });
+
+  it("keeps only the new Season's Day 1 in the log and the ended Season in Seasons", async () => {
+    const today = legendDay(29);
+    const ended = [28, 27, 26, 25, 24].map(legendDay);
+    const ref = { coverageState: "partial", daysObserved: 5, daysMissing: 23 } as const;
+    const client = {
+      getPlayer: vi.fn().mockResolvedValue({
+        ...PLAYER,
+        season: {
+          id: "1791176400",
+          anchor: "2026-10-05T05:00:00Z",
+          currentDayNumber: 1,
+          dayCount: 28,
+          anchorSource: "official_league_history",
+          anchorObservedAt: "2026-10-05T05:10:00Z",
+        },
+        currentDay: today,
+        recentDays: [today, ...ended],
+        seasonDays: [today],
+      }),
+      getPlayerSeasons: vi.fn().mockResolvedValue([
+        // The Season ending 7 Sep has only the game's result, no Clash Lens days.
+        {
+          ...ref,
+          seasonId: "1786338000",
+          daysObserved: 0,
+          daysMissing: 28,
+          source: "official_league_history",
+          officialHistory: { observedAt: "2026-09-07T06:00:00Z", eodTrophies: 5600 },
+        },
+        { ...ref, seasonId: SEASON, source: "tracked_summary", officialHistory: null },
+      ]),
+      getPlayerSeason: vi.fn().mockResolvedValue({
+        ...SUMMARY,
+        dailyEntries: ended.map((day) => ({ ...DAY, dayNumber: day.dayNumber })),
+      }),
+    };
+    const current = (await loadAndRender(client, null)).replace(/<[^>]*>/g, " ");
+    expect(current).toContain("Day 1");
+    for (const hidden of ["Date only", "Day 24", "Day 28", "30 Sep 2026", "4 Oct 2026"])
+      expect(current).not.toContain(hidden);
+    expect(current).toMatch(/Seasons\s+Current Season\s+5 Oct 2026/);
+    expect(current).not.toContain("7 Sep 2026");
+
+    const past = await loadAndRender(client, SEASON);
+    for (const number of [24, 25, 26, 27, 28])
+      expect(past).toContain(`<td>${number}</td>`);
+    expect(past).toContain('<strong aria-current="page">5 Oct 2026</strong>');
   });
 });

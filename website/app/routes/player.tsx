@@ -11,7 +11,7 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import { useSeasonReread } from "../components/SeasonReread";
+import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
@@ -20,9 +20,11 @@ import {
   dayEvidence,
   dayReasons,
   liveDay,
+  legendDayKey,
   liveDayNotice,
   lookupExplanation,
   presentDay,
+  selectPlayerHistory,
 } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
@@ -377,13 +379,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     data.lookup,
     explainedVisit,
   );
-  const history = selectPlayerHistory(player);
-  const now = useServerTime(player ? profileLoadedAt(player.profile) : undefined);
+  const loadedAt = player ? profileLoadedAt(player.profile) : undefined;
+  const now = useServerTime(loadedAt);
   const seasonExpired = useSeasonReread(
-    player ? profileLoadedAt(player.profile) : undefined,
+    loadedAt,
     minuteChecks || !!trackedPlayer?.profile.seasonResetPending,
     data.selectedSeason === null,
     !!data.lookup && !["checking", "tracking"].includes(data.lookup.state),
+  );
+  const history = selectPlayerHistory(
+    player,
+    seasonExpired && loadedAt ? Math.max(now, nextSeasonReset(loadedAt)) : now,
   );
   const todayEnded =
     player?.currentDay != null &&
@@ -630,11 +636,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
             <p className="section-note">{LEGEND_DAY_NOTE}</p>
-            {history.map(({ day, inSeason }) => (
+            {history.map(({ day, seasonDay }) => (
               <LegendDay
                 key={legendDayKey(day.period)}
                 day={day}
-                inSeason={inSeason}
+                seasonDay={seasonDay}
                 isCurrentDay={isCurrentDay(today, day)}
                 openDay={openDay}
               />
@@ -780,11 +786,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             <p className="section-note">No Legend days are saved for this player yet.</p>
           ) : null}
           <div className="legend-days">
-            {history.map(({ day, inSeason }) => (
+            {history.map(({ day, seasonDay }) => (
               <LegendDay
                 key={legendDayKey(day.period)}
                 day={day}
-                inSeason={inSeason}
+                seasonDay={seasonDay}
                 isCurrentDay={isCurrentDay(today, day)}
                 openDay={openDay}
               />
@@ -842,12 +848,14 @@ function SeasonNav({
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
+  // Only Seasons with Clash Lens days; ClashKing's Past Seasons covers the rest.
+  seasons = seasons.filter((season) => season.source === "tracked_summary");
   // A selected past Season always keeps its way back, even if the list failed.
   if (seasons.length === 0 && selectedSeason === null && !error) return null;
   return (
-    <nav className="data-section" aria-label="Historical seasons">
+    <nav className="data-section" aria-label="Seasons">
       <div className="section-heading">
-        <h2>Historical seasons</h2>
+        <h2>Seasons</h2>
       </div>
       {error ? (
         <aside className="notice notice-unavailable" role="alert">
@@ -1176,38 +1184,6 @@ function formatPlayerTimestamp(value: string): string {
   return `${formatPlayerDate(date)}, ${playerTimeFormatter.format(date)} UTC`;
 }
 
-function legendDayKey(period: string): string {
-  return period.split(" – ")[0].slice(0, 10);
-}
-
-function selectPlayerHistory(player: PlayerPage | null) {
-  const seasonDays = player?.seasonDays ?? [];
-  const days = [
-    ...seasonDays,
-    ...(player?.currentDay ? [player.currentDay] : []),
-    ...(player?.recentDays ?? []),
-  ].filter(
-    (day) =>
-      !day.uncertainty.includes("player_not_eligible") ||
-      day.offenseEvents.length > 0 ||
-      day.defenseEvents.length > 0,
-  );
-  return days
-    .filter(
-      (day, index) =>
-        days.findIndex(
-          (saved) => legendDayKey(saved.period) === legendDayKey(day.period),
-        ) === index,
-    )
-    .sort((a, b) => legendDayKey(b.period).localeCompare(legendDayKey(a.period)))
-    .map((day) => ({
-      day,
-      inSeason: seasonDays.some(
-        (saved) => legendDayKey(saved.period) === legendDayKey(day.period),
-      ),
-    }));
-}
-
 const LEGEND_DAY_NOTE =
   "A Legend day runs from 05:00 to 05:00 UTC. Ended days show “Provisional result” until Clash Lens can prove their trophy change includes the automatic defense loss at Reset.";
 
@@ -1217,12 +1193,12 @@ function isCurrentDay(today: RankedDaySummary | null, day: RankedDaySummary): bo
 
 function LegendDay({
   day,
-  inSeason,
+  seasonDay,
   isCurrentDay,
   openDay,
 }: {
   day: RankedDaySummary;
-  inSeason: boolean;
+  seasonDay: string;
   isCurrentDay: boolean;
   openDay: string | null;
 }) {
@@ -1235,7 +1211,7 @@ function LegendDay({
         <span className="legend-day-date">
           <strong>{dayLabel}</strong>
           <span className="legend-day-meta">
-            <small>{inSeason ? <>Day {day.dayNumber ?? "—"}</> : "Date only"}</small>
+            <small>{seasonDay}</small>
             {isCurrentDay ? (
               <LiveBadge />
             ) : (

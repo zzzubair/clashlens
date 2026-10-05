@@ -144,6 +144,11 @@ A domain change is complete only when every affected source observation, derived
 - Missing EOD evidence stays unknown. Keep this movement separate from battle
   results and reset adjustments; do not fold a boundary reset into attack gain
   or defense loss. Preserve the evidence that explains a difference.
+- A player page's Daily Legend log shows only the current Season's days, each
+  numbered from that Season's start. An ended Season's saved days appear under
+  that Season in the page's Seasons list, dated by its end. That list offers
+  only Seasons with Clash Lens days; one known only from the game's league
+  history is left out.
 - Public completed-season rank means final Clash Lens position among tracked
   players only. Official rank remains supporting evidence. Unknown final
   Clash Lens position must not fall back to official rank.
