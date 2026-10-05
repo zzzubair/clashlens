@@ -49,6 +49,30 @@ only instead of a season day number. This adds no weekly recheck or clan discove
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
+The current player view shows attack and defense stats for This Season,
+Last 7 days and Last 14 days when saved player data is available. Selecting a
+past Season opens its saved summary instead of these period stats.
+Attack stats show triple rate, average stars, average destruction and trophies
+per attack. Defense stats show hold rate, average stars and destruction given
+up, trophies given up per defense, and counts of 0-, 1-, 2- and 3-star defenses.
+Recent windows include the current Legend day and the previous 6 or 13 days,
+crossing a Season boundary when saved battle details remain. This Season starts
+at its opening Reset and includes the current Legend day so far.
+Each view shows its dates, saved-day coverage, and separate attack and defense
+sample counts. All averages use individual recorded battles, not averages of
+daily averages. Triple rate is the percentage of recorded attacks with three
+stars; hold rate is the percentage of actual recorded defenses with fewer than
+three stars. Empty samples show Unavailable for averages and rates, with zero
+sample counts and zero defense star counts. Trophies given up are positive losses per recorded
+defense. Automatic Reset losses and missing or unplayed battles are excluded.
+Partial history and conflicting reports are flagged; retained past-Season totals
+cannot fill missing battle details.
+
+With JavaScript enabled, changing Period uses battle details already loaded with
+the player page and makes no request or additional database read. It adds no stored data; the
+[saved-history limits](../docs/history-retention.md) still apply. The calculations
+are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
+
 The separate Past Seasons table shows saved finishes from January 2025 onwards,
 newest first, with three columns: Season ended, Final trophies and Global rank.
 28-day Seasons are dated by their closing Reset; older calendar-month results
