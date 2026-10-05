@@ -41,7 +41,6 @@ const FINISHES: PastSeasonFinish[] = [
     seasonEnd: "2026-08-10T05:00:00+00:00",
     trophies: 5856,
     globalRank: 1,
-    source: "clashking",
   },
   {
     seasonId: "2024-07",
@@ -49,7 +48,6 @@ const FINISHES: PastSeasonFinish[] = [
     seasonEnd: null,
     trophies: 5011,
     globalRank: 934651,
-    source: "clashking",
   },
   {
     seasonId: "2021-12",
@@ -57,7 +55,6 @@ const FINISHES: PastSeasonFinish[] = [
     seasonEnd: null,
     trophies: 4965,
     globalRank: null,
-    source: "clashking",
   },
 ];
 
@@ -158,7 +155,7 @@ describe("past Seasons on the player page", () => {
     expect(html).not.toContain("Past Seasons");
   });
 
-  it("labels official results and preserves unknown official values", async () => {
+  it("shows three columns and preserves unknown official values", async () => {
     mocks.getPastSeasons.mockResolvedValue([
       {
         seasonId: "1788757200",
@@ -166,26 +163,30 @@ describe("past Seasons on the player page", () => {
         seasonEnd: "2026-10-05T05:00:00Z",
         trophies: 5437,
         globalRank: 180,
-        source: "official_league_history",
       },
       {
         ...FINISHES[0],
         trophies: null,
         globalRank: null,
-        source: "official_league_history",
       },
       FINISHES[1],
     ]);
     const html = await renderStreamed(await loadPage());
-    expect(html).toContain("Season ended");
+    const section = html.slice(html.indexOf('id="past-seasons-title"'));
+    const pastSeasons = section.slice(0, section.indexOf("</section>"));
+    expect(pastSeasons.match(/<th scope="col">[^<]*<\/th>/g)).toEqual([
+      '<th scope="col">Season ended</th>',
+      '<th scope="col">Final trophies</th>',
+      '<th scope="col">Global rank</th>',
+    ]);
     expect(html).toMatch(
-      /5 Oct 2026<\/th><td>5,437<\/td><td>#180<\/td><td>Official<\/td>/,
+      /5 Oct 2026<\/th><td>5,437<\/td><td>#180<\/td><\/tr>/,
     );
     expect(html).toMatch(
-      /10 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><td>Official<\/td>/,
+      /10 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><\/tr>/,
     );
     expect(html).toMatch(
-      /Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td><td>ClashKing<\/td>/,
+      /Jul 2024<\/th><td>5,011<\/td><td>#934,651<\/td><\/tr>/,
     );
   });
 
@@ -209,7 +210,6 @@ describe("past Seasons on the player page", () => {
       seasonEnd: null,
       trophies: 5000 + index,
       globalRank: index + 1,
-      source: "clashking",
     }));
     mocks.getPastSeasons.mockResolvedValue(months);
     const html = await renderStreamed(await loadPage());
@@ -253,7 +253,6 @@ describe("past Seasons client boundary", () => {
   it("reads saved finishes from the private API", async () => {
     const { result, fetchMock } = await fetchWith({
       tag: TAG,
-      source: "clashking",
       fetched_at: "2026-10-04T12:00:00+00:00",
       seasons: [
         {
@@ -262,7 +261,6 @@ describe("past Seasons client boundary", () => {
           season_end: "2026-08-10T05:00:00+00:00",
           trophies: 5856,
           global_rank: 1,
-          source: "clashking",
         },
         {
           season_id: "2021-12",
@@ -270,7 +268,6 @@ describe("past Seasons client boundary", () => {
           season_end: null,
           trophies: 4965,
           global_rank: null,
-          source: "clashking",
         },
       ],
     });
@@ -280,14 +277,13 @@ describe("past Seasons client boundary", () => {
     );
   });
 
-  it("accepts unknown official trophies and rejects unrecognized sources", async () => {
+  it("accepts unknown official trophies without per-row source fields", async () => {
     const row = {
       season_id: "1783918800",
       season_start: "2026-07-13T05:00:00+00:00",
       season_end: "2026-08-10T05:00:00+00:00",
       trophies: null,
       global_rank: null,
-      source: "official_league_history",
     };
     const { result } = await fetchWith({ tag: TAG, seasons: [row] });
     await expect(result).resolves.toEqual([
@@ -295,14 +291,8 @@ describe("past Seasons client boundary", () => {
         ...FINISHES[0],
         trophies: null,
         globalRank: null,
-        source: "official_league_history",
       },
     ]);
-    const invalid = await fetchWith({
-      tag: TAG,
-      seasons: [{ ...row, source: "unknown" }],
-    });
-    await expect(invalid.result).rejects.toBeInstanceOf(Error);
   });
 
   it.each([
@@ -317,7 +307,6 @@ describe("past Seasons client boundary", () => {
           season_end: "2026-08-10T05:00:00+00:00",
           trophies: 5856,
           global_rank: 1,
-          source: "clashking",
         },
       ],
     },

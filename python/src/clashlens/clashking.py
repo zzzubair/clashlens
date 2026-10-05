@@ -69,7 +69,6 @@ class SeasonFinish:
     source_season: str
     trophies: int | None
     global_rank: int | None
-    source: str = "clashking"
 
     @property
     def season_end(self) -> datetime | None:
@@ -426,14 +425,11 @@ def _saved(
                 "",
                 row["eod_trophies"],
                 row["final_placement"],
-                "official_league_history",
             )
     finishes = sorted(by_season.values(), key=_sort_key, reverse=True)
     finishes = [finish for finish in finishes if _sort_key(finish) >= _FIRST_SHOWN]
-    sources = {finish.source for finish in finishes}
     return {
         "tag": normalized_tag,
-        "source": "mixed" if len(sources) > 1 else next(iter(sources), "clashking"),
         "fetched_at": None if fetched is None else fetched[0],
         "seasons": [
             {
@@ -442,7 +438,6 @@ def _saved(
                 "season_end": finish.season_end,
                 "trophies": finish.trophies,
                 "global_rank": finish.global_rank,
-                "source": finish.source,
             }
             for finish in finishes
         ],

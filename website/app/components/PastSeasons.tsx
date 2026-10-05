@@ -42,8 +42,7 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
         <h2 id="past-seasons-title">Past Seasons</h2>
       </div>
       <p className="section-note">
-        Final trophies and global rank since January 2025. Official results take
-        precedence, with older history from{" "}
+        Older history from{" "}
         <a href="https://clashk.ing" rel="noopener">
           ClashKing
         </a>
@@ -61,7 +60,6 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
               <th scope="col">Season ended</th>
               <th scope="col">Final trophies</th>
               <th scope="col">Global rank</th>
-              <th scope="col">Source</th>
             </tr>
           </thead>
           <tbody>
@@ -73,9 +71,6 @@ export function PastSeasonList({ finishes }: { finishes: PastSeasonFinish[] }) {
                   {finish.globalRank === null
                     ? "Not recorded"
                     : `#${finish.globalRank.toLocaleString("en-GB")}`}
-                </td>
-                <td>
-                  {finish.source === "official_league_history" ? "Official" : "ClashKing"}
                 </td>
               </tr>
             ))}

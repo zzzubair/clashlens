@@ -236,6 +236,5 @@ export const WORST_PAST_SEASONS: PastSeasonFinish[] = Array.from(
       index < 3 ? new Date(Date.UTC(2026, 8 - index, 29, 5)).toISOString() : null,
     trophies: 4800 + index * 85,
     globalRank: index % 4 === 3 ? null : [1, 13204, 248913][index % 3],
-    source: "clashking",
   }),
 );

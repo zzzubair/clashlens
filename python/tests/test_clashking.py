@@ -266,7 +266,6 @@ def test_viewed_players_refresh_once_a_day_and_keep_rows_through_failures(
                 first = view()
                 assert first.status_code == 200
                 body = first.json()
-                assert body["source"] == "clashking"
                 assert body["fetched_at"] == NOW.isoformat()
                 # The page shows only seasons from January 2025 onwards.
                 assert len(body["seasons"]) == 8
@@ -276,7 +275,6 @@ def test_viewed_players_refresh_once_a_day_and_keep_rows_through_failures(
                     "season_end": "2026-09-07T05:00:00+00:00",
                     "trophies": 5600,
                     "global_rank": 4,
-                    "source": "clashking",
                 }
                 assert body["seasons"][-1]["season_id"] == "2025-09"
 
@@ -574,19 +572,17 @@ def test_past_seasons_use_official_results_and_remap_old_cached_finishes(
                 finally:
                     worker.close()
                 merged = view()
-                assert merged["source"] == "mixed"
                 assert [
                     (
                         row["season_end"],
                         row["trophies"],
                         row["global_rank"],
-                        row["source"],
                     )
                     for row in merged["seasons"]
                 ] == [
-                    (_start(end).isoformat(), *result, "official_league_history")
+                    (_start(end).isoformat(), *result)
                     for end, result in zip(ends, results, strict=True)
-                ] + [(_start("2026-07-13").isoformat(), 5205, 1852, "clashking")]
+                ] + [(_start("2026-07-13").isoformat(), 5205, 1852)]
                 assert fake.calls == 0
 
                 current += timedelta(days=1)
@@ -610,7 +606,6 @@ def test_past_seasons_use_official_results_and_remap_old_cached_finishes(
                 unknown = next(
                     row for row in view()["seasons"] if row["season_id"] == "1783918800"
                 )
-                assert unknown["source"] == "official_league_history"
                 assert unknown["trophies"] is None and unknown["global_rank"] is None
                 with database.pool.connection() as connection:
                     stored = connection.execute(

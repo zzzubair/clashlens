@@ -404,5 +404,4 @@ export interface PastSeasonFinish {
   seasonEnd: string | null;
   trophies: number | null;
   globalRank: number | null;
-  source: "official_league_history" | "clashking";
 }
