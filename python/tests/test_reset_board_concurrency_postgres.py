@@ -1,0 +1,250 @@
+"""The Reset board's member results run side by side, and Reset work goes first.
+
+On 2026-10-06 every Reset reading, battle log and day result took the Reset's
+publication lock in turn, so the 12,795-member board was still waiting at
+06:00. These tests hold one member result open and check the others do not
+wait behind it, that the last results still see every other one before the
+board is built, and that Reset work is claimed before live work.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+
+import psycopg
+from domain_test_support import domain_database
+from test_boundary_publication_lock_order_postgres import _wait_for_waiters
+from test_boundary_publication_postgres import (
+    BOUNDARY,
+    _player_and_version,
+    _sweep_with_members,
+)
+from test_claim_jobs_postgres import (
+    _insert_job,
+    _insert_observation,
+    _production_database,
+)
+
+from clashlens import boundary
+from clashlens.collector_db import CollectorDatabase
+from clashlens.db import (
+    PYTHON_LIVE_PRIORITY,
+    PYTHON_RESET_PRIORITY,
+    Database,
+    ended_day_priority,
+)
+
+# One more member than the tail, plus room to keep results shared.
+MEMBERS = boundary.OPEN_GENERATION_TAIL + 5
+
+
+def _board(connection, count: int) -> list[tuple[int, int]]:
+    players = [
+        _player_and_version(connection, f"#B{index}", 1, "a" * 64)
+        for index in range(count)
+    ]
+    _sweep_with_members(connection, [player_id for player_id, _ in players])
+    return players
+
+
+def _record(database: Database, connection, player: tuple[int, int]) -> None:
+    assert boundary._record_boundary_generation(
+        database,
+        connection,
+        boundary_at=BOUNDARY,
+        player_id=player[0],
+        ranked_day_version_id=player[1],
+        ranked_day_input_hash="a" * 64,
+        reset_lock_wait="1s",
+    )
+
+
+def _states(connection) -> tuple[int, int]:
+    """(members still pending, snapshot builds queued)."""
+    return connection.execute(
+        """
+        SELECT
+            (SELECT count(*) FROM boundary_publication_generation_members
+             WHERE status = 'pending'),
+            (SELECT count(*) FROM python_processing_jobs
+             WHERE work_type = 'build_snapshot')
+        """
+    ).fetchone()
+
+
+def test_member_results_do_not_wait_for_each_other(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                players = _board(connection, MEMBERS)
+                # The first result creates the board under the full lock.
+                _record(database, connection, players[0])
+            with (
+                psycopg.connect(connection_info) as held,
+                psycopg.connect(connection_info) as other,
+            ):
+                _record(database, held, players[1])
+                # Before, this waited a second for ``held`` and gave up.
+                _record(database, other, players[2])
+                other.commit()
+                held.commit()
+            with database.pool.connection() as connection:
+                assert _states(connection) == (MEMBERS - 3, 0)
+        finally:
+            database.close()
+
+
+def test_last_results_see_every_other_one_and_build_once(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        errors: list[BaseException] = []
+        try:
+            with database.pool.connection() as connection:
+                players = _board(connection, MEMBERS)
+                _record(database, connection, players[0])
+
+            def record_rest() -> None:
+                try:
+                    with psycopg.connect(connection_info) as connection:
+                        for player in players[2:]:
+                            boundary._record_boundary_generation(
+                                database,
+                                connection,
+                                boundary_at=BOUNDARY,
+                                player_id=player[0],
+                                ranked_day_version_id=player[1],
+                                ranked_day_input_hash="a" * 64,
+                            )
+                            connection.commit()
+                except BaseException as error:  # noqa: BLE001 - asserted below
+                    errors.append(error)
+
+            with (
+                psycopg.connect(connection_info) as held,
+                psycopg.connect(connection_info, autocommit=True) as observer,
+            ):
+                # Shared while more than the tail wait; it stays uncommitted
+                # while the rest finish.
+                _record(database, held, players[1])
+                worker = threading.Thread(target=record_rest)
+                worker.start()
+                # The tail's full lock waits for the shared result.
+                _wait_for_waiters(observer, 1, errors)
+                assert _states(observer)[1] == 0
+                time.sleep(0.2)
+                assert worker.is_alive()
+                held.commit()
+                worker.join(60)
+            assert errors == []
+            with database.pool.connection() as connection:
+                # The last result saw the held one, so the board is built once.
+                assert _states(connection) == (0, 1)
+        finally:
+            database.close()
+
+
+def test_ended_day_work_has_reset_priority() -> None:
+    now = datetime.now(UTC)
+    today = now.replace(minute=0, second=0, microsecond=0)
+    if today.hour < 5:
+        today -= timedelta(days=1)
+    today = today.replace(hour=5)
+    assert ended_day_priority(today - timedelta(days=1)) == PYTHON_RESET_PRIORITY
+    assert ended_day_priority(today) == PYTHON_LIVE_PRIORITY
+    assert ended_day_priority(today - timedelta(days=2)) == PYTHON_LIVE_PRIORITY
+
+
+def test_collector_queues_reset_readings_at_reset_priority(database_url: str) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            priorities = {}
+            for kind in ("reset_baseline", "reset_settlement", None):
+                handoff = SimpleNamespace(
+                    occurrence_key=f"priority-{kind}",
+                    response_completed_at=datetime.now(UTC),
+                )
+                job_id = CollectorDatabase._upsert_processing_job(
+                    connection,
+                    handoff,
+                    _insert_observation(connection, occurrence_key=f"priority-{kind}"),
+                    "supercell-source-parser-v2",
+                    kind,
+                )
+                priorities[kind] = connection.execute(
+                    "SELECT priority FROM python_processing_jobs WHERE id = %s",
+                    (job_id,),
+                ).fetchone()[0]
+        assert priorities == {
+            "reset_baseline": PYTHON_RESET_PRIORITY,
+            "reset_settlement": PYTHON_LIVE_PRIORITY,
+            None: PYTHON_LIVE_PRIORITY,
+        }
+
+
+def test_reset_work_goes_before_recent_live_work(database_url: str) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            jobs = {
+                key: _insert_job(
+                    connection,
+                    work_type="process_observation",
+                    deduplication_key=f"order:{key}",
+                    input_json={},
+                    observation_id=_insert_observation(
+                        connection, occurrence_key=f"order-{key}"
+                    ),
+                    priority=priority,
+                )
+                for key, priority in (
+                    ("live", PYTHON_LIVE_PRIORITY),
+                    ("reset", PYTHON_RESET_PRIORITY),
+                    ("old", PYTHON_LIVE_PRIORITY),
+                )
+            }
+            # Live work that has waited 15 minutes still yields; after 25 it
+            # goes first, so a Reset cannot hold live data back for long.
+            for key, waited in (("live", "15 minutes"), ("old", "25 minutes")):
+                connection.execute(
+                    "UPDATE python_processing_jobs"
+                    " SET created_at = clock_timestamp() - %s::interval WHERE id = %s",
+                    (waited, jobs[key]),
+                )
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            claimed = [
+                database.claim_job(owner=f"lane-{index}") for index in range(3)
+            ]
+        finally:
+            database.close()
+        assert [claim.job_id for claim in claimed if claim] == [
+            jobs["old"], jobs["reset"], jobs["live"]
+        ]
+
+
+def test_reset_priority_jobs_are_claimable_alongside_unlimited_work(
+    database_url: str,
+) -> None:
+    # A Reset day result is claimed by a lane limited to derived work.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            job_id = _insert_job(
+                connection,
+                work_type="reconcile_ranked_day",
+                deduplication_key="reconcile:reset-priority",
+                input_json={"player_id": 1, "ranked_day_start": "2026-08-03T05:00:00Z"},
+                priority=PYTHON_RESET_PRIORITY,
+            )
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            claim = database.claim_job(
+                owner="derived", work_types=("reconcile_ranked_day",)
+            )
+        finally:
+            database.close()
+        assert claim is not None and claim.job_id == job_id

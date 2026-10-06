@@ -780,7 +780,7 @@ def test_declared_claim_priorities_match_enqueue_sites() -> None:
     declared = {
         int(raw.strip(" ()")) for raw in db_module._PYTHON_CLAIM_PRIORITIES.split(",")
     }
-    assert declared == {25, 100}, (
-        "declared Python claim priorities must match the live and explicit "
-        "backfill enqueue classes"
+    assert declared == {25, 100, 300}, (
+        "declared Python claim priorities must match the live, Reset and "
+        "explicit backfill enqueue classes"
     )

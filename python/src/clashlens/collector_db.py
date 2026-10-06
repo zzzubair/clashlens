@@ -25,6 +25,9 @@ PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
 BATTLE_PARSER_VERSION = "supercell-battle-parser-v3"
 LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
+# The worker's db.PYTHON_RESET_PRIORITY: Reset pair responses are processed
+# before live ones, because the frozen leaderboard waits for them.
+RESET_PROCESSING_PRIORITY = 300
 REVISIT_INTERVAL = timedelta(seconds=90)
 PROFILE_CACHE_WINDOW = timedelta(seconds=5)
 UPLOAD_RETRY_DELAY = timedelta(seconds=5)
@@ -875,9 +878,9 @@ class CollectorDatabase:
             INSERT INTO python_processing_jobs (
                 observation_id, work_type, deduplication_key, input_json,
                 parser_version, processing_version, domain_rule_version,
-                analytics_rule_version, due_at
+                analytics_rule_version, due_at, priority
             ) VALUES (
-                %s, 'process_observation', %s, '{}'::jsonb, %s, %s, %s, %s, %s
+                %s, 'process_observation', %s, '{}'::jsonb, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT DO NOTHING
             RETURNING id
@@ -890,6 +893,7 @@ class CollectorDatabase:
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
                 handoff.response_completed_at,
+                RESET_PROCESSING_PRIORITY if work_kind == "reset_baseline" else 100,
             ),
         ).fetchone()
         if row is not None:

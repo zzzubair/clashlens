@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -25,6 +25,18 @@ ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
 CONTRACT_VERSION = 5
 PYTHON_BACKFILL_PRIORITY = 25
 PYTHON_LIVE_PRIORITY = 100
+# Work the next frozen leaderboard waits for: Reset readings, the day that
+# just ended and the board's builds. A claim adds 10 for each minute a job
+# has waited, so this goes first unless live work has waited 20 minutes.
+PYTHON_RESET_PRIORITY = 300
+
+
+def ended_day_priority(ranked_day_start: datetime) -> int:
+    """Reset priority for a result of the Legend day the latest Reset ended."""
+    ended_at = ranked_day_start + timedelta(days=1)
+    if ended_at <= datetime.now(UTC) < ended_at + timedelta(days=1):
+        return PYTHON_RESET_PRIORITY
+    return PYTHON_LIVE_PRIORITY
 DEFAULT_POOL_SIZE = 4
 MAX_POOL_SIZE = 64
 # The running worker cancels any one database statement, including time spent
@@ -344,9 +356,11 @@ _CLAIM_CANDIDATE_LIMIT = 32
 # Priority classes that can appear in the Python queue. Backfill has its own
 # indexed class so its probe stays bounded without sharing live work's class.
 # The catch-all still claims other operator priorities.
-_PYTHON_CLAIM_PRIORITIES = f"({PYTHON_BACKFILL_PRIORITY}), ({PYTHON_LIVE_PRIORITY})"
+_PYTHON_CLAIM_PRIORITIES = (
+    f"({PYTHON_BACKFILL_PRIORITY}), ({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})"
+)
 _PYTHON_CLAIM_PRIORITY_EXCLUSIONS = (
-    f"{PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY}"
+    f"{PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY}, {PYTHON_RESET_PRIORITY}"
 )
 
 

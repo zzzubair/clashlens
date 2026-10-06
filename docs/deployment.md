@@ -1156,6 +1156,19 @@ the closed one. Giving an attempt back waits at most one second for the job's
 row; if that runs out, the lease expires and maintenance retries the job, or
 fails it on its last attempt.
 
+While a Reset's board waits for more than 100 members, its Reset readings,
+battle logs and day results only share that Reset's publication lock, so they
+run side by side; creating, freezing or correcting the board, and the last 100
+member results, take it alone (`lock_boundary_members` in
+[`boundary.py`](../python/src/clashlens/boundary.py)). On 2026-10-06 they took
+it one at a time, about 13 a second, and the board waited until 06:15. Reset
+readings, results for the Legend day that just ended, and the board's snapshot
+and analytics builds are queued at priority 300 instead of 100
+(`PYTHON_RESET_PRIORITY` in [`db.py`](../python/src/clashlens/db.py)). A claim
+adds 10 for each minute a job has waited, so they go first unless live work has
+waited 20 minutes. The board maintenance pass waits at most 50 milliseconds for
+a Reset's lock and otherwise tries again on its next pass.
+
 Production runs one worker process, whose queue maintenance runs between
 batches. If maintenance in another worker process reaches an expired job on
 its last allowed attempt before restoration succeeds, it still fails the job
