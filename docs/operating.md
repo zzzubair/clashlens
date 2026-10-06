@@ -572,9 +572,10 @@ each player whose first saved battle log was saved on Day 1, from Day 1, and
 each player first tracked later whose battles reach an earlier day, from
 that day. `--first-logs queue --season <Season ID>` queues up to `--max-jobs`
 of them (default 100); run it again until `left_to_queue` is 0. Each player
-is queued once for their earliest saved battle log. A Day 1 waits for the player's accepted Legend I profile
-naming the Season, which its Season-rule start of 5,000 needs; those players
-count in `waiting_for_profile` and are queued when that profile is saved. A
+is queued once for their earliest saved battle log. A Day 1 waits for the
+player's accepted Legend I profile naming the Season, which its Season-rule
+start of 5,000 needs; those players count in `waiting_for_profile` and are
+queued when that profile is saved. A
 player first tracked later with no Legend battles on Day 1 gets no Day 1:
 they may not have joined the Season until later, and Clash Lens must not
 invent a Day 1 for them.
