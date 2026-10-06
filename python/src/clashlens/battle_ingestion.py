@@ -7,7 +7,13 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import army_ingestion, job_outcomes, reconciliation_db, reset_baselines
+from . import (
+    army_ingestion,
+    first_battle_log,
+    job_outcomes,
+    reconciliation_db,
+    reset_baselines,
+)
 from .battle import ParsedBattleLog, ParsedBattleRow
 from .db import (
     RESET_LOCK_WAIT,
@@ -542,6 +548,9 @@ def complete_battle_log(
                         source_quality if live_player_id == reporter_id else None
                     ),
                 )
+            first_battle_log.queue_earlier_days(
+                connection, reporter_id, battle_log.observed_at, valid_rows
+            )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
@@ -955,6 +964,9 @@ def _complete_battle_log_legacy(
                         source_quality if live_player_id == reporter_id else None
                     ),
                 )
+            first_battle_log.queue_earlier_days(
+                connection, reporter_id, battle_log.observed_at, valid_rows
+            )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )

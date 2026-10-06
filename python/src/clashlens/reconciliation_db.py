@@ -7,7 +7,14 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair, boundary, domain, ranked_day_inputs, reset_baselines
+from . import (
+    battle_day_repair,
+    boundary,
+    domain,
+    first_battle_log,
+    ranked_day_inputs,
+    reset_baselines,
+)
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -174,6 +181,21 @@ def recalculate_ranked_day(
         is not None
         else None
     )
+    # A player first tracked after the day's start has no Reset battle log;
+    # their first saved one can prove the day's battles instead.
+    if start_battle_log_observation_id is None and (
+        first_log := first_battle_log.coverage_start(
+            database, connection, player_id, ranked_day
+        )
+    ):
+        start_battle_log_observation_id, holds_whole_day = first_log
+        if holds_whole_day and end_battle_log_observation_id is None:
+            end_battle_log_observation_id = start_battle_log_observation_id
+    if start_baseline is None:
+        start_baseline = first_battle_log.season_rule_start(
+            connection, player_id, ranked_day,
+            complete=start_battle_log_observation_id is not None,
+        )
     coverage = ranked_day_inputs.load_coverage(
         database,
         connection,
@@ -236,7 +258,7 @@ def recalculate_ranked_day(
             now=now,
             start_baseline_id=(
                 int(start_baseline["id"])
-                if start_baseline is not None
+                if start_baseline is not None and start_baseline["id"] is not None
                 else None
             ),
             end_baseline_id=(

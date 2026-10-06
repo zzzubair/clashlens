@@ -235,6 +235,12 @@ def test_saved_boundary_battles_move_to_the_day_before_and_days_republish(
                 "#2UU",
                 [_row(True, NEXT + timedelta(seconds=181), TAG)],
             )
+            # The old code queued no recalculation from a first battle log.
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute(
+                    "DELETE FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:first-log:%'"
+                )
             for day in (DAY, NEXT):
                 job_id = reconciliation_db.enqueue_reconciliation(
                     database, player_tag=TAG, day_start=day, now=day, request_key="old"
