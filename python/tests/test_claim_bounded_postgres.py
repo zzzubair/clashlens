@@ -9,10 +9,11 @@ from test_claim_jobs_postgres import (
     _production_database,
 )
 
-import clashlens.db as db_module
 from clashlens.db import (
-    _CLAIM_CANDIDATE_LIMIT,
     POPULATION_BUILD_WORK_TYPES,
+    PYTHON_BACKFILL_PRIORITY,
+    PYTHON_LIVE_PRIORITY,
+    PYTHON_RESET_PRIORITY,
     RESPONSE_WORK_TYPES,
     Database,
     _claim_select_statement,
@@ -216,16 +217,66 @@ def _explain_claim(
     return plan_text, float(match.group(1))
 
 
-def test_claim_statement_uses_postgresql_statement_clock() -> None:
-    statement, params = _claim_select_statement("python_processing_jobs_worker")
+def _response_job(connection: psycopg.Connection, key: str, **fields) -> int:
+    return _insert_job(
+        connection,
+        work_type="process_observation",
+        deduplication_key=key,
+        input_json={},
+        observation_id=_insert_observation(connection, occurrence_key=key),
+        **fields,
+    )
 
-    assert "statement_timestamp()" in statement
-    assert "%(now)s" not in statement
-    assert "now" not in params
+
+def test_claims_take_only_work_due_by_the_database_clock(database_url: str) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            due = _response_job(connection, "clock-due")
+            _response_job(connection, "clock-later", due_at="infinity")
+            leased = _response_job(connection, "clock-leased")
+            connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET status = 'leased', lease_owner = 'live-lane',
+                    lease_token = 'live-token', attempt_count = 1,
+                    lease_expires_at = clock_timestamp() + interval '1 hour'
+                WHERE id = %s
+                """,
+                (leased,),
+            )
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            claimed = [database.claim_job(owner=f"clock-{index}") for index in range(2)]
+        finally:
+            database.close()
+        assert [claim.job_id if claim else None for claim in claimed] == [due, None]
 
 
-def test_claim_candidate_window_covers_maximum_parallel_lanes() -> None:
-    assert _CLAIM_CANDIDATE_LIMIT == MAX_CONCURRENCY
+def test_every_parallel_lane_finds_work_while_the_others_claim(
+    database_url: str,
+) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            jobs = [
+                _response_job(connection, f"lanes-{index}")
+                for index in range(MAX_CONCURRENCY)
+            ]
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            with psycopg.connect(connection_info) as others:
+                # Every other lane is midway through claiming the oldest jobs.
+                others.execute(
+                    "SELECT id FROM python_processing_jobs"
+                    " WHERE id = ANY(%s) FOR UPDATE",
+                    (jobs[:-1],),
+                )
+                claim = database.claim_job(owner="last-lane")
+                others.rollback()
+        finally:
+            database.close()
+        assert claim is not None and claim.job_id == jobs[-1]
 
 
 def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
@@ -776,11 +827,39 @@ def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str)
             ), "0004 reapply must be non-destructive"
 
 
-def test_declared_claim_priorities_match_enqueue_sites() -> None:
-    declared = {
-        int(raw.strip(" ()")) for raw in db_module._PYTHON_CLAIM_PRIORITIES.split(",")
-    }
-    assert declared == {25, 100}, (
-        "declared Python claim priorities must match the live and explicit "
-        "backfill enqueue classes"
-    )
+def test_reset_live_and_backfill_priorities_are_claimed_in_order(
+    database_url: str,
+) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            jobs = {
+                priority: _insert_job(
+                    connection,
+                    work_type="process_observation",
+                    deduplication_key=f"declared:{priority}",
+                    input_json={},
+                    observation_id=_insert_observation(
+                        connection, occurrence_key=f"declared-{priority}"
+                    ),
+                    priority=priority,
+                )
+                for priority in (
+                    PYTHON_BACKFILL_PRIORITY,
+                    PYTHON_LIVE_PRIORITY,
+                    PYTHON_RESET_PRIORITY,
+                )
+            }
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            claimed = [
+                database.claim_job(owner=f"declared-{index}") for index in range(4)
+            ]
+        finally:
+            database.close()
+        assert [claim.job_id if claim else None for claim in claimed] == [
+            jobs[PYTHON_RESET_PRIORITY],
+            jobs[PYTHON_LIVE_PRIORITY],
+            jobs[PYTHON_BACKFILL_PRIORITY],
+            None,
+        ]

@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from . import collector_metrics, collector_reset, collector_uploads
+from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
 
 UploadClaim = collector_uploads.UploadClaim
 UploadLeaseLost = collector_uploads.UploadLeaseLost
@@ -875,9 +876,9 @@ class CollectorDatabase:
             INSERT INTO python_processing_jobs (
                 observation_id, work_type, deduplication_key, input_json,
                 parser_version, processing_version, domain_rule_version,
-                analytics_rule_version, due_at
+                analytics_rule_version, due_at, priority
             ) VALUES (
-                %s, 'process_observation', %s, '{}'::jsonb, %s, %s, %s, %s, %s
+                %s, 'process_observation', %s, '{}'::jsonb, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT DO NOTHING
             RETURNING id
@@ -890,6 +891,11 @@ class CollectorDatabase:
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
                 handoff.response_completed_at,
+                (
+                    PYTHON_RESET_PRIORITY
+                    if work_kind == "reset_baseline"
+                    else PYTHON_LIVE_PRIORITY
+                ),
             ),
         ).fetchone()
         if row is not None:

@@ -19,9 +19,11 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_LIVE_PRIORITY,
     Claim,
     Database,
     _text_value,
+    ended_day_priority,
 )
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 
@@ -968,8 +970,8 @@ def _enqueue_snapshot_analytics(
         INSERT INTO python_processing_jobs_worker (
             observation_id, work_type, deduplication_key, input_json,
             state, due_at, parser_version, processing_version,
-            domain_rule_version, analytics_rule_version
-        ) VALUES (NULL, 'build_analytics', %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)
+            domain_rule_version, analytics_rule_version, priority
+        ) VALUES (NULL, 'build_analytics', %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s, %s)
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
         (
@@ -1012,6 +1014,10 @@ def _enqueue_snapshot_analytics(
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
+            # A Reset board's analytics go before the slower army build.
+            PYTHON_LIVE_PRIORITY
+            if boundary_at is None
+            else ended_day_priority(boundary_at - RANKED_DAY_DURATION),
         ),
     )
 

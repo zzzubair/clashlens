@@ -568,7 +568,11 @@ class ObservationProcessor:
                 if job_id is None:
                     break
                 claim = self.database.claim_job(
-                    owner=owner, lease_seconds=lease_seconds, job_id=job_id, **limit
+                    owner=owner,
+                    lease_seconds=lease_seconds,
+                    job_id=job_id,
+                    planned=True,
+                    **limit,
                 )
                 if claim is not None:
                     return claim

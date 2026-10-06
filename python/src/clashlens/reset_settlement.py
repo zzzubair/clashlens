@@ -466,10 +466,11 @@ def _lock_reset(connection: Any, player_id: int, boundary_at: datetime) -> str:
 
 def lock_resets(database: Database, connection: Any, observation_id: int | None,
                 resets: list[tuple[int, datetime]], publications: tuple[datetime, ...] = ()) -> None:
-    """Before any generation row: publication locks, then the locks of ``resets``
-    and of every Reset ``observation_id`` may re-judge, each oldest first."""
+    """Before any generation row: publication locks for member results, then
+    the locks of ``resets`` and of every Reset ``observation_id`` may
+    re-judge, each oldest first."""
     for boundary_at in sorted({at.astimezone(UTC) for at in publications}):
-        boundary.lock_boundary_publication(connection, boundary_at)
+        boundary.lock_boundary_members(connection, boundary_at)
     if _has_settlements(database, connection):
         resets = [*resets, *_observation_resets(connection, observation_id, every=True)]
     for player_id, boundary_at in sorted(set(resets), key=lambda r: (r[1], r[0])):

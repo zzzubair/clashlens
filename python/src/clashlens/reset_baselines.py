@@ -17,6 +17,7 @@ from .db import (
     Claim,
     Database,
     _text_value,
+    ended_day_priority,
 )
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
@@ -790,7 +791,7 @@ def _record_boundary_baseline(
 ) -> None:
     """Record one terminal reset result and reevaluate both artifacts."""
     boundary_at = boundary_at.astimezone(UTC)
-    boundary.lock_boundary_publication(connection, boundary_at)
+    shared = boundary.lock_boundary_members(connection, boundary_at)
     sweep = connection.execute(
         """
         SELECT id, member_ids
@@ -806,13 +807,16 @@ def _record_boundary_baseline(
         return
     generation = connection.execute(
         """
-        SELECT id, snapshot_state, army_state
+        SELECT id, snapshot_state, army_state, correction_state,
+               snapshot_manifest_id, army_manifest_id
         FROM boundary_publication_generations
         WHERE boundary_at = %s AND generation = 1
-        FOR UPDATE
-        """,
+        """
+        + ("" if shared else " FOR UPDATE"),
         (boundary_at,),
     ).fetchone()
+    if shared:
+        boundary.require_open_generation(generation and generation[1:], boundary_at)
     if generation is None:
         generation_id, _generation = boundary._create_boundary_generation(database, 
             connection,
@@ -834,15 +838,16 @@ def _record_boundary_baseline(
     else:
         ranked_state = connection.execute(
             """
-            SELECT ranked.id
-            FROM boundary_publication_generation_members AS member
-            JOIN ranked_day_versions AS ranked
-              ON ranked.id = member.ranked_day_version_id
-            WHERE member.generation_id = %s AND member.player_id = %s
+            SELECT ranked_day_version_id
+            FROM boundary_publication_generation_members
+            WHERE generation_id = %s AND player_id = %s
+            FOR UPDATE
             """,
             (generation[0], player_id),
         ).fetchone()
-        ranked_version_id = int(ranked_state[0]) if ranked_state else None
+        ranked_version_id = (
+            int(ranked_state[0]) if ranked_state and ranked_state[0] is not None else None
+        )
         snapshot_status = (
             boundary._boundary_snapshot_status(
                 connection,
@@ -877,9 +882,10 @@ def _record_boundary_baseline(
         """,
         (member_status, snapshot_status, army_status, generation[0], player_id),
     )
-    boundary._try_enqueue_boundary_artifacts(database, 
-        connection, boundary_at=boundary_at, generation_id=int(generation[0])
-    )
+    if not shared:
+        boundary._try_enqueue_boundary_artifacts(database, 
+            connection, boundary_at=boundary_at, generation_id=int(generation[0])
+        )
 
 
 def _load_reset_baseline_context(
@@ -1321,10 +1327,10 @@ def _enqueue_reset_reconciliation(
         INSERT INTO python_processing_jobs_worker (
             observation_id, work_type, deduplication_key, input_json,
             state, due_at, parser_version, processing_version,
-            domain_rule_version, analytics_rule_version
+            domain_rule_version, analytics_rule_version, priority
         ) VALUES (
             NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
-            %s, %s, %s, %s
+            %s, %s, %s, %s, %s
         )
         ON CONFLICT (deduplication_key) DO NOTHING
         RETURNING id
@@ -1356,6 +1362,7 @@ def _enqueue_reset_reconciliation(
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
+            ended_day_priority(ranked_day_start),
         ),
     ).fetchone()
     return int(row[0]) if row is not None else None

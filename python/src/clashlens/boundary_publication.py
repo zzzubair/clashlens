@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
 from . import battle, boundary, reset_baselines
@@ -64,13 +65,22 @@ def reevaluate_boundary_publications(database) -> int:
         # next pass.
         handled = 0
         for boundary_at in boundaries:
-            with connection.transaction():
-                handled += _reevaluate_boundary(database, connection, boundary_at)
+            try:
+                with connection.transaction():
+                    handled += _reevaluate_boundary(database, connection, boundary_at)
+            except LockNotAvailable:
+                # Waiting for the full lock would hold back every member
+                # result that shares it; the next pass checks this Reset.
+                continue
         return handled
 
 
+# How long a pass waits for a Reset's full lock before leaving it to the next.
+REEVALUATION_LOCK_WAIT = "50ms"
+
+
 def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> int:
-    boundary.lock_boundary_publication(connection, boundary_at)
+    boundary.lock_boundary_publication(connection, boundary_at, REEVALUATION_LOCK_WAIT)
     generations = connection.execute(
         """
         SELECT id
@@ -1204,11 +1214,13 @@ def _enqueue_army_analytics(
 
     ``player_ids`` limits the Reset member refresh to the players in the
     changed battles; their status is the only one those decodes can change.
-    ``swept`` is whether the caller already holds the Reset's full lock;
-    False means it holds only the shared one and the refresh is skipped.
+    ``swept`` is whether the caller already holds the Reset's lock as
+    ``boundary.lock_boundary_publication_once_swept`` takes it; False means
+    the Reset is not swept yet and the refresh is skipped.
     """
     ranked_day_start = ranked_day_start.astimezone(UTC)
     coordinator = None
+    shared = False
     boundary_at = ranked_day_start + timedelta(days=1)
     # Before the sweep no generation exists, but the shared lock still makes
     # the first generation wait for these decodes, and see them once created.
@@ -1216,20 +1228,29 @@ def _enqueue_army_analytics(
     if coordinated and swept is None:
         swept = boundary.lock_boundary_publication_once_swept(connection, boundary_at)
     if coordinated and swept:
+        # Already held; this reads back whether it is shared.
+        shared = boundary.lock_boundary_members(connection, boundary_at)
         coordinator = connection.execute(
             """
             SELECT id, generation, snapshot_state, army_state,
-                   army_manifest_id
+                   army_manifest_id, correction_state, snapshot_manifest_id
             FROM boundary_publication_generations
             WHERE boundary_at = %s
               AND snapshot_state <> 'superseded'
               AND army_state <> 'superseded'
             ORDER BY generation DESC
             LIMIT 1
-            FOR UPDATE
-            """,
+            """
+            + ("" if shared else " FOR UPDATE"),
             (boundary_at,),
         ).fetchone()
+        if shared:
+            boundary.require_open_generation(
+                coordinator
+                and (coordinator[2], coordinator[3], coordinator[5],
+                     coordinator[6], coordinator[4]),
+                boundary_at,
+            )
     if coordinator is not None:
         generation_id = int(coordinator[0])
         members = connection.execute(
@@ -1304,12 +1325,13 @@ def _enqueue_army_analytics(
                 generation_id=generation_id,
                 defer_inheritance=True,
             )
-        boundary._try_enqueue_boundary_artifacts(
-            database,
-            connection,
-            boundary_at=boundary_at,
-            generation_id=generation_id,
-        )
+        if not shared:
+            boundary._try_enqueue_boundary_artifacts(
+                database,
+                connection,
+                boundary_at=boundary_at,
+                generation_id=generation_id,
+            )
         return
     # Decode-driven historical/test work without a reset coordinator
     # retains its existing per-day shape. Coordinated boundaries return

@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
 from . import battle_day_repair
@@ -23,6 +24,7 @@ from .db import (
     PROCESSING_VERSION,
     Database,
     _text_value,
+    ended_day_priority,
     lock_wait,
 )
 from .domain_repair import boundary_held
@@ -59,8 +61,8 @@ def lock_boundary_publication_once_swept(connection: Any, boundary_at: datetime)
     No generation exists before the collector saves a Reset's sweep, so work
     for a Reset that has not happened yet shares the lock and runs in
     parallel. A generation is created only under the full lock, which waits
-    for those jobs to commit. A sweep saved while the shared lock was being
-    taken also takes the full lock. Returns whether the full lock was taken.
+    for those jobs to commit. Once swept, member results take it as
+    ``lock_boundary_members`` decides. Returns whether the Reset is swept.
     """
 
     def swept() -> bool:
@@ -76,8 +78,112 @@ def lock_boundary_publication_once_swept(connection: Any, boundary_at: datetime)
         )
         if not swept():
             return False
-    lock_boundary_publication(connection, boundary_at)
+    lock_boundary_members(connection, boundary_at)
     return True
+
+
+# The last members an open generation waits for take the full lock, so the
+# result that leaves none waiting sees every other one committed and starts
+# the build. Above the transactions that can write member results at once:
+# 12 worker lanes, their maintenance and the late-battle sweep.
+OPEN_GENERATION_TAIL = 100
+
+
+def lock_boundary_members(
+    connection: Any, boundary_at: datetime, wait: str | None = None
+) -> bool:
+    """Take a swept Reset's publication lock to write member results;
+    returns whether it is shared.
+
+    On 2026-10-06 every Reset reading, battle log and day result took the
+    full lock in turn, about 13 a second, and the 12,795-member board was
+    still waiting at 06:00. While the Reset's newest generation is open,
+    with nothing frozen or corrected, and more than OPEN_GENERATION_TAIL
+    members wait, the lock is shared: each holder writes only its own member
+    rows, and the generation changes only under the full lock, which waits
+    for them. A transaction keeps the shared mode it holds, because two
+    upgrading it would deadlock; an open generation cannot change meanwhile.
+    """
+    key = f"boundary-publication:{boundary_at.astimezone(UTC).isoformat()}"
+    held_full, held, open_generation, busy = connection.execute(
+        """
+        WITH generation AS (
+            SELECT id, snapshot_state, army_state, correction_state,
+                   snapshot_manifest_id, army_manifest_id
+            FROM boundary_publication_generations
+            WHERE boundary_at = %(boundary_at)s
+              AND snapshot_state <> 'superseded'
+              AND army_state <> 'superseded'
+            ORDER BY generation DESC
+            LIMIT 1
+        ), own AS (
+            SELECT lock.mode
+            FROM pg_locks AS lock
+            WHERE lock.locktype = 'advisory' AND lock.granted
+              AND lock.pid = pg_backend_pid() AND lock.objsubid = 1
+              AND lock.classid::bigint
+                  = (hashtextextended(%(key)s, 0) >> 32) & 4294967295
+              AND lock.objid::bigint
+                  = hashtextextended(%(key)s, 0) & 4294967295
+        ), open_generation AS (
+            SELECT id FROM generation
+            WHERE snapshot_state = 'pending' AND army_state = 'pending'
+              AND correction_state = 'none'
+              AND snapshot_manifest_id IS NULL AND army_manifest_id IS NULL
+        )
+        SELECT
+            COALESCE((SELECT bool_or(mode = 'ExclusiveLock') FROM own), false),
+            EXISTS (SELECT 1 FROM own),
+            EXISTS (SELECT 1 FROM open_generation),
+            EXISTS (
+                SELECT 1 FROM open_generation
+                WHERE (
+                    SELECT count(*) FROM (
+                        SELECT 1 FROM boundary_publication_generation_members
+                        WHERE generation_id = open_generation.id
+                          AND status = 'pending'
+                        LIMIT %(tail)s + 1
+                    ) AS waiting
+                ) > %(tail)s
+            )
+        """,
+        {"boundary_at": boundary_at, "key": key, "tail": OPEN_GENERATION_TAIL},
+    ).fetchone()
+    if held_full:
+        return False
+    # Only a lock shared before the sweep can meet no open generation; it
+    # takes the full lock, as it always has.
+    if held and open_generation:
+        return True
+    if not (open_generation and busy):
+        lock_boundary_publication(connection, boundary_at, wait)
+        return False
+    with lock_wait(connection, wait):
+        connection.execute(
+            "SELECT pg_advisory_xact_lock_shared(hashtextextended(%s, 0))", (key,)
+        )
+    return True
+
+
+def is_open_generation(row: Any) -> bool:
+    """Whether a generation row's (snapshot_state, army_state,
+    correction_state, snapshot_manifest_id, army_manifest_id) is open."""
+    return row is not None and (
+        _text_value(row[0]), _text_value(row[1]), _text_value(row[2]), row[3], row[4]
+    ) == ("pending", "pending", "none", None, None)
+
+
+def require_open_generation(row: Any, boundary_at: datetime) -> None:
+    """Under the shared lock, refuse a generation that is not open.
+
+    The lock is shared only while it is open, so this guards against a
+    change made without the full lock: LockNotAvailable rolls the work back
+    to retry, rather than writing to a frozen generation.
+    """
+    if not is_open_generation(row):
+        raise LockNotAvailable(
+            f"Reset {boundary_at.isoformat()} has no open generation for shared results"
+        )
 
 
 def _create_boundary_generation(
@@ -369,8 +475,8 @@ def _try_enqueue_boundary_artifacts(
             INSERT INTO python_processing_jobs_worker (
                 observation_id, work_type, deduplication_key, input_json,
                 state, due_at, parser_version, processing_version,
-                domain_rule_version, analytics_rule_version
-            ) VALUES (NULL, 'build_snapshot', %s, %s, 'pending', %s, %s, %s, %s, %s)
+                domain_rule_version, analytics_rule_version, priority
+            ) VALUES (NULL, 'build_snapshot', %s, %s, 'pending', %s, %s, %s, %s, %s, %s)
             ON CONFLICT (deduplication_key) DO NOTHING
             """,
             (
@@ -388,6 +494,8 @@ def _try_enqueue_boundary_artifacts(
                 PROCESSING_VERSION,
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
+                # The board goes before the slower army build.
+                ended_day_priority(boundary_at - timedelta(days=1)),
             ),
         )
     army = connection.execute(
@@ -616,7 +724,7 @@ def _record_boundary_generation(
     ).fetchone()
     if sweep is None:
         return False
-    lock_boundary_publication(connection, boundary_at, reset_lock_wait)
+    shared = lock_boundary_members(connection, boundary_at, reset_lock_wait)
     sweep_id = int(sweep[0])
     member_ids = [int(value) for value in (sweep[1] or [])]
     if player_id not in member_ids:
@@ -632,10 +740,12 @@ def _record_boundary_generation(
           AND army_state <> 'superseded'
         ORDER BY generation DESC
         LIMIT 1
-        FOR UPDATE
-        """,
+        """
+        + ("" if shared else " FOR UPDATE"),
         (boundary_at,),
     ).fetchone()
+    if shared:
+        require_open_generation(current and current[2:7], boundary_at)
     if current is None:
         generation_id, generation = _create_boundary_generation(database, 
             connection,
@@ -928,9 +1038,10 @@ def _record_boundary_generation(
                 army_status,
             ),
         )
-    _try_enqueue_boundary_artifacts(database, 
-        connection, boundary_at=boundary_at, generation_id=generation_id
-    )
+    if not shared:
+        _try_enqueue_boundary_artifacts(database, 
+            connection, boundary_at=boundary_at, generation_id=generation_id
+        )
     return True
 
 

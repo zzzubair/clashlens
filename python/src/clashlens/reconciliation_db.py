@@ -17,6 +17,7 @@ from .db import (
     Claim,
     Database,
     _text_value,
+    ended_day_priority,
 )
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
@@ -945,10 +946,10 @@ def _enqueue_live_reconciliation(
         INSERT INTO python_processing_jobs_worker (
             observation_id, work_type, deduplication_key, input_json,
             state, due_at, parser_version, processing_version,
-            domain_rule_version, analytics_rule_version
+            domain_rule_version, analytics_rule_version, priority
         ) VALUES (
             NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
-            %s, %s, %s, %s
+            %s, %s, %s, %s, %s
         )
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
@@ -966,6 +967,7 @@ def _enqueue_live_reconciliation(
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
+            ended_day_priority(ranked_day_start),
         ),
     )
 

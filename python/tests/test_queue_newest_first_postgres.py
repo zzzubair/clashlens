@@ -19,6 +19,7 @@ from test_domain_processing_postgres import (
 
 from clashlens import api_leaderboard, job_outcomes
 from clashlens.api_db import ApiDatabase
+from clashlens.db import PYTHON_RESET_PRIORITY
 from clashlens.domain import ranked_day_for
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 
@@ -451,6 +452,69 @@ def test_limited_newest_plan_keeps_each_players_latest_responses_together(
             assert database.newest_job_plan(limit=10) == expected
         finally:
             database.close()
+
+
+RESET_STATES = {
+    "pending": "",
+    "waiting_dependency": """, status = 'waiting_dependency',
+        due_at = clock_timestamp() - interval '1 minute'""",
+    "leased": """, status = 'leased', lease_owner = 'gone', lease_token = 'gone',
+        lease_expires_at = clock_timestamp() - interval '1 minute', attempt_count = 1""",
+}
+
+
+@pytest.mark.parametrize("state", list(RESET_STATES))
+def test_reset_response_due_after_the_plan_is_cached_is_processed_next(
+    database_url: str,
+    archive_server,
+    state: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        live = [
+            _profile(
+                connection_info,
+                archive_server,
+                tag=tag,
+                trophies=5000,
+                observed_at=DAY.start + timedelta(hours=1),
+            )[1]
+            for tag in ("#9PP", "#2PP", "#8PP")
+        ]
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            first = processor.process_once(owner="lane")
+            assert first is not None and first.job_id in live
+            _observation, reset_job = _profile(
+                connection_info,
+                archive_server,
+                tag="#QQQ",
+                trophies=5000,
+                observed_at=DAY.start + timedelta(hours=2),
+            )
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET priority = %s"
+                    + RESET_STATES[state]
+                    + " WHERE id = %s",
+                    (PYTHON_RESET_PRIORITY, reset_job),
+                )
+                if state == "leased":
+                    connection.execute(
+                        """
+                        INSERT INTO python_processing_attempts (
+                            job_id, attempt_number, lease_owner, lease_token,
+                            started_at, lease_expires_at, state
+                        ) VALUES (
+                            %s, 1, 'gone', 'gone', clock_timestamp() - interval '2 minutes',
+                            clock_timestamp() - interval '1 minute', 'running'
+                        )
+                        """,
+                        (reset_job,),
+                    )
+            second = processor.process_once(owner="lane")
+        finally:
+            database.close()
+        assert second is not None and second.job_id == reset_job
 
 
 @pytest.mark.parametrize("endpoint", ["profile", "battle_log"])
