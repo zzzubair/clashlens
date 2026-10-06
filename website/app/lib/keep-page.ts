@@ -2,27 +2,23 @@ import { useEffect } from "react";
 import {
   isRouteErrorResponse,
   useLocation,
-  useMatches,
   type DataStrategyResult,
   type MiddlewareFunction,
 } from "react-router";
 
-// What the browser shows now, by route, so a failed re-read can keep it.
-let shown: { url: string; data: Map<string, unknown> } | null = null;
+import type { WebsiteErrorResponse } from "./contracts";
+import type { PlayerSearchLoaderData } from "../routes/player-search";
 
-export function rememberShownPage(url: string, data: Map<string, unknown>) {
-  shown = { url, data };
+// The address the browser shows now, so only its own re-read can keep it.
+let shownPage: string | null = null;
+
+export function rememberShownPage(url: string) {
+  shownPage = url;
 }
 
 export function useRememberShownPage() {
   const { pathname, search } = useLocation();
-  const matches = useMatches();
-  useEffect(() => {
-    rememberShownPage(
-      pathname + search,
-      new Map(matches.map((match) => [match.id, match.loaderData])),
-    );
-  });
+  useEffect(() => rememberShownPage(pathname + search));
 }
 
 // No answer from the website: the phone was offline or just woke, the
@@ -35,29 +31,51 @@ function lostConnection(error: unknown) {
   );
 }
 
-// Pages reread their own data in the background, such as when a phone wakes.
-// A re-read that cannot reach the website keeps the page as it is, and the next
-// re-read tries again; only a page the browser has not shown yet can fail.
+const UNAVAILABLE: WebsiteErrorResponse = {
+  error: {
+    code: "unavailable",
+    message: "Saved data is still available, but the live service is unavailable.",
+  },
+};
+
+// Refresh and search show their own unavailable notice, as when the service is down.
+function inlineAnswer({ pathname, searchParams }: URL) {
+  if (/^\/resources\/players\/[^/]+\/refresh$/.test(pathname)) return UNAVAILABLE;
+  if (pathname === "/resources/players/search") {
+    const answer: PlayerSearchLoaderData = {
+      query: (searchParams.get("q") ?? "").trim(),
+      search: null,
+      error: UNAVAILABLE,
+    };
+    return answer;
+  }
+  return undefined;
+}
+
+// Player profiles reread their own data in the background, such as when a phone
+// wakes. A re-read that cannot reach the website leaves the profile as the
+// browser already has it, and the next re-read tries again; only a page the
+// browser has not shown yet can fail. Other pages show the error as before.
 export const keepPageOnLostConnection: MiddlewareFunction<
   Record<string, DataStrategyResult>
 > = async ({ request }, next) => {
   const results = await next();
-  const { pathname, search } = new URL(request.url);
-  const page = shown;
-  const lost = Object.entries(results).filter(
-    ([, result]) => result.type === "error" && lostConnection(result.result),
+  const url = new URL(request.url);
+  const lost = Object.keys(results).filter(
+    (id) => results[id].type === "error" && lostConnection(results[id].result),
   );
+  if (lost.length === 0) return results;
+  const answer = inlineAnswer(url);
+  if (answer !== undefined)
+    return {
+      ...results,
+      ...Object.fromEntries(lost.map((id) => [id, { type: "data", result: answer }])),
+    };
   if (
     request.method !== "GET" ||
-    page?.url !== pathname + search ||
-    lost.length === 0 ||
-    !lost.every(([id]) => page.data.has(id))
+    !url.pathname.startsWith("/players/") ||
+    shownPage !== url.pathname + url.search
   )
     return results;
-  return {
-    ...results,
-    ...Object.fromEntries(
-      lost.map(([id]) => [id, { type: "data", result: page.data.get(id) }]),
-    ),
-  };
+  return Object.fromEntries(Object.entries(results).filter(([id]) => !lost.includes(id)));
 };
