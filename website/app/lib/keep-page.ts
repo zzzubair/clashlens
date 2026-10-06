@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useContext, useEffect } from "react";
+import { preloadModule } from "react-dom";
 import {
   isRouteErrorResponse,
+  UNSAFE_FrameworkContext,
   useLocation,
   type DataStrategyResult,
   type MiddlewareFunction,
@@ -29,6 +31,18 @@ export function rememberShownPage(url: string) {
 export function useRememberShownPage() {
   const { pathname, search } = useLocation();
   useEffect(() => rememberShownPage(pathname + search));
+}
+
+// The browser fetches a route's code the first time it is used, and React
+// Router reloads the whole page when that fetch fails. Download the code for
+// the requests that answer inline with the page, so they still work offline.
+export function usePreloadInlineAnswerCode() {
+  const manifest = useContext(UNSAFE_FrameworkContext)?.manifest;
+  for (const id of ["routes/player-search", "routes/refresh"]) {
+    const route = manifest?.routes[id];
+    if (route === undefined) continue;
+    for (const href of [route.module, ...(route.imports ?? [])]) preloadModule(href);
+  }
 }
 
 // No answer from the website: the phone was offline or just woke, the

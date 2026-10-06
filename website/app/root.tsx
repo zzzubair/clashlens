@@ -23,6 +23,7 @@ import type { UpdateStatus } from "./lib/contracts";
 import {
   LOGGED_OUT,
   keepPageOnLostConnection,
+  usePreloadInlineAnswerCode,
   useRememberShownPage,
 } from "./lib/keep-page";
 import "./app.css";
@@ -113,6 +114,7 @@ export default function App() {
   const navigate = useNavigate();
   const previousPath = useRef(location.pathname);
   useRememberShownPage();
+  usePreloadInlineAnswerCode();
   useEffect(() => {
     if (previousPath.current !== location.pathname && !location.hash) {
       document.getElementById("main-content")?.focus({ preventScroll: true });

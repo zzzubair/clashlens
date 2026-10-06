@@ -1,10 +1,18 @@
-import { createMemoryRouter, data, type MiddlewareFunction } from "react-router";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createMemoryRouter,
+  data,
+  UNSAFE_FrameworkContext,
+  type MiddlewareFunction,
+} from "react-router";
 import { expect, it } from "vitest";
 
 import {
   LOGGED_OUT,
   keepPageOnLostConnection,
   rememberShownPage,
+  usePreloadInlineAnswerCode,
 } from "../../app/lib/keep-page";
 
 const PAGE = "/players/%23LY2QQ9L9Q";
@@ -168,4 +176,36 @@ it("shows search as unavailable when its request loses the connection", async ()
     error: UNAVAILABLE,
   });
   expect(router.state.errors).toBeNull();
+});
+
+// Without this code already downloaded, a first search or Refresh made offline
+// makes React Router reload the page into the browser's offline screen.
+it("has the page download the code for search and Refresh up front", () => {
+  const route = (module: string, imports: string[] = []) => ({ module, imports });
+  const manifest = {
+    routes: {
+      "routes/player": route("/assets/player.js"),
+      "routes/player-search": route("/assets/player-search.js", ["/assets/shared.js"]),
+      "routes/refresh": route("/assets/refresh.js"),
+    },
+  };
+  function Page() {
+    usePreloadInlineAnswerCode();
+    return createElement("html", null, createElement("head"), createElement("body"));
+  }
+  const html = renderToString(
+    createElement(
+      UNSAFE_FrameworkContext.Provider,
+      { value: { manifest } as never },
+      createElement(Page),
+    ),
+  );
+  const preloaded = [...html.matchAll(/<link rel="modulepreload" href="([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  expect(preloaded.sort()).toEqual([
+    "/assets/player-search.js",
+    "/assets/refresh.js",
+    "/assets/shared.js",
+  ]);
 });
