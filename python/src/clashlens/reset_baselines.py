@@ -838,15 +838,16 @@ def _record_boundary_baseline(
     else:
         ranked_state = connection.execute(
             """
-            SELECT ranked.id
-            FROM boundary_publication_generation_members AS member
-            JOIN ranked_day_versions AS ranked
-              ON ranked.id = member.ranked_day_version_id
-            WHERE member.generation_id = %s AND member.player_id = %s
+            SELECT ranked_day_version_id
+            FROM boundary_publication_generation_members
+            WHERE generation_id = %s AND player_id = %s
+            FOR UPDATE
             """,
             (generation[0], player_id),
         ).fetchone()
-        ranked_version_id = int(ranked_state[0]) if ranked_state else None
+        ranked_version_id = (
+            int(ranked_state[0]) if ranked_state and ranked_state[0] is not None else None
+        )
         snapshot_status = (
             boundary._boundary_snapshot_status(
                 connection,

@@ -558,6 +558,9 @@ class ObservationProcessor:
             with self._plan_lock:
                 self._claim_count += 1
                 planned = self._claim_count % OLDEST_FIRST_CLAIM_EVERY != 0
+        reset_due = getattr(self.database, "reset_job_due", None)
+        if planned and reset_due is not None and reset_due(**limit):
+            planned = False
         if planned:
             for attempt in range(NEWEST_PLAN_SIZE):
                 if attempt == 0:

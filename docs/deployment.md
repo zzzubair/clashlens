@@ -1166,10 +1166,11 @@ readings, results for the Legend day that just ended, and the board's snapshot
 and analytics builds are queued at priority 300 instead of 100
 (`PYTHON_RESET_PRIORITY` in [`db.py`](../python/src/clashlens/db.py)). A claim
 adds 10 for each minute a job has waited, so they go first unless live work has
-waited 20 minutes. While a Reset response waits, the newest-job plan is empty,
-so every response claim uses that order; a plan made before it arrived is used
-for at most 30 more seconds. The board maintenance pass waits at most 50 milliseconds for
-a Reset's lock and otherwise tries again on its next pass.
+waited 20 minutes. Before each claim from the newest-job plan, the worker checks
+for Reset-priority work it could take: due, waiting on its saved response, or
+with an expired lease. If there is any, it uses that order instead. The board
+maintenance pass waits at most 50 milliseconds for a Reset's lock and otherwise
+tries again on its next pass.
 
 Production runs one worker process, whose queue maintenance runs between
 batches. If maintenance in another worker process reaches an expired job on

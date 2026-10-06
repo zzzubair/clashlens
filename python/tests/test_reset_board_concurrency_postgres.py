@@ -28,7 +28,7 @@ from test_claim_jobs_postgres import (
     _production_database,
 )
 
-from clashlens import boundary
+from clashlens import boundary, reset_baselines
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import (
     PYTHON_LIVE_PRIORITY,
@@ -143,6 +143,74 @@ def test_last_results_see_every_other_one_and_build_once(database_url: str) -> N
             with database.pool.connection() as connection:
                 # The last result saw the held one, so the board is built once.
                 assert _states(connection) == (0, 1)
+        finally:
+            database.close()
+
+
+def _member(connection, player_id: int) -> tuple[str, str]:
+    status, snapshot_status = connection.execute(
+        """
+        SELECT status, snapshot_status FROM boundary_publication_generation_members
+        WHERE player_id = %s
+        """,
+        (player_id,),
+    ).fetchone()
+    return str(status), str(snapshot_status)
+
+
+def test_reset_replay_keeps_the_result_it_waited_for(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        errors: list[BaseException] = []
+        try:
+            with database.pool.connection() as connection:
+                players = _board(connection, MEMBERS)
+                _record(database, connection, players[0])
+                sweep_id = int(
+                    connection.execute(
+                        "SELECT id FROM collector_reset_sweeps WHERE boundary_at = %s",
+                        (BOUNDARY,),
+                    ).fetchone()[0]
+                )
+
+            def replay() -> None:
+                try:
+                    with psycopg.connect(connection_info) as connection:
+                        reset_baselines._record_boundary_baseline(
+                            database,
+                            connection,
+                            boundary_at=BOUNDARY,
+                            reset_sweep_id=sweep_id,
+                            player_id=players[1][0],
+                            state="complete",
+                        )
+                        connection.commit()
+                except BaseException as error:  # noqa: BLE001 - asserted below
+                    errors.append(error)
+
+            with (
+                psycopg.connect(connection_info) as held,
+                psycopg.connect(connection_info, autocommit=True) as observer,
+            ):
+                # A day result writes the member and is still uncommitted when
+                # a replay of the member's Reset reading arrives.
+                _record(database, held, players[1])
+                written = _member(held, players[1][0])
+                assert written[0] != "pending"
+                worker = threading.Thread(target=replay)
+                worker.start()
+                deadline = time.monotonic() + 30
+                while not errors and not observer.execute(
+                    "SELECT count(*) FROM pg_locks"
+                    " WHERE NOT granted AND locktype IN ('transactionid', 'tuple')"
+                ).fetchone()[0]:
+                    assert time.monotonic() < deadline, "the replay never waited"
+                    time.sleep(0.02)
+                held.commit()
+                worker.join(60)
+            assert errors == []
+            with database.pool.connection() as connection:
+                assert _member(connection, players[1][0]) == written
         finally:
             database.close()
 

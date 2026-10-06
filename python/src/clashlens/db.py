@@ -364,6 +364,36 @@ _PYTHON_CLAIM_PRIORITY_EXCLUSIONS = (
 )
 
 
+def _claim_filters(
+    *,
+    supports_dependency: bool,
+    denormalized_contract: bool,
+    supports_coordinator: bool,
+    work_types: Collection[str] | None,
+    past_reset_build_hold: str | None,
+) -> tuple[str, str, dict[str, Any]]:
+    """Claim alias ``job``'s supported filter, whole eligibility and parameters."""
+    supported_filter, params = _supported_claim_filter(
+        "job",
+        "source_observation",
+        denormalized_contract=denormalized_contract,
+        supports_coordinator=supports_coordinator,
+        past_reset_build_hold=past_reset_build_hold,
+    )
+    if work_types is not None:
+        if not work_types or not set(work_types) <= set(SUPPORTED_WORK_TYPES):
+            raise ValueError("claim work types must be supported work types")
+        supported_filter = f"({supported_filter} AND job.work_type = ANY(%(claim_work_types)s::text[]))"
+        params["claim_work_types"] = sorted(work_types)
+    dependency_filter = "job.state = 'waiting_dependency' OR " if supports_dependency else ""
+    return supported_filter, f"""(((job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
+            AND job.due_at <= statement_timestamp())
+        OR (job.state = 'leased'
+            AND job.lease_expires_at <= statement_timestamp()))
+        AND ({dependency_filter}job.attempt_count < job.max_attempts)
+        AND {supported_filter})""", params
+
+
 def _claim_select_statement(
     jobs_relation: str,
     *,
@@ -390,35 +420,20 @@ def _claim_select_statement(
     ``work_types`` limits every probe and the lock-time recheck to those work
     types, so a limited worker never claims, and never skips over, other work.
     """
-    supported_filter, supported_params = _supported_claim_filter(
-        "job",
-        "source_observation",
+    supported_filter, claimable, params = _claim_filters(
+        supports_dependency=supports_dependency,
         denormalized_contract=denormalized_contract,
         supports_coordinator=supports_coordinator,
+        work_types=work_types,
         past_reset_build_hold=past_reset_build_hold,
     )
-    params: dict[str, Any] = {**supported_params}
-    if work_types is not None:
-        if not work_types or not set(work_types) <= set(SUPPORTED_WORK_TYPES):
-            raise ValueError("claim work types must be supported work types")
-        supported_filter = f"({supported_filter} AND job.work_type = ANY(%(claim_work_types)s::text[]))"
-        params["claim_work_types"] = sorted(work_types)
     if job_id is not None:
         params["job_id"] = job_id
     score = f"""CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
         THEN 0 ELSE 1 END,
         job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
         / 60)::integer * 10"""
-    due = """(job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
-            AND job.due_at <= statement_timestamp())
-        OR (job.state = 'leased'
-            AND job.lease_expires_at <= statement_timestamp())"""
-    dependency_filter = (
-        "job.state = 'waiting_dependency' OR " if supports_dependency else ""
-    )
     dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
-    job_filter = f"""({dependency_filter}job.attempt_count < job.max_attempts)
-        AND {supported_filter}"""
     ordinary_job_filter = f"""job.attempt_count < job.max_attempts
         AND {supported_filter}"""
     # Dependency resumptions do not consume the ordinary attempt budget. Keep
@@ -472,8 +487,7 @@ def _claim_select_statement(
                     job.observation_id, job.replay_observation_id
                 )
             WHERE job.id = %(job_id)s
-              AND ({due})
-              AND {job_filter}
+              AND {claimable}
             ORDER BY ({score}) DESC, job.due_at, job.id
             FOR UPDATE OF job SKIP LOCKED
             LIMIT 1
@@ -546,7 +560,7 @@ def _claim_select_statement(
                 ON source_observation.id = COALESCE(
                     job.observation_id, job.replay_observation_id
                 )
-            WHERE (({due}) AND {job_filter}) IS TRUE
+            WHERE {claimable} IS TRUE
             ORDER BY ({score}) DESC, job.due_at, job.id
             FOR UPDATE OF job SKIP LOCKED
             LIMIT 1
@@ -830,8 +844,6 @@ class Database:
 
         ``claim_job(job_id=...)`` rechecks eligibility and lease state because
         a cached plan can become stale before its suggestions are claimed.
-        While a Reset-priority response is due the plan is empty, so every
-        response claim uses the priority order of ``claim_job``.
         """
         self._ensure_dependency_support_probed()
         supported_filter, supported_params = _supported_claim_filter(
@@ -862,29 +874,12 @@ class Database:
                 SELECT newest.id
                 FROM newest
                 JOIN players AS player ON player.id = newest.player_id
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM {self._jobs_relation} AS job
-                    JOIN collector_observations AS observation
-                      ON observation.id = job.observation_id
-                    WHERE job.state IN ('pending', 'waiting_retry')
-                      AND job.priority = %(reset_priority)s
-                      AND job.due_at <= statement_timestamp()
-                      AND job.work_type = 'process_observation'
-                      AND job.attempt_count < job.max_attempts
-                      AND {supported_filter}
-                )
                 ORDER BY greatest(player.current_observed_at,
                                   player.current_profile_confirmed_at) NULLS FIRST,
                          player.id, newest.endpoint = 'profile' DESC
                 LIMIT %(limit)s
                 """,
-                {
-                    **supported_params,
-                    "priority": PYTHON_LIVE_PRIORITY,
-                    "reset_priority": PYTHON_RESET_PRIORITY,
-                    "limit": limit,
-                },
+                {**supported_params, "priority": PYTHON_LIVE_PRIORITY, "limit": limit},
             ).fetchall()
         return [int(row[0]) for row in rows]
 
@@ -938,6 +933,29 @@ class Database:
         with self.pool.connection() as connection:
             row = connection.execute(query, tuple(params)).fetchone()
             return None if row is None else _text_value(row[0])
+
+    def reset_job_due(self, *, work_types: Collection[str] | None = None) -> bool:
+        """Whether ``claim_job`` could take a Reset-priority job of ``work_types``."""
+        self._ensure_dependency_support_probed()
+        supports_coordinator = getattr(self, "_supports_coordinator_contract", False)
+        with self._timed_connection() as connection:
+            _supported, claimable, params = _claim_filters(
+                supports_dependency=self._supports_dependency_deferral,
+                denormalized_contract=self._supports_denormalized_contract,
+                supports_coordinator=supports_coordinator,
+                work_types=work_types,
+                past_reset_build_hold=(
+                    past_reset_build_hold(connection) if supports_coordinator else None
+                ),
+            )
+            row = connection.execute(
+                f"""SELECT EXISTS (SELECT FROM {self._jobs_relation} AS job
+                LEFT JOIN collector_observations AS source_observation
+                    ON source_observation.id = COALESCE(job.observation_id, job.replay_observation_id)
+                WHERE job.priority = %(reset_priority)s AND {claimable})""",
+                {**params, "reset_priority": PYTHON_RESET_PRIORITY},
+            ).fetchone()
+        return bool(row and row[0])
 
     def claim_job(
         self,
