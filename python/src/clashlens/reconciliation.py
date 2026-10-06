@@ -135,6 +135,9 @@ class ReconciliationInput:
     domain_rule_version: str | None = None
     season_anchor_rule_version: str | None = None
     trophy_allocation_rule_versions: tuple[str, ...] = ()
+    # A Season's first Legend day, whose day before belongs to the previous
+    # Season.
+    season_first_day: bool = False
 
     def __post_init__(self) -> None:
         if self.boundary_kind not in {None, "weekly", "season"}:
@@ -864,6 +867,10 @@ def _automatic_defense_adjustment(
     if defense_count == 0 or defense_count >= MAX_DAILY_DEFENSES:
         return None, "not_applicable"
     previous = data.previous_day
+    if data.season_first_day:
+        # The game averages Day 1's own defenses only: the previous Season's
+        # last day takes no part, so Day 1 needs nothing from it.
+        previous = PreviousRankedDay(True, 0, 0, 0)
     if (
         previous is None
         or not previous.complete

@@ -316,6 +316,7 @@ def recalculate_ranked_day(
             domain_rule_version=domain_rule_version,
             season_anchor_rule_version=SEASON_ANCHOR_RULE_VERSION,
             trophy_allocation_rule_versions=trophy_rule_versions,
+            season_first_day=season_day is not None and season_day.day_number == 1,
         )
     )
     result_data = {

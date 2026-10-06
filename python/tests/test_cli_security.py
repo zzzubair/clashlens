@@ -610,6 +610,34 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
     }
 
 
+@pytest.mark.parametrize("extra,queue", [
+    (["--day-1", "preview", "--season", "1791176400"], False),
+    (["--day-1", "queue", "--season", "1791176400"], True),
+    (["--day-1", "queue"], None),
+    (["--day-1", "queue", "--first-logs", "queue", "--season", "1791176400"], None),
+])
+def test_day_1_recalculation_needs_a_season_and_runs_alone(
+    monkeypatch, capsys, extra: list[str], queue: bool | None
+) -> None:
+    calls = []
+    monkeypatch.setattr("clashlens.battle_day_repair.Database",
+                        lambda url: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(
+        "clashlens.first_battle_log.requeue_day_1",
+        lambda database, season, *, queue, max_jobs: calls.append(
+            (season, queue, max_jobs)) or {"queued": 0},
+    )
+    arguments = ["republish-current-season", "--database-url",
+                 "postgresql://worker@postgres/clashlens", *extra]
+    if queue is None:
+        with pytest.raises(SystemExit):
+            main(arguments)
+        assert calls == []
+    else:
+        assert main(arguments) == 0
+        assert calls == [("1791176400", queue, 100)]
+
+
 @pytest.mark.parametrize("value", ["0", "1001", "many"])
 def test_current_season_republication_command_rejects_unbounded_batches(
     value: str,
