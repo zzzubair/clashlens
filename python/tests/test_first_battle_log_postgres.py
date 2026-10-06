@@ -178,6 +178,13 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
         _process(connection_info, archive_server, jobs)
         opponent = _day_1(connection_info, "#2YY")
         not_in_season = _day_1(connection_info, "#2LL")
+        # Both were queued when their logs were saved. Players tracked before
+        # that existed have no such job, which the backfill is for.
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                "DELETE FROM python_processing_jobs"
+                " WHERE deduplication_key LIKE 'reconcile:first-log:%'"
+            )
 
         database = Database(connection_info)
         try:
@@ -204,15 +211,15 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
     assert not_in_season is None
     assert day_1_joiner[:4] == ("Complete", "inferred", 5000, 5000 + 2 * WIN)
     # The backfill lists the Day 1 joiner and the opponent, not the crawl
-    # import; the opponent was queued when their log was saved.
+    # import.
     assert preview == {
         "season": str(NEW_SEASON), "players": 2, "first_seen_day_1": 1,
         "first_seen_later_with_earlier_battles": 1,
         "days": {DAY_1.isoformat(): 2},
-        "already_queued": 1, "waiting_for_profile": 0, "queued": 0,
-        "left_to_queue": 1,
+        "already_queued": 0, "waiting_for_profile": 0, "queued": 0,
+        "left_to_queue": 2,
     }
-    assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
+    assert (queued["queued"], queued["left_to_queue"]) == (2, 0)
     assert (again["queued"], again["already_queued"]) == (0, 2)
 
 
@@ -245,3 +252,23 @@ def test_opponent_whose_battle_log_is_processed_before_their_profile_gets_day_1(
     assert (waiting["waiting_for_profile"], waiting["queued"]) == (1, 0)
     assert opponent[:4] == ("Partial", "uncertain", 5000, 5000 + WIN)
     assert opponent[4] is True and opponent[6] == "season_rule"
+
+
+@pytest.mark.parametrize("log_first", [False, True])
+def test_day_1_joiner_processed_after_the_reset_gets_day_1_in_either_order(
+    database_url: str, archive_server, log_first: bool
+) -> None:
+    older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(48)]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        profile_job, log_job = _first_seen(
+            connection_info, archive_server, DAY_1 + timedelta(hours=7, minutes=45),
+            profile=_new_season_profile(5000 + 2 * WIN),
+            log=_log(*ATTACKS, filler=older),
+        )
+        # Day 1 has ended, so only whichever of the two finishes last can
+        # queue it.
+        for job in [log_job, profile_job] if log_first else [profile_job, log_job]:
+            _process(connection_info, archive_server, [job])
+        day = _day_1(connection_info)
+
+    assert day[2] == 5000 and day[6] == "season_rule"

@@ -142,8 +142,9 @@ def queue_earlier_days(
     observed_at: datetime,
     rows: list[ParsedBattleRow],
 ) -> None:
-    """When a player's first saved battle log holds their battles from an
-    earlier day of the Season it was saved in, recalculate from that day."""
+    """When a player's first saved battle log was saved on Day 1, or holds
+    their battles from an earlier day of the Season it was saved in,
+    recalculate from that day."""
     saved_day = domain.ranked_day_for(observed_at)
     earlier = [
         row.battle.ranked_day_start
@@ -151,6 +152,8 @@ def queue_earlier_days(
         if row.battle is not None
         and saved_day.season_start <= row.battle.ranked_day_start < saved_day.start
     ]
+    if saved_day.start == saved_day.season_start:
+        earlier = [saved_day.start]
     if not earlier or connection.execute(
         """
         SELECT EXISTS (

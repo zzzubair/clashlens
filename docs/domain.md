@@ -206,7 +206,7 @@ A domain change is complete only when every affected source observation, derived
 - Preserve every raw source observation, including its fetch time and untouched response body.
 - Preserve successful observations when a paired endpoint request fails. Mark the collection attempt incomplete until the missing evidence is collected.
 - Start tracking a valid tag when Clash Lens first confirms it for active tracking.
-- Reconstruct all retained timestamped Legend I events available at first observation. When a player's first saved battle log holds their battles from an earlier day of the Season it was saved in, recalculate that day and every later saved day of the Season.
+- Reconstruct all retained timestamped Legend I events available at first observation. When a player's first saved battle log was saved on Day 1, or holds their battles from an earlier day of the Season it was saved in, recalculate that day and every later saved day of the Season. A Day 1 recalculation waits until both that log and the player's accepted Legend I profile naming the Season are saved, whichever comes last.
 - Mark history before the first reliable observation as partial or unavailable. Do not invent missing history.
 
 ### Battle identity and perspectives
