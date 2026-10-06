@@ -372,7 +372,8 @@ PostgreSQL capacity. `oldest_pending_processing_age_seconds` starts at the
 saved response's `collector_observations.created_at` and includes pending,
 retrying, dependency-waiting and leased jobs, even when the next attempt is
 scheduled in the future. Rescheduling a retry does not reset its age; finished
-jobs are excluded. Jobs without a saved response use their own creation time,
+jobs are excluded. A pending job not yet due, such as a day-end recalculation,
+is left out until its due time and then counts from it. Jobs without a saved response use their own creation time,
 so delayed derived work also contributes to the processing wait.
 Leaderboard, analytics and export builds (`build_*` jobs) are left out of it.
 Each job type's own oldest age, builds included, is

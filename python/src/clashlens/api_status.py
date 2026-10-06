@@ -17,12 +17,15 @@ def get_update_status(database: ApiDatabase, *, now: datetime) -> dict[str, Any]
             """
             SELECT (SELECT max(last_success_at) FROM collector_response_state
                     WHERE scope = 'player' AND endpoint IN ('profile', 'battle_log')),
-                   (SELECT min(created_at) FROM python_processing_jobs
+                   (SELECT min(CASE WHEN status = 'pending'
+                                    THEN greatest(created_at, due_at)
+                                    ELSE created_at END)
+                    FROM python_processing_jobs
                     WHERE work_type IN ('process_observation', 'reconcile_ranked_day')
-                      AND status IN (
-                          'pending', 'waiting_retry', 'waiting_dependency', 'leased'
-                      ))
-            """
+                      AND (status IN ('waiting_retry', 'waiting_dependency', 'leased')
+                           OR (status = 'pending' AND due_at <= %s)))
+            """,
+            (now,),
         ).fetchone()
     now = now.astimezone(UTC)
     limit = now - timedelta(seconds=DELAY_SECONDS)

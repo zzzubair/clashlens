@@ -9,7 +9,10 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
         processing AS (
             SELECT job.work_type, count(*) AS pending_count,
                    greatest(0, extract(epoch FROM clock_timestamp()
-                       - min(COALESCE(observation.created_at, job.created_at)))) AS age
+                       - min(CASE WHEN job.status = 'pending'
+                                  THEN greatest(COALESCE(observation.created_at, job.created_at), job.due_at)
+                                  ELSE COALESCE(observation.created_at, job.created_at) END)
+                         FILTER (WHERE job.status <> 'pending' OR job.due_at <= clock_timestamp()))) AS age
             FROM python_processing_jobs AS job
             LEFT JOIN collector_observations AS observation
               ON observation.id = job.observation_id

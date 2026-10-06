@@ -129,7 +129,8 @@ A domain change is complete only when every affected source observation, derived
   profile or battle log answer has succeeded for 15 minutes, or when work
   needed to publish shown results (processing a saved response, or rebuilding
   a player's Legend day) was saved over 15 minutes ago and is still unfinished,
-  including retries and waits for storage. It names only the delay the data
+  including retries and waits for storage. Work scheduled for later, such as
+  a day's recalculation after its Reset, counts only from when it is due. It names only the delay the data
   shows: no API answer since a time, or when the oldest waiting data was
   saved. Saved values stay visible with their age; a delay
   never turns them into zero or removes a player. Affected Legend days stay
