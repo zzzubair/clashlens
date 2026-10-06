@@ -654,7 +654,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {data.selectedSeason === null && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
-            <p className="section-note">{LEGEND_DAY_NOTE}</p>
             {history.map(({ day, seasonDay }) => (
               <LegendDay
                 key={legendDayKey(day.period)}
@@ -751,7 +750,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       ) : null}
       <p role="status">Now tracking in Legend I.</p>
       {data.selectedSeason === null ? (
-        <PlayerTrends days={trackedPlayer.recentDays} now={now} />
+        <PlayerTrends player={trackedPlayer} now={statisticsTime} />
       ) : null}
       <SeasonNav
         tag={trackedPlayer.tag}
@@ -782,7 +781,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       {data.selectedSeason !== null ? null : (
         <section className="data-section" aria-labelledby="season-days-title">
           <h2 id="season-days-title">Daily Legend log</h2>
-          <p className="section-note">{LEGEND_DAY_NOTE}</p>
           {selectedDay &&
           !history.some(({ day }) => legendDayKey(day.period) === selectedDay) ? (
             <p className="section-note" role="status">
@@ -796,7 +794,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               warning.code === day.completeness.state &&
               warning.detail === day.completeness.reason
                 ? liveDayNotice(dayEvidence(day), todayEnded, warning.label)
-                : null;
+                : undefined;
+            if (notice === null) return null;
             return (
               <p className="section-note" key={`${warning.code}-${warning.label}`}>
                 <strong>{notice?.heading ?? warning.label}:</strong>{" "}
@@ -808,16 +807,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               </p>
             );
           })}
-          {history.some(
-            ({ day }) => day.startTrophiesSource || day.startTrophies == null,
-          ) ? (
-            <p className="section-note">
-              Calculated totals use saved trophies minus recorded changes. Season rule
-              starts are the 5,000 every Legend I player starts a Season on, used when the
-              Season reset reading was unusable. Unavailable means the saved history is
-              incomplete.
-            </p>
-          ) : null}
           {history.length === 0 ? (
             <p className="section-note">No Legend days are saved for this player yet.</p>
           ) : null}
@@ -852,12 +841,6 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
             ? "The check is taking longer than expected. It may still be running."
             : LOOKUP_MESSAGES[lookup.state])}
       </p>
-      {explanation && lookup.reason === "no_legend_battles" ? (
-        <p className="section-note">
-          Taking part in Legend League battles is optional. This page updates as soon as
-          they play.
-        </p>
-      ) : null}
       {explanation ? (
         <a href={canonicalPlayerPath(lookup.tag)}>Check again</a>
       ) : lookup.state === "checking" || lookup.state === "tracking" ? (
@@ -884,7 +867,7 @@ function SeasonNav({
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
-  // Only Seasons with Clash Lens days; the separate Past Seasons table covers the rest.
+  // Only Seasons with Clash Lens days; older finishes are in the separate Older Seasons table.
   seasons = seasons.filter((season) => season.source === "tracked_summary");
   // A selected past Season always keeps its way back, even if the list failed.
   if (seasons.length === 0 && selectedSeason === null && !error) return null;
@@ -968,16 +951,26 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
     stars: Record<string, number | null>,
     unknown: number | null,
     trophies: number | null,
+    played: "attacks" | "defenses",
   ): SummarySide => ({
     count,
     stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
     unknown,
     trophies,
-    perDay: per(trophies, summary.daysObserved),
+    // Days without a battle on this side, such as shielded days, don't count.
+    perDay: per(
+      trophies,
+      summary.daysObserved -
+        summary.dailyEntries.filter((day) => day[played] === 0).length,
+    ),
   });
   return (
     <SeasonSummary
       title={seasonLabel(summary.seasonId, summary.seasonEnd)}
+      {...(tracked &&
+        summary.coverageState !== "complete" && {
+          meta: `${summary.daysObserved} of 28 days recorded`,
+        })}
       rank={["Final rank", finalRank(summary)]}
       finalRank
       trophies={[
@@ -990,24 +983,17 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
           summary.attackStars,
           summary.attackStarsUnknown,
           summary.attackGain,
+          "attacks",
         ),
         defense: side(
           summary.defenseCount,
           summary.defenseStars,
           summary.defenseStarsUnknown,
           summary.defenseLoss,
+          "defenses",
         ),
       })}
-    >
-      {tracked && summary.coverageState !== "complete" ? (
-        <p className="section-note">
-          Totals cover the {summary.daysObserved} of 28 Legend days with records.
-        </p>
-      ) : null}
-      {summary.officialHistory?.finalPlacement == null ? (
-        <p className="section-note">{FINAL_RANK_NOTE}</p>
-      ) : null}
-    </SeasonSummary>
+    />
   );
 }
 
@@ -1191,8 +1177,6 @@ function formatPlayerTimestamp(value: string): string {
   return `${formatPlayerDate(date)}, ${playerTimeFormatter.format(date)} UTC`;
 }
 
-const LEGEND_DAY_NOTE = "A Legend day runs from 05:00 to 05:00 UTC.";
-
 function isCurrentDay(today: RankedDaySummary | null, day: RankedDaySummary): boolean {
   return today != null && legendDayKey(today.period) === legendDayKey(day.period);
 }
@@ -1236,7 +1220,16 @@ function LegendDay({
               : day.startTrophies.toLocaleString("en-GB")}
           </strong>
           {day.startTrophiesSource ? (
-            <span className="legend-day-start-source">{day.startTrophiesSource}</span>
+            <span
+              className="legend-day-start-source"
+              title={
+                day.startTrophiesSource === "Season rule"
+                  ? "Every Legend I player starts a Season on 5,000"
+                  : undefined
+              }
+            >
+              {day.startTrophiesSource}
+            </span>
           ) : null}
         </span>
         <span className="legend-day-stat legend-day-offense">
@@ -1267,9 +1260,14 @@ function LegendDay({
               <span>so far</span>
             </>
           ) : (
-            <strong className={valueTone(day.trophyChange)}>
-              {formatSigned(day.trophyChange)}
-            </strong>
+            <>
+              <strong className={valueTone(day.trophyChange)}>
+                {formatSigned(day.trophyChange)}
+              </strong>
+              {day.trophyChange === null && battleNet !== null ? (
+                <span>{formatSigned(battleNet)} from battles</span>
+              ) : null}
+            </>
           )}
         </span>
         <span className="legend-day-stat legend-day-rank">
@@ -1288,9 +1286,6 @@ function LegendDay({
       ) : (
         <DayStatusNote status={status} reasons={reasons} />
       )}
-      <p className="section-note">
-        {`Recorded battle net ${formatSigned(battleNet)}: recorded attacks minus recorded defenses, without the automatic defense loss at Reset.`}
-      </p>
       <div className="battle-columns">
         <BattleColumn
           title="Attacks"
@@ -1445,13 +1440,10 @@ function valueTone(value: number | null): string {
   return value > 0 ? "score-positive" : "score-negative";
 }
 
-const FINAL_RANK_NOTE =
-  "Final rank is the in-game rank from Clash of Clans, shown once it is published after the Season ends.";
-
 // The official in-game placement, never Clash Lens's own leaderboard position.
 function finalRank(summary: HistoricalSeasonSummary): string {
   const placement = summary.officialHistory?.finalPlacement ?? null;
-  return placement === null ? "Not available yet" : `#${formatCount(placement)}`;
+  return placement === null ? "Not published yet" : `#${formatCount(placement)}`;
 }
 
 function formatCount(value: number | null): string {

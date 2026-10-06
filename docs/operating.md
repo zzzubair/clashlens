@@ -637,7 +637,7 @@ leaderboard and army results.
 
 ### Season final ranks missing
 
-Ended-Season pages show "Not available yet" until Clash of Clans league history
+Ended-Season pages show "Not published yet" until Clash of Clans league history
 holds that Season's row, which appears minutes after the Season-opening Reset.
 The Reset fetches league history again 20 minutes later; when that came too
 early, or before this existed, schedule one more request per tracked player:

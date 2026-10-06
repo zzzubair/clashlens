@@ -147,9 +147,9 @@ export function liveDay(day: DayEvidence) {
 }
 
 /**
- * The note above the daily log for today's Legend day. The day's own entry
- * lists its reasons, so a routine wait says so once here instead of
- * repeating them. Once the page's clock passes Reset, a routine wait is no
+ * The note above the daily log for today's Legend day, or null when there is
+ * nothing to add: a routine wait in progress is already shown by the day's
+ * In progress badge. Once the page's clock passes Reset, a routine wait is no
  * longer in progress, even before the page rereads it; a caution stays.
  */
 export function liveDayNotice(day: DayEvidence, ended: boolean, label: string) {
@@ -160,10 +160,7 @@ export function liveDayNotice(day: DayEvidence, ended: boolean, label: string) {
         heading: "Day ended",
         text: "This Legend day has ended. Updated results are not on this page yet.",
       }
-    : {
-        heading: "Day in progress",
-        text: "This Legend day ends at 05:00 UTC; its result is not final.",
-      };
+    : null;
 }
 
 const REASON_TEXT: Record<string, string> = {

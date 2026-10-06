@@ -135,7 +135,7 @@ describe("past Seasons on the player page", () => {
     const html = await renderStreamed(await loadPage());
 
     expect(mocks.getPastSeasons).toHaveBeenCalledWith(TAG);
-    expect(html).toContain("Past Seasons");
+    expect(html).toContain("Older Seasons");
     expect(html).toMatch(
       /10 Aug 2026<\/th><td class="past-season-rank">#1<\/td><td>5,856<\/td>/,
     );
@@ -156,11 +156,18 @@ describe("past Seasons on the player page", () => {
     const html = await renderStreamed(data);
     expect(html).toContain("Nova");
     expect(html).toContain("Daily Legend log");
-    expect(html).not.toContain("Past Seasons");
+    expect(html).not.toContain("Older Seasons");
   });
 
   it("shows three columns and preserves unknown official values", async () => {
     mocks.getPastSeasons.mockResolvedValue([
+      {
+        seasonId: "1786338000",
+        seasonStart: "2026-08-10T05:00:00Z",
+        seasonEnd: "2026-09-07T05:00:00Z",
+        trophies: 5208,
+        globalRank: 1993,
+      },
       {
         seasonId: "1788757200",
         seasonStart: "2026-09-07T05:00:00Z",
@@ -183,11 +190,14 @@ describe("past Seasons on the player page", () => {
       '<th scope="col">Global rank</th>',
       '<th scope="col">Final trophies</th>',
     ]);
-    expect(html).toMatch(
-      /5 Oct 2026<\/th><td class="past-season-rank">#180<\/td><td>5,437<\/td><\/tr>/,
-    );
+    // Seasons after 7 Sep 2026 are not listed.
+    expect(html).not.toContain("5 Oct 2026");
+    expect(html).not.toContain("5,437");
     expect(html).toMatch(
       /10 Aug 2026<\/th><td>Not recorded<\/td><td>Not recorded<\/td><\/tr>/,
+    );
+    expect(html).toMatch(
+      /7 Sep 2026<\/th><td class="past-season-rank">#1,993<\/td><td>5,208<\/td><\/tr>/,
     );
     expect(html).toMatch(
       /Jul 2024<\/th><td class="past-season-rank">#934,651<\/td><td>5,011<\/td><\/tr>/,
@@ -204,7 +214,7 @@ describe("past Seasons on the player page", () => {
     mocks.getPastSeasons.mockResolvedValue([]);
     const html = await renderStreamed(await loadPage());
     expect(html).toContain("Nova");
-    expect(html).not.toContain("Past Seasons");
+    expect(html).not.toContain("Older Seasons");
   });
 
   it("lists a long history in one table", async () => {

@@ -1,32 +1,32 @@
-import type { RankedDaySummary } from "../lib/contracts";
+import { currentSeasonStart } from "../lib/battle-statistics";
+import type { PlayerPage } from "../lib/contracts";
 import { Metric, MetricCard } from "./MetricCard";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RESET_MS = 5 * 60 * 60 * 1000;
 
-export function PlayerTrends({ days, now }: { days: RankedDaySummary[]; now: number }) {
+export function PlayerTrends({ player, now }: { player: PlayerPage; now: number }) {
   const todayStart = Math.floor((now - RESET_MS) / DAY_MS) * DAY_MS + RESET_MS;
+  // Finished days of the current Season only; early on the windows are shorter.
+  const seasonStart = currentSeasonStart(player, now);
+  const finished = Math.round((todayStart - seasonStart) / DAY_MS);
+  if (finished <= 0) return null;
   // Use recent days directly: the visible log filters out the previous Season.
-  // Daily changes already exclude the Season reset, unlike subtracting profiles.
   // Count each day once and follow the group comparison's completeness rule.
   const recent = new Map(
-    days.map((day) => [Date.parse(day.period.split(" – ")[0]), day]),
+    player.recentDays.map((day) => [Date.parse(day.period.split(" – ")[0]), day]),
   );
   return (
     <section className="data-section" aria-labelledby="player-trends-title">
       <h2 id="player-trends-title">Trophy trend</h2>
-      <p className="section-note">
-        Finished Legend days only, ending at 05:00 UTC. Adds up each day&apos;s own trophy
-        change, so the Season reset to 5,000 never counts as a drop. Missing or uncertain
-        days are left out. The latest day may still change.
-      </p>
       <div className="metric-grid">
         {[7, 14].map((window) => {
+          const span = Math.min(window, finished);
           let total = 0;
           let counted = 0;
           for (const [start, day] of recent) {
             if (
-              start >= todayStart - window * DAY_MS &&
+              start >= todayStart - span * DAY_MS &&
               start < todayStart &&
               (start - RESET_MS) % DAY_MS === 0 &&
               Date.parse(day.period.split(" – ")[1]) === start + DAY_MS &&
@@ -38,7 +38,10 @@ export function PlayerTrends({ days, now }: { days: RankedDaySummary[]; now: num
             }
           }
           return (
-            <MetricCard key={window} title={`Last ${window} days`}>
+            <MetricCard
+              key={window}
+              title={`Last ${window} days${span < window ? ` (${span} so far)` : ""}`}
+            >
               <Metric
                 label="Trophy change"
                 value={
@@ -47,7 +50,7 @@ export function PlayerTrends({ days, now }: { days: RankedDaySummary[]; now: num
                     : `${total > 0 ? "+" : ""}${total.toLocaleString("en-GB")}`
                 }
               />
-              <Metric label="Days counted" value={`${counted} of ${window}`} />
+              <Metric label="Days counted" value={`${counted} of ${span}`} />
             </MetricCard>
           );
         })}
