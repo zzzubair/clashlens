@@ -25,10 +25,11 @@ export const per = (total: number | null, by: number | null) =>
   total === null || !by ? null : total / by;
 
 // The one Season box: rank and trophies first, then hit rate, battles by
-// stars and averages. Without battles it shows only the headline. An ended
+// stars and averages. Meta is one short line of dates and coverage. Without battles it shows only the headline. An ended
 // Season's final rank is its standout number.
 export function SeasonSummary({
   title,
+  meta,
   controls,
   rank,
   finalRank = false,
@@ -38,6 +39,7 @@ export function SeasonSummary({
   children,
 }: {
   title: string;
+  meta?: string;
   controls?: React.ReactNode;
   rank: [label: string, value: string];
   finalRank?: boolean;
@@ -62,7 +64,14 @@ export function SeasonSummary({
       aria-labelledby="season-summary-title"
     >
       <div className="season-summary-head">
-        <h2 id="season-summary-title">{title}</h2>
+        <div>
+          <h2 id="season-summary-title">{title}</h2>
+          {meta ? (
+            <p className="season-summary-meta" aria-live="polite">
+              {meta}
+            </p>
+          ) : null}
+        </div>
         {controls}
       </div>
       <dl className="season-summary-headline">
@@ -136,15 +145,22 @@ export function SeasonSummary({
           <dl className="season-summary-averages">
             {(
               [
-                ["Offense per day", signed(attack.perDay, 1)],
-                ["Defense per day", signed(defense.perDay, -1)],
+                [
+                  "Offense per day",
+                  signed(attack.perDay, 1),
+                  "Averaged over finished Legend days with attacks",
+                ],
+                [
+                  "Defense per day",
+                  signed(defense.perDay, -1),
+                  "Averaged over finished Legend days with defenses",
+                ],
                 ["Per attack", signed(per(attack.trophies, attack.count), 1, 1)],
                 ["Per defense", signed(per(defense.trophies, defense.count), -1, 1)],
-                ["Trophies lost", signed(defense.trophies, -1)],
               ] as const
-            ).map(([label, value]) => (
+            ).map(([label, value, hint]) => (
               <div key={label}>
-                <dt>{label}</dt>
+                <dt title={hint}>{label}</dt>
                 <dd>{value}</dd>
               </div>
             ))}

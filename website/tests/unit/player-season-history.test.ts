@@ -237,9 +237,9 @@ describe("past-Season view", () => {
   });
 
   it.each([
-    ["official_league_history", null, "Not available yet"],
+    ["official_league_history", null, "Not published yet"],
     ["official_league_history", 180, "#180"],
-    ["tracked_summary", null, "Not available yet"],
+    ["tracked_summary", null, "Not published yet"],
     ["tracked_summary", 1340, "#1,340"],
   ] as const)(
     "shows %s official placement %s as the final rank",
@@ -263,10 +263,6 @@ describe("past-Season view", () => {
         SEASON,
       );
       expect(html).toMatch(new RegExp(`<dt>Final rank</dt><dd[^>]*>${expected}</dd>`));
-      // The note explains a rank only while it is missing.
-      expect(html.includes("Final rank is the in-game rank from Clash of Clans,")).toBe(
-        finalPlacement === null,
-      );
       expect(html).not.toContain("Clash Lens final rank");
       expect(html).not.toContain(">183<");
       expect(html).toContain("<dt>Final trophies</dt><dd>5,812</dd>");
@@ -279,7 +275,7 @@ describe("past-Season view", () => {
     },
   );
 
-  it("says a partial total covers 5 of 28 days and includes automatic losses", async () => {
+  it("says a partial total covers 5 of 28 days in one short line", async () => {
     const html = await loadAndRender(
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
@@ -288,16 +284,18 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).toContain("Totals cover the 5 of 28 Legend days with records.");
+    expect(html).toContain(
+      '<p class="season-summary-meta" aria-live="polite">5 of 28 days recorded</p>',
+    );
     expect(html).not.toContain("Partial Season history");
     // The summary drops the Season trophy change; it is ending trophies minus 5,000.
     expect(html).not.toContain("Sum of daily trophy changes");
     expect(html).toContain("50.0%<small>20 of 40 attacks</small>");
-    expect(html).toContain("<dt>Offense per day</dt><dd>+320</dd>");
-    expect(html).toContain("<dt>Defense per day</dt><dd>-260</dd>");
+    expect(html).toMatch(/Offense per day<\/dt><dd>\+320</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>-260</);
     expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
     expect(html).toContain("<dt>Per defense</dt><dd>-32.5</dd>");
-    expect(html).toContain("<dt>Trophies lost</dt><dd>-1,300</dd>");
+    expect(html).not.toContain("Trophies lost");
     expect(html).not.toContain("Stars unknown");
     expect(html).toContain('title="Recorded attacks minus recorded defenses, without');
     expect(html).not.toContain("Net change");
@@ -305,6 +303,25 @@ describe("past-Season view", () => {
     expect(html).not.toContain("Some daily totals are unavailable.");
     // The day's -30 trophy change stays apart from its +10 recorded battle net.
     expect(html).toContain("<td>-30</td><td>+10</td>");
+  });
+
+  it("leaves days without battles, such as shielded days, out of per-day averages", async () => {
+    const quiet = { ...DAY, attacks: 0, defenses: 0, attackGain: 0, defenseLoss: 0 };
+    const html = await loadAndRender(
+      {
+        getPlayer: vi.fn().mockResolvedValue(PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+        getPlayerSeason: vi.fn().mockResolvedValue({
+          ...SUMMARY,
+          dailyEntries: [DAY, { ...quiet, dayNumber: 27 }, { ...quiet, dayNumber: 28 }],
+        }),
+      },
+      SEASON,
+    );
+    // 1,600 attack trophies and 1,300 defense trophies over 3 days with battles.
+    expect(html).toMatch(/Offense per day<\/dt><dd>\+533</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>-433</);
+    expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
   });
 
   it("shows each day's Reset rank, or Unknown when the board lacks the player", async () => {
@@ -360,7 +377,7 @@ describe("past-Season view", () => {
       },
       SEASON,
     );
-    expect(html).not.toContain("Totals cover the");
+    expect(html).not.toContain("days recorded");
     expect(html).not.toContain("Partial Season history");
   });
 

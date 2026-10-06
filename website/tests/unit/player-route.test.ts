@@ -950,7 +950,7 @@ describe("automatic tag lookup", () => {
     expect(html).toContain(
       "Season Clasher is in Legend League but hasn&#x27;t played a Legend League battle this Season.",
     );
-    expect(html).toContain("This page updates as soon as they play.");
+    expect(html).not.toContain("This page updates as soon as they play.");
     expect(html).toContain("Synthetic Clan");
     expect(html).toContain("5,000");
     expect(html).not.toContain("Current trophies");
@@ -1184,7 +1184,7 @@ describe("player day honesty", () => {
     const ended = dayHtml(html, "2026-10-02");
     expect(ended).toMatch(net("Unknown"));
     expect(ended).toContain("Result unknown");
-    expect(ended).toContain("Recorded battle net +26");
+    expect(ended).toContain("<span>+26 from battles</span>");
     expect(ended).toContain("Trophies at the end of this day were not recorded.");
     expect(ended).toContain("8 recorded");
     expect(ended).not.toContain("missing_end_baseline");
@@ -1196,7 +1196,7 @@ describe("player day honesty", () => {
     const today = dayHtml(html, "2026-10-03");
     expect(today).toContain("In progress");
     expect(today).toMatch(net("Unknown"));
-    expect(today).toContain("Recorded battle net 0");
+    expect(today).toContain("<span>0 from battles</span>");
     expect(today).toContain("Ending evidence arrives after Reset.");
     expect(today).toContain("Trophies at the start of this day were not recorded.");
     expect(today).toContain('aria-label="Attack 1 not recorded"');
@@ -1207,7 +1207,7 @@ describe("player day honesty", () => {
     const missingDefense = { ...TODAY, defense: { ...TODAY.defense, trophyLoss: null } };
     expect(
       dayHtml(await page([missingDefense], { currentDay: missingDefense }), "2026-10-03"),
-    ).toContain("Recorded battle net Unknown");
+    ).not.toContain("from battles");
   });
 
   it("does not label an ended saved Live row as today's result", async () => {
@@ -1262,7 +1262,7 @@ describe("player day honesty", () => {
     expect(row).toContain("Provisional result");
     expect(row).not.toContain("Incomplete");
     expect(row).not.toContain("so far");
-    expect(await page([DAY_24])).toContain("A Legend day runs from 05:00 to 05:00 UTC.");
+    expect(await page([DAY_24])).not.toContain("A Legend day runs from");
     expect(row).toContain("The battle log was not checked at the start of this day.");
 
     // Without every battle recorded, a saved number with gaps stays incomplete.

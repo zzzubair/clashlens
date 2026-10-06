@@ -6,7 +6,6 @@ import { SeasonSummary, per } from "./SeasonSummary";
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
   month: "short",
-  year: "numeric",
   timeZone: "UTC",
 });
 const date = (time: number) => dateFormatter.format(time).replace("Sept", "Sep");
@@ -24,25 +23,43 @@ export function BattleStatistics({
 }) {
   const [period, setPeriod] = useState<BattlePeriod>("season");
   const stats = battleStatistics(player, period, now);
-  const seasonStart =
-    period === "season" ? stats.start : battleStatistics(player, "season", now).start;
+  const elapsed = Math.round((stats.today - stats.seasonStart) / 86_400_000) + 1;
   const lastDay = stats.today - 86_400_000;
   const rank =
-    lastDay >= seasonStart
+    lastDay >= stats.seasonStart
       ? [...player.seasonDays, ...player.recentDays].find(
           (day) => Date.parse(day.period.split(" – ")[0]) === lastDay,
         )?.resetRank
       : null;
-  const side = ({ count, stars, trophies, finishedTrophies }: typeof stats.attack) => ({
+  const side = ({
+    count,
+    stars,
+    trophies,
+    finishedTrophies,
+    activeDays,
+  }: typeof stats.attack) => ({
     count,
     stars,
     unknown: 0,
     trophies,
-    perDay: per(finishedTrophies, stats.finishedDays),
+    perDay: per(finishedTrophies, activeDays),
   });
+  const flags = [
+    stats.incomplete || stats.daysSaved < stats.daysExpected
+      ? "Some battles missing"
+      : "",
+    stats.attack.disputed || stats.defense.disputed ? "Conflicting reports" : "",
+  ].filter(Boolean);
   return (
     <SeasonSummary
       title="Season summary"
+      meta={[
+        date(stats.start) === date(stats.today)
+          ? date(stats.today)
+          : `${date(stats.start)} – ${date(stats.today)}`,
+        `${stats.daysSaved} of ${stats.daysExpected} days saved`,
+        ...flags,
+      ].join(" · ")}
       controls={
         <label>
           Showing{" "}
@@ -51,8 +68,11 @@ export function BattleStatistics({
             onChange={(event) => setPeriod(event.target.value as BattlePeriod)}
           >
             <option value="season">This Season</option>
-            <option value="7">Last 7 days</option>
-            <option value="14">Last 14 days</option>
+            {[7, 14].map((days) => (
+              <option key={days} value={days}>
+                {`Last ${days} days${elapsed < days ? ` (${elapsed} so far)` : ""}`}
+              </option>
+            ))}
           </select>
         </label>
       }
@@ -63,18 +83,6 @@ export function BattleStatistics({
       trophies={["Trophies now", trophies]}
       attack={side(stats.attack)}
       defense={side(stats.defense)}
-    >
-      <p className="section-note" aria-live="polite">
-        {date(stats.start)} to {date(stats.end)}: {stats.daysSaved} of{" "}
-        {stats.daysExpected} Legend days saved. Per-day averages leave out today; losses
-        leave out the automatic loss at Reset.
-        {stats.incomplete || stats.daysSaved < stats.daysExpected
-          ? " Some battles may be missing."
-          : ""}
-        {stats.attack.disputed || stats.defense.disputed
-          ? " Some battles have conflicting reports."
-          : ""}
-      </p>
-    </SeasonSummary>
+    />
   );
 }

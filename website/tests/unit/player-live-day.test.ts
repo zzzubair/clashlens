@@ -108,7 +108,7 @@ const todayEntry = (html: string) =>
   html.split('id="legend-day-2026-10-08"')[1].split("</details>")[0];
 
 describe("today's Legend day wording", () => {
-  it("shows recent trophy trends even when a saved day belongs to the previous Season", async () => {
+  it("keeps the previous Season's days out of recent trophy trends", async () => {
     const previousSeasonDay: RankedDaySummary = {
       ...TODAY,
       dayNumber: 28,
@@ -120,19 +120,17 @@ describe("today's Legend day wording", () => {
     };
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
     const trends = html.split('id="player-trends-title"')[1].split("</section>")[0];
-    expect(trends).toContain("Last 7 days");
-    expect(trends).toContain("Last 14 days");
-    expect(trends.match(/<dd>\+35<\/dd>/g)).toHaveLength(2);
-    expect(trends).toContain("1 of 7");
-    expect(trends).toContain("1 of 14");
+    expect(trends).toContain("Last 7 days (3 so far)");
+    expect(trends).toContain("Last 14 days (3 so far)");
+    expect(trends).not.toContain("+35");
+    expect(trends.match(/<dd>0 of 3<\/dd>/g)).toHaveLength(2);
     expect(html).not.toContain('id="legend-day-2026-10-04"');
   });
 
   it("shows a normal wait for Reset as a day in progress, not a fault", async () => {
     const html = await page(WAITING);
-    expect(note(html)).toContain(
-      "<strong>Day in progress:</strong> This Legend day ends at 05:00 UTC; its result is not final.",
-    );
+    // The day's In progress badge says it; no extra note above the log.
+    expect(note(html)).not.toContain("<strong>");
     expect(html).not.toContain("Incomplete ranked-day data");
     expect(html).not.toContain("could not be calculated");
     const entry = todayEntry(html);

@@ -900,6 +900,11 @@
 .season-summary-head h2 {
   margin: 0;
 }
+.season-summary-meta {
+  margin: 0.25rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
 .season-summary select {
   max-width: 100%;
   min-height: 2.75rem;
