@@ -149,7 +149,7 @@ Every fourth claim keeps the existing oldest-first order so daily results and
 other derived work keep moving; on a response-only thread, described below,
 that order covers responses only. If all planned claims are rejected, that call
 falls back to the existing order without refreshing the plan again. While a
-thread could take Reset-priority work, it skips the plan for that claim; see
+thread could take Reset-priority work, its planned claim takes that order; see
 [`deployment.md`](deployment.md).
 
 Worker threads share the newest-job plan, but each thread claims its own next

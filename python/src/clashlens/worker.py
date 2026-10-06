@@ -558,9 +558,6 @@ class ObservationProcessor:
             with self._plan_lock:
                 self._claim_count += 1
                 planned = self._claim_count % OLDEST_FIRST_CLAIM_EVERY != 0
-        reset_due = getattr(self.database, "reset_job_due", None)
-        if planned and reset_due is not None and reset_due(**limit):
-            planned = False
         if planned:
             for attempt in range(NEWEST_PLAN_SIZE):
                 if attempt == 0:
@@ -571,7 +568,11 @@ class ObservationProcessor:
                 if job_id is None:
                     break
                 claim = self.database.claim_job(
-                    owner=owner, lease_seconds=lease_seconds, job_id=job_id, **limit
+                    owner=owner,
+                    lease_seconds=lease_seconds,
+                    job_id=job_id,
+                    planned=True,
+                    **limit,
                 )
                 if claim is not None:
                     return claim

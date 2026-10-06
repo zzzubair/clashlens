@@ -294,6 +294,43 @@ def test_reset_work_goes_before_recent_live_work(database_url: str) -> None:
         ]
 
 
+def test_planned_claim_yields_to_waiting_reset_work(database_url: str) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            jobs = {
+                key: _insert_job(
+                    connection,
+                    work_type="process_observation",
+                    deduplication_key=f"planned:{key}",
+                    input_json={},
+                    observation_id=_insert_observation(
+                        connection, occurrence_key=f"planned-{key}"
+                    ),
+                    priority=priority,
+                )
+                for key, priority in (
+                    ("reset", PYTHON_RESET_PRIORITY),
+                    ("planned", PYTHON_LIVE_PRIORITY),
+                    ("asked", PYTHON_LIVE_PRIORITY),
+                )
+            }
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            # Asking for one job by number still takes it.
+            asked = database.claim_job(owner="operator", job_id=jobs["asked"])
+            claimed = [
+                database.claim_job(owner="lane", job_id=jobs["planned"], planned=True)
+                for _ in range(2)
+            ]
+        finally:
+            database.close()
+        assert asked is not None and asked.job_id == jobs["asked"]
+        assert [claim.job_id if claim else None for claim in claimed] == [
+            jobs["reset"], jobs["planned"]
+        ]
+
+
 def test_reset_priority_jobs_are_claimable_alongside_unlimited_work(
     database_url: str,
 ) -> None:

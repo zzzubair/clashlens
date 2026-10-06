@@ -394,10 +394,19 @@ def _claim_filters(
         AND {supported_filter})""", params
 
 
+def _reset_waiting(jobs_relation: str, claimable: str) -> str:
+    """Whether a Reset-priority job passes ``claimable``."""
+    return f"""EXISTS (SELECT FROM {jobs_relation} AS job
+        LEFT JOIN collector_observations AS source_observation
+            ON source_observation.id = COALESCE(job.observation_id, job.replay_observation_id)
+        WHERE job.priority = {PYTHON_RESET_PRIORITY} AND {claimable})"""
+
+
 def _claim_select_statement(
     jobs_relation: str,
     *,
     job_id: int | None = None,
+    planned: bool = False,
     supports_dependency: bool = True,
     denormalized_contract: bool = True,
     supports_coordinator: bool = False,
@@ -419,6 +428,8 @@ def _claim_select_statement(
     a point lookup and still applies the same where and supported filters.
     ``work_types`` limits every probe and the lock-time recheck to those work
     types, so a limited worker never claims, and never skips over, other work.
+    ``planned`` makes a ``job_id`` claim refuse, and an ordinary one run only,
+    while Reset-priority work it could take waits.
     """
     supported_filter, claimable, params = _claim_filters(
         supports_dependency=supports_dependency,
@@ -429,6 +440,8 @@ def _claim_select_statement(
     )
     if job_id is not None:
         params["job_id"] = job_id
+    gate = "AND NOT " if job_id is not None else "AND "
+    reset_gate = gate + _reset_waiting(jobs_relation, claimable) if planned else ""
     score = f"""CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
         THEN 0 ELSE 1 END,
         job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
@@ -488,6 +501,7 @@ def _claim_select_statement(
                 )
             WHERE job.id = %(job_id)s
               AND {claimable}
+              {reset_gate}
             ORDER BY ({score}) DESC, job.due_at, job.id
             FOR UPDATE OF job SKIP LOCKED
             LIMIT 1
@@ -561,6 +575,7 @@ def _claim_select_statement(
                     job.observation_id, job.replay_observation_id
                 )
             WHERE {claimable} IS TRUE
+              {reset_gate}
             ORDER BY ({score}) DESC, job.due_at, job.id
             FOR UPDATE OF job SKIP LOCKED
             LIMIT 1
@@ -934,29 +949,6 @@ class Database:
             row = connection.execute(query, tuple(params)).fetchone()
             return None if row is None else _text_value(row[0])
 
-    def reset_job_due(self, *, work_types: Collection[str] | None = None) -> bool:
-        """Whether ``claim_job`` could take a Reset-priority job of ``work_types``."""
-        self._ensure_dependency_support_probed()
-        supports_coordinator = getattr(self, "_supports_coordinator_contract", False)
-        with self._timed_connection() as connection:
-            _supported, claimable, params = _claim_filters(
-                supports_dependency=self._supports_dependency_deferral,
-                denormalized_contract=self._supports_denormalized_contract,
-                supports_coordinator=supports_coordinator,
-                work_types=work_types,
-                past_reset_build_hold=(
-                    past_reset_build_hold(connection) if supports_coordinator else None
-                ),
-            )
-            row = connection.execute(
-                f"""SELECT EXISTS (SELECT FROM {self._jobs_relation} AS job
-                LEFT JOIN collector_observations AS source_observation
-                    ON source_observation.id = COALESCE(job.observation_id, job.replay_observation_id)
-                WHERE job.priority = %(reset_priority)s AND {claimable})""",
-                {**params, "reset_priority": PYTHON_RESET_PRIORITY},
-            ).fetchone()
-        return bool(row and row[0])
-
     def claim_job(
         self,
         *,
@@ -964,7 +956,9 @@ class Database:
         lease_seconds: int = 30,
         job_id: int | None = None,
         work_types: Collection[str] | None = None,
+        planned: bool = False,
     ) -> Claim | None:
+        """Claim the best due job, or ``job_id``; a ``planned`` one yields to Reset work."""
         if not owner:
             raise ValueError("lease owner is required")
         if lease_seconds <= 0:
@@ -975,20 +969,25 @@ class Database:
                 supports_coordinator = getattr(
                     self, "_supports_coordinator_contract", False
                 )
-                claim_statement, claim_params = _claim_select_statement(
-                    self._jobs_relation,
-                    job_id=job_id,
-                    supports_dependency=self._supports_dependency_deferral,
-                    denormalized_contract=self._supports_denormalized_contract,
-                    supports_coordinator=supports_coordinator,
-                    work_types=work_types,
-                    past_reset_build_hold=(
+                statement_options = {
+                    "supports_dependency": self._supports_dependency_deferral,
+                    "denormalized_contract": self._supports_denormalized_contract,
+                    "supports_coordinator": supports_coordinator,
+                    "work_types": work_types,
+                    "past_reset_build_hold": (
                         past_reset_build_hold(connection)
                         if supports_coordinator
                         else None
                     ),
-                )
-                row = connection.execute(claim_statement, claim_params).fetchone()
+                }
+                row = connection.execute(*_claim_select_statement(
+                    self._jobs_relation, job_id=job_id, planned=planned, **statement_options
+                )).fetchone()
+                if row is None and planned and job_id is not None:
+                    fallback = _claim_select_statement(
+                        self._jobs_relation, planned=True, **statement_options
+                    )
+                    row = connection.execute(*fallback).fetchone()
                 if row is None:
                     return None
                 data = (
