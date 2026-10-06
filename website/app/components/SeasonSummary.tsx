@@ -19,7 +19,7 @@ const signed = (value: number | null, sign: 1 | -1, digits = 0) =>
           minimumFractionDigits: digits,
           maximumFractionDigits: digits,
         })}`;
-// Words such as "Not available yet" take a smaller size than numbers.
+// Words such as "Not published yet" take a smaller size than numbers.
 const words = (value: string) => (/[a-z]/i.test(value) ? "summary-words" : undefined);
 export const per = (total: number | null, by: number | null) =>
   total === null || !by ? null : total / by;
