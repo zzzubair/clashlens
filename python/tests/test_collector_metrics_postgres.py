@@ -99,8 +99,23 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
                 )
             waiting = database.health_metrics()
             assert waiting["pending_processing"] == 2
-            assert waiting["oldest_pending_processing_age_seconds"] >= 2400
+            if status == "pending":
+                # Not due for five minutes, so not waiting yet.
+                assert waiting["oldest_pending_processing_age_seconds"] == 0
+            else:
+                assert waiting["oldest_pending_processing_age_seconds"] >= 2400
             assert waiting["oldest_pending_upload_age_seconds"] >= 7200
+        # Once due, a pending job waits from its due time, not from when it was saved.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET status = 'pending', due_at = clock_timestamp() - interval '10 minutes',
+                    lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+                """
+            )
+        due = database.health_metrics()
+        assert 600 <= due["oldest_pending_processing_age_seconds"] < 1200
         for status in ("complete", "failed", "cancelled"):
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
