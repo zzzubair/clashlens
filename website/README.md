@@ -45,7 +45,8 @@ mid-answer or a proxy answers with its own error page, the profile keeps showing
 what it had and a later reread tries again; only a profile not yet shown can fail
 with the error screen. Refresh and search show their own unavailable notice
 instead. Nothing is copied aside for this: the header shows signed out until the
-next reread reaches the website, and account pages still show the error screen. The full route list ships with each page, so browsing never needs an extra
+next reread reaches the website, and account pages still show the error screen.
+The full route list ships with each page, so browsing never needs an extra
 route lookup that could fail on its own.
 
 Name results include active players or players with recorded history. Empty
