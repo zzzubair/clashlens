@@ -272,15 +272,19 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     )
 
     ended = data.now >= data.ranked_day.end
+    # The Season rule can start Day 1 without a saved Reset reading.
+    season_rule_start = (
+        data.start_baseline_evidence.get("start_trophies_source") == "season_rule"
+    )
     start_available = _baseline_available(
-        data.start_baseline_id,
+        data.start_baseline_id is not None or season_rule_start,
         data.start_trophies,
         data.start_baseline_complete,
         "start",
         failures,
     )
     end_available = _baseline_available(
-        data.end_baseline_id,
+        data.end_baseline_id is not None,
         data.next_start_trophies,
         data.end_baseline_complete,
         "end",
@@ -450,7 +454,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         shield_state == "inferred_shielded"
         or end_hidden_by_reset
         # A start from the Season rule is the game's rule, not a reading.
-        or data.start_baseline_evidence.get("start_trophies_source") == "season_rule"
+        or season_rule_start
     ):
         confidence = "inferred"
 
@@ -880,13 +884,13 @@ def _automatic_defense_adjustment(
 
 
 def _baseline_available(
-    baseline_id: int | None,
+    saved: bool,
     trophies: int | None,
     explicit_complete: bool | None,
     label: str,
     failures: list[str],
 ) -> bool:
-    if baseline_id is None or trophies is None:
+    if not saved or trophies is None:
         failures.append(f"missing_{label}_baseline")
         return False
     if explicit_complete is False:

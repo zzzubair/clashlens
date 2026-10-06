@@ -27,7 +27,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import domain_repair, reset_baselines
+from . import domain_repair, first_battle_log, reset_baselines
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -312,6 +312,9 @@ def add_republish_command(
     # With --campaign, run one action of a Season's repair campaign instead
     # of queueing a batch; see domain_repair.
     republish_current_season.add_argument("--campaign", choices=domain_repair.ACTIONS)
+    # With --first-logs, preview or queue the days that players first tracked
+    # during the Season can now fill; see first_battle_log.backfill.
+    republish_current_season.add_argument("--first-logs", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
 
@@ -323,11 +326,19 @@ def _season_id(value: str) -> str:
 
 def run_republish_command(database_url: str, arguments: argparse.Namespace) -> int:
     """Queue one batch, or run one campaign action, and print its report."""
-    if (arguments.campaign is None) != (arguments.season is None):
-        raise SystemExit("--campaign and --season go together")
+    first_logs = getattr(arguments, "first_logs", None)
+    if arguments.campaign is not None and first_logs is not None:
+        raise SystemExit("--campaign and --first-logs are separate runs")
+    if (arguments.campaign is None and first_logs is None) != (arguments.season is None):
+        raise SystemExit("--campaign or --first-logs and --season go together")
     database = Database(database_url)
     try:
-        if arguments.campaign is not None:
+        if first_logs is not None:
+            report = first_battle_log.backfill(
+                database, arguments.season, queue=first_logs == "queue",
+                max_jobs=arguments.max_jobs,
+            )
+        elif arguments.campaign is not None:
             report = domain_repair.run_campaign_command(
                 database, arguments.campaign, arguments.season
             )

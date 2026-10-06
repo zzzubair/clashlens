@@ -563,6 +563,17 @@ a campaign lists, read 590 reports, 102,381 battles needing decodes in 4,653
 batches, 2,032 player days and 10 Resets, about 1.7 MB of rows, in 31 seconds.
 Re-measure with `--campaign preview` before activation.
 
+**First-tracked players' earlier days:** a player first tracked during a
+Season gets Day 1, and any earlier day their own battles reach, from their
+first saved battle log. New players get this when that log is saved; for
+players tracked before that, `--first-logs preview --season <Season ID>`
+counts, without writing anything, the players and days it would recalculate:
+each player whose first saved battle log was saved on Day 1, from Day 1, and
+each player first tracked later whose battles reach an earlier day, from
+that day. `--first-logs queue --season <Season ID>` queues up to `--max-jobs`
+of them (default 100); run it again until `left_to_queue` is 0. Each player
+is queued once.
+
 ### Raw-response cleanup failed
 
 Cleanup deletes old raw responses on its own timer; see
