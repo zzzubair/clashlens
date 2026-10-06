@@ -263,7 +263,8 @@ A domain change is complete only when every affected source observation, derived
 - **Observed event loss** in this formula excludes every automatic defense adjustment.
 - Multiply the floored loss by `8 - current day defense-event count` to calculate the total automatic defense adjustment.
 - Do not apply this inference rule to a day with zero established defense events. Preserve the evidence and mark the day uncertain if that exceptional case occurs.
-- A **calculated automatic defense adjustment** uses the versioned averaging rule when the reset outcome cannot yet isolate the exact adjustment.
+- A **calculated automatic defense adjustment** uses the averaging rule when the reset outcome cannot yet isolate the exact adjustment.
+- Each saved result records the reconciliation rule version label it was built under (currently `legend-ranked-day-reconciliation-v3`). The label is raised only when every saved result must be rebuilt; a narrower rule change, such as Season Day 1 averaging its own defenses, keeps the label, and its saved results are recalculated with `republish-current-season --day-1`.
 - A **confirmed automatic defense adjustment** requires continuous battle-log coverage for the previous and current days (on a Season's Day 1, Day 1 alone) plus valid start and end reset baselines whose trophy values jointly isolate the adjustment. Trophy reconciliation alone does not prove its cause.
 - Show the adjustment separately from battle events and identify whether it is calculated or confirmed.
 - Automatic defense adjustments affect ranked-day trophy reconciliation but never contribute to army usage, three-star rate, or other battle-event analytics.
