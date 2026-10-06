@@ -1,7 +1,11 @@
-import { createMemoryRouter, type MiddlewareFunction } from "react-router";
+import { createMemoryRouter, data, type MiddlewareFunction } from "react-router";
 import { expect, it } from "vitest";
 
-import { keepPageOnLostConnection, rememberShownPage } from "../../app/lib/keep-page";
+import {
+  LOGGED_OUT,
+  keepPageOnLostConnection,
+  rememberShownPage,
+} from "../../app/lib/keep-page";
 
 const PAGE = "/players/%23LY2QQ9L9Q";
 const GROUPS = "/account/groups";
@@ -18,11 +22,13 @@ async function openPage(
   path = PAGE,
   middleware: MiddlewareFunction[] = [keepPageOnLostConnection as MiddlewareFunction],
 ) {
-  let reads = 0;
-  const read = (data: unknown) => () => {
-    reads += 1;
-    if (reads > 1) throw failure();
-    return data;
+  const read = (data: unknown) => {
+    let reads = 0;
+    return () => {
+      reads += 1;
+      if (reads > 1) throw failure();
+      return data;
+    };
   };
   const router = createMemoryRouter(
     [
@@ -30,7 +36,7 @@ async function openPage(
         id: "root",
         path: "/",
         middleware,
-        loader: () => ({ loggedIn: true }),
+        loader: read({ loggedIn: true, accountLabel: "A" }),
         children: [
           { id: "player", path: "players/:tag", loader: read({ trophies: 5_014 }) },
           {
@@ -41,8 +47,9 @@ async function openPage(
           {
             id: "refresh",
             path: "resources/players/:tag/refresh",
+            // The website's data read hands a failed submission back wrapped.
             action: () => {
-              throw failure();
+              throw data(failure());
             },
           },
           {
@@ -101,6 +108,7 @@ it.each([
   await router.revalidate();
   expect(router.state.errors).toBeNull();
   expect(router.state.loaderData.player).toEqual({ trophies: 5_014 });
+  expect(router.state.loaderData.root).toEqual(LOGGED_OUT);
 });
 
 it("still shows a real page error from a re-read", async () => {
@@ -137,23 +145,24 @@ it("shows Refresh as unavailable when its request loses the connection", async (
   const router = await openPage(() => new TypeError("Load failed"));
   const formData = new FormData();
   formData.set("idempotencyKey", "key");
-  const data = await fetched(router, "refresh", () =>
+  const answer = await fetched(router, "refresh", () =>
     router.fetch("refresh", "player", "/resources/players/%23LY2QQ9L9Q/refresh", {
       formMethod: "post",
       formData,
     }),
   );
-  expect(data).toEqual(UNAVAILABLE);
+  expect(answer).toEqual(UNAVAILABLE);
   expect(router.state.errors).toBeNull();
   expect(router.state.loaderData.player).toEqual({ trophies: 5_014 });
+  expect(router.state.loaderData.root).toEqual(LOGGED_OUT);
 });
 
 it("shows search as unavailable when its request loses the connection", async () => {
   const router = await openPage(() => new TypeError("Load failed"));
-  const data = await fetched(router, "search", () =>
+  const answer = await fetched(router, "search", () =>
     router.fetch("search", "player", "/resources/players/search?q=+Zub+"),
   );
-  expect(data).toEqual({
+  expect(answer).toEqual({
     query: "Zub",
     search: null,
     error: UNAVAILABLE,

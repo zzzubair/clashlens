@@ -7,7 +7,17 @@ import {
 } from "react-router";
 
 import type { WebsiteErrorResponse } from "./contracts";
+import type { RootLoaderData } from "../root";
 import type { PlayerSearchLoaderData } from "../routes/player-search";
+
+// What the header shows when the account cannot be read.
+export const LOGGED_OUT: RootLoaderData = {
+  loggedIn: false,
+  accountLabel: null,
+  accountUsername: null,
+  logoutIdempotencyKey: null,
+  updateStatus: null,
+};
 
 // The address the browser shows now, so only its own re-read can keep it.
 let shownPage: string | null = null;
@@ -23,7 +33,15 @@ export function useRememberShownPage() {
 
 // No answer from the website: the phone was offline or just woke, the
 // connection dropped mid-answer, or a proxy sent its own error page.
-function lostConnection(error: unknown) {
+// Form submissions arrive wrapped as data(error), so look inside first.
+function lostConnection(result: unknown) {
+  const error =
+    result instanceof Object &&
+    "type" in result &&
+    result.type === "DataWithResponseInit" &&
+    "data" in result
+      ? result.data
+      : result;
   return (
     error instanceof TypeError ||
     (isRouteErrorResponse(error) && error.status >= 500) ||
@@ -55,7 +73,8 @@ function inlineAnswer({ pathname, searchParams }: URL) {
 // Player profiles reread their own data in the background, such as when a phone
 // wakes. A re-read that cannot reach the website leaves the profile as the
 // browser already has it, and the next re-read tries again; only a page the
-// browser has not shown yet can fail. Other pages show the error as before.
+// browser has not shown yet can fail. The header never keeps an account it
+// could not read, so it shows signed out. Other pages show the error as before.
 export const keepPageOnLostConnection: MiddlewareFunction<
   Record<string, DataStrategyResult>
 > = async ({ request }, next) => {
@@ -77,5 +96,13 @@ export const keepPageOnLostConnection: MiddlewareFunction<
     shownPage !== url.pathname + url.search
   )
     return results;
-  return Object.fromEntries(Object.entries(results).filter(([id]) => !lost.includes(id)));
+  return Object.fromEntries(
+    Object.entries(results).flatMap(([id, result]) =>
+      !lost.includes(id)
+        ? [[id, result]]
+        : id === "root"
+          ? [[id, { type: "data", result: LOGGED_OUT }]]
+          : [],
+    ),
+  );
 };

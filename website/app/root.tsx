@@ -20,7 +20,11 @@ import { HeaderSearch } from "./components/PlayerSearch";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
 import type { UpdateStatus } from "./lib/contracts";
-import { keepPageOnLostConnection, useRememberShownPage } from "./lib/keep-page";
+import {
+  LOGGED_OUT,
+  keepPageOnLostConnection,
+  useRememberShownPage,
+} from "./lib/keep-page";
 import "./app.css";
 import "./theme.css";
 import "./explore.css";
@@ -50,13 +54,7 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
     const { loadRootNavigation } = await import("./server/root-navigation.server");
     return { ...(await loadRootNavigation(request)), updateStatus: await updateStatus };
   } catch {
-    return {
-      loggedIn: false,
-      accountLabel: null,
-      accountUsername: null,
-      logoutIdempotencyKey: null,
-      updateStatus: await updateStatus,
-    };
+    return { ...LOGGED_OUT, updateStatus: await updateStatus };
   }
 }
 
