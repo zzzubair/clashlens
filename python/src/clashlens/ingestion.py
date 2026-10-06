@@ -5,7 +5,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import job_outcomes, reset_baselines
+from . import first_battle_log, job_outcomes, reset_baselines
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
@@ -198,6 +198,8 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
             connection.execute(
                 "SELECT id FROM players WHERE id = %s FOR NO KEY UPDATE", (player[0],)
             )
+            if created_profile:
+                first_battle_log.queue_day_1(connection, player[0], profile_version_id)
             connection.execute(
                 """
                 WITH candidate AS (
@@ -370,6 +372,7 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
             anchor_outcome = _record_season_anchor(
                 connection, profile_version_id, profile
             )
+            first_battle_log.queue_day_1(connection, player[0], profile_version_id)
             connection.execute(
                 """
                 WITH candidate AS (

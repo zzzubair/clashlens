@@ -161,7 +161,61 @@ def queue_earlier_days(
         (player_id, observed_at),
     ).fetchone()[0]:
         return
-    _queue(connection, player_id, min(earlier))
+    day = min(earlier)
+    if domain.is_season_boundary(day):
+        connection.execute(
+            "SELECT id FROM players WHERE id = %s FOR NO KEY UPDATE", (player_id,)
+        )
+        if not reset_baselines._season_rule_holds(connection, player_id, day):
+            return
+    _queue(connection, player_id, day)
+
+
+def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> None:
+    """When a player's first accepted Legend I profile naming a Season is
+    saved after their first battle log of that Season, recalculate from Day 1
+    as ``backfill`` would, now that the Season rule can start it."""
+    row = connection.execute(
+        """
+        SELECT profile.current_league_season_id, first.observed_at
+        FROM player_profile_versions AS profile
+        CROSS JOIN LATERAL (
+            SELECT observed_at FROM battle_log_observations
+            WHERE player_id = profile.player_id
+            ORDER BY observed_at, id
+            LIMIT 1
+        ) AS first
+        WHERE profile.id = %s
+          AND profile.eligibility_state = 'eligible'
+          AND profile.source_contract_state = 'accepted'
+          AND NOT EXISTS (
+              SELECT 1 FROM player_profile_versions AS other
+              WHERE other.player_id = profile.player_id
+                AND other.id <> profile.id
+                AND other.current_league_season_id
+                    = profile.current_league_season_id
+                AND other.eligibility_state = 'eligible'
+                AND other.source_contract_state = 'accepted'
+          )
+        """,
+        (profile_version_id,),
+    ).fetchone()
+    if row is None:
+        return
+    first_day = domain.ranked_day_for(row[1])
+    if first_day.official_season_id != _text_value(row[0]):
+        return
+    if first_day.start == first_day.season_start or connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM legend_battles
+            WHERE ranked_day_start = %(day)s
+              AND (attacker_player_id = %(player)s OR defender_player_id = %(player)s)
+        )
+        """,
+        {"day": first_day.season_start, "player": player_id},
+    ).fetchone()[0]:
+        _queue(connection, player_id, first_day.season_start)
 
 
 def backfill(
@@ -171,7 +225,13 @@ def backfill(
     tracked during the Season can now fill: Day 1 for each player whose first
     battle log was saved on Day 1, and, for a player first tracked later, the
     first day their own battles reach back to. Repeating it skips players
-    already queued."""
+    already queued. A Day 1 waits for the accepted Legend I profile naming
+    the Season that its Season-rule start needs; ``queue_day_1`` queues it
+    when that profile is saved.
+
+    A player first tracked later with no Legend battles on Day 1 gets no
+    Day 1: they may not have joined the Season until later, and Clash Lens
+    must not invent a Day 1 for them."""
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(season_start):
         raise ValueError(f"{season_id} is not a Season's start")
@@ -219,9 +279,16 @@ def backfill(
                 {"start": season_start, "end": season_start + domain.SEASON_DURATION},
             ).fetchall()
             waiting = [row for row in rows if not row[3]]
+            ready = [
+                row for row in waiting
+                if row[1] != season_start
+                or reset_baselines._season_rule_holds(
+                    connection, int(row[0]), season_start
+                )
+            ]
             job_ids = [
                 job_id
-                for player_id, day, _, _ in (waiting[:max_jobs] if queue else [])
+                for player_id, day, _, _ in (ready[:max_jobs] if queue else [])
                 if (job_id := _queue(connection, int(player_id), day)) is not None
             ]
     return {
@@ -234,6 +301,7 @@ def backfill(
             for day, count in sorted(Counter(row[1] for row in rows).items())
         },
         "already_queued": len(rows) - len(waiting),
+        "waiting_for_profile": len(waiting) - len(ready),
         "queued": len(job_ids),
-        "left_to_queue": len(waiting) - len(job_ids),
+        "left_to_queue": len(ready) - len(job_ids),
     }
