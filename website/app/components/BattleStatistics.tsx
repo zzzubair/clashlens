@@ -46,7 +46,7 @@ export function BattleStatistics({
   });
   const flags = [
     stats.incomplete || stats.daysSaved < stats.daysExpected
-      ? "Some battles missing"
+      ? "Some battles may be missing"
       : "",
     stats.attack.disputed || stats.defense.disputed ? "Conflicting reports" : "",
   ].filter(Boolean);

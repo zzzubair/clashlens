@@ -750,7 +750,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       ) : null}
       <p role="status">Now tracking in Legend I.</p>
       {data.selectedSeason === null ? (
-        <PlayerTrends player={trackedPlayer} now={now} />
+        <PlayerTrends player={trackedPlayer} now={statisticsTime} />
       ) : null}
       <SeasonNav
         tag={trackedPlayer.tag}

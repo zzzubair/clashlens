@@ -15,8 +15,7 @@ const monthFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-// From the Season ending 5 Oct 2026, Clash Lens's own Season view shows the
-// finish, so this table stops at the Season that ended 7 Sep 2026.
+// This table stops at the Season that ended 7 Sep 2026.
 const LAST_OLDER_SEASON_END = Date.parse("2026-09-07T05:00:00Z");
 
 // Official and ClashKing finishes stream in after the rest of the page.

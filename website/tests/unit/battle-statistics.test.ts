@@ -190,7 +190,7 @@ describe("recorded battle period statistics", () => {
     const html = renderToStaticMarkup(
       createElement(BattleStatistics, { player: player(), now: NOW, trophies: "6,000" }),
     );
-    expect(html).toContain("7 Sep – 4 Oct · 0 of 28 days saved · Some battles missing");
+    expect(html).toContain("7 Sep – 4 Oct · 0 of 28 days saved · Some battles may be missing");
     expect(html).toContain(
       '<dt>Rank at last Reset</dt><dd class="summary-words">Not ranked yet</dd>',
     );

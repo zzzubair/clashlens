@@ -94,8 +94,7 @@ are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 
 The separate Older Seasons table shows saved finishes from January 2025 up to
 the Season that ended on 7 September 2026, newest first, with three columns:
-Season ended, Global rank and Final trophies. From the Season that ended on
-5 October 2026, Clash Lens's own Season view shows the finish instead.
+Season ended, Global rank and Final trophies. Later Seasons are not listed.
 The rank is highlighted as the standout number.
 28-day Seasons are dated by their closing Reset; older calendar-month results
 keep their month label. Saved in-game Legend I history wins for each Season,

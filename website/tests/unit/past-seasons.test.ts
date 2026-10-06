@@ -190,7 +190,7 @@ describe("past Seasons on the player page", () => {
       '<th scope="col">Global rank</th>',
       '<th scope="col">Final trophies</th>',
     ]);
-    // Clash Lens's own Season view covers Seasons from 5 Oct 2026 onwards.
+    // Seasons after 7 Sep 2026 are not listed.
     expect(html).not.toContain("5 Oct 2026");
     expect(html).not.toContain("5,437");
     expect(html).toMatch(
