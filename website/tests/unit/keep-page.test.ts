@@ -209,3 +209,12 @@ it("has the page download the code for search and Refresh up front", () => {
     "/assets/shared.js",
   ]);
 });
+
+it("shows the error again, not an empty page, on Back after a failed profile", async () => {
+  const router = await openPage(() => new TypeError("Load failed"));
+  await router.navigate("/players/%232PP");
+  expect(router.state.errors).toEqual({ root: new TypeError("Load failed") });
+  await router.navigate(-1);
+  expect(router.state.location.pathname).toBe(PAGE);
+  expect(router.state.errors).toEqual({ root: new TypeError("Load failed") });
+});

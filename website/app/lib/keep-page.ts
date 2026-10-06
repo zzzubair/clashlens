@@ -30,7 +30,12 @@ export function rememberShownPage(url: string) {
 
 export function useRememberShownPage() {
   const { pathname, search } = useLocation();
-  useEffect(() => rememberShownPage(pathname + search));
+  useEffect(() => {
+    rememberShownPage(pathname + search);
+    return () => {
+      shownPage = null;
+    };
+  });
 }
 
 // The browser fetches a route's code the first time it is used, and React
@@ -89,10 +94,10 @@ function inlineAnswer({ pathname, searchParams }: URL) {
 // browser already has it, and the next re-read tries again; only a page the
 // browser has not shown yet can fail. The header never keeps an account it
 // could not read, so it shows signed out. Other pages show the error as before.
-export const keepPageOnLostConnection: MiddlewareFunction<
-  Record<string, DataStrategyResult>
-> = async ({ request }, next) => {
-  const results = await next();
+function keepPage(
+  request: Request,
+  results: Record<string, DataStrategyResult>,
+): Record<string, DataStrategyResult> {
   const url = new URL(request.url);
   const lost = Object.keys(results).filter(
     (id) => results[id].type === "error" && lostConnection(results[id].result),
@@ -119,4 +124,17 @@ export const keepPageOnLostConnection: MiddlewareFunction<
           : [],
     ),
   );
+}
+
+// Once the error screen shows, no profile is on screen to keep.
+export const keepPageOnLostConnection: MiddlewareFunction<
+  Record<string, DataStrategyResult>
+> = async ({ request }, next) => {
+  const results = keepPage(request, await next());
+  if (
+    !request.signal.aborted &&
+    Object.values(results).some(({ type }) => type === "error")
+  )
+    shownPage = null;
+  return results;
 };
