@@ -315,6 +315,9 @@ def add_republish_command(
     # With --first-logs, preview or queue the days that players first tracked
     # during the Season can now fill; see first_battle_log.backfill.
     republish_current_season.add_argument("--first-logs", choices=("preview", "queue"))
+    # With --day-1, preview or queue the recalculation of each player's Day 1
+    # with 1 to 7 defenses; see first_battle_log.requeue_day_1.
+    republish_current_season.add_argument("--day-1", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
 
@@ -327,13 +330,20 @@ def _season_id(value: str) -> str:
 def run_republish_command(database_url: str, arguments: argparse.Namespace) -> int:
     """Queue one batch, or run one campaign action, and print its report."""
     first_logs = getattr(arguments, "first_logs", None)
-    if arguments.campaign is not None and first_logs is not None:
-        raise SystemExit("--campaign and --first-logs are separate runs")
-    if (arguments.campaign is None and first_logs is None) != (arguments.season is None):
-        raise SystemExit("--campaign or --first-logs and --season go together")
+    day_1 = getattr(arguments, "day_1", None)
+    modes = [mode for mode in (arguments.campaign, first_logs, day_1) if mode is not None]
+    if len(modes) > 1:
+        raise SystemExit("--campaign, --first-logs and --day-1 are separate runs")
+    if (not modes) != (arguments.season is None):
+        raise SystemExit("--campaign, --first-logs or --day-1 and --season go together")
     database = Database(database_url)
     try:
-        if first_logs is not None:
+        if day_1 is not None:
+            report = first_battle_log.requeue_day_1(
+                database, arguments.season, queue=day_1 == "queue",
+                max_jobs=arguments.max_jobs,
+            )
+        elif first_logs is not None:
             report = first_battle_log.backfill(
                 database, arguments.season, queue=first_logs == "queue",
                 max_jobs=arguments.max_jobs,

@@ -29,7 +29,11 @@ from .db import (
 )
 from .domain import SEASON_START_TROPHIES, RankedDay
 from .ranked_day_inputs import _source_rows
-from .reconciliation import BATTLE_LOG_MAX_ROWS
+from .reconciliation import (
+    BATTLE_LOG_MAX_ROWS,
+    MAX_DAILY_DEFENSES,
+    RECONCILIATION_RULE_VERSION,
+)
 
 
 def _first_log(connection: Any, player_id: int) -> tuple | None:
@@ -106,11 +110,12 @@ def season_rule_start(
 
 
 def _queue(
-    connection: Any, player_id: int, day_start: datetime, observation_id: int
+    connection: Any, player_id: int, day_start: datetime, observation_id: int | None,
+    *, key: str | None = None, trigger: str = "first_battle_log",
 ) -> int | None:
     """Queue the recalculation of one day and every saved later day of its
-    Season from the player's earliest saved battle log, ``observation_id``;
-    ``None`` when it was already queued from that log."""
+    Season, by default from the player's earliest saved battle log,
+    ``observation_id``; ``None`` when it was already queued."""
     day = domain.ranked_day_for(day_start)
     day_text = day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     row = connection.execute(
@@ -127,13 +132,13 @@ def _queue(
         RETURNING id
         """,
         (
-            f"reconcile:first-log:{player_id}:{day_text}:{observation_id}",
+            key or f"reconcile:first-log:{player_id}:{day_text}:{observation_id}",
             Jsonb({
                 "player_id": int(player_id),
                 "ranked_day_start": day_text,
                 "last_ranked_day_start": day_text,
                 "recalculate_season": day.official_season_id,
-                "trigger": "first_battle_log",
+                "trigger": trigger,
             }),
             DEFAULT_PARSER_VERSION,
             PROCESSING_VERSION,
@@ -312,4 +317,62 @@ def backfill(
         "waiting_for_profile": len(waiting) - len(ready),
         "queued": len(job_ids),
         "left_to_queue": len(ready) - len(job_ids),
+    }
+
+
+def requeue_day_1(
+    database: Database, season_id: str, *, queue: bool, max_jobs: int
+) -> dict[str, Any]:
+    """Find, and with ``queue`` recalculate, every player's saved Day 1 with
+    1 to 7 defenses, and their later saved days, once: Day 1's automatic
+    defense loss now averages Day 1's own defenses only, leaving out the
+    previous Season's last day. Repeating it skips players already queued."""
+    season_start = datetime.fromtimestamp(int(season_id), UTC)
+    if not domain.is_season_boundary(season_start):
+        raise ValueError(f"{season_id} is not a Season's start")
+    day_text = season_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def key(player_id: Any) -> str:
+        return f"reconcile:season-day-1:{player_id}:{day_text}:{RECONCILIATION_RULE_VERSION}"
+
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            rows = connection.execute(
+                """
+                WITH day_1 AS (
+                    SELECT DISTINCT ON (player_id) player_id, defense_count
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start = %(start)s
+                      AND reconciliation_rule_version = %(rule)s
+                    ORDER BY player_id, version DESC, id DESC
+                )
+                SELECT player_id FROM day_1
+                WHERE defense_count BETWEEN 1 AND %(most)s
+                ORDER BY player_id
+                """,
+                {"start": season_start, "rule": RECONCILIATION_RULE_VERSION,
+                 "most": MAX_DAILY_DEFENSES - 1},
+            ).fetchall()
+            queued = {
+                row[0] for row in connection.execute(
+                    "SELECT deduplication_key FROM python_processing_jobs_worker"
+                    " WHERE deduplication_key = ANY(%s)",
+                    ([key(row[0]) for row in rows],),
+                ).fetchall()
+            }
+            waiting = [int(row[0]) for row in rows if key(row[0]) not in queued]
+            job_ids = [
+                job_id
+                for player_id in (waiting[:max_jobs] if queue else [])
+                if (job_id := _queue(
+                    connection, player_id, season_start, None,
+                    key=key(player_id), trigger="season_day_1",
+                )) is not None
+            ]
+    return {
+        "season": season_id,
+        "players": len(rows),
+        "already_queued": len(rows) - len(waiting),
+        "queued": len(job_ids),
+        "left_to_queue": len(waiting) - len(job_ids),
     }

@@ -580,6 +580,16 @@ player first tracked later with no Legend battles on Day 1 gets no Day 1:
 they may not have joined the Season until later, and Clash Lens must not
 invent a Day 1 for them.
 
+**Day 1's automatic defense loss:** Day 1 now averages its own defenses only,
+leaving out the previous Season's last day. A Day 1 saved before that keeps
+its old result until recalculated. `--day-1 preview --season <Season ID>`
+counts, without writing anything, the players whose saved Day 1 has 1 to 7
+defenses; `--day-1 queue --season <Season ID>` queues up to `--max-jobs` of
+them, each recalculating Day 1 and every later saved day of the Season. Run
+it again until `left_to_queue` is 0; each player is queued once. On
+2026-10-06 the October 2026 Season (`1791176400`) had about 3,100 such
+players.
+
 ### Raw-response cleanup failed
 
 Cleanup deletes old raw responses on its own timer; see

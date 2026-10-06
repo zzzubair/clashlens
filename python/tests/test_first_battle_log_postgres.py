@@ -9,6 +9,7 @@ back past Day 1's start, and every row carries its own time.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import psycopg
@@ -24,7 +25,7 @@ from test_reset_settlement_state_postgres import (
     _season_profile,
 )
 
-from clashlens import first_battle_log
+from clashlens import first_battle_log, reconciliation_db
 from clashlens.db import Database
 from clashlens.domain import allocate_trophies
 
@@ -309,3 +310,54 @@ def test_older_first_log_processed_after_a_newer_one_recalculates_day_1(
     assert from_newer[2] == 5000 and from_newer[4] is False
     assert from_older[:4] == ("Partial", "uncertain", 5000, 5000 + WIN)
     assert from_older[4] is True and from_older[6] == "season_rule"
+
+
+def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(47)]
+    automatic = LOSS * 7
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        # Day 1 joiners: one with a single defense, one with none.
+        ending = 5000 + 2 * WIN - LOSS - automatic
+        jobs = _first_seen(connection_info, archive_server, DAY_1 + timedelta(hours=8),
+                           profile=_new_season_profile(ending),
+                           log=_log(*ATTACKS, *DEFENSE, filler=older))
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=_new_season_profile(ending),
+                            log=_log(*ATTACKS, *DEFENSE, filler=older))
+        jobs += _first_seen(connection_info, archive_server, DAY_1 + timedelta(hours=8),
+                            tag="#2YY", profile=_new_season_profile(5000 + 2 * WIN, "#2YY"),
+                            log=_log(*ATTACKS, filler=older))
+        # Saved before the fix, Day 1 needed the previous Season's last day.
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day",
+                            lambda data: original(replace(data, season_first_day=False)))
+        _process(connection_info, archive_server, jobs)
+        before = _day_1(connection_info)
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
+
+        database = Database(connection_info)
+        try:
+            preview = first_battle_log.requeue_day_1(
+                database, str(NEW_SEASON), queue=False, max_jobs=100
+            )
+            queued = first_battle_log.requeue_day_1(
+                database, str(NEW_SEASON), queue=True, max_jobs=100
+            )
+            again = first_battle_log.requeue_day_1(
+                database, str(NEW_SEASON), queue=True, max_jobs=100
+            )
+        finally:
+            database.close()
+        _process(connection_info, archive_server, [])
+        after = _day_1(connection_info)
+
+    assert before[0] == "Partial" and before[3] is None
+    assert "automatic_defense_basis_unavailable" in before[5]
+    # Only the player with 1 to 7 defenses is listed.
+    assert preview == {"season": str(NEW_SEASON), "players": 1,
+                       "already_queued": 0, "queued": 0, "left_to_queue": 1}
+    assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
+    assert (again["queued"], again["already_queued"]) == (0, 1)
+    assert after[:4] == ("Complete", "inferred", 5000, ending)
