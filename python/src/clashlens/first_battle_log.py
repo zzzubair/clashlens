@@ -32,15 +32,10 @@ from .ranked_day_inputs import _source_rows
 from .reconciliation import BATTLE_LOG_MAX_ROWS
 
 
-def coverage_start(
-    database: Database, connection: Any, player_id: int, ranked_day: RankedDay
-) -> tuple[int, bool] | None:
-    """The player's first saved battle log, when saved on or after the day's
-    start and holding every battle of the day up to when it was saved: its
-    oldest row is from before the day's battles, or it has fewer than 50
-    rows, the whole log the game keeps. Also whether it was saved after the
-    day's last battle, so it holds the whole day."""
-    first = connection.execute(
+def _first_log(connection: Any, player_id: int) -> tuple | None:
+    """The player's earliest saved battle log: id, observation id, time saved,
+    row count and parser version."""
+    return connection.execute(
         """
         SELECT id, observation_id, observed_at, row_count, parser_version
         FROM battle_log_observations
@@ -50,6 +45,17 @@ def coverage_start(
         """,
         (player_id,),
     ).fetchone()
+
+
+def coverage_start(
+    database: Database, connection: Any, player_id: int, ranked_day: RankedDay
+) -> tuple[int, bool] | None:
+    """The player's first saved battle log, when saved on or after the day's
+    start and holding every battle of the day up to when it was saved: its
+    oldest row is from before the day's battles, or it has fewer than 50
+    rows, the whole log the game keeps. Also whether it was saved after the
+    day's last battle, so it holds the whole day."""
+    first = _first_log(connection, player_id)
     if first is None or first[2] < ranked_day.start:
         return None
     window_start, window_end = domain.battle_window(ranked_day.start)
@@ -99,9 +105,12 @@ def season_rule_start(
     }
 
 
-def _queue(connection: Any, player_id: int, day_start: datetime) -> int | None:
+def _queue(
+    connection: Any, player_id: int, day_start: datetime, observation_id: int
+) -> int | None:
     """Queue the recalculation of one day and every saved later day of its
-    Season; ``None`` when it was already queued."""
+    Season from the player's earliest saved battle log, ``observation_id``;
+    ``None`` when it was already queued from that log."""
     day = domain.ranked_day_for(day_start)
     day_text = day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     row = connection.execute(
@@ -118,7 +127,7 @@ def _queue(connection: Any, player_id: int, day_start: datetime) -> int | None:
         RETURNING id
         """,
         (
-            f"reconcile:first-log:{player_id}:{day_text}",
+            f"reconcile:first-log:{player_id}:{day_text}:{observation_id}",
             Jsonb({
                 "player_id": int(player_id),
                 "ranked_day_start": day_text,
@@ -142,9 +151,9 @@ def queue_earlier_days(
     observed_at: datetime,
     rows: list[ParsedBattleRow],
 ) -> None:
-    """When a player's first saved battle log was saved on Day 1, or holds
-    their battles from an earlier day of the Season it was saved in,
-    recalculate from that day."""
+    """When a player's earliest saved battle log, even one processed after
+    newer ones, was saved on Day 1, or holds their battles from an earlier
+    day of the Season it was saved in, recalculate from that day."""
     saved_day = domain.ranked_day_for(observed_at)
     earlier = [
         row.battle.ranked_day_start
@@ -154,15 +163,10 @@ def queue_earlier_days(
     ]
     if saved_day.start == saved_day.season_start:
         earlier = [saved_day.start]
-    if not earlier or connection.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM battle_log_observations
-            WHERE player_id = %s AND observed_at < %s
-        )
-        """,
-        (player_id, observed_at),
-    ).fetchone()[0]:
+    if not earlier:
+        return
+    first = _first_log(connection, player_id)
+    if first[2] < observed_at:
         return
     day = min(earlier)
     if domain.is_season_boundary(day):
@@ -171,7 +175,7 @@ def queue_earlier_days(
         )
         if not reset_baselines._season_rule_holds(connection, player_id, day):
             return
-    _queue(connection, player_id, day)
+    _queue(connection, player_id, day, int(first[1]))
 
 
 def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> None:
@@ -180,14 +184,8 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
     as ``backfill`` would, now that the Season rule can start it."""
     row = connection.execute(
         """
-        SELECT profile.current_league_season_id, first.observed_at
+        SELECT profile.current_league_season_id
         FROM player_profile_versions AS profile
-        CROSS JOIN LATERAL (
-            SELECT observed_at FROM battle_log_observations
-            WHERE player_id = profile.player_id
-            ORDER BY observed_at, id
-            LIMIT 1
-        ) AS first
         WHERE profile.id = %s
           AND profile.eligibility_state = 'eligible'
           AND profile.source_contract_state = 'accepted'
@@ -203,9 +201,10 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         """,
         (profile_version_id,),
     ).fetchone()
-    if row is None:
+    first = _first_log(connection, player_id)
+    if row is None or first is None:
         return
-    first_day = domain.ranked_day_for(row[1])
+    first_day = domain.ranked_day_for(first[2])
     if first_day.official_season_id != _text_value(row[0]):
         return
     if first_day.start == first_day.season_start or connection.execute(
@@ -218,7 +217,7 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         """,
         {"day": first_day.season_start, "player": player_id},
     ).fetchone()[0]:
-        _queue(connection, player_id, first_day.season_start)
+        _queue(connection, player_id, first_day.season_start, int(first[1]))
 
 
 def backfill(
@@ -228,9 +227,9 @@ def backfill(
     tracked during the Season can now fill: Day 1 for each player whose first
     battle log was saved on Day 1, and, for a player first tracked later, the
     first day their own battles reach back to. Repeating it skips players
-    already queued. A Day 1 waits for the accepted Legend I profile naming
-    the Season that its Season-rule start needs; ``queue_day_1`` queues it
-    when that profile is saved.
+    already queued from their earliest saved battle log. A Day 1 waits for
+    the accepted Legend I profile naming the Season that its Season-rule
+    start needs; ``queue_day_1`` queues it when that profile is saved.
 
     A player first tracked later with no Legend battles on Day 1 gets no
     Day 1: they may not have joined the Season until later, and Clash Lens
@@ -243,15 +242,15 @@ def backfill(
             rows = connection.execute(
                 """
                 WITH first_logs AS (
-                    SELECT player_id, min(observed_at) AS first_at
+                    SELECT DISTINCT ON (player_id)
+                           player_id, observed_at AS first_at, observation_id
                     FROM battle_log_observations
-                    GROUP BY player_id
-                    HAVING min(observed_at) >= %(start)s
-                       AND min(observed_at) < %(end)s
+                    ORDER BY player_id, observed_at, id
                 ), first_days AS (
-                    SELECT player_id, first_at,
+                    SELECT player_id, first_at, observation_id,
                            date_bin('1 day', first_at, %(start)s) AS first_day
                     FROM first_logs
+                    WHERE first_at >= %(start)s AND first_at < %(end)s
                 ), earlier AS (
                     SELECT first_days.player_id, min(battle.ranked_day_start) AS day
                     FROM legend_battles AS battle
@@ -266,6 +265,7 @@ def backfill(
                 SELECT first_days.player_id,
                        COALESCE(earlier.day, first_days.first_day) AS day,
                        first_days.first_day = %(start)s AS first_seen_day_1,
+                       first_days.observation_id,
                        EXISTS (
                            SELECT 1 FROM python_processing_jobs_worker AS job
                            WHERE job.deduplication_key = 'reconcile:first-log:'
@@ -273,6 +273,7 @@ def backfill(
                                || to_char(COALESCE(earlier.day, first_days.first_day)
                                           AT TIME ZONE 'UTC',
                                           'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+                               || ':' || first_days.observation_id
                        ) AS queued
                 FROM first_days
                 LEFT JOIN earlier USING (player_id)
@@ -281,7 +282,7 @@ def backfill(
                 """,
                 {"start": season_start, "end": season_start + domain.SEASON_DURATION},
             ).fetchall()
-            waiting = [row for row in rows if not row[3]]
+            waiting = [row for row in rows if not row[4]]
             ready = [
                 row for row in waiting
                 if row[1] != season_start
@@ -291,8 +292,12 @@ def backfill(
             ]
             job_ids = [
                 job_id
-                for player_id, day, _, _ in (ready[:max_jobs] if queue else [])
-                if (job_id := _queue(connection, int(player_id), day)) is not None
+                for player_id, day, _, observation_id, _ in (
+                    ready[:max_jobs] if queue else []
+                )
+                if (job_id := _queue(
+                    connection, int(player_id), day, int(observation_id)
+                )) is not None
             ]
     return {
         "season": season_id,

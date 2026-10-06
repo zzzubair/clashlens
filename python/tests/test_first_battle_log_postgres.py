@@ -272,3 +272,39 @@ def test_day_1_joiner_processed_after_the_reset_gets_day_1_in_either_order(
         day = _day_1(connection_info)
 
     assert day[2] == 5000 and day[6] == "season_rule"
+
+
+def test_older_first_log_processed_after_a_newer_one_recalculates_day_1(
+    database_url: str, archive_server
+) -> None:
+    found_at = DAY_2 + timedelta(hours=9)  # 14:00 UTC on Day 2
+    day_1_attack = (DAY_1 + timedelta(hours=13), True)
+    day_2_attack = (DAY_2 + timedelta(hours=5), True)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        profile_job, older_job = _first_seen(
+            connection_info, archive_server, found_at, tag="#2YY",
+            profile=_new_season_profile(5000 + 2 * WIN, "#2YY"),
+            log=_log(day_1_attack, day_2_attack, filler=[
+                DAY_1 - timedelta(hours=9 - i / 10) for i in range(48)
+            ]),
+        )
+        # An hour later the full log's oldest row is on Day 1, so it cannot
+        # show that it holds all of Day 1.
+        newer_at = found_at + timedelta(hours=1)
+        _, newer_job = store_observation(
+            connection_info, archive_server, occurrence_key=f"#2YY-newer-{newer_at}",
+            endpoint="battle_log", observed_at=newer_at, normalized_tag="#2YY",
+            body=_log(day_1_attack, day_2_attack, filler=[
+                DAY_1 + timedelta(hours=14, minutes=i) for i in range(48)
+            ]),
+        )
+        _process(connection_info, archive_server, [profile_job, newer_job])
+        from_newer = _day_1(connection_info, "#2YY")
+        # The worker reaches the older log last; it becomes the earliest
+        # saved log and recalculates Day 1 from it.
+        _process(connection_info, archive_server, [older_job])
+        from_older = _day_1(connection_info, "#2YY")
+
+    assert from_newer[2] == 5000 and from_newer[4] is False
+    assert from_older[:4] == ("Partial", "uncertain", 5000, 5000 + WIN)
+    assert from_older[4] is True and from_older[6] == "season_rule"
