@@ -567,6 +567,29 @@ def test_update_status_reports_delayed_collection_and_processing(database_url):
                 )
                 set_old_job("complete", now)
                 assert status() == (False, False)
+                # A day-end recalculation due tomorrow is not waiting yet.
+                with psycopg.connect(info) as connection:
+                    connection.execute(
+                        """
+                        INSERT INTO python_processing_jobs (
+                            work_type, deduplication_key, input_json, created_at, due_at
+                        ) VALUES ('reconcile_ranked_day', 'status-day-end',
+                                  jsonb_build_object('player_id', %s::bigint,
+                                      'ranked_day_start', '2026-10-05T05:00:00Z'),
+                                  %s, %s)
+                        """,
+                        (player_id, now - timedelta(minutes=20), now + timedelta(days=1)),
+                    )
+                assert status() == (False, False)
+                # Due 10 minutes ago and still unclaimed is not late yet; 16 is.
+                for minutes, delayed in ((10, False), (16, True)):
+                    with psycopg.connect(info) as connection:
+                        connection.execute(
+                            "UPDATE python_processing_jobs SET due_at = %s"
+                            " WHERE deduplication_key = 'status-day-end'",
+                            (now - timedelta(minutes=minutes),),
+                        )
+                    assert status() == (False, delayed)
         finally:
             collector.close()
 

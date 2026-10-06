@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -20,6 +20,7 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
     RESET_LOCK_WAIT,
     Claim,
     Database,
@@ -41,6 +42,9 @@ from .reconciliation import (
     serialize_ranked_day_battles,
 )
 from .season_summaries import acquire_player_season_lock, materialize_player_season
+
+# The 2026-10-05 and 2026-10-06 Resets saved every reading within 45 minutes.
+DAY_END_RECALCULATION_DELAY = timedelta(hours=2)
 
 
 def limit_lock_waits(connection: Any) -> None:
@@ -81,6 +85,19 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     (player_id, day_start, claim.input_json["recalculate_season"]),
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)
+            if claim.input_json.get("trigger") == "day_end":
+                # Its Reset reading usually finished the day already.
+                latest = connection.execute(
+                    """
+                    SELECT state FROM ranked_day_versions
+                    WHERE player_id = %s AND ranked_day_start = %s
+                      AND reconciliation_rule_version = %s
+                    ORDER BY version DESC LIMIT 1
+                    """,
+                    (player_id, day_start, RECONCILIATION_RULE_VERSION),
+                ).fetchone()
+                if latest is None or _text_value(latest[0]) != "Live":
+                    day_starts = set()
             for day_start in sorted(day_starts):
                 recalculate_ranked_day(
                     database,
@@ -569,6 +586,8 @@ def recalculate_ranked_day(
         result=result,
         contribution_evidence=contribution_evidence,
     )
+    if result.state == "Live":
+        _enqueue_day_end_reconciliation(connection, player_id, ranked_day)
     if existing is None:
         # A reset sweep is the sole source of expected population.
         # No population-wide job is created for an uncoordinated
@@ -991,6 +1010,50 @@ def _enqueue_live_reconciliation(
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
             ended_day_priority(ranked_day_start),
+        ),
+    )
+
+
+def _enqueue_day_end_reconciliation(
+    connection: Any, player_id: int, ranked_day: RankedDay
+) -> None:
+    """Queue one calculation of a day saved Live, due after its Reset.
+
+    The Reset reading normally finishes the day, but a player switched off
+    during it, such as one moved out of Legend I when a Season starts, gets
+    none and nothing else calculates the day again. On 2026-10-06 that left
+    2,037 ended Day 1 results Live. Due DAY_END_RECALCULATION_DELAY after the
+    Reset, once its readings have landed, the job runs only when no other
+    work waits, and does nothing once the day is finished.
+    """
+    day_text = ranked_day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    connection.execute(
+        """
+        INSERT INTO python_processing_jobs_worker (
+            observation_id, work_type, deduplication_key, input_json,
+            state, due_at, parser_version, processing_version,
+            domain_rule_version, analytics_rule_version, priority
+        ) VALUES (
+            NULL, 'reconcile_ranked_day', %s, %s, 'pending', %s,
+            %s, %s, %s, %s, %s
+        )
+        ON CONFLICT (deduplication_key) DO NOTHING
+        """,
+        (
+            f"reconcile:day-end:{player_id}:{day_text}:{RECONCILIATION_RULE_VERSION}",
+            Jsonb(
+                {
+                    "player_id": int(player_id),
+                    "ranked_day_start": day_text,
+                    "trigger": "day_end",
+                }
+            ),
+            ranked_day.end + DAY_END_RECALCULATION_DELAY,
+            DEFAULT_PARSER_VERSION,
+            PROCESSING_VERSION,
+            DOMAIN_RULE_VERSION,
+            ANALYTICS_RULE_VERSION,
+            PYTHON_BACKFILL_PRIORITY,
         ),
     )
 

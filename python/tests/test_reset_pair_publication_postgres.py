@@ -1148,6 +1148,80 @@ def test_republication_finishes_ended_days_left_live(
             database.close()
 
 
+def test_day_saved_live_is_finished_after_its_reset_without_a_reading(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Production on 2026-10-06: 2,037 players moved out of Legend I when the
+    # Season started had Day 1 saved Live in its first hour, were switched
+    # off and got no Reset reading, so Day 1 stayed Live after it ended.
+    today = ranked_day_for(datetime.now(UTC))
+    earlier = ranked_day_for(today.start - timedelta(days=2))
+    older = ranked_day_for(earlier.start - timedelta(days=1))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        profile_job = store_observation(
+            connection_info, archive_server, occurrence_key="profile",
+            endpoint="profile", body=_profile(5000), observed_at=DAY_START,
+            normalized_tag="#2PP", parser_version=PROFILE_PARSER_VERSION,
+        )[1]
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(profile_job, owner="p").outcome == "processed"
+            original = reconciliation_db.reconcile_ranked_day
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+
+                def calculate(day, now=None) -> None:
+                    with monkeypatch.context() as patch:
+                        if now is not None:
+                            patch.setattr(
+                                reconciliation_db, "reconcile_ranked_day",
+                                lambda data: original(replace(data, now=now)),
+                            )
+                        reconciliation_db.recalculate_ranked_day(
+                            database, connection, player_id=player_id,
+                            day_start=day.start,
+                            parser_version=DEFAULT_PARSER_VERSION,
+                            processing_version=PROCESSING_VERSION,
+                            domain_rule_version=DOMAIN_RULE_VERSION,
+                            analytics_rule_version=ANALYTICS_RULE_VERSION,
+                        )
+
+                for day in (older, earlier):
+                    calculate(day, day.start + timedelta(hours=1))
+                connection.execute(
+                    "UPDATE players SET active = false,"
+                    " eligibility_state = 'ineligible', next_due_at = NULL"
+                    " WHERE id = %s",
+                    (player_id,),
+                )
+                # Something else finished the older day after its Reset.
+                calculate(older)
+                jobs = connection.execute(
+                    "SELECT input_json->>'ranked_day_start', id FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:day-end:%%'"
+                    " ORDER BY 1"
+                ).fetchall()
+                connection.commit()
+            assert _latest_day(database, player_id, earlier.start)[:2] == ("Live", "Live")
+            older_finished = _latest_day(database, player_id, older.start)
+            assert older_finished[:2] == ("Partial", "Partial")
+            day_text = "%Y-%m-%dT%H:%M:%SZ"
+            assert [row[0] for row in jobs] == [
+                older.start.strftime(day_text), earlier.start.strftime(day_text)
+            ]
+            for _, job_id in jobs:
+                assert processor.process_job(job_id, owner="end").outcome == "processed"
+            finished = _latest_day(database, player_id, earlier.start)
+            assert finished[:4] == ("Partial", "Partial", None, None)
+            assert "missing_end_baseline" in finished[4]
+            # A day already finished keeps its result.
+            assert _latest_day(database, player_id, older.start) == older_finished
+        finally:
+            database.close()
+
+
 def test_failed_season_opening_reset_finishes_only_the_closing_day(
     database_url: str, archive_server
 ) -> None:

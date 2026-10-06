@@ -372,7 +372,8 @@ PostgreSQL capacity. `oldest_pending_processing_age_seconds` starts at the
 saved response's `collector_observations.created_at` and includes pending,
 retrying, dependency-waiting and leased jobs, even when the next attempt is
 scheduled in the future. Rescheduling a retry does not reset its age; finished
-jobs are excluded. Jobs without a saved response use their own creation time,
+jobs are excluded. A pending job not yet due, such as a day-end recalculation,
+is left out until its due time and then counts from it. Jobs without a saved response use their own creation time,
 so delayed derived work also contributes to the processing wait.
 Leaderboard, analytics and export builds (`build_*` jobs) are left out of it.
 Each job type's own oldest age, builds included, is
@@ -503,7 +504,12 @@ queued or running wait for a later run. A request that failed while its
 result is still the latest is not queued again but listed, at most
 `--max-jobs` of them, in `failed_blockers`. Until October 2026 a failed
 ending Reset check never recalculated its day, which left 4,705 ended days
-`Live` on 2026-10-03.
+`Live` on 2026-10-03. A day saved `Live` also queues one recalculation of
+that day, `reconcile:day-end:<player>:<day>:<rule>`, due two hours after its
+Reset at the lowest priority; it does nothing once the day is finished. Before
+October 2026 a player switched off during a day, such as the 2,037 moved out
+of Legend I when the 2026-10-05 Season started, got no Reset reading, so their
+day stayed `Live`; finish those with this command.
 When none remain, it queues up to `--max-jobs` published current-season
 player-days that lack the current reconciliation rule version.
 
