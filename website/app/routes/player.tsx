@@ -751,7 +751,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       ) : null}
       <p role="status">Now tracking in Legend I.</p>
       {data.selectedSeason === null ? (
-        <PlayerTrends player={trackedPlayer} now={now} />
+        <PlayerTrends days={trackedPlayer.recentDays} now={now} />
       ) : null}
       <SeasonNav
         tag={trackedPlayer.tag}
@@ -968,17 +968,12 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
     stars: Record<string, number | null>,
     unknown: number | null,
     trophies: number | null,
-    played: ["attacks", "attackGain"] | ["defenses", "defenseLoss"],
   ): SummarySide => ({
     count,
     stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
     unknown,
     trophies,
-    // Per day counts only days with battles on that side, never shielded days.
-    perDay: per(
-      trophies,
-      summary.dailyEntries.filter((day) => played.some((key) => day[key])).length,
-    ),
+    perDay: per(trophies, summary.daysObserved),
   });
   return (
     <SeasonSummary
@@ -995,14 +990,12 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
           summary.attackStars,
           summary.attackStarsUnknown,
           summary.attackGain,
-          ["attacks", "attackGain"],
         ),
         defense: side(
           summary.defenseCount,
           summary.defenseStars,
           summary.defenseStarsUnknown,
           summary.defenseLoss,
-          ["defenses", "defenseLoss"],
         ),
       })}
     >

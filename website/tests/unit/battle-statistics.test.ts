@@ -89,16 +89,15 @@ describe("recorded battle period statistics", () => {
       stars: [0, 1, 1, 1],
       trophies: 70,
       finishedTrophies: 30,
-      battleDays: 1,
     });
     expect(stats.defense).toMatchObject({
       count: 4,
       stars: [1, 1, 1, 1],
       trophies: 65,
       finishedTrophies: 60,
-      battleDays: 1,
     });
     expect(stats.daysSaved).toBe(2);
+    expect(stats.finishedDays).toBe(1);
     expect(stats.daysExpected).toBe(7);
   });
 
@@ -118,7 +117,7 @@ describe("recorded battle period statistics", () => {
     );
     expect(stats.attack).toMatchObject({ trophies: 80, finishedTrophies: 80 });
     expect(stats.defense).toMatchObject({ trophies: 40, finishedTrophies: 40 });
-    expect(stats.attack.battleDays).toBe(1);
+    expect(stats.finishedDays).toBe(1);
   });
 
   it.each([
@@ -158,7 +157,7 @@ describe("recorded battle period statistics", () => {
     }
   });
 
-  it("moves windows at 05:00 UTC and keeps recent windows inside the Season", () => {
+  it("moves windows at 05:00 UTC and keeps recent windows across Season Reset", () => {
     const saved = player([day(0, [event("last-season", 3, 100, 40)])]);
     const reset = TODAY + DAY;
     expect(battleStatistics(saved, "season", reset - 1).attack.count).toBe(1);
@@ -168,9 +167,8 @@ describe("recorded battle period statistics", () => {
       attack: { count: 0 },
     });
     expect(battleStatistics(saved, "7", reset)).toMatchObject({
-      start: reset,
-      daysExpected: 1,
-      attack: { count: 0 },
+      start: reset - 6 * DAY,
+      attack: { count: 1 },
     });
   });
 
@@ -199,8 +197,7 @@ describe("recorded battle period statistics", () => {
     expect(html).toContain("<dt>Trophies now</dt><dd>6,000</dd>");
     expect(html).toContain('<dt>Hit rate</dt><dd class="summary-words">Unavailable</dd>');
     expect(html).toContain("<dt>Per attack</dt><dd>Unavailable</dd>");
-    expect(html).not.toContain("Trophies lost");
-    expect(html).not.toContain("Per-day averages");
+    expect(html).toContain("<dt>Trophies lost</dt><dd>0</dd>");
     expect(html).not.toContain("Stars unknown");
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Infinity");
@@ -236,27 +233,12 @@ describe("recorded battle period statistics", () => {
     expect(html).toMatch(
       /Defenses<\/th><td>2<\/td><td>1<\/td><td>0<\/td><td>1<\/td><td>0</,
     );
-    // Per day uses finished days with battles: the shielded day 2 is left out.
-    expect(html).toContain("<dt>Offense per day</dt><dd>+60</dd>");
-    expect(html).toContain("<dt>Defense per day</dt><dd>-40</dd>");
+    // Per day uses only finished days: yesterday's 60 over 2 saved finished days.
+    expect(html).toContain("<dt>Offense per day</dt><dd>+30</dd>");
+    expect(html).toContain("<dt>Defense per day</dt><dd>-20</dd>");
     expect(html).toContain("<dt>Per attack</dt><dd>+33.3</dd>");
     expect(html).toContain("<dt>Per defense</dt><dd>-22.5</dd>");
-  });
-
-  it.each([
-    [3, []],
-    [7, []],
-    [8, ["Last 7 days"]],
-    [15, ["Last 7 days", "Last 14 days"]],
-  ])("offers only windows shorter than a Season %s days old", (age, options) => {
-    const young = player();
-    young.season!.anchor = new Date(TODAY - (age - 1) * DAY).toISOString();
-    const html = renderToStaticMarkup(
-      createElement(BattleStatistics, { player: young, now: NOW, trophies: "5,100" }),
-    );
-    expect(html.includes("<select")).toBe(options.length > 0);
-    for (const label of ["Last 7 days", "Last 14 days"])
-      expect(html.includes(label)).toBe(options.includes(label));
+    expect(html).toContain("<dt>Trophies lost</dt><dd>-45</dd>");
   });
 
   it("shows a missing latest Reset rank instead of an older one", () => {
