@@ -260,6 +260,60 @@ def test_automatic_defense_uses_previous_and_current_observed_losses() -> None:
     assert result.state == "Complete"
 
 
+def _season_day_1(attacks, defenses, previous_day, next_start_trophies):
+    day_1 = ranked_day_for(datetime(2026, 10, 5, 12, tzinfo=UTC))
+    return reconcile_ranked_day(
+        _input(
+            ranked_day=day_1,
+            now=day_1.end + timedelta(minutes=1),
+            start_trophies=5000,
+            next_start_trophies=next_start_trophies,
+            contributions=(
+                *(BattleContribution(f"a{i}", "offense", n) for i, n in enumerate(attacks)),
+                *(BattleContribution(f"d{i}", "defense", n) for i, n in enumerate(defenses)),
+            ),
+            previous_day=previous_day,
+            season_first_day=True,
+        )
+    )
+
+
+def test_season_day_1_automatic_defense_loss_needs_no_previous_season_day() -> None:
+    # Production, 5 October 2026 (Day 1): player #QPJURYV8, first tracked
+    # during Day 1, so the previous Season's last day was never tracked. Their
+    # 05:00 reading on 6 October, 5,009, is 5,000 plus the battles minus
+    # floor(202 / 7) for the one missing defense.
+    result = _season_day_1(
+        (21, 27, 30, 40, 29, 22, 30, 40),
+        (40, 28, 40, 15, 11, 28, 40),
+        None,
+        5009,
+    )
+
+    assert result.automatic_defense_loss == 28
+    assert result.final_trophies_before_reset == 5009
+    assert result.state == "Complete"
+    assert "automatic_defense_basis_unavailable" not in result.failure_reasons
+
+
+def test_season_day_1_automatic_defense_loss_leaves_out_the_previous_season() -> None:
+    # Production, 5 October 2026 (Day 1): player #LGLCV8J2U, tracked all
+    # along, lost 287 on 8 defenses on the previous Season's last day. Their
+    # profile at 05:09 on 6 October, before any Day 2 battle, read 5,075:
+    # 5,129 minus floor(165 / 6) * 2 = 54, not the 64 the previous Season's
+    # day would give. The 05:00 reading, 5,129, came before the loss.
+    result = _season_day_1(
+        (40, 40, 28, 40, 26, 40, 40, 40),
+        (18, 24, 40, 27, 28, 28),
+        PreviousRankedDay(True, 8, 287, 0),
+        5129,
+    )
+
+    assert result.automatic_defense_loss == 54
+    assert result.final_trophies_before_reset == 5075
+    assert result.unexplained_residual == 54
+
+
 def test_shield_is_not_inferred_when_the_player_has_an_attack() -> None:
     result = reconcile_ranked_day(
         _input(

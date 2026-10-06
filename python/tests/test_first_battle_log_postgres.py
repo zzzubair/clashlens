@@ -106,9 +106,9 @@ DEFENSE = [(DAY_1 + timedelta(hours=6), False)]
     # A full log that starts after Day 1's start may have lost battles, so
     # the day is uncertain, as any day with a coverage gap.
     ("full_from_day_1", ATTACKS, ("Partial", "uncertain", False)),
-    # With 1 to 7 defenses the automatic defense loss needs the day before,
-    # which was never tracked; the day stays partial.
-    ("reaches_back", ATTACKS + DEFENSE, ("Partial", "partial", True)),
+    # With 1 to 7 defenses the automatic defense loss averages Day 1's own
+    # defenses: the day before, never tracked, is the previous Season's.
+    ("reaches_back", ATTACKS + DEFENSE, ("Complete", "inferred", True)),
 ])
 def test_player_first_seen_during_day_1_gets_a_season_rule_start(
     database_url: str, archive_server, first_log: str, battles, expected
@@ -122,13 +122,16 @@ def test_player_first_seen_during_day_1_gets_a_season_rule_start(
         "full_from_day_1": [DAY_1 + timedelta(hours=2, minutes=i) for i in full],
     }[first_log]
     gained = sum(WIN if attack else -LOSS for _, attack in battles)
+    automatic = LOSS * 7 if len(battles) == 3 else 0
     log = _log(*battles, filler=filler)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _first_seen(connection_info, archive_server, first_at,
                            profile=_new_season_profile(5000 + gained), log=log)
-        # This morning's Reset reading ends Day 1 at 5,000 plus its battles.
+        # This morning's Reset reading ends Day 1 at 5,000 plus its battles,
+        # less any automatic defense loss.
         jobs += _reset_work(connection_info, archive_server, DAY_2,
-                            profile=_new_season_profile(5000 + gained), log=log)
+                            profile=_new_season_profile(5000 + gained - automatic),
+                            log=log)
         _process(connection_info, archive_server, jobs)
         day = _day_1(connection_info)
     state, confidence, coverage = expected
@@ -136,9 +139,7 @@ def test_player_first_seen_during_day_1_gets_a_season_rule_start(
     assert day[2] == 5000 and day[6] == "season_rule"
     assert day[4] is coverage
     if state == "Complete":
-        assert day[3] == 5000 + gained
-    if len(battles) == 3:
-        assert "automatic_defense_basis_unavailable" in day[5]
+        assert day[3] == 5000 + gained - automatic
     if not coverage:
         assert "missing_start_battle_log_baseline" in day[5]
 

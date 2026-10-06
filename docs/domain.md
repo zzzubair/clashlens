@@ -255,6 +255,7 @@ A domain change is complete only when every affected source observation, derived
 - There is no automatic offense adjustment.
 - Zero-trophy defense events count as observed defenses when determining how many defenses are missing.
 - Calculate an automatic defense adjustment only when the previous and current days have continuous battle-log coverage and retained evidence establishes their defense-event counts and observed event losses. If any formula input may be incomplete because collection evidence is missing, do not replace the unknown evidence with an adjustment.
+- A Season's Day 1 leaves the previous Season's last day out: its average uses Day 1's own defenses only, so only Day 1 needs that coverage. On 6 October 2026, 1,119 Day 1 results with differing averages matched a profile read after the loss and before any Day 2 battle using Day 1 alone, and none using the previous Season's day.
 - For a current day with 1 through 7 established defense events, calculate the positive loss magnitude per missing defense as:
 
   `floor((previous day observed event loss + current day observed event loss) / (previous day defense-event count + current day defense-event count))`
@@ -263,7 +264,7 @@ A domain change is complete only when every affected source observation, derived
 - Multiply the floored loss by `8 - current day defense-event count` to calculate the total automatic defense adjustment.
 - Do not apply this inference rule to a day with zero established defense events. Preserve the evidence and mark the day uncertain if that exceptional case occurs.
 - A **calculated automatic defense adjustment** uses the versioned averaging rule when the reset outcome cannot yet isolate the exact adjustment.
-- A **confirmed automatic defense adjustment** requires continuous battle-log coverage for the previous and current days plus valid start and end reset baselines whose trophy values jointly isolate the adjustment. Trophy reconciliation alone does not prove its cause.
+- A **confirmed automatic defense adjustment** requires continuous battle-log coverage for the previous and current days (on a Season's Day 1, Day 1 alone) plus valid start and end reset baselines whose trophy values jointly isolate the adjustment. Trophy reconciliation alone does not prove its cause.
 - Show the adjustment separately from battle events and identify whether it is calculated or confirmed.
 - Automatic defense adjustments affect ranked-day trophy reconciliation but never contribute to army usage, three-star rate, or other battle-event analytics.
 
