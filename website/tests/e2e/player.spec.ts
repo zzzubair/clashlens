@@ -424,16 +424,21 @@ test("battle stats switch periods without requests at iPhone width", async ({ pa
   await page.waitForLoadState("networkidle");
   const requests: string[] = [];
   page.on("request", (request) => requests.push(request.url()));
-  for (const [period, days] of [
-    ["7", 7],
-    ["14", 14],
-  ] as const) {
+  // Windows appear only once the Season is longer than them.
+  const windows = await stats
+    .locator("option")
+    .evaluateAll((options) =>
+      options.map((option) => (option as HTMLOptionElement).value).slice(1),
+    );
+  for (const period of windows) {
     await stats.getByLabel("Showing").selectOption(period);
-    await expect(stats).toContainText(`of ${days} Legend days saved.`);
+    await expect(stats).toContainText(`of ${period} Legend days saved.`);
     await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
   }
-  await stats.getByLabel("Showing").selectOption("season");
-  await expect(stats.getByLabel("Showing")).toHaveValue("season");
+  if (windows.length > 0) {
+    await stats.getByLabel("Showing").selectOption("season");
+    await expect(stats.getByLabel("Showing")).toHaveValue("season");
+  }
   expect(requests).toEqual([]);
   expect(
     await page.evaluate(

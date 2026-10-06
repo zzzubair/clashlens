@@ -20,6 +20,7 @@ import { HeaderSearch } from "./components/PlayerSearch";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
 import type { UpdateStatus } from "./lib/contracts";
+import { keepPageOnLostConnection, useRememberShownPage } from "./lib/keep-page";
 import "./app.css";
 import "./theme.css";
 import "./explore.css";
@@ -58,6 +59,10 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
     };
   }
 }
+
+export const clientMiddleware: Route.ClientMiddlewareFunction[] = [
+  keepPageOnLostConnection,
+];
 
 export function meta() {
   return [{ title: "Clash Lens" }];
@@ -109,6 +114,7 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const previousPath = useRef(location.pathname);
+  useRememberShownPage();
   useEffect(() => {
     if (previousPath.current !== location.pathname && !location.hash) {
       document.getElementById("main-content")?.focus({ preventScroll: true });

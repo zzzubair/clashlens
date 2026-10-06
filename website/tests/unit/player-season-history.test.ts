@@ -284,7 +284,21 @@ describe("past-Season view", () => {
       {
         getPlayer: vi.fn().mockResolvedValue(PLAYER),
         getPlayerSeasons: vi.fn().mockResolvedValue([]),
-        getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+        getPlayerSeason: vi.fn().mockResolvedValue({
+          ...SUMMARY,
+          // Days 27 and 28 were shielded; day 26 lost its attack count.
+          dailyEntries: [24, 25, 26, 27, 28].map((dayNumber) => ({
+            ...DAY,
+            dayNumber,
+            ...(dayNumber === 26 && { attacks: null }),
+            ...(dayNumber > 26 && {
+              attacks: 0,
+              defenses: 0,
+              attackGain: 0,
+              defenseLoss: 0,
+            }),
+          })),
+        }),
       },
       SEASON,
     );
@@ -293,11 +307,12 @@ describe("past-Season view", () => {
     // The summary drops the Season trophy change; it is ending trophies minus 5,000.
     expect(html).not.toContain("Sum of daily trophy changes");
     expect(html).toContain("50.0%<small>20 of 40 attacks</small>");
-    expect(html).toContain("<dt>Offense per day</dt><dd>+320</dd>");
-    expect(html).toContain("<dt>Defense per day</dt><dd>-260</dd>");
+    // Per day leaves out the 2 shielded days: 1,600 and 1,300 over 3 days.
+    expect(html).toContain("<dt>Offense per day</dt><dd>+533</dd>");
+    expect(html).toContain("<dt>Defense per day</dt><dd>-433</dd>");
     expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
     expect(html).toContain("<dt>Per defense</dt><dd>-32.5</dd>");
-    expect(html).toContain("<dt>Trophies lost</dt><dd>-1,300</dd>");
+    expect(html).not.toContain("Trophies lost");
     expect(html).not.toContain("Stars unknown");
     expect(html).toContain('title="Recorded attacks minus recorded defenses, without');
     expect(html).not.toContain("Net change");

@@ -140,7 +140,6 @@ export function SeasonSummary({
                 ["Defense per day", signed(defense.perDay, -1)],
                 ["Per attack", signed(per(attack.trophies, attack.count), 1, 1)],
                 ["Per defense", signed(per(defense.trophies, defense.count), -1, 1)],
-                ["Trophies lost", signed(defense.trophies, -1)],
               ] as const
             ).map(([label, value]) => (
               <div key={label}>

@@ -7,31 +7,44 @@ const RESET_MS = 5 * 3_600_000;
 
 // Use recorded battles, never daily trophy adjustments or unplayed defenses.
 // Daily totals leave out today, which is still being played, and count each
-// battle on the saved Legend day it belongs to.
-function summarize(events: (readonly [RankedBattleEvent, boolean])[]) {
+// battle on the saved Legend day it belongs to. Per-day averages divide by the
+// finished days with battles on that side, so shielded days do not lower them.
+function summarize(events: (readonly [RankedBattleEvent, number])[], today: number) {
   const stars = [0, 0, 0, 0];
   let trophies = 0;
   let finishedTrophies = 0;
-  for (const [event, finished] of events) {
+  const finishedDays = new Set<number>();
+  for (const [event, day] of events) {
     stars[event.stars]++;
     trophies += Math.abs(event.trophyChange);
-    if (finished) finishedTrophies += Math.abs(event.trophyChange);
+    if (day < today) {
+      finishedTrophies += Math.abs(event.trophyChange);
+      finishedDays.add(day);
+    }
   }
   return {
     count: events.length,
     stars,
     trophies,
     finishedTrophies,
+    battleDays: finishedDays.size,
     disputed: events.some(([event]) => event.perspectiveDisagreement),
   };
 }
 
+export function currentSeasonStart(player: PlayerPage, now: number) {
+  const anchor = player.season ? Date.parse(player.season.anchor) : NaN;
+  return anchor <= now && now < anchor + 28 * DAY_MS ? anchor : seasonStartAt(now);
+}
+
+// Recent windows stay inside the current Season.
 export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: number) {
   const today = Math.floor((now - RESET_MS) / DAY_MS) * DAY_MS + RESET_MS;
-  const anchor = player.season ? Date.parse(player.season.anchor) : NaN;
-  const seasonStart =
-    anchor <= now && now < anchor + 28 * DAY_MS ? anchor : seasonStartAt(now);
-  const start = period === "season" ? seasonStart : today - (Number(period) - 1) * DAY_MS;
+  const seasonStart = currentSeasonStart(player, now);
+  const start =
+    period === "season"
+      ? seasonStart
+      : Math.max(seasonStart, today - (Number(period) - 1) * DAY_MS);
   const days = new Map(
     [
       ...player.recentDays,
@@ -52,7 +65,7 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
           const time = Date.parse(event.battleTimestamp);
           return time >= start && time <= now;
         })
-        .map(([event, day]) => [event.battleId, [event, day < today] as const]),
+        .map(([event, day]) => [event.battleId, [event, day] as const]),
     ).values(),
   ];
   return {
@@ -61,9 +74,8 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
     today,
     daysSaved: days.size,
     daysExpected: Math.round((today - start) / DAY_MS) + 1,
-    finishedDays: [...days.keys()].filter((time) => time < today).length,
     incomplete: [...days.values()].some((day) => !day.battlesComplete),
-    attack: summarize(events("offenseEvents")),
-    defense: summarize(events("defenseEvents")),
+    attack: summarize(events("offenseEvents"), today),
+    defense: summarize(events("defenseEvents"), today),
   };
 }

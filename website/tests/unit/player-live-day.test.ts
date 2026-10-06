@@ -108,7 +108,7 @@ const todayEntry = (html: string) =>
   html.split('id="legend-day-2026-10-08"')[1].split("</details>")[0];
 
 describe("today's Legend day wording", () => {
-  it("shows recent trophy trends even when a saved day belongs to the previous Season", async () => {
+  it("leaves a saved day from the previous Season out of recent trophy trends", async () => {
     const previousSeasonDay: RankedDaySummary = {
       ...TODAY,
       dayNumber: 28,
@@ -121,10 +121,10 @@ describe("today's Legend day wording", () => {
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
     const trends = html.split('id="player-trends-title"')[1].split("</section>")[0];
     expect(trends).toContain("Last 7 days");
-    expect(trends).toContain("Last 14 days");
-    expect(trends.match(/<dd>\+35<\/dd>/g)).toHaveLength(2);
-    expect(trends).toContain("1 of 7");
-    expect(trends).toContain("1 of 14");
+    // Three days into the Season, a 14-day card would repeat the 7-day one.
+    expect(trends).not.toContain("Last 14 days");
+    expect(trends).not.toContain("+35");
+    expect(trends).toContain("0 of 3");
     expect(html).not.toContain('id="legend-day-2026-10-04"');
   });
 

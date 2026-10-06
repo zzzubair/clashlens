@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { PlayerTrends } from "../../app/components/PlayerTrends";
 import type { RankedDaySummary } from "../../app/lib/contracts";
+import { worstCasePlayer } from "../fixtures/player-worst-case";
 
 const DAY_MS = 86_400_000;
 const RESET = Date.parse("2026-10-05T05:00:00Z");
@@ -25,31 +26,31 @@ function day(start: number, change: number | null = 10): RankedDaySummary {
   };
 }
 
-function cards(days: RankedDaySummary[], now = RESET + 3 * DAY_MS) {
-  const html = renderToStaticMarkup(createElement(PlayerTrends, { days, now }));
-  return {
-    html,
-    seven: html.split("<h3>Last 7 days</h3>")[1].split("</article>")[0],
-    fourteen: html.split("<h3>Last 14 days</h3>")[1].split("</article>")[0],
-  };
+function cards(days: RankedDaySummary[], now = RESET + 20 * DAY_MS) {
+  const player = { ...worstCasePlayer("#2PP", now), recentDays: days };
+  const html = renderToStaticMarkup(createElement(PlayerTrends, { player, now }));
+  const card = (title: string) =>
+    html.split(`<h3>${title}</h3>`)[1]?.split("</article>")[0];
+  return { html, seven: card("Last 7 days"), fourteen: card("Last 14 days") };
 }
 
 describe("player trophy trends", () => {
-  it("adds daily changes across the 5 October Season reset without a fake drop", () => {
-    const now = RESET + 3 * DAY_MS;
+  it("counts only the current Season's finished days, with no explanation text", () => {
+    const now = RESET + 10 * DAY_MS;
     const days = Array.from({ length: 14 }, (_, i) => day(now - (i + 1) * DAY_MS));
-    // A real daily loss stays negative even across a Season boundary.
+    // A real daily loss stays negative.
     days[0].trophyChange = -20;
     const result = cards(days, now);
     expect(result.seven).toContain("<dd>+40</dd>");
     expect(result.seven).toContain("<dd>7 of 7</dd>");
-    expect(result.fourteen).toContain("<dd>+110</dd>");
-    expect(result.fourteen).toContain("<dd>14 of 14</dd>");
-    expect(result.html).toContain("the Season reset to 5,000 never counts as a drop");
+    // The 4 days before the 5 October Season reset never count.
+    expect(result.fourteen).toContain("<dd>+70</dd>");
+    expect(result.fourteen).toContain("<dd>10 of 10</dd>");
+    expect(result.html).not.toContain("<p");
   });
 
   it("counts calendar days, excluding today, future days and older history", () => {
-    const now = RESET + 3 * DAY_MS;
+    const now = RESET + 20 * DAY_MS;
     const result = cards([
       day(now, 500),
       day(now + DAY_MS, 500),
@@ -64,18 +65,26 @@ describe("player trophy trends", () => {
     expect(result.fourteen).toContain("<dd>3 of 14</dd>");
   });
 
-  it("moves the window at 05:00 UTC, including on the Season reset", () => {
-    const days = [day(RESET - DAY_MS, 30), day(RESET - 8 * DAY_MS, 80)];
+  it("moves the window at 05:00 UTC and starts again at the Season reset", () => {
+    const days = [day(RESET, 5), day(RESET - DAY_MS, 30), day(RESET - 8 * DAY_MS, 80)];
     expect(cards(days, RESET - 1).seven).toContain("<dd>+80</dd>");
-    expect(cards(days, RESET).seven).toContain("<dd>+30</dd>");
+    // A Season with no finished day yet has no trend to show.
+    expect(cards(days, RESET).html).toBe("");
+    const result = cards(days, RESET + DAY_MS);
+    expect(result.seven).toContain("<dd>+5</dd>");
+    expect(result.seven).toContain("<dd>1 of 1</dd>");
+    expect(result.fourteen).toBeUndefined();
   });
 
   it("leaves incomplete, uncertain and unknown totals out, and reports coverage", () => {
     const result = cards([
-      { ...day(RESET), completeness: { state: "partial", reason: "Missing battles" } },
-      { ...day(RESET + DAY_MS), completeness: { state: "uncertain", reason: "Dispute" } },
-      day(RESET + 2 * DAY_MS, null),
-      day(RESET - DAY_MS, -15),
+      { ...day(RESET + 16 * DAY_MS), completeness: { state: "partial", reason: "Gaps" } },
+      {
+        ...day(RESET + 17 * DAY_MS),
+        completeness: { state: "uncertain", reason: "Dispute" },
+      },
+      day(RESET + 18 * DAY_MS, null),
+      day(RESET + 19 * DAY_MS, -15),
     ]);
     expect(result.seven).toContain("<dd>-15</dd>");
     expect(result.seven).toContain("<dd>1 of 7</dd>");
@@ -83,26 +92,26 @@ describe("player trophy trends", () => {
   });
 
   it("shows unavailable for no counted days, and distinguishes a proven zero", () => {
-    for (const days of [[], [day(RESET, null)]]) {
+    for (const days of [[], [day(RESET + 19 * DAY_MS, null)]]) {
       const result = cards(days);
       expect(result.seven).toContain("<dd>Unavailable</dd>");
       expect(result.seven).toContain("<dd>0 of 7</dd>");
       expect(result.fourteen).toContain("<dd>Unavailable</dd>");
       expect(result.fourteen).toContain("<dd>0 of 14</dd>");
     }
-    const result = cards([day(RESET, 0)]);
+    const result = cards([day(RESET + 19 * DAY_MS, 0)]);
     expect(result.seven).toContain("<dd>0</dd>");
     expect(result.seven).toContain("<dd>1 of 7</dd>");
   });
 
   it("does not count duplicate or malformed days", () => {
-    const saved = day(RESET);
+    const saved = day(RESET + 15 * DAY_MS);
     const result = cards([
       saved,
       saved,
-      { ...day(RESET + DAY_MS), period: "unknown" },
-      day(RESET + 1000),
-      { ...day(RESET + 2 * DAY_MS), period: "2026-10-07T05:00:00Z" },
+      { ...day(RESET + 16 * DAY_MS), period: "unknown" },
+      day(RESET + 15 * DAY_MS + 1000),
+      { ...day(RESET + 17 * DAY_MS), period: "2026-10-23T05:00:00Z" },
     ]);
     expect(result.seven).toContain("<dd>+10</dd>");
     expect(result.seven).toContain("<dd>1 of 7</dd>");
