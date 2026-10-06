@@ -830,6 +830,8 @@ class Database:
 
         ``claim_job(job_id=...)`` rechecks eligibility and lease state because
         a cached plan can become stale before its suggestions are claimed.
+        While a Reset-priority response is due the plan is empty, so every
+        response claim uses the priority order of ``claim_job``.
         """
         self._ensure_dependency_support_probed()
         supported_filter, supported_params = _supported_claim_filter(
@@ -860,12 +862,29 @@ class Database:
                 SELECT newest.id
                 FROM newest
                 JOIN players AS player ON player.id = newest.player_id
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM {self._jobs_relation} AS job
+                    JOIN collector_observations AS observation
+                      ON observation.id = job.observation_id
+                    WHERE job.state IN ('pending', 'waiting_retry')
+                      AND job.priority = %(reset_priority)s
+                      AND job.due_at <= statement_timestamp()
+                      AND job.work_type = 'process_observation'
+                      AND job.attempt_count < job.max_attempts
+                      AND {supported_filter}
+                )
                 ORDER BY greatest(player.current_observed_at,
                                   player.current_profile_confirmed_at) NULLS FIRST,
                          player.id, newest.endpoint = 'profile' DESC
                 LIMIT %(limit)s
                 """,
-                {**supported_params, "priority": PYTHON_LIVE_PRIORITY, "limit": limit},
+                {
+                    **supported_params,
+                    "priority": PYTHON_LIVE_PRIORITY,
+                    "reset_priority": PYTHON_RESET_PRIORITY,
+                    "limit": limit,
+                },
             ).fetchall()
         return [int(row[0]) for row in rows]
 

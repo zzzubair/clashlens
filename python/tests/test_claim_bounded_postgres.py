@@ -9,10 +9,12 @@ from test_claim_jobs_postgres import (
     _production_database,
 )
 
-import clashlens.db as db_module
 from clashlens.db import (
     _CLAIM_CANDIDATE_LIMIT,
     POPULATION_BUILD_WORK_TYPES,
+    PYTHON_BACKFILL_PRIORITY,
+    PYTHON_LIVE_PRIORITY,
+    PYTHON_RESET_PRIORITY,
     RESPONSE_WORK_TYPES,
     Database,
     _claim_select_statement,
@@ -776,11 +778,39 @@ def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str)
             ), "0004 reapply must be non-destructive"
 
 
-def test_declared_claim_priorities_match_enqueue_sites() -> None:
-    declared = {
-        int(raw.strip(" ()")) for raw in db_module._PYTHON_CLAIM_PRIORITIES.split(",")
-    }
-    assert declared == {25, 100, 300}, (
-        "declared Python claim priorities must match the live, Reset and "
-        "explicit backfill enqueue classes"
-    )
+def test_reset_live_and_backfill_priorities_are_claimed_in_order(
+    database_url: str,
+) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            jobs = {
+                priority: _insert_job(
+                    connection,
+                    work_type="process_observation",
+                    deduplication_key=f"declared:{priority}",
+                    input_json={},
+                    observation_id=_insert_observation(
+                        connection, occurrence_key=f"declared-{priority}"
+                    ),
+                    priority=priority,
+                )
+                for priority in (
+                    PYTHON_BACKFILL_PRIORITY,
+                    PYTHON_LIVE_PRIORITY,
+                    PYTHON_RESET_PRIORITY,
+                )
+            }
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            claimed = [
+                database.claim_job(owner=f"declared-{index}") for index in range(4)
+            ]
+        finally:
+            database.close()
+        assert [claim.job_id if claim else None for claim in claimed] == [
+            jobs[PYTHON_RESET_PRIORITY],
+            jobs[PYTHON_LIVE_PRIORITY],
+            jobs[PYTHON_BACKFILL_PRIORITY],
+            None,
+        ]

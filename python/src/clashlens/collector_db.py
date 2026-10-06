@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from . import collector_metrics, collector_reset, collector_uploads
+from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
 
 UploadClaim = collector_uploads.UploadClaim
 UploadLeaseLost = collector_uploads.UploadLeaseLost
@@ -25,9 +26,6 @@ PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
 BATTLE_PARSER_VERSION = "supercell-battle-parser-v3"
 LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
-# The worker's db.PYTHON_RESET_PRIORITY: Reset pair responses are processed
-# before live ones, because the frozen leaderboard waits for them.
-RESET_PROCESSING_PRIORITY = 300
 REVISIT_INTERVAL = timedelta(seconds=90)
 PROFILE_CACHE_WINDOW = timedelta(seconds=5)
 UPLOAD_RETRY_DELAY = timedelta(seconds=5)
@@ -893,7 +891,11 @@ class CollectorDatabase:
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
                 handoff.response_completed_at,
-                RESET_PROCESSING_PRIORITY if work_kind == "reset_baseline" else 100,
+                (
+                    PYTHON_RESET_PRIORITY
+                    if work_kind == "reset_baseline"
+                    else PYTHON_LIVE_PRIORITY
+                ),
             ),
         ).fetchone()
         if row is not None:

@@ -19,6 +19,7 @@ from test_domain_processing_postgres import (
 
 from clashlens import api_leaderboard, job_outcomes
 from clashlens.api_db import ApiDatabase
+from clashlens.db import PYTHON_RESET_PRIORITY
 from clashlens.domain import ranked_day_for
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 
@@ -451,6 +452,36 @@ def test_limited_newest_plan_keeps_each_players_latest_responses_together(
             assert database.newest_job_plan(limit=10) == expected
         finally:
             database.close()
+
+
+def test_waiting_reset_response_is_processed_before_a_fresh_live_response(
+    database_url: str,
+    archive_server,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        jobs = {}
+        for hour, (kind, tag) in enumerate((("reset", "#9PP"), ("live", "#2PP")), 1):
+            _observation, jobs[kind] = _profile(
+                connection_info,
+                archive_server,
+                tag=tag,
+                trophies=5000,
+                observed_at=DAY.start + timedelta(hours=hour),
+            )
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE python_processing_jobs SET priority = %s WHERE id = %s",
+                (PYTHON_RESET_PRIORITY, jobs["reset"]),
+            )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            results = [processor.process_once(owner="lane") for _ in range(2)]
+        finally:
+            database.close()
+        assert [(result.job_id, result.outcome) for result in results] == [
+            (jobs["reset"], "processed"),
+            (jobs["live"], "processed"),
+        ]
 
 
 @pytest.mark.parametrize("endpoint", ["profile", "battle_log"])
