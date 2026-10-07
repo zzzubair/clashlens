@@ -381,7 +381,6 @@ def _battle_lines(events: Sequence[Mapping[str, Any]], word: str) -> list[str]:
 def full_day(
     site: Site,
     page: Mapping[str, Any],
-    rank: int | None,
     now: datetime,
     *,
     choices: tuple[Choice, ...] = (),
@@ -396,6 +395,7 @@ def full_day(
         summary = [WAITING_FOR_RESET]
     else:
         summary = [f"{number(page['trophies'])} 🏆"]
+    rank = page["rank"]
     summary.append("Unranked" if rank is None else f"#{number(rank)} among tracked")
     day = today or {}
     day_number = day.get("season_day_number") or (ready.get("season") or {}).get(

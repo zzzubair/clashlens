@@ -91,6 +91,7 @@ def page(tag: str, name: str, battles: list[dict[str, Any]], reasons=()) -> dict
         "clan": "Lens Clan",
         "state": "tracking",
         "reason": None,
+        "rank": 1234,
         "trophies": 5842,
         "season_reset_pending": False,
         "observed_at": NOW - timedelta(minutes=2),
@@ -152,10 +153,6 @@ class FakeStore:
         self.moments.append(now)
         return self.pages.get(tag)
 
-    def live_rank(self, tag, now):
-        self._read("live_rank")
-        self.moments.append(now)
-        return 1234
 
 
 class FakeResponse:
@@ -633,7 +630,7 @@ def test_full_day_reads_and_shows_one_legend_day_across_a_reset(store) -> None:
         store, "me", FakeInteraction(), now=now, account=None, share=False
     )["text"]
     # A Reset passed while reading, so everything is read again for the new day.
-    assert store.moments == [before] * 3 + [after] * 3
+    assert store.moments == [before] * 2 + [after] * 2
     next_end = ranked_day_for(after).end
     assert f"<t:{int(next_end.timestamp())}:R>" in text
 
@@ -685,6 +682,19 @@ def test_a_main_moved_away_is_forgotten_by_any_command_that_shows_the_main(store
     store.cards[1].append(lens)
     text = run_command(store, "main", FakeInteraction())["text"]
     assert text.startswith("No main chosen yet.")
+
+
+def test_main_with_one_player_saves_nothing(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    refused = run_command(store, "main", FakeInteraction(), account="#9RR")
+    assert refused["text"] == "That player isn't linked to your Clash Lens account."
+    only = run_command(store, "main", FakeInteraction(), account="#2PP")
+    assert only["text"].startswith("Main is Drift #2PP: your only player")
+    assert store.mains == {}
+    # A second verified player starts with no main chosen.
+    store.cards[1].append(card("#8QQ", "Lens", 5100))
+    later = run_command(store, "main", FakeInteraction())
+    assert later["text"].startswith("No main chosen yet.")
 
 
 def test_only_the_person_who_ran_the_command_can_use_its_dropdown(store) -> None:

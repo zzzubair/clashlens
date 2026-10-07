@@ -25,7 +25,6 @@ class StoreReads(Protocol):
     def main_tag(self, account: AccountContext) -> str | None: ...
     def set_main(self, account: AccountContext, tag: str) -> bool: ...
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None: ...
-    def live_rank(self, tag: str, now: datetime) -> int | None: ...
 
 
 def tag_text(value: str) -> str:
@@ -114,9 +113,7 @@ class Commands:
         status = replies.card_status(page)
         if status not in (None, replies.WAITING_FOR_RESET):
             return replies.player_status(self.site, page, status, choices)
-        return replies.full_day(
-            self.site, page, self.store.live_rank(card["tag"], now), now, choices=choices
-        )
+        return replies.full_day(self.site, page, now, choices=choices)
 
     def main(self, account: AccountContext, player: str | None = None) -> Reply:
         now = self.now()
@@ -124,10 +121,12 @@ class Commands:
         main_tag = self._main(account, cards)
         if not cards:
             return replies.no_players(self.site, account.username, now)
-        if player is None:
+        card = None if player is None else find_own(cards, player)
+        if player is not None and card is None:
+            return replies.not_own()
+        if card is None or len(cards) == 1:
             return replies.main_reply(cards, main_tag)
-        card = find_own(cards, player)
-        if card is None or not self.store.set_main(account, card["tag"]):
+        if not self.store.set_main(account, card["tag"]):
             return replies.not_own()
         return replies.main_reply(cards, card["tag"], changed=True)
 

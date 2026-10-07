@@ -119,8 +119,8 @@ class Store:
         return row is not None
 
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None:
-        """The website's player page with the player's lookup state and
-        reason, all from one read-only database snapshot."""
+        """The website's player page with the player's lookup state, reason
+        and live board position, all from one read-only database snapshot."""
         with self.database.pool.connection() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             page = api_players.get_player_page(
@@ -132,13 +132,11 @@ class Store:
             if page is None:
                 return None
             lookup = api_player_lookup._lookup(connection, tag)
+            rank = api_leaderboard.live_positions(connection, [tag], now=now).get(tag)
         return {
             **page,
             "observed_at": datetime.fromisoformat(page["observed_at"]),
             "state": lookup["state"],
             "reason": lookup.get("reason"),
+            "rank": rank,
         }
-
-    def live_rank(self, tag: str, now: datetime) -> int | None:
-        with self.database.pool.connection() as connection:
-            return api_leaderboard.live_positions(connection, [tag], now=now).get(tag)
