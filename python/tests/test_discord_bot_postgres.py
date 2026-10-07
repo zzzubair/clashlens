@@ -129,7 +129,7 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
             assert store.set_main(account, "#2PP") is True
             assert store.main_tag(account) == "#2PP"
 
-            # Unverifying the player forgets the main without touching the bot's row.
+            # Unverifying the player forgets the main.
             with owner.pool.connection() as connection:
                 connection.execute(
                     "DELETE FROM verified_player_links WHERE account_id = %s"
@@ -142,9 +142,18 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
             assert store.set_main(account, "#8QQ") is True
             _verify(owner, mine, "#8QQ")
             assert store.main_tag(account) == "#8QQ"
-            # A main moved to another account and back is forgotten.
+            # A main moved to another account and back is forgotten, even with
+            # no bot read in between.
             _verify(owner, theirs, "#8QQ")
+            _verify(owner, mine, "#8QQ")
             assert store.main_tag(account) is None
+            # So is one unverified and verified again with no bot read in between.
+            assert store.set_main(account, "#8QQ") is True
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    "DELETE FROM verified_player_links"
+                    " WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#8QQ')"
+                )
             _verify(owner, mine, "#8QQ")
             assert store.main_tag(account) is None
             # The API role may run the player page and live board reads too.
