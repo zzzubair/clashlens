@@ -144,7 +144,7 @@ class Store:
         with self.database.pool.connection() as connection:
             with connection.transaction():
                 # Locking the ownership row holds off a transfer until the save
-                # commits, so the 0080 trigger then forgets this main.
+                # commits, so the 0089 trigger then forgets this main.
                 link = connection.execute(
                     """
                     SELECT link.player_id, link.account_id
