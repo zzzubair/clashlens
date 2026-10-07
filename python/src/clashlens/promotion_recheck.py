@@ -4,14 +4,19 @@ Legend II's top finishers move into Legend I at the Monday 05:00 UTC Reset.
 From 05:30 the collector asks for the profile of every listed Legend II
 player (migration 0076) not checked since the Reset, at most
 ``CLASHLENS_PROMOTION_RECHECK_PER_SECOND`` requests a second (20 by default,
-0 turns it off) on the regular keys. Each request starts only while that
-Reset's collection and settlement checks have finished, no tracked player is
-more than two minutes late, and one key's worth of regular request slots is
-idle. These answers are not saved: a profile showing Legend I queues the
-ordinary discovery check, which saves the profile and starts tracking; any
-other answer only refreshes the list row. A request that fails, or an answer
-that cannot be read or shows an uncertain tier, leaves the player due; it is
-asked again once the rest of the list has been asked.
+0 turns it off) on the regular keys, at most two at once. Just before each
+request, after its pacing wait, it is sent only while that Reset's collection
+and settlement checks have finished, no tracked player is more than two
+minutes late, and one key's worth of regular request slots is idle; otherwise
+the player stays due. A request admitted just before a key wait or an API
+outage can still start late, so at most two promotion requests ever start
+together. Two in flight at about 120 ms each gives roughly 16 requests a
+second, about an hour for 59,000 Legend II players. These answers are not
+saved: a profile showing Legend I queues the ordinary discovery check, which
+saves the profile and starts tracking; any other answer only refreshes the
+list row. A request that fails, or an answer that cannot be read or shows an
+uncertain tier, leaves the player due; it is asked again once the rest of the
+list has been asked.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ if TYPE_CHECKING:
 
 START_DELAY = timedelta(minutes=30)
 BATCH_SIZE = 200
-IN_FLIGHT = 16
+IN_FLIGHT = 2
 IDLE_SECONDS = 60.0
 # How long a reading of the database's spare-time checks is reused.
 GUARD_SECONDS = 1.0
@@ -164,28 +169,11 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[st
     return left_out
 
 
-async def _ask(collector: Collector, admit: Admission, tag: str) -> Answer | None:
-    """Ask for one profile, holding the start turn ``admit.wait`` gave until it goes out."""
-    turn = True
-
-    async def start() -> None:
-        nonlocal turn
-        try:
-            await admit.start()
-        finally:
-            if turn:
-                turn = False
-                admit.release()
-
+async def _ask(collector: Collector, tag: str) -> Answer | None:
     try:
-        response = await collector.client.fetch_player(
-            collector.regular_keys, tag, "profile", before_start=start
-        )
+        response = await collector.client.fetch_player(collector.regular_keys, tag, "profile")
     except ProviderFailure:
         return None
-    finally:
-        if turn:
-            admit.release()
     at = response.response_completed_at
     if response.http_status == 404:
         return (tag, "removed", None, None, at)
@@ -211,7 +199,7 @@ async def _ask(collector: Collector, admit: Admission, tag: str) -> Answer | Non
 
 
 class Admission:
-    """Lets one request at a time go out, at most ``rate`` a second, from spare headroom."""
+    """Paces request starts and checks for spare headroom just before each one."""
 
     def __init__(
         self,
@@ -222,7 +210,6 @@ class Admission:
         self._collector = collector
         self.clock = clock
         self._interval = 1 / rate
-        self._turn = asyncio.Lock()
         self._next_start = 0.0
         self._spare = False
         self._recheck_at = 0.0
@@ -238,29 +225,22 @@ class Admission:
             self._recheck_at = time.monotonic() + GUARD_SECONDS
         return self._spare
 
-    def _keys_idle(self, own: int) -> bool:
-        keys = self._collector.regular_keys
-        return keys.idle_slots() + own >= keys.concurrency_per_key
+    def _keys_idle(self) -> bool:
+        """At least one key's worth of regular request slots is idle."""
+        now = time.monotonic()
+        idle = sum(
+            state.semaphore._value
+            for state in self._collector.regular_keys._states
+            if state.healthy and state.paused_until <= now
+        )
+        return idle >= int(os.environ.get("CLASHLENS_CONCURRENCY_PER_KEY", "6"))
 
-    async def wait(self) -> bool:
-        """Take the start turn once a key's worth of regular slots is idle; False when closed."""
-        await self._turn.acquire()
-        while await self.open():
-            if self._keys_idle(0):
-                return True
-            await asyncio.sleep(self._interval)
-        self._turn.release()
-        return False
-
-    def release(self) -> None:
-        self._turn.release()
-
-    async def start(self) -> None:
-        """Pace and check again just as a request goes out, holding its own key slot."""
-        await asyncio.sleep(max(0.0, self._next_start - time.monotonic()))
-        if not await self.open() or not self._keys_idle(1):
-            raise ProviderFailure("promotion_recheck_paused", retryable=False)
-        self._next_start = time.monotonic() + self._interval
+    async def __call__(self) -> bool:
+        """Wait for this request's start slot; False when it must not start now."""
+        start = max(self._next_start, time.monotonic())
+        self._next_start = start + self._interval
+        await asyncio.sleep(start - time.monotonic())
+        return await self.open() and self._keys_idle()
 
 
 async def check_batch(
@@ -283,10 +263,10 @@ async def check_batch(
 
     async def ask(tag: str) -> Answer | None:
         async with gate:
-            if not await admit.wait():
+            if not await admit():
                 refused.add(tag)
                 return None
-            return await _ask(collector, admit, tag)
+            return await _ask(collector, tag)
 
     answers = await asyncio.gather(*(ask(tag) for tag in tags))
     found = [answer for answer in answers if answer is not None]

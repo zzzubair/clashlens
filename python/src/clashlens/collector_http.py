@@ -477,7 +477,6 @@ class KeyPool:
         self._selection_lock = asyncio.Lock()
         self._before_start = before_start
         self.starts_per_second = starts_per_second
-        self.concurrency_per_key = concurrency_per_key
 
     async def run(
         self, request: Callable[[ApiKey, StartRequest], Awaitable[T]]
@@ -565,15 +564,6 @@ class KeyPool:
                 for state in self._states
             ),
         }
-
-    def idle_slots(self) -> int:
-        """Free request slots across healthy, unpaused keys."""
-        now = monotonic()
-        return sum(
-            state.semaphore._value
-            for state in self._states
-            if state.healthy and state.paused_until <= now
-        )
 
     def key_health(self) -> list[tuple[str, bool, bool, int]]:
         """Return each key's label, health, pause state and request starts."""
@@ -683,9 +673,7 @@ class OfficialApiClient:
         normalized_tag: str,
         endpoint: str,
         start_before: datetime | None = None,
-        before_start: StartRequest | None = None,
     ) -> FetchedResponse:
-        """Fetch one player endpoint; ``before_start`` runs as each request goes out."""
         if endpoint == "profile":
             suffix = f"/v1/players/{quote(normalized_tag, safe='')}"
         elif endpoint == "battle_log":
@@ -694,7 +682,7 @@ class OfficialApiClient:
             suffix = f"/v1/players/{quote(normalized_tag, safe='')}/leaguehistory"
         else:
             raise ValueError("unknown player endpoint")
-        return await self._fetch(pool, endpoint, self.origin + suffix, start_before, before_start)
+        return await self._fetch(pool, endpoint, self.origin + suffix, start_before)
 
     async def fetch_rankings(self, pool: KeyPool) -> FetchedResponse:
         return await self._fetch(
@@ -709,7 +697,6 @@ class OfficialApiClient:
         endpoint: str,
         url: str,
         start_before: datetime | None = None,
-        before_start: StartRequest | None = None,
     ) -> FetchedResponse:
         outage = self.provider_outage
         probe = False
@@ -731,8 +718,6 @@ class OfficialApiClient:
                     if probe or not outage.active:
                         waiting.reschedule(None)
                         break
-            if before_start is not None:
-                await before_start()
             if start_before is not None and datetime.now(UTC) >= start_before:
                 raise CollectionWindowClosed
 

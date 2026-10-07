@@ -65,26 +65,28 @@ seen Legend II and III players.
 Each Monday from 05:30 UTC the collector asks for the profile of every listed
 Legend II player not checked since the Reset, oldest check first, at most
 `CLASHLENS_PROMOTION_RECHECK_PER_SECOND` requests a second on the regular keys
-(20 by default; 0 turns it off), at most 16 at once. Legend III rows stay on
-the list but are not asked. Each request starts only while that Reset's
-collection and settlement checks have finished, no tracked player is more than
-two minutes late (read at most once a second), and one key's worth of regular
-request slots is idle; otherwise it waits and resumes when collection catches
-up. Pacing and these checks apply as each request actually goes out, after any
-wait for a key, a connection or an API outage. These answers are not saved, so a player who stayed put costs one request
-and no storage. A profile showing Legend I queues the ordinary discovery check
-above, which saves the profile, starts tracking and backfills from the first
-battle log. The row is marked checked only once the player is tracked or has
-waiting work that still has to fetch the profile, and only while fewer than 500 discovery checks wait;
-otherwise it stays due and is asked again later. Any other answer refreshes or
-removes the list row. A failed request, or an answer that cannot be read or
-shows an uncertain tier, leaves the player due; it is asked again once the
-rest of the list has been asked, at most once a minute. Each
-stretch of work ends with one `promotion_recheck` line in the collector log
-counting asked, promoted, listed, removed, failed and queued players. At the
-lab's October 2026 list this is about 59,000 Legend II requests (about 50
-minutes at 20 a second) each Monday, plus two requests for each promoted
-player.
+(20 by default; 0 turns it off), at most two at once. Legend III rows stay on
+the list but are not asked. Just before each request, after its pacing wait,
+it is sent only while that Reset's collection and settlement checks have
+finished, no tracked player is more than two minutes late (read at most once a
+second), and one key's worth of regular request slots is idle; otherwise the
+player stays due and the re-check resumes when collection catches up. A
+request admitted just before a key wait or an API outage can still start
+late, so at most two promotion requests ever start together. These answers
+are not saved, so a player who stayed put costs one request and no storage. A
+profile showing Legend I queues the ordinary discovery check above, which
+saves the profile, starts tracking and backfills from the first battle log.
+The row is marked checked only once the player is tracked or has waiting work
+that still has to fetch the profile, and only while fewer than 500 discovery
+checks wait; otherwise it stays due and is asked again later. Any other answer
+refreshes or removes the list row. A failed request, or an answer that cannot
+be read or shows an uncertain tier, leaves the player due; it is asked again
+once the rest of the list has been asked, at most once a minute. Each stretch
+of work ends with one `promotion_recheck` line in the collector log counting
+asked, promoted, listed, removed, failed and queued players. At the lab's
+October 2026 list this is about 59,000 Legend II requests each Monday, plus
+two requests for each promoted player. Two in flight at about 120 ms each
+gives roughly 16 requests a second, so the list takes about an hour.
 
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to

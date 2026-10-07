@@ -21,6 +21,7 @@ from test_reset_settlement_collection_postgres import _collector
 
 from clashlens import promotion_recheck
 from clashlens.collector_db import CollectorDatabase
+from clashlens.collector_http import ApiKey, KeyPool
 
 PROFILE = json.loads(
     (Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json").read_bytes()
@@ -94,6 +95,17 @@ def _seed(connection_info: str) -> None:
         )
 
 
+def _two_key_collector(origin: str, database: CollectorDatabase, tmp_path: Path):
+    """Two regular keys of six slots, so two promotion requests leave a key's worth idle."""
+    collector = _collector(origin, database, tmp_path)
+    collector.regular_keys = KeyPool(
+        [ApiKey("regular-1", "secret"), ApiKey("regular-2", "secret")],
+        starts_per_second=25,
+        concurrency_per_key=6,
+    )
+    return collector
+
+
 def _check(
     origin: str,
     connection_info: str,
@@ -104,7 +116,7 @@ def _check(
 ):
     database = CollectorDatabase(connection_info)
     try:
-        collector = _collector(origin, database, tmp_path)
+        collector = _two_key_collector(origin, database, tmp_path)
         admit = promotion_recheck.Admission(collector, rate, clock=lambda: now)
         return asyncio.run(
             promotion_recheck.check_batch(collector, admit, set() if attempted is None else attempted)
@@ -217,25 +229,26 @@ def test_requests_go_out_paced_and_only_while_a_key_is_idle(
             )
         _Provider.asked = []
         database = CollectorDatabase(connection_info)
-        collector = _collector(origin, database, tmp_path)
+        collector = _two_key_collector(origin, database, tmp_path)
         admit = promotion_recheck.Admission(collector, 20.0, clock=lambda: now)
 
         async def scenario() -> None:
-            # One of the key's six request slots is busy, so nothing goes out.
+            # Seven of the twelve regular slots are busy, so nothing goes out.
             release = asyncio.Event()
 
             async def hold(_key, start_request) -> None:
                 await start_request()
                 await release.wait()
 
-            holder = asyncio.create_task(collector.regular_keys.run(hold))
-            await asyncio.sleep(0.01)
-            batch = asyncio.create_task(promotion_recheck.check_batch(collector, admit, set()))
-            await asyncio.sleep(0.3)
+            holders = [
+                asyncio.create_task(collector.regular_keys.run(hold)) for _ in range(7)
+            ]
+            await asyncio.sleep(0.05)
+            assert await promotion_recheck.check_batch(collector, admit, set()) is None
             assert _Provider.asked == []
             release.set()
-            await holder
-            assert (await asyncio.wait_for(batch, 5))["asked"] == 1
+            await asyncio.gather(*holders)
+            assert (await promotion_recheck.check_batch(collector, admit, set()))["asked"] == 1
             assert _Provider.asked == ["#8QQ"]
 
         try:
