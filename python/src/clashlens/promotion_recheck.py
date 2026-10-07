@@ -245,9 +245,15 @@ class Admission:
 
     async def __call__(self) -> bool:
         """Wait for this request's start slot; False when it must not start now."""
+        stopping = self._collector._stopping
+        if stopping.is_set():
+            return False
         start = max(self._next_start, time.monotonic())
         self._next_start = start + self._interval
-        await asyncio.sleep(start - time.monotonic())
+        try:
+            await asyncio.wait_for(stopping.wait(), timeout=start - time.monotonic())
+        except TimeoutError:
+            pass
         return await self.open() and self._keys_idle()
 
 
