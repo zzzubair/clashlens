@@ -1172,6 +1172,52 @@ def test_spool_reference_read_ignores_stale_statistics(database_url: str) -> Non
     assert referenced == kept
 
 
+def test_spool_reference_read_reads_kept_copies_not_the_whole_table(
+    database_url: str,
+) -> None:
+    # 7 October 2026: production's upload table held 2.64 million rows (1 GB)
+    # and the read scanned all of them to find the few thousand kept copies.
+    with upload_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state,
+                    archive_reference, archive_instance_id, completed_at,
+                    local_deleted_at
+                )
+                SELECT encode(sha256(n::text::bytea), 'hex'), 'sha256/' || n, 1,
+                       'complete', 's3://evidence/' || n, 'fixture-instance',
+                       %(now)s, CASE WHEN n <= 198000 THEN %(now)s::timestamptz END
+                FROM generate_series(1, 200000) AS n
+                """,
+                {"now": NOW},
+            )
+            connection.execute("ANALYZE collector_response_uploads")
+            table_pages = connection.execute(
+                "SELECT relpages FROM pg_class"
+                " WHERE relname = 'collector_response_uploads'"
+            ).fetchone()[0]
+            plan = connection.execute(
+                "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + REFERENCED_SPOOL_HASHES_SQL
+            ).fetchone()[0][0]["Plan"]
+
+    scan = _upload_table_scan(plan)
+    assert scan is not None, plan
+    assert scan["Actual Rows"] == 2000, scan
+    assert scan["Shared Hit Blocks"] + scan["Shared Read Blocks"] < table_pages / 20
+
+
+def _upload_table_scan(plan: dict) -> dict | None:
+    if plan.get("Relation Name") == "collector_response_uploads":
+        return plan
+    for child in plan.get("Plans", []):
+        if (found := _upload_table_scan(child)) is not None:
+            return found
+    return None
+
+
 def test_cleanup_batch_flushes_its_removals_together(database_url: str) -> None:
     # 7 October 2026: each removal waited for its own filesystem commit, about
     # 64 files in 7 s, so deleting archived copies fell behind the Reset.

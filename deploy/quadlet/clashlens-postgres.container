@@ -34,8 +34,12 @@ Notify=healthy
 # changes after a checkpoint, so checkpoints are spaced out and those copies
 # compressed. The larger cache writes a changed page once per checkpoint
 # instead of on every eviction. hba_file requires a password on every network
-# connection; see deploy/postgres/pg_hba.conf.
-Exec=postgres -c hba_file=/etc/clashlens/pg_hba.conf -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on -c shared_buffers=@@POSTGRES_SHARED_BUFFERS@@ -c wal_compression=zstd -c checkpoint_timeout=10min -c max_wal_size=2GB @@POSTGRES_ARCHIVE_ARGS@@
+# connection; see deploy/postgres/pg_hba.conf. The log records statements
+# over 5 s, lock waits over 1 s (deadlock_timeout) and every automatic vacuum
+# and statistics refresh, so a slowdown like 7 Oct 2026's is in the log. Query
+# values are left out: they can hold emails or session data, and ./ops turns
+# the slow-statement log off for its password changes.
+Exec=postgres -c hba_file=/etc/clashlens/pg_hba.conf -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on -c shared_buffers=@@POSTGRES_SHARED_BUFFERS@@ -c wal_compression=zstd -c checkpoint_timeout=10min -c max_wal_size=2GB -c log_min_duration_statement=5s -c log_lock_waits=on -c log_autovacuum_min_duration=0 -c log_parameter_max_length=0 @@POSTGRES_ARCHIVE_ARGS@@
 
 [Service]
 Restart=always

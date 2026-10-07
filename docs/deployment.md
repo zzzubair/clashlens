@@ -804,6 +804,24 @@ any required container is absent, stopped, or unhealthy. Logs come from the user
 journal, which includes both container output and systemd lifecycle failures
 without printing configuration files.
 
+Podman checks each container every 30 seconds and kills it after six failed
+checks in a row, about three minutes. The collector's check is `/livez` on
+port 8081. It fails only when the collector needs a restart: one of its three
+main loops (player checks, queued requests, uploads and cleanup) has not come
+round for 20 minutes, its spool or a saved-response handoff failed, or every
+regular or interactive key is quarantined. It never waits on the database, a
+spool lock or a thread, so a slow database slows collection without getting the
+collector killed; on 7 Oct 2026 it was killed 13 times for that. The port opens
+before startup recovery, which answers `starting`, and failures in the first
+five minutes are ignored; the five-minute start limit still applies. `/readyz`
+still reports the database, spool capacity and keys for a person to read.
+
+PostgreSQL logs statements slower than 5 seconds, waits for a lock longer than
+1 second, and every automatic vacuum and statistics refresh, without query
+values. On 6 Oct 2026 its log was 3.3 MB; at the 2,100 automatic runs a day
+seen since 18 Sep, these add roughly 2–3 MB a day, more on a slow day.
+`./ops` turns the slow-statement log off for its password changes.
+
 ## Private Discord alerts
 
 `./ops alert-check` checks the fourteen conditions below and posts changes to the

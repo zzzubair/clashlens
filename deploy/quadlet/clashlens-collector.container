@@ -26,11 +26,16 @@ NoNewPrivileges=true
 Memory=@@COLLECTOR_MEMORY@@
 PidsLimit=@@COLLECTOR_PIDS@@
 PodmanArgs=--pod=@@PREFIX@@-pod --cpus=@@COLLECTOR_CPUS@@
-HealthCmd=["CMD","python","-c","import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8081/readyz',timeout=3).status == 200"]
+# /livez fails only when the collector is stuck or needs a restart, never
+# because the database is slow; see python/src/clashlens/collector_liveness.py.
+HealthCmd=["CMD","python","-c","import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8081/livez',timeout=3).status == 200"]
 HealthInterval=30s
 HealthTimeout=10s
 HealthRetries=6
 HealthOnFailure=kill
+# Startup recovery can be slow; failed checks are ignored meanwhile, but
+# TimeoutStartSec below still stops a start that outlasts five minutes.
+HealthStartPeriod=5m
 Notify=healthy
 Exec=collector @@COLLECTOR_ARGS@@
 
