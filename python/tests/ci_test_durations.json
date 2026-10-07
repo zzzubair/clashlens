@@ -86,6 +86,7 @@
   "test_reconciliation.py": 0.0,
   "test_reconciliation_postgres.py": 18.29,
   "test_reset_pair_publication_postgres.py": 23.82,
+  "test_reset_reading_before_loss_postgres.py": 2.0,
   "test_reset_settlement_collection_postgres.py": 38.98,
   "test_reset_settlement_proof.py": 0.0,
   "test_reset_settlement_proof_postgres.py": 26.52,

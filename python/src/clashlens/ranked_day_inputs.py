@@ -331,7 +331,9 @@ def load_previous_day(
             coverage_complete,
             shield_state,
             shield_duration_days,
-            input_hash
+            input_hash,
+            end_baseline_id,
+            COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0)
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -368,6 +370,10 @@ def load_previous_day(
                 if previous_row[8] is not None
                 else None
             ),
+            end_baseline_id=(
+                int(previous_row[9]) if previous_row[9] is not None else None
+            ),
+            unsettled_automatic_loss=int(previous_row[10]),
         )
         if previous_row is not None
         else None
