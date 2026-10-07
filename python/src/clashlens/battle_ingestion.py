@@ -545,12 +545,13 @@ def complete_battle_log(
             first_battle_log.queue_earlier_days(
                 connection, reporter_id, battle_log.observed_at, valid_rows
             )
-            enqueue_discovered_players(
-                connection,
-                database,
-                claim,
-                (item["player_id"] for item in discoveries),
-            )
+            if discoveries:
+                enqueue_discovered_players(
+                    connection,
+                    database,
+                    claim,
+                    (item["player_id"] for item in discoveries),
+                )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
@@ -961,12 +962,13 @@ def _complete_battle_log_legacy(
             first_battle_log.queue_earlier_days(
                 connection, reporter_id, battle_log.observed_at, valid_rows
             )
-            enqueue_discovered_players(
-                connection,
-                database,
-                claim,
-                (item["player_id"] for item in discoveries),
-            )
+            if discoveries:
+                enqueue_discovered_players(
+                    connection,
+                    database,
+                    claim,
+                    (item["player_id"] for item in discoveries),
+                )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
