@@ -277,7 +277,7 @@ it("describes Daily trophies as values saved before the Reset, even with recent 
   mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
   const { html } = await render("view=daily&season=1788757200&day=28&page=1");
   expect(html).toContain('id="leaderboard-title">Day 28 standings</h1>');
-  expect(html).toContain("last value saved before this Reset");
+  expect(html).toContain("saved before the Reset plus the battles recorded after it");
   expect(html).toContain("7,211");
   expect(html).not.toContain("These standings are incomplete.");
   // The Live board's Season-reset rule never applies to a frozen day.

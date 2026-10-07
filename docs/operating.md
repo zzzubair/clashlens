@@ -649,13 +649,15 @@ mismatched ended days on 5 and 6 October, about 27 of them now fixable.
 for both kinds of day, at backfill priority; run it outside 04:00–07:00 UTC. A
 day still reporting the mismatch afterwards has a real one.
 
-**Boards that rank a missing player:** a Reset's Daily board leaves out a
-player whose profile check returned 404 (player not found) after their reading
-and before the Reset; see
+**Boards that rank a missing player or miss late battles:** a Reset's Daily
+board leaves out a player whose profile check returned 404 (player not found)
+after their reading and before the Reset, and adds each player's battles
+stamped after their reading; see
 [frozen snapshots](domain.md#6-ranked-day-and-leaderboard-snapshots). Boards
-frozen before that rule still rank such players: on 2026-10-07 the October
-2026 Season's Day 1 board ranked 24 and Day 2 34, with two of them first and
-second on Day 2 above ZOOS Yatta. After deploying the rule, run:
+frozen before those rules still rank such players and miss those battles: on
+2026-10-07 the October 2026 Season's Day 1 board ranked 24 missing players
+and Day 2 34, with two of them first and second on Day 2 above ZOOS Yatta,
+and Day 2 missed late battles for 290 players. After deploying the rules, run:
 
 ```sh
 podman exec clashlens-python-worker \
@@ -666,7 +668,8 @@ podman exec clashlens-python-worker \
 
 `preview` writes nothing and lists each of that Season's Reset boards whose
 frozen input still ranks such a player, with how many went missing
-(`profile_not_found`). `queue` adds one correction for each, rebuilding its
+(`profile_not_found`), or whose saved entries miss the battles after their
+readings, with how many (`late_battles`). `queue` adds one correction for each, rebuilding its
 leaderboard and army records; `correction` reads `queued`, or
 `already_queued` when one was waiting. The worker starts each correction as
 any other: the newest Reset at once, an older one after the 04:30–07:00 UTC

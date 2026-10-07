@@ -11,7 +11,11 @@ from psycopg.types.json import Jsonb
 from . import battle_day_repair
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import DECODER_VERSION
-from .boundary_manifest import _moved_decode_ids, profiles_not_found
+from .boundary_manifest import (
+    _moved_decode_ids,
+    battles_after_readings,
+    profiles_not_found,
+)
 from .boundary_manifest import (
     freeze_boundary_manifest as _freeze_boundary_manifest,
 )
@@ -1051,16 +1055,19 @@ def queue_board_rebuilds(
 ) -> dict[str, Any]:
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
     whose frozen input still ranks a reading taken before the player's
-    profile answered "player not found". On 5 to 7 October 2026 that was 24
-    players on Day 1 and 34 on Day 2, two of them first and second on Day 2.
+    profile answered "player not found", or whose saved entries miss the
+    battles after their readings. On 5 to 7 October 2026 that was 24
+    players on Day 1 and 34 on Day 2, two of them first and second on Day 2,
+    and 290 Day 2 entries.
 
     Each board gets one queued correction of both its leaderboard and army
     records, started as any other: once its build is published, outside a
     repair campaign and past-Reset pacing. Each Reset's newest board is read
     under its publication lock, so a correction is never queued against a
     board a worker has already replaced. A rebuilt board ranks no such
-    reading, so a later run lists nothing for it; one still queued is listed
-    again and not queued twice. Resets of other Seasons are never read.
+    reading and saves the battles after each one, so a later run lists
+    nothing for it; one still queued is listed again and not queued twice.
+    Resets of other Seasons are never read.
     """
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not is_season_boundary(season_start):
@@ -1082,7 +1089,7 @@ def queue_board_rebuilds(
                 lock_boundary_publication(connection, boundary_at)
                 current = connection.execute(
                     """
-                    SELECT id, generation, snapshot_manifest_id
+                    SELECT id, generation, snapshot_manifest_id, snapshot_id
                     FROM boundary_publication_generations
                     WHERE boundary_at = %s
                       AND snapshot_state <> 'superseded'
@@ -1095,22 +1102,56 @@ def queue_board_rebuilds(
                 # A board not frozen yet is built under the current rule.
                 if current is None or current[2] is None:
                     continue
-                generation_id, generation, manifest_id = current
+                generation_id, generation, manifest_id, snapshot_id = current
+                rows = connection.execute(
+                    """
+                    SELECT player_id,
+                           input_identity->'profile_snapshot'->>'observed_at',
+                           ranked_day_version_id
+                    FROM boundary_publication_manifest_rows
+                    WHERE manifest_id = %s
+                      AND input_identity->>'snapshot_quality' = 'eligible'
+                    """,
+                    (manifest_id,),
+                ).fetchall()
                 readings = {
-                    int(row[0]): datetime.fromisoformat(str(row[1]))
-                    for row in connection.execute(
-                        """
-                        SELECT player_id,
-                               input_identity->'profile_snapshot'->>'observed_at'
-                        FROM boundary_publication_manifest_rows
-                        WHERE manifest_id = %s
-                          AND input_identity->>'snapshot_quality' = 'eligible'
-                        """,
-                        (manifest_id,),
-                    ).fetchall()
+                    int(row[0]): datetime.fromisoformat(str(row[1])) for row in rows
                 }
                 not_found = profiles_not_found(connection, boundary_at, readings)
-                if not not_found:
+                # Saved entries whose value or mark the battles after their
+                # reading change. A board not built yet saves them already.
+                after_reading = battles_after_readings(
+                    connection,
+                    boundary_at,
+                    {
+                        int(row[0]): (int(row[2]), readings[int(row[0])])
+                        for row in rows
+                        if row[2] is not None
+                    },
+                )
+                entries = connection.execute(
+                    """
+                    SELECT entry.player_id, entry.trophies,
+                           (manifest.input_identity
+                               ->'profile_snapshot'->>'trophies')::integer,
+                           entry.confidence
+                    FROM leaderboard_snapshot_entries AS entry
+                    JOIN boundary_publication_manifest_rows AS manifest
+                      ON manifest.manifest_id = %s
+                     AND manifest.player_id = entry.player_id
+                    WHERE entry.snapshot_id = %s
+                    """,
+                    (manifest_id, snapshot_id),
+                ).fetchall()
+                late_battles = sum(
+                    (trophies, _text_value(confidence))
+                    != (
+                        reading_trophies + after_reading.get(int(player_id), 0),
+                        "confirmed" if int(player_id) in after_reading else "uncertain",
+                    )
+                    for player_id, trophies, reading_trophies, confidence in entries
+                )
+                if not not_found and not late_battles:
                     continue
                 queued = connection.execute(
                     """
@@ -1149,6 +1190,7 @@ def queue_board_rebuilds(
                         "boundary_at": boundary_at.astimezone(UTC).isoformat(),
                         "generation": int(generation),
                         "profile_not_found": len(not_found),
+                        "late_battles": late_battles,
                         "correction": (
                             "already_queued" if queued is not None
                             else "queued" if queue

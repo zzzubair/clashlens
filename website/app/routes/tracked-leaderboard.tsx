@@ -242,9 +242,10 @@ export default function TrackedLeaderboardRoute() {
           <p className="rankings-context">
             Legend season {formatDate(daily.seasonStartAt)} –{" "}
             {formatDate(daily.seasonEndAt)} · Day reset{" "}
-            <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s last
-            value saved before this Reset, so they may not include every change the game
-            made at the end of the day.
+            <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s total
+            at this Reset, before the game&apos;s automatic defense loss: their last value
+            saved before the Reset plus the battles recorded after it. Where we can&apos;t
+            confirm every later battle was recorded, the saved value is shown alone.
           </p>
         ) : newestObservedAt ? (
           <p className="rankings-context">

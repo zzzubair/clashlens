@@ -434,6 +434,63 @@ def profiles_not_found(
     }
 
 
+def battles_after_readings(
+    connection: Any,
+    boundary_at: datetime,
+    readings: Mapping[int, tuple[int, datetime]],
+) -> dict[int, int]:
+    """Each player's trophy change from their ended day's battles stamped
+    after their reading, for players whose day proves none is missing.
+
+    ``readings`` maps a player to the version of their day ending at
+    ``boundary_at`` and their reading's time. The reading plus this change
+    is their trophies at the Reset before the automatic defense loss. A
+    battle stamped after the reading cannot be in it, so none is counted
+    twice. Proof is the day's continuous battle logs, a reading taken on that
+    day and a time on every battle the day counts; a player without it is
+    left out, and the board keeps their reading and marks it uncertain.
+    """
+    if not readings:
+        return {}
+    return {
+        int(row[0]): int(row[1])
+        for row in connection.execute(
+            """
+            SELECT reading.player_id, late.trophy_change
+            FROM unnest(%s::bigint[], %s::bigint[], %s::timestamptz[])
+                AS reading (player_id, version_id, observed_at)
+            JOIN ranked_day_versions AS ranked
+              ON ranked.id = reading.version_id
+             AND ranked.player_id = reading.player_id
+             AND ranked.ranked_day_end = %s
+            CROSS JOIN LATERAL (
+                SELECT COALESCE(sum(
+                           CASE WHEN battle.value->>'lens' = 'offense' THEN 1
+                                ELSE -1 END
+                           * (battle.value->>'amount_used')::integer
+                       ) FILTER (
+                           WHERE (battle.value->>'battle_timestamp')::timestamptz
+                                 > reading.observed_at
+                       ), 0),
+                       bool_and(battle.value->>'battle_timestamp' IS NOT NULL)
+                FROM jsonb_array_elements(ranked.input_evidence->'contributions')
+                    AS battle
+                WHERE battle.value->>'included' = 'true'
+            ) AS late (trophy_change, every_battle_timed)
+            WHERE ranked.coverage_complete
+              AND reading.observed_at >= ranked.ranked_day_start
+              AND late.every_battle_timed IS NOT FALSE
+            """,
+            (
+                list(readings),
+                [version_id for version_id, _ in readings.values()],
+                [observed_at for _, observed_at in readings.values()],
+                boundary_at,
+            ),
+        ).fetchall()
+    }
+
+
 def _army_rows(
     connection: Any, members: list[Any], generation: Any
 ) -> list[dict[str, Any]]:
