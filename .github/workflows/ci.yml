@@ -78,9 +78,13 @@ jobs:
           RESULT: ${{ needs.python-tests.result }}
         run: test "$RESULT" = success
 
-  website:
-    name: Website Node 24 checks and Chromium E2E
+  website-tests:
+    name: Website checks and browser tests, shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -92,13 +96,16 @@ jobs:
         working-directory: website
         run: npm ci
       - name: Runtime dependency audit (blocking)
+        if: matrix.shard == 1
         working-directory: website
         run: npm audit --omit=dev
       - name: Full dependency audit (reported)
+        if: matrix.shard == 1
         working-directory: website
         continue-on-error: true
         run: npm audit
       - name: Test
+        if: matrix.shard == 1
         working-directory: website
         run: npm test
       - name: Install rootless Podman
@@ -110,7 +117,11 @@ jobs:
         run: npx playwright install --with-deps chromium webkit
       - name: Production build and development stack browser tests
         working-directory: website
-        run: npm run test:e2e
+        # Each shard starts its own development stack, so the halves never
+        # share a database.
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npm run test:e2e -- --shard="$SHARD/2"
       - name: Clean up browser test stack
         if: always()
         # Playwright normally sends SIGTERM to dev e2e-server. Also remove
@@ -127,6 +138,17 @@ jobs:
               podman volume rm "$project-$suffix"
             fi
           done
+
+  website:
+    name: Website Node 24 checks and Chromium E2E
+    if: always()
+    needs: website-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both website shards to pass
+        env:
+          RESULT: ${{ needs.website-tests.result }}
+        run: test "$RESULT" = success
 
   containers:
     name: Container packaging and runtime checks

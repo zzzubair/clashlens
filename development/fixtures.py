@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import signal
 import tempfile
 import threading
 from datetime import UTC, datetime, timedelta
@@ -662,6 +663,9 @@ class ArchiveHandler(QuietHandler):
 
 
 def serve(handler: type[BaseHTTPRequestHandler], host: str, port: int) -> None:
+    # As a container's first process, SIGTERM is ignored unless handled, so
+    # stopping the stack would wait out podman's timeout.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     server = ThreadingHTTPServer((host, port), handler)
     try:
         server.serve_forever()

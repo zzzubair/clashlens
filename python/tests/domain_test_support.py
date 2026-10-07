@@ -142,27 +142,66 @@ def as_api_role(connection_info: str) -> str:
     )
 
 
+DOMAIN_SCHEMA = "python_domain"
+_templates: dict[str, str] = {}
+
+
+def _domain_template(database_url: str) -> str:
+    """Migrate one template database per migration set and server.
+
+    Copying it takes a fraction of the time that applying every migration
+    again for each test takes.
+    """
+    if database_url in _templates:
+        return _templates[database_url]
+    migrations = sorted(
+        (Path(__file__).parents[2] / "deploy" / "migrations").glob("*.sql")
+    )
+    sources = [path.read_text(encoding="utf-8") for path in migrations]
+    grants = production_worker_grants()
+    digest = hashlib.sha256("\0".join([*sources, *grants]).encode()).hexdigest()
+    template = f"python_domain_template_{digest[:16]}"
+    with psycopg.connect(
+        make_conninfo(database_url, dbname="postgres"), autocommit=True
+    ) as admin:
+        # Another pytest process on this server may be building it too.
+        admin.execute("SELECT pg_advisory_lock(hashtext('clashlens domain template'))")
+        if not admin.execute(
+            "SELECT 1 FROM pg_database WHERE datname = %s", (template,)
+        ).fetchone():
+            building = f"{template}_building"
+            admin.execute(f'DROP DATABASE IF EXISTS "{building}" WITH (FORCE)')
+            admin.execute(f'CREATE DATABASE "{building}"')
+            with psycopg.connect(
+                make_conninfo(database_url, dbname=building), autocommit=True
+            ) as connection:
+                connection.execute(f'CREATE SCHEMA "{DOMAIN_SCHEMA}"')
+                connection.execute(f'SET search_path = "{DOMAIN_SCHEMA}"')
+                for sql in sources:
+                    apply_migration(connection, sql)
+                for statement in grants:
+                    connection.execute(statement)
+            admin.execute(f'ALTER DATABASE "{building}" RENAME TO "{template}"')
+    _templates[database_url] = template
+    return template
+
+
 @contextmanager
 def domain_database(
     database_url: str, *, include_coordinator: bool = False
 ) -> Iterator[str]:
-    schema = f"python_domain_{uuid4().hex}"
+    template = _domain_template(database_url)
+    database = f"python_domain_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
-        admin.execute(f'CREATE SCHEMA "{schema}"')
-    connection_info = make_conninfo(database_url, options=f"-c search_path={schema}")
+        admin.execute(f'CREATE DATABASE "{database}" TEMPLATE "{template}"')
+    connection_info = make_conninfo(
+        database_url, dbname=database, options=f"-c search_path={DOMAIN_SCHEMA}"
+    )
     try:
-        root = Path(__file__).parents[2]
-        migrations_dir = root / "deploy" / "migrations"
-        sql_files = sorted(migrations_dir.glob("*.sql"))
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            for path in sql_files:
-                apply_migration(connection, path.read_text(encoding="utf-8"))
-            for statement in production_worker_grants():
-                connection.execute(statement)
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
-            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
 
 
 @contextmanager

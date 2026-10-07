@@ -59,7 +59,7 @@ def command_workspace(tmp_path):
     calls = workspace / "calls.jsonl"
     substitute = (
         f"#!{sys.executable}\n"
-        "import json, os, subprocess, sys\n"
+        "import json, os, shlex, subprocess, sys\n"
         "from pathlib import Path\n"
         "command = Path(sys.argv[0]).name\n"
         "args = sys.argv[1:]\n"
@@ -73,6 +73,8 @@ def command_workspace(tmp_path):
         "if command == 'npm' and (args[:1] == ['run'] or args == ['test']):\n"
         "    name = args[1] if args[0] == 'run' else 'test'\n"
         "    script = json.loads(Path('package.json').read_text())['scripts'][name]\n"
+        "    extra = args[args.index('--') + 1 :] if '--' in args else []\n"
+        "    script = ' '.join([script, *map(shlex.quote, extra)])\n"
         "    sys.exit(subprocess.call(['bash', '-e', '-o', 'pipefail', '-c', script]))\n"
         "if command == 'podman' and args[:1] == ['run']:\n"
         "    os.chdir(Path(os.environ['GITHUB_WORKSPACE']) / 'python')\n"
@@ -109,13 +111,13 @@ def command_workspace(tmp_path):
     return workspace, environment
 
 
-def _run_step(step, command_workspace, job_environment=None):
+def _run_step(step, command_workspace, job_environment=None, shard="1"):
     workspace, environment = command_workspace
     step_environment = {
         key: value.replace(
             "${{ matrix.group }}",
             (job_environment or {}).get("CLASHLENS_TEST_GROUP", "1"),
-        )
+        ).replace("${{ matrix.shard }}", shard)
         for key, value in step.get("env", {}).items()
     }
     return subprocess.run(
@@ -216,9 +218,10 @@ def test_native_python_failure_stops_before_development_tests(
             True,
         ),
         ("packaged-python", "packaged-python-tests", "Packaged Python tests", False),
+        ("website", "website-tests", "Website Node 24 checks and Chromium E2E", True),
     ],
 )
-def test_required_python_result_rejects_failed_cancelled_or_skipped_groups(
+def test_required_result_rejects_failed_cancelled_or_skipped_groups(
     command_workspace, result, required, groups, name, on_pull_requests
 ) -> None:
     job = _workflow()["jobs"][required]
@@ -285,15 +288,17 @@ def test_invalid_python_group_fails_instead_of_silently_omitting_tests() -> None
     assert completed.returncode == pytest.ExitCode.USAGE_ERROR
 
 
+@pytest.mark.parametrize("shard", ["1", "2"])
 @pytest.mark.parametrize(
     "failure",
     [[], ["npm", "audit"], ["react-router", "build"], ["playwright", "test"]],
 )
 def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
-    command_workspace, failure
+    command_workspace, failure, shard
 ) -> None:
-    job = _workflow()["jobs"]["website"]
+    job = _workflow()["jobs"]["website-tests"]
     assert "if" not in job
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": [1, 2]}}
     setup_node = next(
         step for step in job["steps"] if step.get("uses") == "actions/setup-node@v4"
     )
@@ -305,24 +310,33 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
 
     cleanup = next(step for step in job["steps"] if "Clean up" in step.get("name", ""))
     assert cleanup["if"] == "always()"
-    command_workspace[1]["FAIL_COMMAND"] = json.dumps(failure)
+    command_workspace[1]["FAIL_COMMAND"] = json.dumps(
+        ["playwright", "test", f"--shard={shard}/2"]
+        if failure[:1] == ["playwright"]
+        else failure
+    )
     failed = False
     for step in job["steps"]:
         if "run" not in step or (failed and step.get("if") != "always()"):
             continue
-        if step is not cleanup:
-            assert "if" not in step
-        result = _run_step(step, command_workspace)
+        if step is not cleanup and "if" in step:
+            # Website checks run once, beside the first half of the browser tests.
+            assert step["if"] == "matrix.shard == 1"
+            if shard != "1":
+                continue
+        result = _run_step(step, command_workspace, shard=shard)
         if result.returncode and not step.get("continue-on-error", False):
             failed = True
     assert failed == (failure in (["react-router", "build"], ["playwright", "test"]))
     calls = _calls(command_workspace)
     operations = [(call["command"], call["args"]) for call in calls]
-    assert operations[:4] == [
+    assert operations[: 4 if shard == "1" else 1] == [
         ("npm", ["ci"]),
-        ("npm", ["audit", "--omit=dev"]),
-        ("npm", ["audit"]),
-        ("npm", ["test"]),
+        *(
+            [("npm", ["audit", "--omit=dev"]), ("npm", ["audit"]), ("npm", ["test"])]
+            if shard == "1"
+            else []
+        ),
     ]
     browser_operations = [
         operation
@@ -330,7 +344,7 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
         if operation[0] in ("npx", "react-router", "node", "playwright", "dev")
     ]
     expected = [
-        ("react-router", ["typegen"]),
+        *([("react-router", ["typegen"])] if shard == "1" else []),
         ("npx", ["playwright", "install", "--with-deps", "chromium", "webkit"]),
         ("react-router", ["build"]),
     ]
@@ -338,7 +352,7 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
         expected.extend(
             [
                 ("node", ["./scripts/check-browser-assets.mjs"]),
-                ("playwright", ["test"]),
+                ("playwright", ["test", f"--shard={shard}/2"]),
             ]
         )
     assert browser_operations == expected
@@ -626,7 +640,7 @@ def test_browser_cleanup_only_removes_its_own_stack(tmp_path, exists) -> None:
     podman.chmod(0o700)
     step = next(
         step
-        for step in _workflow()["jobs"]["website"]["steps"]
+        for step in _workflow()["jobs"]["website-tests"]["steps"]
         if "Clean up" in step.get("name", "")
     )
     subprocess.run(

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import signal
+import socket
+import subprocess
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
@@ -269,3 +274,29 @@ def test_refused_archive_upload_keeps_connection_usable(
         server.shutdown()
         thread.join(timeout=2)
         server.server_close()
+
+
+def test_fixture_service_exits_cleanly_on_stop_signal() -> None:
+    # Unhandled, SIGTERM is ignored by a container's first process, so podman
+    # waited 30s and then killed every fake service.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    service = subprocess.Popen(
+        [sys.executable, Path(__file__).with_name("fixtures.py"), "clash"]
+        + ["--port", str(port), "--players", "1"]
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                break
+            except OSError:
+                assert service.poll() is None and time.monotonic() < deadline
+                time.sleep(0.05)
+        service.send_signal(signal.SIGTERM)
+        assert service.wait(timeout=5) == 0
+    finally:
+        service.kill()
+        service.wait()

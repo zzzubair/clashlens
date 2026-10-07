@@ -1585,7 +1585,7 @@ def test_reset_baseline_evidence_worker_role_contract(
         work_id = int(work_before[0])
 
         worker_connection_info = make_conninfo(
-            database_url,
+            connection_info,
             options=f"-c search_path={schema}",
         )
 
