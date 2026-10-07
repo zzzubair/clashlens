@@ -28,6 +28,7 @@ _MAX_DESCRIPTION = 4000
 # /me lists this many players before a "Show all" button.
 COMPACT_LIMIT = 4
 _DAILY_BATTLES = 8
+WAITING_FOR_RESET = "Waiting for Season reset"
 
 # One line per command for /help, also used as each command's description.
 COMMANDS = (
@@ -257,7 +258,7 @@ def card_status(card: Mapping[str, Any]) -> str | None:
     if card.get("reason"):
         return _REASON_WORDS.get(card["reason"], "Being checked")
     if card["season_reset_pending"]:
-        return "Waiting for Season reset"
+        return WAITING_FOR_RESET
     if card["trophies"] is None:
         return "Being checked"
     return None
@@ -391,7 +392,7 @@ def full_day(
         None,
     )
     if page["season_reset_pending"]:
-        summary = ["Waiting for Season reset"]
+        summary = [WAITING_FOR_RESET]
     else:
         summary = [f"{number(page['trophies'])} 🏆"]
     summary.append("Unranked" if rank is None else f"#{number(rank)} among tracked")

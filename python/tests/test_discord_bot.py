@@ -132,6 +132,10 @@ class FakeStore:
 
     def main_tag(self, account):
         self._read("main_tag")
+        # As the database does: a main no longer verified is forgotten.
+        own = {item["tag"] for item in self.cards[account.internal_id]}
+        if self.mains.get(account.internal_id) not in own:
+            self.mains.pop(account.internal_id, None)
         return self.mains.get(account.internal_id)
 
     def set_main(self, account, tag):
@@ -568,13 +572,22 @@ def test_full_day_without_a_published_day_says_what_is_unavailable(store) -> Non
 
 
 @pytest.mark.parametrize(
-    ("state", "reason", "word"),
-    [("not_in_legend", None, "Not in Legend"), ("tracking", "pending", "Being checked")],
+    ("state", "reason", "pending", "word"),
+    [
+        ("not_in_legend", None, False, "Not in Legend"),
+        ("tracking", "pending", False, "Being checked"),
+        # Left Legend I with last Season's profile: still Not in Legend.
+        ("not_in_legend", None, True, "Not in Legend"),
+        ("uncertain", None, True, "Being checked"),
+    ],
 )
 def test_a_player_whose_numbers_do_not_apply_gets_its_status_not_old_numbers(
-    store, state, reason, word
+    store, state, reason, pending, word
 ) -> None:
-    store.connect(ME, [card("#2PP", "Drift", 5842, state=state, reason=reason)])
+    store.connect(
+        ME,
+        [card("#2PP", "Drift", 5842, state=state, reason=reason, season_reset_pending=pending)],
+    )
     store.pages["#2PP"] = page("#2PP", "Drift", [])
     message = run_command(store, "me", FakeInteraction(), account=None, share=False)
     assert message["title"] == "Drift #2PP"
@@ -634,6 +647,17 @@ def test_a_typed_tag_is_matched_only_as_written(store) -> None:
     assert refused["text"] == "That player isn't linked to your Clash Lens account."
     saved = run_command(store, "main", FakeInteraction(), account="  #0qq ")
     assert saved["text"].startswith("Main is now Zero #0QQ.")
+
+
+def test_a_main_moved_away_is_forgotten_by_any_command_that_shows_the_main(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    store.mains[1] = "#8QQ"
+    lens = store.cards[1].pop()
+    # With one player left, /main names it without the saved main.
+    assert run_command(store, "main", FakeInteraction())["text"].startswith("Main is Drift")
+    store.cards[1].append(lens)
+    text = run_command(store, "main", FakeInteraction())["text"]
+    assert text.startswith("No main chosen yet.")
 
 
 def test_only_the_person_who_ran_the_command_can_use_its_dropdown(store) -> None:
