@@ -227,13 +227,14 @@ class Admission:
 
     def _keys_idle(self) -> bool:
         """At least one key's worth of regular request slots is idle."""
+        keys = self._collector.regular_keys
         now = time.monotonic()
         idle = sum(
             state.semaphore._value
-            for state in self._collector.regular_keys._states
+            for state in keys._states
             if state.healthy and state.paused_until <= now
         )
-        return idle >= int(os.environ.get("CLASHLENS_CONCURRENCY_PER_KEY", "6"))
+        return idle >= keys.concurrency_per_key
 
     async def __call__(self) -> bool:
         """Wait for this request's start slot; False when it must not start now."""
@@ -249,15 +250,16 @@ async def check_batch(
     """Ask for one batch of listed players; None when nothing could be asked.
 
     Players asked this pass and left due are skipped until no other player is
-    due; then ``attempted`` is cleared and they are asked again.
+    due; that ends the pass, so ``attempted`` is cleared and None returned, and
+    the next pass asks them again.
     """
     if not await admit.open():
         return None
     now = admit.clock()
     tags = await collector._database_call(due_tags, collector.database, now, sorted(attempted))
-    if not tags and attempted:
+    if not tags:
         attempted.clear()
-        tags = await collector._database_call(due_tags, collector.database, now, [])
+        return None
     gate = asyncio.Semaphore(IN_FLIGHT)
     refused: set[str] = set()
 
@@ -268,7 +270,14 @@ async def check_batch(
                 return None
             return await _ask(collector, tag)
 
-    answers = await asyncio.gather(*(ask(tag) for tag in tags))
+    tasks = [asyncio.create_task(ask(tag)) for tag in tags]
+    try:
+        answers = await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     found = [answer for answer in answers if answer is not None]
     asked = len(tags) - len(refused)
     if not asked:

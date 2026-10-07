@@ -477,6 +477,7 @@ class KeyPool:
         self._selection_lock = asyncio.Lock()
         self._before_start = before_start
         self.starts_per_second = starts_per_second
+        self.concurrency_per_key = concurrency_per_key
 
     async def run(
         self, request: Callable[[ApiKey, StartRequest], Awaitable[T]]

@@ -12,10 +12,12 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 from urllib.parse import unquote
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation
 from test_reset_settlement_collection_postgres import _collector
 
@@ -405,7 +407,45 @@ def test_players_left_due_are_asked_again_after_the_rest_of_the_list(
                 "DELETE FROM promotion_candidates WHERE normalized_tag NOT IN ('#8QQ', '#9QQ')"
             )
         attempted: set[str] = set()
-        for _ in range(3):
-            _check(origin, connection_info, tmp_path, now, attempted)
-        # The oldest failing row does not hold back the next one.
+        results = [_check(origin, connection_info, tmp_path, now, attempted) for _ in range(4)]
+        # The oldest failing row does not hold back the next one, and it is
+        # asked again only after the pass ends and its pause.
+        assert [result and result["asked"] for result in results] == [1, 1, None, 1]
         assert _Provider.asked == ["#8QQ", "#9QQ", "#8QQ"]
+
+
+def test_a_failing_request_stops_the_rest_of_its_batch_first() -> None:
+    cancelled = []
+
+    async def database_call(function, *_args):
+        return {
+            promotion_recheck.has_spare_time: True,
+            promotion_recheck.due_tags: ["#8QQ", "#2QQ"],
+        }[function]
+
+    async def fetch_player(_keys, tag: str, _endpoint: str):
+        if tag == "#2QQ":
+            raise RuntimeError("database guard failed")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(tag)
+
+    async def scenario() -> None:
+        collector = SimpleNamespace(
+            _database_call=database_call,
+            _stopping=asyncio.Event(),
+            database=None,
+            regular_keys=KeyPool(
+                [ApiKey("regular-1", "secret")], starts_per_second=25, concurrency_per_key=2
+            ),
+            client=SimpleNamespace(fetch_player=fetch_player),
+        )
+        now = MONDAY + timedelta(minutes=40)
+        admit = promotion_recheck.Admission(collector, 1000.0, clock=lambda: now)
+        with pytest.raises(RuntimeError):
+            await promotion_recheck.check_batch(collector, admit, set())
+        # The slow request ended before the error came back, so no batch outlives its limit.
+        assert cancelled == ["#8QQ"]
+
+    asyncio.run(scenario())
