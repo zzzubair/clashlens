@@ -29,7 +29,7 @@ Usage: ./ops build [--fixture]
        ./ops up [--fixture] [--restart-collector|--keep-collector]
        ./ops down
        ./ops status
-       ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention|ranked-day-compaction|history-retention]
+       ./ops logs [postgres|collector|api|worker|website|discord-bot|archive|clash-api|login|backup|archive-retention|ranked-day-compaction|history-retention]
        ./ops queue-status | ranked-day-compaction
        ./ops backup
        ./ops backup-status
@@ -449,7 +449,7 @@ guard_trusted_proxy_ip() {
 guard_existing_resources() {
   local prefix resource
   for prefix in clashlens clashlens-ops-fixture; do
-    for resource in postgres collector python-api python-worker website archive clash-api login admin-operation archive-prune history-prune; do
+    for resource in postgres collector python-api python-worker website discord-bot archive clash-api login admin-operation archive-prune history-prune; do
       guard_resource container "$prefix-$resource"
     done
     guard_resource pod "$prefix-pod"
@@ -463,7 +463,7 @@ guard_existing_resources() {
     clashlens-collector-archive-access-key clashlens-collector-archive-secret-key clashlens-worker-archive-access-key clashlens-worker-archive-secret-key \
     clashlens-normal-api-keys clashlens-interactive-api-keys clashlens-interactive-1 clashlens-hmac-current clashlens-hmac-previous \
     clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config \
-    clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key clashlens-history-operator-database-url; do
+    clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key clashlens-history-operator-database-url clashlens-discord-bot-token; do
     guard_resource secret "$secret"
   done
 }
@@ -730,7 +730,7 @@ render_units() {
       WEBSITE_PORT "$WEBSITE_PORT" HEALTH_PORT "$HEALTH_PORT" COLLECTOR_ARGS "$COLLECTOR_ARGS" API_ARGS "$API_ARGS" \
       WORKER_ARGS "$WORKER_ARGS" WORKER_LEASE "$WORKER_LEASE" WORKER_CONCURRENCY "$WORKER_CONCURRENCY" WORKER_PROCESSES "$WORKER_PROCESSES" \
       WORKER_DB_POOL "$WORKER_DB_POOL" WORKER_ARCHIVE_POOL "$WORKER_ARCHIVE_POOL" \
-      WORKER_PODMAN_STOP "$((WORKER_LEASE + 10))" WORKER_STOP "$((WORKER_LEASE + 15))"
+      WORKER_PODMAN_STOP "$((WORKER_LEASE + 10))" WORKER_STOP "$((WORKER_LEASE + 15))" PUBLIC_ORIGIN "$(setting CLASHLENS_PUBLIC_ORIGIN https://disabled.invalid)"
   done
   if [[ "$MODE" != fixture ]]; then
     rm -f "$QUADLET_DIR/clashlens-archive.container" "$QUADLET_DIR/clashlens-clash-api.container" "$QUADLET_DIR/clashlens-login.container"
@@ -739,6 +739,7 @@ render_units() {
     [[ "$ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "alert service requires a checkout path without spaces or systemd specifiers"
     alert_requires='Wants=clashlens-alert.timer clashlens-ranked-day-compaction.timer clashlens-history-retention.timer'
     for base in alert ranked-day-compaction history-retention; do render "$TEMPLATE_DIR/clashlens-$base.service" "$USER_UNIT_DIR/clashlens-$base.service" ROOT "$ROOT"; render "$TEMPLATE_DIR/clashlens-$base.timer" "$USER_UNIT_DIR/clashlens-$base.timer"; done
+    [[ "$(setting CLASHLENS_DISCORD_BOT off)" != on ]] || alert_requires+=$'\nWants=clashlens-discord-bot.service'
   fi
   if [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" == apply ]]; then
     backup_requires+=$'\nWants=clashlens-archive-retention.timer'
@@ -901,6 +902,7 @@ validate_production_secret_files() {
       [[ "${#SECRET_VALUE}" -le 512 && "$SECRET_VALUE" != *[[:space:]]* && "$SECRET_VALUE" != CHANGE_ME && "$SECRET_VALUE" != REPLACE_ME ]] || die "$file contains an invalid provider secret"
     done
   fi
+  [[ "$(setting CLASHLENS_DISCORD_BOT off)" != on ]] || read_secret_value "$secret_dir/clashlens-discord-bot.token"
   [[ "$(setting CLASHLENS_ARCHIVE_RETENTION off)" =~ ^(off|preview|apply)$ ]] || die "CLASHLENS_ARCHIVE_RETENTION must be off, preview or apply"
   if [[ "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]; then
     [[ "$(setting CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD)" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || die "CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD must be 32-128 URL-safe characters"
@@ -959,6 +961,7 @@ prepare_secrets() {
     replace_secret clashlens-interactive-api-keys "interactive-1=$interactive_key"
     replace_file_secret clashlens-interactive-1 "$secret_dir/$name"
     replace_file_secret clashlens-hmac-current "$secret_dir/${CONFIG[CLASHLENS_HMAC_SECRET_FILE]##*/}"
+    [[ "$(setting CLASHLENS_DISCORD_BOT off)" != on ]] || replace_file_secret clashlens-discord-bot-token "$secret_dir/clashlens-discord-bot.token"
     if [[ -n "$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" ]]; then
       replace_file_secret clashlens-hmac-previous "$secret_dir/${CONFIG[CLASHLENS_HMAC_PREVIOUS_SECRET_FILE]##*/}"
     else
@@ -1272,7 +1275,7 @@ logs() {
     journalctl --user-unit clashlens.target --user-unit 'clashlens-*.service' --lines 200 --no-pager
     return
   fi
-  case "$service" in postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention|ranked-day-compaction|history-retention) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
+  case "$service" in postgres|collector|api|worker|website|discord-bot|archive|clash-api|login|backup|archive-retention|ranked-day-compaction|history-retention) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
   shift || true
   journalctl --user-unit "$unit" "$@"
 }

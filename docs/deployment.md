@@ -936,12 +936,20 @@ Podman secret only the cleanup container mounts. It logs in as
 Fixture stacks get no timer, and the role cannot log in there. Checks and
 failure handling are in [operating](operating.md#finished-job-cleanup-failed).
 
+## Discord bot
+
+`./ops up` installs the Discord bot's unit in every mode but starts it only in
+production with `CLASHLENS_DISCORD_BOT=on` and the mode-600 token file
+`clashlens-discord-bot.token` under `CLASHLENS_API_KEY_HOST_DIR`. The
+[Discord bot](discord-bot.md) page has the go-live checklist.
+
 ## Status and logs
 
 ```sh
 ./ops status
 ./ops logs
 ./ops logs collector
+./ops logs discord-bot
 ./ops logs postgres --since today
 ./ops logs worker -f
 ./ops queue-status
