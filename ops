@@ -995,7 +995,7 @@ psql_exec() {
 }
 
 psql_exec_sensitive() {
-  local options='-c log_statement=none -c log_min_error_statement=panic -c pg_stat_statements.track_utility=off'
+  local options='-c log_statement=none -c log_min_error_statement=panic -c log_min_duration_statement=-1 -c pg_stat_statements.track_utility=off'
   "$PODMAN_BIN" exec --interactive --env "PGOPTIONS=$options" "$PREFIX-postgres" \
     psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" "$@"
 }

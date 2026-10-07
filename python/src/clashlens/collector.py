@@ -21,6 +21,7 @@ from psycopg_pool import PoolTimeout
 from . import (
     collector_commits,
     collector_intents,
+    collector_liveness,
     collector_reset,
     collector_uploads,
     promotion_recheck,
@@ -139,11 +140,17 @@ class Collector:
         self._metrics_lock = asyncio.Lock()
         self._metrics_refresh_after = 0.0
         self._database_metrics: dict[str, int | float] = {}
+        # When each main loop last came round, and database calls running,
+        # for the container health check.
+        self.loop_passes: dict[str, float] = {}
+        self.database_waits: set[object] = set()
+        collector_liveness.mark(self, "start")
 
     async def _database_call(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         for attempt in range(3):
             try:
-                return await asyncio.to_thread(operation, *args, **kwargs)
+                with collector_liveness.database_wait(self):
+                    return await asyncio.to_thread(operation, *args, **kwargs)
             except psycopg.errors.LockNotAvailable:
                 raise
             except (psycopg.Error, PoolTimeout):
@@ -892,13 +899,16 @@ class Collector:
         )
 
     def cleanup_uploaded(self, *, limit: int = _CLEANUP_LOOKUP_SIZE) -> tuple[int, int]:
-        candidates = self.database.deletable_hashes(limit=limit)
+        with collector_liveness.database_wait(self):
+            candidates = self.database.deletable_hashes(limit=limit)
         deleted = 0
         for index, turn in enumerate(batched(candidates, _CLEANUP_BATCH_SIZE)):
             if index:
+                collector_liveness.mark(self, "uploads")
                 time.sleep(0.1)
             with self.spool.delete_unreferenced_batch() as delete:
-                deleted += self.database.delete_spool_if_deletable(list(turn), delete)
+                with collector_liveness.database_wait(self):
+                    deleted += self.database.delete_spool_if_deletable(list(turn), delete)
         return deleted, len(candidates)
 
     async def run(
@@ -912,24 +922,27 @@ class Collector:
     ) -> None:
         """Run admissions, intent work, uploads, cleanup, and health together."""
         self._stopping = stop_requested
-        await _drain_to_thread(self.recover_handoffs)
-        collector_commits.commit_unrecovered(self, self._unrecovered)
-        await _drain_to_thread(self.spool.cleanup_stale, 60.0)
+        # Open health first: on 7 Oct 2026 a 60 s recovery read ran before it
+        # opened, so every restart was killed again before it could answer.
         server = await asyncio.start_server(
-            self._handle_health, health_host, health_port
+            partial(collector_liveness.serve, self), health_host, health_port
         )
-        tasks = [
-            asyncio.create_task(self._regular_loop(stop_requested, idle_seconds)),
-            asyncio.create_task(
-                self._intent_loop(stop_requested, rankings_enabled, idle_seconds)
-            ),
-            asyncio.create_task(self._upload_loop(stop_requested, idle_seconds)),
-        ]
-        if self.weekly_eligibility_enabled:
-            tasks.append(asyncio.create_task(weekly_eligibility.run(self, stop_requested)))
-        tasks.append(asyncio.create_task(promotion_recheck.run(self, stop_requested)))
+        tasks: list[asyncio.Task[None]] = []
         stop_task = asyncio.create_task(stop_requested.wait())
         try:
+            await _drain_to_thread(self.recover_handoffs)
+            collector_commits.commit_unrecovered(self, self._unrecovered)
+            await _drain_to_thread(self.spool.cleanup_stale, 60.0)
+            tasks += [
+                asyncio.create_task(self._regular_loop(stop_requested, idle_seconds)),
+                asyncio.create_task(
+                    self._intent_loop(stop_requested, rankings_enabled, idle_seconds)
+                ),
+                asyncio.create_task(self._upload_loop(stop_requested, idle_seconds)),
+            ]
+            if self.weekly_eligibility_enabled:
+                tasks.append(asyncio.create_task(weekly_eligibility.run(self, stop_requested)))
+            tasks.append(asyncio.create_task(promotion_recheck.run(self, stop_requested)))
             done, _pending = await asyncio.wait(
                 [*tasks, stop_task], return_when=asyncio.FIRST_COMPLETED
             )
@@ -970,6 +983,7 @@ class Collector:
         graceful = False
         try:
             while not stop_requested.is_set():
+                collector_liveness.mark(self, "regular")
                 for task in [task for task in pending if task.done()]:
                     item = pending.pop(task)
                     paused_tasks.discard(task)
@@ -1094,6 +1108,7 @@ class Collector:
         graceful = False
         try:
             while not stop_requested.is_set():
+                collector_liveness.mark(self, "intents")
                 now = datetime.now(UTC)
                 if rankings_enabled and now >= next_rankings_at:
                     await self._database_call(
@@ -1190,6 +1205,7 @@ class Collector:
         graceful = False
         try:
             while not stop_requested.is_set():
+                collector_liveness.mark(self, "uploads")
                 for owner, task in list(owner_tasks.items()):
                     if task.done():
                         await task
@@ -1251,36 +1267,9 @@ class Collector:
             if not await self.upload_once(owner=owner):
                 await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
 
-    async def _handle_health(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        try:
-            request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 2.0)
-            first_line = request.split(b"\r\n", 1)[0].decode("ascii", "replace")
-            parts = first_line.split()
-            path = parts[1] if len(parts) == 3 and parts[0] == "GET" else ""
-            status, content_type, body = await self.health_response(path)
-        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError):
-            status, content_type, body = 400, "text/plain", b"bad request\n"
-        reasons = {
-            200: "OK",
-            400: "Bad Request",
-            404: "Not Found",
-            503: "Service Unavailable",
-        }
-        response = (
-            f"HTTP/1.1 {status} {reasons.get(status, 'Error')}\r\n"
-            f"Content-Type: {content_type}\r\nContent-Length: {len(body)}\r\n"
-            "Connection: close\r\n\r\n"
-        ).encode("ascii") + body
-        writer.write(response)
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
     async def health_response(self, path: str) -> tuple[int, str, bytes]:
         if path == "/livez":
-            return 200, "text/plain", b"ok\n"
+            return collector_liveness.livez(self)
         if path not in {"/readyz", "/metrics"}:
             return 404, "text/plain", b"not found\n"
         if self._handoff_recovery_required:
