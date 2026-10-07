@@ -167,12 +167,8 @@ def _domain_template(database_url: str) -> str:
         if not admin.execute(
             "SELECT 1 FROM pg_database WHERE datname = %s", (template,)
         ).fetchone():
-            # Older migration sets are never used again.
-            for (old,) in admin.execute(
-                "SELECT datname FROM pg_database WHERE datname LIKE 'python\\_domain\\_template\\_%'"
-            ).fetchall():
-                admin.execute(f'DROP DATABASE "{old}" WITH (FORCE)')
             building = f"{template}_building"
+            admin.execute(f'DROP DATABASE IF EXISTS "{building}" WITH (FORCE)')
             admin.execute(f'CREATE DATABASE "{building}"')
             with psycopg.connect(
                 make_conninfo(database_url, dbname=building), autocommit=True
@@ -195,13 +191,7 @@ def domain_database(
     template = _domain_template(database_url)
     database = f"python_domain_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
-        try:
-            admin.execute(f'CREATE DATABASE "{database}" TEMPLATE "{template}"')
-        except psycopg.errors.InvalidCatalogName:
-            # A run with other migrations on this server replaced the template.
-            del _templates[database_url]
-            template = _domain_template(database_url)
-            admin.execute(f'CREATE DATABASE "{database}" TEMPLATE "{template}"')
+        admin.execute(f'CREATE DATABASE "{database}" TEMPLATE "{template}"')
     connection_info = make_conninfo(
         database_url, dbname=database, options=f"-c search_path={DOMAIN_SCHEMA}"
     )

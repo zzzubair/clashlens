@@ -41,6 +41,10 @@ UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
 Test databases built by `domain_database` in `tests/domain_test_support.py` also
 run the worker permission limits that `../ops` applies after migrations, read
 from `../ops` itself, so worker-role tests fail where production would.
+Each migration set leaves one `python_domain_template_<hash>` database (about
+15 MB) on the test server. To clean up, list them with `SELECT datname FROM
+pg_database WHERE datname LIKE 'python\_domain\_template\_%'` and
+`DROP DATABASE` the unwanted ones while no test run is using them.
 
 The collector and worker share the bounded local spool. The collector saves the
 exact raw response and durable observation metadata before the worker parses it;
