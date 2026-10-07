@@ -402,9 +402,36 @@ def load_zero_result_slots(
         """,
         (list(parsers),),
     ).fetchall() if parsers else []
+    return _slots((parsers[int(row_id)], source) for row_id, source in rows)
+
+
+def load_late_zero_result_slots(
+    database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
+    after: datetime,
+) -> frozenset[tuple[datetime, bool]]:
+    """``load_zero_result_slots`` of the player's battle logs saved after
+    ``after``, the end Reset log, until 10 minutes past the day's battle
+    window: a row can first be returned after that log."""
+    relation, _, _ = _source_rows(database)
+    until = domain.battle_window(ranked_day.start)[1] + timedelta(minutes=10)
+    parsers = dict(_log_ids(
+        connection, "player_id = %s AND observed_at > %s AND observed_at <= %s",
+        (player_id, after, until),
+    ))
+    rows = connection.execute(
+        f"""
+        SELECT sr.battle_log_observation_id, sr.source_json FROM {relation} AS sr
+        WHERE sr.battle_log_observation_id = ANY(%s)
+          AND (sr.source_json -> 'battleTime')::text = '0'
+        """,
+        (list(parsers),),
+    ).fetchall() if parsers else []
+    return _slots((parsers[log_id], source) for log_id, source in rows)
+
+
+def _slots(rows: Any) -> frozenset[tuple[datetime, bool]]:
     slots = set()
-    for row_id, source in rows:
-        parser = parsers[int(row_id)]
+    for parser, source in rows:
         if not battle.is_no_opponent_row(source, parser) or not isinstance(
             source.get("attack"), bool
         ):

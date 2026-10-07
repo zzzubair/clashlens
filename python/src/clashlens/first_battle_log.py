@@ -460,7 +460,7 @@ def requeue_zero_result_slots(
     backfill priority, as ``requeue_day_1``.
 
     The rows are read from the Season's saved battle rows only: their IDs
-    start above the lowest one a battle of the day before the Season used.
+    start above the lowest one a battle of two days before the Season used.
     """
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(season_start):
@@ -481,33 +481,44 @@ def requeue_zero_result_slots(
                     JOIN battle_evidence AS evidence ON evidence.battle_id = fight.id
                     WHERE fight.ranked_day_start = %(before)s
                 ), candidate AS (
-                    SELECT source.id, source.source_json
+                    SELECT source.id, source.battle_log_observation_id,
+                           source.source_json
                     FROM battle_source_rows AS source, bound
                     WHERE source.id >= bound.id
                       AND source.outcome = 'malformed_legend_row'
                       AND source.source_json ->> 'battleType' = 'legend'
                       AND (source.source_json -> 'battleTime')::text = '0'
-                ), listed AS (
-                    SELECT candidate.id, list.parsed_payload_id,
-                           list.reporting_player_id
+                ), owner AS (
+                    SELECT candidate.id, log.id AS log_id
                     FROM candidate
                     JOIN battle_payload_row_lists AS list
                       ON list.source_row_ids @> ARRAY[candidate.id]
+                    JOIN battle_log_observations AS log
+                      ON log.parsed_payload_id = list.parsed_payload_id
+                     AND log.player_id = list.reporting_player_id
                     UNION
-                    SELECT candidate.id, member.parsed_payload_id,
-                           member.reporting_player_id
+                    SELECT candidate.id, log.id
                     FROM candidate
                     JOIN battle_payload_rows AS member
                       ON member.source_row_id = candidate.id
+                    JOIN battle_log_observations AS log
+                      ON log.parsed_payload_id = member.parsed_payload_id
+                     AND log.player_id = member.reporting_player_id
+                    UNION
+                    SELECT candidate.id, occurrence.battle_log_observation_id
+                    FROM candidate
+                    JOIN battle_log_observation_rows AS occurrence
+                      ON occurrence.source_row_id = candidate.id
+                    UNION
+                    SELECT id, battle_log_observation_id FROM candidate
+                    WHERE battle_log_observation_id IS NOT NULL
                 )
                 SELECT DISTINCT log.player_id, log.parser_version, candidate.source_json
-                FROM listed
-                JOIN candidate ON candidate.id = listed.id
-                JOIN battle_log_observations AS log
-                  ON log.parsed_payload_id = listed.parsed_payload_id
-                 AND log.player_id = listed.reporting_player_id
+                FROM owner
+                JOIN candidate ON candidate.id = owner.id
+                JOIN battle_log_observations AS log ON log.id = owner.log_id
                 """,
-                {"before": season_start - timedelta(days=1)},
+                {"before": season_start - timedelta(days=2)},
             ).fetchall()
             now = datetime.now(UTC)
             found: set[tuple[int, datetime]] = set()

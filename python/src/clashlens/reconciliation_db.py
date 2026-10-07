@@ -266,7 +266,11 @@ def recalculate_ranked_day(
     )
     previous = ranked_day_inputs.load_previous_day(connection, player_id, ranked_day)
     zero_result_attacks, zero_result_defenses = ranked_day_inputs.slot_counts(
-        ranked_day_inputs.load_zero_result_slots(connection, coverage),
+        ranked_day_inputs.load_zero_result_slots(connection, coverage)
+        | ranked_day_inputs.load_late_zero_result_slots(
+            database, connection, player_id, ranked_day,
+            coverage[-1].observed_at if coverage else ranked_day.start,
+        ),
         *domain.battle_window(ranked_day.start),
     )
     anchor, season_day = _anchored_day(connection, ranked_day.start)

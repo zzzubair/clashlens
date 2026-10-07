@@ -207,6 +207,39 @@ def test_no_opponent_rows_of_the_day_count_once_as_used_slots(
             database.close()
 
 
+def test_a_no_opponent_row_first_returned_after_the_reset_log_counts(
+    database_url: str, archive_server
+) -> None:
+    # Stamped in the grace after the Reset, so it is the ended day's slot.
+    late = NO_OPPONENT_ROW | {"battleTimestamp": "20260805T050200.000Z"}
+    payload = json.loads(_log(NO_OPPONENT_ROW, with_battle=True))
+    payload["items"].append(late)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = [
+            *_pair(connection_info, archive_server, "start", DAY_START,
+                   _profile(6000), _log(NO_OPPONENT_ROW, with_battle=False)),
+            *_pair(connection_info, archive_server, "end", DAY_END,
+                   _profile(6000), _log(NO_OPPONENT_ROW, with_battle=True)),
+            store_observation(
+                connection_info, archive_server, occurrence_key="late",
+                endpoint="battle_log", body=json.dumps(payload).encode(),
+                observed_at=DAY_END + timedelta(minutes=4), normalized_tag="#2PP",
+            )[1],
+        ]
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _run(database, processor, jobs)
+            with database.pool.connection() as connection:
+                evidence = connection.execute(
+                    "SELECT input_evidence FROM ranked_day_versions"
+                    " WHERE ranked_day_start = %s ORDER BY version DESC, id DESC LIMIT 1",
+                    (DAY_START,),
+                ).fetchone()[0]
+            assert evidence["zero_result_defense_slots"] == 1
+        finally:
+            database.close()
+
+
 def test_republication_recovers_resets_failed_by_no_opponent_rows(
     database_url: str, archive_server, monkeypatch
 ) -> None:

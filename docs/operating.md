@@ -619,7 +619,7 @@ queues up to `--max-jobs` of them, each recalculating the player's oldest
 such day and every later saved day of the Season, at backfill priority. Run
 it again until `left_to_queue` is 0; each player and day is queued once. It
 reads the Season's saved battle rows, those above the lowest row a battle of
-the day before the Season used, so run it outside 04:00–07:00 UTC.
+two days before the Season used, so run it outside 04:00–07:00 UTC.
 
 ### Raw-response cleanup failed
 
