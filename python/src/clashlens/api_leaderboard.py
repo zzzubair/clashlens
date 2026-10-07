@@ -374,7 +374,7 @@ def get_frozen_leaderboard(
                     JOIN ranked_day_versions AS ranked
                       ON ranked.id = member.ranked_day_version_id
                     WHERE member.manifest_id = generation.snapshot_manifest_id
-                    ORDER BY ranked.id DESC LIMIT 1
+                    ORDER BY member.ranked_day_version_id DESC LIMIT 1
                 ) AS generation_day ON true
                 WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
                   AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
@@ -454,7 +454,7 @@ def get_frozen_leaderboard(
                         JOIN ranked_day_versions AS ranked
                           ON ranked.id = member.ranked_day_version_id
                         WHERE member.manifest_id = generation.snapshot_manifest_id
-                        ORDER BY ranked.id DESC LIMIT 1
+                        ORDER BY member.ranked_day_version_id DESC LIMIT 1
                     ) AS generation_day ON true
                     WHERE snapshot.id = %s
                       AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
