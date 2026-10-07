@@ -161,6 +161,41 @@ def test_coverage_gap_or_missing_overlap_makes_ended_day_partial() -> None:
     assert "battle_log_overlap_gap" in overlap_result.failure_reasons
 
 
+def test_shared_non_legend_rows_prove_full_logs_overlap() -> None:
+    # Player 24106 on 6 October 2026: two full logs of non-Legend battles,
+    # no Legend battle in either, 48 of 50 saved rows the same.
+    first, _, last = _coverage()
+    full_logs = (
+        CoverageObservation(
+            observed_at=first.observed_at, row_count=50, battle_identities=(),
+            has_row_gap=False, observation_id=101,
+            source_row_ids=tuple(range(1, 51)),
+        ),
+        CoverageObservation(
+            observed_at=first.observed_at + timedelta(minutes=18), row_count=50,
+            battle_identities=(), has_row_gap=False, observation_id=102,
+            source_row_ids=(51, 52, *range(1, 49)),
+        ),
+        last,
+    )
+    turned_over = (
+        *full_logs[:1],
+        CoverageObservation(
+            observed_at=full_logs[1].observed_at, row_count=50,
+            battle_identities=(), has_row_gap=False, observation_id=102,
+            source_row_ids=tuple(range(51, 101)),
+        ),
+        last,
+    )
+
+    overlapping = reconcile_ranked_day(_input(coverage_observations=full_logs))
+    gap = reconcile_ranked_day(_input(coverage_observations=turned_over))
+
+    assert overlapping.state == "Complete"
+    assert gap.state == "Partial"
+    assert "battle_log_overlap_gap" in gap.failure_reasons
+
+
 def test_weekly_and_season_reset_adjustments_reconcile_against_5000_baseline() -> None:
     weekly = reconcile_ranked_day(
         _input(

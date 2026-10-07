@@ -570,3 +570,86 @@ def requeue_zero_result_slots(
         "queued": len(job_ids),
         "left_to_queue": len(waiting) - len(job_ids),
     }
+
+
+def requeue_overlap_gap(
+    database: Database, season_id: str, *, queue: bool, max_jobs: int
+) -> dict[str, Any]:
+    """Find, and with ``queue`` recalculate, each player's oldest ended day
+    of the Season whose latest result reports ``battle_log_overlap_gap``, and
+    their later saved days. Before October 2026 two full logs overlapped
+    only through a shared Legend battle, so logs sharing only other battles
+    were a gap: 911 ended days on 5 and 6 October 2026. A day is queued once
+    while its finished request is kept, about 48 hours; a later run queues a
+    day still reporting a gap again, which only recalculates it. A failed
+    request is kept and not queued again: it is counted in ``failed`` and up
+    to ``max_jobs`` are listed in ``failed_blockers``. The batch is queued at
+    backfill priority, as ``requeue_day_1``."""
+    season_start = datetime.fromtimestamp(int(season_id), UTC)
+    if not domain.is_season_boundary(season_start):
+        raise ValueError(f"{season_id} is not a Season's start")
+
+    def key(player_id: Any, day: datetime) -> str:
+        return (f"reconcile:overlap-gap:{player_id}:"
+                f"{day.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}")
+
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            rows = connection.execute(
+                """
+                WITH latest AS (
+                    SELECT DISTINCT ON (player_id, ranked_day_start)
+                           player_id, ranked_day_start, failure_reasons
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start >= %(start)s
+                      AND ranked_day_start < %(end)s
+                      AND ranked_day_start + interval '1 day' <= clock_timestamp()
+                    ORDER BY player_id, ranked_day_start, version DESC, id DESC
+                )
+                SELECT DISTINCT ON (player_id) player_id, ranked_day_start
+                FROM latest
+                WHERE failure_reasons ? 'battle_log_overlap_gap'
+                ORDER BY player_id, ranked_day_start
+                """,
+                {"start": season_start, "end": season_start + domain.SEASON_DURATION},
+            ).fetchall()
+            queued = {
+                row[0]: row[1:] for row in connection.execute(
+                    "SELECT deduplication_key, id, state, failure_category"
+                    " FROM python_processing_jobs_worker"
+                    " WHERE deduplication_key = ANY(%s)",
+                    ([key(*row) for row in rows],),
+                ).fetchall()
+            }
+            waiting = [row for row in rows if key(*row) not in queued]
+            failed = [
+                (player_id, day, *queued[key(player_id, day)])
+                for player_id, day in rows
+                if queued.get(key(player_id, day), (None, None))[1] == "failed"
+            ]
+            job_ids = [
+                job_id
+                for player_id, day in (waiting[:max_jobs] if queue else [])
+                if (job_id := _queue(
+                    connection, int(player_id), day, None,
+                    key=key(player_id, day), trigger="overlap_gap",
+                    priority=PYTHON_BACKFILL_PRIORITY,
+                )) is not None
+            ]
+    return {
+        "season": season_id,
+        "players": len(rows),
+        "already_queued": len(rows) - len(waiting),
+        "queued": len(job_ids),
+        "left_to_queue": len(waiting) - len(job_ids),
+        "failed": len(failed),
+        "failed_blockers": [
+            {
+                "job_id": int(job_id),
+                "player_id": int(player_id),
+                "ranked_day_start": f"{day.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}",
+                "failure_category": _text_value(category) if category else None,
+            }
+            for player_id, day, job_id, _, category in failed[:max_jobs]
+        ],
+    }

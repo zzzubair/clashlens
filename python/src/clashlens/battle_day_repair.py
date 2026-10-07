@@ -324,6 +324,10 @@ def add_republish_command(
     republish_current_season.add_argument(
         "--zero-result-slots", choices=("preview", "queue")
     )
+    # With --overlap-gap, preview or queue the recalculation of each player's
+    # oldest ended day reporting battle_log_overlap_gap; see
+    # first_battle_log.requeue_overlap_gap.
+    republish_current_season.add_argument("--overlap-gap", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
 
@@ -338,22 +342,30 @@ def run_republish_command(database_url: str, arguments: argparse.Namespace) -> i
     first_logs = getattr(arguments, "first_logs", None)
     day_1 = getattr(arguments, "day_1", None)
     zero_result_slots = getattr(arguments, "zero_result_slots", None)
-    modes = [mode for mode in (arguments.campaign, first_logs, day_1, zero_result_slots)
+    overlap_gap = getattr(arguments, "overlap_gap", None)
+    modes = [mode for mode in (arguments.campaign, first_logs, day_1, zero_result_slots,
+                               overlap_gap)
              if mode is not None]
     if len(modes) > 1:
         raise SystemExit(
-            "--campaign, --first-logs, --day-1 and --zero-result-slots are separate runs"
+            "--campaign, --first-logs, --day-1, --zero-result-slots and --overlap-gap"
+            " are separate runs"
         )
     if (not modes) != (arguments.season is None):
         raise SystemExit(
-            "--campaign, --first-logs, --day-1 or --zero-result-slots and --season"
-            " go together"
+            "--campaign, --first-logs, --day-1, --zero-result-slots or --overlap-gap"
+            " and --season go together"
         )
     database = Database(database_url)
     try:
         if zero_result_slots is not None:
             report = first_battle_log.requeue_zero_result_slots(
                 database, arguments.season, queue=zero_result_slots == "queue",
+                max_jobs=arguments.max_jobs,
+            )
+        elif overlap_gap is not None:
+            report = first_battle_log.requeue_overlap_gap(
+                database, arguments.season, queue=overlap_gap == "queue",
                 max_jobs=arguments.max_jobs,
             )
         elif day_1 is not None:

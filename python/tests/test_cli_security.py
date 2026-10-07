@@ -689,6 +689,34 @@ def test_season_recalculations_need_a_season_and_run_alone(
         assert calls == [(expected, "1791176400", queue, 100)]
 
 
+@pytest.mark.parametrize("extra,queue", [
+    (["--overlap-gap", "preview", "--season", "1791176400"], False),
+    (["--overlap-gap", "queue", "--season", "1791176400"], True),
+    (["--overlap-gap", "queue"], None),
+    (["--overlap-gap", "queue", "--day-1", "queue", "--season", "1791176400"], None),
+])
+def test_overlap_gap_recalculation_needs_a_season_and_runs_alone(
+    monkeypatch, extra: list[str], queue: bool | None
+) -> None:
+    calls = []
+    monkeypatch.setattr("clashlens.battle_day_repair.Database",
+                        lambda url: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(
+        "clashlens.first_battle_log.requeue_overlap_gap",
+        lambda database, season, *, queue, max_jobs: calls.append(
+            (season, queue, max_jobs)) or {"queued": 0},
+    )
+    arguments = ["republish-current-season", "--database-url",
+                 "postgresql://worker@postgres/clashlens", *extra]
+    if queue is None:
+        with pytest.raises(SystemExit):
+            main(arguments)
+        assert calls == []
+    else:
+        assert main(arguments) == 0
+        assert calls == [("1791176400", queue, 100)]
+
+
 @pytest.mark.parametrize("value", ["0", "1001", "many"])
 def test_current_season_republication_command_rejects_unbounded_batches(
     value: str,

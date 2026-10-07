@@ -397,3 +397,84 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
     assert (again["queued"], again["already_queued"]) == (0, 1)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "inferred", 5000, ending)
+
+
+def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Two Day 1 attacks, then a full log of multiplayer battles only: it
+    # shares 48 multiplayer rows with the first log and no Legend battle.
+    older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(48)]
+    later = [DAY_1 + timedelta(hours=8), DAY_1 + timedelta(hours=8, minutes=30)]
+    only_multiplayer = _log(filler=later + older)
+    ending = 5000 + 2 * WIN
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _first_seen(connection_info, archive_server, DAY_1 + timedelta(hours=7),
+                           profile=_new_season_profile(ending),
+                           log=_log(*ATTACKS, filler=older))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="multiplayer-log",
+            endpoint="battle_log", body=only_multiplayer,
+            observed_at=DAY_1 + timedelta(hours=9), normalized_tag=TAG,
+        )[1])
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=_new_season_profile(ending), log=only_multiplayer)
+        # Saved before the fix, only shared Legend battles showed overlap.
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(
+            reconciliation_db, "reconcile_ranked_day",
+            lambda data: original(replace(data, coverage_observations=tuple(
+                replace(log, source_row_ids=()) for log in data.coverage_observations
+            ))),
+        )
+        _process(connection_info, archive_server, jobs)
+        before = _day_1(connection_info)
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
+
+        database = Database(connection_info)
+        try:
+            preview = first_battle_log.requeue_overlap_gap(
+                database, str(NEW_SEASON), queue=False, max_jobs=100
+            )
+            queued = first_battle_log.requeue_overlap_gap(
+                database, str(NEW_SEASON), queue=True, max_jobs=100
+            )
+            again = first_battle_log.requeue_overlap_gap(
+                database, str(NEW_SEASON), queue=True, max_jobs=100
+            )
+            with psycopg.connect(connection_info) as connection:
+                job_id, player_id = connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'failed',"
+                    " failure_category = 'invalid_work_input'"
+                    " WHERE deduplication_key LIKE 'reconcile:overlap-gap:%'"
+                    " RETURNING id, (input_json ->> 'player_id')::bigint"
+                ).fetchone()
+            failed = first_battle_log.requeue_overlap_gap(
+                database, str(NEW_SEASON), queue=True, max_jobs=100
+            )
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'pending',"
+                    " failure_category = NULL WHERE id = %s", (job_id,),
+                )
+        finally:
+            database.close()
+        priorities = _queued_priorities(connection_info, "reconcile:overlap-gap:")
+        _process(connection_info, archive_server, [])
+        after = _day_1(connection_info)
+
+    assert (before[0], before[3]) == ("Partial", None)
+    assert "battle_log_overlap_gap" in before[5]
+    assert preview == {"season": str(NEW_SEASON), "players": 1,
+                       "already_queued": 0, "queued": 0, "left_to_queue": 1,
+                       "failed": 0, "failed_blockers": []}
+    assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
+    assert (again["queued"], again["already_queued"], again["failed"]) == (0, 1, 0)
+    assert (failed["queued"], failed["left_to_queue"], failed["failed"]) == (0, 0, 1)
+    assert failed["failed_blockers"] == [{
+        "job_id": job_id, "player_id": player_id,
+        "ranked_day_start": f"{DAY_1:%Y-%m-%dT%H:%M:%SZ}",
+        "failure_category": "invalid_work_input",
+    }]
+    assert priorities == {PYTHON_BACKFILL_PRIORITY}
+    assert after[:4] == ("Complete", "inferred", 5000, ending)
