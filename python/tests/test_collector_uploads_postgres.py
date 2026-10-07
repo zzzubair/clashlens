@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -1169,3 +1170,38 @@ def test_spool_reference_read_ignores_stale_statistics(database_url: str) -> Non
 
     assert not _rescans_a_table(plan), plan
     assert referenced == kept
+
+
+def test_cleanup_batch_flushes_its_removals_together(database_url: str) -> None:
+    # 7 October 2026: each removal waited for its own filesystem commit, about
+    # 64 files in 7 s, so deleting archived copies fell behind the Reset.
+    with upload_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        hashes = [_hash(f"flush-{index}") for index in range(32)]
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state,
+                    archive_reference, archive_instance_id, completed_at
+                )
+                SELECT hash, 'sha256/' || hash, 1, 'complete',
+                       's3://evidence/' || hash, 'fixture-instance', %s
+                FROM unnest(%s::text[]) AS hash
+                """,
+                (NOW, hashes),
+            )
+        database = CollectorDatabase(connection_info)
+
+        def slow_flush(_response_hash: str) -> bool:
+            time.sleep(0.2)
+            return True
+
+        started = time.monotonic()
+        try:
+            assert database.delete_spool_if_deletable(hashes, slow_flush) == 32
+            assert database.deletable_hashes(limit=100) == []
+        finally:
+            database.close()
+
+    assert time.monotonic() - started < 2

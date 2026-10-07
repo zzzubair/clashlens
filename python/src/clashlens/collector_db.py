@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic, sleep
@@ -39,11 +40,13 @@ _PLAYER_ENDPOINTS = {"profile", "battle_log", "league_history"}
 # A worker can hold a player or its work for minutes; these writes give up and
 # are retried later instead of holding collection behind it.
 _WORKER_LOCK_WAIT = "SET LOCAL lock_timeout = '3s'"
-# Spool bytes still needed. The last branch looks each response-state row's
-# upload up by primary key: a scalar subquery is never turned into a join, so
-# stale statistics cannot pick a nested loop that rescans every state row per
-# upload row. That plan discarded 286 million rows (about 60 s) after the
-# 7 October 2026 Reset, when the planner expected 1 kept upload and found 4,287.
+_SPOOL_DELETE_THREADS = 16
+# Spool bytes still needed. Two single-table reads, no join, so stale
+# statistics leave the planner no join to get wrong. After the 7 October 2026
+# Reset the planner expected 1 kept upload, found 4,287, and rescanned every
+# response-state row for each (286 million rows, about 60 s). That state branch
+# added nothing: a copy is only marked deleted while complete, and every path
+# away from complete clears the mark, so its rows all have no mark already.
 REFERENCED_SPOOL_HASHES_SQL = """
     SELECT response_hash
     FROM collector_response_uploads
@@ -52,16 +55,6 @@ REFERENCED_SPOOL_HASHES_SQL = """
     SELECT response_hash
     FROM collector_observations
     WHERE archive_reference IS NULL
-    UNION
-    SELECT state.last_response_hash
-    FROM collector_response_state AS state
-    WHERE (
-        SELECT NOT (
-            upload.state = 'complete' AND upload.local_deleted_at IS NOT NULL
-        )
-        FROM collector_response_uploads AS upload
-        WHERE upload.response_hash = state.last_response_hash
-    )
 """
 
 
@@ -1475,7 +1468,14 @@ class CollectorDatabase:
                     """,
                     (hashes,),
                 ).fetchall()
-                deleted = [str(row[0]) for row in eligible if delete(str(row[0]))]
+                # Each removal flushes its folder before this commit. One at a
+                # time, each waited for its own filesystem commit: about 64
+                # files in 7 s after the 7 October 2026 Reset, behind uploads.
+                # Together they share commits.
+                candidates = [str(row[0]) for row in eligible]
+                with ThreadPoolExecutor(_SPOOL_DELETE_THREADS) as pool:
+                    removed = list(pool.map(delete, candidates))
+                deleted = [h for h, gone in zip(candidates, removed) if gone]
                 connection.execute(
                     "UPDATE collector_response_uploads SET local_deleted_at ="
                     " clock_timestamp(), updated_at = clock_timestamp()"
