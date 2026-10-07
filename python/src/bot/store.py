@@ -161,7 +161,9 @@ class Store:
 
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None:
         """The website's player page with the player's lookup state, reason
-        and live board position, all from one read-only database snapshot."""
+        and live board position, all from one read-only database snapshot.
+        A known player with no page gets only their lookup state; None when
+        Clash Lens has never heard of the tag."""
         with self.database.pool.connection() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             page = api_players.get_player_page(
@@ -170,9 +172,22 @@ class Store:
                 now=now,
                 freshness_seconds=FRESHNESS_SECONDS,
             )
-            if page is None:
-                return None
             lookup = api_player_lookup._lookup(connection, tag)
+            if page is None:
+                if lookup["state"] == "unknown":
+                    return None
+                profile = lookup.get("profile") or {}
+                return {
+                    "tag": tag,
+                    "name": profile.get("name"),
+                    "clan": profile.get("clan"),
+                    "trophies": None,
+                    "season_reset_pending": False,
+                    "observed_at": None,
+                    "state": lookup["state"],
+                    "reason": lookup.get("reason"),
+                    "rank": None,
+                }
             rank = api_leaderboard.live_positions(connection, [tag], now=now).get(tag)
         return {
             **page,

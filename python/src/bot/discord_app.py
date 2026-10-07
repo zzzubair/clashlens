@@ -21,6 +21,8 @@ import discord
 import psycopg
 from discord import app_commands
 
+from clashlens.api_groups import COMPARISON_DAYS
+
 from . import replies
 from .commands import Commands
 from .replies import Reply
@@ -399,7 +401,7 @@ class DiscordApp:
         )
         @app_commands.rename(group=group_word)
         @app_commands.choices(
-            days=[app_commands.Choice(name=str(days), value=days) for days in replies.GROUP_DAYS]
+            days=[app_commands.Choice(name=str(days), value=days) for days in COMPARISON_DAYS]
         )
         @app_commands.autocomplete(group=app.own_group_choices)
         async def group_command(

@@ -39,7 +39,7 @@ class StoreReads(Protocol):
 
 T = TypeVar("T")
 # The game's player tag letters, as the website checks them.
-_TAG = re.compile(r"#[0289PYLQGRJCUV]{3,}")
+_TAG = re.compile(r"#[0289PYLQGRJCUV]{3,15}")
 
 
 def tag_text(value: str) -> str:
@@ -124,9 +124,9 @@ class Commands:
         )[: replies.MAX_CHOICES]
         status = replies.card_status(card)
         if status not in (None, replies.WAITING_FOR_RESET):
-            return replies.player_status(self.site, card, status, choices)
+            return replies.player_status(self.site, card, status, now, choices)
         return self._day(card["tag"], now, choices) or replies.player_status(
-            self.site, card, "Being checked", choices
+            self.site, card, "Being checked", now, choices
         )
 
     def _day(self, tag: str, now: datetime, choices: tuple[replies.Choice, ...] = ()) -> Reply | None:
@@ -137,7 +137,7 @@ class Commands:
             return None
         status = replies.card_status(page)
         if status not in (None, replies.WAITING_FOR_RESET):
-            return replies.player_status(self.site, page, status, choices)
+            return replies.player_status(self.site, page, status, now, choices)
         return replies.full_day(self.site, page, now, choices=choices)
 
     def player(self, account: AccountContext, value: str) -> Reply:
@@ -169,8 +169,7 @@ class Commands:
         return replies.no_such_player(text)
 
     def top(self, account: AccountContext) -> Reply:
-        now = self.now()
-        return replies.top_reply(self.site, self.store.board(now), now)
+        return self._one_moment(lambda now: replies.top_reply(self.site, self.store.board(now), now))
 
     def _choose(
         self,
@@ -202,7 +201,7 @@ class Commands:
         board = self.store.board(now, card["tag"])
         if board is None or not any(entry["tag"] == card["tag"] for entry in board["entries"]):
             status = replies.card_status(card) or "Unranked: not on the Live Leaderboard"
-            return replies.player_status(self.site, card, status)
+            return replies.player_status(self.site, card, status, now)
         return replies.rank_reply(self.site, board, card["tag"], now)
 
     def season(self, account: AccountContext, player: str | None = None) -> Reply:
@@ -217,14 +216,17 @@ class Commands:
             return card
         page = self.store.player_page(card["tag"], now)
         if page is None:
-            return replies.player_status(self.site, card, "Being checked")
+            return replies.player_status(self.site, card, "Being checked", now)
         status = replies.card_status(page)
-        if status not in (None, replies.WAITING_FOR_RESET):
-            return replies.player_status(self.site, page, status)
+        has_season = bool((page.get("screen_ready") or {}).get("season_day_starts"))
+        if status not in (None, replies.WAITING_FOR_RESET) and not has_season:
+            return replies.player_status(self.site, page, status, now)
         return replies.season_reply(self.site, page, now)
 
     def group(self, account: AccountContext, group: str | None = None, days: int = 7) -> Reply:
-        now = self.now()
+        return self._one_moment(lambda now: self._group(account, group, days, now))
+
+    def _group(self, account: AccountContext, group: str | None, days: int, now: datetime) -> Reply:
         groups = self.store.groups(account, now)
         if group is None:
             return (
@@ -245,9 +247,7 @@ class Commands:
         if group_id is None or not _is_uuid(group_id):
             return replies.not_your_group()
         try:
-            comparison = self.store.group(
-                account, group_id, days if days in replies.GROUP_DAYS else 7, now
-            )
+            comparison = self.store.group(account, group_id, days, now)
         except GroupTooLarge:
             return replies.group_too_large(self.site, group_id)
         if comparison is None:
@@ -327,10 +327,10 @@ class Commands:
             replies.choice_for({**item, "trophies": None}) for item in self.store.saved(account)
         ]
         tag = tag_text(text)
+        if text:
+            choices += [replies.choice_for(item) for item in self.store.search(text, now)]
         if text and _TAG.fullmatch(tag):
             choices.insert(0, replies.Choice(tag, tag))
-        elif len(text) >= 2:
-            choices += [replies.choice_for(item) for item in self.store.search(text, now)]
         wanted = text.casefold()
         unique: dict[str, replies.Choice] = {}
         for choice in choices:

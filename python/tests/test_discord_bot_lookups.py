@@ -12,6 +12,7 @@ import pytest
 from test_discord_bot import (
     ME,
     NOW,
+    RESET,
     SITE,
     TODAY,
     FakeInteraction,
@@ -103,11 +104,24 @@ def test_player_explains_bad_untracked_and_unknown_players(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842)])
     bad = run_command(store, "player", FakeInteraction(), player="#AB!", share=False)
     assert bad["text"] == "That doesn't look like a player tag."
+    too_long = run_command(store, "player", FakeInteraction(), player="#" + "2" * 16, share=False)
+    assert too_long["text"] == "That doesn't look like a player tag."
     untracked = run_command(store, "player", FakeInteraction(), player="#9RR", share=False)
     assert untracked["text"].startswith("Clash Lens hasn't tracked #9RR yet.")
     assert links(untracked) == {"Open on Clash Lens": "https://clashlens.test/players/%239RR"}
     unknown = run_command(store, "player", FakeInteraction(), player="Nobody", share=False)
     assert unknown["text"].startswith("Clash Lens doesn't know a player called Nobody.")
+
+
+def test_player_known_without_a_current_profile_gets_its_status(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    store.pages["#8QQ"] = {
+        **card("#8QQ", "Lucy", None, reason="no_legend_battles", observed_at=None),
+        "rank": None,
+    }
+    message = run_command(store, "player", FakeInteraction(), player="#8QQ", share=False)
+    assert message["title"] == "Lucy #8QQ"
+    assert message["text"].splitlines() == ["No Legend battles yet", "", RESET]
 
 
 def test_player_needs_a_connected_account(store) -> None:
@@ -130,6 +144,12 @@ def test_player_autocomplete_offers_own_and_saved_players_then_name_matches(stor
         ("Drifter #9RR · 6,000", "#9RR"),
     ]
     assert autocomplete(store, "any_player_choices", "#9rr") == [("#9RR", "#9RR")]
+    store.known.append({"tag": "#0UU", "name": "Lucy", "trophies": 5500})
+    assert autocomplete(store, "any_player_choices", "lucy") == [
+        ("#LUCY", "#LUCY"),
+        ("Lucy #0UU · 5,500", "#0UU"),
+    ]
+    assert autocomplete(store, "any_player_choices", "l") == [("Lucy #0UU · 5,500", "#0UU")]
 
 
 def test_top_lists_the_live_leaderboard_among_tracked_players(store) -> None:
@@ -144,7 +164,8 @@ def test_top_lists_the_live_leaderboard_among_tracked_players(store) -> None:
     }
     message = run_command(store, "top", FakeInteraction(), share=False)
     assert message["title"] == "Live Leaderboard · among 13,263 tracked players"
-    assert message["text"].splitlines()[0] == "#1 First · 6,120"
+    assert message["text"].splitlines()[0].endswith(RESET)
+    assert message["text"].splitlines()[2] == "#1 First · 6,120"
     assert "@everyone" not in message["text"]
     assert "not the official world ranking" in message["footer"]
     assert message["footer"].endswith("Updated 7 min ago")
@@ -165,7 +186,8 @@ def test_rank_shows_the_main_with_the_players_around_it(store) -> None:
     }
     message = run_command(store, "rank", FakeInteraction(), account=None, share=False)
     assert message["title"] == "Drift #2PP · #1,234 of 12,000 tracked · 5,842"
-    assert message["text"].splitlines() == [
+    assert message["text"].splitlines()[0].endswith(RESET)
+    assert message["text"].splitlines()[2:] == [
         "#1,233 Above · 5,850 (+8)",
         "▶ **#1,234 Drift · 5,842**",
         "#1,235 Below · 5,842",
@@ -191,7 +213,7 @@ def test_rank_without_a_main_asks_which_player_and_answers_the_pick(store) -> No
 def test_rank_for_a_player_off_the_board_says_why(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", None, season_reset_pending=True)])
     message = run_command(store, "rank", FakeInteraction(), account=None, share=False)
-    assert message["text"] == "Waiting for Season reset"
+    assert message["text"].splitlines() == ["Waiting for Season reset", "", RESET]
 
 
 def comparison(players: list[dict[str, Any]]) -> dict[str, Any]:
@@ -210,6 +232,7 @@ def member(tag: str, name: str, trophies: int | None, **extra: Any) -> dict[str,
         "observed_at": (NOW - timedelta(minutes=3)).isoformat(),
         "today": {"net": 20, "attacks": 4, "defenses": 3},
         "net": 212,
+        "counted_days": 14,
         **extra,
     }
 
@@ -221,6 +244,7 @@ def test_group_lists_the_persons_groups_and_compares_one(store) -> None:
         [
             member("#8QQ", "Friend", 5900, net=None),
             member("#2PP", "Drift", 5842, you=True),
+            member("#0UU", "New", 5000, net=100, counted_days=2),
             member("#9RR", "Not in it", 6500, in_group=False),
         ]
     )
@@ -234,6 +258,10 @@ def test_group_lists_the_persons_groups_and_compares_one(store) -> None:
     assert lines == [
         "**Friend** #8QQ · 5,900 🏆 · ⚔ 4/8 · 🛡 3/8 · net +20 so far · 14 days: pending",
         "**Drift** #2PP (you) · 5,842 🏆 · ⚔ 4/8 · 🛡 3/8 · net +20 so far · 14 days: +212",
+        (
+            "**New** #0UU · 5,000 🏆 · ⚔ 4/8 · 🛡 3/8 · net +20 so far"
+            " · 14 days: +100 (2 of 14 days counted)"
+        ),
     ]
     assert "group 14" in store.reads
 
@@ -325,10 +353,51 @@ def test_season_totals_the_seasons_recorded_battles(store) -> None:
         "**Defenses** 2 · held 1 of 2 (not tripled) · −50 · −25 per defense"
         " · average stars given up 2.0"
     ) in text
-    assert text.splitlines()[-2:] == [
+    assert text.splitlines()[-4:] == [
         "Day 2 · net +20 · Reset rank #1,300",
         "Day 1 · net +30 · Reset rank #1,500",
+        "",
+        RESET,
     ]
     assert links(message) == {
         "Season on Clash Lens": "https://clashlens.test/players/%232PP?season=1786000000"
     }
+
+
+def test_season_keeps_missing_days_and_numbers_visible(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5040)])
+    season = season_page()
+    ready = season["screen_ready"]
+    # Day 2 was never published and Day 3 lost its defense totals.
+    del ready["days"][1]
+    ready["season_day_starts"] = [day["ranked_day_start"] for day in ready["days"]]
+    ready["days"][-1]["defense_count"] = None
+    ready["days"][-1]["defense_loss"] = None
+    ready["days"][0]["start_trophies"] = None
+    store.pages["#2PP"] = season
+    text = run_command(store, "season", FakeInteraction(), account=None, share=False)["text"]
+    assert "Day 3 of 28 · Unavailable → 5,040" in text
+    assert "(+" not in text.splitlines()[0]
+    assert "**Defenses** Unavailable · held Unavailable of Unavailable (not tripled)" in text
+    assert text.splitlines()[-4:-2] == [
+        "Day 2 · net pending · Reset rank Unavailable",
+        "Day 1 · net +30 · Reset rank #1,500",
+    ]
+
+
+def test_season_without_any_recorded_day_shows_unavailable_not_zero(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5040)])
+    season = season_page()
+    season["screen_ready"]["days"] = []
+    season["screen_ready"]["season_day_starts"] = []
+    store.pages["#2PP"] = season
+    text = run_command(store, "season", FakeInteraction(), account=None, share=False)["text"]
+    assert "**Attacks** Unavailable · hit rate Unavailable (Unavailable three-stars)" in text
+    assert " 0 " not in text
+
+
+def test_season_history_shows_after_the_player_leaves_legend(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5040)])
+    store.pages["#2PP"] = {**season_page(), "state": "not_in_legend"}
+    text = run_command(store, "season", FakeInteraction(), account=None, share=False)["text"]
+    assert "**Attacks** 2 · hit rate 50%" in text

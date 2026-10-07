@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -42,10 +42,6 @@ COMMANDS = (
     (GROUP_WORD, f"One of your {GROUP_WORD}s today and over the last days"),
     ("season", "This Season so far for one of your players"),
 )
-# Commands whose reply can be posted for everyone with `share: True`.
-SHAREABLE = ("me", "player", "top", "rank", GROUP_WORD, "season")
-# Ended Legend days a group comparison can cover.
-GROUP_DAYS = (3, 7, 14)
 
 _STATE_WORDS = {
     "not_in_legend": "Not in Legend",
@@ -150,12 +146,13 @@ def discord_time(moment: datetime, style: str) -> str:
     return f"<t:{int(moment.timestamp())}:{style}>"
 
 
+def reset_time(now: datetime) -> str:
+    end = ranked_day_for(now).end
+    return f"Reset {discord_time(end, 't')} ({discord_time(end, 'R')})"
+
+
 def reset_line(now: datetime) -> str:
-    day = ranked_day_for(now)
-    return (
-        f"Legend day {day.day_number} of 28 · Reset {discord_time(day.end, 't')}"
-        f" ({discord_time(day.end, 'R')})"
-    )
+    return f"Legend day {ranked_day_for(now).day_number} of 28 · {reset_time(now)}"
 
 
 def unavailable() -> Reply:
@@ -355,12 +352,16 @@ def _player_title(item: Mapping[str, Any]) -> str:
 
 
 def player_status(
-    site: Site, card: Mapping[str, Any], status: str, choices: tuple[Choice, ...] = ()
+    site: Site,
+    card: Mapping[str, Any],
+    status: str,
+    now: datetime,
+    choices: tuple[Choice, ...] = (),
 ) -> Reply:
     """A player whose numbers do not apply right now: the status word instead,
     from a card or a player page read."""
     return Reply(
-        status,
+        f"{status}\n\n{reset_time(now)}",
         title=_player_title(card),
         updated=oldest([card["observed_at"]]),
         links=(Link("Open on Clash Lens", site.player(card["tag"])),),
@@ -447,8 +448,7 @@ def full_day(
     notes = [_NOTE_WORDS.get(note["label"], note["label"]) for note in ready["data_quality"]]
     if notes:
         lines += ["", *(f"⚠ {note}" for note in dict.fromkeys(notes))]
-    end = ranked_day_for(now).end
-    lines += ["", f"Reset {discord_time(end, 't')} ({discord_time(end, 'R')})"]
+    lines += ["", reset_time(now)]
     return Reply(
         "\n".join(lines),
         title=_player_title(page),
@@ -552,7 +552,8 @@ def top_reply(site: Site, board: Mapping[str, Any] | None, now: datetime) -> Rep
     link = (Link("Full leaderboard", site.url("/leaderboards/tracked")),)
     if board is None or not board["entries"]:
         return Reply("The Live Leaderboard is empty right now.", updated="pending", links=link)
-    lines = [
+    lines = [reset_line(now), ""]
+    lines += [
         f"#{entry['position']} {safe(entry['name'])} · {number(entry['trophies'])}"
         for entry in board["entries"]
     ]
@@ -571,7 +572,7 @@ def rank_reply(
     """The person's player on the Live Leaderboard with the players around it."""
     entries = board["entries"]
     me = next(entry for entry in entries if entry["tag"] == tag)
-    lines = []
+    lines = [reset_line(now), ""]
     for entry in entries:
         gap = entry["trophies"] - me["trophies"]
         line = f"#{number(entry['position'])} {safe(entry['name'])} · {number(entry['trophies'])}"
@@ -634,7 +635,12 @@ def groups_list(site: Site, groups: Sequence[Mapping[str, Any]], now: datetime) 
 
 def _member_line(player: Mapping[str, Any], days: int) -> str:
     head = f"**{safe(player['name'])}** {player['tag']}" + (" (you)" if player["you"] else "")
-    window = "pending" if player["net"] is None else signed(player["net"])
+    if player["net"] is None:
+        window = "pending"
+    elif player["counted_days"] < days:
+        window = f"{signed(player['net'])} ({player['counted_days']} of {days} days counted)"
+    else:
+        window = signed(player["net"])
     if player["status"] != "tracking":
         return f"{head} · {_STATE_WORDS.get(player['status'], 'Being checked')}"
     if player["season_reset_pending"]:
@@ -681,12 +687,18 @@ def group_reply(site: Site, comparison: Mapping[str, Any], now: datetime) -> Rep
     )
 
 
-def _rate(part: int, whole: int) -> str:
-    return "Unavailable" if not whole else f"{round(100 * part / whole)}%"
+def _rate(part: int | None, whole: int | None) -> str:
+    return "Unavailable" if part is None or not whole else f"{round(100 * part / whole)}%"
 
 
-def _per(total: int, count: int) -> str:
-    return "Unavailable" if not count else signed(round(total / count))
+def _per(total: int | None, count: int | None) -> str:
+    return "Unavailable" if total is None or not count else signed(round(total / count))
+
+
+def _total(days: Sequence[Mapping[str, Any]], key: str) -> int | None:
+    """A Season total, unknown when no day or any day lacks the number."""
+    values = [day[key] for day in days]
+    return None if not values or None in values else sum(values)
 
 
 def _average(values: Sequence[int], unit: str = "") -> str:
@@ -715,45 +727,53 @@ def season_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
     start = None if first is None else first.get("start_trophies")
     now_trophies = None if page["season_reset_pending"] else page["trophies"]
     head = f"Season from {discord_time(datetime.fromisoformat(season['start']), 'D')}"
-    head += f" · Day {season['current_day_number']} of 28"
+    current = season["current_day_number"]
+    head += f" · Day {current} of 28 · {_known(start, number)} → {_known(now_trophies, number)}"
     if start is not None and now_trophies is not None:
-        head += f" · {number(start)} → {number(now_trophies)} ({signed(now_trophies - start)})"
+        head += f" ({signed(now_trophies - start)})"
     attacks = [event for day in days for event in day["offense_events"]]
     defenses = [event for day in days for event in day["defense_events"]]
-    attack_count = sum(day["attack_count"] or 0 for day in days)
-    three_stars = sum(day["attack_three_star_count"] or 0 for day in days)
-    gain = sum(day["attack_gain"] or 0 for day in days)
-    defense_count = sum(day["defense_count"] or 0 for day in days)
-    tripled = sum(day["defense_three_star_count"] or 0 for day in days)
-    loss = sum(day["defense_loss"] or 0 for day in days)
+    attack_count = _total(days, "attack_count")
+    three_stars = _total(days, "attack_three_star_count")
+    gain = _total(days, "attack_gain")
+    defense_count = _total(days, "defense_count")
+    tripled = _total(days, "defense_three_star_count")
+    loss = _total(days, "defense_loss")
+    lost = None if loss is None else -loss
+    held = None if defense_count is None or tripled is None else defense_count - tripled
     lines = [
         head,
-        f"{len(days)} of {season['current_day_number']} Legend days recorded.",
+        f"{len(days)} of {current} Legend days recorded.",
         "",
         (
-            f"**Attacks** {number(attack_count)} · hit rate {_rate(three_stars, attack_count)} "
-            f"({number(three_stars)} three-stars) · {signed(gain)} · "
-            f"{_per(gain, attack_count)} per attack · average destruction "
+            f"**Attacks** {_known(attack_count, number)} · hit rate "
+            f"{_rate(three_stars, attack_count)} ({_known(three_stars, number)} three-stars) · "
+            f"{_known(gain, signed)} · {_per(gain, attack_count)} per attack · "
+            "average destruction "
             f"{_average([event['destruction_percentage'] for event in attacks], '%')}"
         ),
         (
-            f"**Defenses** {number(defense_count)} · held {number(defense_count - tripled)} of "
-            f"{number(defense_count)} (not tripled) · {signed(-loss)} · "
-            f"{_per(-loss, defense_count)} per defense · average stars given up "
+            f"**Defenses** {_known(defense_count, number)} · held {_known(held, number)} of "
+            f"{_known(defense_count, number)} (not tripled) · {_known(lost, signed)} · "
+            f"{_per(lost, defense_count)} per defense · average stars given up "
             f"{_average([event['stars'] for event in defenses])}"
         ),
     ]
-    ended = [day for day in days if day["ranked_day_start"] != ready["current_day_start"]]
+    by_time = {datetime.fromisoformat(day["ranked_day_start"]): day for day in days}
+    season_start = datetime.fromisoformat(season["start"])
+    ended = range(max(1, current - 7), current)
     if ended:
         lines += ["", "**Last ended days**"]
-        for day in reversed(ended[-7:]):
-            net = day["net_trophy_change"]
+        for number_of_day in reversed(ended):
+            day = by_time.get(season_start + timedelta(days=number_of_day - 1), {})
+            net = day.get("net_trophy_change")
             rank = day.get("reset_rank")
             lines.append(
-                f"Day {day.get('season_day_number') or '?'} · net "
+                f"Day {number_of_day} · net "
                 f"{'pending' if net is None else signed(net)} · Reset rank "
                 f"{'Unavailable' if rank is None else '#' + number(rank)}"
             )
+    lines += ["", reset_time(now)]
     return Reply(
         "\n".join(lines),
         title=title,
