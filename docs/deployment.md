@@ -1219,8 +1219,13 @@ and analytics builds are queued at priority 300 instead of 100
 (`PYTHON_RESET_PRIORITY` in [`db.py`](../python/src/clashlens/db.py)). A claim
 adds 10 for each minute live work has waited, while Reset-priority work keeps
 its fixed score, so they go first unless live work has waited 20 minutes,
-however long they have waited themselves. That only holds for live jobs among
-the 32 a claim looks at, picked by when each became due: a retried live job is
+however long they have waited themselves. Every other job each worker thread
+claims still takes Reset-priority work first (`RESET_FIRST_CLAIM_EVERY` in
+[`worker.py`](../python/src/clashlens/worker.py)), so while both wait, live
+work older than 20 minutes, such as the new day's results queued at 05:00,
+and the board's Reset work each get at least half of the jobs every thread
+claims. That only holds for live jobs among the 32 a claim looks at, picked by
+when each became due: a retried live job is
 due again from its retry time, so it can still wait behind Reset work longer
 than 20 minutes. On 2026-10-07 the collector's outage delayed about 19,000
 Reset readings by 35 minutes; while they also earned the waiting bonus, no live
