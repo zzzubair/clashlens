@@ -30,6 +30,16 @@ website.
 - Links in replies use the website address in `CLASHLENS_PUBLIC_ORIGIN`.
 - Memory is capped at 384 MiB and CPU at half a core.
 
+## Reset time in replies
+
+Only replies that show Legend data end with the next Reset as a Discord
+timestamp, which each viewer sees in their own local time: a player's day or
+Season (`/me`, `/player`, `/season`, and a player's status word), `/group`
+standings, and live numbers (`/top`, `/rank`). Errors, refusals, instructions,
+`/help`, `/link`, `/main`, menus and "which one?" prompts (including the
+`/group` list of groups), and lists of linked players have no Reset line on
+purpose.
+
 ## Go-live checklist
 
 Nothing below has been done yet. Do the steps in order.
