@@ -89,11 +89,11 @@ def page(tag: str, name: str, battles: list[dict[str, Any]], reasons=()) -> dict
         "tag": tag,
         "name": name,
         "clan": "Lens Clan",
-        "active": True,
-        "eligibility": "eligible",
+        "state": "tracking",
+        "reason": None,
         "trophies": 5842,
         "season_reset_pending": False,
-        "observed_at": (NOW - timedelta(minutes=2)).isoformat(),
+        "observed_at": NOW - timedelta(minutes=2),
         "screen_ready": {
             "days": [day],
             "current_day_start": day["ranked_day_start"],
@@ -598,18 +598,28 @@ def test_a_player_whose_numbers_do_not_apply_gets_its_status_not_old_numbers(
 
 
 @pytest.mark.parametrize(
-    ("eligibility", "word"), [("ineligible", "Not in Legend"), ("eligible", "Being checked")]
+    ("state", "reason", "word"),
+    [
+        ("not_in_legend", None, "Not in Legend"),
+        ("uncertain", None, "Being checked"),
+        ("tracking", "profile_rejected", "Profile could not be read"),
+        ("tracking", "unknown_tier", "League not recognised"),
+    ],
 )
-def test_a_player_who_left_legend_after_the_card_was_read_gets_its_status(
-    store, eligibility, word
+def test_a_status_change_after_the_card_was_read_comes_from_the_page_read(
+    store, state, reason, word
 ) -> None:
-    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    # The card was read an hour ago; the page read since has a new profile.
+    store.connect(
+        ME, [card("#2PP", "Drift", 5842, observed_at=NOW - timedelta(hours=1))]
+    )
     store.pages["#2PP"] = {
-        **page("#2PP", "Drift", []), "active": False, "eligibility": eligibility
+        **page("#2PP", "Drifted", []), "clan": "New Clan", "state": state, "reason": reason
     }
     message = run_command(store, "me", FakeInteraction(), account=None, share=False)
     assert message["text"] == word
-    assert "🏆" not in message["text"]
+    assert message["title"] == "Drifted #2PP · New Clan"
+    assert message["footer"] == "Updated 2 min ago"
 
 
 def test_full_day_reads_and_shows_one_legend_day_across_a_reset(store) -> None:

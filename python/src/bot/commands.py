@@ -111,9 +111,9 @@ class Commands:
         page = self.store.player_page(card["tag"], now)
         if page is None:
             return replies.player_status(self.site, card, "Being checked", choices)
-        status = replies.page_status(page)
-        if status is not None:
-            return replies.player_status(self.site, card, status, choices)
+        status = replies.card_status(page)
+        if status not in (None, replies.WAITING_FOR_RESET):
+            return replies.player_status(self.site, page, status, choices)
         return replies.full_day(
             self.site, page, self.store.live_rank(card["tag"], now), now, choices=choices
         )
