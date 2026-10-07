@@ -163,7 +163,8 @@ removes, moves, resizes and pins them to one player, and Done saves the layout a
 account's existing 4,096-byte preferences, so there is no database change; a
 default layout uses about 300 bytes. With no linked player the page shows how to
 link one; a player outside Legends gets one "not in Legends" line instead of
-empty cards, and a player still being checked gets one line saying so. The
+empty cards, and a player still being checked, or whose check failed or was
+inconclusive, gets one line saying so. The
 day's battles, gain and day number clear at the Reset until the page reloads.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
