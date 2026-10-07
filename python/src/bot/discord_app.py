@@ -220,38 +220,43 @@ class DiscordApp:
         outcome = "ok"
         try:
             await interaction.response.defer()
-            # This click may edit the message for 15 minutes more, the first
-            # command no longer can.
-            view.origin = interaction
-            reply = await self.read(work)
-            if reply is None:
-                # Never on the message itself, which others may see.
-                outcome = "not_linked"
-                reply = replies.not_linked(
-                    self.commands.site, interaction.user.name, self.commands.now()
-                )
-                await self._send(interaction, reply, private=True)
-                return
-            if isinstance(view, MoreView):
-                if reply is not view.reply:
-                    outcome = "not_own"
+            # One click at a time, and none on a menu already replaced or used.
+            async with view.lock:
+                if view.is_finished():
+                    outcome = "already_used"
+                    return
+                # This click may edit the message for 15 minutes more, the
+                # first command no longer can.
+                view.origin = interaction
+                reply = await self.read(work)
+                if reply is None:
+                    # Never on the message itself, which others may see.
+                    outcome = "not_linked"
+                    reply = replies.not_linked(
+                        self.commands.site, interaction.user.name, self.commands.now()
+                    )
                     await self._send(interaction, reply, private=True)
                     return
-                await interaction.edit_original_response(view=None)
-                view.stop()
+                if isinstance(view, MoreView):
+                    if reply is not view.reply:
+                        outcome = "not_own"
+                        await self._send(interaction, reply, private=True)
+                        return
+                    await interaction.edit_original_response(view=None)
+                    view.stop()
+                    await self.deliver(
+                        interaction, reply, view.messages, owner=view.owner, private=view.private
+                    )
+                    return
+                messages = self.render(reply, view.owner, interaction, private=view.private)
                 await self.deliver(
-                    interaction, reply, view.messages, owner=view.owner, private=view.private
+                    interaction,
+                    reply,
+                    messages,
+                    owner=view.owner,
+                    private=view.private,
+                    replacing=view,
                 )
-                return
-            messages = self.render(reply, view.owner, interaction, private=view.private)
-            await self.deliver(
-                interaction,
-                reply,
-                messages,
-                owner=view.owner,
-                private=view.private,
-                replacing=view,
-            )
         except Slow:
             outcome = "slow"
             await self._send(interaction, replies.slow(), private=True)
@@ -340,6 +345,10 @@ class DiscordApp:
 
 class _OwnedView(discord.ui.View):
     """Buttons only the person who ran the command can use."""
+
+    def __init__(self, *, timeout: float | None) -> None:
+        super().__init__(timeout=timeout)
+        self.lock = asyncio.Lock()
 
     app: DiscordApp
     owner: int
