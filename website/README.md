@@ -150,6 +150,21 @@ couldn't refresh and that saved results are shown; a refused request shows only
 the refusal reason. Each Refresh gets one minute from when it is submitted; after
 that the page stops checking, says so, and ignores any later answer.
 
+The Dashboard at `/dashboard` is a skeleton for signed-in users. Visitors who
+are not signed in see a blurred preview and the sign-in buttons. Signed-in
+users get an account switcher over their linked players, Today / Season / Crew
+tabs ("Crew" is a placeholder word) and a grid of cards in three sizes: S (a
+quarter of the row on desktop), L (half) and XL (the full row). Phones show one
+card per row. Only the Legend clock has content: the 24-hour ring with the Reset
+on top, real clock times in the device's or the chosen time zone, today's
+attacks and defenses at the time they landed, and live trophies and rank. Every
+other card is a labelled placeholder. Customise adds, removes, moves, resizes
+and pins cards to one player, and Done saves the layout and time zone into the
+account's existing 4,096-byte preferences, so there is no database change; a
+default layout uses about 300 bytes. With no linked player the page shows how to
+link one; a player outside Legends gets one "not in Legends" line instead of
+empty cards.
+
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
 website reads them from a copy of the private blog repo on the server, named by
