@@ -80,11 +80,13 @@ and support tests. Pushes to main and manual runs also run the whole packaged
 suite in the check image as four more groups, each against its own PostgreSQL 18 Alpine
 service, the database image the development stack uses. Packaged group 1 also
 runs Ruff, compiles `src` and `../development`, and runs the fake-service tests.
-`Packaged Python tests` fails if any packaged group fails, is cancelled, or is
-skipped. The full development container check then only starts the stack and
+The full development container check then only starts the stack and
 runs the website and browser checks against it.
-The existing check names stay unchanged; the Python result waits for all four
-groups and fails if any group fails, is cancelled, or is skipped.
+One `Required checks` result waits for every other job and fails if any of them
+fails, is cancelled, or is skipped, except that pull requests expect the two
+main-only jobs to be skipped. It replaced three separate waiting results after
+GitHub failed to create such a waiting job in three main runs on October 7,
+2026, failing those runs although every job passed.
 A newer push to a pull request cancels its older run, but runs on main
 commits never cancel each other, so each main commit gets a finished result.
 

@@ -67,17 +67,6 @@ jobs:
         run: |
           PYTHONPATH=.. uv run pytest -q ../development/test_fixtures.py
 
-  python:
-    name: Python lint, compile, and PostgreSQL tests
-    if: always()
-    needs: python-tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require all four Python test groups to pass
-        env:
-          RESULT: ${{ needs.python-tests.result }}
-        run: test "$RESULT" = success
-
   website-tests:
     name: Website checks and browser tests, shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
@@ -139,17 +128,6 @@ jobs:
             fi
           done
 
-  website:
-    name: Website Node 24 checks and Chromium E2E
-    if: always()
-    needs: website-tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require both website shards to pass
-        env:
-          RESULT: ${{ needs.website-tests.result }}
-        run: test "$RESULT" = success
-
   containers:
     name: Container packaging and runtime checks
     runs-on: ubuntu-latest
@@ -206,17 +184,6 @@ jobs:
             --env CLASHLENS_TEST_GROUP='${{ matrix.group }}' \
             clashlens-python-check:ci uv run pytest -q --durations=30
 
-  packaged-python:
-    name: Packaged Python tests
-    if: always() && github.event_name != 'pull_request'
-    needs: packaged-python-tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require all four packaged Python test groups to pass
-        env:
-          RESULT: ${{ needs.packaged-python-tests.result }}
-        run: test "$RESULT" = success
-
   container-runtime:
     name: Full development container checks
     if: github.event_name != 'pull_request'
@@ -227,3 +194,36 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y podman
       - name: Full development container checks
         run: ./dev check
+
+  # The one status to require. GitHub creates a job that waits on others only
+  # after they finish, and on October 7, 2026 it failed to create three such
+  # jobs, failing runs whose every job passed. One waiting job instead of three
+  # leaves one such chance per run. Pull requests skip the two main-only jobs.
+  required:
+    name: Required checks
+    if: always()
+    needs:
+      - python-tests
+      - website-tests
+      - containers
+      - packaged-python-tests
+      - container-runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every check to pass
+        env:
+          EVENT: ${{ github.event_name }}
+          PYTHON: ${{ needs.python-tests.result }}
+          WEBSITE: ${{ needs.website-tests.result }}
+          CONTAINERS: ${{ needs.containers.result }}
+          PACKAGED: ${{ needs.packaged-python-tests.result }}
+          RUNTIME: ${{ needs.container-runtime.result }}
+        run: |
+          main_only=success
+          [ "$EVENT" = pull_request ] && main_only=skipped
+          for result in "$PYTHON" "$WEBSITE" "$CONTAINERS"; do
+            test "$result" = success
+          done
+          for result in "$PACKAGED" "$RUNTIME"; do
+            test "$result" = "$main_only"
+          done
