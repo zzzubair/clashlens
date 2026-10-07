@@ -87,6 +87,11 @@ class Reply:
     placeholder: str | None = None
     # How many players a "Show all" button lists, when /me cut its lines.
     show_all: int | None = None
+    # When the oldest data shown was read, or "pending" or "Unavailable"; the
+    # bot works out "Updated N min ago" from it as each message goes out.
+    updated: datetime | str = "Unavailable"
+    # The tags of the players the reply lists.
+    shown: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,19 +122,17 @@ def signed(value: int) -> str:
     return f"+{value:,}" if value >= 0 else f"−{-value:,}"
 
 
-def ago(seconds: int) -> str:
-    minutes = max(0, seconds) // 60
-    if minutes < 1:
-        return "just now"
-    if minutes < 120:
-        return f"{minutes} min ago"
-    return f"{minutes // 60} h ago"
+def oldest(times: Sequence[datetime | None]) -> datetime | str:
+    """When the oldest shown profile was seen, so no number looks newer than it is."""
+    known = [moment for moment in times if moment is not None]
+    return min(known) if known else "pending"
 
 
-def updated(ages: Sequence[int | None]) -> str:
-    """When the oldest shown profile was saved, so no number looks newer than it is."""
-    known = [age for age in ages if age is not None]
-    return f"Updated {ago(max(known))}" if known else "Updated: pending"
+def updated_line(updated: datetime | str, now: datetime) -> str:
+    if isinstance(updated, str):
+        return f"Updated: {updated}"
+    minutes = max(0, int((now - updated).total_seconds())) // 60
+    return f"Updated {number(minutes)} min ago"
 
 
 def discord_time(moment: datetime, style: str) -> str:
@@ -165,7 +168,7 @@ def not_your_menu() -> Reply:
     return Reply("Only the person who ran this command can use these buttons.")
 
 
-def not_linked(site: Site, discord_name: str) -> Reply:
+def not_linked(site: Site, discord_name: str, now: datetime) -> Reply:
     return Reply(
         f"Clash Lens doesn't know this Discord account (@{safe(discord_name)}) yet.\n\n"
         "**Have a Clash Lens account?** Sign in on the site, open sign-in "
@@ -173,6 +176,7 @@ def not_linked(site: Site, discord_name: str) -> Reply:
         "**New here?** Create an account with Discord.\n\n"
         "Connect the same Discord account you are chatting from, then run /link again.",
         title="Connect Discord to Clash Lens",
+        updated=now,
         links=(
             Link("I have an account: connect Discord", site.url("/account/providers")),
             Link(
@@ -183,17 +187,18 @@ def not_linked(site: Site, discord_name: str) -> Reply:
     )
 
 
-def no_players(site: Site, username: str) -> Reply:
+def no_players(site: Site, username: str, now: datetime) -> Reply:
     return Reply(
         f"Connected as @{safe(username)}. No player linked yet.\n\n"
         "Link your Clash of Clans player on the site with:\n"
         "1. Your player tag, from your in-game profile.\n"
         "2. Your API token, from the game: Settings → More Settings → API Token.",
+        updated=now,
         links=(Link("Link a player", site.url("/account/verify-player")),),
     )
 
 
-def help_reply(site: Site, username: str | None, player_count: int) -> Reply:
+def help_reply(site: Site, username: str | None, player_count: int, now: datetime) -> Reply:
     lines = [
         "Clash Lens shows how you and other Legend League players are really doing.",
         "",
@@ -213,15 +218,20 @@ def help_reply(site: Site, username: str | None, player_count: int) -> Reply:
     return Reply(
         "\n".join(lines),
         title="Clash Lens",
+        updated=now,
         links=(Link("Open Clash Lens", site.url("/")),),
     )
 
 
 def link_reply(
-    site: Site, username: str, cards: Sequence[Mapping[str, Any]], main_tag: str | None
+    site: Site,
+    username: str,
+    cards: Sequence[Mapping[str, Any]],
+    main_tag: str | None,
+    now: datetime,
 ) -> Reply:
     if not cards:
-        return no_players(site, username)
+        return no_players(site, username, now)
     main = next((card for card in cards if card["tag"] == main_tag), None)
     lines = [
         f"Connected as @{safe(username)}.",
@@ -234,7 +244,8 @@ def link_reply(
         lines.append("No main chosen yet: use /main to pick one.")
     return Reply(
         "\n".join(lines),
-        footer=updated([card["age_seconds"] for card in cards]),
+        updated=oldest([card["observed_at"] for card in cards]),
+        shown=tuple(card["tag"] for card in cards),
         links=(Link("Manage on Clash Lens", site.url("/account")),),
     )
 
@@ -316,10 +327,9 @@ def me_overview(
     return Reply(
         "\n".join(lines),
         title="Your Legend day",
-        footer=(
-            "Ranks are among the players Clash Lens tracks, not official world ranks.\n"
-            + updated([card["age_seconds"] for card in shown])
-        ),
+        footer="Ranks are among the players Clash Lens tracks, not official world ranks.",
+        updated=oldest([card["observed_at"] for card in shown]),
+        shown=tuple(card["tag"] for card in shown),
         links=(Link("Open Clash Lens", site.url("/account")),),
         choices=tuple(choice_for(card) for card in players[:MAX_CHOICES]),
         pick="day",
@@ -340,7 +350,7 @@ def player_status(
     return Reply(
         status,
         title=_player_title(card),
-        footer=updated([card["age_seconds"]]),
+        updated=oldest([card["observed_at"]]),
         links=(Link("Open on Clash Lens", site.player(card["tag"])),),
         choices=choices,
         pick="day" if choices else None,
@@ -430,7 +440,7 @@ def full_day(
     return Reply(
         "\n".join(lines),
         title=_player_title(page),
-        footer=updated([page["age_seconds"]]),
+        updated=datetime.fromisoformat(page["observed_at"]),
         links=(Link("Open on Clash Lens", site.player(page["tag"])),),
         choices=choices,
         pick="day" if choices else None,
@@ -442,20 +452,20 @@ def main_reply(
     cards: Sequence[Mapping[str, Any]], main_tag: str | None, *, changed: bool = False
 ) -> Reply:
     main = next((card for card in cards if card["tag"] == main_tag), None)
-    footer = updated([card["age_seconds"] for card in cards])
+    seen = oldest([card["observed_at"] for card in cards])
     if len(cards) == 1:
         only = cards[0]
         return Reply(
             f"Main is {safe(only['name'])} {only['tag']}: your only player, "
             "so every command uses it.",
-            footer=footer,
+            updated=seen,
         )
     if main is None:
         return Reply(
             "No main chosen yet. Pick the player commands should use when you "
             "don't choose one.",
             choices=tuple(choice_for(card) for card in ordered(cards, None)[:MAX_CHOICES]),
-            footer=footer,
+            updated=seen,
             pick="main",
             placeholder="Make this my main…",
         )
@@ -463,11 +473,11 @@ def main_reply(
         return Reply(
             f"Main is now {safe(main['name'])} {main['tag']}. Commands that need "
             "one player use it unless you choose another, and /me lists it first.",
-            footer=footer,
+            updated=seen,
         )
     return Reply(
         f"Main is {safe(main['name'])} {main['tag']}. Use /main account: to change it.",
-        footer=footer,
+        updated=seen,
     )
 
 
