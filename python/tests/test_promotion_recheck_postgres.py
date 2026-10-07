@@ -16,7 +16,7 @@ from typing import ClassVar
 from urllib.parse import unquote
 
 import psycopg
-from domain_test_support import domain_database
+from domain_test_support import domain_database, store_observation
 from test_reset_settlement_collection_postgres import _collector
 
 from clashlens import promotion_recheck
@@ -43,12 +43,14 @@ class _Provider(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     answers: ClassVar[dict[str, tuple[int, bytes]]] = {}
     asked: ClassVar[list[str]] = []
+    started: ClassVar[list[float]] = []
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
     def do_GET(self) -> None:
         tag = unquote(self.path.rsplit("/", 1)[-1])
+        type(self).started.append(time.monotonic())
         type(self).asked.append(tag)
         status, body = type(self).answers.get(tag, (404, b"{}"))
         self.send_response(status)
@@ -62,6 +64,7 @@ class _Provider(BaseHTTPRequestHandler):
 def _provider(answers: dict[str, tuple[int, bytes]]):
     _Provider.answers = answers
     _Provider.asked = []
+    _Provider.started = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -91,12 +94,21 @@ def _seed(connection_info: str) -> None:
         )
 
 
-def _check(origin: str, connection_info: str, tmp_path: Path, now: datetime):
+def _check(
+    origin: str,
+    connection_info: str,
+    tmp_path: Path,
+    now: datetime,
+    attempted: set[str] | None = None,
+    rate: float = 1000.0,
+):
     database = CollectorDatabase(connection_info)
     try:
         collector = _collector(origin, database, tmp_path)
-        admit = promotion_recheck.Admission(collector, 1000.0, clock=lambda: now)
-        return asyncio.run(promotion_recheck.check_batch(collector, admit))
+        admit = promotion_recheck.Admission(collector, rate, clock=lambda: now)
+        return asyncio.run(
+            promotion_recheck.check_batch(collector, admit, set() if attempted is None else attempted)
+        )
     finally:
         database.close()
 
@@ -186,25 +198,30 @@ def test_monday_recheck_waits_for_05_30_late_live_players_and_settlement(
         assert _check(origin, connection_info, tmp_path, now)["asked"] == 4
 
 
-def test_each_request_waits_for_its_start_slot_and_an_idle_key(
+def test_requests_go_out_paced_and_only_while_a_key_is_idle(
     database_url: str, tmp_path: Path
 ) -> None:
     with domain_database(database_url) as connection_info, _provider({}) as origin:
         _seed(connection_info)
+        now = MONDAY + timedelta(minutes=40)
+        # After an idle stretch, requests still reach the API a twentieth of a second apart.
+        assert _check(origin, connection_info, tmp_path, now, rate=20.0)["asked"] == 4
+        gaps = [b - a for a, b in itertools.pairwise(_Provider.started)]
+        assert len(gaps) == 3 and min(gaps) >= 0.04
+
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "INSERT INTO promotion_candidates (normalized_tag, league_tier_id, checked_at)"
+                " VALUES ('#8QQ', 105000035, %s)",
+                (LAST_WEEK,),
+            )
+        _Provider.asked = []
         database = CollectorDatabase(connection_info)
         collector = _collector(origin, database, tmp_path)
-        now = MONDAY + timedelta(minutes=40)
         admit = promotion_recheck.Admission(collector, 20.0, clock=lambda: now)
 
         async def scenario() -> None:
-            # After an idle stretch, starts are still a twentieth of a second apart.
-            starts = []
-            for _ in range(3):
-                assert await admit()
-                starts.append(time.monotonic())
-            assert min(b - a for a, b in itertools.pairwise(starts)) >= 0.045
-
-            # One of the key's six request slots is busy, so nothing starts.
+            # One of the key's six request slots is busy, so nothing goes out.
             release = asyncio.Event()
 
             async def hold(_key, start_request) -> None:
@@ -213,12 +230,13 @@ def test_each_request_waits_for_its_start_slot_and_an_idle_key(
 
             holder = asyncio.create_task(collector.regular_keys.run(hold))
             await asyncio.sleep(0.01)
-            waiting = asyncio.create_task(admit())
+            batch = asyncio.create_task(promotion_recheck.check_batch(collector, admit, set()))
             await asyncio.sleep(0.3)
-            assert not waiting.done()
+            assert _Provider.asked == []
             release.set()
             await holder
-            assert await asyncio.wait_for(waiting, 1)
+            assert (await asyncio.wait_for(batch, 5))["asked"] == 1
+            assert _Provider.asked == ["#8QQ"]
 
         try:
             asyncio.run(scenario())
@@ -285,16 +303,96 @@ def test_a_promoted_player_another_job_holds_stays_due(
         assert _checked_at(connection_info, "#8QQ") > MONDAY
 
 
-def test_an_unreadable_answer_stays_due_for_a_retry(database_url: str, tmp_path: Path) -> None:
-    answers = {"#8QQ": (200, b"{not json")}
+def test_a_promoted_player_whose_waiting_work_has_its_profile_stays_due(
+    database_url: str, archive_server, tmp_path: Path
+) -> None:
+    legend_i = _profile("#8QQ", 105000036, "Legend I", 5000)
+    answers = {"#8QQ": (200, legend_i)}
+    with domain_database(database_url) as connection_info, _provider(answers) as origin:
+        _seed(connection_info)
+        now = MONDAY + timedelta(minutes=40)
+        observation_id, _job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="promotion-held-profile",
+            endpoint="profile",
+            body=legend_i,
+            observed_at=datetime.now(UTC),
+            normalized_tag="#8QQ",
+        )
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("DELETE FROM promotion_candidates WHERE normalized_tag <> '#8QQ'")
+            # The check already has its profile and waits only for league history.
+            connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
+                    profile_status, battle_log_status, league_history_status,
+                    profile_observation_id
+                )
+                SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag, now(),
+                       'held', 'observed', 'not_applicable', 'pending', %s
+                FROM players WHERE normalized_tag = '#8QQ'
+                """,
+                (observation_id,),
+            )
+        assert _check(origin, connection_info, tmp_path, now) == Counter(
+            asked=1, promoted=1, failed=0, queued=0
+        )
+        assert _checked_at(connection_info, "#8QQ") == LAST_WEEK
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE collector_work SET profile_status = 'pending', profile_observation_id = NULL"
+            )
+        # Work that still has to fetch the profile hands the player on.
+        assert _check(origin, connection_info, tmp_path, now)["queued"] == 1
+        assert _checked_at(connection_info, "#8QQ") > MONDAY
+
+
+def test_an_unreadable_or_uncertain_answer_stays_due_for_a_retry(
+    database_url: str, tmp_path: Path
+) -> None:
+    answers = {
+        "#8QQ": (200, b"{not json"),
+        # A Legend III ID named Legend I is an uncertain tier.
+        "#9QQ": (200, _profile("#9QQ", 105000034, "Legend I", 5000)),
+    }
     with domain_database(database_url) as connection_info, _provider(answers) as origin:
         _seed(connection_info)
         now = MONDAY + timedelta(minutes=40)
         with psycopg.connect(connection_info) as connection:
-            connection.execute("DELETE FROM promotion_candidates WHERE normalized_tag <> '#8QQ'")
-        # Each batch asks again; nothing skips the player for the week.
+            connection.execute(
+                "DELETE FROM promotion_candidates WHERE normalized_tag NOT IN ('#8QQ', '#9QQ')"
+            )
+        # Each pass asks again; nothing skips the players for the week.
         for _ in range(4):
             assert _check(origin, connection_info, tmp_path, now) == Counter(
-                asked=1, failed=1, queued=0
+                asked=2, failed=2, queued=0
             )
-        assert _checked_at(connection_info, "#8QQ") == LAST_WEEK
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                "SELECT normalized_tag, league_tier_id, checked_at FROM promotion_candidates"
+                " ORDER BY normalized_tag"
+            ).fetchall() == [("#8QQ", 105000035, LAST_WEEK), ("#9QQ", 105000035, LAST_WEEK)]
+
+
+def test_players_left_due_are_asked_again_after_the_rest_of_the_list(
+    database_url: str, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(promotion_recheck, "BATCH_SIZE", 1)
+    answers = {
+        "#8QQ": (200, b"{not json"),
+        "#9QQ": (200, _profile("#9QQ", 105000035, "Legend II", 5100)),
+    }
+    with domain_database(database_url) as connection_info, _provider(answers) as origin:
+        _seed(connection_info)
+        now = MONDAY + timedelta(minutes=40)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "DELETE FROM promotion_candidates WHERE normalized_tag NOT IN ('#8QQ', '#9QQ')"
+            )
+        attempted: set[str] = set()
+        for _ in range(3):
+            _check(origin, connection_info, tmp_path, now, attempted)
+        # The oldest failing row does not hold back the next one.
+        assert _Provider.asked == ["#8QQ", "#9QQ", "#8QQ"]

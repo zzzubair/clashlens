@@ -10,7 +10,8 @@ more than two minutes late, and one key's worth of regular request slots is
 idle. These answers are not saved: a profile showing Legend I queues the
 ordinary discovery check, which saves the profile and starts tracking; any
 other answer only refreshes the list row. A request that fails, or an answer
-that cannot be read, leaves the player due for a later batch.
+that cannot be read or shows an uncertain tier, leaves the player due; it is
+asked again once the rest of the list has been asked.
 """
 
 from __future__ import annotations
@@ -80,7 +81,7 @@ def has_spare_time(database: CollectorDatabase, now: datetime) -> bool:
         ).fetchone()
 
 
-def due_tags(database: CollectorDatabase, now: datetime) -> list[str]:
+def due_tags(database: CollectorDatabase, now: datetime, skip: list[str]) -> list[str]:
     """The next listed Legend II players not checked since the Monday Reset."""
     with database._connection() as connection:
         return [
@@ -89,23 +90,24 @@ def due_tags(database: CollectorDatabase, now: datetime) -> list[str]:
                 """
                 SELECT normalized_tag FROM promotion_candidates
                 WHERE league_tier_id = %s AND checked_at < %s
+                  AND NOT (normalized_tag = ANY(%s::text[]))
                 ORDER BY checked_at, normalized_tag
                 LIMIT %s
                 """,
-                (LEGEND_II_TIER_ID, week_start(now), BATCH_SIZE),
+                (LEGEND_II_TIER_ID, week_start(now), skip, BATCH_SIZE),
             )
         ]
 
 
-def record_answers(database: CollectorDatabase, answers: list[Answer]) -> int:
-    """Save one batch's answers; returns how many promoted players were handed on.
+def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[str]:
+    """Save one batch's answers; returns the promoted players left due.
 
-    A promoted player is handed on once tracked or given a waiting discovery
-    check. Promoted players share the discovery queue's limit of
+    A promoted player is handed on once tracked or given waiting work that
+    still has to fetch the profile. Promoted players share the discovery queue's limit of
     DISCOVERY_QUEUE_CAP waiting checks; one that does not fit, or is not
     handed on, keeps its old row, so it stays due and is asked again later.
     """
-    queued = 0
+    left_out: set[str] = set()
     promoted = [answer[0] for answer in answers if answer[1] == "promoted"]
     with database._connection() as connection, connection.transaction():
         if promoted:
@@ -122,13 +124,9 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> int:
             ).fetchone()[0]
             left_out = set(promoted[max(0, DISCOVERY_QUEUE_CAP - int(waiting)) :])
             for tag in promoted:
-                if tag in left_out:
-                    continue
-                if connection.execute(
+                if tag not in left_out and not connection.execute(
                     "SELECT clashlens_queue_promoted_player(%s)", (tag,)
                 ).fetchone()[0]:
-                    queued += 1
-                else:
                     left_out.add(tag)
             answers = [answer for answer in answers if answer[0] not in left_out]
         kept = [answer for answer in answers if answer[1] != "removed"]
@@ -163,14 +161,31 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> int:
                 [answer[4] for answer in answers if answer[1] == "removed"],
             ),
         )
-    return queued
+    return left_out
 
 
-async def _ask(collector: Collector, tag: str) -> Answer | None:
+async def _ask(collector: Collector, admit: Admission, tag: str) -> Answer | None:
+    """Ask for one profile, holding the start turn ``admit.wait`` gave until it goes out."""
+    turn = True
+
+    async def start() -> None:
+        nonlocal turn
+        try:
+            await admit.start()
+        finally:
+            if turn:
+                turn = False
+                admit.release()
+
     try:
-        response = await collector.client.fetch_player(collector.regular_keys, tag, "profile")
+        response = await collector.client.fetch_player(
+            collector.regular_keys, tag, "profile", before_start=start
+        )
     except ProviderFailure:
         return None
+    finally:
+        if turn:
+            admit.release()
     at = response.response_completed_at
     if response.http_status == 404:
         return (tag, "removed", None, None, at)
@@ -186,17 +201,17 @@ async def _ask(collector: Collector, tag: str) -> Answer | None:
         )
     except ProfileParseError:
         return None
+    if profile.eligibility_state not in {"eligible", "ineligible"}:
+        return None
     if profile.league_tier_id == LEGEND_I_TIER_ID:
         return (tag, "promoted", None, profile.trophies, at)
     if profile.league_tier_id in CANDIDATE_TIER_IDS:
         return (tag, "listed", profile.league_tier_id, profile.trophies, at)
-    if profile.eligibility_state in {"eligible", "ineligible"}:
-        return (tag, "removed", None, None, at)
-    return None
+    return (tag, "removed", None, None, at)
 
 
 class Admission:
-    """Admits one request start at a time, at most ``rate`` a second, from spare headroom."""
+    """Lets one request at a time go out, at most ``rate`` a second, from spare headroom."""
 
     def __init__(
         self,
@@ -207,13 +222,15 @@ class Admission:
         self._collector = collector
         self.clock = clock
         self._interval = 1 / rate
-        self._lock = asyncio.Lock()
+        self._turn = asyncio.Lock()
         self._next_start = 0.0
         self._spare = False
         self._recheck_at = 0.0
 
     async def open(self) -> bool:
         """Whether collection has time to spare, read at most once a GUARD_SECONDS."""
+        if self._collector._stopping.is_set():
+            return False
         if time.monotonic() >= self._recheck_at:
             self._spare = await self._collector._database_call(
                 has_spare_time, self._collector.database, self.clock()
@@ -221,43 +238,72 @@ class Admission:
             self._recheck_at = time.monotonic() + GUARD_SECONDS
         return self._spare
 
-    async def __call__(self) -> bool:
-        """Wait for the next start slot and idle keys; False once time runs out or on stop."""
+    def _keys_idle(self, own: int) -> bool:
         keys = self._collector.regular_keys
-        async with self._lock:
-            while True:
-                await asyncio.sleep(max(0.0, self._next_start - time.monotonic()))
-                if self._collector._stopping.is_set() or not await self.open():
-                    return False
-                self._next_start = time.monotonic() + self._interval
-                if keys.idle_slots() >= keys.concurrency_per_key:
-                    return True
+        return keys.idle_slots() + own >= keys.concurrency_per_key
+
+    async def wait(self) -> bool:
+        """Take the start turn once a key's worth of regular slots is idle; False when closed."""
+        await self._turn.acquire()
+        while await self.open():
+            if self._keys_idle(0):
+                return True
+            await asyncio.sleep(self._interval)
+        self._turn.release()
+        return False
+
+    def release(self) -> None:
+        self._turn.release()
+
+    async def start(self) -> None:
+        """Pace and check again just as a request goes out, holding its own key slot."""
+        await asyncio.sleep(max(0.0, self._next_start - time.monotonic()))
+        if not await self.open() or not self._keys_idle(1):
+            raise ProviderFailure("promotion_recheck_paused", retryable=False)
+        self._next_start = time.monotonic() + self._interval
 
 
-async def check_batch(collector: Collector, admit: Admission) -> Counter[str] | None:
-    """Ask for one batch of listed players; None when nothing could be asked."""
+async def check_batch(
+    collector: Collector, admit: Admission, attempted: set[str]
+) -> Counter[str] | None:
+    """Ask for one batch of listed players; None when nothing could be asked.
+
+    Players asked this pass and left due are skipped until no other player is
+    due; then ``attempted`` is cleared and they are asked again.
+    """
     if not await admit.open():
         return None
-    tags = await collector._database_call(due_tags, collector.database, admit.clock())
+    now = admit.clock()
+    tags = await collector._database_call(due_tags, collector.database, now, sorted(attempted))
+    if not tags and attempted:
+        attempted.clear()
+        tags = await collector._database_call(due_tags, collector.database, now, [])
     gate = asyncio.Semaphore(IN_FLIGHT)
-    refused = 0
+    refused: set[str] = set()
 
     async def ask(tag: str) -> Answer | None:
-        nonlocal refused
         async with gate:
-            if not await admit():
-                refused += 1
+            if not await admit.wait():
+                refused.add(tag)
                 return None
-            return await _ask(collector, tag)
+            return await _ask(collector, admit, tag)
 
     answers = await asyncio.gather(*(ask(tag) for tag in tags))
     found = [answer for answer in answers if answer is not None]
-    asked = len(tags) - refused
+    asked = len(tags) - len(refused)
     if not asked:
         return None
-    queued = await collector._database_call(record_answers, collector.database, found)
+    left_due = await collector._database_call(record_answers, collector.database, found)
+    attempted.update(left_due)
+    attempted.update(
+        tag
+        for tag, answer in zip(tags, answers, strict=True)
+        if answer is None and tag not in refused
+    )
     totals = Counter(answer[1] for answer in found)
-    totals.update(asked=asked, failed=asked - len(found), queued=queued)
+    totals.update(
+        asked=asked, failed=asked - len(found), queued=totals["promoted"] - len(left_due)
+    )
     return totals
 
 
@@ -274,10 +320,15 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
         return
     admit = Admission(collector, rate)
     stretch: Counter[str] = Counter()
+    monday: datetime | None = None
+    attempted: set[str] = set()
     while not stop_requested.is_set():
-        event = {"event": "promotion_recheck", "week_start": week_start(admit.clock()).isoformat()}
+        if week_start(admit.clock()) != monday:
+            monday = week_start(admit.clock())
+            attempted.clear()
+        event = {"event": "promotion_recheck", "week_start": monday.isoformat()}
         try:
-            batch = await check_batch(collector, admit)
+            batch = await check_batch(collector, admit, attempted)
         except Exception as error:  # noqa: BLE001 - retried after a pause
             batch = None
             print(json.dumps({**event, "status": "failed", "error": repr(error)[:300]}), flush=True)

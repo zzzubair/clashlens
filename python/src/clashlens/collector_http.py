@@ -683,7 +683,9 @@ class OfficialApiClient:
         normalized_tag: str,
         endpoint: str,
         start_before: datetime | None = None,
+        before_start: StartRequest | None = None,
     ) -> FetchedResponse:
+        """Fetch one player endpoint; ``before_start`` runs as each request goes out."""
         if endpoint == "profile":
             suffix = f"/v1/players/{quote(normalized_tag, safe='')}"
         elif endpoint == "battle_log":
@@ -692,7 +694,7 @@ class OfficialApiClient:
             suffix = f"/v1/players/{quote(normalized_tag, safe='')}/leaguehistory"
         else:
             raise ValueError("unknown player endpoint")
-        return await self._fetch(pool, endpoint, self.origin + suffix, start_before)
+        return await self._fetch(pool, endpoint, self.origin + suffix, start_before, before_start)
 
     async def fetch_rankings(self, pool: KeyPool) -> FetchedResponse:
         return await self._fetch(
@@ -707,6 +709,7 @@ class OfficialApiClient:
         endpoint: str,
         url: str,
         start_before: datetime | None = None,
+        before_start: StartRequest | None = None,
     ) -> FetchedResponse:
         outage = self.provider_outage
         probe = False
@@ -728,6 +731,8 @@ class OfficialApiClient:
                     if probe or not outage.active:
                         waiting.reschedule(None)
                         break
+            if before_start is not None:
+                await before_start()
             if start_before is not None and datetime.now(UTC) >= start_before:
                 raise CollectionWindowClosed
 

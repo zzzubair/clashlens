@@ -70,14 +70,16 @@ the list but are not asked. Each request starts only while that Reset's
 collection and settlement checks have finished, no tracked player is more than
 two minutes late (read at most once a second), and one key's worth of regular
 request slots is idle; otherwise it waits and resumes when collection catches
-up. These answers are not saved, so a player who stayed put costs one request
+up. Pacing and these checks apply as each request actually goes out, after any
+wait for a key, a connection or an API outage. These answers are not saved, so a player who stayed put costs one request
 and no storage. A profile showing Legend I queues the ordinary discovery check
 above, which saves the profile, starts tracking and backfills from the first
 battle log. The row is marked checked only once the player is tracked or has
-a waiting check, and only while fewer than 500 discovery checks wait;
+waiting work that still has to fetch the profile, and only while fewer than 500 discovery checks wait;
 otherwise it stays due and is asked again later. Any other answer refreshes or
-removes the list row. A failed request or an unreadable answer leaves the
-player due, asked again at most once a minute after the list is done. Each
+removes the list row. A failed request, or an answer that cannot be read or
+shows an uncertain tier, leaves the player due; it is asked again once the
+rest of the list has been asked, at most once a minute. Each
 stretch of work ends with one `promotion_recheck` line in the collector log
 counting asked, promoted, listed, removed, failed and queued players. At the
 lab's October 2026 list this is about 59,000 Legend II requests (about 50
