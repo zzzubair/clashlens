@@ -28,23 +28,26 @@ class Store:
 
     def players(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]:
         """Each verified player's trophies, board position, day so far and how
-        old its saved profile is, the same age the player page shows."""
-        user = api_accounts.get_public_user(self.database, account.username, now=now)
-        if user is None:
-            return []
-        cards = user["verified_players"]
+        old its saved profile is, the same age the player page shows. The age
+        is read first: a profile saved in between only makes it look older."""
         with self.database.pool.connection() as connection:
             seen = dict(
                 connection.execute(
                     """
-                    SELECT normalized_tag,
-                           GREATEST(current_observed_at, current_profile_confirmed_at)
-                    FROM players
-                    WHERE normalized_tag = ANY(%s)
+                    SELECT player.normalized_tag,
+                           GREATEST(player.current_observed_at,
+                                    player.current_profile_confirmed_at)
+                    FROM verified_player_links AS link
+                    JOIN players AS player ON player.id = link.player_id
+                    WHERE link.account_id = %s
                     """,
-                    ([card["tag"] for card in cards],),
+                    (account.internal_id,),
                 ).fetchall()
             )
+        user = api_accounts.get_public_user(self.database, account.username, now=now)
+        if user is None:
+            return []
+        cards = user["verified_players"]
         for card in cards:
             at = seen.get(card["tag"])
             card["age_seconds"] = (

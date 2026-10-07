@@ -36,6 +36,9 @@ READ_SLOTS = 4
 # Dropdowns and buttons stop working after this, inside Discord's 15 minute
 # limit on editing a reply.
 VIEW_SECONDS = 600
+# Discord allows an app installed only to a person 5 follow-up messages per
+# interaction.
+FOLLOWUPS = 5
 _COLOUR = discord.Colour(0xF2B33D)
 
 
@@ -144,7 +147,12 @@ class DiscordApp:
             try:
                 await interaction.delete_original_response()
             except discord.HTTPException:
-                log.warning("could not remove a shared reply's placeholder", exc_info=True)
+                log.warning(
+                    "could not remove a shared reply's placeholder, so the private "
+                    "reply was not sent",
+                    exc_info=True,
+                )
+                return
         await self._send(interaction, reply, private=True)
 
     async def _send(self, interaction: discord.Interaction, reply: Reply, *, private: bool) -> None:
@@ -153,12 +161,40 @@ class DiscordApp:
         private = private and not in_bot_dm(interaction)
         messages = self.render(reply, interaction.user.id, interaction, private=private)
         try:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(**messages.pop(0), ephemeral=private)
-            for message in messages:
-                await interaction.followup.send(**message, ephemeral=private)
+            await self.deliver(interaction, messages, owner=interaction.user.id, private=private)
         except discord.HTTPException:
             log.warning("could not send a reply to Discord", exc_info=True)
+
+    async def deliver(
+        self,
+        interaction: discord.Interaction,
+        messages: list[dict[str, Any]],
+        *,
+        owner: int,
+        private: bool,
+        replacing: ReplyView | None = None,
+    ) -> None:
+        """Send rendered messages for one interaction, the first in place of
+        `replacing`'s message when given. What does not fit in Discord's
+        follow-up allowance waits behind a "Show more" button."""
+        first_free = replacing is not None or not interaction.response.is_done()
+        room = FOLLOWUPS + 1 if first_free else FOLLOWUPS
+        if len(messages) > room:
+            more = MoreView(self, owner, messages[room:], private)
+            messages = [*messages[: room - 1], {**messages[room - 1], "view": more}]
+        else:
+            messages = list(messages)
+        if replacing is not None:
+            # Without view=None Discord keeps the old buttons on the message.
+            await interaction.edit_original_response(**{"view": None, **messages.pop(0)})
+            # The old buttons are gone; their timeout must not put them back.
+            replacing.stop()
+        elif not interaction.response.is_done():
+            await interaction.response.send_message(**messages.pop(0), ephemeral=private)
+        for message in messages:
+            sent = await interaction.followup.send(**message, ephemeral=private, wait=True)
+            if isinstance(message.get("view"), MoreView):
+                message["view"].message = sent
 
     async def on_component(
         self, interaction: discord.Interaction, view: ReplyView, work: Callable[[], Reply | None]
@@ -168,6 +204,9 @@ class DiscordApp:
         outcome = "ok"
         try:
             await interaction.response.defer()
+            # This click may edit the message for 15 minutes more, the first
+            # command no longer can.
+            view.origin = interaction
             reply = await self.read(work)
             if reply is None:
                 # Never on the message itself, which others may see.
@@ -175,13 +214,10 @@ class DiscordApp:
                 reply = replies.not_linked(self.commands.site, interaction.user.name)
                 await self._send(interaction, reply, private=True)
                 return
-            first, *rest = self.render(reply, view.owner, view.origin, private=view.private)
-            # Without view=None Discord keeps the old buttons on the message.
-            await interaction.edit_original_response(**{"view": None, **first})
-            # The old buttons are gone; their timeout must not put them back.
-            view.stop()
-            for message in rest:
-                await interaction.followup.send(**message, ephemeral=view.private)
+            messages = self.render(reply, view.owner, interaction, private=view.private)
+            await self.deliver(
+                interaction, messages, owner=view.owner, private=view.private, replacing=view
+            )
         except Slow:
             outcome = "slow"
             await self._send(interaction, replies.slow(), private=True)
@@ -266,7 +302,55 @@ class DiscordApp:
             await app.respond(interaction, "main", app.commands.main, account)
 
 
-class ReplyView(discord.ui.View):
+class _OwnedView(discord.ui.View):
+    """Buttons only the person who ran the command can use."""
+
+    app: DiscordApp
+    owner: int
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner:
+            return True
+        await self.app._send(interaction, replies.not_your_menu(), private=True)
+        return False
+
+
+class MoreView(_OwnedView):
+    """A "Show more" button for the messages one interaction could not send."""
+
+    def __init__(
+        self, app: DiscordApp, owner: int, messages: list[dict[str, Any]], private: bool
+    ) -> None:
+        super().__init__(timeout=VIEW_SECONDS)
+        self.app = app
+        self.owner = owner
+        self.messages = messages
+        self.private = private
+        self.message: discord.WebhookMessage | None = None
+        button: discord.ui.Button[MoreView] = discord.ui.Button(label="Show more")
+
+        async def more(interaction: discord.Interaction) -> None:
+            try:
+                await interaction.response.defer()
+                await interaction.edit_original_response(view=None)
+                self.stop()
+                await app.deliver(interaction, self.messages, owner=owner, private=private)
+            except discord.HTTPException:
+                log.warning("could not send the rest of a reply", exc_info=True)
+
+        button.callback = more  # type: ignore[method-assign]
+        self.add_item(button)
+
+    async def on_timeout(self) -> None:
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(view=None)
+        except discord.HTTPException:
+            pass
+
+
+class ReplyView(_OwnedView):
     """Link buttons, plus the dropdown and "Show all" button only the person
     who ran the command can use."""
 
@@ -321,12 +405,6 @@ class ReplyView(discord.ui.View):
 
             button.callback = show_all  # type: ignore[method-assign]
             self.add_item(button)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id == self.owner:
-            return True
-        await self.app._send(interaction, replies.not_your_menu(), private=True)
-        return False
 
     async def on_timeout(self) -> None:
         # Keep the link buttons; the rest would only answer "interaction failed".
