@@ -21,8 +21,9 @@ CREATE TABLE promotion_candidates (
 CREATE INDEX promotion_candidates_due
     ON promotion_candidates (league_tier_id, checked_at);
 
--- Record one recognized profile. An older observation never overwrites or
--- removes a newer one, and never re-adds a player whose saved profile is newer.
+-- Record one recognized profile; the caller holds the player's row lock. An
+-- older observation never overwrites or removes a newer one, and never changes
+-- the row of a player whose saved profile was checked later.
 CREATE FUNCTION clashlens_note_promotion_candidate(
     tag text, tier_id integer, trophy_count integer, observed_at timestamptz
 )
@@ -30,12 +31,15 @@ RETURNS void LANGUAGE sql SECURITY DEFINER
 AS $$
     DELETE FROM promotion_candidates
     WHERE normalized_tag = tag AND checked_at <= observed_at
-      AND tier_id NOT IN (105000034, 105000035);
+      AND tier_id NOT IN (105000034, 105000035) AND NOT EXISTS (
+          SELECT 1 FROM players AS player WHERE player.normalized_tag = tag
+            AND GREATEST(player.current_observed_at, player.current_profile_confirmed_at) > observed_at
+      );
     INSERT INTO promotion_candidates (normalized_tag, league_tier_id, trophies, checked_at)
     SELECT tag, tier_id, trophy_count, observed_at
     WHERE tier_id IN (105000034, 105000035) AND NOT EXISTS (
-        SELECT 1 FROM players AS player
-        WHERE player.normalized_tag = tag AND player.current_observed_at > observed_at
+        SELECT 1 FROM players AS player WHERE player.normalized_tag = tag
+          AND GREATEST(player.current_observed_at, player.current_profile_confirmed_at) > observed_at
     )
     ON CONFLICT (normalized_tag) DO UPDATE SET
         league_tier_id = EXCLUDED.league_tier_id,
@@ -44,9 +48,12 @@ AS $$
     WHERE promotion_candidates.checked_at < EXCLUDED.checked_at;
 $$;
 
--- Players already saved whose current profile shows Legend II or III.
+-- Players already saved whose current profile shows Legend II or III, as of
+-- that profile's latest check.
 INSERT INTO promotion_candidates (normalized_tag, league_tier_id, trophies, checked_at)
-SELECT player.normalized_tag, version.league_tier_id, version.trophies, version.observed_at
+SELECT player.normalized_tag, version.league_tier_id, version.trophies,
+       COALESCE(GREATEST(player.current_observed_at, player.current_profile_confirmed_at),
+                version.observed_at)
 FROM players AS player
 JOIN player_profile_versions AS version ON version.id = player.current_profile_version_id
 WHERE NOT player.active AND version.league_tier_id IN (105000034, 105000035)

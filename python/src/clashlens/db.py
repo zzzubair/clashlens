@@ -47,8 +47,7 @@ WORKER_STATEMENT_TIMEOUT_SECONDS = 900
 # Otherwise it keeps its own rows, and any earlier Resets it already took,
 # locked for as long as a slow publication holds that Reset.
 RESET_LOCK_WAIT = "250ms"
-# At most this many profile checks for newly discovered players wait at once,
-# plus one log's or ranking's players per worker adding checks at that moment.
+# At most this many profile checks for newly discovered players wait at once.
 # Legend I gains about 2,000 players a week; a full queue drains in under a
 # minute at the measured 21 discovery checks per second.
 DISCOVERY_QUEUE_CAP = 500
@@ -1408,10 +1407,9 @@ def enqueue_discovered_players(
 
     Players already tracked or already given this week's check are skipped
     before anything else. The remaining ones are queued only while fewer than
-    DISCOVERY_QUEUE_CAP such checks wait; transactions adding checks at once
-    can each add one log's or ranking's players past it. A full queue skips
-    them with no saved retry. A player another job updates or queues for over
-    a second raises LockNotAvailable, so the whole job rolls back and reruns.
+    DISCOVERY_QUEUE_CAP such checks wait; a full queue skips them with no saved
+    retry. Waiting over a second for another job adding checks, or updating a
+    player, raises LockNotAvailable, so the whole job rolls back and reruns.
     """
     if not database.player_discovery_enabled or claim.work_type != "process_observation":
         return
@@ -1437,6 +1435,8 @@ def enqueue_discovered_players(
     ]
     if not candidates:
         return
+    with lock_wait(connection, "1s"):
+        connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('discovery-queue', 0))")
     waiting = connection.execute(
         """
         SELECT count(*) FROM collector_work

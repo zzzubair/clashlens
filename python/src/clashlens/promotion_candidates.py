@@ -4,9 +4,9 @@ Production keeps one ``promotion_candidates`` row per such player: the tier
 and trophies last seen and when (migration 0076). Profile processing keeps
 the rows current. The ``load-promotion-candidates`` command adds the lab's
 list once, from a CSV file with the header
-``tag,league_tier_id,trophies,checked_at``. A tracked player is left out,
-and a tag already listed keeps whichever check is newer. Any invalid line
-refuses the whole file.
+``tag,league_tier_id,trophies,checked_at``. A tracked player, or one whose
+saved profile was checked later than the line, is left out, and a tag already
+listed keeps whichever check is newer. Any invalid line refuses the whole file.
 """
 
 from __future__ import annotations
@@ -67,7 +67,9 @@ def load_candidates(
                 AS input(tag, tier, trophies, checked)
             WHERE NOT EXISTS (
                 SELECT 1 FROM players
-                WHERE players.normalized_tag = input.tag AND players.active
+                WHERE players.normalized_tag = input.tag
+                  AND (players.active OR GREATEST(players.current_observed_at,
+                                                  players.current_profile_confirmed_at) > input.checked)
             )
             ON CONFLICT (normalized_tag) DO UPDATE SET
                 league_tier_id = EXCLUDED.league_tier_id,
