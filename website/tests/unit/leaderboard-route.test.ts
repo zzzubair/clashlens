@@ -324,9 +324,7 @@ it.each([
     fixture.provenance.observedAt = "2026-09-09T04:59:00Z";
     mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
     const { html } = await render("view=daily&season=1788757200&day=2&page=1");
-    const links = [
-      ...html.matchAll(/<a href="([^"]+)"[^>]*>Go to Day (\d+)/g),
-    ];
+    const links = [...html.matchAll(/<a href="([^"]+)"[^>]*>Go to Day (\d+)/g)];
     expect(links.map(([, , day]) => `Go to Day ${day}`)).toEqual(labels);
     for (const [, href, day] of links) expect(href).toContain(`day=${day}`);
     expect(html).not.toMatch(/>(Older|Newer)</);
