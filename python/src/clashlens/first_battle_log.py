@@ -325,15 +325,18 @@ def requeue_day_1(
 ) -> dict[str, Any]:
     """Find, and with ``queue`` recalculate, every player's saved Day 1 with
     1 to 7 defenses, and their later saved days, once: Day 1's automatic
-    defense loss now averages Day 1's own defenses only, leaving out the
-    previous Season's last day. Repeating it skips players already queued."""
+    defense loss averages Day 1's own defenses only, is charged for
+    (attacks - defenses) missing defenses when attacks are at least the
+    defenses, and a Reset reading taken before it is read less it. Repeating
+    it skips players already queued; players queued by the run before those
+    last two changes are queued again."""
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(season_start):
         raise ValueError(f"{season_id} is not a Season's start")
     day_text = season_start.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def key(player_id: Any) -> str:
-        return f"reconcile:season-day-1:{player_id}:{day_text}:{RECONCILIATION_RULE_VERSION}"
+        return f"reconcile:season-day-1-unsettled-loss:{player_id}:{day_text}:{RECONCILIATION_RULE_VERSION}"
 
     with database.pool.connection() as connection:
         with connection.transaction():
