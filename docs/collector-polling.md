@@ -28,16 +28,69 @@ Production discovery is on: `CLASHLENS_PLAYER_DISCOVERY_ENABLED` defaults to
 player who is not tracked and has not had this week's check gets one check:
 one profile request and one league-history request. Unlike the scheduled weekly
 check, it does not reuse saved league history. At most 500 such checks wait at
-once, plus one log's or ranking's players for each worker adding checks at
-the same moment; workers adding checks together do not skip each other's
-players. A player whose record another job is updating is waited for up to
-one second; after that the whole log or ranking is processed again later. A
-player skipped while the queue is full gets no saved retry; they are tried
-again only when a later changed battle log or ranking names them. Legend I
-gains about 2,000 players a week, so this costs about 570 requests a day, plus
-about 4,000 once for the roughly 2,000 Legend I players not yet tracked. Each
-player found eligible is then tracked like any other, so revisits slow in
-proportion to the added players while the keys set the pace.
+once. One job at a time adds checks, so jobs adding checks together never pass
+that limit or skip each other's players. A job waits up to one second for
+another job adding checks, or for a player another job is updating; after that
+the whole log or ranking is processed again later. A player skipped while the
+queue is full gets no saved retry; they are tried again only when a later
+changed battle log or ranking names them. Legend I gains about 2,000 players a
+week, so this costs about 570 requests a day, plus about 4,000 once for the
+roughly 2,000 Legend I players not yet tracked. Each player found eligible is
+then tracked like any other, so revisits slow in proportion to the added
+players while the keys set the pace.
+
+The promotion list (`promotion_candidates`, migration 0076) holds Legend II and
+Legend III players who can be promoted into Legend I at a Monday Reset: one row
+per tag with the tier and trophies last seen and when, and no raw response.
+Every processed profile showing Legend II or III adds or refreshes its row; one
+showing any other recognized tier removes it. An older answer never overwrites
+a newer one or changes the row of a player whose saved profile was checked
+later. The migration copies inactive players whose saved profile shows Legend
+II or III, as of that profile's latest check. The lab's list is added once with
+the collector database role, from a CSV file with the header
+`tag,league_tier_id,trophies,checked_at`:
+
+```sh
+podman exec -i clashlens-collector python -m clashlens.cli \
+  load-promotion-candidates --database-url-file /run/secrets/database-url --file - < candidates.csv
+```
+
+It prints how many lines it read and how many rows it added or updated. Tracked
+players and players whose saved profile was checked later than the line are
+left out, a tag already listed keeps its newer check, and one invalid line
+refuses the whole file. About 130 bytes a row with its indexes: the lab's
+October 2026 list of 250,680 players is about 33 MB, growing only with newly
+seen Legend II and III players.
+
+Each Monday, after the Reset sweep (05:00-05:10 UTC), settlement (from 05:20)
+and the late-battle check (from 05:30), from 06:00 the collector asks for the
+profile of every listed Legend II player not checked since the Reset, oldest
+check first, at most
+`CLASHLENS_PROMOTION_RECHECK_PER_SECOND` requests a second on the regular keys
+(20 by default; 0 turns it off), at most two at once. Legend III rows stay on
+the list but are not asked. Just before each request, after its pacing wait,
+it is sent only while that Reset's collection and settlement checks have
+finished, no tracked player is more than two minutes late (read at most once a
+second), and one key's worth of regular request slots is idle; otherwise the
+player stays due and the re-check resumes when collection catches up. A
+request admitted just before a key wait or an API outage can still start
+late, so at most two promotion requests ever start together. These answers
+are not saved, so a player who stayed put costs one request and no storage. A
+profile showing Legend I queues the ordinary discovery check above, which
+saves the profile, starts tracking and backfills from the first battle log.
+The row is marked checked only once the player is tracked or has waiting work
+that still has to fetch the profile. A new check is added only while fewer
+than 500 discovery checks wait; once that limit is reached by checks actually
+added, the remaining promoted players stay due and are asked again later. Any other answer
+refreshes or removes the list row. A failed request, or an answer that cannot
+be read or shows an uncertain tier, leaves the player due; it is asked again
+once the rest of the list has been asked, at most once a minute. Each stretch
+of work ends with one `promotion_recheck` line in the collector log counting
+asked, promoted, listed, removed, failed and queued players. At the lab's
+October 2026 list this is about 59,000 Legend II requests each Monday, plus
+two requests for each promoted player. Two in flight at about 120 ms each
+gives roughly 16 requests a second, so the list takes about an hour.
+
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to
 verification without treating all known tags as live players.

@@ -23,6 +23,7 @@ from . import (
     collector_intents,
     collector_reset,
     collector_uploads,
+    promotion_recheck,
     weekly_eligibility,
 )
 from .archive import ArchiveReadError, S3ArchiveReader
@@ -925,9 +926,8 @@ class Collector:
             asyncio.create_task(self._upload_loop(stop_requested, idle_seconds)),
         ]
         if self.weekly_eligibility_enabled:
-            tasks.append(
-                asyncio.create_task(weekly_eligibility.run(self, stop_requested))
-            )
+            tasks.append(asyncio.create_task(weekly_eligibility.run(self, stop_requested)))
+        tasks.append(asyncio.create_task(promotion_recheck.run(self, stop_requested)))
         stop_task = asyncio.create_task(stop_requested.wait())
         try:
             done, _pending = await asyncio.wait(

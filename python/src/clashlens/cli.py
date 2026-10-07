@@ -30,10 +30,9 @@ from . import (
     api_verification,
     battle_day_repair,
     league_history_refresh,
+    promotion_candidates,
 )
-from . import (
-    db as _db,
-)
+from . import db as _db
 from .api import ClashKingClient, create_app
 from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
@@ -284,6 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
         subparsers, _database_argument, _bounded_int
     )
     league_history_refresh.add_command(subparsers, _database_argument)
+    promotion_candidates.add_command(subparsers, _database_argument)
 
     materialize_seasons = subparsers.add_parser(
         "materialize-season-summaries",
@@ -538,11 +538,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(report, sort_keys=True))
             return 0
         if arguments.command == "republish-current-season":
-            return battle_day_repair.run_republish_command(
-                _database_url(arguments), arguments
-            )
+            return battle_day_repair.run_republish_command(_database_url(arguments), arguments)
         if arguments.command == "refresh-league-history":
             return league_history_refresh.run_command(_database_url(arguments))
+        if arguments.command == "load-promotion-candidates":
+            return promotion_candidates.run_command(_database_url(arguments), arguments.file)
         if arguments.command == "materialize-season-summaries":
             import psycopg
 

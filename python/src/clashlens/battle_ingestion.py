@@ -208,9 +208,9 @@ def complete_battle_log(
             affected_battle_ids: set[int] = set()
             shared_state_changed_battle_ids: set[int] = set()
 
+            discoveries: list[dict[str, int]] = []
             if valid_rows:
                 battles = []
-                discoveries = []
                 for row in valid_rows:
                     battle = row.battle
                     assert battle is not None
@@ -251,12 +251,6 @@ def complete_battle_log(
                     ON CONFLICT DO NOTHING
                     """,
                     (Jsonb(discoveries), observation_id, battle_log.observed_at),
-                )
-                enqueue_discovered_players(
-                    connection,
-                    database,
-                    claim,
-                    (item["player_id"] for item in discoveries),
                 )
                 canonical_rows = connection.execute(
                     """
@@ -551,6 +545,13 @@ def complete_battle_log(
             first_battle_log.queue_earlier_days(
                 connection, reporter_id, battle_log.observed_at, valid_rows
             )
+            if discoveries:
+                enqueue_discovered_players(
+                    connection,
+                    database,
+                    claim,
+                    (item["player_id"] for item in discoveries),
+                )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
@@ -673,9 +674,9 @@ def _complete_battle_log_legacy(
             affected_battle_ids: set[int] = set()
             shared_state_changed_battle_ids: set[int] = set()
 
+            discoveries: list[dict[str, int]] = []
             if valid_rows:
                 battles = []
-                discoveries = []
                 for row in valid_rows:
                     battle = row.battle
                     assert battle is not None
@@ -716,12 +717,6 @@ def _complete_battle_log_legacy(
                     ON CONFLICT DO NOTHING
                     """,
                     (Jsonb(discoveries), observation_id, battle_log.observed_at),
-                )
-                enqueue_discovered_players(
-                    connection,
-                    database,
-                    claim,
-                    (item["player_id"] for item in discoveries),
                 )
                 canonical_rows = connection.execute(
                     """
@@ -967,6 +962,13 @@ def _complete_battle_log_legacy(
             first_battle_log.queue_earlier_days(
                 connection, reporter_id, battle_log.observed_at, valid_rows
             )
+            if discoveries:
+                enqueue_discovered_players(
+                    connection,
+                    database,
+                    claim,
+                    (item["player_id"] for item in discoveries),
+                )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )

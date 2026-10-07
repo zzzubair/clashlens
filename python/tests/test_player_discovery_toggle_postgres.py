@@ -190,17 +190,17 @@ def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
             database.close()
 
 
-def test_discovery_checks_added_at_the_same_moment_are_all_queued(
-    database_url: str,
+def test_discovery_checks_added_at_the_same_moment_wait_their_turn_within_the_cap(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
-            first_id, second_id = [
+            first_id, second_id, third_id, fourth_id = [
                 row[0]
                 for row in connection.execute(
                     "INSERT INTO players (normalized_tag, active, eligibility_state)"
-                    " VALUES ('#Q1', false, 'unknown'), ('#Q2', false, 'unknown')"
-                    " RETURNING id"
+                    " SELECT '#Q' || n, false, 'unknown' FROM generate_series(1, 4) AS n"
+                    " ORDER BY n RETURNING id"
                 ).fetchall()
             ]
         options = conninfo_to_dict(connection_info).get("options", "")
@@ -208,20 +208,44 @@ def test_discovery_checks_added_at_the_same_moment_are_all_queued(
             make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
         )
         claim = SimpleNamespace(work_type="process_observation")
-        try:
-            with database.pool.connection() as first, first.transaction():
-                # The first battle log's transaction is still open.
-                enqueue_discovered_players(first, database, claim, [first_id])
-                with database.pool.connection() as second, second.transaction():
-                    enqueue_discovered_players(second, database, claim, [second_id])
+
+        def discover(player_id: int) -> None:
+            with database.pool.connection() as connection, connection.transaction():
+                enqueue_discovered_players(connection, database, claim, [player_id])
+
+        def queued() -> list[int]:
             with database.pool.connection() as connection:
-                queued = sorted(
+                return sorted(
                     row[0]
                     for row in connection.execute(
                         "SELECT player_id FROM collector_work WHERE kind = 'discovery_profile'"
                     )
                 )
-            assert queued == sorted([first_id, second_id])
+
+        def discover_while_another_job_adds(open_id: int, waiting_id: int) -> None:
+            with ThreadPoolExecutor(1) as executor:
+                with database.pool.connection() as first, first.transaction():
+                    # The first battle log's transaction is still open.
+                    enqueue_discovered_players(first, database, claim, [open_id])
+                    waiting = executor.submit(discover, waiting_id)
+                    sleep(0.2)
+                    assert not waiting.done()
+                waiting.result(timeout=5)
+
+        try:
+            discover_while_another_job_adds(first_id, second_id)
+            assert queued() == sorted([first_id, second_id])
+
+            # The second job counts the first one's check, so the cap holds.
+            monkeypatch.setattr("clashlens.db.DISCOVERY_QUEUE_CAP", 3)
+            discover_while_another_job_adds(third_id, fourth_id)
+            assert queued() == sorted([first_id, second_id, third_id])
+
+            # A job kept waiting over a second rolls back to be retried.
+            with database.pool.connection() as first, first.transaction():
+                enqueue_discovered_players(first, database, claim, [fourth_id])
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    discover(fourth_id)
         finally:
             database.close()
 
@@ -261,7 +285,7 @@ def test_discovery_of_a_player_another_job_holds_retries_instead_of_skipping(
             database.close()
 
 
-def test_two_jobs_that_both_saved_a_new_player_queue_one_check_without_waiting(
+def test_two_jobs_that_both_saved_a_new_player_queue_one_check(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url) as connection_info:
