@@ -102,6 +102,9 @@ class PreviousRankedDay:
     # (see ``_settled_start``), and the Reset evidence the reading came from.
     unsettled_automatic_loss: int = 0
     end_baseline_id: int | None = None
+    # That day's "no opponent, no battle" defense rows (see
+    # ``ReconciliationInput``).
+    zero_result_defense_slots: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +148,11 @@ class ReconciliationInput:
     # A Season's first Legend day, whose day before belongs to the previous
     # Season.
     season_first_day: bool = False
+    # The day's "no opponent, no battle" Legend rows: not battles, but the
+    # game counts each as a used attack or defense, with no loss, when it
+    # charges the automatic defense loss.
+    zero_result_attack_slots: int = 0
+    zero_result_defense_slots: int = 0
 
     def __post_init__(self) -> None:
         if self.boundary_kind not in {None, "weekly", "season"}:
@@ -332,7 +340,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     # prove the end-of-day total or the automatic defense loss.
     end_hidden_by_reset = False
 
-    automatic_value_known = not (1 <= defense_count <= 7) or automatic_loss is not None
+    automatic_value_known = automatic_state != "unknown"
     if start_available and automatic_value_known:
         assert start_trophies is not None
         final_trophies = (
@@ -957,6 +965,12 @@ def _automatic_defense_adjustment(
     observed_defense_loss: int,
     failures: list[str],
 ) -> tuple[int | None, str]:
+    # The game fills missing defense slots, counting its "no opponent, no
+    # battle" rows as used slots with no loss. Of 3,643 Day 1 results checked
+    # against a profile read after the loss on 6 October 2026, 3,623 matched
+    # counting them and 3,581 without.
+    attack_count += data.zero_result_attack_slots
+    defense_count += data.zero_result_defense_slots
     if defense_count == 0 or defense_count >= MAX_DAILY_DEFENSES:
         return None, "not_applicable"
     previous = data.previous_day
@@ -973,7 +987,11 @@ def _automatic_defense_adjustment(
     ):
         failures.append("automatic_defense_basis_unavailable")
         return None, "unknown"
-    denominator = previous.observed_defense_count + defense_count
+    denominator = (
+        previous.observed_defense_count
+        + previous.zero_result_defense_slots
+        + defense_count
+    )
     if denominator <= 0:
         failures.append("automatic_defense_basis_unavailable")
         return None, "unknown"
@@ -989,7 +1007,9 @@ def _automatic_defense_adjustment(
         # more attacks than defenses lost that, 3 lost (8 - defenses); of
         # 120 with equal counts, 59 kept the Reset reading past 05:14 and 6
         # lost (8 - defenses). Fewer attacks than defenses lost
-        # (8 - defenses) in 37 of 38.
+        # (8 - defenses) in 37 of 38. Recounted with "no opponent, no battle"
+        # rows on 1,615 Day 1 results, this still matched 1,597, against
+        # 1,442 for (8 - defenses) and 1,566 for (attacks - defenses) alone.
         missing_defenses = attack_count - defense_count
     return average_loss * missing_defenses, "calculated"
 
@@ -1132,6 +1152,10 @@ def _input_evidence(
         "player_eligible": data.player_eligible,
         # Only present when true, so every other day keeps its hash.
         **({"not_enrolled": True} if data.not_enrolled else {}),
+        **({"zero_result_attack_slots": data.zero_result_attack_slots}
+           if data.zero_result_attack_slots else {}),
+        **({"zero_result_defense_slots": data.zero_result_defense_slots}
+           if data.zero_result_defense_slots else {}),
         "perspective_disagreement": data.perspective_disagreement,
         "malformed_evidence": data.malformed_evidence,
         "unclassified_evidence": data.unclassified_evidence,
@@ -1175,4 +1199,6 @@ def _previous_day_evidence(previous: PreviousRankedDay | None) -> dict[str, Any]
     if previous.unsettled_automatic_loss:
         evidence["unsettled_automatic_loss"] = previous.unsettled_automatic_loss
         evidence["end_baseline_id"] = previous.end_baseline_id
+    if previous.zero_result_defense_slots:
+        evidence["zero_result_defense_slots"] = previous.zero_result_defense_slots
     return evidence

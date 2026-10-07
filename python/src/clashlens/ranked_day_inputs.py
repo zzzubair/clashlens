@@ -333,7 +333,8 @@ def load_previous_day(
             shield_duration_days,
             input_hash,
             end_baseline_id,
-            COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0)
+            COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
+            COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0)
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -374,10 +375,54 @@ def load_previous_day(
                 int(previous_row[9]) if previous_row[9] is not None else None
             ),
             unsettled_automatic_loss=int(previous_row[10]),
+            zero_result_defense_slots=int(previous_row[11]),
         )
         if previous_row is not None
         else None
     )
+
+
+def load_zero_result_slots(
+    connection: Any,
+    ranked_day: RankedDay,
+    coverage: tuple[CoverageObservation, ...],
+) -> tuple[int, int]:
+    """How many "no opponent, no battle" attack and defense rows the day's
+    battle logs hold. None is a battle; the automatic defense loss alone
+    counts them as used slots."""
+    parsers = {
+        row_id: observation.parser_version
+        for observation in coverage
+        if observation.parser_version is not None
+        for row_id in observation.source_row_ids
+    }
+    rows = connection.execute(
+        """
+        SELECT id, source_json FROM battle_source_rows
+        WHERE id = ANY(%s) AND (source_json -> 'battleTime')::text = '0'
+        """,
+        (list(parsers),),
+    ).fetchall() if parsers else []
+    start, end = domain.battle_window(ranked_day.start)
+    slots: set[tuple[datetime, bool]] = set()
+    for row_id, source in rows:
+        parser = parsers[int(row_id)]
+        if not battle.is_no_opponent_row(source, parser) or not isinstance(
+            source.get("attack"), bool
+        ):
+            continue
+        try:
+            at = battle._parse_battle_timestamp(
+                battle._battle_timestamp_value(source, parser), parser
+            )
+        except battle.BattleLogParseError:
+            continue
+        # A live log keeps the row for days; it belongs to the day of its
+        # report time, and each later log repeating it adds no slot.
+        if start <= at < end:
+            slots.add((at, source["attack"]))
+    attacks = sum(1 for _, attack in slots if attack)
+    return attacks, len(slots) - attacks
 
 
 def _log_ids(connection: Any, condition: str, params: tuple[Any, ...]) -> list[Any]:
