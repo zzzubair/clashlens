@@ -185,3 +185,39 @@ def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
             assert blocked_id not in queued()
         finally:
             database.close()
+
+
+def test_discovery_checks_added_at_the_same_moment_are_all_queued(
+    database_url: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            first_id, second_id = [
+                row[0]
+                for row in connection.execute(
+                    "INSERT INTO players (normalized_tag, active, eligibility_state)"
+                    " VALUES ('#Q1', false, 'unknown'), ('#Q2', false, 'unknown')"
+                    " RETURNING id"
+                ).fetchall()
+            ]
+        options = conninfo_to_dict(connection_info).get("options", "")
+        database = Database(
+            make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
+        )
+        claim = SimpleNamespace(work_type="process_observation")
+        try:
+            with database.pool.connection() as first, first.transaction():
+                # The first battle log's transaction is still open.
+                enqueue_discovered_players(first, database, claim, [first_id])
+                with database.pool.connection() as second, second.transaction():
+                    enqueue_discovered_players(second, database, claim, [second_id])
+            with database.pool.connection() as connection:
+                queued = sorted(
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT player_id FROM collector_work WHERE kind = 'discovery_profile'"
+                    )
+                )
+            assert queued == sorted([first_id, second_id])
+        finally:
+            database.close()

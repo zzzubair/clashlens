@@ -921,3 +921,38 @@ def test_reset_recheck_still_waits_for_a_real_sweep_edit(database_url: str) -> N
                 assert time.monotonic() - started >= 0.5
         finally:
             database.close()
+
+
+def test_a_new_player_check_goes_ahead_of_the_settlement_backlog(
+    database_url: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _players(connection_info, TAG, "#2QQ")
+        (new_id,) = _players(connection_info, "#9QQ", active=False)
+        database = CollectorDatabase(connection_info)
+        try:
+            database.begin_reset(WEDNESDAY_RESET)
+            seen_at = WEDNESDAY_RESET + timedelta(minutes=30)
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_work SET status = 'complete', completed_at = now()"
+                    " WHERE kind = 'reset_baseline'"
+                )
+                connection.execute(
+                    """
+                    INSERT INTO collector_work (
+                        kind, lane, scope, player_id, normalized_tag, due_at,
+                        coalescing_key, profile_status, battle_log_status,
+                        league_history_status
+                    ) VALUES ('discovery_profile', 'ordinary', 'player', %s, '#9QQ',
+                              %s, 'discovery-profile:new', 'pending',
+                              'not_applicable', 'pending')
+                    """,
+                    (new_id, seen_at),
+                )
+            due = database.pending_intents(limit=3, now=seen_at, interactive=False)
+            assert [intent.kind for intent in due] == [
+                "discovery_profile", "reset_settlement", "reset_settlement"
+            ]
+        finally:
+            database.close()
