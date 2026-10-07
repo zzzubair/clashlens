@@ -207,33 +207,60 @@ def test_native_python_failure_stops_before_development_tests(
     ]
 
 
-@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped"])
+RESULTS = ["success", "failure", "cancelled", "skipped"]
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
 @pytest.mark.parametrize(
-    ("required", "groups", "name", "on_pull_requests"),
+    "needed",
     [
-        (
-            "python",
-            "python-tests",
-            "Python lint, compile, and PostgreSQL tests",
-            True,
-        ),
-        ("packaged-python", "packaged-python-tests", "Packaged Python tests", False),
-        ("website", "website-tests", "Website Node 24 checks and Chromium E2E", True),
+        "python-tests",
+        "website-tests",
+        "containers",
+        "packaged-python-tests",
+        "container-runtime",
     ],
 )
-def test_required_result_rejects_failed_cancelled_or_skipped_groups(
-    command_workspace, result, required, groups, name, on_pull_requests
+@pytest.mark.parametrize("result", RESULTS)
+def test_one_required_check_rejects_any_failed_cancelled_or_missing_job(
+    command_workspace, event, needed, result
 ) -> None:
-    job = _workflow()["jobs"][required]
-    assert job["name"] == name
-    assert job["needs"] == groups
-    assert _runs(job["if"], "pull_request") == on_pull_requests
-    assert _runs(job["if"], "push") and _runs(job["if"], "workflow_dispatch")
-    step = job["steps"][0]
-    assert step["env"]["RESULT"] == f"${{{{ needs.{groups}.result }}}}"
-    step = {**step, "env": {"RESULT": result}}
-    completed = _run_step(step, command_workspace)
-    assert (completed.returncode == 0) == (result == "success")
+    jobs = _workflow()["jobs"]
+    required = jobs["required"]
+    assert required["name"] == "Required checks"
+    assert _runs(required["if"], event)
+    # Every other job feeds the one required check, and nothing else waits.
+    assert sorted(required["needs"]) == sorted(set(jobs) - {"required"})
+    assert [name for name, job in jobs.items() if "needs" in job] == ["required"]
+    step = required["steps"][0]
+    names = {
+        "PYTHON": "python-tests",
+        "WEBSITE": "website-tests",
+        "CONTAINERS": "containers",
+        "PACKAGED": "packaged-python-tests",
+        "RUNTIME": "container-runtime",
+    }
+    assert step["env"] == {
+        "EVENT": "${{ github.event_name }}",
+        **{key: f"${{{{ needs.{job}.result }}}}" for key, job in names.items()},
+    }
+
+    def expected(job):
+        return "success" if _runs(jobs[job].get("if", "always()"), event) else "skipped"
+
+    results = {job: expected(job) for job in names.values()}
+    results[needed] = result
+    completed = _run_step(
+        {
+            **step,
+            "env": {
+                "EVENT": event,
+                **{key: results[job] for key, job in names.items()},
+            },
+        },
+        command_workspace,
+    )
+    assert (completed.returncode == 0) == (result == expected(needed))
 
 
 def test_python_groups_collect_every_test_once() -> None:
@@ -436,10 +463,6 @@ def test_pr_packaging_builds_only_python_and_runs_packaged_tests(
         ),
     ]
     assert _calls(command_workspace)[-1]["cwd"] == str(command_workspace[0] / "python")
-    assert (
-        _workflow()["jobs"]["website"]["name"]
-        == "Website Node 24 checks and Chromium E2E"
-    )
 
 
 def test_packaging_test_failure_fails_the_container_step(command_workspace) -> None:
