@@ -33,21 +33,21 @@ that limit or skip each other's players. A job waits up to one second for
 another job adding checks, or for a player another job is updating; after that
 the whole log or ranking is processed again later. A player skipped while the
 queue is full gets no saved retry; they are tried again only when a later
-changed battle log or ranking names them. Legend I
-gains about 2,000 players a week, so this costs about 570 requests a day, plus
-about 4,000 once for the roughly 2,000 Legend I players not yet tracked. Each
-player found eligible is then tracked like any other, so revisits slow in
-proportion to the added players while the keys set the pace.
+changed battle log or ranking names them. Legend I gains about 2,000 players a
+week, so this costs about 570 requests a day, plus about 4,000 once for the
+roughly 2,000 Legend I players not yet tracked. Each player found eligible is
+then tracked like any other, so revisits slow in proportion to the added
+players while the keys set the pace.
 
 The promotion list (`promotion_candidates`, migration 0076) holds Legend II and
 Legend III players who can be promoted into Legend I at a Monday Reset: one row
 per tag with the tier and trophies last seen and when, and no raw response.
 Every processed profile showing Legend II or III adds or refreshes its row; one
-showing any other recognized tier removes it. An older answer never
-overwrites a newer one or changes the row of a player whose saved profile was
-checked later. The migration copies inactive players whose saved
-profile shows Legend II or III, as of that profile's latest check. The lab's list is added once with the collector
-database role, from a CSV file with the header
+showing any other recognized tier removes it. An older answer never overwrites
+a newer one or changes the row of a player whose saved profile was checked
+later. The migration copies inactive players whose saved profile shows Legend
+II or III, as of that profile's latest check. The lab's list is added once with
+the collector database role, from a CSV file with the header
 `tag,league_tier_id,trophies,checked_at`:
 
 ```sh
