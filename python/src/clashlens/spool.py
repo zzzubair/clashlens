@@ -929,13 +929,18 @@ class Spool:
 
     def remove_unreferenced(self, referenced: Callable[[], set[str]]) -> int:
         with self._cleanup():
+            # Both reads happen inside the barrier, sidecars first: a hash
+            # whose sidecar was removed before this scan has its upload row
+            # committed already, so the later database read sees it. A
+            # snapshot taken outside the barrier can miss that commit and
+            # delete a body a pending upload needs. The database read runs
+            # without the capacity lock, as delete_unreferenced_batch does:
+            # every readiness check, in this container and the worker's, takes
+            # that lock, and a slow read held it past their health checks.
             with self._capacity_lock():
-                # Both reads happen inside the barrier, sidecars first: a
-                # hash whose sidecar was removed before this scan has its
-                # upload row committed already, so the later database read
-                # sees it. A snapshot taken outside the barrier can miss
-                # that commit and delete a body a pending upload needs.
-                protected = self._handoff_hashes_locked() | referenced()
+                protected = self._handoff_hashes_locked()
+            protected |= referenced()
+            with self._capacity_lock():
                 orphaned = {
                     digest
                     for digest, _size in self._final_files_locked()

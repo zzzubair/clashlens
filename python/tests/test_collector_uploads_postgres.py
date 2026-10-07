@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -10,7 +11,11 @@ import pytest
 from domain_test_support import domain_database
 from psycopg import sql
 
-from clashlens.collector_db import CollectorDatabase, ResponseHandoff
+from clashlens.collector_db import (
+    REFERENCED_SPOOL_HASHES_SQL,
+    CollectorDatabase,
+    ResponseHandoff,
+)
 from clashlens.collector_uploads import (
     NEXT_DUE_UPLOAD_SQL,
     UploadLeaseLost,
@@ -1074,3 +1079,129 @@ def test_claim_reads_only_the_next_due_row_in_a_production_sized_backlog(
         assert first is not None and second is not None
         assert first.spool_key == "sha256/200000"
         assert second.spool_key == "sha256/199992"
+
+
+def _rescans_a_table(plan: dict) -> bool:
+    children = plan.get("Plans", [])
+    if plan["Node Type"] == "Nested Loop" and _scans_a_table(children[1]):
+        return True
+    return any(_rescans_a_table(child) for child in children)
+
+
+def _scans_a_table(plan: dict) -> bool:
+    return plan["Node Type"] == "Seq Scan" or any(
+        _scans_a_table(child) for child in plan.get("Plans", [])
+    )
+
+
+def test_spool_reference_read_ignores_stale_statistics(database_url: str) -> None:
+    # 7 October 2026: statistics taken before the Reset said no upload kept its
+    # spool copy, the Reset then left 4,287 kept, and the planner rescanned all
+    # 66,859 response-state rows for each one. Spool cleanup took 60 s instead
+    # of 0.7 s, and each restarted collector spent its life waiting on it.
+    with upload_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                "ALTER TABLE collector_response_uploads SET (autovacuum_enabled = off)"
+            )
+            connection.execute(
+                """
+                WITH player AS (
+                    INSERT INTO players (normalized_tag, active, next_due_at)
+                    SELECT '#P' || n, true, %(now)s
+                    FROM generate_series(1, 3000) AS n
+                    RETURNING id, normalized_tag
+                ), state AS (
+                    INSERT INTO collector_response_state (
+                        scope, identity_key, endpoint, player_id, normalized_tag,
+                        last_response_hash, last_content_fingerprint,
+                        last_occurrence_key, last_applied_occurrence_key,
+                        last_seen_at
+                    )
+                    SELECT 'player', normalized_tag, 'profile', id, normalized_tag,
+                           encode(sha256(normalized_tag::bytea), 'hex'),
+                           encode(sha256(normalized_tag::bytea), 'hex'),
+                           'stale-' || id, 'stale-' || id, %(now)s
+                    FROM player
+                    RETURNING last_response_hash
+                )
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state,
+                    archive_reference, archive_instance_id, completed_at,
+                    local_deleted_at
+                )
+                SELECT last_response_hash, 'sha256/' || last_response_hash, 1,
+                       'complete', 's3://evidence/' || last_response_hash,
+                       'fixture-instance', %(now)s, %(now)s
+                FROM state
+                """,
+                {"now": NOW},
+            )
+            connection.execute(
+                "ANALYZE collector_response_uploads, collector_response_state"
+            )
+            kept = {
+                row[0]
+                for row in connection.execute(
+                    """
+                    UPDATE collector_response_uploads SET local_deleted_at = NULL
+                    WHERE response_hash IN (
+                        SELECT response_hash FROM collector_response_uploads
+                        ORDER BY response_hash LIMIT 1000
+                    )
+                    RETURNING response_hash
+                    """
+                ).fetchall()
+            }
+            # Hash and merge joins cost about the same as that nested loop, so
+            # which one stale statistics pick is luck. Forbid them: the read
+            # must still have no plan that rescans a table per row.
+            connection.execute("SET enable_hashjoin = off")
+            connection.execute("SET enable_mergejoin = off")
+            plan = connection.execute(
+                "EXPLAIN (FORMAT JSON) " + REFERENCED_SPOOL_HASHES_SQL
+            ).fetchone()[0][0]["Plan"]
+        database = CollectorDatabase(connection_info)
+        try:
+            referenced = database.referenced_spool_hashes()
+        finally:
+            database.close()
+
+    assert not _rescans_a_table(plan), plan
+    assert referenced == kept
+
+
+def test_cleanup_batch_flushes_its_removals_together(database_url: str) -> None:
+    # 7 October 2026: each removal waited for its own filesystem commit, about
+    # 64 files in 7 s, so deleting archived copies fell behind the Reset.
+    with upload_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        hashes = [_hash(f"flush-{index}") for index in range(32)]
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state,
+                    archive_reference, archive_instance_id, completed_at
+                )
+                SELECT hash, 'sha256/' || hash, 1, 'complete',
+                       's3://evidence/' || hash, 'fixture-instance', %s
+                FROM unnest(%s::text[]) AS hash
+                """,
+                (NOW, hashes),
+            )
+        database = CollectorDatabase(connection_info)
+
+        def slow_flush(_response_hash: str) -> bool:
+            time.sleep(0.2)
+            return True
+
+        started = time.monotonic()
+        try:
+            assert database.delete_spool_if_deletable(hashes, slow_flush) == 32
+            assert database.deletable_hashes(limit=100) == []
+        finally:
+            database.close()
+
+    assert time.monotonic() - started < 2
