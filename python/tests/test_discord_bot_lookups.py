@@ -143,13 +143,15 @@ def test_player_autocomplete_offers_own_and_saved_players_then_name_matches(stor
         ("Drift #2PP · 5,842", "#2PP"),
         ("Drifter #9RR · 6,000", "#9RR"),
     ]
-    assert autocomplete(store, "any_player_choices", "#9rr") == [("#9RR", "#9RR")]
+    assert autocomplete(store, "any_player_choices", "#9rr") == []
     store.known.append({"tag": "#0UU", "name": "Lucy", "trophies": 5500})
-    assert autocomplete(store, "any_player_choices", "lucy") == [
-        ("#LUCY", "#LUCY"),
-        ("Lucy #0UU · 5,500", "#0UU"),
-    ]
+    assert autocomplete(store, "any_player_choices", "lucy") == [("Lucy #0UU · 5,500", "#0UU")]
     assert autocomplete(store, "any_player_choices", "l") == [("Lucy #0UU · 5,500", "#0UU")]
+    store.cards[1].append(card("#0LL", "Chasing 8QQ", 5000))
+    assert autocomplete(store, "any_player_choices", "8qq") == [
+        ("Saved One #8QQ", "#8QQ"),
+        ("Chasing 8QQ #0LL · 5,000", "#0LL"),
+    ]
 
 
 def test_top_lists_the_live_leaderboard_among_tracked_players(store) -> None:

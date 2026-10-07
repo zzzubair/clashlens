@@ -308,7 +308,8 @@ class Commands:
 
     def player_choices(self, discord_id: str, current: str) -> list[replies.Choice]:
         """Autocomplete for /player: the person's own players and saved
-        players first, then known players whose name matches what is typed."""
+        players first, then known players whose name matches what is typed;
+        a listed player whose tag is exactly what is typed comes first."""
         account = self.store.account(discord_id)
         if account is None:
             return []
@@ -318,11 +319,10 @@ class Commands:
         choices += [
             replies.choice_for({**item, "trophies": None}) for item in self.store.saved(account)
         ]
-        tag = tag_text(text)
         if text:
             choices += [replies.choice_for(item) for item in self.store.search(text, now)]
-        if text and _TAG.fullmatch(tag):
-            choices.insert(0, replies.Choice(tag, tag))
+        tag = tag_text(text)
+        choices.sort(key=lambda choice: choice.value != tag)
         wanted = text.casefold()
         unique: dict[str, replies.Choice] = {}
         for choice in choices:
