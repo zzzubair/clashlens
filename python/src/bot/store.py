@@ -20,6 +20,41 @@ from clashlens.api_db import AccountContext, ApiDatabase
 FRESHNESS_SECONDS = 900
 
 
+def _linked_players(
+    connection: Any, account_id: int
+) -> list[tuple[int, str, str | None, str | None]]:
+    """Every verified player's id, tag, and newest saved name and clan: the
+    website's own read, without its 500-player cutoff, so the bot lists them all."""
+    rows = connection.execute(
+        """
+        SELECT player.id, player.normalized_tag, profile.name, profile.clan
+        FROM verified_player_links AS link
+        JOIN players AS player ON player.id = link.player_id
+        LEFT JOIN LATERAL (
+            SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
+                   version.player_id
+            FROM player_profile_versions AS version
+            CROSS JOIN LATERAL (
+                SELECT max(observed_at) AS observed_at FROM player_profile_effects
+                WHERE profile_version_id = version.id
+            ) AS effect
+            WHERE version.normalized_tag = player.normalized_tag
+            ORDER BY COALESCE(effect.observed_at, version.observed_at) DESC,
+                     version.id DESC
+            LIMIT 1
+        ) AS profile ON profile.player_id = player.id
+        WHERE link.account_id = %s
+        ORDER BY player.normalized_tag
+        """,
+        (account_id,),
+    ).fetchall()
+    return [
+        (int(row[0]), str(row[1]), None if row[2] is None else str(row[2]),
+         None if row[3] is None else str(row[3]))
+        for row in rows
+    ]
+
+
 class _OneConnection:
     """The API database with every read on one open connection, so the
     website's own page read shares that connection's snapshot."""
@@ -53,7 +88,7 @@ class Store:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             cards = api_players.player_cards(
                 connection,
-                api_accounts._linked_players(connection, account.internal_id),
+                _linked_players(connection, account.internal_id),
                 now=now,
             )
             seen = dict(

@@ -68,6 +68,35 @@ def _verify(database: ApiDatabase, account_id: int, tag: str) -> None:
         )
 
 
+def test_bot_lists_every_verified_player_past_500(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            mine = _account(owner, "discord", DISCORD_ID, "drift")
+            letters = "0289PYLQGRJCUV"
+            tags = [
+                "#" + "".join(letters[index // 14**place % 14] for place in range(3))
+                for index in range(501)
+            ]
+            with owner.pool.connection() as connection:
+                for tag in tags:
+                    connection.execute(
+                        "INSERT INTO players (normalized_tag, active) VALUES (%s, false)",
+                        (tag,),
+                    )
+            for tag in tags:
+                _verify(owner, mine, tag)
+            store = Store(bot)
+            account = store.account(DISCORD_ID)
+            assert account is not None
+            cards = store.players(account, NOW)
+            assert sorted(card["tag"] for card in cards) == sorted(tags)
+        finally:
+            bot.close()
+            owner.close()
+
+
 def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
     database_url: str,
 ) -> None:
