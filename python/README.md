@@ -66,12 +66,14 @@ run of the whole suite on October 4, 2026, at commit `b73e710` with Python
 3.12.13 and PostgreSQL 18.6, using `pytest --junitxml`; each test's setup, test
 and cleanup time is summed into its file. Where the slowest-30 lists of the four
 GitHub groups in run 37176424841 showed a test taking longer than locally, the
-GitHub time is used. The longest files go first into the
-group with less recorded work. New test files also run once, with an initial
-estimate of one second. The workflow tests collect the full suite and all four
-groups to check for missing or repeated tests and check that their recorded
-time totals differ by less than 10 percent. Refresh the timings when the
-groups' GitHub test times drift apart.
+GitHub time is used. After `domain_database` began copying a template
+database, the 64 files that use it were timed again in one local run on
+October 7, 2026, and those times replace their earlier ones. The longest files
+go first into the group with less recorded work. New test files also run once,
+with an initial estimate of one second. The workflow tests collect the full
+suite and all four groups to check for missing or repeated tests and check that
+their recorded time totals differ by less than 10 percent. Refresh the timings
+when the groups' GitHub test times drift apart.
 
 Pull requests always build the Python check image and run its packaged backup
 and support tests. Pushes to main and manual runs also run the whole packaged
