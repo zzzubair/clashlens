@@ -1410,8 +1410,8 @@ def enqueue_discovered_players(
     before anything else. The remaining ones are queued only while fewer than
     DISCOVERY_QUEUE_CAP such checks wait; transactions adding checks at once
     can each add one log's or ranking's players past it. A full queue skips
-    them with no saved retry. A player row another job holds past one
-    second raises LockNotAvailable, so the whole job rolls back and runs again.
+    them with no saved retry. A player another job updates or queues for over
+    a second raises LockNotAvailable, so the whole job rolls back and reruns.
     """
     if not database.player_discovery_enabled or claim.work_type != "process_observation":
         return
@@ -1449,7 +1449,7 @@ def enqueue_discovered_players(
         batch, candidates = candidates[:room], candidates[room:]
         with lock_wait(connection, "1s"):
             connection.execute(
-                "SELECT 1 FROM players WHERE id = ANY(%s::bigint[]) ORDER BY id FOR UPDATE",
+                "SELECT 1 FROM players WHERE id = ANY(%s::bigint[]) ORDER BY id FOR NO KEY UPDATE",
                 (batch,),
             )
         room -= connection.execute(
