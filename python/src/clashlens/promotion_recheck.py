@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import time
 from collections import Counter
@@ -316,8 +317,15 @@ async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
     players left due are asked again at most once a minute. Each stretch of
     work ends with one printed line counting its answers.
     """
-    rate = float(os.environ.get("CLASHLENS_PROMOTION_RECHECK_PER_SECOND", "20"))
-    if rate <= 0:
+    try:
+        rate = float(os.environ.get("CLASHLENS_PROMOTION_RECHECK_PER_SECOND", "20"))
+    except ValueError as error:
+        rate = 0
+        print(
+            json.dumps({"event": "promotion_recheck", "status": "failed", "error": repr(error)[:300]}),
+            flush=True,
+        )
+    if not 0 < rate < math.inf:
         await stop_requested.wait()
         return
     admit = Admission(collector, rate)
