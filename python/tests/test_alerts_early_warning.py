@@ -125,3 +125,15 @@ def test_a_health_warning_is_sent_before_the_slow_checks_run(rt, monkeypatch) ->
     assert rt.run() == 0
     assert warned_before and all(warned_before)
     assert len(warnings(rt)) == 1
+
+
+def test_an_open_backlog_warning_does_not_hide_a_health_warning(rt) -> None:
+    at(rt, 7, 10)
+    rt.metrics[OVERDUE] = 600
+    assert rt.run() == 0
+    assert len(warnings(rt)) == 1
+    rt.health_streaks["clashlens-collector"] = 2
+    rt.now += 60
+    assert rt.run() == 0
+    assert len(warnings(rt)) == 2
+    assert "clashlens-collector failed its last 2 health checks" in warnings(rt)[1]

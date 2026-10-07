@@ -83,11 +83,12 @@ CONDITIONS = {
         ),
         "./ops logs worker",
     ),
+    "health": (
+        "Early warning: a container may soon be restarted by its health check",
+        "./ops status, then ./ops logs",
+    ),
     "warning": (
-        (
-            "Early warning: a container may soon be restarted by its health check,"
-            " or work is falling behind"
-        ),
+        "Early warning: work is falling behind",
         "./ops status, then ./ops logs",
     ),
     "monitoring": (
@@ -549,9 +550,9 @@ def observe(
                 f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
             )
 
-    findings["warning"] = early_warning(podman, metrics if metrics_read else {}, state, clock)
+    findings.update(early_warnings(podman, metrics if metrics_read else {}, state, clock))
     # Sent before the slow checks below: Podman kills about three minutes in.
-    send({"warning": findings["warning"]})
+    send({"health": findings["health"]})
 
     names = (
         ("clashlens_spool_bytes", "max_bytes"),
@@ -693,9 +694,12 @@ def observe(
     return findings, errors
 
 
-def early_warning(podman: str, metrics: dict, state: dict, clock: str) -> bool | None:
-    """Warn before a health-check kill or a stalled Reset: 7 Oct 2026 had none."""
-    reasons, unknown = [], False
+def early_warnings(podman: str, metrics: dict, state: dict, clock: str) -> dict:
+    """Warn before a health-check kill or a stalled Reset: 7 Oct 2026 had none.
+
+    A kill is its own condition, so an open backlog warning never hides one."""
+    reasons: dict[str, list[str]] = {"health": [], "warning": []}
+    unknown = set()
     for container in ("clashlens-collector", "clashlens-python-worker"):
         try:
             result = command(
@@ -705,27 +709,30 @@ def early_warning(podman: str, metrics: dict, state: dict, clock: str) -> bool |
         except (OSError, ValueError, subprocess.SubprocessError):
             streak = None
         if streak is None:
-            unknown = True
+            unknown.add("health")
         elif streak >= WARNING_HEALTH_STREAK:
-            reasons.append(f"{container} failed its last {streak} health checks")
+            reasons["health"].append(f"{container} failed its last {streak} health checks")
     age = metrics.get("clashlens_collector_oldest_pending_processing_age_seconds")
     limit = WARNING_RESET_OVERDUE if "05:00" <= clock < "07:00" else WARNING_OVERDUE
     if age is None:
-        unknown = True
+        unknown.add("warning")
     elif age >= limit:
-        reasons.append(f"the oldest overdue job has waited {int(age // 60)} minutes")
+        reasons["warning"].append(f"the oldest overdue job has waited {int(age // 60)} minutes")
     # Responses saved in the collector's sampled minute, once it is all in 05:00-06:00.
     saved = metrics.get("clashlens_collector_responses_saved_last_minute")
     sampled = metrics.get("clashlens_collector_metrics_sample_timestamp_seconds")
     if "05:00" <= clock < "06:00":
         hours = {datetime.fromtimestamp(t, UTC).hour for t in (sampled - 60, sampled)} if sampled is not None else None
         if saved is None or hours != {5}:
-            unknown = True
+            unknown.add("warning")
         elif saved < WARNING_RESET_SAVED_PER_MINUTE:
-            reasons.append(f"only {int(saved)} responses a minute were saved in the Reset hour")
-    if reasons:
-        state.setdefault("details", {})["warning"] = "Now: " + "; ".join(reasons)
-    return True if reasons else (None if unknown else False)
+            reasons["warning"].append(f"only {int(saved)} responses a minute were saved in the Reset hour")
+    findings = {}
+    for name, found in reasons.items():
+        if found:
+            state.setdefault("details", {})[name] = "Now: " + "; ".join(found)
+        findings[name] = True if found else (None if name in unknown else False)
+    return findings
 
 
 def observe_site(
