@@ -126,6 +126,12 @@ def ago(seconds: int) -> str:
     return f"{minutes // 60} h ago"
 
 
+def updated(ages: Sequence[int | None]) -> str:
+    """When the oldest shown profile was saved, so no number looks newer than it is."""
+    known = [age for age in ages if age is not None]
+    return f"Updated {ago(max(known))}" if known else "Updated: pending"
+
+
 def discord_time(moment: datetime, style: str) -> str:
     """Discord shows this in each viewer's own time zone."""
     return f"<t:{int(moment.timestamp())}:{style}>"
@@ -228,6 +234,7 @@ def link_reply(
         lines.append("No main chosen yet: use /main to pick one.")
     return Reply(
         "\n".join(lines),
+        footer=updated([card["age_seconds"] for card in cards]),
         links=(Link("Manage on Clash Lens", site.url("/account")),),
     )
 
@@ -306,20 +313,13 @@ def me_overview(
     shown = players[:COMPACT_LIMIT] if cut else players
     lines = [reset_line(now), ""]
     lines += [card_line(card, main=card["tag"] == main_tag) for card in shown]
-    footer = "Ranks are among the players Clash Lens tracks, not official world ranks."
-    # The oldest profile behind the numbers shown, so no number looks newer
-    # than it is.
-    ages = [
-        card["age_seconds"]
-        for card in shown
-        if card_status(card) is None and card["age_seconds"] is not None
-    ]
-    if ages:
-        footer = f"Updated {ago(max(ages))} · {footer}"
     return Reply(
         "\n".join(lines),
         title="Your Legend day",
-        footer=footer,
+        footer=(
+            "Ranks are among the players Clash Lens tracks, not official world ranks.\n"
+            + updated([card["age_seconds"] for card in shown])
+        ),
         links=(Link("Open Clash Lens", site.url("/account")),),
         choices=tuple(choice_for(card) for card in players[:MAX_CHOICES]),
         pick="day",
@@ -337,11 +337,10 @@ def player_status(
     site: Site, card: Mapping[str, Any], status: str, choices: tuple[Choice, ...] = ()
 ) -> Reply:
     """A player whose numbers do not apply right now: the status word instead."""
-    age = card.get("age_seconds")
     return Reply(
         status,
         title=_player_title(card),
-        footer=None if age is None else f"Updated {ago(age)}",
+        footer=updated([card["age_seconds"]]),
         links=(Link("Open on Clash Lens", site.player(card["tag"])),),
         choices=choices,
         pick="day" if choices else None,
@@ -431,7 +430,7 @@ def full_day(
     return Reply(
         "\n".join(lines),
         title=_player_title(page),
-        footer=f"Updated {ago(page['age_seconds'])}",
+        footer=updated([page["age_seconds"]]),
         links=(Link("Open on Clash Lens", site.player(page["tag"])),),
         choices=choices,
         pick="day" if choices else None,
@@ -443,27 +442,32 @@ def main_reply(
     cards: Sequence[Mapping[str, Any]], main_tag: str | None, *, changed: bool = False
 ) -> Reply:
     main = next((card for card in cards if card["tag"] == main_tag), None)
+    footer = updated([card["age_seconds"] for card in cards])
     if len(cards) == 1:
         only = cards[0]
         return Reply(
             f"Main is {safe(only['name'])} {only['tag']}: your only player, "
-            "so every command uses it."
+            "so every command uses it.",
+            footer=footer,
         )
     if main is None:
         return Reply(
             "No main chosen yet. Pick the player commands should use when you "
             "don't choose one.",
             choices=tuple(choice_for(card) for card in ordered(cards, None)[:MAX_CHOICES]),
+            footer=footer,
             pick="main",
             placeholder="Make this my main…",
         )
     if changed:
         return Reply(
             f"Main is now {safe(main['name'])} {main['tag']}. Commands that need "
-            "one player use it unless you choose another, and /me lists it first."
+            "one player use it unless you choose another, and /me lists it first.",
+            footer=footer,
         )
     return Reply(
-        f"Main is {safe(main['name'])} {main['tag']}. Use /main account: to change it."
+        f"Main is {safe(main['name'])} {main['tag']}. Use /main account: to change it.",
+        footer=footer,
     )
 
 

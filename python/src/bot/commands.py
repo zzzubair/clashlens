@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from clashlens.api_db import AccountContext
+from clashlens.domain import ranked_day_for
 
 from . import replies
 from .replies import Reply, Site
@@ -74,9 +75,19 @@ class Commands:
         return replies.link_reply(self.site, account.username, cards, self._main(account, cards))
 
     def me(self, account: AccountContext, player: str | None = None, *, show_all: bool = False) -> Reply:
-        # One moment for every read and the reply, so a Reset mid-command
-        # cannot mix two Legend days.
+        # One moment for every read and the reply. Data saved after a Reset
+        # that passed during the reads may belong to the next Legend day, so
+        # then everything is read again for that day.
         now = self.now()
+        reply = self._me(account, player, now, show_all)
+        later = self.now()
+        if ranked_day_for(later).start != ranked_day_for(now).start:
+            return self._me(account, player, later, show_all)
+        return reply
+
+    def _me(
+        self, account: AccountContext, player: str | None, now: datetime, show_all: bool
+    ) -> Reply:
         cards = self.store.players(account, now)
         if not cards:
             return replies.no_players(self.site, account.username)

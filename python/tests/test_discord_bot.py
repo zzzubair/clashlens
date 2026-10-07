@@ -171,18 +171,31 @@ class FakeResponse:
         self.interaction.record(message)
 
 
+class FakeSent:
+    def __init__(self) -> None:
+        self.edits: list[dict[str, Any]] = []
+
+    async def edit(self, **changes: Any) -> None:
+        self.edits.append(changes)
+
+
 class FakeFollowup:
     def __init__(self, interaction: FakeInteraction) -> None:
         self.interaction = interaction
+        self.sent: list[FakeSent] = []
 
-    async def send(self, **message: Any) -> None:
+    async def send(self, *, wait: bool = False, **message: Any) -> FakeSent:
         interaction = self.interaction
+        # An app installed only to the person gets 5 follow-ups per interaction.
+        assert len(self.sent) < 5, "Discord refuses a sixth follow-up message"
+        self.sent.append(FakeSent())
         if interaction.thinking is not None:
             # As Discord does: the first message after "thinking" replaces it
             # and keeps its visibility, whatever this message asks for.
             message = {**message, "ephemeral": interaction.thinking}
             interaction.thinking = None
         interaction.record(message)
+        return self.sent[-1]
 
 
 class FakeInteraction:
@@ -196,10 +209,11 @@ class FakeInteraction:
         self.events: list[str] = [] if events is None else events
         # The visibility of a "thinking" placeholder still showing.
         self.thinking: bool | None = None
+        self.delete_fails = False
         self.messages: list[dict[str, Any]] = []
 
     def record(self, message: dict[str, Any], *, edited: bool = False) -> None:
-        embed = message["embed"]
+        embed = message.get("embed", discord.Embed())
         self.messages.append(
             {
                 "private": bool(message.get("ephemeral")),
@@ -216,6 +230,8 @@ class FakeInteraction:
         self.record(message, edited=True)
 
     async def delete_original_response(self) -> None:
+        if self.delete_fails:
+            raise discord.HTTPException(SimpleNamespace(status=500, reason="Server Error"), "")
         self.thinking = None
 
     @property
@@ -239,11 +255,23 @@ def run_command(
         await tree.get_command(name).callback(interaction, **options)
 
     asyncio.run(go())
-    return interaction.last
+    return interaction.last if interaction.messages else None
 
 
-def texts(interaction: FakeInteraction) -> str:
-    return "\n".join(message["text"] for message in interaction.messages)
+def texts(*interactions: FakeInteraction) -> str:
+    return "\n".join(
+        message["text"] or ""
+        for interaction in interactions
+        for message in interaction.messages
+    )
+
+
+def button(message: dict[str, Any], label: str) -> discord.ui.Button:
+    (found,) = [
+        item for item in message["view"].children
+        if isinstance(item, discord.ui.Button) and item.label.startswith(label)
+    ]
+    return found
 
 
 def links(message: dict[str, Any]) -> dict[str, str]:
@@ -288,6 +316,12 @@ def test_unconnected_person_gets_only_a_private_connect_message_even_when_sharin
         "https://clashlens.test/auth/discord?returnPath=%2Faccount",
     }
     assert store.reads == ["account"]
+
+
+def test_a_private_reply_is_dropped_when_the_public_placeholder_cannot_be_removed(store) -> None:
+    interaction = FakeInteraction()
+    interaction.delete_fails = True
+    assert run_command(store, "me", interaction, account=None, share=True) is None
 
 
 def test_help_and_link_work_without_a_connection(store) -> None:
@@ -353,23 +387,49 @@ def test_me_lists_main_first_then_most_trophies_with_a_dropdown(store) -> None:
     ]
     (select,) = [item for item in message["view"].children if isinstance(item, discord.ui.Select)]
     assert [option.value for option in select.options] == ["#8QQ", "#0UU", "#2PP", "#9RR"]
-    assert message["footer"].startswith("Updated 2 min ago · ")
+    assert message["footer"].endswith("\nUpdated 2 min ago")
+
+
+def test_every_player_reply_ends_with_its_oldest_update_time(store) -> None:
+    store.connect(
+        ME,
+        [
+            card("#2PP", "Drift", 5842, state="not_in_legend", age_seconds=600),
+            card("#8QQ", "Lens", 5100, state="not_in_legend", age_seconds=None),
+        ],
+    )
+    for name, options in (("me", {"account": None, "share": False}), ("link", {})):
+        footer = run_command(store, name, FakeInteraction(), **options)["footer"]
+        assert footer.endswith("Updated 10 min ago")
+    store.cards[1][0]["age_seconds"] = None
+    footer = run_command(store, "me", FakeInteraction(), account=None, share=False)["footer"]
+    assert footer.endswith("Updated: pending")
 
 
 def test_me_shows_every_player_across_messages_when_one_is_not_enough(store) -> None:
     tags = [f"#{index:04d}" for index in range(60)]
     store.connect(ME, [card(tag, "Wanderer", 5000 + index) for index, tag in enumerate(tags)])
-    interaction = FakeInteraction()
-    message = run_command(store, "me", interaction, account=None, share=False)
-    (button,) = [
-        item for item in message["view"].children
-        if isinstance(item, discord.ui.Button) and not item.url
-    ]
-    asyncio.run(button.callback(interaction))
-    shown = interaction.messages[1:]
-    assert len(shown) > 1
-    assert all(len(item["text"]) <= 4096 for item in shown)
-    assert all(f"** {tag} " in texts(interaction) for tag in tags)
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    click = FakeInteraction()
+    asyncio.run(button(message, "Show all").callback(click))
+    assert len(click.messages) > 1
+    assert all(len(item["text"]) <= 4096 for item in click.messages)
+    assert all(f"** {tag} " in texts(click) for tag in tags)
+
+
+def test_show_all_beyond_discords_follow_up_allowance_continues_on_request(store) -> None:
+    tags = [f"#{index:04d}" for index in range(500)]
+    store.connect(ME, [card(tag, "Wanderer", 5000) for tag in tags])
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    clicks = [FakeInteraction()]
+    asyncio.run(button(message, "Show all").callback(clicks[0]))
+    while isinstance(clicks[-1].last["view"], discord_app.MoreView):
+        clicks.append(FakeInteraction())
+        asyncio.run(button(clicks[-2].last, "Show more").callback(clicks[-1]))
+        # The button goes once it has been used.
+        assert clicks[-1].messages[0]["edited"] and clicks[-1].messages[0]["view"] is None
+    assert len(clicks) >= 2
+    assert all(f"** {tag} " in texts(*clicks) for tag in tags)
 
 
 def test_link_lists_every_player_across_messages(store) -> None:
@@ -385,16 +445,32 @@ def test_link_lists_every_player_across_messages(store) -> None:
 
 def test_me_with_many_players_shows_four_then_all_on_request(store) -> None:
     store.connect(ME, [card(f"#{tag}", f"P{tag}", 5000 + index) for index, tag in enumerate("2PQRUV")])
-    interaction = FakeInteraction()
-    message = run_command(store, "me", interaction, account=None, share=False)
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
     assert message["text"].count("\n**") == 4
-    (button,) = [
-        item for item in message["view"].children
-        if isinstance(item, discord.ui.Button) and not item.url
-    ]
-    assert button.label == "Show all (6)"
-    asyncio.run(button.callback(interaction))
-    assert interaction.last["text"].count("\n**") == 6
+    show_all = button(message, "Show all")
+    assert show_all.label == "Show all (6)"
+    click = FakeInteraction()
+    asyncio.run(show_all.callback(click))
+    assert click.last["text"].count("\n**") == 6
+
+
+def test_a_menu_is_cleared_with_the_latest_clicks_permission(store) -> None:
+    store.connect(ME, [card(f"#{tag}", f"P{tag}", 5000) for tag in "2PQRUV"])
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    click = FakeInteraction()
+    asyncio.run(button(message, "Show all").callback(click))
+    shown = len(click.messages)
+    asyncio.run(click.messages[0]["view"].on_timeout())
+    assert len(click.messages) == shown + 1 and click.last["edited"] is True
+    # A click that keeps the old menu also renews who may clear it.
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    store.fail = psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
+    retry = FakeInteraction()
+    view = message["view"]
+    pick(message, retry, "#2PP")
+    assert retry.last["text"] == "Clash Lens is taking longer than usual. Try again."
+    asyncio.run(view.on_timeout())
+    assert retry.last["edited"] is True
 
 
 def test_one_player_gets_the_full_day_in_time_order(store) -> None:
@@ -462,14 +538,17 @@ def test_a_player_whose_numbers_do_not_apply_gets_its_status_not_old_numbers(
 
 def test_full_day_reads_and_shows_one_legend_day_across_a_reset(store) -> None:
     before = TODAY.end - timedelta(seconds=1)
-    clock = iter([before, TODAY.end + timedelta(seconds=1)])
+    after = TODAY.end + timedelta(seconds=1)
+    clock = iter([before, after])
     store.connect(ME, [card("#2PP", "Drift", 5842)])
     store.pages["#2PP"] = page("#2PP", "Drift", [])
     text = run_command(
         store, "me", FakeInteraction(), now=lambda: next(clock), account=None, share=False
     )["text"]
-    assert set(store.moments) == {before}
-    assert f"<t:{int(TODAY.end.timestamp())}:R>" in text
+    # A Reset passed while reading, so everything is read again for the new day.
+    assert store.moments == [before] * 3 + [after] * 3
+    next_end = ranked_day_for(after).end
+    assert f"<t:{int(next_end.timestamp())}:R>" in text
 
 
 def test_me_refuses_a_player_on_another_account(store) -> None:
