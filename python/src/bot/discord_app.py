@@ -275,30 +275,54 @@ class DiscordApp:
                 "component outcome=%s ms=%d", outcome, (time.perf_counter() - started) * 1000
             )
 
-    async def own_player_choices(
-        self, interaction: discord.Interaction, current: str
-    ) -> list[app_commands.Choice[str]]:
-        """Autocomplete for options that name one of the person's own players."""
+    async def _choices(
+        self, work: Callable[..., list[replies.Choice]], *args: Any
+    ) -> list[replies.Choice]:
+        """One autocomplete read, or no entries when it cannot answer in time."""
         deadline = asyncio.get_running_loop().time() + AUTOCOMPLETE_SECONDS
-        task = asyncio.ensure_future(
-            self.read(self.commands.own_choices, str(interaction.user.id), deadline=deadline)
-        )
+        task = asyncio.ensure_future(self.read(work, *args, deadline=deadline))
         # A read already running when the answer is due keeps its slot until
         # it ends; one still waiting for a slot then never runs.
         task.add_done_callback(lambda done: done.cancelled() or done.exception())
         try:
             async with asyncio.timeout(AUTOCOMPLETE_SECONDS):
-                choices = await asyncio.shield(task)
+                return await asyncio.shield(task)
         except Exception:
             # An empty list is the only safe autocomplete answer.
             log.warning("autocomplete read failed", exc_info=True)
             return []
+
+    @staticmethod
+    def _offer(choices: list[replies.Choice], current: str) -> list[app_commands.Choice[str]]:
         wanted = current.casefold().strip()
         return [
             app_commands.Choice(name=choice.label, value=choice.value)
             for choice in choices
             if wanted in choice.label.casefold()
         ][: replies.MAX_CHOICES]
+
+    async def own_player_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for options that name one of the person's own players."""
+        choices = await self._choices(self.commands.own_choices, str(interaction.user.id))
+        return self._offer(choices, current)
+
+    async def own_group_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for the person's own groups."""
+        choices = await self._choices(self.commands.group_choices, str(interaction.user.id))
+        return self._offer(choices, current)
+
+    async def any_player_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for /player: own and saved players, then name matches."""
+        choices = await self._choices(
+            self.commands.player_choices, str(interaction.user.id), current
+        )
+        return self._offer(choices, "")
 
     def register(self, tree: app_commands.CommandTree) -> None:
         app = self
@@ -341,6 +365,60 @@ class DiscordApp:
         @app_commands.autocomplete(account=app.own_player_choices)
         async def main_command(interaction: discord.Interaction, account: str | None = None) -> None:
             await app.respond(interaction, "main", app.commands.main, account)
+
+        share_text = "Post the reply for everyone in this channel"
+
+        @tree.command(name="player", description=words["player"])
+        @app_commands.describe(player="A player tag, with or without #, or a name", share=share_text)
+        @app_commands.autocomplete(player=app.any_player_choices)
+        async def player_command(
+            interaction: discord.Interaction, player: str, share: bool = False
+        ) -> None:
+            await app.respond(interaction, "player", app.commands.player, player, share=share)
+
+        @tree.command(name="top", description=words["top"])
+        @app_commands.describe(share=share_text)
+        async def top_command(interaction: discord.Interaction, share: bool = False) -> None:
+            await app.respond(interaction, "top", app.commands.top, share=share)
+
+        @tree.command(name="rank", description=words["rank"])
+        @app_commands.describe(account="One of your players; empty for your main", share=share_text)
+        @app_commands.autocomplete(account=app.own_player_choices)
+        async def rank_command(
+            interaction: discord.Interaction, account: str | None = None, share: bool = False
+        ) -> None:
+            await app.respond(interaction, "rank", app.commands.rank, account, share=share)
+
+        group_word = replies.GROUP_WORD
+
+        @tree.command(name=group_word, description=words[group_word])
+        @app_commands.describe(
+            group=f"One of your {group_word}s; empty to list them",
+            days="Ended Legend days to compare",
+            share=share_text,
+        )
+        @app_commands.rename(group=group_word)
+        @app_commands.choices(
+            days=[app_commands.Choice(name=str(days), value=days) for days in replies.GROUP_DAYS]
+        )
+        @app_commands.autocomplete(group=app.own_group_choices)
+        async def group_command(
+            interaction: discord.Interaction,
+            group: str | None = None,
+            days: int = 7,
+            share: bool = False,
+        ) -> None:
+            await app.respond(
+                interaction, group_word, app.commands.group, group, days, share=share
+            )
+
+        @tree.command(name="season", description=words["season"])
+        @app_commands.describe(account="One of your players; empty for your main", share=share_text)
+        @app_commands.autocomplete(account=app.own_player_choices)
+        async def season_command(
+            interaction: discord.Interaction, account: str | None = None, share: bool = False
+        ) -> None:
+            await app.respond(interaction, "season", app.commands.season, account, share=share)
 
 
 class _OwnedView(discord.ui.View):

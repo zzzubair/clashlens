@@ -281,9 +281,11 @@ def links(message: dict[str, Any]) -> dict[str, str]:
     return {item.label: item.url for item in message["view"].children if getattr(item, "url", None)}
 
 
-def test_commands_install_for_users_and_servers_and_only_me_can_be_shared() -> None:
+def test_commands_install_for_users_and_servers_and_lookups_can_be_shared() -> None:
     commands = {command["name"]: command for command in command_payload()}
-    assert set(commands) == {"help", "link", "me", "main"}
+    assert set(commands) == {
+        "help", "link", "me", "main", "player", "top", "rank", "group", "season"
+    }
     for command in commands.values():
         # Guild, bot DM and group DM; installable to a server and to a user.
         assert command["contexts"] == [0, 1, 2]
@@ -292,7 +294,7 @@ def test_commands_install_for_users_and_servers_and_only_me_can_be_shared() -> N
         name for name, command in commands.items()
         if any(option["name"] == "share" for option in command["options"])
     }
-    assert shareable == {"me"}
+    assert shareable == {"me", "player", "top", "rank", "group", "season"}
 
 
 @pytest.mark.parametrize(

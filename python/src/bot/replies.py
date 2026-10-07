@@ -36,7 +36,16 @@ COMMANDS = (
     ("link", "Connect Discord to Clash Lens, or see what is connected"),
     ("me", "Your Legend day: one line per player, or the full day for one"),
     ("main", "Choose the player commands use when you don't pick one"),
+    ("player", "Any tracked player's Legend day, by tag or name"),
+    ("top", "The top 10 of the Live Leaderboard among tracked players"),
+    ("rank", "Where your player stands, with the 5 above and 5 below"),
+    (GROUP_WORD, f"One of your {GROUP_WORD}s today and over the last days"),
+    ("season", "This Season so far for one of your players"),
 )
+# Commands whose reply can be posted for everyone with `share: True`.
+SHAREABLE = ("me", "player", "top", "rank", GROUP_WORD, "season")
+# Ended Legend days a group comparison can cover.
+GROUP_DAYS = (3, 7, 14)
 
 _STATE_WORDS = {
     "not_in_legend": "Not in Legend",
@@ -207,7 +216,8 @@ def help_reply(site: Site, username: str | None, player_count: int, now: datetim
         "",
         (
             "Every command except /help and /link needs this Discord account "
-            "connected to Clash Lens. In servers, replies are private to you."
+            "connected to Clash Lens. In servers, replies are private to you "
+            "unless you add share: True."
         ),
         "",
     ]
@@ -497,3 +507,264 @@ def pages(text: str) -> list[str]:
         size += len(line) + 1
     pieces.append("\n".join(lines))
     return pieces
+
+
+def _seen(value: str | None) -> datetime | None:
+    return None if value is None else datetime.fromisoformat(value)
+
+
+def bad_tag() -> Reply:
+    return Reply("That doesn't look like a player tag.")
+
+
+def no_such_player(name: str) -> Reply:
+    return Reply(
+        f"Clash Lens doesn't know a player called {safe(name)}. "
+        "Pick one from the list or use their tag."
+    )
+
+
+def not_tracked(site: Site, tag: str, now: datetime) -> Reply:
+    return Reply(
+        f"Clash Lens hasn't tracked {tag} yet. Open their page to start "
+        "tracking and check back in a few minutes.",
+        updated=now,
+        links=(Link("Open on Clash Lens", site.player(tag)),),
+    )
+
+
+def which_player(cards: Sequence[Mapping[str, Any]], action: str) -> Reply:
+    """No player chosen and no main: ask with a dropdown of the person's own."""
+    return Reply(
+        "Which player? Pick one below, or use /main to set the one these "
+        "commands use when you don't choose.",
+        choices=tuple(choice_for(card) for card in ordered(cards, None)[:MAX_CHOICES]),
+        updated=oldest([card["observed_at"] for card in cards]),
+        pick=action,
+        placeholder="Which player?",
+    )
+
+
+_RANK_NOTE = "Clash Lens ranks the players it tracks; this is not the official world ranking."
+
+
+def top_reply(site: Site, board: Mapping[str, Any] | None, now: datetime) -> Reply:
+    link = (Link("Full leaderboard", site.url("/leaderboards/tracked")),)
+    if board is None or not board["entries"]:
+        return Reply("The Live Leaderboard is empty right now.", updated="pending", links=link)
+    lines = [
+        f"#{entry['position']} {safe(entry['name'])} · {number(entry['trophies'])}"
+        for entry in board["entries"]
+    ]
+    return Reply(
+        "\n".join(lines),
+        title=f"Live Leaderboard · among {number(board['tracked_population'])} tracked players",
+        footer=_RANK_NOTE,
+        updated=oldest([_seen(entry["observed_at"]) for entry in board["entries"]]),
+        links=link,
+    )
+
+
+def rank_reply(
+    site: Site, board: Mapping[str, Any], tag: str, now: datetime
+) -> Reply:
+    """The person's player on the Live Leaderboard with the players around it."""
+    entries = board["entries"]
+    me = next(entry for entry in entries if entry["tag"] == tag)
+    lines = []
+    for entry in entries:
+        gap = entry["trophies"] - me["trophies"]
+        line = f"#{number(entry['position'])} {safe(entry['name'])} · {number(entry['trophies'])}"
+        if entry is me:
+            line = f"▶ **{line}**"
+        elif gap:
+            line += f" ({signed(gap)})"
+        lines.append(line)
+    return Reply(
+        "\n".join(lines),
+        title=(
+            f"{safe(me['name'])} {tag} · #{number(me['position'])} of "
+            f"{number(board['total_entries'])} tracked · {number(me['trophies'])}"
+        ),
+        footer=_RANK_NOTE,
+        updated=oldest([_seen(entry["observed_at"]) for entry in entries]),
+        links=(Link("Open on Clash Lens", site.player(tag)),),
+    )
+
+
+def no_groups(site: Site, now: datetime) -> Reply:
+    return Reply(
+        f"You have no {GROUP_WORD}s yet.",
+        updated=now,
+        links=(Link(f"Make a {GROUP_WORD}", site.url("/account/groups")),),
+    )
+
+
+def not_your_group() -> Reply:
+    return Reply(f"That {GROUP_WORD} isn't on your Clash Lens account.")
+
+
+def group_too_large(site: Site, group_id: str) -> Reply:
+    return Reply(
+        f"This {GROUP_WORD} is too large to compare here.",
+        links=(Link("Open on Clash Lens", site.url(f"/account/groups/{quote(group_id)}")),),
+    )
+
+
+def groups_list(site: Site, groups: Sequence[Mapping[str, Any]], now: datetime) -> Reply:
+    shown = groups[:10]
+    lines = [
+        f"**{safe(group['name'])}** · {len(group['tags'])} players" for group in shown
+    ]
+    if len(groups) > len(shown):
+        lines.append(f"…and {len(groups) - len(shown)} more on Clash Lens.")
+    return Reply(
+        "\n".join(lines),
+        title=f"Your {GROUP_WORD}s",
+        updated=now,
+        links=(Link("Open on Clash Lens", site.url("/account/groups")),),
+        choices=tuple(
+            Choice(" ".join(group["name"].split())[:_MAX_CHOICE_LABEL], group["group_id"])
+            for group in groups[:MAX_CHOICES]
+        ),
+        pick=GROUP_WORD,
+        placeholder=f"Open a {GROUP_WORD}…",
+    )
+
+
+def _member_line(player: Mapping[str, Any], days: int) -> str:
+    head = f"**{safe(player['name'])}** {player['tag']}" + (" (you)" if player["you"] else "")
+    window = "pending" if player["net"] is None else signed(player["net"])
+    if player["status"] != "tracking":
+        return f"{head} · {_STATE_WORDS.get(player['status'], 'Being checked')}"
+    if player["season_reset_pending"]:
+        return f"{head} · {WAITING_FOR_RESET} · {days} days: {window}"
+    if player["trophies"] is None:
+        return f"{head} · Being checked"
+    parts = [head, f"{number(player['trophies'])} 🏆"]
+    today = player["today"]
+    if today is None:
+        parts += ["no battles recorded today", "net pending"]
+    else:
+        parts.append(f"⚔ {_known(today['attacks'], _of_eight)}")
+        parts.append(f"🛡 {_known(today['defenses'], _of_eight)}")
+        net = today["net"]
+        parts.append("net pending" if net is None else f"net {signed(net)} so far")
+    parts.append(f"{days} days: {window}")
+    return " · ".join(parts)
+
+
+def group_reply(site: Site, comparison: Mapping[str, Any], now: datetime) -> Reply:
+    days = comparison["days"]
+    members = sorted(
+        (player for player in comparison["players"] if player["in_group"]),
+        key=lambda player: (
+            player["trophies"] is None,
+            -(player["trophies"] or 0),
+            player["tag"],
+        ),
+    )
+    lines = [reset_line(now), ""]
+    lines += [_member_line(player, days) for player in members] or [
+        f"This {GROUP_WORD} has no players yet."
+    ]
+    return Reply(
+        "\n".join(lines),
+        title=f"{safe(comparison['name'])} · last {days} ended Legend days",
+        updated=oldest([_seen(player["observed_at"]) for player in members]),
+        links=(
+            Link(
+                "Open on Clash Lens",
+                site.url(f"/account/groups/{quote(comparison['group_id'])}"),
+            ),
+        ),
+    )
+
+
+def _rate(part: int, whole: int) -> str:
+    return "Unavailable" if not whole else f"{round(100 * part / whole)}%"
+
+
+def _per(total: int, count: int) -> str:
+    return "Unavailable" if not count else signed(round(total / count))
+
+
+def _average(values: Sequence[int], unit: str = "") -> str:
+    return "Unavailable" if not values else f"{sum(values) / len(values):.1f}{unit}"
+
+
+def season_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
+    """This Season so far for one player, from the player page read."""
+    ready = page["screen_ready"]
+    season = ready.get("season")
+    title = _player_title(page)
+    link = (Link("Open on Clash Lens", site.player(page["tag"])),)
+    if season is None:
+        return Reply(
+            "This Season's days are not available yet.",
+            title=title,
+            updated=page["observed_at"],
+            links=link,
+        )
+    by_start = {day["ranked_day_start"]: day for day in ready["days"]}
+    days = sorted(
+        (by_start[start] for start in ready["season_day_starts"] if start in by_start),
+        key=lambda day: day["ranked_day_start"],
+    )
+    first = next((day for day in days if day.get("season_day_number") == 1), None)
+    start = None if first is None else first.get("start_trophies")
+    now_trophies = None if page["season_reset_pending"] else page["trophies"]
+    head = f"Season from {discord_time(datetime.fromisoformat(season['start']), 'D')}"
+    head += f" · Day {season['current_day_number']} of 28"
+    if start is not None and now_trophies is not None:
+        head += f" · {number(start)} → {number(now_trophies)} ({signed(now_trophies - start)})"
+    attacks = [event for day in days for event in day["offense_events"]]
+    defenses = [event for day in days for event in day["defense_events"]]
+    attack_count = sum(day["attack_count"] or 0 for day in days)
+    three_stars = sum(day["attack_three_star_count"] or 0 for day in days)
+    gain = sum(day["attack_gain"] or 0 for day in days)
+    defense_count = sum(day["defense_count"] or 0 for day in days)
+    tripled = sum(day["defense_three_star_count"] or 0 for day in days)
+    loss = sum(day["defense_loss"] or 0 for day in days)
+    lines = [
+        head,
+        f"{len(days)} of {season['current_day_number']} Legend days recorded.",
+        "",
+        (
+            f"**Attacks** {number(attack_count)} · hit rate {_rate(three_stars, attack_count)} "
+            f"({number(three_stars)} three-stars) · {signed(gain)} · "
+            f"{_per(gain, attack_count)} per attack · average destruction "
+            f"{_average([event['destruction_percentage'] for event in attacks], '%')}"
+        ),
+        (
+            f"**Defenses** {number(defense_count)} · held {number(defense_count - tripled)} of "
+            f"{number(defense_count)} (not tripled) · {signed(-loss)} · "
+            f"{_per(-loss, defense_count)} per defense · average stars given up "
+            f"{_average([event['stars'] for event in defenses])}"
+        ),
+    ]
+    ended = [day for day in days if day["ranked_day_start"] != ready["current_day_start"]]
+    if ended:
+        lines += ["", "**Last ended days**"]
+        for day in reversed(ended[-7:]):
+            net = day["net_trophy_change"]
+            rank = day.get("reset_rank")
+            lines.append(
+                f"Day {day.get('season_day_number') or '?'} · net "
+                f"{'pending' if net is None else signed(net)} · Reset rank "
+                f"{'Unavailable' if rank is None else '#' + number(rank)}"
+            )
+    return Reply(
+        "\n".join(lines),
+        title=title,
+        footer="Totals count the battles Clash Lens recorded this Season.",
+        updated=page["observed_at"],
+        links=(
+            Link(
+                "Season on Clash Lens",
+                site.url(
+                    f"/players/{quote(page['tag'], safe='')}?season={quote(season['id'])}"
+                ),
+            ),
+        ),
+    )

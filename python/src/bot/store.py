@@ -13,7 +13,13 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from clashlens import api_accounts, api_leaderboard, api_player_lookup, api_players
+from clashlens import (
+    api_accounts,
+    api_groups,
+    api_leaderboard,
+    api_player_lookup,
+    api_players,
+)
 from clashlens.api_db import AccountContext, ApiDatabase
 
 # The website's own freshness limit for a saved player profile.
@@ -175,3 +181,39 @@ class Store:
             "reason": lookup.get("reason"),
             "rank": rank,
         }
+
+    def search(self, query: str, now: datetime) -> list[dict[str, Any]]:
+        """Known players whose name matches, exact name first, as the website's search."""
+        return api_players.search_known_players(
+            self.database, query, now=now, freshness_seconds=FRESHNESS_SECONDS, limit=25
+        )
+
+    def saved(self, account: AccountContext) -> list[dict[str, Any]]:
+        """The account's saved players: tag and name."""
+        return api_accounts.list_saved_players(self.database, account.internal_id)
+
+    def board(self, now: datetime, focus_tag: str | None = None) -> dict[str, Any] | None:
+        """The Live Leaderboard's top 10, or with `focus_tag` that player and
+        the 5 players either side; None when the player is not on the board."""
+        if focus_tag is None:
+            return api_leaderboard.get_live_leaderboard(self.database, limit=10, now=now)
+        return api_leaderboard.get_live_leaderboard(
+            self.database, limit=1, now=now, focus_tag=focus_tag
+        )
+
+    def groups(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]:
+        return api_accounts.list_groups(self.database, account.internal_id, now=now)
+
+    def group(
+        self, account: AccountContext, group_id: str, days: int, now: datetime
+    ) -> dict[str, Any] | None:
+        """One of the account's groups side by side; None when the account has
+        no such group. Raises api_groups.GroupTooLarge past 20 members."""
+        return api_groups.get_group_comparison(
+            self.database,
+            account.internal_id,
+            group_id,
+            days=days,
+            now=now,
+            freshness_seconds=FRESHNESS_SECONDS,
+        )
