@@ -214,7 +214,7 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
             )
         finally:
             database.close()
-        # The batch runs only when live and Reset work is idle.
+        # The batch yields to any higher-priority work its thread can claim.
         priorities = _queued_priorities(connection_info, "reconcile:first-log:")
         _process(connection_info, archive_server, [])
         day_1_joiner = _day_1(connection_info)
@@ -380,7 +380,7 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
             )
         finally:
             database.close()
-        # The batch runs only when live and Reset work is idle.
+        # The batch yields to any higher-priority work its thread can claim.
         priorities = _queued_priorities(
             connection_info, "reconcile:season-day-1-unsettled-loss:"
         )

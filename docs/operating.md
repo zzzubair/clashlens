@@ -577,8 +577,9 @@ counts, without writing anything, the players and days it would recalculate:
 each player whose first saved battle log was saved on Day 1, from Day 1, and
 each player first tracked later whose battles reach an earlier day, from
 that day. `--first-logs queue --season <Season ID>` queues up to `--max-jobs`
-of them (default 100), at backfill priority: they run only when no live or
-Reset work is due; run it again until `left_to_queue` is 0. Each player
+of them (default 100), at backfill priority: a worker thread runs them only
+when no higher-priority work that thread can claim is due; run it again until
+`left_to_queue` is 0. Each player
 is queued once for their earliest saved battle log. A Day 1 waits for the
 player's accepted Legend I profile naming the Season, which its Season-rule
 start of 5,000 needs; those players count in `waiting_for_profile` and are
@@ -596,10 +597,10 @@ Day 1 saved before that keeps its old result until recalculated.
 `--day-1 preview --season <Season ID>` counts, without writing anything, the
 players whose saved Day 1 has 1 to 7 defenses; `--day-1 queue --season
 <Season ID>` queues up to `--max-jobs` of them, each recalculating Day 1 and
-every later saved day of the Season, at backfill priority: they run only when
-no live or Reset work is due, so a batch never holds live pages back, and a
-batch queued in the busy hour after Reset waits for it to pass. Run it again
-until `left_to_queue` is 0;
+every later saved day of the Season, at backfill priority: a worker thread
+runs them only when no higher-priority work that thread can claim is due, so a
+thread that does not process saved responses can still run them while
+responses wait. Run it again until `left_to_queue` is 0;
 each player is queued once, and players queued by the earlier run that only
 averaged Day 1's own defenses are queued once more. On 2026-10-06 the October
 2026 Season (`1791176400`) had about 3,100 such players.

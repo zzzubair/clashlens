@@ -289,7 +289,8 @@ def backfill(
     database: Database, season_id: str, *, queue: bool, max_jobs: int
 ) -> dict[str, Any]:
     # An operator's batch: queued at backfill priority, like requeue_day_1,
-    # so it runs only when live and Reset work is idle.
+    # so a worker thread runs it only when no higher-priority work that thread
+    # can claim is due.
     """Find, and with ``queue`` recalculate, the days that players first
     tracked during the Season can now fill: Day 1 for each player whose first
     battle log was saved on Day 1, and, for a player first tracked later, the
@@ -393,8 +394,8 @@ def requeue_day_1(
     defenses, and a Reset reading taken before it is read less it. Repeating
     it skips players already queued; players queued by the run before those
     last two changes are queued again. The batch is queued at backfill
-    priority: it runs only when live and Reset work is idle, so a big batch
-    never holds live updates back. Batch 1 of 775 players on 2026-10-07 was
+    priority: a worker thread runs it only when no higher-priority work that
+    thread can claim is due. Batch 1 of 775 players on 2026-10-07 was
     queued live, in the busy hour after Reset."""
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(season_start):
