@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from clashlens.api_db import _screen_events
 from clashlens.domain import ranked_day_for
@@ -9,6 +12,7 @@ from clashlens.reconciliation import (
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
     CoverageObservation,
+    LateEndReading,
     PreviousRankedDay,
     ReconciliationInput,
     reconcile_ranked_day,
@@ -988,3 +992,148 @@ def test_a_disputed_day_never_takes_the_loss_off_its_reading() -> None:
     assert "unsettled_automatic_loss" not in disputed.formula_components
     assert next_day.start_trophies == 6010
     assert "start_unsettled_automatic_loss" not in next_day.formula_components
+
+
+# 6 October 2026 shape: the Reset profile read at 05:41 after two new-day
+# battles, the Reset battle log just after it.
+READ_AT = DAY.end + timedelta(minutes=41)
+NEW_DAY = (
+    BattleContribution("next-attack", "offense", 30,
+                       battle_timestamp=DAY.end + timedelta(minutes=20)),
+    BattleContribution("next-defense", "defense", 15,
+                       battle_timestamp=DAY.end + timedelta(minutes=30)),
+    # After the reading: not in it.
+    BattleContribution("later-attack", "offense", 40,
+                       battle_timestamp=READ_AT + timedelta(minutes=10)),
+)
+LATE_FAILURE = {"state": "failed", "failure_reasons": ["profile_after_first_event"]}
+
+
+def _day_without_reading(**overrides):
+    first, middle, last = _coverage()
+    values = {
+        "next_start_trophies": None,
+        "end_baseline_complete": False,
+        "end_baseline_evidence": LATE_FAILURE,
+        "coverage_observations": (
+            first, middle, replace(last, observed_at=READ_AT + timedelta(seconds=1))
+        ),
+        "contributions": (
+            BattleContribution("attack-1", "offense", 20,
+                               battle_timestamp=DAY.start + timedelta(hours=2)),
+            *(
+                BattleContribution(f"defense-{i}", "defense", 10,
+                                   battle_timestamp=DAY.start + timedelta(hours=3 + i))
+                for i in range(8)
+            ),
+        ),
+        # 6000 + 20 - 80 = 5940 at the Reset, then +30 and -15 before 05:41.
+        "late_end_reading": LateEndReading(5955, READ_AT, NEW_DAY),
+    }
+    values.update(overrides)
+    return reconcile_ranked_day(_input(**values))
+
+
+def test_late_reset_reading_less_new_day_battles_verifies_the_day_end() -> None:
+    result = _day_without_reading()
+
+    assert (result.state, result.confidence) == ("Complete", "inferred")
+    assert result.failure_reasons == ()
+    assert result.final_trophies_before_reset == 5940
+    assert result.next_start_trophies == 5940
+    # Where the end came from stays on the saved result.
+    late = result.input_evidence["late_end_reading"]
+    assert (late["used"], late["reading_trophies"], late["trophies"]) == (
+        True, 5955, 5940
+    )
+    assert late["new_day_trophy_change"] == 15
+    assert [battle["battle_identity"] for battle in late["new_day_battles"]] == [
+        "next-attack", "next-defense"
+    ]
+    assert "day_end_source" not in result.input_evidence
+
+
+def test_late_reset_reading_that_contradicts_the_battles_is_inconsistent() -> None:
+    result = _day_without_reading(late_end_reading=LateEndReading(5956, READ_AT, NEW_DAY))
+
+    assert result.state == "Inconsistent"
+    assert "trophy_equation_mismatch" in result.failure_reasons
+
+
+def _with_new_day(*battles: BattleContribution) -> LateEndReading:
+    return LateEndReading(5955, READ_AT, (*NEW_DAY, *battles))
+
+
+@pytest.mark.parametrize("overrides,reason", [
+    # A battle two minutes before the reading may not be in it yet.
+    ({"late_end_reading": _with_new_day(BattleContribution(
+        "close", "offense", 0, battle_timestamp=READ_AT - timedelta(minutes=2)))},
+     "battle_near_reading"),
+    # A battle log read before the profile may miss battles before it.
+    ({"coverage_observations": _coverage()}, "battle_log_read_before_profile"),
+    # A disputed new-day battle leaves its trophies unsure.
+    ({"late_end_reading": _with_new_day(BattleContribution(
+        "disputed", "offense", 0, disagreement=True,
+        battle_timestamp=DAY.end + timedelta(minutes=10)))},
+     "new_day_battles_disputed"),
+    # Any other reason the reading failed still holds.
+    ({"end_baseline_evidence": {**LATE_FAILURE, "failure_reasons": [
+        "profile_after_first_event", "profile_invalid"]}},
+     "end_reading_failed_otherwise"),
+])
+def test_unclear_late_reading_is_set_aside_and_the_end_calculated(
+    overrides, reason
+) -> None:
+    result = _day_without_reading(**overrides)
+
+    assert (result.state, result.confidence) == ("Complete", "inferred")
+    assert result.final_trophies_before_reset == 5940
+    assert result.next_start_trophies is None
+    assert result.input_evidence["late_end_reading"]["used"] is False
+    assert result.input_evidence["late_end_reading"]["rejected_because"] == reason
+    assert result.input_evidence["day_end_source"] == "calculated_not_reset_verified"
+
+
+def test_day_missing_only_its_reset_reading_ends_on_its_calculated_end() -> None:
+    # A 404 at the Reset. One defense: the automatic defense loss charges 7
+    # missing defenses at the average of yesterday's 2 and today's 1.
+    result = _day_without_reading(
+        late_end_reading=None,
+        end_baseline_evidence={"state": "failed", "failure_reasons": [
+            "profile_non_success"]},
+        contributions=(
+            BattleContribution("attack-1", "offense", 20),
+            BattleContribution("defense-1", "defense", 10),
+        ),
+    )
+
+    assert (result.state, result.confidence) == ("Complete", "inferred")
+    assert result.automatic_defense_loss == 70
+    assert result.final_trophies_before_reset == 6000 + 20 - 10 - 70
+    assert result.input_evidence["day_end_source"] == "calculated_not_reset_verified"
+    assert "late_end_reading" not in result.input_evidence
+
+
+@pytest.mark.parametrize("overrides,reason", [
+    # A full log sharing nothing with the one before may have lost battles.
+    ({"coverage_observations": (
+        _coverage()[0],
+        CoverageObservation(DAY.start + timedelta(hours=12), 50, ("other",), False,
+                            observation_id=102),
+        replace(_coverage()[2], observed_at=READ_AT + timedelta(seconds=1)),
+    )}, "battle_log_overlap_gap"),
+    ({"start_trophies": None}, "missing_start_baseline"),
+    # The Reset is still collecting its reading.
+    ({"end_baseline_evidence": {"state": "partial", "failure_reasons": []},
+      "late_end_reading": None}, "missing_end_baseline"),
+    ({"player_eligible": False}, "player_not_eligible"),
+])
+def test_end_is_never_calculated_over_a_gap_or_unproven_start(overrides, reason) -> None:
+    result = _day_without_reading(
+        **{"late_end_reading": _with_new_day(BattleContribution(
+            "close", "offense", 0, battle_timestamp=READ_AT)), **overrides}
+    )
+
+    assert result.state == "Partial"
+    assert reason in result.failure_reasons
+    assert "day_end_source" not in result.input_evidence

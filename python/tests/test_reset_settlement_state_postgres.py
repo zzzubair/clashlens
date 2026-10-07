@@ -23,8 +23,15 @@ from test_reconciliation_postgres import (
     _profile,
 )
 
-from clashlens import api_players, reconciliation_db, reset_baselines, reset_settlement
+from clashlens import (
+    api_players,
+    ranked_day_inputs,
+    reconciliation_db,
+    reset_baselines,
+    reset_settlement,
+)
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import allocate_trophies, ranked_day_for
 
 TAG = "#2PP"
 # The fixture profiles report the Season that ends at the August 10 Reset.
@@ -493,13 +500,16 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
             WHERE evidence.boundary_at = '{boundary.isoformat()}'
             ORDER BY evidence.version DESC, evidence.id DESC LIMIT 1""")
         current = _rows(connection_info, CURRENT_PROFILE)
-    # The accepted 6,040 is kept as evidence but starts neither day. It is
+    # The accepted 6,040 is kept as evidence but starts neither day. Less the
+    # sixteen battles before it, it shows the ended day's 6,000 end. It is
     # still the current profile, so the player page can calculate a 6,000
     # start from it and the sixteen recorded battles.
     assert evidence == [
         (False, ["profile_after_first_event"], "accepted", 6040)
     ]
-    assert days[boundary - timedelta(days=1)][:2] == (6000, rule_start)
+    assert days[boundary - timedelta(days=1)][:2] == (
+        6000, 6000 if kind == "ordinary" else rule_start
+    )
     assert days[boundary][0] == rule_start
     assert days[boundary][2:] == (8, 8, 320, 280)
     assert current == [(6040, "accepted")]
@@ -538,6 +548,81 @@ def test_legend_ii_reset_profile_is_current_but_gives_no_start(
     assert days[DAY_END - timedelta(days=1)] == (6000, None)
     assert days[DAY_END][0] is None
     assert current == [(4900, "accepted")]
+
+
+@pytest.mark.parametrize("new_day_defense_minutes,verified", [(15, True), (27, False)])
+def test_day_with_a_late_reset_reading_is_complete(
+    database_url: str, archive_server, new_day_defense_minutes: int, verified: bool
+) -> None:
+    # The day starts at 6,000 and takes eight 3-star defenses. The Reset
+    # profile is read at 05:30, after a new-day attack at 05:10 and a
+    # defense; the Reset battle log just after it holds all ten battles.
+    boundary = BOUNDARIES["ordinary"]
+    start = boundary - timedelta(days=1)
+    template = json.loads(_battle_log())["items"][0]
+
+    def battle(at: datetime, attack: bool, stars: int, tag: str) -> dict:
+        return {**template, "attack": attack, "stars": stars,
+                "destructionPercentage": 100 if stars == 3 else 60,
+                "opponentPlayerTag": f"#{tag}PP",
+                "battleTimestamp": at.strftime("%Y%m%dT%H%M%S.000Z")}
+
+    defenses = [battle(start + timedelta(hours=1 + i), False, 3, tag)
+                for i, tag in enumerate("89QGRJCU")]
+    new_day = [battle(boundary + timedelta(minutes=10), True, 3, "YL"),
+               battle(boundary + timedelta(minutes=new_day_defense_minutes),
+                      False, 2, "VL")]
+    three_stars, two_stars = allocate_trophies(3, 100), allocate_trophies(2, 60)
+    day_end = 6000 - 8 * three_stars.defender_loss
+    reading = day_end + three_stars.attacker_gain - two_stars.defender_loss
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, start,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="midday-log",
+            endpoint="battle_log", body=json.dumps({"items": defenses}).encode(),
+            observed_at=start + timedelta(hours=12), normalized_tag=TAG,
+        )[1])
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_profile(reading),
+                            log=json.dumps({"items": new_day + defenses}).encode(),
+                            profile_at=boundary + timedelta(minutes=30),
+                            log_at=boundary + timedelta(minutes=30, seconds=1))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=start,
+                now=boundary + timedelta(hours=1), request_key="late-reading",
+            )
+            assert processor.process_job(job, owner="day") is not None
+        finally:
+            database.close()
+        day = _rows(connection_info, f"""
+            SELECT state, confidence, final_trophies_before_reset,
+                   next_start_trophies, defense_count,
+                   input_evidence -> 'late_end_reading' -> 'used',
+                   input_evidence ->> 'day_end_source'
+            FROM ranked_day_versions
+            WHERE ranked_day_start = '{start.isoformat()}'
+            ORDER BY version DESC LIMIT 1""")
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+            ).fetchone()[0]
+            previous = ranked_day_inputs.load_previous_day(
+                connection, player_id, ranked_day_for(boundary)
+            )
+
+    if verified:
+        assert day == [("Complete", "inferred", day_end, day_end, 8, True, None)]
+    else:
+        # A defense three minutes before the reading may not be in it yet,
+        # so the start and the day's battles give the end instead.
+        assert day == [("Complete", "inferred", day_end, None, 8, False,
+                        "calculated_not_reset_verified")]
+    # Either way the next day can average its automatic defense loss on it.
+    assert previous is not None and previous.complete
 
 
 DAY_ROWS = """
@@ -620,8 +705,10 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
         ))
         rebuilt_again = _rows(connection_info, rebuilds)[0][0]
     day_28, day_1 = boundary - timedelta(days=1), boundary
-    # Until then September's last day has no end and Day 1 no start.
-    assert before[day_28][0] == "Partial" and before[day_28][3] is None
+    # Until then September's last day ends on its calculated end, with no
+    # next start, and Day 1 has no start.
+    assert before[day_28][:2] == ("Complete", "inferred")
+    assert before[day_28][3] is None
     assert before[day_1][2] is None
     if later_tier == "Legend I":
         assert after[day_28][:4] == ("Complete", "inferred", 6400, 5000)

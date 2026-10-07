@@ -397,3 +397,51 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
     assert (again["queued"], again["already_queued"]) == (0, 1)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "inferred", 5000, ending)
+
+
+def test_day_lacking_only_its_reset_reading_is_recalculated_once(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Day 1 starts at 5,000 by the Season rule and its two attacks are all in
+    # the first log; the Reset ending it gets a 404 for the profile.
+    older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(48)]
+    log = _log(*ATTACKS, filler=older)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _first_seen(connection_info, archive_server, DAY_1 + timedelta(hours=7),
+                           profile=_new_season_profile(5000 + 2 * WIN), log=log)
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=_new_season_profile(5000 + 2 * WIN),
+                            profile_status=404, log=log)
+        # Saved before the fix, a day without its Reset reading stayed Partial.
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day",
+                            lambda data: original(replace(data, end_baseline_evidence={})))
+        _process(connection_info, archive_server, jobs)
+        before = _day_1(connection_info)
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
+
+        database = Database(connection_info)
+        try:
+            preview = first_battle_log.requeue_missing_end(
+                database, str(NEW_SEASON), queue=False, max_jobs=100
+            )
+            queued = first_battle_log.requeue_missing_end(
+                database, str(NEW_SEASON), queue=True, max_jobs=100
+            )
+            again = first_battle_log.requeue_missing_end(
+                database, str(NEW_SEASON), queue=True, max_jobs=100
+            )
+        finally:
+            database.close()
+        priorities = _queued_priorities(connection_info, "reconcile:missing-end:")
+        _process(connection_info, archive_server, [])
+        after = _day_1(connection_info)
+
+    assert before[0] == "Partial"
+    assert before[5] == ["missing_end_baseline"]
+    assert preview == {"season": str(NEW_SEASON), "players": 1,
+                       "already_queued": 0, "queued": 0, "left_to_queue": 1}
+    assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
+    assert (again["queued"], again["already_queued"]) == (0, 1)
+    assert priorities == {PYTHON_BACKFILL_PRIORITY}
+    assert after[:4] == ("Complete", "inferred", 5000, 5000 + 2 * WIN)

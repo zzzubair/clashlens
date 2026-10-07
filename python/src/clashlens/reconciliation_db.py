@@ -36,6 +36,7 @@ from .domain import (
 from .profile import normalize_player_tag
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
+    LateEndReading,
     ReconciliationInput,
     ReconciliationResult,
     reconcile_ranked_day,
@@ -112,6 +113,32 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
+
+
+def _late_end_reading(
+    connection: Any,
+    player_id: int,
+    ranked_day: RankedDay,
+    end_baseline: dict[str, Any] | None,
+) -> LateEndReading | None:
+    """The ending Reset reading rejected only for coming after the new day's
+    first battle, with the new day's saved battles; ``None`` otherwise."""
+    evidence = end_baseline["evidence"] if end_baseline is not None else {}
+    profile = evidence.get("profile") or {}
+    if (
+        evidence.get("failure_reasons") != ["profile_after_first_event"]
+        or evidence.get("season_reset_pending")
+        or profile.get("trophies") is None
+        or profile.get("observed_at") is None
+    ):
+        return None
+    return LateEndReading(
+        trophies=int(profile["trophies"]),
+        read_at=datetime.fromisoformat(profile["observed_at"]),
+        new_day_contributions=ranked_day_inputs.load_contributions(
+            connection, player_id, ranked_day_for(ranked_day.end)
+        ),
+    )
 
 
 def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> bool:
@@ -376,6 +403,9 @@ def recalculate_ranked_day(
             season_anchor_rule_version=SEASON_ANCHOR_RULE_VERSION,
             trophy_allocation_rule_versions=trophy_rule_versions,
             season_first_day=season_day is not None and season_day.day_number == 1,
+            late_end_reading=_late_end_reading(
+                connection, player_id, ranked_day, end_baseline
+            ),
         )
     )
     result_data = {

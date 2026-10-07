@@ -318,6 +318,10 @@ def add_republish_command(
     # With --day-1, preview or queue the recalculation of each player's Day 1
     # with 1 to 7 defenses; see first_battle_log.requeue_day_1.
     republish_current_season.add_argument("--day-1", choices=("preview", "queue"))
+    # With --missing-end, preview or queue the recalculation of each player's
+    # oldest ended day left Partial for want of its ending Reset reading; see
+    # first_battle_log.requeue_missing_end.
+    republish_current_season.add_argument("--missing-end", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
 
@@ -331,14 +335,25 @@ def run_republish_command(database_url: str, arguments: argparse.Namespace) -> i
     """Queue one batch, or run one campaign action, and print its report."""
     first_logs = getattr(arguments, "first_logs", None)
     day_1 = getattr(arguments, "day_1", None)
-    modes = [mode for mode in (arguments.campaign, first_logs, day_1) if mode is not None]
+    missing_end = getattr(arguments, "missing_end", None)
+    modes = [mode for mode in (arguments.campaign, first_logs, day_1, missing_end)
+             if mode is not None]
     if len(modes) > 1:
-        raise SystemExit("--campaign, --first-logs and --day-1 are separate runs")
+        raise SystemExit(
+            "--campaign, --first-logs, --day-1 and --missing-end are separate runs"
+        )
     if (not modes) != (arguments.season is None):
-        raise SystemExit("--campaign, --first-logs or --day-1 and --season go together")
+        raise SystemExit(
+            "--campaign, --first-logs, --day-1 or --missing-end and --season go together"
+        )
     database = Database(database_url)
     try:
-        if day_1 is not None:
+        if missing_end is not None:
+            report = first_battle_log.requeue_missing_end(
+                database, arguments.season, queue=missing_end == "queue",
+                max_jobs=arguments.max_jobs,
+            )
+        elif day_1 is not None:
             report = first_battle_log.requeue_day_1(
                 database, arguments.season, queue=day_1 == "queue",
                 max_jobs=arguments.max_jobs,

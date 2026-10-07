@@ -447,3 +447,67 @@ def requeue_day_1(
         "queued": len(job_ids),
         "left_to_queue": len(waiting) - len(job_ids),
     }
+
+
+def requeue_missing_end(
+    database: Database, season_id: str, *, queue: bool, max_jobs: int
+) -> dict[str, Any]:
+    """Find, and with ``queue`` recalculate, each player's oldest ended day
+    of the Season whose latest result is Partial for want of its ending Reset
+    reading, and their later saved days, once per day. Before October 2026
+    such a day stayed Partial even with a proven start and every battle seen:
+    3,623 ended days on 6 October 2026. The batch is queued at backfill
+    priority, as ``requeue_day_1``."""
+    season_start = datetime.fromtimestamp(int(season_id), UTC)
+    if not domain.is_season_boundary(season_start):
+        raise ValueError(f"{season_id} is not a Season's start")
+
+    def key(player_id: Any, day: datetime) -> str:
+        return (f"reconcile:missing-end:{player_id}:"
+                f"{day.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}")
+
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            rows = connection.execute(
+                """
+                WITH latest AS (
+                    SELECT DISTINCT ON (player_id, ranked_day_start)
+                           player_id, ranked_day_start, state, failure_reasons
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start >= %(start)s
+                      AND ranked_day_start < %(end)s
+                      AND ranked_day_start + interval '1 day' <= clock_timestamp()
+                    ORDER BY player_id, ranked_day_start, version DESC, id DESC
+                )
+                SELECT DISTINCT ON (player_id) player_id, ranked_day_start
+                FROM latest
+                WHERE state = 'Partial'
+                  AND failure_reasons ? 'missing_end_baseline'
+                ORDER BY player_id, ranked_day_start
+                """,
+                {"start": season_start, "end": season_start + domain.SEASON_DURATION},
+            ).fetchall()
+            queued = {
+                row[0] for row in connection.execute(
+                    "SELECT deduplication_key FROM python_processing_jobs_worker"
+                    " WHERE deduplication_key = ANY(%s)",
+                    ([key(*row) for row in rows],),
+                ).fetchall()
+            }
+            waiting = [row for row in rows if key(*row) not in queued]
+            job_ids = [
+                job_id
+                for player_id, day in (waiting[:max_jobs] if queue else [])
+                if (job_id := _queue(
+                    connection, int(player_id), day, None,
+                    key=key(player_id, day), trigger="missing_end",
+                    priority=PYTHON_BACKFILL_PRIORITY,
+                )) is not None
+            ]
+    return {
+        "season": season_id,
+        "players": len(rows),
+        "already_queued": len(rows) - len(waiting),
+        "queued": len(job_ids),
+        "left_to_queue": len(waiting) - len(job_ids),
+    }

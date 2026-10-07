@@ -945,10 +945,15 @@ def test_failed_ending_reset_finishes_the_day_without_inventing_a_total(
             for job in jobs:
                 assert processor.process_job(job, owner="finish").outcome == "processed"
             finished = _latest_day(database, player_id)
-            assert finished[0] == "Partial"
-            assert finished[1] in {"Partial", "Malformed", "Inconsistent"}
-            # An untrusted reading gives no next start at all.
-            assert "missing_end_baseline" in finished[4]
+            if start:
+                # A proven start and every battle seen give the end; the
+                # untrusted reading gives no next start at all.
+                assert finished[:2] == ("Complete", "Complete")
+                assert finished[4] == []
+            else:
+                assert finished[0] == "Partial"
+                assert finished[1] in {"Partial", "Malformed", "Inconsistent"}
+                assert "missing_end_baseline" in finished[4]
             assert finished[5] == 1
             # A total comes only from a proven start plus the recorded battle,
             # never from the failed reading's 6,100.

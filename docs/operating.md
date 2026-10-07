@@ -607,6 +607,18 @@ each player is queued once, and players queued by the earlier run that only
 averaged Day 1's own defenses are queued once more. On 2026-10-06 the October
 2026 Season (`1791176400`) had about 3,100 such players.
 
+**Days lacking only their Reset reading:** a day with a proven start and
+every battle seen now ends on its
+[calculated end](domain.md#automatic-defense-adjustment), or on a late Reset
+reading less the new day's battles before it, instead of staying Partial.
+Days saved before keep their old result until recalculated.
+`--missing-end preview --season <Season ID>` counts, without writing
+anything, the players whose latest result for an ended day of that Season is
+Partial for want of its ending Reset reading; `--missing-end queue --season
+<Season ID>` queues up to `--max-jobs` of them, each recalculating the
+player's oldest such day and every later saved day of the Season, at backfill
+priority. Run it again until `left_to_queue` is 0. Each day is queued once.
+
 ### Raw-response cleanup failed
 
 Cleanup deletes old raw responses on its own timer; see

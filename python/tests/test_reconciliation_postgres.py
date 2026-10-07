@@ -1449,6 +1449,6 @@ def test_season_end_days_use_the_28_day_phase_while_the_anchor_is_old(
     assert text(season_day[2]) == "season_reset"
     assert season_day[3] == 5000 - start_trophies
     # A Reset reading still naming the ending Season is not the next start,
-    # even at 5,000, so the day's final total stays unproved.
-    assert (text(season_day[4]), text(season_day[5])) == ("Partial", "uncertain")
+    # even at 5,000; the start and the day's battles give the end.
+    assert (text(season_day[4]), text(season_day[5])) == ("Complete", "inferred")
     assert (text(season_identity[0]), season_identity[1]) == ("1786338000", 1)
