@@ -50,7 +50,7 @@ def test_lab_list_loads_once_keeps_newer_checks_and_skips_tracked_players(
             )
             connection.execute(
                 "INSERT INTO players (normalized_tag, active, eligibility_state, current_observed_at)"
-                " VALUES ('#3PP', false, 'ineligible', %s)",
+                " VALUES ('#0PP', false, 'ineligible', %s)",
                 (datetime.fromisoformat(newer),),
             )
         url = _collector_url(connection_info)
@@ -66,7 +66,7 @@ def test_lab_list_loads_once_keeps_newer_checks_and_skips_tracked_players(
             + f"8QQ,105000035,4900,{older}\n"
             + f"#8QQ,105000035,4950,{newer}\n"  # same tag: newest kept
             + f"#9QQ,105000034,,{older}\n"
-            + f"#3PP,105000035,4800,{older}\n"  # saved profile checked later: left out
+            + f"#0PP,105000035,4800,{older}\n"  # saved profile checked later: left out
         ) == 0
         assert json.loads(capsys.readouterr().out) == {"added_or_updated": 2, "read": 4}
         assert _rows(connection_info) == [
