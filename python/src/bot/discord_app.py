@@ -1,12 +1,12 @@
 """The only part of the bot that talks to Discord.
 
-It registers the slash commands, keeps each person to a few commands at a
-time, decides who sees a reply, runs the database reads off the event loop
-with a time limit, and turns a `Reply` into a Discord message with buttons.
+It registers the slash commands, decides who sees a reply, runs the database
+reads off the event loop, and turns a `Reply` into Discord messages with
+buttons.
 
 Who sees a reply: in the bot's own DM every reply is a normal message. In a
 server or group DM it is private to the person who typed the command, unless
-the command takes `share` and they set it.
+the command takes `share` and they set it; refusals and failures stay private.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import OrderedDict, deque
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -30,23 +29,13 @@ log = logging.getLogger("clashlens.bot")
 
 T = TypeVar("T")
 
-# Discord waits 3 seconds for the first answer. The link check must finish
-# well inside that; later reads may take longer because the bot has already
-# shown "thinking".
-LINK_CHECK_SECONDS = 2.0
-READ_SECONDS = 8.0
+# Autocomplete cannot show "thinking", and Discord waits 3 seconds for it.
+AUTOCOMPLETE_SECONDS = 2.0
 # Database reads running at once; the bot's connection pool holds as many.
 READ_SLOTS = 4
 # Dropdowns and buttons stop working after this, inside Discord's 15 minute
 # limit on editing a reply.
 VIEW_SECONDS = 600
-# A person may run this many commands or clicks in any window of seconds.
-COMMANDS_PER_WINDOW = 5
-WINDOW_SECONDS = 15.0
-# Autocomplete asks on every keystroke, so each person's own players are kept
-# this long, for at most this many people.
-OWN_CHOICES_SECONDS = 60.0
-OWN_CHOICES_PEOPLE = 2000
 _COLOUR = discord.Colour(0xF2B33D)
 
 
@@ -58,91 +47,45 @@ class Unavailable(Exception):
     pass
 
 
-class RateLimiter:
-    """At most `limit` actions per person in any `window` seconds."""
-
-    def __init__(
-        self,
-        limit: int = COMMANDS_PER_WINDOW,
-        window: float = WINDOW_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self.limit = limit
-        self.window = window
-        self.clock = clock
-        self._seen: dict[int, deque[float]] = {}
-
-    def retry_after(self, person: int) -> float:
-        """0 and the action counts, or the seconds until it would be allowed."""
-        now = self.clock()
-        if len(self._seen) > 10_000:
-            # Forget people with nothing inside the window so memory stays bounded.
-            self._seen = {
-                key: times for key, times in self._seen.items() if times[-1] > now - self.window
-            }
-        times = self._seen.setdefault(person, deque())
-        while times and times[0] <= now - self.window:
-            times.popleft()
-        if len(times) >= self.limit:
-            return times[0] + self.window - now
-        times.append(now)
-        return 0.0
-
-
-class _Recent:
-    """A small time-limited memory, oldest entry forgotten first."""
-
-    def __init__(self, seconds: float, size: int, clock: Callable[[], float] = time.monotonic):
-        self.seconds = seconds
-        self.size = size
-        self.clock = clock
-        self._items: OrderedDict[int, tuple[float, Any]] = OrderedDict()
-
-    def get(self, key: int) -> Any | None:
-        item = self._items.get(key)
-        if item is None or item[0] < self.clock():
-            return None
-        return item[1]
-
-    def put(self, key: int, value: Any) -> None:
-        self._items[key] = (self.clock() + self.seconds, value)
-        self._items.move_to_end(key)
-        while len(self._items) > self.size:
-            self._items.popitem(last=False)
-
-
 def in_bot_dm(interaction: discord.Interaction) -> bool:
     return interaction.context.dm_channel
 
 
 class DiscordApp:
-    def __init__(self, commands: Commands, *, limiter: RateLimiter | None = None) -> None:
+    def __init__(self, commands: Commands) -> None:
         self.commands = commands
-        self.limiter = limiter or RateLimiter()
         self._slots = asyncio.Semaphore(READ_SLOTS)
-        self._own_choices = _Recent(OWN_CHOICES_SECONDS, OWN_CHOICES_PEOPLE)
 
-    async def read(self, work: Callable[..., T], *args: Any, seconds: float | None = None) -> T:
-        """Run one blocking read in a worker thread, giving up after `seconds`."""
+    async def read(self, work: Callable[..., T], *args: Any) -> T:
+        """Run blocking database work in a worker thread. The database's own
+        time limits end it: a statement over its limit is slow and rolls back,
+        no connection within the pool's wait means Clash Lens is unavailable.
+        The slot stays taken until the work has ended."""
         try:
-            async with asyncio.timeout(READ_SECONDS if seconds is None else seconds):
-                async with self._slots:
-                    return await asyncio.to_thread(work, *args)
-        except TimeoutError as error:
-            raise Slow from error
+            async with self._slots:
+                return await asyncio.to_thread(work, *args)
         except psycopg.errors.QueryCanceled as error:
             raise Slow from error
         except psycopg.OperationalError as error:
             raise Unavailable from error
 
-    def render(self, reply: Reply, owner: int, interaction: discord.Interaction) -> dict[str, Any]:
-        embed = discord.Embed(title=reply.title, description=reply.body, colour=_COLOUR)
-        if reply.footer:
-            embed.set_footer(text=reply.footer)
-        message: dict[str, Any] = {"embed": embed}
+    def render(
+        self, reply: Reply, owner: int, origin: discord.Interaction, *, private: bool
+    ) -> list[dict[str, Any]]:
+        """One message per page of the reply: the first carries the title and
+        buttons, the last the footer."""
+        texts = replies.pages(reply.body)
+        messages: list[dict[str, Any]] = []
+        for index, text in enumerate(texts):
+            embed = discord.Embed(
+                title=reply.title if index == 0 else None, description=text, colour=_COLOUR
+            )
+            if reply.footer and index == len(texts) - 1:
+                embed.set_footer(text=reply.footer)
+            messages.append({"embed": embed})
         if reply.links or reply.choices or reply.show_all:
-            message["view"] = ReplyView(self, reply, owner, interaction)
-        return message
+            messages[0]["view"] = ReplyView(self, reply, owner, origin, private)
+        return messages
 
     async def respond(
         self,
@@ -152,48 +95,40 @@ class DiscordApp:
         *args: Any,
         needs_link: bool = True,
         share: bool = False,
-        always_private: bool = False,
     ) -> None:
         """Answer one slash command; `work` gets the linked account first when
         the command needs one."""
         started = time.perf_counter()
         outcome = "ok"
-        private = not in_bot_dm(interaction) and (always_private or not share)
-        owner = interaction.user.id
+        shared = share and not in_bot_dm(interaction)
         try:
-            wait = self.limiter.retry_after(owner)
-            if wait:
-                outcome = "limited"
-                await self._send(interaction, replies.limited(wait), private=True)
-                return
+            # Acknowledge before any database work: Discord waits 3 seconds.
+            await interaction.response.defer(
+                ephemeral=not shared and not in_bot_dm(interaction), thinking=True
+            )
             if needs_link:
-                account = await self.read(
-                    self.commands.account, str(owner), seconds=LINK_CHECK_SECONDS
-                )
+                account = await self.read(self.commands.account, str(interaction.user.id))
                 if account is None:
                     outcome = "not_linked"
                     reply = replies.not_linked(self.commands.site, interaction.user.name)
-                    await self._send(interaction, reply, private=not in_bot_dm(interaction))
+                    await self._private(interaction, reply, shared)
                     return
                 args = (account, *args)
-            await interaction.response.defer(ephemeral=private, thinking=True)
             reply = await self.read(work, *args)
-            await interaction.followup.send(
-                **self.render(reply, owner, interaction), ephemeral=private
-            )
+            await self._send(interaction, reply, private=not shared)
         except Slow:
             outcome = "slow"
-            await self._send(interaction, replies.slow(), private=True)
+            await self._private(interaction, replies.slow(), shared)
         except Unavailable:
             outcome = "unavailable"
-            await self._send(interaction, replies.unavailable(), private=True)
+            await self._private(interaction, replies.unavailable(), shared)
         except discord.HTTPException:
             outcome = "discord_error"
             log.warning("command %s could not reach Discord", name, exc_info=True)
         except Exception:
             outcome = "error"
             log.exception("command %s failed", name)
-            await self._send(interaction, replies.failed(), private=True)
+            await self._private(interaction, replies.failed(), shared)
         finally:
             log.info(
                 "command=%s outcome=%s ms=%d",
@@ -202,14 +137,26 @@ class DiscordApp:
                 (time.perf_counter() - started) * 1000,
             )
 
+    async def _private(self, interaction: discord.Interaction, reply: Reply, shared: bool) -> None:
+        """A reply only the person sees. After a public "thinking", Discord
+        would show the next message to everyone, so that goes first."""
+        if shared:
+            try:
+                await interaction.delete_original_response()
+            except discord.HTTPException:
+                log.warning("could not remove a shared reply's placeholder", exc_info=True)
+        await self._send(interaction, reply, private=True)
+
     async def _send(self, interaction: discord.Interaction, reply: Reply, *, private: bool) -> None:
-        """Send a reply whether or not the interaction was answered already."""
-        message = self.render(reply, interaction.user.id, interaction)
+        """Send a reply whether or not the interaction was answered already.
+        In the bot's own DM every reply is a normal message."""
+        private = private and not in_bot_dm(interaction)
+        messages = self.render(reply, interaction.user.id, interaction, private=private)
         try:
-            if interaction.response.is_done():
+            if not interaction.response.is_done():
+                await interaction.response.send_message(**messages.pop(0), ephemeral=private)
+            for message in messages:
                 await interaction.followup.send(**message, ephemeral=private)
-            else:
-                await interaction.response.send_message(**message, ephemeral=private)
         except discord.HTTPException:
             log.warning("could not send a reply to Discord", exc_info=True)
 
@@ -220,21 +167,21 @@ class DiscordApp:
         started = time.perf_counter()
         outcome = "ok"
         try:
-            wait = self.limiter.retry_after(interaction.user.id)
-            if wait:
-                outcome = "limited"
-                await self._send(interaction, replies.limited(wait), private=True)
-                return
             await interaction.response.defer()
             reply = await self.read(work)
             if reply is None:
+                # Never on the message itself, which others may see.
                 outcome = "not_linked"
                 reply = replies.not_linked(self.commands.site, interaction.user.name)
-            await interaction.edit_original_response(
-                **self.render(reply, view.owner, view.origin)
-            )
+                await self._send(interaction, reply, private=True)
+                return
+            first, *rest = self.render(reply, view.owner, view.origin, private=view.private)
+            # Without view=None Discord keeps the old buttons on the message.
+            await interaction.edit_original_response(**{"view": None, **first})
             # The old buttons are gone; their timeout must not put them back.
             view.stop()
+            for message in rest:
+                await interaction.followup.send(**message, ephemeral=view.private)
         except Slow:
             outcome = "slow"
             await self._send(interaction, replies.slow(), private=True)
@@ -257,18 +204,18 @@ class DiscordApp:
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
         """Autocomplete for options that name one of the person's own players."""
-        person = interaction.user.id
-        choices = self._own_choices.get(person)
-        if choices is None:
-            try:
-                choices = await self.read(
-                    self.commands.own_choices, str(person), seconds=LINK_CHECK_SECONDS
-                )
-            except Exception:
-                # An empty list is the only safe autocomplete answer.
-                log.warning("autocomplete read failed", exc_info=True)
-                return []
-            self._own_choices.put(person, choices)
+        task = asyncio.ensure_future(
+            self.read(self.commands.own_choices, str(interaction.user.id))
+        )
+        # A read that outlives the answer still holds its slot until it ends.
+        task.add_done_callback(lambda done: done.cancelled() or done.exception())
+        try:
+            async with asyncio.timeout(AUTOCOMPLETE_SECONDS):
+                choices = await asyncio.shield(task)
+        except Exception:
+            # An empty list is the only safe autocomplete answer.
+            log.warning("autocomplete read failed", exc_info=True)
+            return []
         wanted = current.casefold().strip()
         return [
             app_commands.Choice(name=choice.label, value=choice.value)
@@ -288,7 +235,6 @@ class DiscordApp:
                 app.commands.help,
                 str(interaction.user.id),
                 needs_link=False,
-                always_private=True,
             )
 
         @tree.command(name="link", description=words["link"])
@@ -300,7 +246,6 @@ class DiscordApp:
                 str(interaction.user.id),
                 interaction.user.name,
                 needs_link=False,
-                always_private=True,
             )
 
         @tree.command(name="me", description=words["me"])
@@ -318,9 +263,7 @@ class DiscordApp:
         @app_commands.describe(account="The player to make your main")
         @app_commands.autocomplete(account=app.own_player_choices)
         async def main_command(interaction: discord.Interaction, account: str | None = None) -> None:
-            await app.respond(
-                interaction, "main", app.commands.main, account, always_private=True
-            )
+            await app.respond(interaction, "main", app.commands.main, account)
 
 
 class ReplyView(discord.ui.View):
@@ -328,7 +271,12 @@ class ReplyView(discord.ui.View):
     who ran the command can use."""
 
     def __init__(
-        self, app: DiscordApp, reply: Reply, owner: int, origin: discord.Interaction
+        self,
+        app: DiscordApp,
+        reply: Reply,
+        owner: int,
+        origin: discord.Interaction,
+        private: bool,
     ) -> None:
         # Link buttons never expire, so a view with only links needs no timer.
         interactive = bool(reply.choices or reply.show_all)
@@ -336,6 +284,7 @@ class ReplyView(discord.ui.View):
         self.app = app
         self.owner = owner
         self.origin = origin
+        self.private = private
         for link in reply.links:
             self.add_item(discord.ui.Button(label=link.label[:80], url=link.url))
         if reply.choices:

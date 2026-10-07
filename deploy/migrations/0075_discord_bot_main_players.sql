@@ -1,15 +1,17 @@
 -- Clash Lens deployment migration 0075.
 -- The Discord bot remembers one main player per Clash Lens account: the
 -- verified player its single-player commands use when none is chosen.
--- The bot reads a main only while that player is still verified to the same
--- account, so unverifying or moving a player forgets it without a write here.
--- Deleting the account or the player deletes the row. At most one row per
--- account, so the table stays as small as the account list.
+-- A main names the verification that linked the player, so the bot reads it
+-- only while that same verification stands. Unverifying the player, moving it
+-- to another account or verifying it again forgets the main, even if the
+-- player later comes back, without a write here.
+-- Deleting the account deletes the row. At most one row per account, so the
+-- table stays as small as the account list.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS discord_bot_main_players (
     account_id bigint PRIMARY KEY REFERENCES clash_lens_accounts (id) ON DELETE CASCADE,
-    player_id bigint NOT NULL REFERENCES players (id) ON DELETE CASCADE,
+    verification_request_id uuid NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
