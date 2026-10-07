@@ -4,19 +4,19 @@ Discord interaction and a fake store: no Discord connection, no database."""
 from __future__ import annotations
 
 import asyncio
-import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
 import discord
 import psycopg
+import psycopg_pool
 import pytest
 
 from bot import discord_app
 from bot.__main__ import ConfigError, command_payload, read_token
 from bot.commands import Commands
-from bot.discord_app import DiscordApp, RateLimiter
+from bot.discord_app import DiscordApp
 from bot.replies import Site
 from clashlens.api_db import AccountContext, _screen_daily_log_with_events
 from clashlens.domain import ranked_day_for
@@ -39,6 +39,7 @@ def card(tag: str, name: str, trophies: int | None, **extra: Any) -> dict[str, A
         "season_reset_pending": False,
         "rank": 1200,
         "today": {"net": 40, "attacks": 3, "defenses": 2},
+        "age_seconds": 120,
         **extra,
     }
 
@@ -107,8 +108,8 @@ class FakeStore:
         self.mains: dict[int, str] = {}
         self.pages: dict[str, dict[str, Any]] = {}
         self.fail: Exception | None = None
-        self.delay = 0.0
         self.reads: list[str] = []
+        self.moments: list[datetime] = []
 
     def connect(self, discord_id: int, cards: list[dict[str, Any]], username="drift") -> None:
         account_id = len(self.accounts) + 1
@@ -119,14 +120,14 @@ class FakeStore:
         self.reads.append(name)
         if self.fail is not None:
             raise self.fail
-        time.sleep(self.delay)
 
     def account(self, discord_id):
         self._read("account")
         return self.accounts.get(discord_id)
 
-    def players(self, account):
+    def players(self, account, now):
         self._read("players")
+        self.moments.append(now)
         return self.cards[account.internal_id]
 
     def main_tag(self, account):
@@ -140,12 +141,14 @@ class FakeStore:
         self.mains[account.internal_id] = tag
         return True
 
-    def player_page(self, tag):
+    def player_page(self, tag, now):
         self._read("player_page")
+        self.moments.append(now)
         return self.pages.get(tag)
 
-    def live_rank(self, tag):
+    def live_rank(self, tag, now):
         self._read("live_rank")
+        self.moments.append(now)
         return 1234
 
 
@@ -159,7 +162,9 @@ class FakeResponse:
 
     async def defer(self, *, ephemeral: bool = False, thinking: bool = False) -> None:
         self.done = True
-        self.interaction.deferred = ephemeral
+        self.interaction.events.append("acknowledged")
+        if thinking:
+            self.interaction.thinking = ephemeral
 
     async def send_message(self, **message: Any) -> None:
         self.done = True
@@ -171,31 +176,47 @@ class FakeFollowup:
         self.interaction = interaction
 
     async def send(self, **message: Any) -> None:
-        self.interaction.record(message)
+        interaction = self.interaction
+        if interaction.thinking is not None:
+            # As Discord does: the first message after "thinking" replaces it
+            # and keeps its visibility, whatever this message asks for.
+            message = {**message, "ephemeral": interaction.thinking}
+            interaction.thinking = None
+        interaction.record(message)
 
 
 class FakeInteraction:
-    def __init__(self, user: int = ME, *, dm: bool = False, name: str = "drift") -> None:
+    def __init__(
+        self, user: int = ME, *, dm: bool = False, name: str = "drift", events=None
+    ) -> None:
         self.user = SimpleNamespace(id=user, name=name)
         self.context = SimpleNamespace(dm_channel=dm)
         self.response = FakeResponse(self)
         self.followup = FakeFollowup(self)
-        self.deferred: bool | None = None
+        self.events: list[str] = [] if events is None else events
+        # The visibility of a "thinking" placeholder still showing.
+        self.thinking: bool | None = None
         self.messages: list[dict[str, Any]] = []
 
-    def record(self, message: dict[str, Any]) -> None:
+    def record(self, message: dict[str, Any], *, edited: bool = False) -> None:
         embed = message["embed"]
         self.messages.append(
             {
                 "private": bool(message.get("ephemeral")),
+                "edited": edited,
                 "title": embed.title,
                 "text": embed.description,
-                "view": message.get("view"),
+                "footer": embed.footer.text,
+                # An edit without a view keeps the old buttons, as on Discord.
+                "view": message.get("view", "old buttons kept"),
             }
         )
 
     async def edit_original_response(self, **message: Any) -> None:
-        self.record(message)
+        self.record(message, edited=True)
+
+    async def delete_original_response(self) -> None:
+        self.thinking = None
 
     @property
     def last(self) -> dict[str, Any]:
@@ -207,9 +228,11 @@ def store() -> FakeStore:
     return FakeStore()
 
 
-def run_command(store: FakeStore, name: str, interaction: FakeInteraction, **options: Any):
+def run_command(
+    store: FakeStore, name: str, interaction: FakeInteraction, *, now=lambda: NOW, **options: Any
+):
     async def go() -> None:
-        app = DiscordApp(Commands(store, SITE, now=lambda: NOW))
+        app = DiscordApp(Commands(store, SITE, now=now))
         client = discord.Client(intents=discord.Intents.none())
         tree = discord.app_commands.CommandTree(client)
         app.register(tree)
@@ -217,6 +240,10 @@ def run_command(store: FakeStore, name: str, interaction: FakeInteraction, **opt
 
     asyncio.run(go())
     return interaction.last
+
+
+def texts(interaction: FakeInteraction) -> str:
+    return "\n".join(message["text"] for message in interaction.messages)
 
 
 def links(message: dict[str, Any]) -> dict[str, str]:
@@ -251,7 +278,9 @@ def test_server_replies_are_private_unless_shared_and_dm_replies_are_normal(
 
 
 def test_unconnected_person_gets_only_a_private_connect_message_even_when_sharing(store) -> None:
-    message = run_command(store, "me", FakeInteraction(name="drifter"), account=None, share=True)
+    interaction = FakeInteraction(name="drifter")
+    message = run_command(store, "me", interaction, account=None, share=True)
+    assert len(interaction.messages) == 1
     assert message["private"] is True
     assert "(@drifter)" in message["text"]
     assert set(links(message).values()) == {
@@ -274,7 +303,7 @@ def test_help_and_link_work_without_a_connection(store) -> None:
         store, "help", FakeInteraction()
     )["text"]
     linked = run_command(store, "link", FakeInteraction())["text"]
-    assert "Players: Drift #2PP, Lens #8QQ." in linked
+    assert "• Drift #2PP\n• Lens #8QQ" in linked
     assert "Main: Lens." in linked
 
 
@@ -285,29 +314,22 @@ def test_connected_account_without_players_is_sent_to_verify_one(store) -> None:
     assert links(message) == {"Link a player": "https://clashlens.test/account/verify-player"}
 
 
-def test_database_outage_says_unavailable_never_unconnected(store) -> None:
-    store.fail = psycopg.OperationalError("connection refused")
-    message = run_command(store, "me", FakeInteraction(), account=None, share=True)
+@pytest.mark.parametrize(("dm", "private"), [(False, True), (True, False)])
+def test_database_outage_says_unavailable_never_unconnected(store, dm, private) -> None:
+    # The pool's error when no connection comes within its wait.
+    store.fail = psycopg_pool.PoolTimeout("couldn't get a connection after 5.00 sec")
+    interaction = FakeInteraction(dm=dm, events=store.reads)
+    message = run_command(store, "me", interaction, account=None, share=True)
+    assert store.reads == ["acknowledged", "account"]
     assert message["text"] == "Clash Lens is unavailable right now, try again in a minute."
-    assert message["private"] is True
+    assert message["private"] is private
 
 
-def test_slow_read_asks_to_try_again(store, monkeypatch) -> None:
+def test_slow_read_asks_to_try_again(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842)])
-    monkeypatch.setattr(discord_app, "READ_SECONDS", 0.05)
-    store.delay = 0.2
+    store.fail = psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
     message = run_command(store, "me", FakeInteraction(), account=None, share=False)
     assert message["text"] == "Clash Lens is taking longer than usual. Try again."
-
-
-def test_too_many_commands_are_refused_without_reading() -> None:
-    clock = [0.0]
-    limiter = RateLimiter(limit=5, window=15, clock=lambda: clock[0])
-    assert [limiter.retry_after(ME) for _ in range(5)] == [0.0] * 5
-    assert limiter.retry_after(ME) == 15
-    assert limiter.retry_after(OTHER) == 0.0
-    clock[0] = 15.0
-    assert limiter.retry_after(ME) == 0.0
 
 
 def test_me_lists_main_first_then_most_trophies_with_a_dropdown(store) -> None:
@@ -331,6 +353,34 @@ def test_me_lists_main_first_then_most_trophies_with_a_dropdown(store) -> None:
     ]
     (select,) = [item for item in message["view"].children if isinstance(item, discord.ui.Select)]
     assert [option.value for option in select.options] == ["#8QQ", "#0UU", "#2PP", "#9RR"]
+    assert message["footer"].startswith("Updated 2 min ago · ")
+
+
+def test_me_shows_every_player_across_messages_when_one_is_not_enough(store) -> None:
+    tags = [f"#{index:04d}" for index in range(60)]
+    store.connect(ME, [card(tag, "Wanderer", 5000 + index) for index, tag in enumerate(tags)])
+    interaction = FakeInteraction()
+    message = run_command(store, "me", interaction, account=None, share=False)
+    (button,) = [
+        item for item in message["view"].children
+        if isinstance(item, discord.ui.Button) and not item.url
+    ]
+    asyncio.run(button.callback(interaction))
+    shown = interaction.messages[1:]
+    assert len(shown) > 1
+    assert all(len(item["text"]) <= 4096 for item in shown)
+    assert all(f"** {tag} " in texts(interaction) for tag in tags)
+
+
+def test_link_lists_every_player_across_messages(store) -> None:
+    tags = [f"#{index:04d}" for index in range(500)]
+    store.connect(ME, [card(tag, "Wanderer", 5000) for tag in tags])
+    interaction = FakeInteraction()
+    run_command(store, "link", interaction)
+    assert len(interaction.messages) > 1
+    assert all(item["private"] for item in interaction.messages)
+    assert all(len(item["text"]) <= 4096 for item in interaction.messages)
+    assert all(f"Wanderer {tag}\n" in texts(interaction) + "\n" for tag in tags)
 
 
 def test_me_with_many_players_shows_four_then_all_on_request(store) -> None:
@@ -384,6 +434,44 @@ def test_full_day_holds_back_net_until_every_battle_is_recorded(store) -> None:
     assert "Net so far" not in text
 
 
+def test_full_day_without_a_published_day_says_what_is_unavailable(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    store.pages["#2PP"] = page("#2PP", "Drift", [])
+    store.pages["#2PP"]["screen_ready"].update(days=[], current_day_start=None)
+    text = run_command(store, "me", FakeInteraction(), account=None, share=False)["text"]
+    assert text.startswith(
+        "5,842 🏆 · #1,234 among tracked · Legend day Unavailable · start trophies Unavailable"
+    )
+    assert "Net pending" in text
+
+
+@pytest.mark.parametrize(
+    ("state", "reason", "word"),
+    [("not_in_legend", None, "Not in Legend"), ("tracking", "pending", "Being checked")],
+)
+def test_a_player_whose_numbers_do_not_apply_gets_its_status_not_old_numbers(
+    store, state, reason, word
+) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842, state=state, reason=reason)])
+    store.pages["#2PP"] = page("#2PP", "Drift", [])
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    assert message["title"] == "Drift #2PP"
+    assert message["text"] == word
+    assert "player_page" not in store.reads
+
+
+def test_full_day_reads_and_shows_one_legend_day_across_a_reset(store) -> None:
+    before = TODAY.end - timedelta(seconds=1)
+    clock = iter([before, TODAY.end + timedelta(seconds=1)])
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    store.pages["#2PP"] = page("#2PP", "Drift", [])
+    text = run_command(
+        store, "me", FakeInteraction(), now=lambda: next(clock), account=None, share=False
+    )["text"]
+    assert set(store.moments) == {before}
+    assert f"<t:{int(TODAY.end.timestamp())}:R>" in text
+
+
 def test_me_refuses_a_player_on_another_account(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
     store.connect(OTHER, [card("#9RR", "Theirs", 6000)])
@@ -409,7 +497,7 @@ def test_main_saves_only_the_persons_own_player(store) -> None:
     refused = run_command(store, "main", FakeInteraction(), account="#9RR")
     assert refused["text"] == "That player isn't linked to your Clash Lens account."
     assert store.mains == {}
-    saved = run_command(store, "main", FakeInteraction(dm=True), account="lens")
+    saved = run_command(store, "main", FakeInteraction(dm=True), account="8qq")
     assert saved["text"].startswith("Main is now Lens #8QQ.")
     assert store.mains == {1: "#8QQ"}
 
@@ -421,13 +509,37 @@ def test_only_the_person_who_ran_the_command_can_use_its_dropdown(store) -> None
     stranger = FakeInteraction(OTHER)
     allowed = asyncio.run(view.interaction_check(stranger))
     assert allowed is False
-    assert stranger.last == {
-        "private": True,
-        "title": None,
-        "text": "Only the person who ran this command can use these buttons.",
-        "view": None,
-    }
+    assert stranger.last["private"] is True
+    assert stranger.last["text"] == "Only the person who ran this command can use these buttons."
     assert asyncio.run(view.interaction_check(FakeInteraction(ME))) is True
+
+
+def pick(message: dict[str, Any], interaction: FakeInteraction, value: str) -> None:
+    (select,) = [item for item in message["view"].children if isinstance(item, discord.ui.Select)]
+    select._values = [value]
+    asyncio.run(select.callback(interaction))
+
+
+def test_picking_a_main_removes_the_dropdown(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    message = run_command(store, "main", FakeInteraction(), account=None)
+    click = FakeInteraction()
+    pick(message, click, "#8QQ")
+    assert click.last["edited"] is True
+    assert click.last["text"].startswith("Main is now Lens #8QQ.")
+    assert click.last["view"] is None
+
+
+def test_a_shared_reply_never_turns_into_a_connect_message(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
+    message = run_command(store, "me", FakeInteraction(), account=None, share=True)
+    assert message["private"] is False
+    del store.accounts[str(ME)]
+    click = FakeInteraction()
+    pick(message, click, "#8QQ")
+    assert [item["edited"] for item in click.messages] == [False]
+    assert click.last["private"] is True
+    assert click.last["title"] == "Connect Discord to Clash Lens"
 
 
 def test_autocomplete_offers_only_the_persons_own_players(store) -> None:
@@ -437,6 +549,9 @@ def test_autocomplete_offers_only_the_persons_own_players(store) -> None:
     choices = asyncio.run(app.own_player_choices(FakeInteraction(), "dri"))
     assert [(choice.name, choice.value) for choice in choices] == [("Drift #2PP · 5,842", "#2PP")]
     assert asyncio.run(app.own_player_choices(FakeInteraction(12345), "")) == []
+    # A player moved to another account stops being offered at once.
+    store.cards[1].pop(0)
+    assert asyncio.run(app.own_player_choices(FakeInteraction(), "dri")) == []
 
 
 def test_token_file_problems_never_show_the_token(tmp_path) -> None:

@@ -1,10 +1,7 @@
 """Start the Clash Lens Discord bot.
 
-    python -m bot run              answer slash commands until stopped
-    python -m bot show-commands    print the commands Discord would be sent
-    python -m bot register [--guild ID]
-                                   send the commands to Discord: everywhere,
-                                   or to one test server at once
+    python -m bot run         answer slash commands until stopped
+    python -m bot register    send the commands to Discord
 
 The bot opens one connection out to Discord and serves nothing itself.
 Settings come from the environment:
@@ -18,15 +15,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlsplit
-
-import discord
 
 from clashlens.api_db import ApiDatabase
 from clashlens.bootstrap import BootstrapError, read_secret_file
@@ -96,7 +90,7 @@ def _commands(config: Config) -> Commands:
 
 
 def _offline_commands() -> Commands:
-    # Listing commands reads nothing, so it needs no database or website.
+    # Registering commands reads nothing, so it needs no database or website.
     return Commands(store=None, site=Site("https://example.invalid"))  # type: ignore[arg-type]
 
 
@@ -117,17 +111,12 @@ def command_payload() -> list[dict]:
     return [command.to_dict(tree) for command in tree.get_commands()]
 
 
-async def register(config: Config, guild_id: int | None) -> int:
+async def register(config: Config) -> int:
     token = read_token(config.token_file)
     client, tree = build_client(_offline_commands())
     async with client:
         await client.login(token)
-        if guild_id is None:
-            synced = await tree.sync()
-        else:
-            guild = discord.Object(id=guild_id)
-            tree.copy_global_to(guild=guild)
-            synced = await tree.sync(guild=guild)
+        synced = await tree.sync()
     print(f"registered {len(synced)} commands: {', '.join(sorted(c.name for c in synced))}")
     return 0
 
@@ -136,20 +125,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m bot")
     actions = parser.add_subparsers(dest="action", required=True)
     actions.add_parser("run")
-    actions.add_parser("show-commands")
-    registering = actions.add_parser("register")
-    registering.add_argument("--guild", type=int, help="one test server's ID")
+    actions.add_parser("register")
     arguments = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
-    if arguments.action == "show-commands":
-        print(json.dumps(command_payload(), indent=2, sort_keys=True))
-        return 0
     try:
         config = load_config(os.environ)
         if arguments.action == "register":
-            return asyncio.run(register(config, arguments.guild))
+            return asyncio.run(register(config))
         run(config)
     except ConfigError as error:
         print(f"bot: {error}", file=sys.stderr)

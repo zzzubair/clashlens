@@ -7,7 +7,7 @@ an @mention in a name cannot ping anyone or break the layout.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -21,7 +21,7 @@ from clashlens.domain import ranked_day_for
 # (groups, saved players, crews); renaming it here renames it everywhere.
 GROUP_WORD = "group"
 # Discord shows at most 25 dropdown entries, 100 characters per entry label
-# and 80 per button label, and cuts an embed description at 4,096.
+# and 80 per button label, and refuses an embed description over 4,096.
 MAX_CHOICES = 25
 _MAX_CHOICE_LABEL = 100
 _MAX_DESCRIPTION = 4000
@@ -151,10 +151,6 @@ def failed() -> Reply:
     return Reply("Something went wrong on Clash Lens's side. Try again in a minute.")
 
 
-def limited(seconds: float) -> Reply:
-    return Reply(f"Slow down a little: try again in {max(1, round(seconds))} s.")
-
-
 def not_own() -> Reply:
     return Reply("That player isn't linked to your Clash Lens account.")
 
@@ -220,9 +216,12 @@ def link_reply(
 ) -> Reply:
     if not cards:
         return no_players(site, username)
-    players = ", ".join(f"{safe(card['name'])} {card['tag']}" for card in cards)
     main = next((card for card in cards if card["tag"] == main_tag), None)
-    lines = [f"Connected as @{safe(username)}.", f"Players: {players}."]
+    lines = [
+        f"Connected as @{safe(username)}.",
+        "Players:",
+        *(f"• {safe(card['name'])} {card['tag']}" for card in cards),
+    ]
     if main is not None:
         lines.append(f"Main: {safe(main['name'])}.")
     elif len(cards) > 1:
@@ -246,8 +245,12 @@ def card_status(card: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _count(value: int | None) -> str:
-    return "–" if value is None else str(value)
+def _known(value: int | None, show: Callable[[int], str]) -> str:
+    return "Unavailable" if value is None else show(value)
+
+
+def _of_eight(count: int) -> str:
+    return f"{count}/8"
 
 
 def card_line(card: Mapping[str, Any], *, main: bool = False) -> str:
@@ -260,10 +263,10 @@ def card_line(card: Mapping[str, Any], *, main: bool = False) -> str:
     parts.append("Unranked" if card["rank"] is None else f"#{number(card['rank'])}")
     today = card["today"]
     if today is None:
-        parts.append("no battles recorded today")
+        parts += ["no battles recorded today", "net pending"]
     else:
-        parts.append(f"⚔ {_count(today['attacks'])}/8")
-        parts.append(f"🛡 {_count(today['defenses'])}/8")
+        parts.append(f"⚔ {_known(today['attacks'], _of_eight)}")
+        parts.append(f"🛡 {_known(today['defenses'], _of_eight)}")
         net = today["net"]
         parts.append("net pending" if net is None else f"net {signed(net)} so far")
     return " · ".join(parts)
@@ -303,15 +306,46 @@ def me_overview(
     shown = players[:COMPACT_LIMIT] if cut else players
     lines = [reset_line(now), ""]
     lines += [card_line(card, main=card["tag"] == main_tag) for card in shown]
+    footer = "Ranks are among the players Clash Lens tracks, not official world ranks."
+    # The oldest profile behind the numbers shown, so no number looks newer
+    # than it is.
+    ages = [
+        card["age_seconds"]
+        for card in shown
+        if card_status(card) is None and card["age_seconds"] is not None
+    ]
+    if ages:
+        footer = f"Updated {ago(max(ages))} · {footer}"
     return Reply(
-        _fit("\n".join(lines)),
+        "\n".join(lines),
         title="Your Legend day",
-        footer="Ranks are among the players Clash Lens tracks, not official world ranks.",
+        footer=footer,
         links=(Link("Open Clash Lens", site.url("/account")),),
         choices=tuple(choice_for(card) for card in players[:MAX_CHOICES]),
         pick="day",
         placeholder="Full day for…",
         show_all=len(players) if cut else None,
+    )
+
+
+def _player_title(item: Mapping[str, Any]) -> str:
+    title = f"{safe(item['name'])} {item['tag']}"
+    return f"{title} · {safe(item['clan'])}" if item.get("clan") else title
+
+
+def player_status(
+    site: Site, card: Mapping[str, Any], status: str, choices: tuple[Choice, ...] = ()
+) -> Reply:
+    """A player whose numbers do not apply right now: the status word instead."""
+    age = card.get("age_seconds")
+    return Reply(
+        status,
+        title=_player_title(card),
+        footer=None if age is None else f"Updated {ago(age)}",
+        links=(Link("Open on Clash Lens", site.player(card["tag"])),),
+        choices=choices,
+        pick="day" if choices else None,
+        placeholder="Full day for…" if choices else None,
     )
 
 
@@ -352,59 +386,51 @@ def full_day(
     else:
         summary = [f"{number(page['trophies'])} 🏆"]
     summary.append("Unranked" if rank is None else f"#{number(rank)} among tracked")
-    day_number = (today or {}).get("season_day_number") or (ready.get("season") or {}).get(
+    day = today or {}
+    day_number = day.get("season_day_number") or (ready.get("season") or {}).get(
         "current_day_number"
     )
-    if day_number:
-        summary.append(f"Legend day {day_number} of 28")
-    if today is not None and today.get("start_trophies") is not None:
-        summary.append(f"started today at {number(today['start_trophies'])}")
+    summary.append(f"Legend day {day_number} of 28" if day_number else "Legend day Unavailable")
+    start = day.get("start_trophies")
+    summary.append(
+        "start trophies Unavailable" if start is None else f"started today at {number(start)}"
+    )
     lines = [" · ".join(summary), ""]
     if today is None:
         lines.append("No battles recorded for this Legend day yet.")
     else:
-        attacks, defenses = today["offense_events"], today["defense_events"]
-        attack_count = today["attack_count"] if today["attack_count"] is not None else len(attacks)
-        defense_count = (
-            today["defense_count"] if today["defense_count"] is not None else len(defenses)
-        )
-        gain = today["attack_gain"]
-        if gain is None:
-            gain = sum(event["trophy_change"] for event in attacks)
-        loss = -today["defense_loss"] if today["defense_loss"] is not None else sum(
-            event["trophy_change"] for event in defenses
-        )
+        loss = today["defense_loss"]
         lines.append(
-            f"**Attacks** {attack_count}/8 · {signed(gain)} · "
-            f"{today['attack_three_star_count'] or 0} three-stars"
+            f"**Attacks** {_known(today['attack_count'], _of_eight)} · "
+            f"{_known(today['attack_gain'], signed)} · "
+            f"{_known(today['attack_three_star_count'], str)} three-stars"
         )
-        lines += _battle_lines(attacks, "vs")
+        lines += _battle_lines(today["offense_events"], "vs")
         lines.append(
-            f"**Defenses** {defense_count}/8 · {signed(loss)} · "
-            f"{today['defense_three_star_count'] or 0} three-stars given up"
+            f"**Defenses** {_known(today['defense_count'], _of_eight)} · "
+            f"{_known(None if loss is None else -loss, signed)} · "
+            f"{_known(today['defense_three_star_count'], str)} three-stars given up"
         )
-        lines += _battle_lines(defenses, "by")
-        lines.append("")
-        if today["battles_complete"]:
-            lines.append(f"Net so far: {signed(gain + loss)}")
-        else:
-            lines.append("Net pending: Clash Lens has not recorded every battle yet.")
-        if defense_count < _DAILY_BATTLES:
-            lines.append(
-                "Fewer than 8 defenses so far: the game applies an automatic "
-                "defense loss at Reset; the amount shows after Reset."
-            )
+        lines += _battle_lines(today["defense_events"], "by")
+    lines.append("")
+    if today is not None and today["battles_complete"]:
+        lines.append(f"Net so far: {signed(today['attack_gain'] - today['defense_loss'])}")
+    else:
+        lines.append("Net pending: Clash Lens has not recorded every battle yet.")
+    defenses = day.get("defense_count")
+    if defenses is not None and defenses < _DAILY_BATTLES:
+        lines.append(
+            "Fewer than 8 defenses so far: the game applies an automatic "
+            "defense loss at Reset; the amount shows after Reset."
+        )
     notes = [_NOTE_WORDS.get(note["label"], note["label"]) for note in ready["data_quality"]]
     if notes:
         lines += ["", *(f"⚠ {note}" for note in dict.fromkeys(notes))]
     end = ranked_day_for(now).end
     lines += ["", f"Reset {discord_time(end, 't')} ({discord_time(end, 'R')})"]
-    title = f"{safe(page['name'])} {page['tag']}"
-    if page.get("clan"):
-        title += f" · {safe(page['clan'])}"
     return Reply(
-        _fit("\n".join(lines)),
-        title=title,
+        "\n".join(lines),
+        title=_player_title(page),
         footer=f"Updated {ago(page['age_seconds'])}",
         links=(Link("Open on Clash Lens", site.player(page["tag"])),),
         choices=choices,
@@ -441,5 +467,17 @@ def main_reply(
     )
 
 
-def _fit(text: str) -> str:
-    return text if len(text) <= _MAX_DESCRIPTION else text[: _MAX_DESCRIPTION - 1] + "…"
+def pages(text: str) -> list[str]:
+    """Text split at line ends into pieces Discord accepts whole, so a long
+    list goes out as several messages instead of being cut short."""
+    pieces: list[str] = []
+    lines: list[str] = []
+    size = 0
+    for line in text.split("\n"):
+        if lines and size + len(line) > _MAX_DESCRIPTION:
+            pieces.append("\n".join(lines))
+            lines, size = [], 0
+        lines.append(line)
+        size += len(line) + 1
+    pieces.append("\n".join(lines))
+    return pieces

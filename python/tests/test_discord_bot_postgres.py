@@ -39,6 +39,7 @@ def _account(database: ApiDatabase, provider: str, subject: str, username: str) 
 
 
 def _verify(database: ApiDatabase, account_id: int, tag: str) -> None:
+    """Verify `tag` to the account, moving it there as a transfer does."""
     request_id = str(uuid4())
     with database.pool.connection() as connection:
         connection.execute(
@@ -59,6 +60,9 @@ def _verify(database: ApiDatabase, account_id: int, tag: str) -> None:
             """
             INSERT INTO verified_player_links (player_id, account_id, verification_request_id)
             SELECT id, %s, %s FROM players WHERE normalized_tag = %s
+            ON CONFLICT (player_id) DO UPDATE
+                SET account_id = EXCLUDED.account_id,
+                    verification_request_id = EXCLUDED.verification_request_id
             """,
             (account_id, request_id, tag),
         )
@@ -78,13 +82,15 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
             _verify(owner, mine, "#2PP")
             _verify(owner, mine, "#8QQ")
             _verify(owner, theirs, "#9RR")
-            store = Store(bot, now=lambda: NOW)
+            store = Store(bot)
 
             # A Google-only account is not found by a Discord ID.
             assert store.account("google-subject") is None
             account = store.account(DISCORD_ID)
             assert account is not None and account.internal_id == mine
-            assert [card["tag"] for card in store.players(account)] == ["#2PP", "#8QQ"]
+            cards = store.players(account, NOW)
+            assert [card["tag"] for card in cards] == ["#2PP", "#8QQ"]
+            assert all(card["age_seconds"] is not None for card in cards)
 
             assert store.main_tag(account) is None
             assert store.set_main(account, "#9RR") is False
@@ -102,9 +108,16 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
                     (mine,),
                 )
             assert store.main_tag(account) is None
+
+            # A main moved to another account and back is forgotten too.
+            assert store.set_main(account, "#8QQ") is True
+            _verify(owner, theirs, "#8QQ")
+            assert store.main_tag(account) is None
+            _verify(owner, mine, "#8QQ")
+            assert store.main_tag(account) is None
             # The API role may run the player page and live board reads too.
-            assert store.player_page("#8QQ")["tag"] == "#8QQ"
-            store.live_rank("#8QQ")
+            assert store.player_page("#8QQ", NOW)["tag"] == "#8QQ"
+            store.live_rank("#8QQ", NOW)
         finally:
             bot.close()
             owner.close()

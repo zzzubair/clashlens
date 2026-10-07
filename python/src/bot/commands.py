@@ -15,16 +15,16 @@ from typing import Any, Protocol
 from clashlens.api_db import AccountContext
 
 from . import replies
-from .replies import Choice, Reply, Site
+from .replies import Reply, Site
 
 
 class StoreReads(Protocol):
     def account(self, discord_id: str) -> AccountContext | None: ...
-    def players(self, account: AccountContext) -> list[dict[str, Any]]: ...
+    def players(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]: ...
     def main_tag(self, account: AccountContext) -> str | None: ...
     def set_main(self, account: AccountContext, tag: str) -> bool: ...
-    def player_page(self, tag: str) -> dict[str, Any] | None: ...
-    def live_rank(self, tag: str) -> int | None: ...
+    def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None: ...
+    def live_rank(self, tag: str, now: datetime) -> int | None: ...
 
 
 def tag_text(value: str) -> str:
@@ -34,14 +34,9 @@ def tag_text(value: str) -> str:
 
 
 def find_own(cards: Sequence[Mapping[str, Any]], value: str) -> Mapping[str, Any] | None:
-    """The person's own player named by a picked tag, a typed tag or a name."""
+    """The person's own player named by a picked or typed tag."""
     tag = tag_text(value)
-    for card in cards:
-        if card["tag"] == tag:
-            return card
-    wanted = " ".join(value.split()).casefold()
-    named = [card for card in cards if (card["name"] or "").casefold() == wanted]
-    return named[0] if len(named) == 1 else None
+    return next((card for card in cards if card["tag"] == tag), None)
 
 
 class Commands:
@@ -68,22 +63,26 @@ class Commands:
         account = self.store.account(discord_id)
         if account is None:
             return replies.help_reply(self.site, None, 0)
-        return replies.help_reply(self.site, account.username, len(self.store.players(account)))
+        players = self.store.players(account, self.now())
+        return replies.help_reply(self.site, account.username, len(players))
 
     def link(self, discord_id: str, discord_name: str) -> Reply:
         account = self.store.account(discord_id)
         if account is None:
             return replies.not_linked(self.site, discord_name)
-        cards = self.store.players(account)
+        cards = self.store.players(account, self.now())
         return replies.link_reply(self.site, account.username, cards, self._main(account, cards))
 
     def me(self, account: AccountContext, player: str | None = None, *, show_all: bool = False) -> Reply:
-        cards = self.store.players(account)
+        # One moment for every read and the reply, so a Reset mid-command
+        # cannot mix two Legend days.
+        now = self.now()
+        cards = self.store.players(account, now)
         if not cards:
             return replies.no_players(self.site, account.username)
         if player is None and len(cards) > 1:
             return replies.me_overview(
-                self.site, cards, self._main(account, cards), self.now(), show_all=show_all
+                self.site, cards, self._main(account, cards), now, show_all=show_all
             )
         card = cards[0] if player is None else find_own(cards, player)
         if card is None:
@@ -92,22 +91,19 @@ class Commands:
             tuple(replies.choice_for(item) for item in replies.ordered(cards, None))
             if len(cards) > 1
             else ()
-        )
-        return self._day(card["tag"], choices[: replies.MAX_CHOICES])
-
-    def _day(self, tag: str, choices: tuple[Choice, ...] = ()) -> Reply:
-        page = self.store.player_page(tag)
+        )[: replies.MAX_CHOICES]
+        status = replies.card_status(card)
+        if status is not None and not card["season_reset_pending"]:
+            return replies.player_status(self.site, card, status, choices)
+        page = self.store.player_page(card["tag"], now)
         if page is None:
-            return Reply(
-                f"Clash Lens hasn't read {tag} yet. Check back in a few minutes.",
-                links=(replies.Link("Open on Clash Lens", self.site.player(tag)),),
-            )
+            return replies.player_status(self.site, card, "Being checked", choices)
         return replies.full_day(
-            self.site, page, self.store.live_rank(tag), self.now(), choices=choices
+            self.site, page, self.store.live_rank(card["tag"], now), now, choices=choices
         )
 
     def main(self, account: AccountContext, player: str | None = None) -> Reply:
-        cards = self.store.players(account)
+        cards = self.store.players(account, self.now())
         if not cards:
             return replies.no_players(self.site, account.username)
         if player is None:
@@ -128,11 +124,11 @@ class Commands:
             return self.me(account, show_all=True)
         return self.me(account, tag)
 
-    def own_choices(self, discord_id: str) -> list[Choice]:
+    def own_choices(self, discord_id: str) -> list[replies.Choice]:
         """Autocomplete entries: only the person's own verified players."""
         account = self.store.account(discord_id)
         if account is None:
             return []
-        cards = self.store.players(account)
+        cards = self.store.players(account, self.now())
         main_tag = self._main(account, cards)
         return [replies.choice_for(card) for card in replies.ordered(cards, main_tag)]
