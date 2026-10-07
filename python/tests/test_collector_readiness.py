@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
+import psycopg
 from domain_test_support import domain_database
 from psycopg_pool import PoolTimeout
 from test_collector import _Client, _collector, _Spool, _Store
 
 from clashlens.collector_db import CollectorDatabase
 from clashlens.collector_http import ApiKey, KeyPool
+from clashlens.spool import Spool
 
 
 def test_slow_database_counts_do_not_slow_readiness() -> None:
@@ -28,6 +33,53 @@ def test_slow_database_counts_do_not_slow_readiness() -> None:
 
     assert ready == (200, "text/plain", b"ready\n")
     assert time.monotonic() - started < 1
+
+
+def test_slow_spool_cleanup_read_does_not_block_either_readiness(tmp_path) -> None:
+    # 7 October 2026: the cleanup's database read took 60 s while holding the
+    # spool lock, so the collector's /readyz and the worker's health check,
+    # which shares the spool folder, both timed out and Podman killed them.
+    reading = threading.Event()
+    release = threading.Event()
+
+    class SlowReferenceStore(_Store):
+        def referenced_spool_hashes(self) -> set[str]:
+            reading.set()
+            assert release.wait(timeout=10)
+            return set()
+
+    fake = _Spool()
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    worker_spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    collector = _collector(spool, SlowReferenceStore(fake), _Client(fake))
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        sweep = executor.submit(collector._sweep_unreferenced)
+        try:
+            assert reading.wait(timeout=2)
+            ready = executor.submit(asyncio.run, collector.health_response("/readyz"))
+            worker = executor.submit(worker_spool.readiness, admission=False)
+            assert ready.result(timeout=2) == (200, "text/plain", b"ready\n")
+            assert worker.result(timeout=2) == (True, "ready")
+        finally:
+            release.set()
+        sweep.result(timeout=2)
+
+
+def test_spool_cleanup_read_over_its_time_limit_skips_one_sweep(tmp_path) -> None:
+    class TimedOutStore(_Store):
+        def referenced_spool_hashes(self) -> set[str]:
+            raise psycopg.errors.QueryCanceled("statement timeout")
+
+    fake = _Spool()
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    digest = hashlib.sha256(b"orphan").hexdigest()
+    spool.publish(b"orphan", digest)
+    collector = _collector(spool, TimedOutStore(fake), _Client(fake))
+
+    collector._sweep_unreferenced()
+
+    assert collector.outcomes["spool_sweep_timeout"] == 1
+    assert spool.verify(digest) == b"orphan"
 
 
 def test_unreachable_database_fails_readiness() -> None:

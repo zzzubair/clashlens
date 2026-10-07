@@ -39,6 +39,30 @@ _PLAYER_ENDPOINTS = {"profile", "battle_log", "league_history"}
 # A worker can hold a player or its work for minutes; these writes give up and
 # are retried later instead of holding collection behind it.
 _WORKER_LOCK_WAIT = "SET LOCAL lock_timeout = '3s'"
+# Spool bytes still needed. The last branch looks each response-state row's
+# upload up by primary key: a scalar subquery is never turned into a join, so
+# stale statistics cannot pick a nested loop that rescans every state row per
+# upload row. That plan discarded 286 million rows (about 60 s) after the
+# 7 October 2026 Reset, when the planner expected 1 kept upload and found 4,287.
+REFERENCED_SPOOL_HASHES_SQL = """
+    SELECT response_hash
+    FROM collector_response_uploads
+    WHERE local_deleted_at IS NULL
+    UNION
+    SELECT response_hash
+    FROM collector_observations
+    WHERE archive_reference IS NULL
+    UNION
+    SELECT state.last_response_hash
+    FROM collector_response_state AS state
+    WHERE (
+        SELECT NOT (
+            upload.state = 'complete' AND upload.local_deleted_at IS NOT NULL
+        )
+        FROM collector_response_uploads AS upload
+        WHERE upload.response_hash = state.last_response_hash
+    )
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1381,30 +1405,12 @@ class CollectorDatabase:
         return {row[0] for row in rows}
 
     def referenced_spool_hashes(self) -> set[str]:
+        # Spool cleanup pauses new raw responses while this runs; give up
+        # (QueryCanceled) rather than hold them, and the next sweep retries.
         with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT response_hash
-                FROM collector_response_uploads
-                WHERE local_deleted_at IS NULL
-                UNION
-                SELECT response_hash
-                FROM collector_observations
-                WHERE archive_reference IS NULL
-                UNION
-                SELECT state.last_response_hash
-                FROM collector_response_state AS state
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM collector_response_uploads AS upload
-                    WHERE upload.response_hash = state.last_response_hash
-                      AND NOT (
-                          upload.state = 'complete'
-                          AND upload.local_deleted_at IS NOT NULL
-                      )
-                )
-                """
-            ).fetchall()
+            with connection.transaction():
+                connection.execute("SET LOCAL statement_timeout = '10s'")
+                rows = connection.execute(REFERENCED_SPOOL_HASHES_SQL).fetchall()
         return {str(row[0]) for row in rows}
 
     def deletable_hashes(self, *, limit: int = 100) -> list[str]:
