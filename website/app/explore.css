@@ -734,19 +734,12 @@
 
 .snapshot-pagination {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   padding: 0.8rem 1.15rem;
-  color: var(--cl-muted);
-  border-top: 1px solid var(--cl-border);
+  border-bottom: 1px solid var(--cl-border);
   background: var(--cl-panel);
   font-size: 0.78rem;
-}
-
-.snapshot-pagination > div {
-  display: flex;
-  gap: 0.5rem;
 }
 
 .snapshot-pagination a {
@@ -1307,11 +1300,6 @@
     grid-column: 1 / -1;
     grid-row: 1;
     justify-self: center;
-  }
-
-  .snapshot-pagination {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .player-header {

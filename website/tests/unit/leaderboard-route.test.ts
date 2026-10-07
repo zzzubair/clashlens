@@ -301,3 +301,39 @@ it.each([
     expect(html).not.toContain("Try another name or an exact tag");
   },
 );
+
+it.each([
+  [{ dayNumber: 1 }, null, ["Go to Day 1"]],
+  [null, { dayNumber: 3 }, ["Go to Day 3"]],
+  [{ dayNumber: 1 }, { dayNumber: 3 }, ["Go to Day 1", "Go to Day 3"]],
+  [null, null, []],
+] as const)(
+  "names the Season day each day button opens, above the table: %o %o",
+  async (previous, next, labels) => {
+    const fixture = structuredClone(board);
+    fixture.view = "daily";
+    fixture.daily = {
+      officialSeasonId: "1788757200",
+      dayNumber: 2,
+      resetAt: "2026-09-09T05:00:00Z",
+      seasonStartAt: "2026-09-07T05:00:00Z",
+      seasonEndAt: "2026-10-05T05:00:00Z",
+      previousSnapshot: previous && { officialSeasonId: "1788757200", ...previous },
+      nextSnapshot: next && { officialSeasonId: "1788757200", ...next },
+    };
+    fixture.provenance.observedAt = "2026-09-09T04:59:00Z";
+    mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+    const { html } = await render("view=daily&season=1788757200&day=2&page=1");
+    const links = [
+      ...html.matchAll(/<a href="([^"]+)"[^>]*>Go to Day (\d+)/g),
+    ];
+    expect(links.map(([, , day]) => `Go to Day ${day}`)).toEqual(labels);
+    for (const [, href, day] of links) expect(href).toContain(`day=${day}`);
+    expect(html).not.toMatch(/>(Older|Newer)</);
+    if (labels.length) {
+      expect(html.indexOf('aria-label="Other days"')).toBeLessThan(
+        html.indexOf("<table"),
+      );
+    } else expect(html).not.toContain('aria-label="Other days"');
+  },
+);
