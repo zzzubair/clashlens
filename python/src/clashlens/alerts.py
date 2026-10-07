@@ -287,7 +287,8 @@ def completeness_probe() -> None:
 
     Counts players in Legend I battles of the current or previous Legend day
     who are not tracked although their first such battle was saved over an
-    hour ago, long enough for discovery to have checked them.
+    hour ago, long enough for discovery to have checked them. Players whose
+    saved profile shows a lower tier, such as Monday demotions, are left out.
     """
     import psycopg
 
@@ -312,7 +313,7 @@ def completeness_probe() -> None:
                     HAVING min(created_at) < clock_timestamp() - interval '1 hour'
                 ) AS seen
                 JOIN players ON players.id = seen.player_id
-                WHERE NOT players.active
+                WHERE NOT players.active AND players.eligibility_state <> 'ineligible'
                 """
             ).fetchone()[0]
         )

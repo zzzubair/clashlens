@@ -31,8 +31,9 @@ def test_completeness_probe_counts_untracked_battlers_seen_over_an_hour_ago(
                 for row in connection.execute(
                     """
                     INSERT INTO players (normalized_tag, active, eligibility_state)
-                    SELECT '#Q' || n, n = 0, CASE WHEN n = 0 THEN 'eligible' ELSE 'unknown' END
-                    FROM generate_series(0, 4) AS n ORDER BY n RETURNING id
+                    SELECT '#Q' || n, n = 0,
+                           CASE n WHEN 0 THEN 'eligible' WHEN 5 THEN 'ineligible' ELSE 'unknown' END
+                    FROM generate_series(0, 5) AS n ORDER BY n RETURNING id
                     """
                 ).fetchall()
             ]
@@ -41,6 +42,7 @@ def test_completeness_probe_counts_untracked_battlers_seen_over_an_hour_ago(
                 (today - timedelta(days=1), untracked[1], tracked, timedelta(hours=20)),  # counted
                 (today, tracked, untracked[2], timedelta(minutes=10)),  # discovery still has time
                 (today - timedelta(days=2), tracked, untracked[3], timedelta(days=2)),  # too old
+                (today - timedelta(days=1), untracked[4], tracked, timedelta(hours=20)),  # demoted
             ):
                 connection.execute(
                     "INSERT INTO legend_battles (ranked_day_start, attacker_player_id,"

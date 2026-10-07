@@ -204,6 +204,8 @@ def test_ops_rejects_a_bad_check_limit_before_stopping_and_forwards_a_good_one(
     tmp_path: Path, setting: str | None, forwarded: str | None
 ) -> None:
     ops = Path(__file__).resolve().parents[2] / "ops"
+    # The optional promotion re-check rate is forwarded only when set.
+    promotion_rate = "0" if setting == "384" else ""
     # `./ops up` runs with host checks stubbed; stopping the running services
     # is recorded, then the environment is written in its place.
     result = subprocess.run(
@@ -215,6 +217,7 @@ source "$1" help >/dev/null
 STATE_DIR="$2"
 MODE=fixture
 [[ -z "$3" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$3
+[[ -z "$4" ]] || CONFIG[CLASHLENS_PROMOTION_RECHECK_PER_SECOND]=$4
 for step in require_host load_release guard_generated_units guard_existing_resources \
     guard_trusted_proxy_ip guard_network_subnet cleanup_stale_admin_state ensure_linger \
     migrate_legacy_units guard_systemd_units write_alert_intent; do
@@ -227,6 +230,7 @@ up_stack
             str(ops),
             str(tmp_path),
             setting or "",
+            promotion_rate,
         ],
         check=False,
         capture_output=True,
@@ -244,6 +248,7 @@ up_stack
         for line in (tmp_path / "env/collector.env").read_text().splitlines()
     )
     assert collector.get("CLASHLENS_REGULAR_PARALLELISM") == forwarded
+    assert collector.get("CLASHLENS_PROMOTION_RECHECK_PER_SECOND") == (promotion_rate or None)
 
 
 @pytest.mark.parametrize(
