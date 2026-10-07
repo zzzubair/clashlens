@@ -607,6 +607,20 @@ each player is queued once, and players queued by the earlier run that only
 averaged Day 1's own defenses are queued once more. On 2026-10-06 the October
 2026 Season (`1791176400`) had about 3,100 such players.
 
+**"No opponent, no battle" rows in the automatic defense loss:** the game
+counts each such row as a used attack or defense slot when it charges the
+automatic defense loss
+([automatic defense adjustment](domain.md#automatic-defense-adjustment)). A
+day saved before that keeps its old result, and so does the day after, which
+pools it. `--zero-result-slots preview --season <Season ID>` counts, without
+writing anything, the players with an ended saved day of that Season whose
+battle logs hold such a row; `--zero-result-slots queue --season <Season ID>`
+queues up to `--max-jobs` of them, each recalculating the player's oldest
+such day and every later saved day of the Season, at backfill priority. Run
+it again until `left_to_queue` is 0; each player and day is queued once. It
+reads the Season's saved battle rows, those above the lowest row a battle of
+the day before the Season used, so run it outside 04:00–07:00 UTC.
+
 ### Raw-response cleanup failed
 
 Cleanup deletes old raw responses on its own timer; see

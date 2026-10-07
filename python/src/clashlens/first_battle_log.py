@@ -447,3 +447,115 @@ def requeue_day_1(
         "queued": len(job_ids),
         "left_to_queue": len(waiting) - len(job_ids),
     }
+
+
+def requeue_zero_result_slots(
+    database: Database, season_id: str, *, queue: bool, max_jobs: int
+) -> dict[str, Any]:
+    """Find, and with ``queue`` recalculate, each player's oldest ended day
+    of the Season whose battle logs hold a "no opponent, no battle" row, and
+    their later saved days, so the day after each such day pools it too.
+    Days saved before October 2026 left those rows out of the automatic
+    defense loss. Only saved days are queued, each player and day once, at
+    backfill priority, as ``requeue_day_1``.
+
+    The rows are read from the Season's saved battle rows only: their IDs
+    start above the lowest one a battle of the day before the Season used.
+    """
+    season_start = datetime.fromtimestamp(int(season_id), UTC)
+    if not domain.is_season_boundary(season_start):
+        raise ValueError(f"{season_id} is not a Season's start")
+    season_end = season_start + domain.SEASON_DURATION
+
+    def key(player_id: int, day: datetime) -> str:
+        return (f"reconcile:zero-result-slots:{player_id}:"
+                f"{day:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}")
+
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            rows = connection.execute(
+                """
+                WITH bound AS (
+                    SELECT COALESCE(min(evidence.source_row_id), 0) AS id
+                    FROM legend_battles AS fight
+                    JOIN battle_evidence AS evidence ON evidence.battle_id = fight.id
+                    WHERE fight.ranked_day_start = %(before)s
+                ), candidate AS (
+                    SELECT source.id, source.source_json
+                    FROM battle_source_rows AS source, bound
+                    WHERE source.id >= bound.id
+                      AND source.outcome = 'malformed_legend_row'
+                      AND source.source_json ->> 'battleType' = 'legend'
+                      AND (source.source_json -> 'battleTime')::text = '0'
+                ), listed AS (
+                    SELECT candidate.id, list.parsed_payload_id,
+                           list.reporting_player_id
+                    FROM candidate
+                    JOIN battle_payload_row_lists AS list
+                      ON list.source_row_ids @> ARRAY[candidate.id]
+                    UNION
+                    SELECT candidate.id, member.parsed_payload_id,
+                           member.reporting_player_id
+                    FROM candidate
+                    JOIN battle_payload_rows AS member
+                      ON member.source_row_id = candidate.id
+                )
+                SELECT DISTINCT log.player_id, log.parser_version, candidate.source_json
+                FROM listed
+                JOIN candidate ON candidate.id = listed.id
+                JOIN battle_log_observations AS log
+                  ON log.parsed_payload_id = listed.parsed_payload_id
+                 AND log.player_id = listed.reporting_player_id
+                """,
+                {"before": season_start - timedelta(days=1)},
+            ).fetchall()
+            now = datetime.now(UTC)
+            found: set[tuple[int, datetime]] = set()
+            for player_id, parser, source in rows:
+                if not battle.is_no_opponent_row(source, parser):
+                    continue
+                try:
+                    day = domain.battle_day_for(battle._parse_battle_timestamp(
+                        battle._battle_timestamp_value(source, parser), parser))
+                except battle.BattleLogParseError:
+                    continue
+                if season_start <= day.start < season_end and day.end <= now:
+                    found.add((int(player_id), day.start))
+            # Only a saved day changes, and the day after only pools a saved one.
+            saved = connection.execute(
+                """
+                SELECT DISTINCT player_id, ranked_day_start FROM ranked_day_versions
+                WHERE player_id = ANY(%s) AND ranked_day_start = ANY(%s)
+                  AND reconciliation_rule_version = %s
+                """,
+                (sorted({player for player, _ in found}),
+                 sorted({day for _, day in found}), RECONCILIATION_RULE_VERSION),
+            ).fetchall()
+            oldest: dict[int, datetime] = {}
+            for player_id, day in found & {(int(p), d) for p, d in saved}:
+                oldest[player_id] = min(oldest.get(player_id, day), day)
+            days = sorted(oldest.items())
+            queued = {
+                row[0] for row in connection.execute(
+                    "SELECT deduplication_key FROM python_processing_jobs_worker"
+                    " WHERE deduplication_key = ANY(%s)",
+                    ([key(*day) for day in days],),
+                ).fetchall()
+            }
+            waiting = [day for day in days if key(*day) not in queued]
+            job_ids = [
+                job_id
+                for player_id, day in (waiting[:max_jobs] if queue else [])
+                if (job_id := _queue(
+                    connection, player_id, day, None,
+                    key=key(player_id, day), trigger="zero_result_slots",
+                    priority=PYTHON_BACKFILL_PRIORITY,
+                )) is not None
+            ]
+    return {
+        "season": season_id,
+        "players": len(days),
+        "already_queued": len(days) - len(waiting),
+        "queued": len(job_ids),
+        "left_to_queue": len(waiting) - len(job_ids),
+    }

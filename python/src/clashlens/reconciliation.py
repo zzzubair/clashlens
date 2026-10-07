@@ -975,8 +975,8 @@ def _automatic_defense_adjustment(
         return None, "not_applicable"
     previous = data.previous_day
     if data.season_first_day:
-        # The game averages Day 1's own defenses only: the previous Season's
-        # last day takes no part, so Day 1 needs nothing from it.
+        # Day 1 needs nothing from the previous Season's last day; see
+        # ``automatic_defense_loss``.
         previous = PreviousRankedDay(True, 0, 0, 0)
     if (
         previous is None
@@ -987,19 +987,40 @@ def _automatic_defense_adjustment(
     ):
         failures.append("automatic_defense_basis_unavailable")
         return None, "unknown"
-    denominator = (
-        previous.observed_defense_count
-        + previous.zero_result_defense_slots
-        + defense_count
+    return automatic_defense_loss(
+        attacks=attack_count,
+        defenses=defense_count,
+        defense_loss=observed_defense_loss,
+        previous_defenses=(
+            previous.observed_defense_count + previous.zero_result_defense_slots
+        ),
+        previous_defense_loss=previous.observed_defense_loss,
+        season_first_day=data.season_first_day,
+    ), "calculated"
+
+
+def automatic_defense_loss(
+    *,
+    attacks: int,
+    defenses: int,
+    defense_loss: int,
+    previous_defenses: int,
+    previous_defense_loss: int,
+    season_first_day: bool,
+) -> int:
+    """The game's automatic defense loss for a day with 1 to 7 used defense
+    slots. Attacks and defenses are used slots, "no opponent, no battle" rows
+    included; losses are observed battle losses, without the previous day's
+    automatic loss."""
+    if season_first_day:
+        # The game averages Day 1's own defenses only: the previous Season's
+        # last day takes no part.
+        previous_defenses = previous_defense_loss = 0
+    average_loss = (previous_defense_loss + defense_loss) // (
+        previous_defenses + defenses
     )
-    if denominator <= 0:
-        failures.append("automatic_defense_basis_unavailable")
-        return None, "unknown"
-    average_loss = (
-        previous.observed_defense_loss + observed_defense_loss
-    ) // denominator
-    missing_defenses = MAX_DAILY_DEFENSES - defense_count
-    if data.season_first_day and attack_count >= defense_count:
+    missing_defenses = MAX_DAILY_DEFENSES - defenses
+    if season_first_day and attacks >= defenses:
         # On a Season's Day 1 the game charges a player with at least as
         # many attacks as defenses for (attacks - defenses) missing defenses,
         # so equal counts lose nothing. Profiles read on 6 October 2026
@@ -1010,8 +1031,8 @@ def _automatic_defense_adjustment(
         # (8 - defenses) in 37 of 38. Recounted with "no opponent, no battle"
         # rows on 1,615 Day 1 results, this still matched 1,597, against
         # 1,442 for (8 - defenses) and 1,566 for (attacks - defenses) alone.
-        missing_defenses = attack_count - defense_count
-    return average_loss * missing_defenses, "calculated"
+        missing_defenses = attacks - defenses
+    return average_loss * missing_defenses
 
 
 def _baseline_available(

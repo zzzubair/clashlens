@@ -15,7 +15,8 @@ from test_reconciliation_postgres import (
     _seed_reset_collection_identity,
 )
 
-from clashlens import battle, ranked_day_inputs, reset_baselines
+from clashlens import battle, first_battle_log, ranked_day_inputs, reset_baselines
+from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
 
 # Live logs keep this row for days: no opponent, no battle.
@@ -184,6 +185,24 @@ def test_no_opponent_rows_of_the_day_count_once_as_used_slots(
             assert evidence["zero_result_attack_slots"] == 1
             assert evidence["zero_result_defense_slots"] == 1
             assert next_day is not None and next_day.zero_result_defense_slots == 1
+
+            season = ranked_day_for(DAY_START).official_season_id
+            requeue = first_battle_log.requeue_zero_result_slots
+            preview = requeue(database, season, queue=False, max_jobs=10)
+            queued = requeue(database, season, queue=True, max_jobs=10)
+            again = requeue(database, season, queue=True, max_jobs=10)
+            with database.pool.connection() as connection:
+                job = connection.execute(
+                    "SELECT input_json, priority FROM python_processing_jobs_worker"
+                    " WHERE input_json ->> 'trigger' = 'zero_result_slots'"
+                ).fetchall()
+            assert (preview["players"], preview["queued"]) == (1, 0)
+            assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
+            assert (again["already_queued"], again["queued"]) == (1, 0)
+            assert len(job) == 1 and job[0][1] == PYTHON_BACKFILL_PRIORITY
+            # Yesterday's row makes the saved day before the oldest to recalculate.
+            assert job[0][0]["ranked_day_start"] == "2026-08-03T05:00:00Z"
+            assert job[0][0]["recalculate_season"] == season
         finally:
             database.close()
 
@@ -281,9 +300,9 @@ def test_republication_rechecks_a_complete_reset_whose_delayed_log_had_only_no_o
 ) -> None:
     monkeypatch.setenv(proof.SWITCH, "true")
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        scenario = proof._scenario(
-            connection_info, archive_server, check_rows=(NO_OPPONENT_ROW,)
-        )
+        # A row from before the two averaged days leaves the automatic loss as it is.
+        older = NO_OPPONENT_ROW | {"battleTimestamp": "20260802T110000.000Z"}
+        scenario = proof._scenario(connection_info, archive_server, check_rows=(older,))
         # Saved before the row stopped counting as a gap.
         with monkeypatch.context() as before:
             before.setattr(battle, "is_no_opponent_row", lambda *_: False)

@@ -33,7 +33,12 @@ from .domain import (
     ranked_day_for,
 )
 from .ranked_day_inputs import Reading
-from .reconciliation import MAX_DAILY_DEFENSES, BattleContribution, CoverageObservation
+from .reconciliation import (
+    MAX_DAILY_DEFENSES,
+    BattleContribution,
+    CoverageObservation,
+    automatic_defense_loss,
+)
 
 PROOF_RULE_VERSION = "reset-settlement-observed-adjustment-v1"
 NEW_PROOFS_SWITCH = "CLASHLENS_ENABLE_NEW_RESET_PROOFS"
@@ -118,6 +123,9 @@ class ProofInputs:
     log_coverage: CoverageObservation | None = None
     # Each battle in the named battle log: (battle ID, lens, report time, trophies).
     log_reports: tuple[tuple[str, str, datetime, int], ...] = ()
+    # Each "no opponent, no battle" row in the named battle log, as
+    # (report time, is an attack): used slots for the automatic loss only.
+    zero_result_slots: frozenset[tuple[datetime, bool]] = frozenset()
     # Every saved own-side report of the ended day and the day before.
     battles: tuple[BattleContribution, ...] = ()
     # Report times of unreadable rows in battle logs saved after the named one.
@@ -265,14 +273,27 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     # day's battles and its positive automatic loss, gives the target; the
     # early reading must sit exactly that loss above it, and the named
     # profile exactly on it.
+    zero_attacks, zero_defenses = ranked_day_inputs.slot_counts(
+        inputs.zero_result_slots, ended_from, ended_until)
+    zero_prior_defenses = ranked_day_inputs.slot_counts(
+        inputs.zero_result_slots, prior_from, ended_from)[1]
     automatic = None
-    if 1 <= len(defenses) < MAX_DAILY_DEFENSES:
-        automatic = (sum(prior_defenses) + sum(defenses)) // (
-            len(prior_defenses) + len(defenses)
-        ) * (MAX_DAILY_DEFENSES - len(defenses))
+    if 1 <= len(defenses) + zero_defenses < MAX_DAILY_DEFENSES:
+        automatic = automatic_defense_loss(
+            attacks=len(attacks) + zero_attacks,
+            defenses=len(defenses) + zero_defenses,
+            defense_loss=sum(defenses),
+            previous_defenses=len(prior_defenses) + zero_prior_defenses,
+            previous_defense_loss=sum(prior_defenses),
+            season_first_day=is_season_boundary(boundary - DAY),
+        )
     proof["automatic_loss_basis"] = {
         "prior_defenses": len(prior_defenses), "prior_defense_loss": sum(prior_defenses),
         "defenses": len(defenses), "defense_loss": sum(defenses), "automatic_loss": automatic,
+        # Only present when the log holds such rows, so other proofs are unchanged.
+        **{name: count for name, count in (
+            ("zero_result_attacks", zero_attacks), ("zero_result_defenses", zero_defenses),
+            ("zero_result_prior_defenses", zero_prior_defenses)) if count},
     }
     root = inputs.root
     if root is None:
@@ -381,6 +402,8 @@ def load_proof_inputs(
         log_coverage=coverage,
         log_reports=ranked_day_inputs.load_log_reports(
             database, connection, log.observation_id, log.parser_version),
+        zero_result_slots=ranked_day_inputs.load_zero_result_slots(
+            connection, (coverage,) if coverage else ()),
         battles=tuple(battle for day in (boundary_at - 2 * DAY, boundary_at - DAY)
                       for battle in ranked_day_inputs.load_contributions(
                           connection, player_id, ranked_day_for(day))),

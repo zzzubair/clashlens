@@ -383,13 +383,12 @@ def load_previous_day(
 
 
 def load_zero_result_slots(
-    connection: Any,
-    ranked_day: RankedDay,
-    coverage: tuple[CoverageObservation, ...],
-) -> tuple[int, int]:
-    """How many "no opponent, no battle" attack and defense rows the day's
-    battle logs hold. None is a battle; the automatic defense loss alone
-    counts them as used slots."""
+    connection: Any, coverage: tuple[CoverageObservation, ...]
+) -> frozenset[tuple[datetime, bool]]:
+    """Each "no opponent, no battle" row these battle logs hold, as (report
+    time, is an attack). A live log keeps the row for days, so each later
+    log repeating it adds nothing. None is a battle; the automatic defense
+    loss alone counts them as used attack and defense slots."""
     parsers = {
         row_id: observation.parser_version
         for observation in coverage
@@ -403,8 +402,7 @@ def load_zero_result_slots(
         """,
         (list(parsers),),
     ).fetchall() if parsers else []
-    start, end = domain.battle_window(ranked_day.start)
-    slots: set[tuple[datetime, bool]] = set()
+    slots = set()
     for row_id, source in rows:
         parser = parsers[int(row_id)]
         if not battle.is_no_opponent_row(source, parser) or not isinstance(
@@ -412,17 +410,20 @@ def load_zero_result_slots(
         ):
             continue
         try:
-            at = battle._parse_battle_timestamp(
+            slots.add((battle._parse_battle_timestamp(
                 battle._battle_timestamp_value(source, parser), parser
-            )
+            ), source["attack"]))
         except battle.BattleLogParseError:
             continue
-        # A live log keeps the row for days; it belongs to the day of its
-        # report time, and each later log repeating it adds no slot.
-        if start <= at < end:
-            slots.add((at, source["attack"]))
-    attacks = sum(1 for _, attack in slots if attack)
-    return attacks, len(slots) - attacks
+    return frozenset(slots)
+
+
+def slot_counts(
+    slots: frozenset[tuple[datetime, bool]], since: datetime, until: datetime
+) -> tuple[int, int]:
+    """The attack and defense slots reported in ``[since, until)``."""
+    attacks = [attack for at, attack in slots if since <= at < until]
+    return sum(attacks), len(attacks) - sum(attacks)
 
 
 def _log_ids(connection: Any, condition: str, params: tuple[Any, ...]) -> list[Any]:
