@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from time import sleep
 from types import SimpleNamespace
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_domain_processing_postgres import _processor
@@ -183,5 +186,129 @@ def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
             discover([blocked_id, left_out])
             assert left_out in queued()
             assert blocked_id not in queued()
+        finally:
+            database.close()
+
+
+def test_discovery_checks_added_at_the_same_moment_are_all_queued(
+    database_url: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            first_id, second_id = [
+                row[0]
+                for row in connection.execute(
+                    "INSERT INTO players (normalized_tag, active, eligibility_state)"
+                    " VALUES ('#Q1', false, 'unknown'), ('#Q2', false, 'unknown')"
+                    " RETURNING id"
+                ).fetchall()
+            ]
+        options = conninfo_to_dict(connection_info).get("options", "")
+        database = Database(
+            make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
+        )
+        claim = SimpleNamespace(work_type="process_observation")
+        try:
+            with database.pool.connection() as first, first.transaction():
+                # The first battle log's transaction is still open.
+                enqueue_discovered_players(first, database, claim, [first_id])
+                with database.pool.connection() as second, second.transaction():
+                    enqueue_discovered_players(second, database, claim, [second_id])
+            with database.pool.connection() as connection:
+                queued = sorted(
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT player_id FROM collector_work WHERE kind = 'discovery_profile'"
+                    )
+                )
+            assert queued == sorted([first_id, second_id])
+        finally:
+            database.close()
+
+
+def test_discovery_of_a_player_another_job_holds_retries_instead_of_skipping(
+    database_url: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "INSERT INTO players (normalized_tag, active, eligibility_state)"
+                " VALUES ('#Q3', false, 'unknown') RETURNING id"
+            ).fetchone()[0]
+        options = conninfo_to_dict(connection_info).get("options", "")
+        database = Database(
+            make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
+        )
+        claim = SimpleNamespace(work_type="process_observation")
+        try:
+            with psycopg.connect(connection_info) as holder, holder.transaction():
+                # Another job is still processing this player's profile.
+                holder.execute("SELECT 1 FROM players WHERE id = %s FOR NO KEY UPDATE", (player_id,))
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    with database.pool.connection() as busy, busy.transaction():
+                        enqueue_discovered_players(busy, database, claim, [player_id])
+            with database.pool.connection() as retry, retry.transaction():
+                enqueue_discovered_players(retry, database, claim, [player_id])
+            with database.pool.connection() as connection:
+                queued = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT player_id FROM collector_work WHERE kind = 'discovery_profile'"
+                    )
+                ]
+            assert queued == [player_id]
+        finally:
+            database.close()
+
+
+def test_two_jobs_that_both_saved_a_new_player_queue_one_check_without_waiting(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _store_pair(connection_info, archive_server)
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "INSERT INTO players (normalized_tag, active, eligibility_state)"
+                " VALUES ('#Q4', false, 'unknown') RETURNING id"
+            ).fetchone()[0]
+            battle_log, ranking = [
+                row[0]
+                for row in connection.execute("SELECT id FROM collector_observations ORDER BY id")
+            ]
+        options = conninfo_to_dict(connection_info).get("options", "")
+        database = Database(
+            make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
+        )
+        claim = SimpleNamespace(work_type="process_observation")
+        sighting = (
+            "INSERT INTO known_player_discoveries"
+            " (player_id, observation_id, source_row_index, source_kind, discovered_at)"
+            " VALUES (%s, %s, 0, %s, clock_timestamp())"
+        )
+        try:
+            with (
+                ThreadPoolExecutor(1) as executor,
+                database.pool.connection() as first,
+                database.pool.connection() as second,
+                second.transaction(),
+            ):
+                with first.transaction():
+                    # Each job's saved sighting holds a key-share lock on the player.
+                    first.execute(sighting, (player_id, battle_log, "battle_opponent"))
+                    second.execute(sighting, (player_id, ranking, "official_ranking"))
+                    enqueue_discovered_players(first, database, claim, [player_id])
+                    queuing = executor.submit(
+                        enqueue_discovered_players, second, database, claim, [player_id]
+                    )
+                    sleep(0.2)
+                queuing.result(timeout=5)
+            with database.pool.connection() as connection:
+                queued = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT player_id FROM collector_work WHERE kind = 'discovery_profile'"
+                    )
+                ]
+            assert queued == [player_id]
         finally:
             database.close()

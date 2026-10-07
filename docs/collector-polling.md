@@ -28,13 +28,16 @@ Production discovery is on: `CLASHLENS_PLAYER_DISCOVERY_ENABLED` defaults to
 player who is not tracked and has not had this week's check gets one check:
 one profile request and one league-history request. Unlike the scheduled weekly
 check, it does not reuse saved league history. At most 500 such checks wait at
-once. A player skipped while the queue is full or busy gets no saved retry;
-they are tried again only when a later changed battle log or ranking names
-them. Legend I gains about 2,000 players a week, so this costs about 570
-requests a day, plus about 4,000 once for the roughly 2,000 Legend I players
-not yet tracked. Each player found
-eligible is then tracked like any other, so revisits slow in proportion to the
-added players while the keys set the pace.
+once, plus one log's or ranking's players for each worker adding checks at
+the same moment; workers adding checks together do not skip each other's
+players. A player whose record another job is updating is waited for up to
+one second; after that the whole log or ranking is processed again later. A
+player skipped while the queue is full gets no saved retry; they are tried
+again only when a later changed battle log or ranking names them. Legend I
+gains about 2,000 players a week, so this costs about 570 requests a day, plus
+about 4,000 once for the roughly 2,000 Legend I players not yet tracked. Each
+player found eligible is then tracked like any other, so revisits slow in
+proportion to the added players while the keys set the pace.
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to
 verification without treating all known tags as live players.
@@ -553,11 +556,13 @@ processed. Nothing reads the pair yet; every published result is unchanged.
 Budget at 13,263 members (October 3, 2026): 26,526 extra requests per Reset.
 Six regular keys at 25 starts per second take at least 177 seconds, but the
 32 slots are the real limit: production's early Reset pass, the same work,
-finished in 7m45s and 10m10s on October 1 and 2. Rankings and discovery due
-after 05:20 wait behind the pass. Each finished check keeps a work row, about
-220 bytes plus three index entries: 3-5 MB a day, about 1.8 GB a year, never
-deleted. A saved profile and log average 23 KB and 74 KB of raw bytes, up to
-1.3 GB a day before identical bytes are stored once.
+finished in 7m45s and 10m10s on October 1 and 2, but the October 6 pass ran
+from 05:20 to 08:18. Discovery and ranking checks go ahead of the pass and of
+the season-end league-history refresh, so a player first seen at 05:30 is
+checked within seconds, not after the pass. Each finished check keeps a work
+row, about 220 bytes plus three index entries: 3-5 MB a day, about 1.8 GB a
+year, never deleted. A saved profile and log average 23 KB and 74 KB of raw
+bytes, up to 1.3 GB a day before identical bytes are stored once.
 
 ## Spool, archive and rate enforcement
 

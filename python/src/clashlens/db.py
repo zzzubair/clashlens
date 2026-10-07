@@ -47,7 +47,8 @@ WORKER_STATEMENT_TIMEOUT_SECONDS = 900
 # Otherwise it keeps its own rows, and any earlier Resets it already took,
 # locked for as long as a slow publication holds that Reset.
 RESET_LOCK_WAIT = "250ms"
-# At most this many profile checks for newly discovered players wait at once.
+# At most this many profile checks for newly discovered players wait at once,
+# plus one log's or ranking's players per worker adding checks at that moment.
 # Legend I gains about 2,000 players a week; a full queue drains in under a
 # minute at the measured 21 discovery checks per second.
 DISCOVERY_QUEUE_CAP = 500
@@ -1407,9 +1408,10 @@ def enqueue_discovered_players(
 
     Players already tracked or already given this week's check are skipped
     before anything else. The remaining ones are queued only while fewer than
-    DISCOVERY_QUEUE_CAP such checks wait. One transaction at a time may add
-    checks; a busy or full queue skips them with no saved retry, so only a
-    later changed battle log or ranking naming the player tries again.
+    DISCOVERY_QUEUE_CAP such checks wait; transactions adding checks at once
+    can each add one log's or ranking's players past it. A full queue skips
+    them with no saved retry. A player another job updates or queues for over
+    a second raises LockNotAvailable, so the whole job rolls back and reruns.
     """
     if not database.player_discovery_enabled or claim.work_type != "process_observation":
         return
@@ -1433,9 +1435,7 @@ def enqueue_discovered_players(
             (sorted(set(player_ids)),),
         )
     ]
-    if not candidates or not connection.execute(
-        "SELECT pg_try_advisory_xact_lock(hashtextextended('discovery-queue', 0))"
-    ).fetchone()[0]:
+    if not candidates:
         return
     waiting = connection.execute(
         """
@@ -1447,6 +1447,11 @@ def enqueue_discovered_players(
     room = DISCOVERY_QUEUE_CAP - int(waiting)
     while room > 0 and candidates:
         batch, candidates = candidates[:room], candidates[room:]
+        with lock_wait(connection, "1s"):
+            connection.execute(
+                "SELECT 1 FROM players WHERE id = ANY(%s::bigint[]) ORDER BY id FOR NO KEY UPDATE",
+                (batch,),
+            )
         room -= connection.execute(
             "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])", (batch,)
         ).fetchone()[0]
