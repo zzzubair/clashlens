@@ -391,6 +391,20 @@ export default function TrackedLeaderboardRoute() {
               </span>
             ) : null}
           </div>
+          {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
+            <nav aria-label="Other days" className="snapshot-pagination">
+              {daily.previousSnapshot ? (
+                <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>
+                  Go to Day {daily.previousSnapshot.dayNumber}
+                </Link>
+              ) : null}
+              {daily.nextSnapshot ? (
+                <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>
+                  Go to Day {daily.nextSnapshot.dayNumber}
+                </Link>
+              ) : null}
+            </nav>
+          ) : null}
           {entries.length === 0 ? (
             <div className="empty-state">
               <h3>No standings available yet</h3>
@@ -522,21 +536,6 @@ export default function TrackedLeaderboardRoute() {
               </nav>
             </>
           )}
-          {daily ? (
-            <nav aria-label="Daily snapshots" className="snapshot-pagination">
-              <span>Saved day snapshots</span>
-              <div>
-                {daily.previousSnapshot ? (
-                  <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>
-                    Older
-                  </Link>
-                ) : null}
-                {daily.nextSnapshot ? (
-                  <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>Newer</Link>
-                ) : null}
-              </div>
-            </nav>
-          ) : null}
         </section>
       ) : (
         <div className="empty-state">
