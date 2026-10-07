@@ -1179,7 +1179,10 @@ and analytics builds are queued at priority 300 instead of 100
 (`PYTHON_RESET_PRIORITY` in [`db.py`](../python/src/clashlens/db.py)). A claim
 adds 10 for each minute live work has waited, while Reset-priority work keeps
 its fixed score, so they go first unless live work has waited 20 minutes,
-however long they have waited themselves. On 2026-10-07 the collector's outage
+however long they have waited themselves. That only holds for live jobs among
+the 32 a claim looks at, picked by when each became due: a retried live job is
+due again from its retry time, so it can still wait behind Reset work longer
+than 20 minutes. On 2026-10-07 the collector's outage
 delayed about 19,000 Reset readings by 35 minutes; while they also earned the
 waiting bonus, no live reading was processed until they were all done, 40
 minutes later, and live pages fell up to 59 minutes behind. Operator batches
