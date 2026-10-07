@@ -86,7 +86,9 @@ def test_full_spool_drains_once_the_archive_returns(
         assert spool.readiness() == (False, "degraded_capacity")
         with pytest.raises(SpoolError, match="degraded_capacity"):
             spool.reserve()
-        collector = SimpleNamespace(database=database, spool=spool)
+        collector = SimpleNamespace(
+            database=database, spool=spool, loop_passes={}, database_waits=set()
+        )
         assert Collector.cleanup_uploaded(collector) == (0, 0)
 
         # The archive comes back and takes a copy of both responses.
