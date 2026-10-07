@@ -790,9 +790,10 @@ def run(config: dict, state_dir: Path, root: Path | None, check=observe) -> int:
             state["resumed_at"] = intent.stat().st_mtime
 
         def send(findings: dict) -> None:
-            hold_recoveries(state, findings, now)
+            taken = time.time()
+            hold_recoveries(state, findings, taken)
             save_state(path, state)
-            deliver(state, findings, now, path, webhook)
+            deliver(state, findings, taken, path, webhook)
 
         findings, errors = check(config, state, now, root, send)
         hold_recoveries(state, findings, now)

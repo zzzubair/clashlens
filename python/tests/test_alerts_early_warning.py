@@ -155,3 +155,21 @@ def test_a_health_failure_starting_during_the_slow_checks_warns_in_the_same_run(
     assert rt.run() == 0
     assert len(warnings(rt)) == 1
     assert "clashlens-python-worker failed its last 2 health checks" in warnings(rt)[0]
+
+
+def test_a_health_recovery_mid_run_is_timed_when_it_was_seen(rt, monkeypatch) -> None:
+    at(rt, 12, 10)
+    rt.health_streaks["clashlens-collector"] = 2
+    assert rt.run() == 0
+    run_command = alerts.command
+
+    def command(args, timeout=15):
+        if "backup-status" in args:
+            rt.health_streaks["clashlens-collector"] = 0
+            at(rt, 12, 13)
+        return run_command(args, timeout)
+
+    monkeypatch.setattr(alerts, "command", command)
+    at(rt, 12, 11)
+    assert rt.run() == 0
+    assert "Clash Lens recovered at 2026-10-08T12:13:00+00:00" in rt.posts[-1]["content"]
