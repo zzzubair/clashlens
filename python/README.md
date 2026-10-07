@@ -10,6 +10,7 @@ private signed API. Runtime boundaries are in
 
 ## Layout
 
+- `src/bot/` — the Discord bot; `python -m bot --help` lists how to run it.
 - `src/clashlens/` — application modules, worker, API, accounts, processing,
   reconciliation, analytics, verification, and HMAC proof.
 - `tests/` — pytest suite, including PostgreSQL-backed tests.
