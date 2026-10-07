@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic, sleep
@@ -39,6 +40,22 @@ _PLAYER_ENDPOINTS = {"profile", "battle_log", "league_history"}
 # A worker can hold a player or its work for minutes; these writes give up and
 # are retried later instead of holding collection behind it.
 _WORKER_LOCK_WAIT = "SET LOCAL lock_timeout = '3s'"
+_SPOOL_DELETE_THREADS = 16
+# Spool bytes still needed. Two single-table reads, no join, so stale
+# statistics leave the planner no join to get wrong. After the 7 October 2026
+# Reset the planner expected 1 kept upload, found 4,287, and rescanned every
+# response-state row for each (286 million rows, about 60 s). That state branch
+# added nothing: a copy is only marked deleted while complete, and every path
+# away from complete clears the mark, so its rows all have no mark already.
+REFERENCED_SPOOL_HASHES_SQL = """
+    SELECT response_hash
+    FROM collector_response_uploads
+    WHERE local_deleted_at IS NULL
+    UNION
+    SELECT response_hash
+    FROM collector_observations
+    WHERE archive_reference IS NULL
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1381,30 +1398,12 @@ class CollectorDatabase:
         return {row[0] for row in rows}
 
     def referenced_spool_hashes(self) -> set[str]:
+        # Spool cleanup pauses new raw responses while this runs; give up
+        # (QueryCanceled) rather than hold them, and the next sweep retries.
         with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT response_hash
-                FROM collector_response_uploads
-                WHERE local_deleted_at IS NULL
-                UNION
-                SELECT response_hash
-                FROM collector_observations
-                WHERE archive_reference IS NULL
-                UNION
-                SELECT state.last_response_hash
-                FROM collector_response_state AS state
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM collector_response_uploads AS upload
-                    WHERE upload.response_hash = state.last_response_hash
-                      AND NOT (
-                          upload.state = 'complete'
-                          AND upload.local_deleted_at IS NOT NULL
-                      )
-                )
-                """
-            ).fetchall()
+            with connection.transaction():
+                connection.execute("SET LOCAL statement_timeout = '10s'")
+                rows = connection.execute(REFERENCED_SPOOL_HASHES_SQL).fetchall()
         return {str(row[0]) for row in rows}
 
     def deletable_hashes(self, *, limit: int = 100) -> list[str]:
@@ -1469,7 +1468,14 @@ class CollectorDatabase:
                     """,
                     (hashes,),
                 ).fetchall()
-                deleted = [str(row[0]) for row in eligible if delete(str(row[0]))]
+                # Each removal flushes its folder before this commit. One at a
+                # time, each waited for its own filesystem commit: about 64
+                # files in 7 s after the 7 October 2026 Reset, behind uploads.
+                # Together they share commits.
+                candidates = [str(row[0]) for row in eligible]
+                with ThreadPoolExecutor(_SPOOL_DELETE_THREADS) as pool:
+                    removed = list(pool.map(delete, candidates))
+                deleted = [h for h, gone in zip(candidates, removed) if gone]
                 connection.execute(
                     "UPDATE collector_response_uploads SET local_deleted_at ="
                     " clock_timestamp(), updated_at = clock_timestamp()"
