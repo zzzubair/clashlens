@@ -27,7 +27,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import domain_repair, first_battle_log, reset_baselines
+from . import boundary, domain_repair, first_battle_log, reset_baselines
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -328,6 +328,10 @@ def add_republish_command(
     # oldest ended day reporting battle_log_overlap_gap; see
     # first_battle_log.requeue_overlap_gap.
     republish_current_season.add_argument("--overlap-gap", choices=("preview", "queue"))
+    # With --boards, preview or queue rebuilds of the Season's Reset boards
+    # still ranking a reading the board now leaves out; see
+    # boundary.queue_board_rebuilds.
+    republish_current_season.add_argument("--boards", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
 
@@ -343,22 +347,27 @@ def run_republish_command(database_url: str, arguments: argparse.Namespace) -> i
     day_1 = getattr(arguments, "day_1", None)
     zero_result_slots = getattr(arguments, "zero_result_slots", None)
     overlap_gap = getattr(arguments, "overlap_gap", None)
+    boards = getattr(arguments, "boards", None)
     modes = [mode for mode in (arguments.campaign, first_logs, day_1, zero_result_slots,
-                               overlap_gap)
+                               overlap_gap, boards)
              if mode is not None]
     if len(modes) > 1:
         raise SystemExit(
-            "--campaign, --first-logs, --day-1, --zero-result-slots and --overlap-gap"
-            " are separate runs"
+            "--campaign, --first-logs, --day-1, --zero-result-slots, --overlap-gap"
+            " and --boards are separate runs"
         )
     if (not modes) != (arguments.season is None):
         raise SystemExit(
-            "--campaign, --first-logs, --day-1, --zero-result-slots or --overlap-gap"
-            " and --season go together"
+            "--campaign, --first-logs, --day-1, --zero-result-slots, --overlap-gap"
+            " or --boards and --season go together"
         )
     database = Database(database_url)
     try:
-        if zero_result_slots is not None:
+        if boards is not None:
+            report = boundary.queue_board_rebuilds(
+                database, arguments.season, queue=boards == "queue"
+            )
+        elif zero_result_slots is not None:
             report = first_battle_log.requeue_zero_result_slots(
                 database, arguments.season, queue=zero_result_slots == "queue",
                 max_jobs=arguments.max_jobs,

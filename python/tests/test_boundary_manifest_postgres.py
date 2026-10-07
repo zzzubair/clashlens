@@ -833,3 +833,186 @@ def _assert_every_case_seeded(
     assert any(
         (9000000 + row["player_id"]) * 2 in row.get("decode_ids", []) for row in rows
     )
+
+
+# Day 2 of the Season that began on 5 October 2026, as Astra's report of
+# 7 October found it: two players whose profiles went "not found" on 5 October
+# ranked first and second on their last trophies, above ZOOS Yatta.
+DAY_2_RESET = datetime(2026, 10, 7, 5, tzinfo=UTC)
+_ARCHIVE = (None, None, None, SimpleNamespace(objects={}))
+
+
+def _october(day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=UTC)
+
+
+def _seed_board(connection_info: str, readings: list[tuple[str, int, datetime]]) -> int:
+    """One Day 2 generation whose members each have one accepted profile."""
+    season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+    with psycopg.connect(connection_info) as connection:
+        for index, (tag, trophies, observed_at) in enumerate(readings, start=1):
+            connection.execute(
+                "INSERT INTO players (id, normalized_tag, active)"
+                " OVERRIDING SYSTEM VALUE VALUES (%s, %s, true)",
+                (index, tag),
+            )
+        sweep = connection.execute(
+            """
+            INSERT INTO collector_reset_sweeps
+                (boundary_at, member_ids, membership_captured_at)
+            VALUES (%s, %s, clock_timestamp())
+            RETURNING id
+            """,
+            (DAY_2_RESET, list(range(1, len(readings) + 1))),
+        ).fetchone()[0]
+        generation_id, _ = boundary._create_boundary_generation(
+            None,
+            connection,
+            boundary_at=DAY_2_RESET,
+            sweep_id=sweep,
+            player_ids=list(range(1, len(readings) + 1)),
+            generation=1,
+            supersedes_id=None,
+        )
+        # The profiles' own responses are not needed.
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for index, (tag, trophies, observed_at) in enumerate(readings, start=1):
+            connection.execute(
+                """
+                INSERT INTO player_profile_versions (
+                    player_id, observation_id, normalized_tag, endpoint_version,
+                    schema_version, parser_version, observed_at,
+                    source_http_status, name, trophies, league_tier_id,
+                    league_tier_name, eligibility_state, profile_json,
+                    source_contract_state, current_league_season_id
+                ) VALUES (%s, %s, %s, 'v1', 'v1', 'parser', %s, 200, %s, %s,
+                          105000034, 'Legend League', 'eligible', %s,
+                          'accepted', %s)
+                """,
+                (
+                    index, 900000 + index, tag, observed_at, tag, trophies,
+                    json.dumps({"tag": tag, "trophies": trophies}), season,
+                ),
+            )
+    return generation_id
+
+
+def test_board_leaves_out_missing_players_and_readings_from_before_the_day(
+    database_url: str,
+) -> None:
+    readings = [
+        ("#PJ22PJPQJ", 5280, _october(5, 7, 51)),  # KURDiSTAN, 404 at 08:35
+        ("#8LLLG2V99", 5277, _october(6, 6, 19)),  # Eason, 404 later that day
+        ("#PPVYC88R", 5274, _october(6, 22, 31)),  # ZOOS Yatta
+        ("#RECOVERED", 5250, _october(6, 6)),  # 404, then a success
+        ("#AFTERRESET", 5240, _october(6, 8)),  # 404 only after the Reset
+        ("#SERVERERROR", 5230, _october(6, 8)),  # a timeout says nothing
+        ("#BEFOREDAY", 5290, _october(6, 4)),  # no reading on Day 2
+    ]
+    responses = [
+        ("#PJ22PJPQJ", 404, _october(5, 8, 35)),
+        ("#8LLLG2V99", 404, _october(6, 8, 6)),
+        ("#RECOVERED", 404, _october(6, 7)),
+        ("#RECOVERED", 200, _october(6, 9)),
+        ("#AFTERRESET", 404, _october(7, 6)),
+        ("#SERVERERROR", 503, _october(6, 10)),
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        for tag, status, at in responses:
+            store_observation(
+                connection_info, _ARCHIVE, occurrence_key=f"{tag}-{at.isoformat()}",
+                endpoint="profile", body=f"{status} {tag}".encode(),
+                observed_at=at, normalized_tag=tag, http_status=status,
+            )
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                manifest_id, _ = boundary._freeze_boundary_manifest(
+                    database, connection, generation_id=generation_id,
+                    artifact_kind="snapshot",
+                )
+                rows = connection.execute(
+                    """
+                    SELECT input_identity->'profile_snapshot'->>'tag',
+                           input_identity->>'snapshot_quality'
+                    FROM boundary_publication_manifest_rows
+                    WHERE manifest_id = %s
+                    ORDER BY (input_identity->'profile_snapshot'->>'trophies')::int DESC
+                    """,
+                    (manifest_id,),
+                ).fetchall()
+        finally:
+            database.close()
+    assert [(text(tag), text(quality)) for tag, quality in rows] == [
+        ("#BEFOREDAY", "profile_before_day"),
+        ("#PJ22PJPQJ", "profile_not_found"),
+        ("#8LLLG2V99", "profile_not_found"),
+        ("#PPVYC88R", "eligible"),
+        ("#RECOVERED", "eligible"),
+        ("#AFTERRESET", "eligible"),
+        ("#SERVERERROR", "eligible"),
+    ]
+    # The board ranks only eligible rows, by trophies, so Yatta is first.
+
+
+def test_board_rebuild_queues_one_correction_per_board_still_ranking_a_missing_player(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(
+            connection_info,
+            [
+                ("#8LLLG2V99", 5277, _october(6, 6, 19)),
+                ("#PPVYC88R", 5274, _october(6, 22, 31)),
+            ],
+        )
+        database = Database(connection_info)
+        try:
+            # Frozen before its "not found" response was saved, as boards
+            # built before this rule were.
+            with database.pool.connection() as connection:
+                boundary._freeze_boundary_manifest(
+                    database, connection, generation_id=generation_id,
+                    artifact_kind="snapshot",
+                )
+            store_observation(
+                connection_info, _ARCHIVE, occurrence_key="eason-404",
+                endpoint="profile", body=b"404", observed_at=_october(6, 8, 6),
+                normalized_tag="#8LLLG2V99", http_status=404,
+            )
+            season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+            board = {
+                "boundary_at": DAY_2_RESET.isoformat(),
+                "generation": 1,
+                "profile_not_found": 1,
+                "profile_before_day": 0,
+            }
+            reports = [
+                boundary.queue_board_rebuilds(database, season, queue=queue)
+                for queue in (False, True, True)
+            ]
+            assert [report["boards"] for report in reports] == [
+                [{**board, "correction": "not_queued"}],
+                [{**board, "correction": "queued"}],
+                [{**board, "correction": "already_queued"}],
+            ]
+            # The Season before is never read.
+            earlier = str(int(season) - 28 * 86400)
+            assert boundary.queue_board_rebuilds(database, earlier, queue=True)[
+                "boards"
+            ] == []
+            with database.pool.connection() as connection:
+                corrections = connection.execute(
+                    """
+                    SELECT boundary_at, source_generation_id, affected_artifacts,
+                           pending_inputs, state
+                    FROM boundary_publication_corrections
+                    """
+                ).fetchall()
+        finally:
+            database.close()
+    assert [
+        (row[0], row[1], sorted(text(value) for value in row[2]), row[3], text(row[4]))
+        for row in corrections
+    ] == [(DAY_2_RESET, generation_id, ["army", "snapshot"], [], "queued")]
