@@ -125,6 +125,9 @@ class ReconciliationInput:
     start_baseline_complete: bool | None = None
     end_baseline_complete: bool | None = None
     player_eligible: bool = True
+    # Saved profiles prove the player had not yet signed up for the Season
+    # this whole day (see reconciliation_db._known_not_enrolled).
+    not_enrolled: bool = False
     perspective_disagreement: bool = False
     malformed_evidence: bool = False
     unclassified_evidence: bool = False
@@ -297,6 +300,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         failures.append("season_anchor_conflict")
     if not data.player_eligible:
         failures.append("player_not_eligible")
+    if data.not_enrolled and not data.contributions:
+        failures.append("not_enrolled")
 
     final_trophies: int | None = None
     net_trophy_change: int | None = None
@@ -1012,6 +1017,8 @@ def _input_evidence(
         "boundary_kind": data.boundary_kind,
         "season_anchor_valid": data.season_anchor_valid,
         "player_eligible": data.player_eligible,
+        # Only present when true, so every other day keeps its hash.
+        **({"not_enrolled": True} if data.not_enrolled else {}),
         "perspective_disagreement": data.perspective_disagreement,
         "malformed_evidence": data.malformed_evidence,
         "unclassified_evidence": data.unclassified_evidence,

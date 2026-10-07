@@ -208,6 +208,7 @@ A domain change is complete only when every affected source observation, derived
 - Preserve successful observations when a paired endpoint request fails. Mark the collection attempt incomplete until the missing evidence is collected.
 - Start tracking a valid tag when Clash Lens first confirms it for active tracking.
 - Reconstruct all retained timestamped Legend I events available at first observation. When a player's first saved battle log was saved on Day 1, or holds their battles from an earlier day of the Season it was saved in, recalculate that day and every later saved day of the Season, again whenever an older battle log of theirs is processed after newer ones. A Day 1 recalculation waits until both that log and the player's accepted Legend I profile naming the Season are saved, whichever comes last.
+- Mark a day `not_enrolled` (shown as "Not enrolled") only when it is proven: the player had no battle that day, a saved Legend I profile observed after the day ended still showed Season ID 0 (not signed up), and a later saved profile in the same Season shows them signed up for it. When that first signed-up profile arrives after a Season ID 0 profile of the Season, recalculate the Season's saved days. A player who never signs up, or whose earlier days have no such profile, keeps those days as they were.
 - Mark history before the first reliable observation as partial or unavailable. Do not invent missing history.
 
 ### Battle identity and perspectives

@@ -186,7 +186,9 @@ def queue_earlier_days(
 def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> None:
     """When a player's first accepted Legend I profile naming a Season is
     saved after their first battle log of that Season, recalculate from Day 1
-    as ``backfill`` would, now that the Season rule can start it."""
+    as ``backfill`` would, now that the Season rule can start it. After an
+    earlier profile this Season showed no sign-up, recalculate the Season's
+    saved days in any case."""
     row = connection.execute(
         """
         SELECT profile.current_league_season_id
@@ -206,6 +208,26 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         """,
         (profile_version_id,),
     ).fetchone()
+    if row is not None and str(row[0]).isdigit() and int(row[0]) > 0:
+        # A late sign-up: recalculate the Season's saved days so the ones
+        # before it can be shown as not enrolled.
+        season_start = datetime.fromtimestamp(int(row[0]), UTC)
+        if connection.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM player_profile_versions AS waiting
+                JOIN player_profile_effects AS seen ON seen.profile_version_id = waiting.id
+                WHERE waiting.player_id = %s AND waiting.league_tier_id = 105000036
+                  AND waiting.current_league_season_id = '0' AND seen.observed_at >= %s
+            )
+            """,
+            (player_id, season_start),
+        ).fetchone()[0]:
+            _queue(
+                connection, player_id, season_start, None,
+                key=f"reconcile:late-enrollment:{player_id}:{int(row[0])}",
+                trigger="late_enrollment",
+            )
     first = _first_log(connection, player_id)
     if row is None or first is None:
         return

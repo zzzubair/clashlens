@@ -88,6 +88,13 @@ const BATTLE_DOUBT_CODES = new Set([
 // recorded (all 8 of each) has nothing missing from its number. Python marks
 // this for recent days; saved Season entries carry only their counts and codes.
 export function presentDay(day: DayEvidence, isCurrentDay: boolean) {
+  // Saved profiles prove the player had not signed up for the Season yet.
+  if (!isCurrentDay && day.codes.includes("not_enrolled"))
+    return {
+      status: "Not enrolled",
+      reasons: [REASON_TEXT.not_enrolled],
+      battleNet: null,
+    };
   const battlesComplete =
     day.battlesComplete ??
     (day.attacks === 8 &&
@@ -188,6 +195,7 @@ const REASON_TEXT: Record<string, string> = {
     "The automatic defense loss at Reset could not be calculated.",
   season_anchor_conflict: "The Season start date could not be confirmed.",
   player_not_eligible: "The player was not in Legend I for all of this day.",
+  not_enrolled: "The player had not signed up for this Season yet.",
   shield_sequence_longer_than_two_days:
     "A shield period was longer than expected and could not be explained.",
   malformed_evidence: "Some saved evidence for this day could not be read.",

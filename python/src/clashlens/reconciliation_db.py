@@ -114,6 +114,45 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             )
 
 
+def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> bool:
+    """Whether a Legend I profile saved after the day ended still showed no
+    Season, and a later one in the same Season showed the player signed up.
+    A player cannot leave a Season once signed up, so neither answer alone is
+    enough: the first proves no sign-up yet, the second that this Season is
+    the one they joined."""
+    return bool(
+        connection.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM player_profile_versions AS waiting
+                JOIN player_profile_effects AS waiting_seen
+                  ON waiting_seen.profile_version_id = waiting.id
+                JOIN player_profile_versions AS joined
+                  ON joined.player_id = waiting.player_id
+                JOIN player_profile_effects AS joined_seen
+                  ON joined_seen.profile_version_id = joined.id
+                WHERE waiting.player_id = %(player)s
+                  AND waiting.league_tier_id = 105000036
+                  AND waiting.current_league_season_id = '0'
+                  AND waiting_seen.observed_at >= %(day_end)s
+                  AND joined.current_league_season_id = %(season)s
+                  AND joined.eligibility_state = 'eligible'
+                  AND joined.source_contract_state = 'accepted'
+                  AND joined_seen.observed_at > waiting_seen.observed_at
+                  AND joined_seen.observed_at < %(season_end)s
+            )
+            """,
+            {
+                "player": player_id,
+                "day_end": ranked_day.end,
+                "season": ranked_day.official_season_id,
+                "season_end": ranked_day.season_end,
+            },
+        ).fetchone()[0]
+    )
+
+
 def recalculate_ranked_day(
     database: Database,
     connection: Any,
@@ -317,6 +356,8 @@ def recalculate_ranked_day(
                 else False
             ),
             player_eligible=player_eligible,
+            not_enrolled=not contributions
+            and _known_not_enrolled(connection, player_id, ranked_day),
             perspective_disagreement=perspective_disagreement,
             malformed_evidence=malformed_evidence,
             unclassified_evidence=unclassified_evidence,
