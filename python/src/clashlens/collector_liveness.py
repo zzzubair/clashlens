@@ -4,10 +4,10 @@ Podman checks ``/livez`` every 30 s and kills the collector after six failures
 in a row. On 7 Oct 2026 that check was ``/readyz``, which waits for a database
 connection, so a slow database got a working collector killed 13 times. Each
 collector loop now records the time every time round, and ``/livez`` fails
-only when one of them has not come round for STUCK_SECONDS, or on a state only
-a restart clears. A slow database slows the loops without making them look
-stuck. ``/livez`` reads only the collector's memory: no lock, thread, file or
-database connection. ``/readyz`` still reports the database, spool capacity
+only when one of them has not come round for STUCK_SECONDS while no database
+call is running, or on a state only a restart clears. A slow database slows the
+loops without making them look stuck. ``/livez`` reads only the collector's
+memory: no lock, thread, file or database connection. ``/readyz`` still reports the database, spool capacity
 and keys, for people to read.
 """
 
@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,6 +31,16 @@ def mark(collector: Collector, loop: str) -> None:
     collector.loop_passes[loop] = time.monotonic()
 
 
+@contextmanager
+def database_wait(collector: Collector) -> Iterator[None]:
+    token = object()
+    collector.database_waits.add(token)
+    try:
+        yield
+    finally:
+        collector.database_waits.discard(token)
+
+
 def livez(collector: Collector) -> tuple[int, str, bytes]:
     passes = collector.loop_passes
     oldest = min(passes.get(name, passes["start"]) for name in LOOPS)
@@ -36,7 +48,7 @@ def livez(collector: Collector) -> tuple[int, str, bytes]:
         state = "handoff_recovery_required"
     elif collector._spool_io_failed:
         state = "spool_io_failure"
-    elif time.monotonic() - oldest >= STUCK_SECONDS:
+    elif time.monotonic() - oldest >= STUCK_SECONDS and not collector.database_waits:
         state = "stuck"
     elif not all(name in passes for name in LOOPS):
         # Startup recovery still running; HealthStartPeriod ignores this.

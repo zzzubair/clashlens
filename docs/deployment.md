@@ -808,10 +808,12 @@ Podman checks each container every 30 seconds and kills it after six failed
 checks in a row, about three minutes. The collector's check is `/livez` on
 port 8081. It fails only when the collector needs a restart: one of its three
 main loops (player checks, queued requests, uploads and cleanup) has not come
-round for 20 minutes, its spool or a saved-response handoff failed, or every
-regular or interactive key is quarantined. It never waits on the database, a
-spool lock or a thread, so a slow database slows collection without getting the
-collector killed; on 7 Oct 2026 it was killed 13 times for that. The port opens
+round for 20 minutes and no database call is running, its spool or a
+saved-response handoff failed, or every regular or interactive key is
+quarantined. It never waits on the database, a spool lock or a thread, and time
+spent in a database call never counts as stuck, so a slow database slows
+collection without getting the collector killed; on 7 Oct 2026 it was killed
+13 times for that. The port opens
 before startup recovery, which answers `starting`, and failures in the first
 five minutes are ignored; the five-minute start limit still applies. `/readyz`
 still reports the database, spool capacity and keys for a person to read.

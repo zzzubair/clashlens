@@ -4,12 +4,14 @@ import asyncio
 import socket
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from psycopg_pool import PoolTimeout
 from test_collector import _Client, _collector, _Spool, _Store
 
+from clashlens import collector_liveness
 from clashlens.collector_liveness import LOOPS, STUCK_SECONDS
 
 LIVE = (200, "text/plain", b"live\n")
@@ -47,6 +49,38 @@ def test_a_loop_that_stops_coming_round_fails_after_twenty_minutes(loop) -> None
         "text/plain",
         b"stuck\n",
     )
+
+
+def test_slow_cleanup_batches_do_not_fail_the_container_check(monkeypatch) -> None:
+    # 1,024 kept copies in 16 batches of 90 s each keep the uploads loop from
+    # coming round for 24 minutes while the database is slow.
+    collector = _running_collector()
+    now = [time.monotonic()]
+    answers: list[bytes] = []
+
+    def advance(seconds: float) -> None:
+        now[0] += seconds
+        collector.loop_passes.update(regular=now[0], intents=now[0])
+        answers.append(asyncio.run(collector.health_response("/livez"))[2])
+
+    def slow_delete(digests: list[str], _delete: object) -> int:
+        advance(90.0)
+        return len(digests)
+
+    monkeypatch.setattr(
+        collector_liveness, "time", SimpleNamespace(monotonic=lambda: now[0])
+    )
+    monkeypatch.setattr("clashlens.collector.time", SimpleNamespace(sleep=advance))
+    collector.database.deletable = [f"{index:064x}" for index in range(1024)]
+    collector.database.delete_spool_if_deletable = slow_delete
+
+    assert collector.cleanup_uploaded() == (1024, 1024)
+    assert now[0] - collector.loop_passes["start"] > STUCK_SECONDS
+    assert len(answers) == 31
+    assert set(answers) == {b"live\n"}
+
+    advance(STUCK_SECONDS)
+    assert answers[-1] == b"stuck\n"
 
 
 def test_startup_that_never_finishes_fails_after_twenty_minutes() -> None:

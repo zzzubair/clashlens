@@ -140,14 +140,17 @@ class Collector:
         self._metrics_lock = asyncio.Lock()
         self._metrics_refresh_after = 0.0
         self._database_metrics: dict[str, int | float] = {}
-        # When each main loop last came round, for the container health check.
+        # When each main loop last came round, and database calls running,
+        # for the container health check.
         self.loop_passes: dict[str, float] = {}
+        self.database_waits: set[object] = set()
         collector_liveness.mark(self, "start")
 
     async def _database_call(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         for attempt in range(3):
             try:
-                return await asyncio.to_thread(operation, *args, **kwargs)
+                with collector_liveness.database_wait(self):
+                    return await asyncio.to_thread(operation, *args, **kwargs)
             except psycopg.errors.LockNotAvailable:
                 raise
             except (psycopg.Error, PoolTimeout):
@@ -896,13 +899,16 @@ class Collector:
         )
 
     def cleanup_uploaded(self, *, limit: int = _CLEANUP_LOOKUP_SIZE) -> tuple[int, int]:
-        candidates = self.database.deletable_hashes(limit=limit)
+        with collector_liveness.database_wait(self):
+            candidates = self.database.deletable_hashes(limit=limit)
         deleted = 0
         for index, turn in enumerate(batched(candidates, _CLEANUP_BATCH_SIZE)):
             if index:
+                collector_liveness.mark(self, "uploads")
                 time.sleep(0.1)
             with self.spool.delete_unreferenced_batch() as delete:
-                deleted += self.database.delete_spool_if_deletable(list(turn), delete)
+                with collector_liveness.database_wait(self):
+                    deleted += self.database.delete_spool_if_deletable(list(turn), delete)
         return deleted, len(candidates)
 
     async def run(
