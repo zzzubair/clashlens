@@ -104,13 +104,13 @@ def _seed_published_boards(connection_info: str) -> None:
         connection.execute("ANALYZE")
 
 
-def _manifest_rows_read(plan: dict) -> int:
+def _rows_read(plan: dict, relation: str) -> int:
     read = 0
-    if plan.get("Relation Name") == "boundary_publication_manifest_rows":
+    if plan.get("Relation Name") == relation:
         per_loop = plan["Actual Rows"] + plan.get("Rows Removed by Filter", 0)
         read += round(per_loop * plan["Actual Loops"])
     for child in plan.get("Plans", []):
-        read += _manifest_rows_read(child)
+        read += _rows_read(child, relation)
     return read
 
 
@@ -151,5 +151,7 @@ def test_daily_board_lookup_reads_one_input_row_per_board(
     assert frozen is not None
     assert frozen["boundary_at"] == FIRST_END.isoformat()
     assert frozen["season_day_number"] == 1
-    # Each published board's Legend day lookup should read one input row.
-    assert _manifest_rows_read(plan[0]["Plan"]) <= BOARDS, plan
+    # Each published board's Legend day lookup should read one input row and
+    # one ranked day.
+    for relation in ("boundary_publication_manifest_rows", "ranked_day_versions"):
+        assert _rows_read(plan[0]["Plan"], relation) <= BOARDS, (relation, plan)
