@@ -300,7 +300,7 @@ def card_line(card: Mapping[str, Any], *, main: bool = False) -> str:
 
 def choice_for(card: Mapping[str, Any]) -> Choice:
     """A dropdown or autocomplete entry: "Name #TAG · 5,842"."""
-    label = f"{' '.join((card['name'] or 'Unnamed').split())} {card['tag']}"
+    label = f"{card['name'] or 'Unnamed'} {card['tag']}"
     if card.get("trophies") is not None:
         label += f" · {number(card['trophies'])}"
     return Choice(label[:_MAX_CHOICE_LABEL], card["tag"])
@@ -631,7 +631,7 @@ def groups_list(
         updated=now,
         links=(Link("Open on Clash Lens", site.url("/account/groups")),),
         choices=tuple(
-            Choice(" ".join(group["name"].split())[:_MAX_CHOICE_LABEL], group["group_id"])
+            Choice(group["name"][:_MAX_CHOICE_LABEL], group["group_id"])
             for group in groups[:MAX_CHOICES]
         ),
         pick=f"{GROUP_WORD} {days}",

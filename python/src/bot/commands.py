@@ -145,7 +145,7 @@ class Commands:
         return self._one_moment(lambda now: self._player(value, now))
 
     def _player(self, value: str, now: datetime) -> Reply:
-        text = " ".join(value.split())
+        text = value.strip()
         tag = tag_text(text)
         is_tag = _TAG.fullmatch(tag) is not None
         if text.startswith("#") or not text:
@@ -302,19 +302,19 @@ class Commands:
         if account is None:
             return []
         return [
-            replies.Choice(" ".join(item["name"].split())[:100], item["group_id"])
+            replies.Choice(item["name"][:100], item["group_id"])
             for item in self.store.groups(account, self.now())
         ]
 
     def player_choices(self, discord_id: str, current: str) -> list[replies.Choice]:
         """Autocomplete for /player: the person's own players and saved
         players first, then known players whose name matches what is typed;
-        a listed player whose tag is exactly what is typed comes first."""
+        a known player whose tag is exactly what is typed comes first."""
         account = self.store.account(discord_id)
         if account is None:
             return []
         now = self.now()
-        text = " ".join(current.split())
+        text = current.strip()
         choices = [replies.choice_for(card) for card in self.store.players(account, now)]
         choices += [
             replies.choice_for({**item, "trophies": None}) for item in self.store.saved(account)
@@ -322,6 +322,10 @@ class Commands:
         if text:
             choices += [replies.choice_for(item) for item in self.store.search(text, now)]
         tag = tag_text(text)
+        page = self.store.player_page(tag, now) if text and _TAG.fullmatch(tag) else None
+        if page is not None:
+            trophies = None if page["season_reset_pending"] else page["trophies"]
+            choices.insert(0, replies.choice_for({**page, "trophies": trophies}))
         choices.sort(key=lambda choice: choice.value != tag)
         wanted = text.casefold()
         unique: dict[str, replies.Choice] = {}

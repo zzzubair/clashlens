@@ -100,6 +100,21 @@ def test_player_finds_any_tracked_player_by_tag_or_name(store) -> None:
     assert by_name["title"] == "Theirs #8QQ · Lens Clan"
 
 
+def test_player_by_name_keeps_the_spaces_typed(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    store.pages["#8QQ"] = page("#8QQ", "Dark King", [])
+    store.pages["#9RR"] = page("#9RR", "Dark  King", [])
+    store.known = [
+        {"tag": "#8QQ", "name": "Dark King", "trophies": 5900},
+        {"tag": "#9RR", "name": "Dark  King", "trophies": 5800},
+    ]
+    message = run_command(store, "player", FakeInteraction(), player=" Dark  King ", share=False)
+    assert "#9RR" in message["title"]
+    assert autocomplete(store, "any_player_choices", "dark  k") == [
+        ("Dark  King #9RR · 5,800", "#9RR")
+    ]
+
+
 def test_player_explains_bad_untracked_and_unknown_players(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842)])
     bad = run_command(store, "player", FakeInteraction(), player="#AB!", share=False)
@@ -144,6 +159,13 @@ def test_player_autocomplete_offers_own_and_saved_players_then_name_matches(stor
         ("Drifter #9RR · 6,000", "#9RR"),
     ]
     assert autocomplete(store, "any_player_choices", "#9rr") == []
+    store.pages["#9RR"] = page("#9RR", "Drifter", [])
+    assert autocomplete(store, "any_player_choices", "9rr") == [("Drifter #9RR · 5,842", "#9RR")]
+    assert autocomplete(store, "any_player_choices", "#9RR ") == [("Drifter #9RR · 5,842", "#9RR")]
+    assert autocomplete(store, "any_player_choices", "drif") == [
+        ("Drift #2PP · 5,842", "#2PP"),
+        ("Drifter #9RR · 6,000", "#9RR"),
+    ]
     store.known.append({"tag": "#0UU", "name": "Lucy", "trophies": 5500})
     assert autocomplete(store, "any_player_choices", "lucy") == [("Lucy #0UU · 5,500", "#0UU")]
     assert autocomplete(store, "any_player_choices", "l") == [("Lucy #0UU · 5,500", "#0UU")]
