@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+import pytest
 from domain_test_support import as_api_role, domain_database
 from test_api_db_public_ops import NOW, seed_profile
 
@@ -162,6 +164,39 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
             assert (page["tag"], page["state"], page["reason"], page["rank"]) == (
                 "#8QQ", card["state"], card["reason"], card["rank"]
             )
+        finally:
+            bot.close()
+            owner.close()
+
+
+def test_a_main_saved_during_a_transfer_is_not_kept(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            seed_profile(owner, "#8QQ", 5100)
+            mine = _account(owner, "discord", DISCORD_ID, "drift")
+            theirs = _account(owner, "google", "google-subject", "other")
+            _verify(owner, mine, "#8QQ")
+            store = Store(bot)
+            account = store.account(DISCORD_ID)
+            assert account is not None
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with owner.pool.connection() as connection:
+                    with connection.transaction():
+                        connection.execute(
+                            "UPDATE verified_player_links SET account_id = %s"
+                            " WHERE player_id = (SELECT id FROM players"
+                            " WHERE normalized_tag = '#8QQ')",
+                            (theirs,),
+                        )
+                        saving = pool.submit(store.set_main, account, "#8QQ")
+                        # The save waits for the transfer instead of reading the old owner.
+                        with pytest.raises(TimeoutError):
+                            saving.result(timeout=1)
+                assert saving.result(timeout=10) is False
+            _verify(owner, mine, "#8QQ")
+            assert store.main_tag(account) is None
         finally:
             bot.close()
             owner.close()

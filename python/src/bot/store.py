@@ -143,21 +143,29 @@ class Store:
         """Save `tag` as the main; False when it is not this account's player."""
         with self.database.pool.connection() as connection:
             with connection.transaction():
-                row = connection.execute(
+                link = connection.execute(
                     """
-                    INSERT INTO discord_bot_main_players (account_id, player_id)
-                    SELECT link.account_id, link.player_id
+                    SELECT link.player_id, link.account_id
                     FROM verified_player_links AS link
                     JOIN players AS player ON player.id = link.player_id
-                    WHERE link.account_id = %s AND player.normalized_tag = %s
+                    WHERE player.normalized_tag = %s
+                    FOR SHARE OF link
+                    """,
+                    (tag,),
+                ).fetchone()
+                if link is None or int(link[1]) != account.internal_id:
+                    return False
+                connection.execute(
+                    """
+                    INSERT INTO discord_bot_main_players (account_id, player_id)
+                    VALUES (%s, %s)
                     ON CONFLICT (account_id) DO UPDATE
                         SET player_id = EXCLUDED.player_id,
                             updated_at = clock_timestamp()
-                    RETURNING account_id
                     """,
-                    (account.internal_id, tag),
-                ).fetchone()
-        return row is not None
+                    (account.internal_id, link[0]),
+                )
+        return True
 
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None:
         """The website's player page with the player's lookup state, reason
