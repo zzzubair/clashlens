@@ -23,12 +23,19 @@ def _workflow() -> dict:
     return parsed
 
 
-def _expand(text: str, **github: str) -> str:
+def _expand(text: str, needs: dict[str, str] | None = None, **github: str) -> str:
     """Expand GitHub ${{ }} expressions using only the operators ci.yml uses."""
 
     def value(match: re.Match) -> str:
         python = match[1].replace("&&", " and ").replace("||", " or ").strip()
-        names = {"always": lambda: True, "github": SimpleNamespace(**github)}
+        python = re.sub(r"\bneeds\.([\w-]+)", r"needs['\1']", python)
+        names = {
+            "always": lambda: True,
+            "github": SimpleNamespace(**github),
+            "needs": {
+                job: SimpleNamespace(result=r) for job, r in (needs or {}).items()
+            },
+        }
         result = eval(python, {"__builtins__": {}, **names})
         return str(result).lower() if isinstance(result, bool) else str(result)
 
@@ -233,33 +240,17 @@ def test_one_required_check_rejects_any_failed_cancelled_or_missing_job(
     assert sorted(required["needs"]) == sorted(set(jobs) - {"required"})
     assert [name for name, job in jobs.items() if "needs" in job] == ["required"]
     step = required["steps"][0]
-    names = {
-        "PYTHON": "python-tests",
-        "WEBSITE": "website-tests",
-        "CONTAINERS": "containers",
-        "PACKAGED": "packaged-python-tests",
-        "RUNTIME": "container-runtime",
-    }
-    assert step["env"] == {
-        "EVENT": "${{ github.event_name }}",
-        **{key: f"${{{{ needs.{job}.result }}}}" for key, job in names.items()},
-    }
 
     def expected(job):
         return "success" if _runs(jobs[job].get("if", "always()"), event) else "skipped"
 
-    results = {job: expected(job) for job in names.values()}
+    results = {job: expected(job) for job in required["needs"]}
     results[needed] = result
-    completed = _run_step(
-        {
-            **step,
-            "env": {
-                "EVENT": event,
-                **{key: results[job] for key, job in names.items()},
-            },
-        },
-        command_workspace,
-    )
+    env = {
+        key: _expand(text, needs=results, event_name=event)
+        for key, text in step["env"].items()
+    }
+    completed = _run_step({**step, "env": env}, command_workspace)
     assert (completed.returncode == 0) == (result == expected(needed))
 
 
