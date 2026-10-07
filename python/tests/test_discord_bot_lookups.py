@@ -252,6 +252,8 @@ def test_group_lists_the_persons_groups_and_compares_one(store) -> None:
             member("#8QQ", "Friend", 5900, net=None),
             member("#2PP", "Drift", 5842, you=True),
             member("#0UU", "New", 5000, net=100, counted_days=2),
+            member("#3YY", "Left", None, status="not_in_legend", net=-40),
+            member("#7LL", "Checking", None, net=None),
             member("#9RR", "Not in it", 6500, in_group=False),
         ]
     )
@@ -269,6 +271,8 @@ def test_group_lists_the_persons_groups_and_compares_one(store) -> None:
             "**New** #0UU · 5,000 🏆 · ⚔ 4/8 · 🛡 3/8 · net +20 so far"
             " · 14 days: +100 (2 of 14 days counted)"
         ),
+        "**Left** #3YY · Not in Legend · 14 days: −40",
+        "**Checking** #7LL · Being checked · 14 days: pending",
     ]
     assert "group 14" in store.reads
     by_name = run_command(
@@ -384,7 +388,7 @@ def test_season_totals_the_seasons_recorded_battles(store) -> None:
         RESET,
     ]
     assert links(message) == {
-        "Season on Clash Lens": "https://clashlens.test/players/%232PP?season=1786000000"
+        "Season on Clash Lens": "https://clashlens.test/players/%232PP"
     }
 
 

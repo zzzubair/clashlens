@@ -647,17 +647,18 @@ def _member_line(player: Mapping[str, Any], days: int) -> str:
         window = f"{signed(player['net'])} ({player['counted_days']} of {days} days counted)"
     else:
         window = signed(player["net"])
-    if player["status"] != "tracking":
-        return f"{head} · {_STATE_WORDS.get(player['status'], 'Being checked')}"
-    if player["season_reset_pending"]:
-        return f"{head} · {WAITING_FOR_RESET} · {days} days: {window}"
-    if player["trophies"] is None:
-        return f"{head} · Being checked"
-    parts = [head, f"{number(player['trophies'])} 🏆"]
+    parts = [head]
     today = player["today"]
-    if today is None:
-        parts += ["no battles recorded today", "net pending"]
+    if player["status"] != "tracking":
+        parts.append(_STATE_WORDS.get(player["status"], "Being checked"))
+    elif player["season_reset_pending"]:
+        parts.append(WAITING_FOR_RESET)
+    elif player["trophies"] is None:
+        parts.append("Being checked")
+    elif today is None:
+        parts += [f"{number(player['trophies'])} 🏆", "no battles recorded today", "net pending"]
     else:
+        parts.append(f"{number(player['trophies'])} 🏆")
         parts.append(f"⚔ {_known(today['attacks'], _of_eight)}")
         parts.append(f"🛡 {_known(today['defenses'], _of_eight)}")
         net = today["net"]
@@ -788,9 +789,7 @@ def season_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
         links=(
             Link(
                 "Season on Clash Lens",
-                site.url(
-                    f"/players/{quote(page['tag'], safe='')}?season={quote(season['id'])}"
-                ),
+                site.player(page["tag"]),
             ),
         ),
     )
