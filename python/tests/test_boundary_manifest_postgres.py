@@ -897,7 +897,7 @@ def _seed_board(connection_info: str, readings: list[tuple[str, int, datetime]])
     return generation_id
 
 
-def test_board_leaves_out_missing_players_and_readings_from_before_the_day(
+def test_board_leaves_out_players_whose_profile_went_missing_before_the_reset(
     database_url: str,
 ) -> None:
     readings = [
@@ -907,7 +907,7 @@ def test_board_leaves_out_missing_players_and_readings_from_before_the_day(
         ("#RECOVERED", 5250, _october(6, 6)),  # 404, then a success
         ("#AFTERRESET", 5240, _october(6, 8)),  # 404 only after the Reset
         ("#SERVERERROR", 5230, _october(6, 8)),  # a timeout says nothing
-        ("#BEFOREDAY", 5290, _october(6, 4)),  # no reading on Day 2
+        ("#OLDREADING", 5220, _october(6, 4)),  # then only server errors
     ]
     responses = [
         ("#PJ22PJPQJ", 404, _october(5, 8, 35)),
@@ -916,6 +916,7 @@ def test_board_leaves_out_missing_players_and_readings_from_before_the_day(
         ("#RECOVERED", 200, _october(6, 9)),
         ("#AFTERRESET", 404, _october(7, 6)),
         ("#SERVERERROR", 503, _october(6, 10)),
+        ("#OLDREADING", 500, _october(6, 12)),
     ]
     with domain_database(database_url, include_coordinator=True) as connection_info:
         generation_id = _seed_board(connection_info, readings)
@@ -945,13 +946,13 @@ def test_board_leaves_out_missing_players_and_readings_from_before_the_day(
         finally:
             database.close()
     assert [(text(tag), text(quality)) for tag, quality in rows] == [
-        ("#BEFOREDAY", "profile_before_day"),
         ("#PJ22PJPQJ", "profile_not_found"),
         ("#8LLLG2V99", "profile_not_found"),
         ("#PPVYC88R", "eligible"),
         ("#RECOVERED", "eligible"),
         ("#AFTERRESET", "eligible"),
         ("#SERVERERROR", "eligible"),
+        ("#OLDREADING", "eligible"),
     ]
     # The board ranks only eligible rows, by trophies, so Yatta is first.
 
@@ -986,7 +987,6 @@ def test_board_rebuild_queues_one_correction_per_board_still_ranking_a_missing_p
                 "boundary_at": DAY_2_RESET.isoformat(),
                 "generation": 1,
                 "profile_not_found": 1,
-                "profile_before_day": 0,
             }
             reports = [
                 boundary.queue_board_rebuilds(database, season, queue=queue)

@@ -641,7 +641,7 @@ reason) for investigating.
 
 **Boards that rank a missing player:** a Reset's Daily board leaves out a
 player whose profile check returned 404 (player not found) after their reading
-and before the Reset, and any reading from before the day it ranks; see
+and before the Reset; see
 [frozen snapshots](domain.md#6-ranked-day-and-leaderboard-snapshots). Boards
 frozen before that rule still rank such players: on 2026-10-07 the October
 2026 Season's Day 1 board ranked 24 and Day 2 34, with two of them first and
@@ -656,17 +656,20 @@ podman exec clashlens-python-worker \
 
 `preview` writes nothing and lists each of that Season's Reset boards whose
 frozen input still ranks such a player, with how many went missing
-(`profile_not_found`) and how many had no reading on the day
-(`profile_before_day`). `queue` adds one correction for each, rebuilding its
+(`profile_not_found`). `queue` adds one correction for each, rebuilding its
 leaderboard and army records; `correction` reads `queued`, or
 `already_queued` when one was waiting. The worker starts each correction as
 any other: the newest Reset at once, an older one after the 04:30–07:00 UTC
 quiet window and 6 hours after its last rebuild. The corrected board then
 replaces the published one, which stays saved as superseded. Run `preview`
-again later: a board is listed until its rebuild starts, and the run is
-finished when `boards` is empty. A board frozen after the deploy needs
-nothing. Only Resets inside the given Season are read, so the Season before is
-never touched.
+again later: a board is listed until its rebuild starts, so an empty `boards`
+means only that nothing is left to queue. The old board is still served until
+the rebuild publishes, and a failed rebuild leaves it served. The run is
+finished only when each listed Reset's newest `generation` shows
+`snapshot_state` and `army_state` as `published`, using the query under
+[Reset publication missing](#reset-publication-missing). A board frozen after
+the deploy needs nothing. Only Resets inside the given Season are read, so the
+Season before is never touched.
 
 ### Raw-response cleanup failed
 

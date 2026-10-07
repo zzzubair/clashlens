@@ -364,10 +364,6 @@ def _snapshot_rows(
                 # The player went missing after this reading, so its
                 # trophies no longer stand for them at the Reset.
                 identity["snapshot_quality"] = "profile_not_found"
-            elif profile[2] < generation[0] - RANKED_DAY_DURATION:
-                # A reading from before the ranked Legend day began says
-                # nothing about that day.
-                identity["snapshot_quality"] = "profile_before_day"
             else:
                 identity["snapshot_quality"] = "eligible"
         else:

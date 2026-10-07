@@ -27,7 +27,7 @@ from .db import (
     ended_day_priority,
     lock_wait,
 )
-from .domain import RANKED_DAY_DURATION, SEASON_DURATION, is_season_boundary
+from .domain import SEASON_DURATION, is_season_boundary
 from .domain_repair import boundary_held
 from .past_reset_pacing import past_reset_build_waits, past_reset_correction_waits
 
@@ -1050,14 +1050,15 @@ def queue_board_rebuilds(
     database: Database, season_id: str, *, queue: bool
 ) -> dict[str, Any]:
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
-    whose frozen input still ranks a reading the board now leaves out: one
-    taken before the player's profile answered "player not found", or before
-    the Legend day it ranks began. On 5 to 7 October 2026 that was 24 players
-    on Day 1 and 34 on Day 2, two of them first and second on Day 2.
+    whose frozen input still ranks a reading taken before the player's
+    profile answered "player not found". On 5 to 7 October 2026 that was 24
+    players on Day 1 and 34 on Day 2, two of them first and second on Day 2.
 
     Each board gets one queued correction of both its leaderboard and army
     records, started as any other: once its build is published, outside a
-    repair campaign and past-Reset pacing. A rebuilt board ranks no such
+    repair campaign and past-Reset pacing. Each Reset's newest board is read
+    under its publication lock, so a correction is never queued against a
+    board a worker has already replaced. A rebuilt board ranks no such
     reading, so a later run lists nothing for it; one still queued is listed
     again and not queued twice. Resets of other Seasons are never read.
     """
@@ -1067,22 +1068,34 @@ def queue_board_rebuilds(
     boards: list[dict[str, Any]] = []
     with database.pool.connection() as connection:
         with connection.transaction():
-            generations = connection.execute(
+            resets = connection.execute(
                 """
-                SELECT DISTINCT ON (boundary_at)
-                       id, boundary_at, generation, snapshot_manifest_id
+                SELECT DISTINCT boundary_at
                 FROM boundary_publication_generations
                 WHERE boundary_at > %s AND boundary_at <= %s
-                  AND snapshot_state <> 'superseded'
-                  AND army_state <> 'superseded'
-                ORDER BY boundary_at, generation DESC
+                ORDER BY boundary_at
                 """,
                 (season_start, season_start + SEASON_DURATION),
             ).fetchall()
-            for generation_id, boundary_at, generation, manifest_id in generations:
+        for (boundary_at,) in resets:
+            with connection.transaction():
+                lock_boundary_publication(connection, boundary_at)
+                current = connection.execute(
+                    """
+                    SELECT id, generation, snapshot_manifest_id
+                    FROM boundary_publication_generations
+                    WHERE boundary_at = %s
+                      AND snapshot_state <> 'superseded'
+                      AND army_state <> 'superseded'
+                    ORDER BY generation DESC
+                    LIMIT 1
+                    """,
+                    (boundary_at,),
+                ).fetchone()
                 # A board not frozen yet is built under the current rule.
-                if manifest_id is None:
+                if current is None or current[2] is None:
                     continue
+                generation_id, generation, manifest_id = current
                 readings = {
                     int(row[0]): datetime.fromisoformat(str(row[1]))
                     for row in connection.execute(
@@ -1097,15 +1110,8 @@ def queue_board_rebuilds(
                     ).fetchall()
                 }
                 not_found = profiles_not_found(connection, boundary_at, readings)
-                before_day = [
-                    player_id
-                    for player_id, observed_at in readings.items()
-                    if player_id not in not_found
-                    and observed_at < boundary_at - RANKED_DAY_DURATION
-                ]
-                if not not_found and not before_day:
+                if not not_found:
                     continue
-                lock_boundary_publication(connection, boundary_at)
                 queued = connection.execute(
                     """
                     SELECT id FROM boundary_publication_corrections
@@ -1143,7 +1149,6 @@ def queue_board_rebuilds(
                         "boundary_at": boundary_at.astimezone(UTC).isoformat(),
                         "generation": int(generation),
                         "profile_not_found": len(not_found),
-                        "profile_before_day": len(before_day),
                         "correction": (
                             "already_queued" if queued is not None
                             else "queued" if queue
