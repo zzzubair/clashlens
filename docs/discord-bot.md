@@ -14,7 +14,7 @@ website.
   "gateway") and listens on no port, so it adds no public endpoint.
 - It reads Clash Lens data with the private API's own read code and the API's
   database login, so numbers in Discord match the website. Its only write is
-  each account's main player (migration 0076). Whether the bot should instead go
+  each account's main player (migration 0080). Whether the bot should instead go
   through the private API, as [architecture](architecture.md) says outside
   programs should, is an open owner decision.
 - It needs no privileged Discord access ("intents"), and its replies can never

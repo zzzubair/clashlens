@@ -737,9 +737,8 @@ render_units() {
   fi
   if [[ "$MODE" == production ]]; then
     [[ "$ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "alert service requires a checkout path without spaces or systemd specifiers"
-    alert_requires='Wants=clashlens-alert.timer clashlens-ranked-day-compaction.timer clashlens-history-retention.timer'
+    alert_requires='Wants=clashlens-alert.timer clashlens-ranked-day-compaction.timer clashlens-history-retention.timer'; [[ "$(setting CLASHLENS_DISCORD_BOT off)" != on ]] || alert_requires+=$'\nWants=clashlens-discord-bot.service'
     for base in alert ranked-day-compaction history-retention; do render "$TEMPLATE_DIR/clashlens-$base.service" "$USER_UNIT_DIR/clashlens-$base.service" ROOT "$ROOT"; render "$TEMPLATE_DIR/clashlens-$base.timer" "$USER_UNIT_DIR/clashlens-$base.timer"; done
-    [[ "$(setting CLASHLENS_DISCORD_BOT off)" != on ]] || alert_requires+=$'\nWants=clashlens-discord-bot.service'
   fi
   if [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" == apply ]]; then
     backup_requires+=$'\nWants=clashlens-archive-retention.timer'
@@ -878,7 +877,7 @@ read_secret_value() {
 validate_production_secret_files() {
   local secret_dir name file value
   secret_dir=$(setting CLASHLENS_API_KEY_HOST_DIR)
-  for name in ${REGULAR_KEY_NAMES//,/ } interactive-1; do
+  for name in ${REGULAR_KEY_NAMES//,/ } interactive-1 $([[ "$(setting CLASHLENS_DISCORD_BOT off)" != on ]] || printf discord-bot.token); do
     file="$secret_dir/clashlens-$name"
     read_secret_value "$file"
     value=$SECRET_VALUE
@@ -902,7 +901,6 @@ validate_production_secret_files() {
       [[ "${#SECRET_VALUE}" -le 512 && "$SECRET_VALUE" != *[[:space:]]* && "$SECRET_VALUE" != CHANGE_ME && "$SECRET_VALUE" != REPLACE_ME ]] || die "$file contains an invalid provider secret"
     done
   fi
-  [[ "$(setting CLASHLENS_DISCORD_BOT off)" != on ]] || read_secret_value "$secret_dir/clashlens-discord-bot.token"
   [[ "$(setting CLASHLENS_ARCHIVE_RETENTION off)" =~ ^(off|preview|apply)$ ]] || die "CLASHLENS_ARCHIVE_RETENTION must be off, preview or apply"
   if [[ "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]; then
     [[ "$(setting CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD)" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || die "CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD must be 32-128 URL-safe characters"
