@@ -519,6 +519,9 @@ def _pause_both_jobs_after_call(
 
 def _process_battle_logs_concurrently(ci: str, archive_server, jobs: list[int]):
     db, proc = _processor(ci, archive_server)
+    # Both jobs pause mid-log while the queue for new players' checks is held
+    # to commit; discovery's own tests cover jobs taking turns on it.
+    db.player_discovery_enabled = False
     results: dict[int, object] = {}
 
     def run(job_id: int) -> None:

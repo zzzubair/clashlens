@@ -624,6 +624,10 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
                     ADD COLUMN current_profile_fingerprint text
                 """
             )
+            # Today's worker saves each profile's tier to the promotion list.
+            connection.execute(
+                (ROOT / "deploy/migrations/0076_promotion_candidates.sql").read_text()
+            )
         _, initial_job = store_observation(
             connection_info, archive_server, occurrence_key="upgrade-initial",
             endpoint="profile", body=body, observed_at=NOW, normalized_tag="#2PP",
@@ -678,7 +682,8 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
                 )
                 connection.commit()
                 for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
-                    if int(migration.name.split("_", 1)[0]) >= 40:
+                    number = int(migration.name.split("_", 1)[0])
+                    if number >= 40 and number != 76:
                         apply_migration(connection, migration.read_text())
                 fingerprint = connection.execute(
                     "SELECT current_profile_fingerprint FROM players WHERE normalized_tag = '#2PP'"

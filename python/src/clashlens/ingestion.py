@@ -198,6 +198,11 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
             connection.execute(
                 "SELECT id FROM players WHERE id = %s FOR NO KEY UPDATE", (player[0],)
             )
+            if profile.eligibility_state in {"eligible", "ineligible"}:
+                connection.execute(
+                    "SELECT clashlens_note_promotion_candidate(%s, %s, %s, %s)",
+                    (profile.normalized_tag, profile.league_tier_id, profile.trophies, profile.observed_at),
+                )
             if created_profile:
                 first_battle_log.queue_day_1(connection, player[0], profile_version_id)
             connection.execute(
