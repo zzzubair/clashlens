@@ -89,6 +89,8 @@ def page(tag: str, name: str, battles: list[dict[str, Any]], reasons=()) -> dict
         "tag": tag,
         "name": name,
         "clan": "Lens Clan",
+        "active": True,
+        "eligibility": "eligible",
         "trophies": 5842,
         "season_reset_pending": False,
         "observed_at": (NOW - timedelta(minutes=2)).isoformat(),
@@ -593,6 +595,21 @@ def test_a_player_whose_numbers_do_not_apply_gets_its_status_not_old_numbers(
     assert message["title"] == "Drift #2PP"
     assert message["text"] == word
     assert "player_page" not in store.reads
+
+
+@pytest.mark.parametrize(
+    ("eligibility", "word"), [("ineligible", "Not in Legend"), ("eligible", "Being checked")]
+)
+def test_a_player_who_left_legend_after_the_card_was_read_gets_its_status(
+    store, eligibility, word
+) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    store.pages["#2PP"] = {
+        **page("#2PP", "Drift", []), "active": False, "eligibility": eligibility
+    }
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    assert message["text"] == word
+    assert "🏆" not in message["text"]
 
 
 def test_full_day_reads_and_shows_one_legend_day_across_a_reset(store) -> None:
