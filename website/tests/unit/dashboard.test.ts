@@ -1,4 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup, renderToString } from "react-dom/server";
+import {
+  createStaticHandler,
+  createStaticRouter,
+  StaticRouterProvider,
+} from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
@@ -27,7 +34,9 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return { ...actual, createPythonClient: mocks.createPythonClient };
 });
 
+import { LegendClock } from "../../app/components/LegendClock";
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
+import type { PlayerDay } from "../../app/lib/dashboard";
 import {
   MAX_CARDS_PER_TAB,
   defaultLayout,
@@ -36,7 +45,7 @@ import {
   readSavedLayout,
   serializeLayout,
 } from "../../app/lib/dashboard";
-import {
+import DashboardRoute, {
   action,
   loader,
   type DashboardActionData,
@@ -114,17 +123,14 @@ describe("dashboard layout", () => {
     expect(parsePostedLayout(JSON.parse(JSON.stringify(stored)))).toEqual(layout);
   });
 
-  it("reads an old saved layout leniently", () => {
+  it("reads an old saved layout leniently and keeps cards on their own tab", () => {
     const layout = readSavedLayout({
       v: 1,
       tz: "Not/AZone",
       today: [["retired-card", "l"], ["shield", "xl"], ["invite", "s", MAIN], "junk"],
     });
     expect(layout.timeZone).toBe("auto");
-    expect(layout.tabs.today).toEqual([
-      { card: "shield", size: "s", player: null },
-      { card: "invite", size: "s", player: null },
-    ]);
+    expect(layout.tabs.today).toEqual([{ card: "shield", size: "s", player: null }]);
     expect(layout.tabs.season).toEqual(defaultLayout().tabs.season);
   });
 
@@ -136,6 +142,7 @@ describe("dashboard layout", () => {
     expect(posted({ today: [["nope", "l"]] })).toBeNull();
     expect(posted({ today: [["shield", "xl"]] })).toBeNull();
     expect(posted({ crew: [["invite", "l", MAIN]] })).toBeNull();
+    expect(posted({ season: [["clock", "l"]] })).toBeNull();
     expect(posted({ today: [["clock", "l", "#lq2v8pj0"]] })).toBeNull();
     expect(posted({ tz: "Not/AZone" })).toBeNull();
     expect(posted({ season: undefined })).toBeNull();
@@ -153,6 +160,58 @@ describe("dashboard layout", () => {
   });
 });
 
+function clockText(day: PlayerDay | null, today: LinkedPlayerCard["today"]) {
+  const html = renderToStaticMarkup(
+    createElement(LegendClock, {
+      player: linked(MAIN),
+      day,
+      today,
+      size: "l",
+      nowMs: null,
+      timeZone: "UTC",
+    }),
+  );
+  return [...html.matchAll(/<p class="clock-battles-title">(.*?)<\/p>/g)].map((match) =>
+    (match[1] ?? "").replace(/<[^>]+>/g, "").trim(),
+  );
+}
+
+describe("Legend clock", () => {
+  const attack = { at: Date.UTC(2026, 9, 7, 9), kind: "attack" as const, stars: 3 };
+
+  it("shows battle totals only for a complete day", () => {
+    const battles = [{ ...attack, trophyChange: 40 }];
+    expect(
+      clockText(
+        { dayNumber: 3, dayCount: 28, battles, complete: true },
+        { net: 40, attacks: 1, defenses: 0 },
+      ),
+    ).toEqual(["Attacks 1/8 +40", "Defenses 0/8 0"]);
+    expect(
+      clockText(
+        { dayNumber: 3, dayCount: 28, battles, complete: false },
+        { net: null, attacks: 5, defenses: 2 },
+      ),
+    ).toEqual(["Attacks 5/8", "Defenses 2/8"]);
+    expect(clockText(null, null)).toEqual(["Attacks –/8", "Defenses –/8"]);
+  });
+
+  it("names the upcoming Reset in local time across a clock change", () => {
+    const html = renderToStaticMarkup(
+      createElement(LegendClock, {
+        player: linked(MAIN),
+        day: null,
+        today: null,
+        size: "s",
+        nowMs: Date.UTC(2026, 9, 25, 2),
+        timeZone: "Europe/London",
+      }),
+    );
+    expect(html).toContain("to Reset at 05:00");
+    expect(html).toContain('<text class="clock-reset-time" x="150" y="36">05:00</text>');
+  });
+});
+
 describe("dashboard route", () => {
   let account: {
     username: string;
@@ -165,6 +224,10 @@ describe("dashboard route", () => {
     getPublicUser: ReturnType<typeof vi.fn>;
     getPlayer: ReturnType<typeof vi.fn>;
   };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   beforeEach(() => {
     mocks.getWebsiteConfig.mockReturnValue(
@@ -219,6 +282,33 @@ describe("dashboard route", () => {
     expect(data.layout).toEqual(defaultLayout());
     expect(data.days).toEqual({});
     expect(client.getPlayer).toHaveBeenCalledWith(MAIN);
+  });
+
+  it("keeps the day's battles, whether they are complete, and when the day ends", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 9, 7, 9, 30) });
+    client.getPlayer.mockResolvedValue({
+      season: { currentDayNumber: 3, dayCount: 28 },
+      currentDay: {
+        battlesComplete: false,
+        offenseEvents: [
+          { battleTimestamp: "2026-10-07T09:00:00Z", stars: 3, trophyChange: 40 },
+        ],
+        defenseEvents: [],
+      },
+    });
+    const { data } = unwrap<DashboardLoaderData>(
+      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
+    );
+    if (data.kind !== "signed-in") throw new Error("expected signed in");
+    expect(data.dayEndsMs).toBe(Date.UTC(2026, 9, 8, 5));
+    expect(data.days[MAIN]).toEqual({
+      dayNumber: 3,
+      dayCount: 28,
+      battles: [
+        { at: Date.UTC(2026, 9, 7, 9), kind: "attack", stars: 3, trophyChange: 40 },
+      ],
+      complete: false,
+    });
   });
 
   it("follows the switcher's player and reads the saved layout", async () => {
@@ -290,5 +380,55 @@ describe("dashboard route", () => {
     );
     expect(status).toBe(503);
     expect(data).toMatchObject({ saved: false, error: expect.any(String) });
+  });
+});
+
+describe("dashboard page", () => {
+  const CHECKING = "#9YJ2C0QL";
+
+  async function renderDashboard(loaderData: DashboardLoaderData) {
+    const handler = createStaticHandler([
+      { path: "/dashboard", Component: DashboardRoute, loader: () => loaderData },
+    ]);
+    const context = await handler.query(new Request(`${ORIGIN}/dashboard`));
+    if (context instanceof Response) throw new Error("unexpected response");
+    return renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+        hydrate: false,
+      }),
+    ).replaceAll("<!-- -->", "");
+  }
+
+  it("says each player's status once and shows live numbers only on the clock", async () => {
+    const layout = defaultLayout();
+    layout.tabs.today = [
+      { card: "clock", size: "l", player: null },
+      { card: "shield", size: "s", player: ALT },
+      { card: "around", size: "s", player: ALT },
+      { card: "goal", size: "s", player: CHECKING },
+    ];
+    const html = await renderDashboard({
+      kind: "signed-in",
+      players: [
+        linked(ALT, { name: "Lens Alt", state: "not_in_legend", trophies: null }),
+        linked(MAIN),
+        linked(CHECKING, { name: "Lens New", state: "checking", rank: null }),
+      ],
+      playersUnavailable: false,
+      selectedTag: MAIN,
+      layout,
+      days: {},
+      dayEndsMs: Date.UTC(2026, 9, 8, 5),
+      idempotencyKey: IDEMPOTENCY_KEY,
+    });
+    expect(html.match(/not in Legends/gi)).toHaveLength(1);
+    expect(html).toContain("Lens Alt is not in Legends");
+    expect(html).toContain("Lens New</b> Checking this tag with Clash of Clans.");
+    expect(html.match(/5,696/g)).toHaveLength(1);
+    expect(html.match(/#318/g)).toHaveLength(1);
+    expect(html).not.toContain('data-card="shield"');
+    expect(html).not.toContain('data-card="goal"');
   });
 });

@@ -16,9 +16,9 @@ import {
   CARD_SIZES,
   CARDS,
   DASHBOARD_TABS,
-  defaultTab,
   serializeLayout,
 } from "../lib/dashboard";
+import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import type { DashboardActionData } from "../routes/dashboard";
 import { DashboardIcon } from "./DashboardIcon";
 import { LegendClock, timeZoneLabel } from "./LegendClock";
@@ -203,11 +203,10 @@ function CardPicker({
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [filter, setFilter] = useState<DashboardTab | "all">("all");
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
-  const shown = CARD_IDS.filter((id) => filter === "all" || CARDS[id].tab === filter);
+  const shown = CARD_IDS.filter((id) => CARDS[id].tab === tab);
   return (
     <dialog
       ref={dialog}
@@ -228,18 +227,6 @@ function CardPicker({
           <DashboardIcon name="x" />
         </button>
       </header>
-      <div className="dash-picker-filters" role="group" aria-label="Show cards from">
-        {(["all", ...DASHBOARD_TABS.map((item) => item.id)] as const).map((id) => (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={filter === id}
-            onClick={() => setFilter(id)}
-          >
-            {id === "all" ? "All" : TAB_LABELS[id]}
-          </button>
-        ))}
-      </div>
       <ul className="dash-picker-list">
         {shown.map((id) => {
           const definition = CARDS[id];
@@ -331,6 +318,7 @@ export function DashboardGrid({
   players,
   selected,
   days,
+  dayEndsMs,
   idempotencyKey,
   renderTabs,
   dayLabel,
@@ -341,6 +329,7 @@ export function DashboardGrid({
   players: LinkedPlayerCard[];
   selected: LinkedPlayerCard | null;
   days: Record<string, PlayerDay>;
+  dayEndsMs: number;
   idempotencyKey: string;
   renderTabs: (meta: ReactNode) => ReactNode;
   dayLabel: string | null;
@@ -368,16 +357,26 @@ export function DashboardGrid({
   const cards = shown.tabs[tab];
   const saving = fetcher.state !== "idle";
   const timeZone = shown.timeZone === "auto" ? (device ?? "UTC") : shown.timeZone;
-  const selectedInLegends = selected?.state === "tracking";
+  const dayOver = nowMs !== null && nowMs >= dayEndsMs;
+  const notTracking = [
+    selected,
+    ...cards.map((card) => players.find((player) => player.tag === card.player)),
+  ].filter(
+    (player, index, all): player is LinkedPlayerCard =>
+      !!player &&
+      player.state !== "tracking" &&
+      all.findIndex((other) => other?.tag === player.tag) === index,
+  );
 
+  const editDraft = (change: (current: DashboardLayout) => DashboardLayout) => {
+    if (!saving) setDraft((current) => (current ? change(current) : current));
+  };
   const updateTab = (next: PlacedCard[]) =>
-    setDraft((current) =>
-      current ? { ...current, tabs: { ...current.tabs, [tab]: next } } : current,
-    );
+    editDraft((current) => ({ ...current, tabs: { ...current.tabs, [tab]: next } }));
 
   const meta = (
     <div className="dash-meta">
-      {dayLabel ? (
+      {dayLabel && !dayOver ? (
         <span>
           <DashboardIcon name="cal" /> {dayLabel}
         </span>
@@ -422,6 +421,7 @@ export function DashboardGrid({
           <button
             type="button"
             className="button button-primary dash-add"
+            disabled={saving}
             onClick={() => setPicking(true)}
           >
             <DashboardIcon name="plus" /> Add a card
@@ -433,9 +433,7 @@ export function DashboardGrid({
               value={shown.timeZone}
               onChange={(event) => {
                 const value = event.currentTarget.value;
-                setDraft((current) =>
-                  current ? { ...current, timeZone: value } : current,
-                );
+                editDraft((current) => ({ ...current, timeZone: value }));
               }}
             >
               <option value="auto">Device time ({device ?? "auto"})</option>
@@ -446,13 +444,6 @@ export function DashboardGrid({
               ))}
             </select>
           </label>
-          <button
-            type="button"
-            className="button button-secondary"
-            onClick={() => updateTab(defaultTab(tab))}
-          >
-            Reset
-          </button>
           <button
             type="button"
             className="button button-secondary"
@@ -484,12 +475,21 @@ export function DashboardGrid({
           ) : null}
         </div>
       ) : null}
-      {selected && !selectedInLegends && !editing ? (
-        <p className="dash-banner" role="status">
-          <DashboardIcon name="shieldOff" />
-          <b>{playerName(selected)} is not in Legends</b>
+      {notTracking.map((player) => (
+        <p key={player.tag} className="dash-banner" role="status">
+          {player.state === "not_in_legend" ? (
+            <>
+              <DashboardIcon name="shieldOff" />
+              <b>{playerName(player)} is not in Legends</b>
+            </>
+          ) : (
+            <>
+              <DashboardIcon name="info" />
+              <b>{playerName(player)}</b> {LOOKUP_MESSAGES[player.state]}
+            </>
+          )}
         </p>
-      ) : null}
+      ))}
       <div className="dash-grid">
         {cards.map((placed, index) => {
           const definition = CARDS[placed.card];
@@ -497,9 +497,7 @@ export function DashboardGrid({
             ? (players.find((player) => player.tag === placed.player) ?? null)
             : null;
           const player = definition.perPlayer ? (pinned ?? selected) : null;
-          if (!editing && definition.perPlayer && !pinned && !selectedInLegends) {
-            return null;
-          }
+          if (!editing && player && player.state !== "tracking") return null;
           const tools = editing ? (
             <CardTools
               placed={placed}
@@ -532,20 +530,12 @@ export function DashboardGrid({
               <CardFrame key={index} placed={placed} tools={tools} pinnedTo={pinnedTo}>
                 <LegendClock
                   player={player}
-                  day={days[player.tag] ?? null}
+                  day={dayOver ? null : (days[player.tag] ?? null)}
+                  today={dayOver ? null : player.today}
                   size={placed.size}
                   nowMs={nowMs}
                   timeZone={timeZone}
                 />
-              </CardFrame>
-            );
-          }
-          if (definition.perPlayer && player && player.state !== "tracking") {
-            return (
-              <CardFrame key={index} placed={placed} tools={tools} pinnedTo={pinnedTo}>
-                <p className="dash-empty">
-                  <DashboardIcon name="shieldOff" /> Not in Legends
-                </p>
               </CardFrame>
             );
           }

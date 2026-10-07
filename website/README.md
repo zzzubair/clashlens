@@ -158,12 +158,13 @@ quarter of the row on desktop), L (half) and XL (the full row). Phones show one
 card per row. Only the Legend clock has content: the 24-hour ring with the Reset
 on top, real clock times in the device's or the chosen time zone, today's
 attacks and defenses at the time they landed, and live trophies and rank. Every
-other card is a labelled placeholder. Customise adds, removes, moves, resizes
-and pins cards to one player, and Done saves the layout and time zone into the
+other card is a labelled placeholder. Customise adds cards to their own tab,
+removes, moves, resizes and pins them to one player, and Done saves the layout and time zone into the
 account's existing 4,096-byte preferences, so there is no database change; a
 default layout uses about 300 bytes. With no linked player the page shows how to
 link one; a player outside Legends gets one "not in Legends" line instead of
-empty cards.
+empty cards, and a player still being checked gets one line saying so. The
+day's battles, gain and day number clear at the Reset until the page reloads.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the

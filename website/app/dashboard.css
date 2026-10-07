@@ -46,12 +46,6 @@
   border-bottom-width: 3px;
 }
 
-.dash-account small {
-  color: var(--cl-muted);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
 .dash-account[aria-current="true"] {
   background: var(--cl-panel);
   border-color: var(--cl-action);
@@ -126,7 +120,6 @@
 .dash-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-flow: row dense;
   gap: 1rem;
 }
 
@@ -331,8 +324,7 @@
   display: inline-flex;
 }
 
-.dash-sizes button,
-.dash-picker-filters button {
+.dash-sizes button {
   min-width: 2.4rem;
   min-height: 2.4rem;
   padding: 0 0.55rem;
@@ -347,8 +339,7 @@
   border-left: 0;
 }
 
-.dash-sizes button[aria-pressed="true"],
-.dash-picker-filters button[aria-pressed="true"] {
+.dash-sizes button[aria-pressed="true"] {
   color: var(--cl-paper);
   background: var(--cl-ink);
 }
@@ -398,13 +389,6 @@
   gap: 0.5rem;
   margin: 0;
   font-size: 1.25rem;
-}
-
-.dash-picker-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.8rem 1rem 0;
 }
 
 .dash-picker-list {

@@ -59,7 +59,7 @@ function ClockFace({
     left === null
       ? "–"
       : `${Math.floor(left / 60)}h ${String(left % 60).padStart(2, "0")}m`;
-  const resetLabel = dayStart === null ? "--:--" : format.format(dayStart);
+  const resetLabel = resetMs === null ? "--:--" : format.format(resetMs);
   // A short hand inside the ring, clear of the countdown in the middle.
   const [handStartX, handStartY] = point(elapsed ?? 0, RING - 36);
   const [handX, handY] = point(elapsed ?? 0, RING - 10);
@@ -146,20 +146,26 @@ function ClockFace({
 function BattleRow({
   label,
   battles,
+  count,
+  complete,
   kind,
 }: {
   label: string;
   battles: ClockBattle[];
+  count: number | null;
+  complete: boolean;
   kind: "attack" | "defense";
 }) {
   const total = battles.reduce((sum, battle) => sum + battle.trophyChange, 0);
   return (
     <div className="clock-battles">
       <p className="clock-battles-title">
-        {label} {battles.length}/{SLOTS}{" "}
-        <span className={total > 0 ? "positive" : total < 0 ? "negative" : ""}>
-          {signed(total)}
-        </span>
+        {label} {count ?? "–"}/{SLOTS}{" "}
+        {complete ? (
+          <span className={total > 0 ? "positive" : total < 0 ? "negative" : ""}>
+            {signed(total)}
+          </span>
+        ) : null}
       </p>
       <ol className="clock-boxes">
         {Array.from({ length: SLOTS }, (_, index) => {
@@ -183,16 +189,21 @@ function BattleRow({
   );
 }
 
-/** The Legend clock card body: clock, live trophies and rank, today's battles. */
+/**
+ * The Legend clock card body: clock, live trophies and rank, today's battles.
+ * `day` and `today` are null once the Legend day they were read for is over.
+ */
 export function LegendClock({
   player,
   day,
+  today,
   size,
   nowMs,
   timeZone,
 }: {
   player: LinkedPlayerCard;
   day: PlayerDay | null;
+  today: LinkedPlayerCard["today"];
   size: CardSize;
   nowMs: number | null;
   timeZone: string;
@@ -200,7 +211,8 @@ export function LegendClock({
   const battles = [...(day?.battles ?? [])].sort((a, b) => a.at - b.at);
   const attacks = battles.filter((battle) => battle.kind === "attack");
   const defenses = battles.filter((battle) => battle.kind === "defense");
-  const net = player.today?.net ?? null;
+  const complete = day?.complete === true;
+  const net = today?.net ?? null;
   return (
     <div className={`legend-clock legend-clock-${size}`}>
       <ClockFace nowMs={nowMs} timeZone={timeZone} battles={battles} />
@@ -238,8 +250,20 @@ export function LegendClock({
         </dl>
         {size !== "s" ? (
           <>
-            <BattleRow label="Attacks" battles={attacks} kind="attack" />
-            <BattleRow label="Defenses" battles={defenses} kind="defense" />
+            <BattleRow
+              label="Attacks"
+              battles={attacks}
+              count={complete ? attacks.length : (today?.attacks ?? null)}
+              complete={complete}
+              kind="attack"
+            />
+            <BattleRow
+              label="Defenses"
+              battles={defenses}
+              count={complete ? defenses.length : (today?.defenses ?? null)}
+              complete={complete}
+              kind="defense"
+            />
           </>
         ) : null}
       </div>

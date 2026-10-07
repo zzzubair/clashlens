@@ -12,6 +12,7 @@ import {
   DASHBOARD_TABS,
   defaultTab,
   isDashboardTab,
+  nextResetMs,
   parsePostedLayout,
   readSavedLayout,
   serializeLayout,
@@ -35,6 +36,8 @@ export type DashboardLoaderData =
       selectedTag: string | null;
       layout: DashboardLayout;
       days: Record<string, PlayerDay>;
+      /** The Reset that ends the Legend day `days` and the players' `today` were read for. */
+      dayEndsMs: number;
       idempotencyKey: string;
     };
 
@@ -115,6 +118,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     if (card.card === "clock" && pinned?.state === "tracking") clockTags.add(pinned.tag);
   }
   const days: Record<string, PlayerDay> = {};
+  const dayEndsMs = nextResetMs(Date.now());
   await Promise.all(
     [...clockTags].slice(0, MAX_PLAYER_DAYS).map(async (tag) => {
       try {
@@ -133,6 +137,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       selectedTag: selected?.tag ?? null,
       layout,
       days,
+      dayEndsMs,
       idempotencyKey: freshIdempotencyKey(),
     },
     { headers: NO_STORE },
@@ -158,6 +163,7 @@ function playerDay(page: PlayerPage): PlayerDay {
     dayNumber: page.season?.currentDayNumber ?? null,
     dayCount: page.season?.dayCount ?? null,
     battles,
+    complete: day?.battlesComplete === true,
   };
 }
 
@@ -297,18 +303,6 @@ function AccountSwitcher({
           replace
         >
           <b>{player.name ?? player.tag}</b>
-          <small>
-            {player.state === "tracking" ? (
-              <>
-                {player.trophies?.toLocaleString("en-US") ?? "–"}
-                {player.rank !== null ? ` · #${player.rank.toLocaleString("en-US")}` : ""}
-              </>
-            ) : (
-              <>
-                <DashboardIcon name="shieldOff" /> Not in Legends
-              </>
-            )}
-          </small>
         </Link>
       ))}
       <Link className="dash-account dash-account-add" to="/account/verify-player">
@@ -423,6 +417,7 @@ export default function DashboardRoute() {
         players={loaderData.players}
         selected={selected}
         days={loaderData.days}
+        dayEndsMs={loaderData.dayEndsMs}
         idempotencyKey={loaderData.idempotencyKey}
         renderTabs={(meta) => <DashboardTabs tab={tab} meta={meta} />}
         dayLabel={day?.dayNumber ? `Day ${day.dayNumber} of ${day.dayCount ?? 28}` : null}

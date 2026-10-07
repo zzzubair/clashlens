@@ -19,7 +19,7 @@ export type CardData = "ready" | "new-read" | "estimate" | "new-data" | "not-rea
 export interface CardDefinition {
   title: string;
   icon: IconName;
-  /** The tab the card starts on, and its picker filter. */
+  /** The only tab the card can be placed on. */
   tab: DashboardTab;
   sizes: CardSize[];
   defaultSize: CardSize;
@@ -337,6 +337,7 @@ export function readSavedLayout(value: unknown): DashboardLayout {
     layout.tabs[id] = saved.slice(0, MAX_CARDS_PER_TAB).flatMap((item) => {
       if (!Array.isArray(item) || !isCardId(item[0])) return [];
       const definition = CARDS[item[0]];
+      if (definition.tab !== id) return [];
       const size = definition.sizes.includes(item[1])
         ? (item[1] as CardSize)
         : definition.defaultSize;
@@ -363,7 +364,7 @@ export function parsePostedLayout(value: unknown): DashboardLayout | null {
       const [card, size, player] = item as unknown[];
       if (!isCardId(card) || !isCardSize(size)) return null;
       const definition = CARDS[card];
-      if (!definition.sizes.includes(size)) return null;
+      if (definition.tab !== id || !definition.sizes.includes(size)) return null;
       if (player === undefined) {
         cards.push({ card, size, player: null });
         continue;
@@ -396,6 +397,8 @@ export interface PlayerDay {
   dayNumber: number | null;
   dayCount: number | null;
   battles: ClockBattle[];
+  /** Every battle of the day so far is in `battles`. */
+  complete: boolean;
 }
 
 /** The Reset is 05:00 UTC. Returns the next Reset after `nowMs`, in milliseconds. */
