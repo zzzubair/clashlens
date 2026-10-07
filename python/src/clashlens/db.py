@@ -25,9 +25,8 @@ ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
 CONTRACT_VERSION = 5
 PYTHON_BACKFILL_PRIORITY = 25
 PYTHON_LIVE_PRIORITY = 100
-# Work the next frozen leaderboard waits for: Reset readings, the day that
-# just ended and the board's builds. Only other work gains 10 a minute waited,
-# so this goes first until live work has waited 20 minutes (docs/deployment.md).
+# Work the next frozen leaderboard waits for: Reset readings, ended day, board builds.
+# Only other work gains 10 a minute waited, so this leads until live waits 20 minutes.
 PYTHON_RESET_PRIORITY = 300
 
 
