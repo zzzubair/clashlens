@@ -1231,9 +1231,9 @@ than 20 minutes. On 2026-10-07 the collector's outage delayed about 19,000
 Reset readings by 35 minutes; while they also earned the waiting bonus, no live
 reading was processed until they were all done, 40 minutes later, and live
 pages fell up to 59 minutes behind. Operator batches
-(`republish-current-season --first-logs` and `--day-1`) are queued at
-backfill priority, 25, which a worker thread only runs when no higher-priority
-work that thread can claim is due; a thread that does not process saved
+(`republish-current-season --first-logs`, `--day-1` and `--overlap-gap`)
+are queued at backfill priority, 25, which a worker thread only runs when no
+higher-priority work that thread can claim is due; a thread that does not process saved
 responses can run one while responses still wait. A claim from the newest-job
 plan takes its planned job only if, in the same database statement, no
 Reset-priority work it could take is waiting: due, waiting on its saved
