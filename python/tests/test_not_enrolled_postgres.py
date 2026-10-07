@@ -64,3 +64,39 @@ def test_days_before_a_proven_late_sign_up_are_not_enrolled(
     # Day 1 ended before a profile still showed no sign-up; Day 2 did not.
     assert "not_enrolled" in reasons[DAY_1]
     assert "not_enrolled" not in reasons[DAY_2]
+
+
+def test_every_proven_day_before_a_late_sign_up_is_calculated(
+    database_url: str, archive_server
+) -> None:
+    day_8, day_9, day_10 = (DAY_1 + timedelta(days=n) for n in (7, 8, 9))
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        # First found on Day 8, not signed up and with no battles.
+        jobs = _reset_work(connection_info, archive_server, day_8,
+                           profile=_not_signed_up(), log=_log())
+        _process(connection_info, archive_server, jobs)
+        jobs = _reset_work(connection_info, archive_server, day_10,
+                           profile=_new_season_profile(5000), log=_log())
+        _process(connection_info, archive_server, jobs)
+        reasons = _reasons(connection_info)
+
+    # Days 1-7 ended before the Day 8 profile; Day 9 had no such profile.
+    for day in range(7):
+        assert "not_enrolled" in reasons[DAY_1 + timedelta(days=day)]
+    assert "not_enrolled" not in reasons[day_9]
+
+
+def test_a_not_signed_up_profile_processed_after_the_sign_up_still_proves_it(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        late = _reset_work(connection_info, archive_server, DAY_2,
+                           profile=_not_signed_up(), log=_log())
+        jobs = _reset_work(connection_info, archive_server, DAY_3,
+                           profile=_new_season_profile(5000), log=_log())
+        _process(connection_info, archive_server, jobs)
+        assert "not_enrolled" not in _reasons(connection_info).get(DAY_1, [])
+        _process(connection_info, archive_server, late)
+        reasons = _reasons(connection_info)
+
+    assert "not_enrolled" in reasons[DAY_1]

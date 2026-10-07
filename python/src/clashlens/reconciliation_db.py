@@ -133,7 +133,8 @@ def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> boo
                 JOIN player_profile_effects AS joined_seen
                   ON joined_seen.profile_version_id = joined.id
                 WHERE waiting.player_id = %(player)s
-                  AND waiting.league_tier_id = 105000036
+                  AND waiting.eligibility_state = 'eligible'
+                  AND waiting.eligibility_reason = 'confirmed_legend_i'
                   AND waiting.current_league_season_id = '0'
                   AND waiting_seen.observed_at >= %(day_end)s
                   AND joined.current_league_season_id = %(season)s

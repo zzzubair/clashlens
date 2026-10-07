@@ -11,7 +11,7 @@ built this way keep every usual day rule; a start from the Season rule stays
 from __future__ import annotations
 
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -112,10 +112,12 @@ def season_rule_start(
 def _queue(
     connection: Any, player_id: int, day_start: datetime, observation_id: int | None,
     *, key: str | None = None, trigger: str = "first_battle_log",
+    later_days: bool = True,
 ) -> int | None:
-    """Queue the recalculation of one day and every saved later day of its
-    Season, by default from the player's earliest saved battle log,
-    ``observation_id``; ``None`` when it was already queued."""
+    """Queue the recalculation of one day and, with ``later_days``, every
+    saved later day of its Season, by default from the player's earliest
+    saved battle log, ``observation_id``; ``None`` when it was already
+    queued."""
     day = domain.ranked_day_for(day_start)
     day_text = day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     row = connection.execute(
@@ -136,8 +138,10 @@ def _queue(
             Jsonb({
                 "player_id": int(player_id),
                 "ranked_day_start": day_text,
-                "last_ranked_day_start": day_text,
-                "recalculate_season": day.official_season_id,
+                **({
+                    "last_ranked_day_start": day_text,
+                    "recalculate_season": day.official_season_id,
+                } if later_days else {}),
                 "trigger": trigger,
             }),
             DEFAULT_PARSER_VERSION,
@@ -186,9 +190,8 @@ def queue_earlier_days(
 def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> None:
     """When a player's first accepted Legend I profile naming a Season is
     saved after their first battle log of that Season, recalculate from Day 1
-    as ``backfill`` would, now that the Season rule can start it. After an
-    earlier profile this Season showed no sign-up, recalculate the Season's
-    saved days in any case."""
+    as ``backfill`` would, now that the Season rule can start it. Also
+    check whether it proves a late sign-up for the Season."""
     row = connection.execute(
         """
         SELECT profile.current_league_season_id
@@ -208,26 +211,10 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         """,
         (profile_version_id,),
     ).fetchone()
-    if row is not None and str(row[0]).isdigit() and int(row[0]) > 0:
-        # A late sign-up: recalculate the Season's saved days so the ones
-        # before it can be shown as not enrolled.
-        season_start = datetime.fromtimestamp(int(row[0]), UTC)
-        if connection.execute(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM player_profile_versions AS waiting
-                JOIN player_profile_effects AS seen ON seen.profile_version_id = waiting.id
-                WHERE waiting.player_id = %s AND waiting.league_tier_id = 105000036
-                  AND waiting.current_league_season_id = '0' AND seen.observed_at >= %s
-            )
-            """,
-            (player_id, season_start),
-        ).fetchone()[0]:
-            _queue(
-                connection, player_id, season_start, None,
-                key=f"reconcile:late-enrollment:{player_id}:{int(row[0])}",
-                trigger="late_enrollment",
-            )
+    if row is not None:
+        queue_not_enrolled(
+            connection, player_id, datetime.fromtimestamp(int(row[0]), UTC)
+        )
     first = _first_log(connection, player_id)
     if row is None or first is None:
         return
@@ -245,6 +232,55 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         {"day": first_day.season_start, "player": player_id},
     ).fetchone()[0]:
         _queue(connection, player_id, first_day.season_start, int(first[1]))
+
+
+def queue_not_enrolled(connection: Any, player_id: int, observed_at: datetime) -> None:
+    """Once saved profiles prove a late sign-up for the Season of
+    ``observed_at``, recalculate each day of it that ended before a confirmed
+    Legend I profile still showed no Season, Season ID 0, followed by a
+    profile showing the sign-up, so it can be shown as not enrolled. Either
+    profile may be processed last."""
+    day = domain.ranked_day_for(observed_at)
+    latest = connection.execute(
+        """
+        SELECT max(waiting_seen.observed_at)
+        FROM player_profile_versions AS waiting
+        JOIN player_profile_effects AS waiting_seen
+          ON waiting_seen.profile_version_id = waiting.id
+        WHERE waiting.player_id = %(player)s
+          AND waiting.eligibility_state = 'eligible'
+          AND waiting.eligibility_reason = 'confirmed_legend_i'
+          AND waiting.current_league_season_id = '0'
+          AND waiting_seen.observed_at >= %(start)s
+          AND EXISTS (
+              SELECT 1
+              FROM player_profile_versions AS joined
+              JOIN player_profile_effects AS joined_seen
+                ON joined_seen.profile_version_id = joined.id
+              WHERE joined.player_id = waiting.player_id
+                AND joined.current_league_season_id = %(season)s
+                AND joined.eligibility_state = 'eligible'
+                AND joined.source_contract_state = 'accepted'
+                AND joined_seen.observed_at > waiting_seen.observed_at
+                AND joined_seen.observed_at < %(end)s
+          )
+        """,
+        {
+            "player": player_id,
+            "start": day.season_start,
+            "season": day.official_season_id,
+            "end": day.season_end,
+        },
+    ).fetchone()[0]
+    day_start = day.season_start
+    while latest is not None and day_start + timedelta(days=1) <= latest:
+        day_text = day_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _queue(
+            connection, player_id, day_start, None,
+            key=f"reconcile:not-enrolled:{player_id}:{day_text}",
+            trigger="late_enrollment", later_days=False,
+        )
+        day_start += timedelta(days=1)
 
 
 def backfill(
