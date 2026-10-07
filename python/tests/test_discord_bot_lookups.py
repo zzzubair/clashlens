@@ -172,6 +172,13 @@ def test_top_lists_the_live_leaderboard_among_tracked_players(store) -> None:
     assert links(message) == {"Full leaderboard": "https://clashlens.test/leaderboards/tracked"}
 
 
+def test_top_with_an_empty_board_still_shows_the_reset(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    message = run_command(store, "top", FakeInteraction(), share=False)
+    assert message["text"].splitlines()[0] == "The Live Leaderboard is empty right now."
+    assert message["text"].splitlines()[-1].endswith(RESET)
+
+
 def test_rank_shows_the_main_with_the_players_around_it(store) -> None:
     store.connect(ME, [card("#2PP", "Drift", 5842), card("#8QQ", "Lens", 5100)])
     store.mains[1] = "#2PP"
@@ -190,7 +197,7 @@ def test_rank_shows_the_main_with_the_players_around_it(store) -> None:
     assert message["text"].splitlines()[2:] == [
         "#1,233 Above · 5,850 (+8)",
         "▶ **#1,234 Drift · 5,842**",
-        "#1,235 Below · 5,842",
+        "#1,235 Below · 5,842 (+0)",
     ]
 
 
@@ -251,7 +258,7 @@ def test_group_lists_the_persons_groups_and_compares_one(store) -> None:
     listed = run_command(store, "group", FakeInteraction(), group=None, days=7, share=False)
     assert "**Night Crew** · 2 players" in listed["text"]
     compared = run_command(
-        store, "group", FakeInteraction(), group="night crew", days=14, share=False
+        store, "group", FakeInteraction(), group=GROUP_ID, days=14, share=False
     )
     assert compared["title"] == "Night Crew · last 14 ended Legend days"
     lines = [line for line in compared["text"].splitlines() if line.startswith("**")]
@@ -264,6 +271,23 @@ def test_group_lists_the_persons_groups_and_compares_one(store) -> None:
         ),
     ]
     assert "group 14" in store.reads
+    by_name = run_command(
+        store, "group", FakeInteraction(), group="Night Crew", days=7, share=False
+    )
+    assert by_name["text"] == "That group isn't on your Clash Lens account."
+
+
+def test_group_picked_from_the_list_keeps_the_chosen_days(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+    store.group_lists[1] = [{"group_id": GROUP_ID, "name": "Night Crew", "tags": ["#2PP"]}]
+    store.comparisons[(1, GROUP_ID)] = comparison([member("#2PP", "Drift", 5842, you=True)])
+    interaction = FakeInteraction()
+    listed = run_command(store, "group", interaction, group=None, days=3, share=False)
+    (select,) = [item for item in listed["view"].children if isinstance(item, discord.ui.Select)]
+    select._values = [GROUP_ID]  # what Discord fills in when the person picks
+    asyncio.run(select.callback(interaction))
+    assert interaction.last["title"] == "Night Crew · last 3 ended Legend days"
+    assert "group 3" in store.reads
 
 
 def test_group_of_another_account_or_too_large_is_refused(store) -> None:
@@ -401,3 +425,12 @@ def test_season_history_shows_after_the_player_leaves_legend(store) -> None:
     store.pages["#2PP"] = {**season_page(), "state": "not_in_legend"}
     text = run_command(store, "season", FakeInteraction(), account=None, share=False)["text"]
     assert "**Attacks** 2 · hit rate 50%" in text
+
+
+def test_season_not_available_yet_still_shows_the_reset(store) -> None:
+    store.connect(ME, [card("#2PP", "Drift", 5040)])
+    season = season_page()
+    season["screen_ready"]["season"] = None
+    store.pages["#2PP"] = season
+    text = run_command(store, "season", FakeInteraction(), account=None, share=False)["text"]
+    assert text.splitlines() == ["This Season's days are not available yet.", "", RESET]

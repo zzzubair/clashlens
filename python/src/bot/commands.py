@@ -230,20 +230,11 @@ class Commands:
         groups = self.store.groups(account, now)
         if group is None:
             return (
-                replies.groups_list(self.site, groups, now)
+                replies.groups_list(self.site, groups, days, now)
                 if groups
                 else replies.no_groups(self.site, now)
             )
-        wanted = " ".join(group.split()).casefold()
-        group_id = next(
-            (
-                item["group_id"]
-                for item in groups
-                if item["group_id"] == group.strip().lower()
-                or item["name"].casefold() == wanted
-            ),
-            None,
-        )
+        group_id = next((item["group_id"] for item in groups if item["group_id"] == group), None)
         if group_id is None or not _is_uuid(group_id):
             return replies.not_your_group()
         try:
@@ -282,8 +273,9 @@ class Commands:
             return self.rank(account, tag)
         if action == "season":
             return self.season(account, tag)
-        if action == replies.GROUP_WORD:
-            return self.group(account, tag)
+        word, _, days = action.partition(" ")
+        if word == replies.GROUP_WORD:
+            return self.group(account, tag, int(days))
         return self.me(account, tag)
 
     def keep(self, discord_id: str, reply: Reply) -> Reply | None:

@@ -551,7 +551,11 @@ _RANK_NOTE = "Clash Lens ranks the players it tracks; this is not the official w
 def top_reply(site: Site, board: Mapping[str, Any] | None, now: datetime) -> Reply:
     link = (Link("Full leaderboard", site.url("/leaderboards/tracked")),)
     if board is None or not board["entries"]:
-        return Reply("The Live Leaderboard is empty right now.", updated="pending", links=link)
+        return Reply(
+            f"The Live Leaderboard is empty right now.\n\n{reset_line(now)}",
+            updated="pending",
+            links=link,
+        )
     lines = [reset_line(now), ""]
     lines += [
         f"#{entry['position']} {safe(entry['name'])} · {number(entry['trophies'])}"
@@ -578,7 +582,7 @@ def rank_reply(
         line = f"#{number(entry['position'])} {safe(entry['name'])} · {number(entry['trophies'])}"
         if entry is me:
             line = f"▶ **{line}**"
-        elif gap:
+        else:
             line += f" ({signed(gap)})"
         lines.append(line)
     return Reply(
@@ -612,7 +616,9 @@ def group_too_large(site: Site, group_id: str) -> Reply:
     )
 
 
-def groups_list(site: Site, groups: Sequence[Mapping[str, Any]], now: datetime) -> Reply:
+def groups_list(
+    site: Site, groups: Sequence[Mapping[str, Any]], days: int, now: datetime
+) -> Reply:
     shown = groups[:10]
     lines = [
         f"**{safe(group['name'])}** · {len(group['tags'])} players" for group in shown
@@ -628,7 +634,7 @@ def groups_list(site: Site, groups: Sequence[Mapping[str, Any]], now: datetime) 
             Choice(" ".join(group["name"].split())[:_MAX_CHOICE_LABEL], group["group_id"])
             for group in groups[:MAX_CHOICES]
         ),
-        pick=GROUP_WORD,
+        pick=f"{GROUP_WORD} {days}",
         placeholder=f"Open a {GROUP_WORD}…",
     )
 
@@ -713,7 +719,7 @@ def season_reply(site: Site, page: Mapping[str, Any], now: datetime) -> Reply:
     link = (Link("Open on Clash Lens", site.player(page["tag"])),)
     if season is None:
         return Reply(
-            "This Season's days are not available yet.",
+            f"This Season's days are not available yet.\n\n{reset_time(now)}",
             title=title,
             updated=page["observed_at"],
             links=link,
