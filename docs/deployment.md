@@ -1177,14 +1177,25 @@ it one at a time, about 13 a second, and the board waited until 06:15. Reset
 readings, results for the Legend day that just ended, and the board's snapshot
 and analytics builds are queued at priority 300 instead of 100
 (`PYTHON_RESET_PRIORITY` in [`db.py`](../python/src/clashlens/db.py)). A claim
-adds 10 for each minute a job has waited, so they go first unless live work has
-waited 20 minutes. A claim from the newest-job plan takes its planned job only
-if, in the same database statement, no Reset-priority work it could take is
-waiting: due, waiting on its saved response, or with an expired lease. If there
-is any, the same claim uses that order instead. Asking for one particular job by
-number still takes that job. The board
-maintenance pass waits at most 50 milliseconds for a Reset's lock and otherwise
-tries again on its next pass.
+adds 10 for each minute live work has waited, while Reset-priority work keeps
+its fixed score, so they go first unless live work has waited 20 minutes,
+however long they have waited themselves. That only holds for live jobs among
+the 32 a claim looks at, picked by when each became due: a retried live job is
+due again from its retry time, so it can still wait behind Reset work longer
+than 20 minutes. On 2026-10-07 the collector's outage delayed about 19,000
+Reset readings by 35 minutes; while they also earned the waiting bonus, no live
+reading was processed until they were all done, 40 minutes later, and live
+pages fell up to 59 minutes behind. Operator batches
+(`republish-current-season --first-logs` and `--day-1`) are queued at
+backfill priority, 25, which a worker thread only runs when no higher-priority
+work that thread can claim is due; a thread that does not process saved
+responses can run one while responses still wait. A claim from the newest-job
+plan takes its planned job only if, in the same database statement, no
+Reset-priority work it could take is waiting: due, waiting on its saved
+response, or with an expired lease. If there is any, the same claim uses that
+order instead. Asking for one particular job by number still takes that job.
+The board maintenance pass waits at most 50 milliseconds for a Reset's lock
+and otherwise tries again on its next pass.
 
 Production runs one worker process, whose queue maintenance runs between
 batches. If maintenance in another worker process reaches an expired job on

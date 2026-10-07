@@ -23,6 +23,7 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
     Database,
     _text_value,
     ended_day_priority,
@@ -112,12 +113,13 @@ def season_rule_start(
 def _queue(
     connection: Any, player_id: int, day_start: datetime, observation_id: int | None,
     *, key: str | None = None, trigger: str = "first_battle_log",
-    later_days: bool = True,
+    later_days: bool = True, priority: int | None = None,
 ) -> int | None:
     """Queue the recalculation of one day and, with ``later_days``, every
     saved later day of its Season, by default from the player's earliest
     saved battle log, ``observation_id``; ``None`` when it was already
-    queued."""
+    queued. Without ``priority``, the day's own: Reset priority while its
+    Reset is the latest, else live."""
     day = domain.ranked_day_for(day_start)
     day_text = day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     row = connection.execute(
@@ -148,7 +150,7 @@ def _queue(
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
-            ended_day_priority(day.start),
+            ended_day_priority(day.start) if priority is None else priority,
         ),
     ).fetchone()
     return int(row[0]) if row is not None else None
@@ -286,6 +288,9 @@ def queue_not_enrolled(connection: Any, player_id: int, observed_at: datetime) -
 def backfill(
     database: Database, season_id: str, *, queue: bool, max_jobs: int
 ) -> dict[str, Any]:
+    # An operator's batch: queued at backfill priority, like requeue_day_1,
+    # so a worker thread runs it only when no higher-priority work that thread
+    # can claim is due.
     """Find, and with ``queue`` recalculate, the days that players first
     tracked during the Season can now fill: Day 1 for each player whose first
     battle log was saved on Day 1, and, for a player first tracked later, the
@@ -359,7 +364,8 @@ def backfill(
                     ready[:max_jobs] if queue else []
                 )
                 if (job_id := _queue(
-                    connection, int(player_id), day, int(observation_id)
+                    connection, int(player_id), day, int(observation_id),
+                    priority=PYTHON_BACKFILL_PRIORITY,
                 )) is not None
             ]
     return {
@@ -387,7 +393,10 @@ def requeue_day_1(
     (attacks - defenses) missing defenses when attacks are at least the
     defenses, and a Reset reading taken before it is read less it. Repeating
     it skips players already queued; players queued by the run before those
-    last two changes are queued again."""
+    last two changes are queued again. The batch is queued at backfill
+    priority: a worker thread runs it only when no higher-priority work that
+    thread can claim is due. Batch 1 of 775 players on 2026-10-07 was
+    queued live, in the busy hour after Reset."""
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(season_start):
         raise ValueError(f"{season_id} is not a Season's start")
@@ -428,6 +437,7 @@ def requeue_day_1(
                 if (job_id := _queue(
                     connection, player_id, season_start, None,
                     key=key(player_id), trigger="season_day_1",
+                    priority=PYTHON_BACKFILL_PRIORITY,
                 )) is not None
             ]
     return {

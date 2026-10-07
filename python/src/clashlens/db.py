@@ -25,9 +25,8 @@ ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
 CONTRACT_VERSION = 5
 PYTHON_BACKFILL_PRIORITY = 25
 PYTHON_LIVE_PRIORITY = 100
-# Work the next frozen leaderboard waits for: Reset readings, the day that
-# just ended and the board's builds. A claim adds 10 for each minute a job
-# has waited, so this goes first unless live work has waited 20 minutes.
+# Reset readings, ended-day results, board builds; only other work gains 10 a minute,
+# so live jobs in the claim window pass it at 20 minutes; retried live jobs may not.
 PYTHON_RESET_PRIORITY = 300
 
 
@@ -444,8 +443,9 @@ def _claim_select_statement(
     reset_gate = gate + _reset_waiting(jobs_relation, claimable) if planned else ""
     score = f"""CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
         THEN 0 ELSE 1 END,
-        job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
-        / 60)::integer * 10"""
+        CASE WHEN job.priority = {PYTHON_RESET_PRIORITY} THEN job.priority
+        ELSE job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
+        / 60)::integer * 10 END"""
     dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
     ordinary_job_filter = f"""job.attempt_count < job.max_attempts
         AND {supported_filter}"""

@@ -26,7 +26,7 @@ from test_reset_settlement_state_postgres import (
 )
 
 from clashlens import first_battle_log, reconciliation_db
-from clashlens.db import Database
+from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import allocate_trophies
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
@@ -147,6 +147,17 @@ def test_player_first_seen_during_day_1_gets_a_season_rule_start(
         assert "missing_start_battle_log_baseline" in day[5]
 
 
+def _queued_priorities(connection_info: str, key_prefix: str) -> set[int]:
+    with psycopg.connect(connection_info) as connection:
+        return {
+            row[0] for row in connection.execute(
+                "SELECT DISTINCT priority FROM python_processing_jobs"
+                " WHERE deduplication_key LIKE %s",
+                (key_prefix + "%",),
+            )
+        }
+
+
 def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
     database_url: str, archive_server
 ) -> None:
@@ -203,6 +214,8 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
             )
         finally:
             database.close()
+        # The batch yields to any higher-priority work its thread can claim.
+        priorities = _queued_priorities(connection_info, "reconcile:first-log:")
         _process(connection_info, archive_server, [])
         day_1_joiner = _day_1(connection_info)
 
@@ -225,6 +238,7 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
     }
     assert (queued["queued"], queued["left_to_queue"]) == (2, 0)
     assert (again["queued"], again["already_queued"]) == (0, 2)
+    assert priorities == {PYTHON_BACKFILL_PRIORITY}
 
 
 def test_opponent_whose_battle_log_is_processed_before_their_profile_gets_day_1(
@@ -366,6 +380,10 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
             )
         finally:
             database.close()
+        # The batch yields to any higher-priority work its thread can claim.
+        priorities = _queued_priorities(
+            connection_info, "reconcile:season-day-1-unsettled-loss:"
+        )
         _process(connection_info, archive_server, [])
         after = _day_1(connection_info)
 
@@ -377,4 +395,5 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
                        "already_queued": 0, "queued": 0, "left_to_queue": 1}
     assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
     assert (again["queued"], again["already_queued"]) == (0, 1)
+    assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "inferred", 5000, ending)

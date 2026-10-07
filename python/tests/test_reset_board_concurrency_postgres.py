@@ -269,28 +269,39 @@ def test_reset_work_goes_before_recent_live_work(database_url: str) -> None:
                 )
                 for key, priority in (
                     ("live", PYTHON_LIVE_PRIORITY),
+                    ("delayed", PYTHON_RESET_PRIORITY),
                     ("reset", PYTHON_RESET_PRIORITY),
                     ("old", PYTHON_LIVE_PRIORITY),
                 )
             }
             # Live work that has waited 15 minutes still yields; after 25 it
-            # goes first, so a Reset cannot hold live data back for long.
-            for key, waited in (("live", "15 minutes"), ("old", "25 minutes")):
+            # goes first, so a Reset cannot hold live data back for long,
+            # even a Reset reading the collector delayed by 30 minutes: on
+            # 2026-10-07 an outage delayed about 19,000 of them, and live
+            # pages fell up to 59 minutes behind while they all went first.
+            # This holds for live jobs among those a claim looks at; a retried
+            # live job, due again from its retry time, can still wait longer.
+            for key, waited in (
+                ("live", "15 minutes"),
+                ("delayed", "30 minutes"),
+                ("old", "25 minutes"),
+            ):
                 connection.execute(
                     "UPDATE python_processing_jobs"
-                    " SET created_at = clock_timestamp() - %s::interval WHERE id = %s",
-                    (waited, jobs[key]),
+                    " SET created_at = clock_timestamp() - %s::interval,"
+                    " due_at = clock_timestamp() - %s::interval WHERE id = %s",
+                    (waited, waited, jobs[key]),
                 )
             connection.commit()
         database = Database(connection_info)
         try:
             claimed = [
-                database.claim_job(owner=f"lane-{index}") for index in range(3)
+                database.claim_job(owner=f"lane-{index}") for index in range(4)
             ]
         finally:
             database.close()
         assert [claim.job_id for claim in claimed if claim] == [
-            jobs["old"], jobs["reset"], jobs["live"]
+            jobs["old"], jobs["delayed"], jobs["reset"], jobs["live"]
         ]
 
 
