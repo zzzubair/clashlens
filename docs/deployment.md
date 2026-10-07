@@ -953,9 +953,9 @@ use the [operating notes](operating.md#respond-to-alerts).
 - **An early warning before a health-check kill**: the collector or worker
   failed **2 health checks in a row**, from `podman inspect`'s failing
   streak. Podman kills a container at 6, about three minutes, and its own
-  status stays `healthy` until then. This is sent before the alert check's
-  slower checks run, and is its own alert so an open backlog warning never
-  hides it.
+  status stays `healthy` until then. The alert check reads this before its
+  slower checks and again after each one, and sends it as soon as it appears.
+  It is its own alert so an open backlog warning never hides it.
 - **An early warning when work falls behind**, one alert naming every reason
   that holds:
   - the oldest overdue job has waited **10 minutes**, or **45 minutes** between

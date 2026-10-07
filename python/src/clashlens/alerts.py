@@ -550,9 +550,15 @@ def observe(
                 f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
             )
 
-    findings.update(early_warnings(podman, metrics if metrics_read else {}, state, clock))
-    # Sent before the slow checks below: Podman kills about three minutes in.
-    send({"health": findings["health"]})
+    findings["warning"] = early_warning(metrics if metrics_read else {}, state, clock)
+
+    def check_health() -> None:
+        # Sent before and between the slow checks below: Podman kills about
+        # three minutes in, and each slow check may take 25 seconds.
+        findings["health"] = health_warning(podman, state)
+        send({"health": findings["health"]})
+
+    check_health()
 
     names = (
         ("clashlens_spool_bytes", "max_bytes"),
@@ -617,6 +623,7 @@ def observe(
         findings["restarts"] = any(count > 3 for count in counts.values())
     except (OSError, ValueError, subprocess.SubprocessError):
         errors.append("Restart history unavailable; run ./ops logs")
+    check_health()
 
     try:
         backup_failed = (
@@ -637,6 +644,7 @@ def observe(
             errors.append("Backup check failed; run ./ops backup-status")
         else:
             state.pop("backup_failing_since", None)
+    check_health()
 
     probe = [
         podman,
@@ -651,6 +659,7 @@ def observe(
         findings["reads"] = command(probe, 25).returncode != 0
     except (OSError, subprocess.SubprocessError):
         findings["reads"] = True
+    check_health()
     for name, flag, count, unavailable, service in (
         ("leaderboard", "--leaderboard", 3, "Live Leaderboard freshness", "api"),
         ("publication", "--publication", 1, "Reset publication status", "api"),
@@ -666,6 +675,7 @@ def observe(
         except (OSError, ValueError, subprocess.SubprocessError):
             errors.append(f"{unavailable} unavailable; run ./ops logs {service}")
             values = None
+        check_health()
         if name != "leaderboard":
             if values is not None:
                 findings[name] = values[0] > (UNTRACKED_BATTLER_LIMIT if name == "completeness" else 0)
@@ -694,12 +704,11 @@ def observe(
     return findings, errors
 
 
-def early_warnings(podman: str, metrics: dict, state: dict, clock: str) -> dict:
-    """Warn before a health-check kill or a stalled Reset: 7 Oct 2026 had none.
+def health_warning(podman: str, state: dict) -> bool | None:
+    """Warn before a health-check kill: 7 Oct 2026 had none.
 
     A kill is its own condition, so an open backlog warning never hides one."""
-    reasons: dict[str, list[str]] = {"health": [], "warning": []}
-    unknown = set()
+    reasons, unknown = [], False
     for container in ("clashlens-collector", "clashlens-python-worker"):
         try:
             result = command(
@@ -709,30 +718,35 @@ def early_warnings(podman: str, metrics: dict, state: dict, clock: str) -> dict:
         except (OSError, ValueError, subprocess.SubprocessError):
             streak = None
         if streak is None:
-            unknown.add("health")
+            unknown = True
         elif streak >= WARNING_HEALTH_STREAK:
-            reasons["health"].append(f"{container} failed its last {streak} health checks")
+            reasons.append(f"{container} failed its last {streak} health checks")
+    if reasons:
+        state.setdefault("details", {})["health"] = "Now: " + "; ".join(reasons)
+    return True if reasons else (None if unknown else False)
+
+
+def early_warning(metrics: dict, state: dict, clock: str) -> bool | None:
+    """Warn before a stalled Reset or a growing backlog."""
+    reasons, unknown = [], False
     age = metrics.get("clashlens_collector_oldest_pending_processing_age_seconds")
     limit = WARNING_RESET_OVERDUE if "05:00" <= clock < "07:00" else WARNING_OVERDUE
     if age is None:
-        unknown.add("warning")
+        unknown = True
     elif age >= limit:
-        reasons["warning"].append(f"the oldest overdue job has waited {int(age // 60)} minutes")
+        reasons.append(f"the oldest overdue job has waited {int(age // 60)} minutes")
     # Responses saved in the collector's sampled minute, once it is all in 05:00-06:00.
     saved = metrics.get("clashlens_collector_responses_saved_last_minute")
     sampled = metrics.get("clashlens_collector_metrics_sample_timestamp_seconds")
     if "05:00" <= clock < "06:00":
         hours = {datetime.fromtimestamp(t, UTC).hour for t in (sampled - 60, sampled)} if sampled is not None else None
         if saved is None or hours != {5}:
-            unknown.add("warning")
+            unknown = True
         elif saved < WARNING_RESET_SAVED_PER_MINUTE:
-            reasons["warning"].append(f"only {int(saved)} responses a minute were saved in the Reset hour")
-    findings = {}
-    for name, found in reasons.items():
-        if found:
-            state.setdefault("details", {})[name] = "Now: " + "; ".join(found)
-        findings[name] = True if found else (None if name in unknown else False)
-    return findings
+            reasons.append(f"only {int(saved)} responses a minute were saved in the Reset hour")
+    if reasons:
+        state.setdefault("details", {})["warning"] = "Now: " + "; ".join(reasons)
+    return True if reasons else (None if unknown else False)
 
 
 def observe_site(

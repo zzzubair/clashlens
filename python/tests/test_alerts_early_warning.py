@@ -137,3 +137,21 @@ def test_an_open_backlog_warning_does_not_hide_a_health_warning(rt) -> None:
     assert rt.run() == 0
     assert len(warnings(rt)) == 2
     assert "clashlens-collector failed its last 2 health checks" in warnings(rt)[1]
+
+
+def test_a_health_failure_starting_during_the_slow_checks_warns_in_the_same_run(
+    rt, monkeypatch
+) -> None:
+    # The minute timer skips while a run is busy, so a run's slow checks can
+    # outlast the three minutes before Podman kills a failing container.
+    run_command = alerts.command
+
+    def command(args, timeout=15):
+        if "backup-status" in args:
+            rt.health_streaks["clashlens-python-worker"] = 2
+        return run_command(args, timeout)
+
+    monkeypatch.setattr(alerts, "command", command)
+    assert rt.run() == 0
+    assert len(warnings(rt)) == 1
+    assert "clashlens-python-worker failed its last 2 health checks" in warnings(rt)[0]
