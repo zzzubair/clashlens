@@ -668,6 +668,19 @@ podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
 **Recovered:** every Reset since the first one has published its frozen
 leaderboard and army results.
 
+### Untracked Legend I battlers
+
+**First checks:** `./ops logs worker --since '2 hours ago' --no-pager` for
+processing failures, then `./ops queue-status` and
+`./ops failed-items --limit 20`: opponent discovery queues one profile check
+per newly seen player, so a stalled collector or worker leaves them untracked.
+
+**Fix or escalate:** escalate; a player missed by discovery is checked again
+the next time a changed battle log names them.
+
+**Recovered:** at most 10 players from the current or previous Legend day's
+battles have stayed untracked for over an hour.
+
 ### Season final ranks missing
 
 Ended-Season pages show "Not published yet" until Clash of Clans league history
@@ -695,10 +708,10 @@ SSH, it is powered off or offline.
 
 ### When alerts themselves fail
 
-The monitoring warning means a disk, restart-history, Live Leaderboard or
-Reset publication check has been unreadable for ten minutes. Run
+The monitoring warning means a disk, restart-history, Live Leaderboard,
+Reset publication or untracked battler check has been unreadable for ten minutes. Run
 `journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager`
-to see which diagnostic repeats. Its recovery only means all four checks can
+to see which diagnostic repeats. Its recovery only means all five checks can
 be read again; a disk, Live Leaderboard or publication problem they then
 report keeps its own alert open.
 

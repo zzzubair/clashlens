@@ -75,9 +75,16 @@ CONDITIONS = {
         "A Reset's frozen leaderboard or army results are over an hour past their publication time",
         "./ops logs worker",
     ),
+    "completeness": (
+        (
+            "Over 10 players who battled in Legend I today or yesterday are still"
+            " untracked an hour after their first battle was saved"
+        ),
+        "./ops logs worker",
+    ),
     "monitoring": (
         (
-            "A disk, restart-history, Live Leaderboard or Reset publication check"
+            "A disk, restart-history, Live Leaderboard, Reset publication or untracked battler check"
             " has been unreadable for at least 10 minutes"
         ),
         "journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager",
@@ -105,6 +112,7 @@ UNREADABLE = {
     "Restart history unavailable; run ./ops logs",
     "Live Leaderboard freshness unavailable; run ./ops logs api",
     "Reset publication status unavailable; run ./ops logs api",
+    "Untracked Legend I battler count unavailable; run ./ops logs worker",
 }
 
 # A recovery is sent only after this long without the problem, so a problem
@@ -115,6 +123,8 @@ RECOVERY_HOLD = 900
 LEADERBOARD_STALE_SHARE = 0.05
 LEADERBOARD_OLDEST = 1200
 LEADERBOARD_HOLD = 300
+# Untracked recent Legend I battlers tolerated before the completeness alert.
+UNTRACKED_BATTLER_LIMIT = 10
 
 
 class CheckError(Exception):
@@ -270,6 +280,42 @@ def publication_probe() -> None:
         )
     finally:
         database.close()
+
+
+def completeness_probe() -> None:
+    """Run inside the worker container; prints how many recent battlers are untracked.
+
+    Counts players in Legend I battles of the current or previous Legend day
+    who are not tracked although their first such battle was saved over an
+    hour ago, long enough for discovery to have checked them.
+    """
+    import psycopg
+
+    url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
+    with psycopg.connect(url) as connection:
+        print(
+            connection.execute(
+                """
+                WITH since AS (
+                    SELECT date_bin(interval '1 day', clock_timestamp(),
+                                    timestamptz '2000-01-01 05:00:00+00')
+                           - interval '1 day' AS day_start
+                ), battlers AS (
+                    SELECT attacker_player_id AS player_id, created_at
+                    FROM legend_battles WHERE ranked_day_start >= (SELECT day_start FROM since)
+                    UNION ALL
+                    SELECT defender_player_id, created_at
+                    FROM legend_battles WHERE ranked_day_start >= (SELECT day_start FROM since)
+                )
+                SELECT count(*) FROM (
+                    SELECT player_id FROM battlers GROUP BY player_id
+                    HAVING min(created_at) < clock_timestamp() - interval '1 hour'
+                ) AS seen
+                JOIN players ON players.id = seen.player_id
+                WHERE NOT players.active
+                """
+            ).fetchone()[0]
+        )
 
 
 def elapsed_without_reset(start: float, end: float) -> float:
@@ -576,21 +622,24 @@ def observe(
         findings["reads"] = command(probe, 25).returncode != 0
     except (OSError, subprocess.SubprocessError):
         findings["reads"] = True
-    for name, flag, count, unavailable in (
-        ("leaderboard", "--leaderboard", 3, "Live Leaderboard freshness"),
-        ("publication", "--publication", 1, "Reset publication status"),
+    for name, flag, count, unavailable, service in (
+        ("leaderboard", "--leaderboard", 3, "Live Leaderboard freshness", "api"),
+        ("publication", "--publication", 1, "Reset publication status", "api"),
+        # The worker's database role reads battles; the API's does not.
+        ("completeness", "--completeness", 1, "Untracked Legend I battler count", "worker"),
     ):
         try:
-            result = command(probe[:-1] + [flag], 25)
+            container = f"clashlens-python-{service}"
+            result = command([podman, "exec", container, *probe[3:-1], flag], 25)
             values = [int(value) for value in result.stdout.split()]
             if result.returncode or len(values) != count:
                 raise ValueError
         except (OSError, ValueError, subprocess.SubprocessError):
-            errors.append(f"{unavailable} unavailable; run ./ops logs api")
+            errors.append(f"{unavailable} unavailable; run ./ops logs {service}")
             values = None
-        if name == "publication":
+        if name != "leaderboard":
             if values is not None:
-                findings[name] = values[0] > 0
+                findings[name] = values[0] > (UNTRACKED_BATTLER_LIMIT if name == "completeness" else 0)
         elif values is None or resetting:
             state.pop("leaderboard_stale_since", None)
         elif values[2] > LEADERBOARD_OLDEST or values[0] > LEADERBOARD_STALE_SHARE * values[1]:
@@ -674,6 +723,9 @@ def main() -> int:
             return 0
         if sys.argv[1:] == ["--publication"]:
             publication_probe()
+            return 0
+        if sys.argv[1:] == ["--completeness"]:
+            completeness_probe()
             return 0
         if sys.argv[1:2] == ["--uptime"] and len(sys.argv) > 4:
             state_dir, webhook, *urls = sys.argv[2:]

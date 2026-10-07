@@ -961,12 +961,21 @@ use the [operating notes](operating.md#respond-to-alerts).
   production yet. On Oct 2 collection took about 8 minutes and the Live
   Leaderboard was fully fresh about 13 minutes after Reset. Tighten it once
   real publication times can be measured.
+- **More than 10 untracked recent Legend I battlers**: players in a saved
+  Legend I battle of the current or previous Legend day who are not tracked
+  although their first such battle was saved over an hour ago. Opponent
+  discovery checks a newly seen player within seconds, so a count above 10
+  means discovery is stalled or skipping players. On production on Oct 6, 2026
+  one of 11,756 Season battlers was untracked. The check enters the private
+  worker container, whose database role reads battles, and prints only the
+  count; it reads the battles of two Legend days (about 44,000 rows) through
+  their existing day lookup.
 
 Missing collector measurements or a failed publication check never clear these
 alerts, and each recovers only when its own measurement does.
 
-- **A disk, restart-history, Live Leaderboard or Reset publication check
-  unreadable for 10 minutes** (600 seconds). These four checks otherwise
+- **A disk, restart-history, Live Leaderboard, Reset publication or untracked
+  battler check unreadable for 10 minutes** (600 seconds). These five checks otherwise
   only log a diagnostic and stay unknown, which can hide their own problem
   indefinitely. Each keeps its own first-failure time, so a check that
   becomes readable and later fails again starts a new ten minutes, and one
