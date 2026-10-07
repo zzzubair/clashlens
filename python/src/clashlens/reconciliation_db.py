@@ -340,18 +340,12 @@ def recalculate_ranked_day(
         "state": result.state,
         "confidence": result.confidence,
         "failure_reasons": list(result.failure_reasons),
-        "start_trophies": (
-            int(start_baseline["trophies"])
-            if start_baseline is not None
-            and start_baseline["trophies"] is not None
-            else None
-        ),
-        "next_start_trophies": (
-            int(end_baseline["trophies"])
-            if end_baseline is not None
-            and end_baseline["trophies"] is not None
-            else None
-        ),
+        # The Reset reading, less the previous day's automatic defense loss
+        # when the reading came before the game applied it.
+        "start_trophies": result.start_trophies,
+        # The end reading, less this day's automatic defense loss when the
+        # reading came before the game applied it: the next day's start.
+        "next_start_trophies": result.next_start_trophies,
         "attack_count": result.attack_count,
         "defense_count": result.defense_count,
         "attack_gain": result.attack_trophy_gain,

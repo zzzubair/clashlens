@@ -98,6 +98,10 @@ class PreviousRankedDay:
     state: str | None = None
     confidence: str | None = None
     input_hash: str | None = None
+    # The automatic defense loss that day's Reset reading had not yet applied
+    # (see ``_settled_start``), and the Reset evidence the reading came from.
+    unsettled_automatic_loss: int = 0
+    end_baseline_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +174,14 @@ class ReconciliationResult:
     formula_components: dict[str, Any] = field(default_factory=dict)
     shield_evidence: dict[str, Any] = field(default_factory=dict)
     input_evidence: dict[str, Any] = field(default_factory=dict)
+    # The day's starting trophies: the Reset reading, less the previous day's
+    # unsettled automatic defense loss when that reading predates it.
+    start_trophies: int | None = None
+    # The next day's starting trophies: the end Reset reading, less this
+    # day's unsettled automatic defense loss, the loss the reading had not
+    # yet applied.
+    next_start_trophies: int | None = None
+    unsettled_automatic_loss: int = 0
 
     @property
     def attack_gain(self) -> int:
@@ -269,10 +281,14 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     automatic_loss, automatic_state = _automatic_defense_adjustment(
         data,
         coverage_complete=coverage_complete,
+        attack_count=attack_count,
         defense_count=defense_count,
         observed_defense_loss=defense_loss,
         failures=failures,
     )
+    start_trophies, start_unsettled_loss = _settled_start(data)
+    next_start_trophies = data.next_start_trophies
+    unsettled_loss = 0
 
     ended = data.now >= data.ranked_day.end
     # The Season rule can start Day 1 without a saved Reset reading.
@@ -313,13 +329,13 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
 
     automatic_value_known = not (1 <= defense_count <= 7) or automatic_loss is not None
     if start_available and automatic_value_known:
-        assert data.start_trophies is not None
+        assert start_trophies is not None
         final_trophies = (
-            data.start_trophies + attack_gain - defense_loss - (automatic_loss or 0)
+            start_trophies + attack_gain - defense_loss - (automatic_loss or 0)
         )
-        net_trophy_change = final_trophies - data.start_trophies
+        net_trophy_change = final_trophies - start_trophies
         if data.next_start_trophies is not None:
-            observed_trophy_change = data.next_start_trophies - data.start_trophies
+            observed_trophy_change = data.next_start_trophies - start_trophies
 
         if data.boundary_kind == "season" or (
             data.boundary_kind == "weekly" and final_trophies < 5000
@@ -332,14 +348,31 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         expected_next = final_trophies + boundary_adjustment
 
         if end_available and data.next_start_trophies is not None:
-            observed_boundary_adjustment = data.next_start_trophies - final_trophies
             residual = data.next_start_trophies - expected_next
+            if (
+                automatic_loss
+                and residual == automatic_loss
+                and automatic_state == "calculated"
+                and not end_hidden_by_reset
+            ):
+                # The game applies the automatic defense loss about 7 to 13
+                # minutes after the Reset, and the Reset reading usually comes
+                # first, so it sits exactly the calculated loss above the
+                # day's end: 589 days on 2 October 2026, 998 on 3 October and
+                # 2,889 on 5 October. The loss stays calculated, and the next
+                # day starts from the reading less it.
+                unsettled_loss = automatic_loss
+                next_start_trophies = data.next_start_trophies - unsettled_loss
+                observed_trophy_change = next_start_trophies - start_trophies
+                residual = 0
+            observed_boundary_adjustment = next_start_trophies - final_trophies
             if abs(residual) > TROPHY_RECONCILIATION_TOLERANCE:
                 failures.append("trophy_equation_mismatch")
             elif (
                 automatic_loss is not None
                 and automatic_state == "calculated"
                 and not end_hidden_by_reset
+                and not unsettled_loss
             ):
                 # The paired baselines isolate the calculated settlement loss.
                 automatic_state = "confirmed"
@@ -363,6 +396,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             attack_count=attack_count,
             defense_count=defense_count,
             coverage_complete=coverage_complete,
+            start_trophies=start_trophies,
             final_trophies=final_trophies,
             residual=residual,
             automatic_state=automatic_state,
@@ -381,6 +415,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             automatic_state=automatic_state,
             boundary_adjustment=0,
             boundary_type=None,
+            start_trophies=start_trophies,
+            next_start_trophies=next_start_trophies,
             final_trophies=None,
             shield_state=shield_state,
             shield_duration=shield_duration,
@@ -391,15 +427,20 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             observed_boundary_adjustment=None,
             expected_next=None,
             residual=None,
+            unsettled_loss=0,
             formula_components=_formula_components(
                 data,
+                start_trophies=start_trophies,
+                start_unsettled_loss=start_unsettled_loss,
                 attack_gain=attack_gain,
                 defense_loss=defense_loss,
                 automatic_loss=automatic_loss,
                 final_trophies=None,
                 boundary_adjustment=0,
                 expected_next=None,
+                next_start_trophies=next_start_trophies,
                 residual=None,
+                unsettled_loss=0,
             ),
             shield_evidence=shield_evidence,
             input_evidence=_input_evidence(
@@ -415,6 +456,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         attack_count=attack_count,
         defense_count=defense_count,
         coverage_complete=coverage_complete,
+        start_trophies=start_trophies,
         final_trophies=final_trophies,
         residual=residual,
         automatic_state=automatic_state,
@@ -458,6 +500,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         or end_hidden_by_reset
         # A start from the Season rule is the game's rule, not a reading.
         or season_rule_start
+        # The reading predates the loss, so the day's end is calculated.
+        or unsettled_loss
     ):
         confidence = "inferred"
 
@@ -472,6 +516,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         automatic_state=automatic_state,
         boundary_adjustment=boundary_adjustment,
         boundary_type=boundary_type,
+        start_trophies=start_trophies,
+        next_start_trophies=next_start_trophies,
         final_trophies=final_trophies,
         shield_state=shield_state,
         shield_duration=shield_duration,
@@ -482,15 +528,20 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         observed_boundary_adjustment=observed_boundary_adjustment,
         expected_next=expected_next,
         residual=residual,
+        unsettled_loss=unsettled_loss,
         formula_components=_formula_components(
             data,
+            start_trophies=start_trophies,
+            start_unsettled_loss=start_unsettled_loss,
             attack_gain=attack_gain,
             defense_loss=defense_loss,
             automatic_loss=automatic_loss,
             final_trophies=final_trophies,
             boundary_adjustment=boundary_adjustment,
             expected_next=expected_next,
+            next_start_trophies=next_start_trophies,
             residual=residual,
+            unsettled_loss=unsettled_loss,
         ),
         shield_evidence=shield_evidence,
         input_evidence=_input_evidence(
@@ -513,6 +564,8 @@ def _result(
     automatic_state: str,
     boundary_adjustment: int,
     boundary_type: str | None,
+    start_trophies: int | None,
+    next_start_trophies: int | None,
     final_trophies: int | None,
     shield_state: str,
     shield_duration: int | None,
@@ -523,6 +576,7 @@ def _result(
     observed_boundary_adjustment: int | None,
     expected_next: int | None,
     residual: int | None,
+    unsettled_loss: int,
     formula_components: dict[str, Any],
     shield_evidence: dict[str, Any],
     input_evidence: dict[str, Any],
@@ -551,7 +605,32 @@ def _result(
         formula_components=formula_components,
         shield_evidence=shield_evidence,
         input_evidence=input_evidence,
+        start_trophies=start_trophies,
+        next_start_trophies=next_start_trophies,
+        unsettled_automatic_loss=unsettled_loss,
     )
+
+
+def _settled_start(data: ReconciliationInput) -> tuple[int | None, int]:
+    """The day's starting trophies and what was taken off the Reset reading.
+
+    The previous day's result can say its end reading, this day's start
+    reading, came before the game applied its automatic defense loss. The
+    day then starts from the reading less that loss, as the player did once
+    it landed. On 2 October 2026 that explained 728 of 733 next days whose
+    start was too high and a later reading could check.
+    """
+    previous = data.previous_day
+    if (
+        data.start_trophies is None
+        or previous is None
+        or not previous.unsettled_automatic_loss
+        or previous.end_baseline_id is None
+        or previous.end_baseline_id != data.start_baseline_id
+    ):
+        return data.start_trophies, 0
+    loss = previous.unsettled_automatic_loss
+    return data.start_trophies - loss, loss
 
 
 def _deduplicate_contributions(
@@ -860,6 +939,7 @@ def _automatic_defense_adjustment(
     data: ReconciliationInput,
     *,
     coverage_complete: bool,
+    attack_count: int,
     defense_count: int,
     observed_defense_loss: int,
     failures: list[str],
@@ -887,7 +967,18 @@ def _automatic_defense_adjustment(
     average_loss = (
         previous.observed_defense_loss + observed_defense_loss
     ) // denominator
-    return average_loss * (MAX_DAILY_DEFENSES - defense_count), "calculated"
+    missing_defenses = MAX_DAILY_DEFENSES - defense_count
+    if data.season_first_day and attack_count >= defense_count:
+        # On a Season's Day 1 the game charges a player with at least as
+        # many attacks as defenses for (attacks - defenses) missing defenses,
+        # so equal counts lose nothing. Profiles read on 6 October 2026
+        # after the loss and before any Day 2 battle: 66 of 69 players with
+        # more attacks than defenses lost that, 3 lost (8 - defenses); of
+        # 120 with equal counts, 59 kept the Reset reading past 05:14 and 6
+        # lost (8 - defenses). Fewer attacks than defenses lost
+        # (8 - defenses) in 37 of 38.
+        missing_defenses = attack_count - defense_count
+    return average_loss * missing_defenses, "calculated"
 
 
 def _baseline_available(
@@ -913,6 +1004,7 @@ def _shield_state(
     attack_count: int,
     defense_count: int,
     coverage_complete: bool,
+    start_trophies: int | None,
     final_trophies: int | None,
     residual: int | None,
     automatic_state: str,
@@ -931,8 +1023,8 @@ def _shield_state(
         "automatic_defense_not_applied": automatic_state == "not_applicable",
         "trophies_unchanged": (
             final_trophies is not None
-            and data.start_trophies is not None
-            and final_trophies == data.start_trophies
+            and start_trophies is not None
+            and final_trophies == start_trophies
         ),
         "perspective_disagreement": data.perspective_disagreement,
     }
@@ -965,27 +1057,40 @@ def _shield_state(
 def _formula_components(
     data: ReconciliationInput,
     *,
+    start_trophies: int | None,
+    start_unsettled_loss: int,
     attack_gain: int,
     defense_loss: int,
     automatic_loss: int | None,
     final_trophies: int | None,
     boundary_adjustment: int,
     expected_next: int | None,
+    next_start_trophies: int | None,
     residual: int | None,
+    unsettled_loss: int,
 ) -> dict[str, Any]:
-    return {
-        "start_trophies": data.start_trophies,
+    components: dict[str, Any] = {
+        "start_trophies": start_trophies,
         "attack_gain": attack_gain,
         "observed_defense_loss": defense_loss,
         "automatic_defense_loss": automatic_loss,
         "final_trophies_before_reset": final_trophies,
         "boundary_adjustment": boundary_adjustment,
         "expected_next_start_trophies": expected_next,
-        "next_start_trophies": data.next_start_trophies,
+        "next_start_trophies": next_start_trophies,
         "unexplained_residual": residual,
         "tolerance": TROPHY_RECONCILIATION_TOLERANCE,
         "equation": "next_start = start + attack_gain - defense_loss - automatic_defense_loss + boundary_adjustment",
     }
+    # Only days the Reset reading's timing changed carry these keys, so every
+    # other saved result keeps its hash.
+    if start_unsettled_loss:
+        components["start_reading_trophies"] = data.start_trophies
+        components["start_unsettled_automatic_loss"] = start_unsettled_loss
+    if unsettled_loss:
+        components["next_start_reading_trophies"] = data.next_start_trophies
+        components["unsettled_automatic_loss"] = unsettled_loss
+    return components
 
 
 def _input_evidence(
@@ -1035,7 +1140,7 @@ def _input_evidence(
 def _previous_day_evidence(previous: PreviousRankedDay | None) -> dict[str, Any] | None:
     if previous is None:
         return None
-    return {
+    evidence: dict[str, Any] = {
         "complete": previous.complete,
         "observed_defense_count": previous.observed_defense_count,
         "observed_defense_loss": previous.observed_defense_loss,
@@ -1052,3 +1157,7 @@ def _previous_day_evidence(previous: PreviousRankedDay | None) -> dict[str, Any]
         "confidence": previous.confidence,
         "input_hash": previous.input_hash,
     }
+    if previous.unsettled_automatic_loss:
+        evidence["unsettled_automatic_loss"] = previous.unsettled_automatic_loss
+        evidence["end_baseline_id"] = previous.end_baseline_id
+    return evidence

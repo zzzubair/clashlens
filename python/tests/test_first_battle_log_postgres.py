@@ -108,7 +108,8 @@ DEFENSE = [(DAY_1 + timedelta(hours=6), False)]
     # the day is uncertain, as any day with a coverage gap.
     ("full_from_day_1", ATTACKS, ("Partial", "uncertain", False)),
     # With 1 to 7 defenses the automatic defense loss averages Day 1's own
-    # defenses: the day before, never tracked, is the previous Season's.
+    # defenses: the day before, never tracked, is the previous Season's. On
+    # Day 1, 2 attacks and 1 defense are charged for 2 - 1 missing defenses.
     ("reaches_back", ATTACKS + DEFENSE, ("Complete", "inferred", True)),
 ])
 def test_player_first_seen_during_day_1_gets_a_season_rule_start(
@@ -123,7 +124,7 @@ def test_player_first_seen_during_day_1_gets_a_season_rule_start(
         "full_from_day_1": [DAY_1 + timedelta(hours=2, minutes=i) for i in full],
     }[first_log]
     gained = sum(WIN if attack else -LOSS for _, attack in battles)
-    automatic = LOSS * 7 if len(battles) == 3 else 0
+    automatic = LOSS if len(battles) == 3 else 0
     log = _log(*battles, filler=filler)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _first_seen(connection_info, archive_server, first_at,
@@ -316,7 +317,8 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(47)]
-    automatic = LOSS * 7
+    # Day 1 charges 2 attacks and 1 defense for one missing defense.
+    automatic = LOSS
     with domain_database(database_url, include_coordinator=True) as connection_info:
         # Day 1 joiners: one with a single defense, one with none.
         ending = 5000 + 2 * WIN - LOSS - automatic
