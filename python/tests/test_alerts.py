@@ -50,6 +50,7 @@ def runtime(tmp_path, monkeypatch):
         leaderboard="0 13000 0",
         publication="0",
         completeness="0",
+        health_streaks={},
         site_status=200,
         disk_used=10,
         volume_failed=False,
@@ -134,6 +135,13 @@ def runtime(tmp_path, monkeypatch):
     }
     monkeypatch.setattr(alerts, "RECOVERY_HOLD", 0)
     monkeypatch.setattr(alerts, "LEADERBOARD_HOLD", 0)
+    # The early warning's overdue-work limits sit under the processing alert's.
+    # Other alerts' tests leave them out; the warning's own tests restore them.
+    rt.warning_limits = {
+        name: getattr(alerts, name) for name in ("WARNING_OVERDUE", "WARNING_RESET_OVERDUE")
+    }
+    for name in rt.warning_limits:
+        monkeypatch.setattr(alerts, name, float("inf"))
     monkeypatch.setattr(
         alerts.shutil,
         "disk_usage",
@@ -155,6 +163,8 @@ def runtime(tmp_path, monkeypatch):
             code, output = 0, rt.publication
         elif "--completeness" in args:
             code, output = 0, rt.completeness
+        elif "inspect" in args:
+            code, output = 0, str(rt.health_streaks.get(args[-1], 0))
         else:
             assert f"MESSAGE_ID={alerts.RESTART_MESSAGE}" in args
             code, output = (

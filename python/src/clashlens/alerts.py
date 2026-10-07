@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -82,6 +83,14 @@ CONDITIONS = {
         ),
         "./ops logs worker",
     ),
+    "health": (
+        "Early warning: a container may soon be restarted by its health check",
+        "./ops status, then ./ops logs",
+    ),
+    "warning": (
+        "Early warning: work is falling behind",
+        "./ops status, then ./ops logs",
+    ),
     "monitoring": (
         (
             "A disk, restart-history, Live Leaderboard, Reset publication or untracked battler check"
@@ -125,6 +134,15 @@ LEADERBOARD_OLDEST = 1200
 LEADERBOARD_HOLD = 300
 # Untracked recent Legend I battlers tolerated before the completeness alert.
 UNTRACKED_BATTLER_LIMIT = 10
+# The early warning. Podman kills a container after six failed health checks
+# in a row, about three minutes, so two failures leave time to act. Overdue
+# work normally reaches 35 minutes after a Reset (6 Oct 2026), hence the
+# higher limit 05:00-07:00 UTC. A normal Reset hour saves 420-2,700
+# responses a minute; 7 Oct's stall saved 17-44.
+WARNING_HEALTH_STREAK = 2
+WARNING_OVERDUE = 600
+WARNING_RESET_OVERDUE = 2700
+WARNING_RESET_SAVED_PER_MINUTE = 100
 
 
 class CheckError(Exception):
@@ -462,7 +480,7 @@ def deliver(
 
 
 def observe(
-    config: dict, state: dict, now: float, root: Path
+    config: dict, state: dict, now: float, root: Path, send: Callable[[dict], None]
 ) -> tuple[dict, list[str]]:
     findings = dict.fromkeys(CONDITIONS)
     errors = []
@@ -539,6 +557,16 @@ def observe(
                 f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
             )
 
+    findings["warning"] = early_warning(metrics if metrics_read else {}, state, clock)
+
+    def check_health() -> None:
+        # Sent before and between the slow checks below: Podman kills about
+        # three minutes in, and each slow check may take 25 seconds.
+        findings["health"] = health_warning(podman, state)
+        send({"health": findings["health"]})
+
+    check_health()
+
     names = (
         ("clashlens_spool_bytes", "max_bytes"),
         ("clashlens_spool_objects", "max_objects"),
@@ -602,6 +630,7 @@ def observe(
         findings["restarts"] = any(count > 3 for count in counts.values())
     except (OSError, ValueError, subprocess.SubprocessError):
         errors.append("Restart history unavailable; run ./ops logs")
+    check_health()
 
     try:
         backup_failed = (
@@ -622,6 +651,7 @@ def observe(
             errors.append("Backup check failed; run ./ops backup-status")
         else:
             state.pop("backup_failing_since", None)
+    check_health()
 
     probe = [
         podman,
@@ -636,6 +666,7 @@ def observe(
         findings["reads"] = command(probe, 25).returncode != 0
     except (OSError, subprocess.SubprocessError):
         findings["reads"] = True
+    check_health()
     for name, flag, count, unavailable, service in (
         ("leaderboard", "--leaderboard", 3, "Live Leaderboard freshness", "api"),
         ("publication", "--publication", 1, "Reset publication status", "api"),
@@ -651,6 +682,7 @@ def observe(
         except (OSError, ValueError, subprocess.SubprocessError):
             errors.append(f"{unavailable} unavailable; run ./ops logs {service}")
             values = None
+        check_health()
         if name != "leaderboard":
             if values is not None:
                 findings[name] = values[0] > (UNTRACKED_BATTLER_LIMIT if name == "completeness" else 0)
@@ -679,8 +711,53 @@ def observe(
     return findings, errors
 
 
+def health_warning(podman: str, state: dict) -> bool | None:
+    """Warn before a health-check kill: 7 Oct 2026 had none.
+
+    A kill is its own condition, so an open backlog warning never hides one."""
+    reasons, unknown = [], False
+    for container in ("clashlens-collector", "clashlens-python-worker"):
+        try:
+            result = command(
+                [podman, "inspect", "--format", "{{.State.Health.FailingStreak}}", container]
+            )
+            streak = None if result.returncode else int(result.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            streak = None
+        if streak is None:
+            unknown = True
+        elif streak >= WARNING_HEALTH_STREAK:
+            reasons.append(f"{container} failed its last {streak} health checks")
+    if reasons:
+        state.setdefault("details", {})["health"] = "Now: " + "; ".join(reasons)
+    return True if reasons else (None if unknown else False)
+
+
+def early_warning(metrics: dict, state: dict, clock: str) -> bool | None:
+    """Warn before a stalled Reset or a growing backlog."""
+    reasons, unknown = [], False
+    age = metrics.get("clashlens_collector_oldest_pending_processing_age_seconds")
+    limit = WARNING_RESET_OVERDUE if "05:00" <= clock < "07:00" else WARNING_OVERDUE
+    if age is None:
+        unknown = True
+    elif age >= limit:
+        reasons.append(f"the oldest overdue job has waited {int(age // 60)} minutes")
+    # Responses saved in the collector's sampled minute, once it is all in 05:00-06:00.
+    saved = metrics.get("clashlens_collector_responses_saved_last_minute")
+    sampled = metrics.get("clashlens_collector_metrics_sample_timestamp_seconds")
+    if "05:00" <= clock < "06:00":
+        hours = {datetime.fromtimestamp(t, UTC).hour for t in (sampled - 60, sampled)} if sampled is not None else None
+        if saved is None or hours != {5}:
+            unknown = True
+        elif saved < WARNING_RESET_SAVED_PER_MINUTE:
+            reasons.append(f"only {int(saved)} responses a minute were saved in the Reset hour")
+    if reasons:
+        state.setdefault("details", {})["warning"] = "Now: " + "; ".join(reasons)
+    return True if reasons else (None if unknown else False)
+
+
 def observe_site(
-    config: dict, state: dict, now: float, _root: Path | None
+    config: dict, state: dict, now: float, _root: Path | None, _send: Callable
 ) -> tuple[dict, list[str]]:
     """Alert once the site has failed every check for two minutes."""
     try:
@@ -718,7 +795,14 @@ def run(config: dict, state_dir: Path, root: Path | None, check=observe) -> int:
         intent = state_dir / "alert-intent"
         if intent.exists():
             state["resumed_at"] = intent.stat().st_mtime
-        findings, errors = check(config, state, now, root)
+
+        def send(findings: dict) -> None:
+            taken = time.time()
+            hold_recoveries(state, findings, taken)
+            save_state(path, state)
+            deliver(state, findings, taken, path, webhook)
+
+        findings, errors = check(config, state, now, root, send)
         hold_recoveries(state, findings, now)
         save_state(path, state)
         delivered = deliver(state, findings, now, path, webhook)

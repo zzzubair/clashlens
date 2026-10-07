@@ -409,6 +409,7 @@ def process_until_stopped(
     claims_ready: Callable[[], bool],
     maintain: Callable[[Semaphore], None],
     on_result: Callable[[ProcessResult], None],
+    progress: Callable[[], None] = lambda: None,
 ) -> None:
     """Keep ``concurrency`` lanes claiming until ``stop_requested`` is set.
 
@@ -427,6 +428,9 @@ def process_until_stopped(
     so long derived work can never hold them all. Each derived lane takes a
     turn from a shared semaphore, one per derived lane, before it claims, and
     ``maintain`` receives the same semaphore for its heavy work.
+
+    Each lane calls ``progress`` every time round its loop, never the timer,
+    so the health check sees a stuck worker even while maintenance ticks.
     """
     _validate_lanes(concurrency, owner, lease_seconds)
     report_lock = threading.Lock()
@@ -458,6 +462,7 @@ def process_until_stopped(
         limits = [{"work_types": kinds} for kinds in work_type_order or ()] or [{}]
         takes_turns = work_type_order not in (None, (RESPONSE_WORK_TYPES,))
         while not stopped():
+            progress()
             if takes_turns and not derived_turns.acquire(timeout=idle_seconds):
                 continue
             try:
@@ -1114,9 +1119,11 @@ class ObservationProcessor:
         max_jobs: int = 100,
         lease_seconds: int = 30,
         stop_requested: Event | None = None,
+        progress: Callable[[], None] = lambda: None,
     ) -> list[ProcessResult]:
         results: list[ProcessResult] = []
         for _ in range(max_jobs):
+            progress()
             if stop_requested is not None and stop_requested.is_set():
                 break
             try:

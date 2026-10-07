@@ -480,9 +480,40 @@ def test_queue_health_reports_an_empty_active_queue(
                 "failed": 0,
                 "failed_count_capped": False,
                 "oldest_due_seconds": None,
+                "overdue": 0,
+                "scheduled_later": 0,
             }
         finally:
             database.close()
+
+
+def test_queue_health_counts_overdue_and_scheduled_later_work_apart(
+    database_url: str,
+) -> None:
+    # 7 Oct 2026: 21,887 recalculations due over the next day read as backlog.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            for key, due_at in (
+                ("late", "2026-08-01T00:00:00Z"),
+                ("tomorrow", "2999-01-01T00:00:00Z"),
+                ("next-day", "2999-01-02T00:00:00Z"),
+            ):
+                _insert_job(
+                    connection,
+                    work_type="process_observation",
+                    deduplication_key=key,
+                    input_json={},
+                    observation_id=_insert_observation(connection, occurrence_key=key),
+                    due_at=due_at,
+                    max_attempts=3,
+                )
+        database = Database(connection_info)
+        try:
+            health = database.queue_health()
+        finally:
+            database.close()
+    assert (health["pending"], health["overdue"], health["scheduled_later"]) == (3, 1, 2)
+    assert health["oldest_due_seconds"] > 0
 
 
 @pytest.mark.parametrize(

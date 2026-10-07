@@ -111,6 +111,17 @@ def archive_server():
         server.server_close()
 
 
+@pytest.fixture(autouse=True)
+def worker_progress_file(tmp_path, monkeypatch) -> None:
+    # One test's worker run must not make another's health check skip its
+    # database checks.
+    from clashlens import worker_liveness
+
+    monkeypatch.setattr(
+        worker_liveness, "PROGRESS_FILE", str(tmp_path / "worker-progress")
+    )
+
+
 @pytest.fixture()
 def database_url() -> str:
     value = os.environ.get("CLASHLENS_TEST_DATABASE_URL")

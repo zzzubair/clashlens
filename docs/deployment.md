@@ -806,7 +806,7 @@ without printing configuration files.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the twelve conditions below and posts changes to the
+`./ops alert-check` checks the fourteen conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
@@ -950,6 +950,26 @@ use the [operating notes](operating.md#respond-to-alerts).
   mornings whose processing takes longer than that: on Oct 3 ordinary work
   passed 30 minutes at 05:43 and 06:38, and on Oct 4 it would have warned at
   03:15 instead of 03:46.
+- **An early warning before a health-check kill**: the collector or worker
+  failed **2 health checks in a row**, from `podman inspect`'s failing
+  streak. Podman kills a container at 6, about three minutes, and its own
+  status stays `healthy` until then. The alert check reads this before its
+  slower checks and again after each one, and sends it as soon as it appears.
+  It is its own alert so an open backlog warning never hides it.
+- **An early warning when work falls behind**, one alert naming every reason
+  that holds:
+  - the oldest overdue job has waited **10 minutes**, or **45 minutes** between
+    05:00 and 07:00 UTC, from `oldest_pending_processing_age_seconds`. The
+    normal Reset on 6 Oct 2026 left work overdue for up to 35 minutes;
+  - fewer than **100 responses a minute** saved between 05:00 and 06:00 UTC,
+    from the collector's `responses_saved_last_minute`, counted from saved
+    rows (up to 1,000) in the minute before its sample. Normal Reset hours
+    save 420–2,700 a minute.
+
+  For either warning, a container that cannot be inspected, missing
+  measurements, or a sampled minute that starts before 05:00 leave it
+  unknown, so an open warning stays open. On 7 Oct 2026 Podman killed the
+  collector 13 times and the worker 4 times in 34 minutes with no alert.
 - **A Reset publication over an hour past its target time**: no publication
   record for that Reset has published both its frozen leaderboard and its army
   results an hour after the existing target, five minutes after Reset or ten

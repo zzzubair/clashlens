@@ -63,6 +63,7 @@ from .worker import (
     process_concurrently,
     process_until_stopped,
 )
+from .worker_liveness import ProgressMark, worker_readiness
 
 MAX_REPORTED_RESULTS = 100
 # Save plus request threads leave 64 of the collector container's 512 for the rest.
@@ -866,9 +867,12 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         if isinstance(processor, ObservationProcessor):
             processor.stage_metrics = database.stage_metrics = stage_metrics
 
+        progress = ProgressMark()
+
         def process_batch() -> list[ProcessResult]:
             # Local spool and PostgreSQL own claim readiness. Remote marker
             # health is telemetry; known local duplicates remain processable.
+            progress()
             if not archive.check_ready():
                 return []
             maintenance.run_due()
@@ -878,6 +882,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     max_jobs=arguments.max_jobs,
                     lease_seconds=arguments.lease_seconds,
                     stop_requested=stop_requested,
+                    progress=progress,
                 )
             return process_concurrently(
                 processor,
@@ -993,6 +998,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     claims_ready=archive.check_ready,
                     maintain=maintenance.run_due,
                     on_result=report_result,
+                    progress=progress,
                 )
             while not stop_requested.is_set():
                 results = process_batch()
@@ -1061,45 +1067,11 @@ def _run_worker(arguments: argparse.Namespace) -> int:
 
 
 def _run_ready(arguments: argparse.Namespace) -> int:
-    database = Database(_database_url(arguments))
-    try:
-        archive = _archive(arguments, database=database)
-        if not database.is_ready(
-            expected_contract_version=arguments.expected_contract_version
-        ):
-            return 1
-        if not archive.check_ready():
-            return 1
-        remote_health = getattr(
-            archive, "check_marker_health", lambda: "unconfigured"
-        )()
-        if remote_health == "terminal":
-            # A marker mismatch is terminal configuration drift, not an outage;
-            # readiness must fail so the operator resolves it before workers run.
-            print(
-                json.dumps(
-                    {
-                        "status": "not_ready",
-                        "spool": getattr(
-                            archive, "readiness", lambda: {"ready": True}
-                        )(),
-                        "remote_health": remote_health,
-                    }
-                )
-            )
-            return 1
-        print(
-            json.dumps(
-                {
-                    "status": "ready",
-                    "spool": getattr(archive, "readiness", lambda: {"ready": True})(),
-                    "remote_health": remote_health,
-                }
-            )
-        )
-        return 0
-    finally:
-        database.close()
+    payload = worker_readiness(
+        arguments, lambda: Database(_database_url(arguments)), _archive
+    )
+    print(json.dumps(payload))
+    return 0 if payload["status"] == "ready" else 1
 
 
 def _install_shutdown_handlers(stop_requested: Event) -> None:

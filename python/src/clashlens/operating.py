@@ -351,6 +351,8 @@ class WorkerMetrics:
                 "failed",
                 "failed_count_capped",
                 "oldest_due_seconds",
+                "overdue",
+                "scheduled_later",
             )
         }
         raw_reason = spool.get("reason")

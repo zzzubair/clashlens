@@ -899,21 +899,19 @@ class Database:
         return [int(row[0]) for row in rows]
 
     def queue_health(self) -> dict[str, bool | int | float | None]:
+        # Overdue and scheduled-later work are counted apart: recalculations
+        # queued a day ahead are not a backlog, and on 7 Oct 2026 21,887 of
+        # them read as one.
         with self.pool.connection() as connection:
             row = connection.execute(
                 f"""
                 WITH active AS MATERIALIZED (
-                    SELECT state, due_at
+                    SELECT state, due_at, state <> 'leased' AND due_at <= clock_timestamp() AS overdue
                     FROM {self._jobs_relation}
                     WHERE state IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
                 ), failed AS (
                     SELECT count(*) AS failed_count
-                    FROM (
-                        SELECT 1
-                        FROM {self._jobs_relation}
-                        WHERE state = 'failed'
-                        LIMIT 1001
-                    ) AS bounded_failed
+                    FROM (SELECT 1 FROM {self._jobs_relation} WHERE state = 'failed' LIMIT 1001) AS bounded_failed
                 )
                 SELECT
                     count(*) FILTER (WHERE state = 'pending'),
@@ -921,12 +919,9 @@ class Database:
                     count(*) FILTER (WHERE state = 'waiting_dependency'),
                     count(*) FILTER (WHERE state = 'leased'),
                     (SELECT failed_count FROM failed),
-                    extract(
-                        epoch FROM clock_timestamp() - min(due_at) FILTER (
-                            WHERE state IN ('pending', 'waiting_retry', 'waiting_dependency')
-                              AND due_at <= clock_timestamp()
-                        )
-                    )
+                    extract(epoch FROM clock_timestamp() - min(due_at) FILTER (WHERE overdue)),
+                    count(*) FILTER (WHERE overdue),
+                    count(*) FILTER (WHERE state <> 'leased' AND NOT overdue)
                 FROM active
                 """
             ).fetchone()
@@ -939,6 +934,8 @@ class Database:
             "failed": int(row[4]),
             "failed_count_capped": int(row[4]) == 1001,
             "oldest_due_seconds": None if row[5] is None else max(0.0, float(row[5])),
+            "overdue": int(row[6]),
+            "scheduled_later": int(row[7]),
         }
 
     def pool_health(self) -> dict[str, int]:
