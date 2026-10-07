@@ -264,6 +264,7 @@ export function selectPlayerHistory(player: PlayerPage | null, now: number) {
       seasonDay(day) >= 1 &&
       seasonDay(day) <= 28 &&
       (!day.uncertainty.includes("player_not_eligible") ||
+        day.uncertainty.includes("not_enrolled") ||
         day.offenseEvents.length > 0 ||
         day.defenseEvents.length > 0),
   );
