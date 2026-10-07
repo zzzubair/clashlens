@@ -159,12 +159,17 @@ function playerDay(page: PlayerPage): PlayerDay {
         }))
         .filter((battle) => Number.isFinite(battle.at))
     : [];
+  const complete = day?.battlesComplete === true;
+  const gain = day?.offense.trophyGain ?? null;
+  const loss = day?.defense.trophyLoss ?? null;
   return {
     dayNumber: page.season?.currentDayNumber ?? null,
     dayCount: page.season?.dayCount ?? null,
     battles,
-    complete: day?.battlesComplete === true,
-    net: day?.trophyChange ?? null,
+    complete,
+    net:
+      day?.trophyChange ??
+      (complete && gain !== null && loss !== null ? gain - loss : null),
     attacks: day?.offense.attacks ?? null,
     defenses: day?.defense.defenses ?? null,
   };

@@ -341,6 +341,32 @@ describe("dashboard route", () => {
     });
   });
 
+  it("works out a complete live day's gain from its attacks and defenses", async () => {
+    const day = {
+      battlesComplete: true,
+      trophyChange: null,
+      offense: { attacks: 2, trophyGain: 80 },
+      defense: { defenses: 1, trophyLoss: 16 },
+      offenseEvents: [],
+      defenseEvents: [],
+    };
+    client.getPlayer.mockResolvedValue({ season: null, currentDay: day });
+    const complete = unwrap<DashboardLoaderData>(
+      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
+    ).data;
+    if (complete.kind !== "signed-in") throw new Error("expected signed in");
+    expect(complete.days[MAIN]).toMatchObject({ complete: true, net: 64 });
+    client.getPlayer.mockResolvedValue({
+      season: null,
+      currentDay: { ...day, battlesComplete: false },
+    });
+    const partial = unwrap<DashboardLoaderData>(
+      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
+    ).data;
+    if (partial.kind !== "signed-in") throw new Error("expected signed in");
+    expect(partial.days[MAIN]).toMatchObject({ complete: false, net: null });
+  });
+
   it("ends the day at the Reset after the first read starts, even if it lands after", async () => {
     vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 9, 7, 4, 59, 59) });
     client.getPublicUser.mockImplementation(async () => {
