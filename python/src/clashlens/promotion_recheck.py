@@ -1,10 +1,11 @@
 """Re-check the promotion list after each Monday Reset.
 
 Legend II's top finishers move into Legend I at the Monday 05:00 UTC Reset.
-From 05:30 the collector asks for the profile of every listed Legend II
-player (migration 0076) not checked since the Reset, at most
-``CLASHLENS_PROMOTION_RECHECK_PER_SECOND`` requests a second (20 by default,
-0 turns it off) on the regular keys, at most two at once. Just before each
+After the Reset sweep (05:00-05:10), settlement (from 05:20) and the
+late-battle check (from 05:30), from 06:00 the collector asks for the profile
+of every listed Legend II player (migration 0076) not checked since the
+Reset, at most ``CLASHLENS_PROMOTION_RECHECK_PER_SECOND`` requests a second
+(20 by default, 0 turns it off) on the regular keys, at most two at once. Just before each
 request, after its pacing wait, it is sent only while that Reset's collection
 and settlement checks have finished, no tracked player is more than two
 minutes late, and one key's worth of regular request slots is idle; otherwise
@@ -45,7 +46,7 @@ from .promotion_candidates import CANDIDATE_TIER_IDS
 if TYPE_CHECKING:
     from .collector import Collector
 
-START_DELAY = timedelta(minutes=30)
+START_DELAY = timedelta(hours=1)
 BATCH_SIZE = 200
 IN_FLIGHT = 2
 IDLE_SECONDS = 60.0
@@ -66,7 +67,7 @@ def week_start(now: datetime) -> datetime:
 
 
 def has_spare_time(database: CollectorDatabase, now: datetime) -> bool:
-    """05:30 has passed, collection has time to spare and settlement checks are done."""
+    """06:00 has passed, collection has time to spare and settlement checks are done."""
     if now < week_start(now) + START_DELAY:
         return False
     with database._connection() as connection, connection.transaction():
@@ -108,9 +109,10 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[st
     """Save one batch's answers; returns the promoted players left due.
 
     A promoted player is handed on once tracked or given waiting work that
-    still has to fetch the profile. Promoted players share the discovery queue's limit of
-    DISCOVERY_QUEUE_CAP waiting checks; one that does not fit, or is not
-    handed on, keeps its old row, so it stays due and is asked again later.
+    still has to fetch the profile. Checks they add share the discovery
+    queue's limit of DISCOVERY_QUEUE_CAP waiting checks; once that is full,
+    the rest, like any player not handed on, keep their old rows, so they
+    stay due and are asked again later.
     """
     left_out: set[str] = set()
     promoted = [answer[0] for answer in answers if answer[1] == "promoted"]
@@ -127,11 +129,16 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[st
                   AND kind = 'discovery_profile' AND NOT eligibility_recheck
                 """
             ).fetchone()[0]
-            left_out = set(promoted[max(0, DISCOVERY_QUEUE_CAP - int(waiting)) :])
+            room = DISCOVERY_QUEUE_CAP - int(waiting)
             for tag in promoted:
-                if tag not in left_out and not connection.execute(
-                    "SELECT clashlens_queue_promoted_player(%s)", (tag,)
-                ).fetchone()[0]:
+                if room <= 0:
+                    left_out.add(tag)
+                    continue
+                handed, added = connection.execute(
+                    "SELECT handed, added FROM clashlens_queue_promoted_player(%s)", (tag,)
+                ).fetchone()
+                room -= added
+                if not handed:
                     left_out.add(tag)
             answers = [answer for answer in answers if answer[0] not in left_out]
         kept = [answer for answer in answers if answer[1] != "removed"]

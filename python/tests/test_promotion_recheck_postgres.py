@@ -145,7 +145,7 @@ def test_monday_recheck_queues_promoted_players_and_refreshes_the_list(
     }
     with domain_database(database_url) as connection_info, _provider(answers) as origin:
         _seed(connection_info)
-        assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=40)) == Counter(
+        assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=70)) == Counter(
             asked=4, promoted=1, listed=1, removed=2, failed=0, queued=1
         )
         # Legend III and players already checked since the Reset are not asked.
@@ -173,16 +173,17 @@ def test_monday_recheck_queues_promoted_players_and_refreshes_the_list(
         assert queued == [("#8QQ", False, "pending")]
 
         # Everyone due this week has been asked.
-        assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=41)) is None
+        assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=71)) is None
 
 
-def test_monday_recheck_waits_for_05_30_late_live_players_and_settlement(
+def test_monday_recheck_waits_for_06_00_late_live_players_and_settlement(
     database_url: str, tmp_path: Path
 ) -> None:
     with domain_database(database_url) as connection_info, _provider({}) as origin:
         _seed(connection_info)
-        assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=20)) is None
-        now = MONDAY + timedelta(minutes=40)
+        # Settlement and the late-battle check come first, so 05:50 is too early.
+        assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=50)) is None
+        now = MONDAY + timedelta(minutes=70)
         with psycopg.connect(connection_info) as connection:
             player_id = connection.execute(
                 "INSERT INTO players (normalized_tag, active, eligibility_state, next_due_at)"
@@ -217,7 +218,7 @@ def test_requests_go_out_paced_and_only_while_a_key_is_idle(
 ) -> None:
     with domain_database(database_url) as connection_info, _provider({}) as origin:
         _seed(connection_info)
-        now = MONDAY + timedelta(minutes=40)
+        now = MONDAY + timedelta(minutes=70)
         # After an idle stretch, requests still reach the API a twentieth of a second apart.
         assert _check(origin, connection_info, tmp_path, now, rate=20.0)["asked"] == 4
         gaps = [b - a for a, b in itertools.pairwise(_Provider.started)]
@@ -283,7 +284,7 @@ def test_a_promoted_player_waits_while_the_discovery_queue_is_full(
                 FROM waiting
                 """
             )
-        now = MONDAY + timedelta(minutes=40)
+        now = MONDAY + timedelta(minutes=70)
         assert _check(origin, connection_info, tmp_path, now)["queued"] == 0
         with psycopg.connect(connection_info) as connection:
             assert connection.execute(
@@ -294,13 +295,68 @@ def test_a_promoted_player_waits_while_the_discovery_queue_is_full(
         assert _check(origin, connection_info, tmp_path, now)["queued"] == 1
 
 
+def test_a_refused_promoted_player_does_not_use_the_last_queue_place(
+    database_url: str, tmp_path: Path
+) -> None:
+    answers = {
+        "#8QQ": (200, _profile("#8QQ", 105000036, "Legend I", 5000)),
+        "#9QQ": (200, _profile("#9QQ", 105000036, "Legend I", 5100)),
+    }
+    with domain_database(database_url) as connection_info, _provider(answers) as origin:
+        _seed(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "DELETE FROM promotion_candidates WHERE normalized_tag NOT IN ('#8QQ', '#9QQ')"
+            )
+            connection.execute(
+                """
+                WITH waiting AS (
+                    INSERT INTO players (normalized_tag, active, eligibility_state)
+                    SELECT '#Q' || n, false, 'unknown' FROM generate_series(1, 499) AS n
+                    RETURNING id, normalized_tag
+                )
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
+                    profile_status, battle_log_status, league_history_status
+                )
+                SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag,
+                       now(), 'full:' || id, 'pending', 'not_applicable', 'pending'
+                FROM waiting
+                """
+            )
+            # #8QQ's discovery check already failed this week, so it cannot get another.
+            connection.execute(
+                """
+                WITH refused AS (
+                    INSERT INTO players (normalized_tag, active, eligibility_state)
+                    VALUES ('#8QQ', false, 'unknown') RETURNING id, normalized_tag
+                )
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
+                    status, profile_status, battle_log_status, league_history_status
+                )
+                SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag, now(),
+                       'discovery-profile:' || id || ':' || %s, 'failed', 'failed',
+                       'not_applicable', 'pending'
+                FROM refused
+                """,
+                (MONDAY.strftime("%Y-%m-%dT%H:%M:%SZ"),),
+            )
+        now = MONDAY + timedelta(minutes=70)
+        assert _check(origin, connection_info, tmp_path, now) == Counter(
+            asked=2, promoted=2, failed=0, queued=1
+        )
+        assert _checked_at(connection_info, "#8QQ") == LAST_WEEK
+        assert _checked_at(connection_info, "#9QQ") > MONDAY
+
+
 def test_a_promoted_player_another_job_holds_stays_due(
     database_url: str, tmp_path: Path
 ) -> None:
     answers = {"#8QQ": (200, _profile("#8QQ", 105000036, "Legend I", 5000))}
     with domain_database(database_url) as connection_info, _provider(answers) as origin:
         _seed(connection_info)
-        now = MONDAY + timedelta(minutes=40)
+        now = MONDAY + timedelta(minutes=70)
         with psycopg.connect(connection_info) as connection:
             connection.execute("DELETE FROM promotion_candidates WHERE normalized_tag <> '#8QQ'")
             connection.execute(
@@ -325,7 +381,7 @@ def test_a_promoted_player_whose_waiting_work_has_its_profile_stays_due(
     answers = {"#8QQ": (200, legend_i)}
     with domain_database(database_url) as connection_info, _provider(answers) as origin:
         _seed(connection_info)
-        now = MONDAY + timedelta(minutes=40)
+        now = MONDAY + timedelta(minutes=70)
         observation_id, _job_id = store_observation(
             connection_info,
             archive_server,
@@ -374,7 +430,7 @@ def test_an_unreadable_or_uncertain_answer_stays_due_for_a_retry(
     }
     with domain_database(database_url) as connection_info, _provider(answers) as origin:
         _seed(connection_info)
-        now = MONDAY + timedelta(minutes=40)
+        now = MONDAY + timedelta(minutes=70)
         with psycopg.connect(connection_info) as connection:
             connection.execute(
                 "DELETE FROM promotion_candidates WHERE normalized_tag NOT IN ('#8QQ', '#9QQ')"
@@ -401,7 +457,7 @@ def test_players_left_due_are_asked_again_after_the_rest_of_the_list(
     }
     with domain_database(database_url) as connection_info, _provider(answers) as origin:
         _seed(connection_info)
-        now = MONDAY + timedelta(minutes=40)
+        now = MONDAY + timedelta(minutes=70)
         with psycopg.connect(connection_info) as connection:
             connection.execute(
                 "DELETE FROM promotion_candidates WHERE normalized_tag NOT IN ('#8QQ', '#9QQ')"
@@ -441,7 +497,7 @@ def test_a_failing_request_stops_the_rest_of_its_batch_first() -> None:
             ),
             client=SimpleNamespace(fetch_player=fetch_player),
         )
-        now = MONDAY + timedelta(minutes=40)
+        now = MONDAY + timedelta(minutes=70)
         admit = promotion_recheck.Admission(collector, 1000.0, clock=lambda: now)
         with pytest.raises(RuntimeError):
             await promotion_recheck.check_batch(collector, admit, set())

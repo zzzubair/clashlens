@@ -62,8 +62,10 @@ refuses the whole file. About 130 bytes a row with its indexes: the lab's
 October 2026 list of 250,680 players is about 33 MB, growing only with newly
 seen Legend II and III players.
 
-Each Monday from 05:30 UTC the collector asks for the profile of every listed
-Legend II player not checked since the Reset, oldest check first, at most
+Each Monday, after the Reset sweep (05:00-05:10 UTC), settlement (from 05:20)
+and the late-battle check (from 05:30), from 06:00 the collector asks for the
+profile of every listed Legend II player not checked since the Reset, oldest
+check first, at most
 `CLASHLENS_PROMOTION_RECHECK_PER_SECOND` requests a second on the regular keys
 (20 by default; 0 turns it off), at most two at once. Legend III rows stay on
 the list but are not asked. Just before each request, after its pacing wait,
@@ -77,8 +79,9 @@ are not saved, so a player who stayed put costs one request and no storage. A
 profile showing Legend I queues the ordinary discovery check above, which
 saves the profile, starts tracking and backfills from the first battle log.
 The row is marked checked only once the player is tracked or has waiting work
-that still has to fetch the profile, and only while fewer than 500 discovery
-checks wait; otherwise it stays due and is asked again later. Any other answer
+that still has to fetch the profile. A new check is added only while fewer
+than 500 discovery checks wait; once that limit is reached by checks actually
+added, the remaining promoted players stay due and are asked again later. Any other answer
 refreshes or removes the list row. A failed request, or an answer that cannot
 be read or shows an uncertain tier, leaves the player due; it is asked again
 once the rest of the list has been asked, at most once a minute. Each stretch
