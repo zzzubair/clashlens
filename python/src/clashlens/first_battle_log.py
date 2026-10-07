@@ -577,13 +577,14 @@ def requeue_overlap_gap(
 ) -> dict[str, Any]:
     """Find, and with ``queue`` recalculate, each player's oldest ended day
     of the Season whose latest result reports ``battle_log_overlap_gap``, and
-    their later saved days, once per day. Before October 2026 two full logs
-    overlapped only through a shared Legend battle, so logs sharing only
-    other battles were a gap: 911 ended days on 5 and 6 October 2026. A day
-    still reporting a gap after this is queued no more; one whose
-    recalculation failed is counted in ``failed`` and up to ``max_jobs`` are
-    listed in ``failed_blockers``. The batch is queued at backfill priority,
-    as ``requeue_day_1``."""
+    their later saved days. Before October 2026 two full logs overlapped
+    only through a shared Legend battle, so logs sharing only other battles
+    were a gap: 911 ended days on 5 and 6 October 2026. A day is queued once
+    while its finished request is kept, about 48 hours; a later run queues a
+    day still reporting a gap again, which only recalculates it. A failed
+    request is kept and not queued again: it is counted in ``failed`` and up
+    to ``max_jobs`` are listed in ``failed_blockers``. The batch is queued at
+    backfill priority, as ``requeue_day_1``."""
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(season_start):
         raise ValueError(f"{season_id} is not a Season's start")
