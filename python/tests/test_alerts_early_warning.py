@@ -66,19 +66,17 @@ def test_overdue_work_warns_at_10_minutes_or_45_after_a_reset(
         assert f"oldest overdue job has waited {age // 60} minutes" in warnings(rt)[0]
 
 
-def saved_sample(rt, hour, minute, newest_id) -> None:
+def saved_sample(rt, hour, minute, saved) -> None:
     at(rt, hour, minute, 10)
     rt.metrics[f"{PREFIX}metrics_sample_timestamp_seconds"] = rt.now - 5
-    rt.metrics[f"{PREFIX}newest_observation_id"] = newest_id
+    rt.metrics[f"{PREFIX}responses_saved_last_minute"] = saved
 
 
 @pytest.mark.parametrize(("saved", "warned"), [(99, True), (100, False)])
 def test_reset_hour_saving_under_100_responses_a_minute_warns(
     rt, saved, warned
 ) -> None:
-    saved_sample(rt, 5, 20, 1_000)
-    assert rt.run() == 0
-    saved_sample(rt, 5, 21, 1_000 + saved)
+    saved_sample(rt, 5, 21, saved)
     assert rt.run() == 0
     assert len(warnings(rt)) == int(warned)
     if warned:
@@ -91,13 +89,11 @@ def test_slow_saving_outside_the_reset_hour_or_across_its_start_does_not_warn(
     rt,
 ) -> None:
     # The minute before the Reset is a deliberate pause.
-    saved_sample(rt, 4, 59, 1_000)
+    saved_sample(rt, 4, 59, 0)
     assert rt.run() == 0
-    saved_sample(rt, 5, 0, 1_000)
+    saved_sample(rt, 5, 0, 0)
     assert rt.run() == 0
-    saved_sample(rt, 6, 30, 1_000)
-    assert rt.run() == 0
-    saved_sample(rt, 6, 31, 1_000)
+    saved_sample(rt, 6, 30, 0)
     assert rt.run() == 0
     assert warnings(rt) == []
 
@@ -111,3 +107,21 @@ def test_an_unreadable_health_streak_keeps_an_open_warning_open(rt) -> None:
     rt.now += 60
     assert rt.run() == 0
     assert len(rt.posts) == 1
+
+
+def test_a_health_warning_is_sent_before_the_slow_checks_run(rt, monkeypatch) -> None:
+    # Podman kills at 6 failures, about three minutes; the backup and database
+    # checks after it can take 25 seconds each.
+    rt.health_streaks["clashlens-collector"] = 4
+    run_command = alerts.command
+    warned_before = []
+
+    def command(args, timeout=15):
+        if "{{.State.Health.FailingStreak}}" not in args:
+            warned_before.append(bool(warnings(rt)))
+        return run_command(args, timeout)
+
+    monkeypatch.setattr(alerts, "command", command)
+    assert rt.run() == 0
+    assert warned_before and all(warned_before)
+    assert len(warnings(rt)) == 1

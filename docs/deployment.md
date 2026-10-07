@@ -959,11 +959,13 @@ use the [operating notes](operating.md#respond-to-alerts).
     05:00 and 07:00 UTC, from `oldest_pending_processing_age_seconds`. The
     normal Reset on 6 Oct 2026 left work overdue for up to 35 minutes;
   - fewer than **100 responses a minute** saved between 05:00 and 06:00 UTC,
-    from two collector samples of `newest_observation_id` both in that hour.
-    Normal Reset hours save 420–2,700 a minute.
+    from the collector's `responses_saved_last_minute`, counted from saved
+    rows (up to 1,000) in the minute before its sample. Normal Reset hours
+    save 420–2,700 a minute.
 
-  A container that cannot be inspected, missing measurements, or the first
-  sample of the hour leave the warning unknown, so an open warning stays
+  The warning is sent before the alert check's slower checks run. A container
+  that cannot be inspected, missing measurements, or a sampled minute that
+  starts before 05:00 leave the warning unknown, so an open warning stays
   open. On 7 Oct 2026 Podman killed the collector 13 times and the worker 4
   times in 34 minutes with no alert.
 - **A Reset publication over an hour past its target time**: no publication

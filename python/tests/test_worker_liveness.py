@@ -12,11 +12,12 @@ import threading
 import time
 from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Event
 
 from clashlens import cli, worker_liveness
 from clashlens.spool import Spool
-from clashlens.worker import process_until_stopped
+from clashlens.worker import ObservationProcessor, ProcessResult, process_until_stopped
 
 
 class _SlowDatabase:
@@ -43,7 +44,6 @@ def _arguments(tmp_path, *, spool_root) -> Namespace:
         database_url_file="",
         expected_contract_version=5,
         spool_root=str(spool_root),
-        progress_file=str(tmp_path / "progress"),
     )
 
 
@@ -57,7 +57,7 @@ def test_running_worker_stays_healthy_while_the_lock_is_held_and_the_database_sl
 ) -> None:
     root = tmp_path / "spool"
     collector = Spool(root, max_body_bytes=1024)
-    worker_liveness.ProgressMark(str(tmp_path / "progress"))()
+    worker_liveness.ProgressMark()()
     monkeypatch.setattr(cli, "Database", _SlowDatabase)
     holding, release = threading.Event(), threading.Event()
 
@@ -85,7 +85,7 @@ def test_worker_without_progress_for_20_minutes_fails_its_health_check(
 ) -> None:
     root = tmp_path / "spool"
     Spool(root, max_body_bytes=1024)
-    progress = tmp_path / "progress"
+    progress = Path(worker_liveness.PROGRESS_FILE)
     progress.touch()
     monkeypatch.setattr(cli, "Database", _SlowDatabase)
     arguments = _arguments(tmp_path, spool_root=root)
@@ -198,3 +198,22 @@ def test_idle_lanes_report_progress_and_stuck_lanes_stop_even_while_maintenance_
     finally:
         stop.set()
         worker.join(timeout=5)
+
+
+def test_one_lane_reports_progress_before_every_job_in_a_batch() -> None:
+    # One lane runs batches of up to 100 jobs; at 20 s a job one batch outlasts
+    # the 20 minutes after which the health check calls the worker stuck.
+    events = []
+
+    class Processor(ObservationProcessor):
+        def __init__(self) -> None:
+            pass
+
+        def process_once(self, **_kwargs):
+            events.append("job")
+            return ProcessResult(len(events), "processed")
+
+    Processor().process_until_idle(
+        owner="test-worker", max_jobs=3, progress=lambda: events.append("progress")
+    )
+    assert events == ["progress", "job"] * 3

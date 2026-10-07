@@ -25,38 +25,31 @@ from .spool import read_readiness
 STUCK_SECONDS = 1200.0
 MARK_INTERVAL_SECONDS = 5.0
 # The health check runs inside the worker's container, which has its own /tmp.
-DEFAULT_PROGRESS_FILE = os.environ.get(
-    "CLASHLENS_WORKER_PROGRESS_FILE", "/tmp/clashlens-worker-progress"
-)
+PROGRESS_FILE = "/tmp/clashlens-worker-progress"
 
 
 class ProgressMark:
     """Touch the progress file, at most once every MARK_INTERVAL_SECONDS."""
 
-    def __init__(self, path: str) -> None:
-        self.path = path
+    def __init__(self) -> None:
         self._marked_at = float("-inf")
         self._lock = threading.Lock()
 
     def __call__(self) -> None:
-        if not self.path:
-            return
         now = time.monotonic()
         with self._lock:
             if now - self._marked_at < MARK_INTERVAL_SECONDS:
                 return
             self._marked_at = now
         try:
-            Path(self.path).touch()
+            Path(PROGRESS_FILE).touch()
         except OSError:
             pass  # A file that stops changing reads as stuck, which is right.
 
 
-def seconds_since_progress(path: str) -> float | None:
-    if not path:
-        return None
+def seconds_since_progress() -> float | None:
     try:
-        return max(0.0, time.time() - os.stat(path).st_mtime)
+        return max(0.0, time.time() - os.stat(PROGRESS_FILE).st_mtime)
     except FileNotFoundError:
         return None
 
@@ -73,7 +66,7 @@ def worker_readiness(
     spool = {"ready": spool_ready, "component": "spool", "reason": reason}
     if not spool_ready:
         return {"status": "not_ready", "spool": spool}
-    since = seconds_since_progress(getattr(arguments, "progress_file", ""))
+    since = seconds_since_progress()
     if since is not None:
         stuck = since >= STUCK_SECONDS
         return {

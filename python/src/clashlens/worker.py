@@ -1119,9 +1119,11 @@ class ObservationProcessor:
         max_jobs: int = 100,
         lease_seconds: int = 30,
         stop_requested: Event | None = None,
+        progress: Callable[[], None] = lambda: None,
     ) -> list[ProcessResult]:
         results: list[ProcessResult] = []
         for _ in range(max_jobs):
+            progress()
             if stop_requested is not None and stop_requested.is_set():
                 break
             try:

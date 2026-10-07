@@ -384,7 +384,7 @@ def test_health_metrics_count_saved_responses(database_url: str) -> None:
             ).fetchone()[0]
         database = CollectorDatabase(connection_info)
         try:
-            assert "newest_observation_id" not in database.health_metrics()
+            assert database.health_metrics()["responses_saved_last_minute"] == 0
             completed_at = datetime.now(UTC)
             for index in range(3):
                 body_hash = hashlib.sha256(f"body {index}".encode()).hexdigest()
@@ -409,7 +409,12 @@ def test_health_metrics_count_saved_responses(database_url: str) -> None:
                     )
                 )
                 if index == 0:
-                    first = database.health_metrics()["newest_observation_id"]
-            assert database.health_metrics()["newest_observation_id"] == first + 2
+                    # Saves that roll back still use up ids, as on 7 Oct 2026.
+                    with psycopg.connect(connection_info) as connection:
+                        connection.execute(
+                            "SELECT nextval(pg_get_serial_sequence('collector_observations', 'id'))"
+                            " FROM generate_series(1, 100)"
+                        )
+            assert database.health_metrics()["responses_saved_last_minute"] == 3
         finally:
             database.close()

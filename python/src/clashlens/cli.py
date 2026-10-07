@@ -63,7 +63,7 @@ from .worker import (
     process_concurrently,
     process_until_stopped,
 )
-from .worker_liveness import DEFAULT_PROGRESS_FILE, ProgressMark, worker_readiness
+from .worker_liveness import ProgressMark, worker_readiness
 
 MAX_REPORTED_RESULTS = 100
 # Save plus request threads leave 64 of the collector container's 512 for the rest.
@@ -194,7 +194,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=("archive HTTP connection pool size (default: max(4, concurrency))"),
     )
     worker.add_argument("--operating-snapshot-file", default="")
-    worker.add_argument("--progress-file", default=DEFAULT_PROGRESS_FILE)
     worker.add_argument(
         "--terminal-snapshot-file",
         default="",
@@ -217,7 +216,6 @@ def build_parser() -> argparse.ArgumentParser:
     _database_argument(ready)
     _archive_arguments(ready)
     ready.add_argument("--expected-contract-version", type=int, default=4)
-    ready.add_argument("--progress-file", default=DEFAULT_PROGRESS_FILE)
 
     queue_status = subparsers.add_parser(
         "queue-status", help="report aggregate production worker queue health"
@@ -869,7 +867,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         if isinstance(processor, ObservationProcessor):
             processor.stage_metrics = database.stage_metrics = stage_metrics
 
-        progress = ProgressMark(getattr(arguments, "progress_file", ""))
+        progress = ProgressMark()
 
         def process_batch() -> list[ProcessResult]:
             # Local spool and PostgreSQL own claim readiness. Remote marker
@@ -884,6 +882,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     max_jobs=arguments.max_jobs,
                     lease_seconds=arguments.lease_seconds,
                     stop_requested=stop_requested,
+                    progress=progress,
                 )
             return process_concurrently(
                 processor,

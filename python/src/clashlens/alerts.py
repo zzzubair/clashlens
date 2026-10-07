@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -471,7 +472,7 @@ def deliver(
 
 
 def observe(
-    config: dict, state: dict, now: float, root: Path
+    config: dict, state: dict, now: float, root: Path, send: Callable[[dict], None]
 ) -> tuple[dict, list[str]]:
     findings = dict.fromkeys(CONDITIONS)
     errors = []
@@ -549,6 +550,8 @@ def observe(
             )
 
     findings["warning"] = early_warning(podman, metrics if metrics_read else {}, state, clock)
+    # Sent before the slow checks below: Podman kills about three minutes in.
+    send({"warning": findings["warning"]})
 
     names = (
         ("clashlens_spool_bytes", "max_bytes"),
@@ -711,29 +714,22 @@ def early_warning(podman: str, metrics: dict, state: dict, clock: str) -> bool |
         unknown = True
     elif age >= limit:
         reasons.append(f"the oldest overdue job has waited {int(age // 60)} minutes")
-    # Responses saved a minute, from two collector samples both in 05:00-06:00.
-    newest = metrics.get("clashlens_collector_newest_observation_id")
+    # Responses saved in the collector's sampled minute, once it is all in 05:00-06:00.
+    saved = metrics.get("clashlens_collector_responses_saved_last_minute")
     sampled = metrics.get("clashlens_collector_metrics_sample_timestamp_seconds")
-    rate = None
-    if newest is not None and sampled is not None:
-        previous = state.get("saved_sample")
-        hours = {datetime.fromtimestamp(t, UTC).hour for t in (sampled, (previous or [0])[0])}
-        if previous and 0 < sampled - previous[0] <= 300 and hours == {5}:
-            rate = (newest - previous[1]) * 60 / (sampled - previous[0])
-        if not previous or sampled > previous[0]:
-            state["saved_sample"] = [sampled, newest]
     if "05:00" <= clock < "06:00":
-        if rate is None:
+        hours = {datetime.fromtimestamp(t, UTC).hour for t in (sampled - 60, sampled)} if sampled is not None else None
+        if saved is None or hours != {5}:
             unknown = True
-        elif rate < WARNING_RESET_SAVED_PER_MINUTE:
-            reasons.append(f"only {int(rate)} responses a minute were saved in the Reset hour")
+        elif saved < WARNING_RESET_SAVED_PER_MINUTE:
+            reasons.append(f"only {int(saved)} responses a minute were saved in the Reset hour")
     if reasons:
         state.setdefault("details", {})["warning"] = "Now: " + "; ".join(reasons)
     return True if reasons else (None if unknown else False)
 
 
 def observe_site(
-    config: dict, state: dict, now: float, _root: Path | None
+    config: dict, state: dict, now: float, _root: Path | None, _send: Callable
 ) -> tuple[dict, list[str]]:
     """Alert once the site has failed every check for two minutes."""
     try:
@@ -771,7 +767,13 @@ def run(config: dict, state_dir: Path, root: Path | None, check=observe) -> int:
         intent = state_dir / "alert-intent"
         if intent.exists():
             state["resumed_at"] = intent.stat().st_mtime
-        findings, errors = check(config, state, now, root)
+
+        def send(findings: dict) -> None:
+            hold_recoveries(state, findings, now)
+            save_state(path, state)
+            deliver(state, findings, now, path, webhook)
+
+        findings, errors = check(config, state, now, root, send)
         hold_recoveries(state, findings, now)
         save_state(path, state)
         delivered = deliver(state, findings, now, path, webhook)
