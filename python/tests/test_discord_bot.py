@@ -39,7 +39,7 @@ def card(tag: str, name: str, trophies: int | None, **extra: Any) -> dict[str, A
         "season_reset_pending": False,
         "rank": 1200,
         "today": {"net": 40, "attacks": 3, "defenses": 2},
-        "age_seconds": 120,
+        "observed_at": NOW - timedelta(minutes=2),
         **extra,
     }
 
@@ -91,7 +91,7 @@ def page(tag: str, name: str, battles: list[dict[str, Any]], reasons=()) -> dict
         "clan": "Lens Clan",
         "trophies": 5842,
         "season_reset_pending": False,
-        "age_seconds": 120,
+        "observed_at": (NOW - timedelta(minutes=2)).isoformat(),
         "screen_ready": {
             "days": [day],
             "current_day_start": day["ranked_day_start"],
@@ -394,16 +394,20 @@ def test_every_player_reply_ends_with_its_oldest_update_time(store) -> None:
     store.connect(
         ME,
         [
-            card("#2PP", "Drift", 5842, state="not_in_legend", age_seconds=600),
-            card("#8QQ", "Lens", 5100, state="not_in_legend", age_seconds=None),
+            card("#2PP", "Drift", 5842, state="not_in_legend", observed_at=NOW - timedelta(hours=3)),
+            card("#8QQ", "Lens", 5100, state="not_in_legend", observed_at=None),
         ],
     )
     for name, options in (("me", {"account": None, "share": False}), ("link", {})):
         footer = run_command(store, name, FakeInteraction(), **options)["footer"]
-        assert footer.endswith("Updated 10 min ago")
-    store.cards[1][0]["age_seconds"] = None
+        assert footer.endswith("Updated 180 min ago")
+    store.cards[1][0]["observed_at"] = None
     footer = run_command(store, "me", FakeInteraction(), account=None, share=False)["footer"]
     assert footer.endswith("Updated: pending")
+    assert run_command(store, "help", FakeInteraction())["footer"] == "Updated 0 min ago"
+    store.fail = psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
+    footer = run_command(store, "me", FakeInteraction(), account=None, share=False)["footer"]
+    assert footer == "Updated: Unavailable"
 
 
 def test_me_shows_every_player_across_messages_when_one_is_not_enough(store) -> None:
@@ -420,16 +424,42 @@ def test_me_shows_every_player_across_messages_when_one_is_not_enough(store) -> 
 def test_show_all_beyond_discords_follow_up_allowance_continues_on_request(store) -> None:
     tags = [f"#{index:04d}" for index in range(500)]
     store.connect(ME, [card(tag, "Wanderer", 5000) for tag in tags])
-    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    clock = [NOW]
+    message = run_command(
+        store, "me", FakeInteraction(), now=lambda: clock[0], account=None, share=False
+    )
     clicks = [FakeInteraction()]
     asyncio.run(button(message, "Show all").callback(clicks[0]))
+    assert clicks[0].last["footer"].endswith("\nUpdated 2 min ago")
     while isinstance(clicks[-1].last["view"], discord_app.MoreView):
+        clock[0] += timedelta(minutes=9)
         clicks.append(FakeInteraction())
         asyncio.run(button(clicks[-2].last, "Show more").callback(clicks[-1]))
         # The button goes once it has been used.
         assert clicks[-1].messages[0]["edited"] and clicks[-1].messages[0]["view"] is None
+        # Each batch ends with how old the data is when it goes out.
+        minutes = int((clock[0] - NOW).total_seconds()) // 60 + 2
+        assert clicks[-1].last["footer"].endswith(f"\nUpdated {minutes} min ago")
     assert len(clicks) >= 2
     assert all(f"** {tag} " in texts(*clicks) for tag in tags)
+
+
+@pytest.mark.parametrize("change", ["disconnected", "other account"])
+def test_show_more_sends_nothing_once_the_players_are_no_longer_the_persons(
+    store, change
+) -> None:
+    tags = [f"#{index:04d}" for index in range(500)]
+    store.connect(ME, [card(tag, "Wanderer", 5000) for tag in tags])
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    click = FakeInteraction()
+    asyncio.run(button(message, "Show all").callback(click))
+    del store.accounts[str(ME)]
+    if change == "other account":
+        store.connect(ME, [card("#9RR", "Theirs", 6000)])
+    more = FakeInteraction()
+    asyncio.run(button(click.last, "Show more").callback(more))
+    assert [item["private"] for item in more.messages] == [True]
+    assert "Wanderer" not in texts(more)
 
 
 def test_link_lists_every_player_across_messages(store) -> None:
@@ -540,10 +570,11 @@ def test_full_day_reads_and_shows_one_legend_day_across_a_reset(store) -> None:
     before = TODAY.end - timedelta(seconds=1)
     after = TODAY.end + timedelta(seconds=1)
     clock = iter([before, after])
+    now = lambda: next(clock, after)
     store.connect(ME, [card("#2PP", "Drift", 5842)])
     store.pages["#2PP"] = page("#2PP", "Drift", [])
     text = run_command(
-        store, "me", FakeInteraction(), now=lambda: next(clock), account=None, share=False
+        store, "me", FakeInteraction(), now=now, account=None, share=False
     )["text"]
     # A Reset passed while reading, so everything is read again for the new day.
     assert store.moments == [before] * 3 + [after] * 3
@@ -631,6 +662,24 @@ def test_autocomplete_offers_only_the_persons_own_players(store) -> None:
     # A player moved to another account stops being offered at once.
     store.cards[1].pop(0)
     assert asyncio.run(app.own_player_choices(FakeInteraction(), "dri")) == []
+
+
+def test_autocomplete_that_ran_out_of_time_waiting_never_reads(store, monkeypatch) -> None:
+    monkeypatch.setattr(discord_app, "AUTOCOMPLETE_SECONDS", 0.05)
+    store.connect(ME, [card("#2PP", "Drift", 5842)])
+
+    async def go() -> None:
+        app = DiscordApp(Commands(store, SITE, now=lambda: NOW))
+        # Every read place busy with other work.
+        for _ in range(discord_app.READ_SLOTS):
+            await app._slots.acquire()
+        assert await app.own_player_choices(FakeInteraction(), "") == []
+        for _ in range(discord_app.READ_SLOTS):
+            app._slots.release()
+        await asyncio.sleep(0.05)
+
+    asyncio.run(go())
+    assert store.reads == []
 
 
 def test_token_file_problems_never_show_the_token(tmp_path) -> None:

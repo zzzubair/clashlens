@@ -59,13 +59,18 @@ class DiscordApp:
         self.commands = commands
         self._slots = asyncio.Semaphore(READ_SLOTS)
 
-    async def read(self, work: Callable[..., T], *args: Any) -> T:
+    async def read(
+        self, work: Callable[..., T], *args: Any, deadline: float | None = None
+    ) -> T:
         """Run blocking database work in a worker thread. The database's own
         time limits end it: a statement over its limit is slow and rolls back,
         no connection within the pool's wait means Clash Lens is unavailable.
-        The slot stays taken until the work has ended."""
+        The slot stays taken until the work has ended. Work still waiting for
+        a slot at `deadline`, in event loop time, is dropped unrun."""
         try:
             async with self._slots:
+                if deadline is not None and asyncio.get_running_loop().time() > deadline:
+                    raise Slow
                 return await asyncio.to_thread(work, *args)
         except psycopg.errors.QueryCanceled as error:
             raise Slow from error
@@ -75,17 +80,16 @@ class DiscordApp:
     def render(
         self, reply: Reply, owner: int, origin: discord.Interaction, *, private: bool
     ) -> list[dict[str, Any]]:
-        """One message per page of the reply: the first carries the title and
-        buttons, the last the footer."""
-        texts = replies.pages(reply.body)
-        messages: list[dict[str, Any]] = []
-        for index, text in enumerate(texts):
-            embed = discord.Embed(
-                title=reply.title if index == 0 else None, description=text, colour=_COLOUR
-            )
-            if reply.footer and index == len(texts) - 1:
-                embed.set_footer(text=reply.footer)
-            messages.append({"embed": embed})
+        """One message per page of the reply, the first with the title and
+        buttons; `deliver` adds the footer."""
+        messages: list[dict[str, Any]] = [
+            {
+                "embed": discord.Embed(
+                    title=reply.title if index == 0 else None, description=text, colour=_COLOUR
+                )
+            }
+            for index, text in enumerate(replies.pages(reply.body))
+        ]
         if reply.links or reply.choices or reply.show_all:
             messages[0]["view"] = ReplyView(self, reply, owner, origin, private)
         return messages
@@ -113,7 +117,9 @@ class DiscordApp:
                 account = await self.read(self.commands.account, str(interaction.user.id))
                 if account is None:
                     outcome = "not_linked"
-                    reply = replies.not_linked(self.commands.site, interaction.user.name)
+                    reply = replies.not_linked(
+                        self.commands.site, interaction.user.name, self.commands.now()
+                    )
                     await self._private(interaction, reply, shared)
                     return
                 args = (account, *args)
@@ -161,29 +167,37 @@ class DiscordApp:
         private = private and not in_bot_dm(interaction)
         messages = self.render(reply, interaction.user.id, interaction, private=private)
         try:
-            await self.deliver(interaction, messages, owner=interaction.user.id, private=private)
+            await self.deliver(
+                interaction, reply, messages, owner=interaction.user.id, private=private
+            )
         except discord.HTTPException:
             log.warning("could not send a reply to Discord", exc_info=True)
 
     async def deliver(
         self,
         interaction: discord.Interaction,
+        reply: Reply,
         messages: list[dict[str, Any]],
         *,
         owner: int,
         private: bool,
-        replacing: ReplyView | None = None,
+        replacing: _OwnedView | None = None,
     ) -> None:
-        """Send rendered messages for one interaction, the first in place of
-        `replacing`'s message when given. What does not fit in Discord's
-        follow-up allowance waits behind a "Show more" button."""
+        """Send `reply`'s rendered messages for one interaction, the first in
+        place of `replacing`'s message when given. What does not fit in
+        Discord's follow-up allowance waits behind a "Show more" button. The
+        last message sent ends with the footer and how old the data is now."""
         first_free = replacing is not None or not interaction.response.is_done()
         room = FOLLOWUPS + 1 if first_free else FOLLOWUPS
-        if len(messages) > room:
-            more = MoreView(self, owner, messages[room:], private)
-            messages = [*messages[: room - 1], {**messages[room - 1], "view": more}]
-        else:
-            messages = list(messages)
+        rest = messages[room:]
+        messages = [dict(message) for message in messages[:room]]
+        if rest:
+            messages[-1]["view"] = MoreView(self, reply, owner, rest, private)
+        ending = replies.updated_line(reply.updated, self.commands.now())
+        messages[-1]["embed"].set_footer(
+            text=f"{reply.footer}\n{ending}" if reply.footer else ending
+        )
+
         if replacing is not None:
             # Without view=None Discord keeps the old buttons on the message.
             await interaction.edit_original_response(**{"view": None, **messages.pop(0)})
@@ -197,9 +211,11 @@ class DiscordApp:
                 message["view"].message = sent
 
     async def on_component(
-        self, interaction: discord.Interaction, view: ReplyView, work: Callable[[], Reply | None]
+        self, interaction: discord.Interaction, view: _OwnedView, work: Callable[[], Reply | None]
     ) -> None:
-        """A dropdown pick or button click: swap the message for the new reply."""
+        """A dropdown pick or button click: swap the message for the new reply.
+        "Show more" sends the rest of its reply only while the person's account
+        still has every player it lists."""
         started = time.perf_counter()
         outcome = "ok"
         try:
@@ -211,12 +227,30 @@ class DiscordApp:
             if reply is None:
                 # Never on the message itself, which others may see.
                 outcome = "not_linked"
-                reply = replies.not_linked(self.commands.site, interaction.user.name)
+                reply = replies.not_linked(
+                    self.commands.site, interaction.user.name, self.commands.now()
+                )
                 await self._send(interaction, reply, private=True)
+                return
+            if isinstance(view, MoreView):
+                if reply is not view.reply:
+                    outcome = "not_own"
+                    await self._send(interaction, reply, private=True)
+                    return
+                await interaction.edit_original_response(view=None)
+                view.stop()
+                await self.deliver(
+                    interaction, reply, view.messages, owner=view.owner, private=view.private
+                )
                 return
             messages = self.render(reply, view.owner, interaction, private=view.private)
             await self.deliver(
-                interaction, messages, owner=view.owner, private=view.private, replacing=view
+                interaction,
+                reply,
+                messages,
+                owner=view.owner,
+                private=view.private,
+                replacing=view,
             )
         except Slow:
             outcome = "slow"
@@ -240,10 +274,12 @@ class DiscordApp:
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
         """Autocomplete for options that name one of the person's own players."""
+        deadline = asyncio.get_running_loop().time() + AUTOCOMPLETE_SECONDS
         task = asyncio.ensure_future(
-            self.read(self.commands.own_choices, str(interaction.user.id))
+            self.read(self.commands.own_choices, str(interaction.user.id), deadline=deadline)
         )
-        # A read that outlives the answer still holds its slot until it ends.
+        # A read already running when the answer is due keeps its slot until
+        # it ends; one still waiting for a slot then never runs.
         task.add_done_callback(lambda done: done.cancelled() or done.exception())
         try:
             async with asyncio.timeout(AUTOCOMPLETE_SECONDS):
@@ -307,6 +343,9 @@ class _OwnedView(discord.ui.View):
 
     app: DiscordApp
     owner: int
+    private: bool
+    # The latest interaction that may still edit the message.
+    origin: discord.Interaction | None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.owner:
@@ -319,33 +358,37 @@ class MoreView(_OwnedView):
     """A "Show more" button for the messages one interaction could not send."""
 
     def __init__(
-        self, app: DiscordApp, owner: int, messages: list[dict[str, Any]], private: bool
+        self,
+        app: DiscordApp,
+        reply: Reply,
+        owner: int,
+        messages: list[dict[str, Any]],
+        private: bool,
     ) -> None:
         super().__init__(timeout=VIEW_SECONDS)
         self.app = app
+        self.reply = reply
         self.owner = owner
         self.messages = messages
         self.private = private
+        self.origin = None
         self.message: discord.WebhookMessage | None = None
         button: discord.ui.Button[MoreView] = discord.ui.Button(label="Show more")
 
         async def more(interaction: discord.Interaction) -> None:
-            try:
-                await interaction.response.defer()
-                await interaction.edit_original_response(view=None)
-                self.stop()
-                await app.deliver(interaction, self.messages, owner=owner, private=private)
-            except discord.HTTPException:
-                log.warning("could not send the rest of a reply", exc_info=True)
+            await app.on_component(
+                interaction, self, lambda: app.commands.keep(str(interaction.user.id), reply)
+            )
 
         button.callback = more  # type: ignore[method-assign]
         self.add_item(button)
 
     async def on_timeout(self) -> None:
-        if self.message is None:
-            return
         try:
-            await self.message.edit(view=None)
+            if self.origin is not None:
+                await self.origin.edit_original_response(view=None)
+            elif self.message is not None:
+                await self.message.edit(view=None)
         except discord.HTTPException:
             pass
 

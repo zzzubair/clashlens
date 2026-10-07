@@ -61,18 +61,22 @@ class Commands:
         return self.store.main_tag(account) if cards else None
 
     def help(self, discord_id: str) -> Reply:
+        now = self.now()
         account = self.store.account(discord_id)
         if account is None:
-            return replies.help_reply(self.site, None, 0)
-        players = self.store.players(account, self.now())
-        return replies.help_reply(self.site, account.username, len(players))
+            return replies.help_reply(self.site, None, 0, now)
+        players = self.store.players(account, now)
+        return replies.help_reply(self.site, account.username, len(players), now)
 
     def link(self, discord_id: str, discord_name: str) -> Reply:
+        now = self.now()
         account = self.store.account(discord_id)
         if account is None:
-            return replies.not_linked(self.site, discord_name)
-        cards = self.store.players(account, self.now())
-        return replies.link_reply(self.site, account.username, cards, self._main(account, cards))
+            return replies.not_linked(self.site, discord_name, now)
+        cards = self.store.players(account, now)
+        return replies.link_reply(
+            self.site, account.username, cards, self._main(account, cards), now
+        )
 
     def me(self, account: AccountContext, player: str | None = None, *, show_all: bool = False) -> Reply:
         # One moment for every read and the reply. Data saved after a Reset
@@ -90,7 +94,7 @@ class Commands:
     ) -> Reply:
         cards = self.store.players(account, now)
         if not cards:
-            return replies.no_players(self.site, account.username)
+            return replies.no_players(self.site, account.username, now)
         if player is None and len(cards) > 1:
             return replies.me_overview(
                 self.site, cards, self._main(account, cards), now, show_all=show_all
@@ -114,9 +118,10 @@ class Commands:
         )
 
     def main(self, account: AccountContext, player: str | None = None) -> Reply:
-        cards = self.store.players(account, self.now())
+        now = self.now()
+        cards = self.store.players(account, now)
         if not cards:
-            return replies.no_players(self.site, account.username)
+            return replies.no_players(self.site, account.username, now)
         if player is None:
             return replies.main_reply(cards, self._main(account, cards))
         card = find_own(cards, player)
@@ -134,6 +139,15 @@ class Commands:
         if action == "all":
             return self.me(account, show_all=True)
         return self.me(account, tag)
+
+    def keep(self, discord_id: str, reply: Reply) -> Reply | None:
+        """`reply` again while this Discord user's account still has every
+        player it lists; None when this Discord user is no longer connected."""
+        account = self.store.account(discord_id)
+        if account is None:
+            return None
+        own = {card["tag"] for card in self.store.players(account, self.now())}
+        return reply if set(reply.shown) <= own else replies.not_own()
 
     def own_choices(self, discord_id: str) -> list[replies.Choice]:
         """Autocomplete entries: only the person's own verified players."""

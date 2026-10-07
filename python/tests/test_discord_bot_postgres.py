@@ -90,7 +90,7 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
             assert account is not None and account.internal_id == mine
             cards = store.players(account, NOW)
             assert [card["tag"] for card in cards] == ["#2PP", "#8QQ"]
-            assert all(card["age_seconds"] is not None for card in cards)
+            assert all(card["observed_at"] is not None for card in cards)
 
             assert store.main_tag(account) is None
             assert store.set_main(account, "#9RR") is False
@@ -109,8 +109,11 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
                 )
             assert store.main_tag(account) is None
 
-            # A main moved to another account and back is forgotten too.
+            # Verifying the main again on the same account keeps it.
             assert store.set_main(account, "#8QQ") is True
+            _verify(owner, mine, "#8QQ")
+            assert store.main_tag(account) == "#8QQ"
+            # A main moved to another account and back is forgotten.
             _verify(owner, theirs, "#8QQ")
             assert store.main_tag(account) is None
             _verify(owner, mine, "#8QQ")

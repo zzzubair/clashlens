@@ -2,8 +2,8 @@
 
 The bot connects as the API's database role and calls the same reads the
 website's pages use, so a number in Discord matches the number on the site.
-Its only write is each account's main player. Every read takes the moment of
-the command, so one reply never mixes two Legend days.
+Its only writes are each account's main player. Every read takes the moment
+of the command, so one reply never mixes two Legend days.
 """
 
 from __future__ import annotations
@@ -27,49 +27,56 @@ class Store:
         return api_accounts.resolve_account(self.database, "discord", discord_id)
 
     def players(self, account: AccountContext, now: datetime) -> list[dict[str, Any]]:
-        """Each verified player's trophies, board position, day so far and how
-        old its saved profile is, the same age the player page shows. The age
-        is read first: a profile saved in between only makes it look older."""
+        """Each verified player's card, read with the website's own code, and
+        when its saved profile was last seen, both from one database snapshot
+        so the time always belongs to the numbers."""
         with self.database.pool.connection() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            cards = api_players.player_cards(
+                connection,
+                api_accounts._linked_players(connection, account.internal_id),
+                now=now,
+            )
             seen = dict(
                 connection.execute(
                     """
-                    SELECT player.normalized_tag,
-                           GREATEST(player.current_observed_at,
-                                    player.current_profile_confirmed_at)
-                    FROM verified_player_links AS link
-                    JOIN players AS player ON player.id = link.player_id
-                    WHERE link.account_id = %s
+                    SELECT normalized_tag,
+                           GREATEST(current_observed_at, current_profile_confirmed_at)
+                    FROM players
+                    WHERE normalized_tag = ANY(%s)
                     """,
-                    (account.internal_id,),
+                    ([card["tag"] for card in cards],),
                 ).fetchall()
             )
-        user = api_accounts.get_public_user(self.database, account.username, now=now)
-        if user is None:
-            return []
-        cards = user["verified_players"]
         for card in cards:
-            at = seen.get(card["tag"])
-            card["age_seconds"] = (
-                None if at is None else max(0, int((now - at).total_seconds()))
-            )
+            card["observed_at"] = seen.get(card["tag"])
         return cards
 
     def main_tag(self, account: AccountContext) -> str | None:
-        """The saved main, only while the verification it was chosen under stands."""
+        """The saved main; one no longer verified to this account is forgotten."""
         with self.database.pool.connection() as connection:
-            row = connection.execute(
-                """
-                SELECT player.normalized_tag
-                FROM discord_bot_main_players AS main
-                JOIN verified_player_links AS link
-                    ON link.verification_request_id = main.verification_request_id
-                   AND link.account_id = main.account_id
-                JOIN players AS player ON player.id = link.player_id
-                WHERE main.account_id = %s
-                """,
-                (account.internal_id,),
-            ).fetchone()
+            with connection.transaction():
+                connection.execute(
+                    """
+                    DELETE FROM discord_bot_main_players AS main
+                    WHERE main.account_id = %s
+                      AND NOT EXISTS (
+                          SELECT 1 FROM verified_player_links AS link
+                          WHERE link.player_id = main.player_id
+                            AND link.account_id = main.account_id
+                      )
+                    """,
+                    (account.internal_id,),
+                )
+                row = connection.execute(
+                    """
+                    SELECT player.normalized_tag
+                    FROM discord_bot_main_players AS main
+                    JOIN players AS player ON player.id = main.player_id
+                    WHERE main.account_id = %s
+                    """,
+                    (account.internal_id,),
+                ).fetchone()
         return None if row is None else str(row[0])
 
     def set_main(self, account: AccountContext, tag: str) -> bool:
@@ -78,13 +85,13 @@ class Store:
             with connection.transaction():
                 row = connection.execute(
                     """
-                    INSERT INTO discord_bot_main_players (account_id, verification_request_id)
-                    SELECT link.account_id, link.verification_request_id
+                    INSERT INTO discord_bot_main_players (account_id, player_id)
+                    SELECT link.account_id, link.player_id
                     FROM verified_player_links AS link
                     JOIN players AS player ON player.id = link.player_id
                     WHERE link.account_id = %s AND player.normalized_tag = %s
                     ON CONFLICT (account_id) DO UPDATE
-                        SET verification_request_id = EXCLUDED.verification_request_id,
+                        SET player_id = EXCLUDED.player_id,
                             updated_at = clock_timestamp()
                     RETURNING account_id
                     """,
