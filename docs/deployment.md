@@ -806,7 +806,7 @@ without printing configuration files.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the twelve conditions below and posts changes to the
+`./ops alert-check` checks the fourteen conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
