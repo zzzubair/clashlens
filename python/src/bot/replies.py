@@ -251,6 +251,14 @@ def link_reply(
     )
 
 
+def page_status(page: Mapping[str, Any]) -> str | None:
+    """The status word when the player page's own profile is no longer a
+    Legend player's, decided as the card's lookup decides it."""
+    if page["active"]:
+        return None
+    return _STATE_WORDS["not_in_legend" if page["eligibility"] == "ineligible" else "uncertain"]
+
+
 def card_status(card: Mapping[str, Any]) -> str | None:
     """Words that replace a player's numbers when they do not apply."""
     if card["state"] != "tracking":
