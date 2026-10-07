@@ -354,13 +354,20 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 and residual == automatic_loss
                 and automatic_state == "calculated"
                 and not end_hidden_by_reset
+                and ended
+                and coverage_complete
+                and not failures
+                and not malformed_evidence
+                and not inconsistent_evidence
             ):
                 # The game applies the automatic defense loss about 7 to 13
                 # minutes after the Reset, and the Reset reading usually comes
                 # first, so it sits exactly the calculated loss above the
                 # day's end: 589 days on 2 October 2026, 998 on 3 October and
                 # 2,889 on 5 October. The loss stays calculated, and the next
-                # day starts from the reading less it.
+                # day starts from the reading less it. Only an otherwise clean
+                # day is read this way: disputed or missing battles could make
+                # any gap look like the loss.
                 unsettled_loss = automatic_loss
                 next_start_trophies = data.next_start_trophies - unsettled_loss
                 observed_trophy_change = next_start_trophies - start_trophies
@@ -614,8 +621,8 @@ def _result(
 def _settled_start(data: ReconciliationInput) -> tuple[int | None, int]:
     """The day's starting trophies and what was taken off the Reset reading.
 
-    The previous day's result can say its end reading, this day's start
-    reading, came before the game applied its automatic defense loss. The
+    The previous day's Complete result can say its end reading, this day's
+    start reading, came before the game applied its automatic defense loss. The
     day then starts from the reading less that loss, as the player did once
     it landed. On 2 October 2026 that explained 728 of 733 next days whose
     start was too high and a later reading could check.
@@ -624,6 +631,7 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int]:
     if (
         data.start_trophies is None
         or previous is None
+        or not previous.complete
         or not previous.unsettled_automatic_loss
         or previous.end_baseline_id is None
         or previous.end_baseline_id != data.start_baseline_id

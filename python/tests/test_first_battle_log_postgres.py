@@ -28,6 +28,7 @@ from test_reset_settlement_state_postgres import (
 from clashlens import first_battle_log, reconciliation_db
 from clashlens.db import Database
 from clashlens.domain import allocate_trophies
+from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
 DAY_1 = BOUNDARIES["season"]
 DAY_2 = DAY_1 + timedelta(days=1)
@@ -337,6 +338,19 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
                             lambda data: original(replace(data, season_first_day=False)))
         _process(connection_info, archive_server, jobs)
         before = _day_1(connection_info)
+        # The run before this correction already queued, and finished, the
+        # player under its own key.
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+            ).fetchone()[0]
+            first_battle_log._queue(
+                connection, player_id, DAY_1, None, trigger="season_day_1",
+                key=f"reconcile:season-day-1:{player_id}:"
+                f"{DAY_1:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}",
+            )
+        _process(connection_info, archive_server, [])
+        unchanged = _day_1(connection_info)
         monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
 
         database = Database(connection_info)
@@ -356,6 +370,7 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
         after = _day_1(connection_info)
 
     assert before[0] == "Partial" and before[3] is None
+    assert (unchanged[0], unchanged[3]) == ("Partial", None)
     assert "automatic_defense_basis_unavailable" in before[5]
     # Only the player with 1 to 7 defenses is listed.
     assert preview == {"season": str(NEW_SEASON), "players": 1,

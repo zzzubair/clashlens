@@ -960,3 +960,31 @@ def test_season_day_1_charges_attacks_minus_defenses_unless_attacks_are_fewer() 
     )
     assert ordinary.automatic_defense_loss == 60
     assert ordinary.state == "Complete"
+
+
+def test_a_disputed_day_never_takes_the_loss_off_its_reading() -> None:
+    # The default day ends on 5,940 with a calculated loss of 70, so a 6,010
+    # reading looks like one taken before the loss. With the battles disputed,
+    # other reports could give another loss, so the reading stands as read.
+    disputed = reconcile_ranked_day(
+        _input(next_start_trophies=6010, perspective_disagreement=True)
+    )
+    # A next day built on it, even when the saved result claims a loss.
+    next_day = reconcile_ranked_day(
+        _input(
+            start_baseline_id=11,
+            start_trophies=6010,
+            next_start_trophies=6010,
+            contributions=(),
+            previous_day=PreviousRankedDay(
+                False, 1, 10, 0, unsettled_automatic_loss=70, end_baseline_id=11
+            ),
+        )
+    )
+
+    assert disputed.state == "Inconsistent"
+    assert disputed.unsettled_automatic_loss == 0
+    assert disputed.next_start_trophies == 6010
+    assert "unsettled_automatic_loss" not in disputed.formula_components
+    assert next_day.start_trophies == 6010
+    assert "start_unsettled_automatic_loss" not in next_day.formula_components
