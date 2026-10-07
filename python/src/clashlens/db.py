@@ -1408,11 +1408,10 @@ def enqueue_discovered_players(
 
     Players already tracked or already given this week's check are skipped
     before anything else. The remaining ones are queued only while fewer than
-    DISCOVERY_QUEUE_CAP such checks wait. Transactions adding checks at the
-    same moment do not wait for or skip each other, so each can add up to one
-    log's or ranking's players past the cap. A full queue skips them with no
-    saved retry, so only a later changed battle log or ranking naming the
-    player tries again.
+    DISCOVERY_QUEUE_CAP such checks wait; transactions adding checks at once
+    can each add one log's or ranking's players past it. A full queue skips
+    them with no saved retry. A player row another job holds past one
+    second raises LockNotAvailable, so the whole job rolls back and runs again.
     """
     if not database.player_discovery_enabled or claim.work_type != "process_observation":
         return
@@ -1448,6 +1447,11 @@ def enqueue_discovered_players(
     room = DISCOVERY_QUEUE_CAP - int(waiting)
     while room > 0 and candidates:
         batch, candidates = candidates[:room], candidates[room:]
+        with lock_wait(connection, "1s"):
+            connection.execute(
+                "SELECT 1 FROM players WHERE id = ANY(%s::bigint[]) ORDER BY id FOR UPDATE",
+                (batch,),
+            )
         room -= connection.execute(
             "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])", (batch,)
         ).fetchone()[0]

@@ -30,9 +30,10 @@ one profile request and one league-history request. Unlike the scheduled weekly
 check, it does not reuse saved league history. At most 500 such checks wait at
 once, plus one log's or ranking's players for each worker adding checks at
 the same moment; workers adding checks together do not skip each other's
-players. A player skipped while the queue is full gets no saved retry;
-they are tried again only when a later changed battle log or ranking names
-them. Legend I gains about 2,000 players a week, so this costs about 570
+players. A player whose record another job is updating is waited for up to
+one second; after that the whole log or ranking is processed again later. A
+player skipped while the queue is full gets no saved retry; they are tried
+again only when a later changed battle log or ranking names them. Legend I gains about 2,000 players a week, so this costs about 570
 requests a day, plus about 4,000 once for the roughly 2,000 Legend I players
 not yet tracked. Each player found
 eligible is then tracked like any other, so revisits slow in proportion to the
