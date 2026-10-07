@@ -11,7 +11,7 @@ from psycopg.types.json import Jsonb
 from . import battle_day_repair
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import DECODER_VERSION
-from .boundary_manifest import _moved_decode_ids
+from .boundary_manifest import _moved_decode_ids, profiles_not_found
 from .boundary_manifest import (
     freeze_boundary_manifest as _freeze_boundary_manifest,
 )
@@ -27,6 +27,7 @@ from .db import (
     ended_day_priority,
     lock_wait,
 )
+from .domain import SEASON_DURATION, is_season_boundary
 from .domain_repair import boundary_held
 from .past_reset_pacing import past_reset_build_waits, past_reset_correction_waits
 
@@ -1043,6 +1044,119 @@ def _record_boundary_generation(
             connection, boundary_at=boundary_at, generation_id=generation_id
         )
     return True
+
+
+def queue_board_rebuilds(
+    database: Database, season_id: str, *, queue: bool
+) -> dict[str, Any]:
+    """Find, and with ``queue`` rebuild, each of the Season's Reset boards
+    whose frozen input still ranks a reading taken before the player's
+    profile answered "player not found". On 5 to 7 October 2026 that was 24
+    players on Day 1 and 34 on Day 2, two of them first and second on Day 2.
+
+    Each board gets one queued correction of both its leaderboard and army
+    records, started as any other: once its build is published, outside a
+    repair campaign and past-Reset pacing. Each Reset's newest board is read
+    under its publication lock, so a correction is never queued against a
+    board a worker has already replaced. A rebuilt board ranks no such
+    reading, so a later run lists nothing for it; one still queued is listed
+    again and not queued twice. Resets of other Seasons are never read.
+    """
+    season_start = datetime.fromtimestamp(int(season_id), UTC)
+    if not is_season_boundary(season_start):
+        raise ValueError(f"{season_id} is not a Season's start")
+    boards: list[dict[str, Any]] = []
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            resets = connection.execute(
+                """
+                SELECT DISTINCT boundary_at
+                FROM boundary_publication_generations
+                WHERE boundary_at > %s AND boundary_at <= %s
+                ORDER BY boundary_at
+                """,
+                (season_start, season_start + SEASON_DURATION),
+            ).fetchall()
+        for (boundary_at,) in resets:
+            with connection.transaction():
+                lock_boundary_publication(connection, boundary_at)
+                current = connection.execute(
+                    """
+                    SELECT id, generation, snapshot_manifest_id
+                    FROM boundary_publication_generations
+                    WHERE boundary_at = %s
+                      AND snapshot_state <> 'superseded'
+                      AND army_state <> 'superseded'
+                    ORDER BY generation DESC
+                    LIMIT 1
+                    """,
+                    (boundary_at,),
+                ).fetchone()
+                # A board not frozen yet is built under the current rule.
+                if current is None or current[2] is None:
+                    continue
+                generation_id, generation, manifest_id = current
+                readings = {
+                    int(row[0]): datetime.fromisoformat(str(row[1]))
+                    for row in connection.execute(
+                        """
+                        SELECT player_id,
+                               input_identity->'profile_snapshot'->>'observed_at'
+                        FROM boundary_publication_manifest_rows
+                        WHERE manifest_id = %s
+                          AND input_identity->>'snapshot_quality' = 'eligible'
+                        """,
+                        (manifest_id,),
+                    ).fetchall()
+                }
+                not_found = profiles_not_found(connection, boundary_at, readings)
+                if not not_found:
+                    continue
+                queued = connection.execute(
+                    """
+                    SELECT id FROM boundary_publication_corrections
+                    WHERE boundary_at = %s AND source_generation_id = %s
+                      AND state IN ('queued', 'pending_inputs')
+                    ORDER BY id DESC LIMIT 1
+                    FOR UPDATE
+                    """,
+                    (boundary_at, generation_id),
+                ).fetchone()
+                if queue and queued is not None:
+                    connection.execute(
+                        """
+                        UPDATE boundary_publication_corrections
+                        SET affected_artifacts = ARRAY(
+                                SELECT DISTINCT unnest(
+                                    affected_artifacts || ARRAY['snapshot', 'army'])
+                            )
+                        WHERE id = %s
+                        """,
+                        (queued[0],),
+                    )
+                elif queue:
+                    connection.execute(
+                        """
+                        INSERT INTO boundary_publication_corrections
+                            (boundary_at, source_generation_id,
+                             affected_artifacts, pending_inputs)
+                        VALUES (%s, %s, ARRAY['snapshot', 'army'], '[]'::jsonb)
+                        """,
+                        (boundary_at, generation_id),
+                    )
+                boards.append(
+                    {
+                        "boundary_at": boundary_at.astimezone(UTC).isoformat(),
+                        "generation": int(generation),
+                        "profile_not_found": len(not_found),
+                        "correction": (
+                            "already_queued" if queued is not None
+                            else "queued" if queue
+                            else "not_queued"
+                        ),
+                    }
+                )
+    return {"season_id": season_id, "queue": queue, "boards": boards}
 
 
 def _boundary_population_hash(player_ids: list[int]) -> str:

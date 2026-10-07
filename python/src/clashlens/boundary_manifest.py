@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Collection, Mapping
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -263,6 +263,9 @@ def _snapshot_rows(
     # Why a player with no accepted profile has none: their newest profile's
     # source state and their newest profile response's failure.
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
+    not_found = profiles_not_found(
+        connection, boundary_at, {player_id: row[2] for player_id, row in profiles.items()}
+    )
     failures = {
         int(row[0]): row[1:]
         for row in connection.execute(
@@ -351,14 +354,18 @@ def _snapshot_rows(
             }
             if _text_value(profile[7]) != "eligible":
                 identity["snapshot_quality"] = "invalid"
-            elif season_is_current(
+            elif not season_is_current(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
             ):
-                identity["snapshot_quality"] = "eligible"
-            else:
                 # Trophies from before this player's Season reset never
                 # stand for the ended day's Season.
                 identity["snapshot_quality"] = "season_reset_pending"
+            elif player_id in not_found:
+                # The player went missing after this reading, so its
+                # trophies no longer stand for them at the Reset.
+                identity["snapshot_quality"] = "profile_not_found"
+            else:
+                identity["snapshot_quality"] = "eligible"
         else:
             identity["profile_version_id"] = None
             identity["profile_input_hash"] = None
@@ -385,6 +392,46 @@ def _snapshot_rows(
             identity["snapshot_quality"] = snapshot_quality
         manifest_rows.append(identity)
     return manifest_rows
+
+
+def profiles_not_found(
+    connection: Any, boundary_at: datetime, readings: Mapping[int, datetime]
+) -> set[int]:
+    """Players whose profile answered "player not found" after their reading.
+
+    The newest successful or not-found profile response after each player's
+    reading, up to the Reset, decides, as the Live Leaderboard's latest
+    response does: a later success brings the player back, and a timeout or
+    server error changes nothing. A response that changes the answer is
+    always saved, so saved responses show when the player went missing.
+    """
+    if not readings:
+        return set()
+    return {
+        int(row[0])
+        for row in connection.execute(
+            """
+            SELECT reading.player_id
+            FROM unnest(%s::bigint[], %s::timestamptz[])
+                AS reading (player_id, observed_at)
+            CROSS JOIN LATERAL (
+                SELECT observation.http_status
+                FROM collector_observations AS observation
+                WHERE observation.player_id = reading.player_id
+                  AND observation.endpoint = 'profile'
+                  AND observation.response_completed_at > reading.observed_at
+                  AND observation.response_completed_at <= %s
+                  AND (observation.http_status = 404
+                       OR observation.http_status BETWEEN 200 AND 299)
+                ORDER BY observation.response_completed_at DESC,
+                         observation.id DESC
+                LIMIT 1
+            ) AS latest
+            WHERE latest.http_status = 404
+            """,
+            (list(readings), list(readings.values()), boundary_at),
+        ).fetchall()
+    }
 
 
 def _army_rows(
