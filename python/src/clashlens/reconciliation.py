@@ -947,8 +947,11 @@ def _coverage_is_continuous(
             malformed = True
 
     for previous, current in pairwise(observations):
+        # A saved source row shared by both logs is the same reported row,
+        # Legend or not: each row's saved identity includes its battle time.
         if current.row_count >= BATTLE_LOG_MAX_ROWS and not (
             set(previous.battle_identities) & set(current.battle_identities)
+            or set(previous.source_row_ids) & set(current.source_row_ids)
         ):
             failures.append("battle_log_overlap_gap")
 

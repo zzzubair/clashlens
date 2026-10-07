@@ -621,6 +621,19 @@ it again until `left_to_queue` is 0; each player and day is queued once. It
 reads the Season's saved battle rows, those above the lowest row a battle of
 two days before the Season used, so run it outside 04:00–07:00 UTC.
 
+**Full logs that share only other battles:** two full 50-row battle logs
+overlap when they share any saved row, not only a Legend battle. Days
+calculated before that report `battle_log_overlap_gap` falsely; on
+2026-10-07 the October 2026 Season had 911 such ended days on 5 and 6
+October, 25 of them otherwise ready to finish.
+`--overlap-gap preview --season <Season ID>` counts, without writing
+anything, the players whose latest result for an ended day of that Season
+reports the gap; `--overlap-gap queue --season <Season ID>` queues up to
+`--max-jobs` of them, each recalculating the player's oldest such day and
+every later saved day of the Season, at backfill priority. Run it again until
+`left_to_queue` is 0. Each day is queued once: a day still reporting the gap
+after its recalculation has a real one, and is not queued again.
+
 ### Raw-response cleanup failed
 
 Cleanup deletes old raw responses on its own timer; see
