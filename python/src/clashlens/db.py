@@ -26,12 +26,8 @@ CONTRACT_VERSION = 5
 PYTHON_BACKFILL_PRIORITY = 25
 PYTHON_LIVE_PRIORITY = 100
 # Work the next frozen leaderboard waits for: Reset readings, the day that
-# just ended and the board's builds. A claim adds 10 for each minute live
-# work has waited, while this keeps its fixed score, so this goes first
-# unless live work has waited 20 minutes. On 2026-10-07 a collector outage
-# delayed about 19,000 Reset readings by 35 minutes; while they also earned
-# the waiting bonus, no live reading was processed for 40 minutes and live
-# pages fell up to 59 minutes behind.
+# just ended and the board's builds. Only other work gains 10 a minute waited,
+# so this goes first until live work has waited 20 minutes (docs/deployment.md).
 PYTHON_RESET_PRIORITY = 300
 
 
