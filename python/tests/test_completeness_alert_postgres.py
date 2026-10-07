@@ -30,11 +30,16 @@ def test_completeness_probe_counts_untracked_battlers_seen_over_an_hour_ago(
                 row[0]
                 for row in connection.execute(
                     """
-                    INSERT INTO players (normalized_tag, active, eligibility_state)
+                    INSERT INTO players (normalized_tag, active, eligibility_state,
+                                         current_observed_at)
                     SELECT '#Q' || n, n = 0,
-                           CASE n WHEN 0 THEN 'eligible' WHEN 5 THEN 'ineligible' ELSE 'unknown' END
-                    FROM generate_series(0, 5) AS n ORDER BY n RETURNING id
-                    """
+                           CASE WHEN n = 0 THEN 'eligible' WHEN n >= 5 THEN 'ineligible'
+                                ELSE 'unknown' END,
+                           CASE n WHEN 5 THEN %(now)s - interval '1 hour'
+                                  WHEN 6 THEN %(now)s - interval '30 hours' END
+                    FROM generate_series(0, 6) AS n ORDER BY n RETURNING id
+                    """,
+                    {"now": now},
                 ).fetchall()
             ]
             for day, attacker, defender, saved_ago in (
@@ -43,6 +48,7 @@ def test_completeness_probe_counts_untracked_battlers_seen_over_an_hour_ago(
                 (today, tracked, untracked[2], timedelta(minutes=10)),  # discovery still has time
                 (today - timedelta(days=2), tracked, untracked[3], timedelta(days=2)),  # too old
                 (today - timedelta(days=1), untracked[4], tracked, timedelta(hours=20)),  # demoted
+                (today - timedelta(days=1), untracked[5], tracked, timedelta(hours=20)),  # promoted
             ):
                 connection.execute(
                     "INSERT INTO legend_battles (ranked_day_start, attacker_player_id,"
@@ -51,4 +57,4 @@ def test_completeness_probe_counts_untracked_battlers_seen_over_an_hour_ago(
                 )
         capsys.readouterr()
         alerts.completeness_probe()
-        assert int(capsys.readouterr().out) == 2
+        assert int(capsys.readouterr().out) == 3

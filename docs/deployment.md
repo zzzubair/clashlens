@@ -964,9 +964,9 @@ use the [operating notes](operating.md#respond-to-alerts).
 - **More than 10 untracked recent Legend I battlers**: players in a saved
   Legend I battle of the current or previous Legend day who are not tracked
   although their first such battle was saved over an hour ago. Players whose
-  saved profile shows a lower tier, such as Monday demotions, are left out,
-  because they are correctly no longer tracked. Opponent
-  discovery checks a newly seen player within seconds, so a count above 10
+  saved profile showed a lower tier after their latest such battle, such as
+  Monday demotions, are left out, because they are correctly no longer
+  tracked. Opponent discovery checks a newly seen player within seconds, so a count above 10
   means discovery is stalled or skipping players. On production on Oct 6, 2026
   one of 11,756 Season battlers was untracked. The check enters the private
   worker container, whose database role reads battles, and prints only the

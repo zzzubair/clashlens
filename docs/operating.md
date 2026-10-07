@@ -680,7 +680,8 @@ the next time a changed battle log names them.
 
 **Recovered:** at most 10 players from the current or previous Legend day's
 battles have stayed untracked for over an hour, not counting players whose
-saved profile shows a lower tier, such as Monday demotions.
+saved profile showed a lower tier after their latest such battle, such as
+Monday demotions.
 
 ### Season final ranks missing
 
