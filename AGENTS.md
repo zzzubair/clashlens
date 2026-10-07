@@ -36,6 +36,7 @@ Use these exactly.
 - **EOD**: trophy count at the end of a Legend day.
 - **Season**: exactly 28 Legend days.
 - **Tournament**: a ranked competition period. Weekly in other Ranked Leagues, 28 Legend days in Legend I.
+- **Main**: the one verified player per Clash Lens account that the bot's single-player commands use when none is chosen.
 
 ## Technical words
 
@@ -60,6 +61,7 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Boundary settlement**: whether a Reset's trophy count is proven to include the previous day's automatic defense loss; until then it is provisional.
 - **Promotion list**: Legend II and III players saved so the Monday re-check can find the ones promoted into Legend I.
 - **Unsettled loss**: the previous day's automatic defense loss that a Reset reading was taken before the game applied, so the next day starts from the reading less it.
+- **Ephemeral reply**: a Discord reply only the person who typed the command can see.
 
 If you introduce a new term, add it here in the same PR. One plain sentence.
 
