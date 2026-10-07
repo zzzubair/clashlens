@@ -7,8 +7,8 @@ collector loop now records the time every time round, and ``/livez`` fails
 only when one of them has not come round for STUCK_SECONDS while no database
 call is running, or on a state only a restart clears. A slow database slows the
 loops without making them look stuck. ``/livez`` reads only the collector's
-memory: no lock, thread, file or database connection. ``/readyz`` still reports the database, spool capacity
-and keys, for people to read.
+memory: no lock, thread, file or database connection. ``/readyz`` still
+reports the database, spool capacity and keys, for people to read.
 """
 
 from __future__ import annotations
