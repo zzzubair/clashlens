@@ -8,14 +8,33 @@ of the command, so one reply never mixes two Legend days.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from clashlens import api_accounts, api_leaderboard, api_players
+from clashlens import api_accounts, api_leaderboard, api_player_lookup, api_players
 from clashlens.api_db import AccountContext, ApiDatabase
 
 # The website's own freshness limit for a saved player profile.
 FRESHNESS_SECONDS = 900
+
+
+class _OneConnection:
+    """The API database with every read on one open connection, so the
+    website's own page read shares that connection's snapshot."""
+
+    def __init__(self, database: ApiDatabase, connection: Any) -> None:
+        self._database = database
+        self._connection = connection
+        self.pool = self
+
+    @contextmanager
+    def connection(self) -> Iterator[Any]:
+        yield self._connection
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._database, name)
 
 
 class Store:
@@ -100,9 +119,25 @@ class Store:
         return row is not None
 
     def player_page(self, tag: str, now: datetime) -> dict[str, Any] | None:
-        return api_players.get_player_page(
-            self.database, tag, now=now, freshness_seconds=FRESHNESS_SECONDS
-        )
+        """The website's player page with the player's lookup state and
+        reason, all from one read-only database snapshot."""
+        with self.database.pool.connection() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            page = api_players.get_player_page(
+                _OneConnection(self.database, connection),  # type: ignore[arg-type]
+                tag,
+                now=now,
+                freshness_seconds=FRESHNESS_SECONDS,
+            )
+            if page is None:
+                return None
+            lookup = api_player_lookup._lookup(connection, tag)
+        return {
+            **page,
+            "observed_at": datetime.fromisoformat(page["observed_at"]),
+            "state": lookup["state"],
+            "reason": lookup.get("reason"),
+        }
 
     def live_rank(self, tag: str, now: datetime) -> int | None:
         with self.database.pool.connection() as connection:

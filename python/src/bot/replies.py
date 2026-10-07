@@ -251,14 +251,6 @@ def link_reply(
     )
 
 
-def page_status(page: Mapping[str, Any]) -> str | None:
-    """The status word when the player page's own profile is no longer a
-    Legend player's, decided as the card's lookup decides it."""
-    if page["active"]:
-        return None
-    return _STATE_WORDS["not_in_legend" if page["eligibility"] == "ineligible" else "uncertain"]
-
-
 def card_status(card: Mapping[str, Any]) -> str | None:
     """Words that replace a player's numbers when they do not apply."""
     if card["state"] != "tracking":
@@ -355,7 +347,8 @@ def _player_title(item: Mapping[str, Any]) -> str:
 def player_status(
     site: Site, card: Mapping[str, Any], status: str, choices: tuple[Choice, ...] = ()
 ) -> Reply:
-    """A player whose numbers do not apply right now: the status word instead."""
+    """A player whose numbers do not apply right now: the status word instead,
+    from a card or a player page read."""
     return Reply(
         status,
         title=_player_title(card),
@@ -449,7 +442,7 @@ def full_day(
     return Reply(
         "\n".join(lines),
         title=_player_title(page),
-        updated=datetime.fromisoformat(page["observed_at"]),
+        updated=page["observed_at"],
         links=(Link("Open on Clash Lens", site.player(page["tag"])),),
         choices=choices,
         pick="day" if choices else None,

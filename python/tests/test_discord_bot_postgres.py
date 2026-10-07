@@ -119,7 +119,11 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
             _verify(owner, mine, "#8QQ")
             assert store.main_tag(account) is None
             # The API role may run the player page and live board reads too.
-            assert store.player_page("#8QQ", NOW)["tag"] == "#8QQ"
+            page = store.player_page("#8QQ", NOW)
+            (card,) = [card for card in store.players(account, NOW) if card["tag"] == "#8QQ"]
+            assert (page["tag"], page["state"], page["reason"]) == (
+                "#8QQ", card["state"], card["reason"]
+            )
             store.live_rank("#8QQ", NOW)
         finally:
             bot.close()
