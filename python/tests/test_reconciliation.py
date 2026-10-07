@@ -260,7 +260,7 @@ def test_automatic_defense_uses_previous_and_current_observed_losses() -> None:
     assert result.state == "Complete"
 
 
-def _season_day_1(attacks, defenses, previous_day, next_start_trophies):
+def _season_day_1(attacks, defenses, previous_day, next_start_trophies, **overrides):
     day_1 = ranked_day_for(datetime(2026, 10, 5, 12, tzinfo=UTC))
     return reconcile_ranked_day(
         _input(
@@ -274,6 +274,7 @@ def _season_day_1(attacks, defenses, previous_day, next_start_trophies):
             ),
             previous_day=previous_day,
             season_first_day=True,
+            **overrides,
         )
     )
 
@@ -960,6 +961,83 @@ def test_season_day_1_charges_attacks_minus_defenses_unless_attacks_are_fewer() 
     )
     assert ordinary.automatic_defense_loss == 60
     assert ordinary.state == "Complete"
+
+
+def test_no_opponent_rows_are_used_slots_for_the_automatic_loss_only() -> None:
+    # Production, 5 October 2026 (Day 1), each log holding a "no opponent, no
+    # battle" row; profiles read on 6 October after the loss and before any
+    # Day 2 battle. #C8UUYRYP: 8 attacks, 6 defenses for 211 and one such
+    # defense row; 5,070 at 05:06, then 5,040: floor(211 / 7) for one
+    # missing defense, not floor(211 / 6) * 2 = 70.
+    extra_defense = _season_day_1(
+        (40,) * 7 + (1,), (40, 40, 40, 40, 40, 11), None, 5070,
+        zero_result_defense_slots=1,
+    )
+    # #2VCCCJG9: 7 attacks, one such attack row, 7 defenses for 186; 5,086,
+    # then 5,060: 8 used attacks charge floor(186 / 7) once, not nothing.
+    extra_attack = _season_day_1(
+        (40,) * 6 + (32,), (40, 40, 40, 30, 20, 10, 6), None, 5086,
+        zero_result_attack_slots=1,
+    )
+    # #P2P80LVVJ: 6 attacks, one such attack row, 7 defenses for 194; the
+    # 4,991 reading stood: 7 used attacks for 7 defenses lose nothing, not
+    # floor(194 / 7) = 27.
+    equal = _season_day_1(
+        (40, 40, 40, 40, 20, 5), (40, 40, 40, 40, 20, 10, 4), None, 4991,
+        zero_result_attack_slots=1,
+    )
+
+    assert extra_defense.automatic_defense_loss == 30
+    assert extra_defense.final_trophies_before_reset == 5040
+    assert extra_defense.unsettled_automatic_loss == 30
+    assert extra_attack.automatic_defense_loss == 26
+    assert extra_attack.final_trophies_before_reset == 5060
+    assert extra_attack.unsettled_automatic_loss == 26
+    assert equal.automatic_defense_loss == 0
+    assert equal.final_trophies_before_reset == 4991
+    assert (equal.state, equal.confidence) == ("Complete", "exact")
+    # They are not battles.
+    assert (extra_defense.attack_count, extra_defense.defense_count) == (8, 6)
+    assert (extra_attack.attack_count, extra_attack.defense_count) == (7, 7)
+    assert extra_defense.input_evidence["zero_result_defense_slots"] == 1
+    assert "zero_result_attack_slots" not in extra_defense.input_evidence
+    assert "zero_result_defense_slots" not in reconcile_ranked_day(
+        _input()
+    ).input_evidence
+
+
+def test_no_opponent_defense_rows_join_both_days_of_the_average() -> None:
+    # Any other day pools yesterday's and today's used defense slots, such
+    # rows counting with no loss: floor((180 + 150) / (7 + 6)) * 2 = 50.
+    pooled = reconcile_ranked_day(
+        _input(
+            start_trophies=6000,
+            next_start_trophies=5800,
+            contributions=_defenses(40, 30, 30, 30, 20),
+            previous_day=PreviousRankedDay(
+                True, 6, 180, 0, zero_result_defense_slots=1
+            ),
+            zero_result_defense_slots=1,
+        )
+    )
+    # 7 defenses and one such row fill all 8 slots: no loss to calculate.
+    full = reconcile_ranked_day(
+        _input(
+            next_start_trophies=5930,
+            contributions=_defenses(10, 10, 10, 10, 10, 10, 10),
+            previous_day=None,
+            zero_result_defense_slots=1,
+        )
+    )
+
+    assert pooled.automatic_defense_loss == 50
+    assert pooled.final_trophies_before_reset == 5800
+    assert pooled.state == "Complete"
+    assert pooled.input_evidence["previous_day"]["zero_result_defense_slots"] == 1
+    assert full.automatic_defense_loss is None
+    assert full.automatic_defense_evidence_state == "not_applicable"
+    assert full.final_trophies_before_reset == 5930
+    assert full.state == "Complete"
 
 
 def test_a_disputed_day_never_takes_the_loss_off_its_reading() -> None:

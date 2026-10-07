@@ -265,6 +265,14 @@ def recalculate_ranked_day(
         connection, player_id, ranked_day
     )
     previous = ranked_day_inputs.load_previous_day(connection, player_id, ranked_day)
+    zero_result_attacks, zero_result_defenses = ranked_day_inputs.slot_counts(
+        ranked_day_inputs.load_zero_result_slots(connection, coverage)
+        | ranked_day_inputs.load_late_zero_result_slots(
+            database, connection, player_id, ranked_day,
+            coverage[-1].observed_at if coverage else ranked_day.start,
+        ),
+        *domain.battle_window(ranked_day.start),
+    )
     anchor, season_day = _anchored_day(connection, ranked_day.start)
     # Days before the anchor's previous Season stay an anchor conflict.
     anchor_valid = season_day is not None and ranked_day.start >= anchor[3]
@@ -376,6 +384,8 @@ def recalculate_ranked_day(
             season_anchor_rule_version=SEASON_ANCHOR_RULE_VERSION,
             trophy_allocation_rule_versions=trophy_rule_versions,
             season_first_day=season_day is not None and season_day.day_number == 1,
+            zero_result_attack_slots=zero_result_attacks,
+            zero_result_defense_slots=zero_result_defenses,
         )
     )
     result_data = {

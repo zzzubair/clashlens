@@ -660,18 +660,23 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
     (["--day-1", "queue", "--season", "1791176400"], True),
     (["--day-1", "queue"], None),
     (["--day-1", "queue", "--first-logs", "queue", "--season", "1791176400"], None),
+    (["--zero-result-slots", "preview", "--season", "1791176400"], False),
+    (["--zero-result-slots", "queue", "--season", "1791176400"], True),
+    (["--zero-result-slots", "queue"], None),
+    (["--zero-result-slots", "queue", "--day-1", "queue", "--season", "1791176400"], None),
 ])
-def test_day_1_recalculation_needs_a_season_and_runs_alone(
+def test_season_recalculations_need_a_season_and_run_alone(
     monkeypatch, capsys, extra: list[str], queue: bool | None
 ) -> None:
     calls = []
     monkeypatch.setattr("clashlens.battle_day_repair.Database",
                         lambda url: SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(
-        "clashlens.first_battle_log.requeue_day_1",
-        lambda database, season, *, queue, max_jobs: calls.append(
-            (season, queue, max_jobs)) or {"queued": 0},
-    )
+    for name in ("requeue_day_1", "requeue_zero_result_slots"):
+        monkeypatch.setattr(
+            f"clashlens.first_battle_log.{name}",
+            lambda database, season, *, queue, max_jobs, name=name: calls.append(
+                (name, season, queue, max_jobs)) or {"queued": 0},
+        )
     arguments = ["republish-current-season", "--database-url",
                  "postgresql://worker@postgres/clashlens", *extra]
     if queue is None:
@@ -680,7 +685,8 @@ def test_day_1_recalculation_needs_a_season_and_runs_alone(
         assert calls == []
     else:
         assert main(arguments) == 0
-        assert calls == [("1791176400", queue, 100)]
+        expected = "requeue_day_1" if extra[0] == "--day-1" else "requeue_zero_result_slots"
+        assert calls == [(expected, "1791176400", queue, 100)]
 
 
 @pytest.mark.parametrize("value", ["0", "1001", "many"])

@@ -333,7 +333,8 @@ def load_previous_day(
             shield_duration_days,
             input_hash,
             end_baseline_id,
-            COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0)
+            COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
+            COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0)
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -374,10 +375,82 @@ def load_previous_day(
                 int(previous_row[9]) if previous_row[9] is not None else None
             ),
             unsettled_automatic_loss=int(previous_row[10]),
+            zero_result_defense_slots=int(previous_row[11]),
         )
         if previous_row is not None
         else None
     )
+
+
+def load_zero_result_slots(
+    connection: Any, coverage: tuple[CoverageObservation, ...]
+) -> frozenset[tuple[datetime, bool]]:
+    """Each "no opponent, no battle" row these battle logs hold, as (report
+    time, is an attack). A live log keeps the row for days, so each later
+    log repeating it adds nothing. None is a battle; the automatic defense
+    loss alone counts them as used attack and defense slots."""
+    parsers = {
+        row_id: observation.parser_version
+        for observation in coverage
+        if observation.parser_version is not None
+        for row_id in observation.source_row_ids
+    }
+    rows = connection.execute(
+        """
+        SELECT id, source_json FROM battle_source_rows
+        WHERE id = ANY(%s) AND (source_json -> 'battleTime')::text = '0'
+        """,
+        (list(parsers),),
+    ).fetchall() if parsers else []
+    return _slots((parsers[int(row_id)], source) for row_id, source in rows)
+
+
+def load_late_zero_result_slots(
+    database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
+    after: datetime,
+) -> frozenset[tuple[datetime, bool]]:
+    """``load_zero_result_slots`` of the player's battle logs saved after
+    ``after``, the end Reset log, until 10 minutes past the day's battle
+    window: a row can first be returned after that log."""
+    relation, _, _ = _source_rows(database)
+    until = domain.battle_window(ranked_day.start)[1] + timedelta(minutes=10)
+    parsers = dict(_log_ids(
+        connection, "player_id = %s AND observed_at > %s AND observed_at <= %s",
+        (player_id, after, until),
+    ))
+    rows = connection.execute(
+        f"""
+        SELECT sr.battle_log_observation_id, sr.source_json FROM {relation} AS sr
+        WHERE sr.battle_log_observation_id = ANY(%s)
+          AND (sr.source_json -> 'battleTime')::text = '0'
+        """,
+        (list(parsers),),
+    ).fetchall() if parsers else []
+    return _slots((parsers[log_id], source) for log_id, source in rows)
+
+
+def _slots(rows: Any) -> frozenset[tuple[datetime, bool]]:
+    slots = set()
+    for parser, source in rows:
+        if not battle.is_no_opponent_row(source, parser) or not isinstance(
+            source.get("attack"), bool
+        ):
+            continue
+        try:
+            slots.add((battle._parse_battle_timestamp(
+                battle._battle_timestamp_value(source, parser), parser
+            ), source["attack"]))
+        except battle.BattleLogParseError:
+            continue
+    return frozenset(slots)
+
+
+def slot_counts(
+    slots: frozenset[tuple[datetime, bool]], since: datetime, until: datetime
+) -> tuple[int, int]:
+    """The attack and defense slots reported in ``[since, until)``."""
+    attacks = [attack for at, attack in slots if since <= at < until]
+    return sum(attacks), len(attacks) - sum(attacks)
 
 
 def _log_ids(connection: Any, condition: str, params: tuple[Any, ...]) -> list[Any]:
