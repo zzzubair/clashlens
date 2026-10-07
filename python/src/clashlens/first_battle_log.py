@@ -580,8 +580,10 @@ def requeue_overlap_gap(
     their later saved days, once per day. Before October 2026 two full logs
     overlapped only through a shared Legend battle, so logs sharing only
     other battles were a gap: 911 ended days on 5 and 6 October 2026. A day
-    still reporting a gap after this is queued no more. The batch is queued
-    at backfill priority, as ``requeue_day_1``."""
+    still reporting a gap after this is queued no more; one whose
+    recalculation failed is counted in ``failed`` and up to ``max_jobs`` are
+    listed in ``failed_blockers``. The batch is queued at backfill priority,
+    as ``requeue_day_1``."""
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(season_start):
         raise ValueError(f"{season_id} is not a Season's start")
@@ -611,13 +613,19 @@ def requeue_overlap_gap(
                 {"start": season_start, "end": season_start + domain.SEASON_DURATION},
             ).fetchall()
             queued = {
-                row[0] for row in connection.execute(
-                    "SELECT deduplication_key FROM python_processing_jobs_worker"
+                row[0]: row[1:] for row in connection.execute(
+                    "SELECT deduplication_key, id, state, failure_category"
+                    " FROM python_processing_jobs_worker"
                     " WHERE deduplication_key = ANY(%s)",
                     ([key(*row) for row in rows],),
                 ).fetchall()
             }
             waiting = [row for row in rows if key(*row) not in queued]
+            failed = [
+                (player_id, day, *queued[key(player_id, day)])
+                for player_id, day in rows
+                if queued.get(key(player_id, day), (None, None))[1] == "failed"
+            ]
             job_ids = [
                 job_id
                 for player_id, day in (waiting[:max_jobs] if queue else [])
@@ -633,4 +641,14 @@ def requeue_overlap_gap(
         "already_queued": len(rows) - len(waiting),
         "queued": len(job_ids),
         "left_to_queue": len(waiting) - len(job_ids),
+        "failed": len(failed),
+        "failed_blockers": [
+            {
+                "job_id": int(job_id),
+                "player_id": int(player_id),
+                "ranked_day_start": f"{day.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}",
+                "failure_category": _text_value(category) if category else None,
+            }
+            for player_id, day, job_id, _, category in failed[:max_jobs]
+        ],
     }

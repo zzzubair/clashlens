@@ -442,6 +442,21 @@ def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
             again = first_battle_log.requeue_overlap_gap(
                 database, str(NEW_SEASON), queue=True, max_jobs=100
             )
+            with psycopg.connect(connection_info) as connection:
+                job_id, player_id = connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'failed',"
+                    " failure_category = 'invalid_work_input'"
+                    " WHERE deduplication_key LIKE 'reconcile:overlap-gap:%'"
+                    " RETURNING id, (input_json ->> 'player_id')::bigint"
+                ).fetchone()
+            failed = first_battle_log.requeue_overlap_gap(
+                database, str(NEW_SEASON), queue=True, max_jobs=100
+            )
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'pending',"
+                    " failure_category = NULL WHERE id = %s", (job_id,),
+                )
         finally:
             database.close()
         priorities = _queued_priorities(connection_info, "reconcile:overlap-gap:")
@@ -451,8 +466,15 @@ def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
     assert (before[0], before[3]) == ("Partial", None)
     assert "battle_log_overlap_gap" in before[5]
     assert preview == {"season": str(NEW_SEASON), "players": 1,
-                       "already_queued": 0, "queued": 0, "left_to_queue": 1}
+                       "already_queued": 0, "queued": 0, "left_to_queue": 1,
+                       "failed": 0, "failed_blockers": []}
     assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
-    assert (again["queued"], again["already_queued"]) == (0, 1)
+    assert (again["queued"], again["already_queued"], again["failed"]) == (0, 1, 0)
+    assert (failed["queued"], failed["left_to_queue"], failed["failed"]) == (0, 0, 1)
+    assert failed["failed_blockers"] == [{
+        "job_id": job_id, "player_id": player_id,
+        "ranked_day_start": f"{DAY_1:%Y-%m-%dT%H:%M:%SZ}",
+        "failure_category": "invalid_work_input",
+    }]
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "inferred", 5000, ending)

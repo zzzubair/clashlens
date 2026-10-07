@@ -632,7 +632,10 @@ reports the gap; `--overlap-gap queue --season <Season ID>` queues up to
 `--max-jobs` of them, each recalculating the player's oldest such day and
 every later saved day of the Season, at backfill priority. Run it again until
 `left_to_queue` is 0. Each day is queued once: a day still reporting the gap
-after its recalculation has a real one, and is not queued again.
+after its recalculation has a real one, and is not queued again. A
+recalculation that failed is not queued again either: `failed` counts them
+and `failed_blockers` lists at most `--max-jobs` (job, player, day, failure
+reason) for investigating.
 
 ### Raw-response cleanup failed
 
