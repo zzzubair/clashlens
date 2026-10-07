@@ -161,7 +161,9 @@ def _domain_template(database_url: str) -> str:
     grants = production_worker_grants()
     digest = hashlib.sha256("\0".join([*sources, *grants]).encode()).hexdigest()
     template = f"python_domain_template_{digest[:16]}"
-    with psycopg.connect(database_url, autocommit=True) as admin:
+    with psycopg.connect(
+        make_conninfo(database_url, dbname="postgres"), autocommit=True
+    ) as admin:
         # Another pytest process on this server may be building it too.
         admin.execute("SELECT pg_advisory_lock(hashtext('clashlens domain template'))")
         if not admin.execute(
