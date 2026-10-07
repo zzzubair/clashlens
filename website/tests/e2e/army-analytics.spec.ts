@@ -99,6 +99,8 @@ test("a reversed day range is explained while a custom trophy range is unfinishe
   page,
 }) => {
   await page.goto("/analytics/armies?saved=1&season=current");
+  // A dropdown change made before the page's JavaScript loads is ignored.
+  await page.waitForLoadState("networkidle");
   const form = page.getByRole("form", { name: "Army analytics filters" });
   await form.getByLabel("Players").selectOption("trophies");
   await form.getByLabel("Min trophies").fill("5000");
@@ -123,6 +125,7 @@ for (const lens of ["offense", "defense"]) {
     await page.goto(
       `/analytics/armies?saved=1&season=current&lens=${lens}&population=top-100`,
     );
+    await page.waitForLoadState("networkidle");
     const form = page.getByRole("form", { name: "Army analytics filters" });
     const players = form.getByLabel("Players");
     await expect(players).toHaveValue("top-100");
