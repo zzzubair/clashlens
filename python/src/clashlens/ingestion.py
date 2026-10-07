@@ -96,6 +96,11 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 (profile.normalized_tag,),
             ).fetchone()
             assert player is not None
+            if profile.eligibility_state in {"eligible", "ineligible"}:
+                connection.execute(
+                    "SELECT clashlens_note_promotion_candidate(%s, %s, %s, %s)",
+                    (profile.normalized_tag, profile.league_tier_id, profile.trophies, profile.observed_at),
+                )
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (

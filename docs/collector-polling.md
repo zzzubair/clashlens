@@ -38,6 +38,28 @@ gains about 2,000 players a week, so this costs about 570 requests a day, plus
 about 4,000 once for the roughly 2,000 Legend I players not yet tracked. Each
 player found eligible is then tracked like any other, so revisits slow in
 proportion to the added players while the keys set the pace.
+
+The promotion list (`promotion_candidates`, migration 0076) holds Legend II and
+Legend III players who can be promoted into Legend I at a Monday Reset: one row
+per tag with the tier and trophies last seen and when, and no raw response.
+Every processed profile showing Legend II or III adds or refreshes its row; one
+showing any other recognized tier removes it, and an older answer never
+overwrites a newer one. The migration copies inactive players whose saved
+profile shows Legend II or III. The lab's list is added once with the collector
+database role, from a CSV file with the header
+`tag,league_tier_id,trophies,checked_at`:
+
+```sh
+podman exec -i clashlens-collector python -m clashlens.cli \
+  load-promotion-candidates --database-url-file /run/secrets/database-url --file - < candidates.csv
+```
+
+It prints how many lines it read and how many rows it added or updated. Tracked
+players are left out, a tag already listed keeps its newer check, and one
+invalid line refuses the whole file. About 130 bytes a row with its indexes:
+the lab's October 2026 list of 250,680 players is about 33 MB, growing only
+with newly seen Legend II and III players. Nothing reads the list yet.
+
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to
 verification without treating all known tags as live players.
