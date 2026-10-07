@@ -411,6 +411,7 @@ def _claim_select_statement(
     supports_coordinator: bool = False,
     work_types: Collection[str] | None = None,
     past_reset_build_hold: str | None = None,
+    reset_first: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT and its named parameters.
 
@@ -427,8 +428,8 @@ def _claim_select_statement(
     a point lookup and still applies the same where and supported filters.
     ``work_types`` limits every probe and the lock-time recheck to those work
     types, so a limited worker never claims, and never skips over, other work.
-    ``planned`` makes a ``job_id`` claim refuse, and an ordinary one run only,
-    while Reset-priority work it could take waits.
+    ``planned`` makes a ``job_id`` claim refuse, and an ordinary one run only, while
+    Reset-priority work it could take waits; ``reset_first`` puts that work first.
     """
     supported_filter, claimable, params = _claim_filters(
         supports_dependency=supports_dependency,
@@ -441,7 +442,8 @@ def _claim_select_statement(
         params["job_id"] = job_id
     gate = "AND NOT " if job_id is not None else "AND "
     reset_gate = gate + _reset_waiting(jobs_relation, claimable) if planned else ""
-    score = f"""CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
+    first = f"job.priority = {PYTHON_RESET_PRIORITY}, " if reset_first else ""
+    score = f"""{first}CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
         THEN 0 ELSE 1 END,
         CASE WHEN job.priority = {PYTHON_RESET_PRIORITY} THEN job.priority
         ELSE job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
@@ -954,6 +956,7 @@ class Database:
         job_id: int | None = None,
         work_types: Collection[str] | None = None,
         planned: bool = False,
+        reset_first: bool = False,
     ) -> Claim | None:
         """Claim the best due job, or ``job_id``; a ``planned`` one yields to Reset work."""
         if not owner:
@@ -963,14 +966,13 @@ class Database:
         with self._timed_connection() as connection:
             with connection.transaction():
                 self._ensure_dependency_support_probed()
-                supports_coordinator = getattr(
-                    self, "_supports_coordinator_contract", False
-                )
+                supports_coordinator = getattr(self, "_supports_coordinator_contract", False)
                 statement_options = {
                     "supports_dependency": self._supports_dependency_deferral,
                     "denormalized_contract": self._supports_denormalized_contract,
                     "supports_coordinator": supports_coordinator,
                     "work_types": work_types,
+                    "reset_first": reset_first,
                     "past_reset_build_hold": (
                         past_reset_build_hold(connection)
                         if supports_coordinator

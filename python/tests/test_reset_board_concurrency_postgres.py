@@ -4,7 +4,8 @@ On 2026-10-06 every Reset reading, battle log and day result took the Reset's
 publication lock in turn, so the 12,795-member board was still waiting at
 06:00. These tests hold one member result open and check the others do not
 wait behind it, that the last results still see every other one before the
-board is built, and that Reset work is claimed before live work.
+board is built, and that Reset work is claimed before live work, while live
+work that has waited 20 minutes still gets every other claim.
 """
 
 from __future__ import annotations
@@ -33,9 +34,11 @@ from clashlens.collector_db import CollectorDatabase
 from clashlens.db import (
     PYTHON_LIVE_PRIORITY,
     PYTHON_RESET_PRIORITY,
+    RESPONSE_WORK_TYPES,
     Database,
     ended_day_priority,
 )
+from clashlens.worker import DERIVED_WITHOUT_BUILDS, ObservationProcessor
 
 # One more member than the tail, plus room to keep results shared.
 MEMBERS = boundary.OPEN_GENERATION_TAIL + 5
@@ -364,3 +367,75 @@ def test_reset_priority_jobs_are_claimable_alongside_unlimited_work(
         finally:
             database.close()
         assert claim is not None and claim.job_id == job_id
+
+
+def test_reset_backlog_and_old_live_work_take_turns_in_every_lane(
+    database_url: str,
+) -> None:
+    # Around 05:21 the new day's recalculations queued at 05:00 have waited
+    # over 20 minutes, so they win on waiting time while the ended day's
+    # results the board needs are still queued. Each lane alternates, so both
+    # keep moving: the Reset backlog finishes, and old live work never waits
+    # more than one turn per lane behind it.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            classes: dict[int, str] = {}
+            for work_type, count in (
+                ("process_observation", 6), ("reconcile_ranked_day", 3)
+            ):
+                for index in range(count):
+                    for kind, priority in (
+                        ("reset", PYTHON_RESET_PRIORITY),
+                        ("live", PYTHON_LIVE_PRIORITY),
+                    ):
+                        key = f"turns:{work_type}:{kind}:{index}"
+                        job = (
+                            {"input_json": {}, "observation_id": _insert_observation(
+                                connection, occurrence_key=key
+                            )}
+                            if work_type == "process_observation"
+                            else {"input_json": {
+                                "player_id": index + 1,
+                                "ranked_day_start": "2026-08-03T05:00:00Z",
+                            }}
+                        )
+                        job_id = _insert_job(
+                            connection,
+                            work_type=work_type,
+                            deduplication_key=key,
+                            priority=priority,
+                            **job,
+                        )
+                        classes[job_id] = kind
+            connection.execute(
+                "UPDATE python_processing_jobs"
+                " SET created_at = clock_timestamp() - interval '25 minutes',"
+                " due_at = clock_timestamp() - interval '25 minutes'"
+                " WHERE priority = %s",
+                (PYTHON_LIVE_PRIORITY,),
+            )
+            connection.commit()
+        database = Database(connection_info)
+        try:
+            processor = ObservationProcessor(database, archive=object())
+            claimed = {
+                lane: [
+                    processor._claim_next(
+                        owner=lane, lease_seconds=60, work_types=work_types
+                    )
+                    for _ in range(count)
+                ]
+                for lane, work_types, count in (
+                    ("responses", RESPONSE_WORK_TYPES, 12),
+                    ("results", DERIVED_WITHOUT_BUILDS, 6),
+                )
+            }
+        finally:
+            database.close()
+        assert {
+            lane: [classes[claim.job_id] for claim in claims if claim]
+            for lane, claims in claimed.items()
+        } == {
+            "responses": ["reset", "live"] * 6,
+            "results": ["reset", "live"] * 3,
+        }

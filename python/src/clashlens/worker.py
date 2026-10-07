@@ -78,6 +78,10 @@ NEWEST_PLAN_SIZE = 5000
 NEWEST_PLAN_MAX_AGE_SECONDS = 30.0
 NEWEST_PLAN_EMPTY_RETRY_SECONDS = 1.0
 OLDEST_FIRST_CLAIM_EVERY = 4
+# Every other claim of each lane takes Reset-priority work first while any
+# waits, so live work that has waited 20 minutes, which wins the other claims,
+# cannot hold back the previous day's board, and neither can starve the other.
+RESET_FIRST_CLAIM_EVERY = 2
 # A continuous worker with two or more lanes keeps about two thirds of them
 # (8 of 12) for responses. The rest run derived work: daily results, builds
 # and redecodes. Only one of them may run a population build, and the timer's
@@ -528,6 +532,7 @@ class ObservationProcessor:
         self._plan_refreshed_at: float | None = None
         self._plan_refreshing = False
         self._claim_count = 0
+        self._lane_claims: dict[str, int] = {}
 
     def _record_stage(self, stage: str, started_at: float) -> None:
         if self.stage_metrics is not None:
@@ -558,6 +563,10 @@ class ObservationProcessor:
     ) -> Claim | None:
         # The newest-first plan holds only responses, so derived lanes skip it.
         limit = {} if work_types is None else {"work_types": work_types}
+        with self._plan_lock:
+            turn = self._lane_claims.get(owner, 0)
+            self._lane_claims[owner] = turn + 1
+        limit["reset_first"] = turn % RESET_FIRST_CLAIM_EVERY == 0
         planned = False
         if work_types is None or "process_observation" in work_types:
             with self._plan_lock:
