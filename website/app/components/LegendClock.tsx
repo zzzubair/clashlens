@@ -192,6 +192,7 @@ function BattleRow({
 /**
  * The Legend clock card body: clock, live trophies and rank, today's battles.
  * `day` and `today` are null once the Legend day they were read for is over.
+ * Daily counts and gain come from `day` when it was read, else from `today`.
  */
 export function LegendClock({
   player,
@@ -212,7 +213,8 @@ export function LegendClock({
   const attacks = battles.filter((battle) => battle.kind === "attack");
   const defenses = battles.filter((battle) => battle.kind === "defense");
   const complete = day?.complete === true;
-  const net = today?.net ?? null;
+  const counts = day ?? today;
+  const net = counts?.net ?? null;
   return (
     <div className={`legend-clock legend-clock-${size}`}>
       <ClockFace nowMs={nowMs} timeZone={timeZone} battles={battles} />
@@ -253,14 +255,14 @@ export function LegendClock({
             <BattleRow
               label="Attacks"
               battles={attacks}
-              count={complete ? attacks.length : (today?.attacks ?? null)}
+              count={complete ? attacks.length : (counts?.attacks ?? null)}
               complete={complete}
               kind="attack"
             />
             <BattleRow
               label="Defenses"
               battles={defenses}
-              count={complete ? defenses.length : (today?.defenses ?? null)}
+              count={complete ? defenses.length : (counts?.defenses ?? null)}
               complete={complete}
               kind="defense"
             />

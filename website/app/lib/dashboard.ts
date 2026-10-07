@@ -399,6 +399,9 @@ export interface PlayerDay {
   battles: ClockBattle[];
   /** Every battle of the day so far is in `battles`. */
   complete: boolean;
+  net: number | null;
+  attacks: number | null;
+  defenses: number | null;
 }
 
 /** The Reset is 05:00 UTC. Returns the next Reset after `nowMs`, in milliseconds. */

@@ -92,6 +92,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     );
   }
 
+  const dayEndsMs = nextResetMs(Date.now());
   const publicClient = createPythonClient();
   let players: LinkedPlayerCard[] = [];
   let playersUnavailable = false;
@@ -118,7 +119,6 @@ export async function loader({ request }: Route.LoaderArgs) {
     if (card.card === "clock" && pinned?.state === "tracking") clockTags.add(pinned.tag);
   }
   const days: Record<string, PlayerDay> = {};
-  const dayEndsMs = nextResetMs(Date.now());
   await Promise.all(
     [...clockTags].slice(0, MAX_PLAYER_DAYS).map(async (tag) => {
       try {
@@ -164,6 +164,9 @@ function playerDay(page: PlayerPage): PlayerDay {
     dayCount: page.season?.dayCount ?? null,
     battles,
     complete: day?.battlesComplete === true,
+    net: day?.trophyChange ?? null,
+    attacks: day?.offense.attacks ?? null,
+    defenses: day?.defense.defenses ?? null,
   };
 }
 

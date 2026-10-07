@@ -404,7 +404,6 @@ export function DashboardGrid({
         {renderTabs(meta)}
         <div className="dash-grid">
           <LinkPlayerPrompt />
-          <PlaceholderCard placed={{ card: "cutoffs", size: "l", player: null }} />
         </div>
       </>
     );
