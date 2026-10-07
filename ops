@@ -314,6 +314,7 @@ validate_runtime_values() {
   item=$(setting CLASHLENS_REGULAR_PARALLELISM ''); keys=$(( $(tr -cd , <<<"$REGULAR_KEY_NAMES" | wc -c) + 1 ))
   [[ -z "$item" || ( "$item" =~ ^[1-9][0-9]{0,2}$ && "$item" -le 384 ) ]] || die "CLASHLENS_REGULAR_PARALLELISM must be a whole number from 1 to 384"
   (( save = ${item:-2 * keys * KEY_RATE}, save = save < 256 ? 256 : save > 384 ? 384 : save, save + ((keys + 1) * 6 < 448 - save ? (keys + 1) * 6 : 448 - save) + 64 <= COLLECTOR_PIDS )) || die "collector save and request threads plus 64 spare exceed CLASHLENS_COLLECTOR_PIDS=$COLLECTOR_PIDS"
+  item=$(setting CLASHLENS_PROMOTION_RECHECK_PER_SECOND ''); [[ -z "$item" || "$item" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "CLASHLENS_PROMOTION_RECHECK_PER_SECOND must be a number of requests a second, 0 or more"
   for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
   for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done
   local memory_mib=${POSTGRES_MEMORY%[bBkKmMgGtT]}
@@ -791,10 +792,12 @@ write_environment() {
     "CLASHLENS_SPOOL_MAX_BYTES=$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "CLASHLENS_SPOOL_MAX_OBJECTS=$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
     "CLASHLENS_SPOOL_FREE_SPACE_FLOOR=$(setting CLASHLENS_SPOOL_FREE_SPACE_FLOOR 1073741824)" "CLASHLENS_SPOOL_FREE_INODE_FLOOR=$(setting CLASHLENS_SPOOL_FREE_INODE_FLOOR 10000)"
     "CLASHLENS_MAX_BODY_BYTES=$(setting CLASHLENS_MAX_BODY_BYTES 4194304)")
-  local collector_optional=() regular_parallelism
+  local collector_optional=() regular_parallelism promotion_rate
   [[ -z "$official_proxy" ]] || collector_optional+=("CLASHLENS_OFFICIAL_API_PROXY_URL=$official_proxy")
   regular_parallelism=$(setting CLASHLENS_REGULAR_PARALLELISM '')
   [[ -z "$regular_parallelism" ]] || collector_optional+=("CLASHLENS_REGULAR_PARALLELISM=$regular_parallelism")
+  promotion_rate=$(setting CLASHLENS_PROMOTION_RECHECK_PER_SECOND '')
+  [[ -z "$promotion_rate" ]] || collector_optional+=("CLASHLENS_PROMOTION_RECHECK_PER_SECOND=$promotion_rate")
   write_env collector.env "${common[@]}" "${collector_optional[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key \
     "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" \

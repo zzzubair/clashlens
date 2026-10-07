@@ -57,13 +57,13 @@ def test_lab_list_loads_once_keeps_newer_checks_and_skips_tracked_players(
 
         def load(text: str) -> int:
             monkeypatch.setattr("sys.stdin", io.StringIO(text))
-            return promotion_candidates.run_command(url, "-")
+            return promotion_candidates.run_command(url)
 
         header = "tag,league_tier_id,trophies,checked_at\n"
         assert load(
             header
             + f"#2PP,105000035,5100,{newer}\n"  # tracked: left out
-            + f"8QQ,105000035,4900,{older}\n"
+            + f"#8QQ,105000035,4900,{older}\n"
             + f"#8QQ,105000035,4950,{newer}\n"  # same tag: newest kept
             + f"#9QQ,105000034,,{older}\n"
             + f"#0PP,105000035,4800,{older}\n"  # saved profile checked later: left out
@@ -82,8 +82,10 @@ def test_lab_list_loads_once_keeps_newer_checks_and_skips_tracked_players(
             ("#9QQ", 105000035, 4800),
         ]
 
-        # One bad line refuses the whole file.
+        # One bad line refuses the whole file, including a tag without '#'.
         assert load(header + f"#2QQ,105000035,4800,{newer}\n#0QQ,105000036,5000,{newer}\n") == 1
+        assert "line 3" in capsys.readouterr().err
+        assert load(header + f"#2QQ,105000035,4800,{newer}\n0QQ,105000035,5000,{newer}\n") == 1
         assert "line 3" in capsys.readouterr().err
         assert [row[0] for row in _rows(connection_info)] == ["#8QQ", "#9QQ"]
 
@@ -125,6 +127,39 @@ def test_processed_profiles_add_and_remove_promotion_candidates(
             assert _rows(connection_info) == []
         finally:
             database.close()
+
+
+def test_an_unchanged_profile_answer_moves_the_listed_check_forward(
+    database_url: str, archive_server
+) -> None:
+    rechecked_at = OBSERVED_AT + timedelta(days=7)
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _store(connection_info, archive_server, "legend-ii", _profile(LEGEND_II, 4900), OBSERVED_AT)
+            assert processor.process_once(owner="legend-ii") is not None
+        finally:
+            database.close()
+        with psycopg.connect(connection_info) as connection:
+            # The collector saves no job for an answer matching the saved profile.
+            connection.execute(
+                """
+                INSERT INTO collector_response_state (
+                    scope, identity_key, endpoint, player_id, normalized_tag,
+                    last_response_hash, last_content_fingerprint,
+                    last_occurrence_key, last_applied_occurrence_key,
+                    last_seen_at, last_observation_id, last_success_at
+                )
+                SELECT 'player', '#2PP', 'profile', player.id, '#2PP',
+                       observation.response_hash, player.current_profile_fingerprint,
+                       'unchanged', 'unchanged', %s, observation.id, %s
+                FROM players AS player
+                JOIN collector_observations AS observation ON observation.player_id = player.id
+                WHERE player.normalized_tag = '#2PP'
+                """,
+                (rechecked_at, rechecked_at),
+            )
+        assert _rows(connection_info) == [("#2PP", 105000035, 4900, rechecked_at)]
 
 
 def test_an_older_profile_waits_for_a_newer_job_and_leaves_its_removal(

@@ -542,7 +542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "refresh-league-history":
             return league_history_refresh.run_command(_database_url(arguments))
         if arguments.command == "load-promotion-candidates":
-            return promotion_candidates.run_command(_database_url(arguments), arguments.file)
+            return promotion_candidates.run_command(_database_url(arguments))
         if arguments.command == "materialize-season-summaries":
             import psycopg
 

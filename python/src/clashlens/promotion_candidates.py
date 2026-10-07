@@ -3,8 +3,8 @@
 Production keeps one ``promotion_candidates`` row per such player: the tier
 and trophies last seen and when (migration 0076). Profile processing keeps
 the rows current. The ``load-promotion-candidates`` command adds the lab's
-list once, from a CSV file with the header
-``tag,league_tier_id,trophies,checked_at``. A tracked player, or one whose
+list once, from a CSV on standard input with the header
+``tag,league_tier_id,trophies,checked_at`` and each tag written as ``#TAG``. A tracked player, or one whose
 saved profile was checked later than the line, is left out, and a tag already
 listed keeps whichever check is newer. Any invalid line refuses the whole file.
 """
@@ -34,8 +34,7 @@ def read_candidates(lines: Iterable[str]) -> list[tuple[str, int, int | None, da
     rows: dict[str, tuple[str, int, int | None, datetime]] = {}
     for number, row in enumerate(reader, start=2):
         try:
-            raw_tag = (row["tag"] or "").strip()
-            tag = normalize_player_tag(raw_tag if raw_tag.startswith("#") else f"#{raw_tag}")
+            tag = normalize_player_tag(row["tag"] or "")
             tier = int(row["league_tier_id"])
             trophies = int(row["trophies"]) if row["trophies"] else None
             checked_at = datetime.fromisoformat(row["checked_at"])
@@ -88,21 +87,16 @@ def add_command(
     """Add the ``load-promotion-candidates`` command to the CLI."""
     command = subparsers.add_parser(
         "load-promotion-candidates",
-        help="add Legend II and III players from a CSV file ('-' reads standard input) to the Monday promotion list (collector database role)",
+        help="add Legend II and III players from a CSV on standard input to the Monday promotion list (collector database role)",
     )
     database_argument(command)
-    command.add_argument("--file", required=True)
 
 
-def run_command(database_url: str, path: str) -> int:
+def run_command(database_url: str) -> int:
     import psycopg
 
     try:
-        if path == "-":
-            candidates = read_candidates(sys.stdin)
-        else:
-            with open(path, newline="", encoding="utf-8") as lines:
-                candidates = read_candidates(lines)
+        candidates = read_candidates(sys.stdin)
     except ValueError as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         return 1

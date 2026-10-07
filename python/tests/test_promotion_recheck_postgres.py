@@ -545,3 +545,23 @@ def test_stopping_mid_batch_at_a_slow_rate_ends_the_batch_quickly() -> None:
         assert result is not None and result["asked"] == 1
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("setting", ["20/s", "nan"])
+def test_an_unusable_rate_keeps_the_recheck_off_until_stopped(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], setting: str
+) -> None:
+    monkeypatch.setenv("CLASHLENS_PROMOTION_RECHECK_PER_SECOND", setting)
+
+    async def scenario() -> None:
+        stopping = asyncio.Event()
+        run = asyncio.create_task(promotion_recheck.run(SimpleNamespace(), stopping))
+        await asyncio.sleep(0.1)
+        assert not run.done()
+        stopping.set()
+        await asyncio.wait_for(run, timeout=1)
+
+    asyncio.run(scenario())
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    expected = [{"event": "promotion_recheck", "status": "failed"}] if setting == "20/s" else []
+    assert [{key: line[key] for key in ("event", "status")} for line in lines] == expected

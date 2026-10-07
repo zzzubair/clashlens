@@ -49,6 +49,7 @@ def runtime(tmp_path, monkeypatch):
         reads_failed=False,
         leaderboard="0 13000 0",
         publication="0",
+        completeness="0",
         site_status=200,
         disk_used=10,
         volume_failed=False,
@@ -152,6 +153,8 @@ def runtime(tmp_path, monkeypatch):
             code, output = 0, rt.leaderboard
         elif "--publication" in args:
             code, output = 0, rt.publication
+        elif "--completeness" in args:
+            code, output = 0, rt.completeness
         else:
             assert f"MESSAGE_ID={alerts.RESTART_MESSAGE}" in args
             code, output = (
@@ -210,6 +213,8 @@ def trigger(rt, condition, value=True):
         rt.metrics[name] = limit if value else limit - 1
     elif condition == "publication":
         rt.publication = "1" if value else "0"
+    elif condition == "completeness":
+        rt.completeness = "11" if value else "10"
 
 
 @pytest.mark.parametrize(
@@ -227,6 +232,7 @@ def trigger(rt, condition, value=True):
         "processing",
         "upload",
         "publication",
+        "completeness",
     ],
 )
 def test_alert_and_recovery_once_across_separate_runs(runtime, condition, capsys):

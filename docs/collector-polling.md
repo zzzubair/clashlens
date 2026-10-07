@@ -43,16 +43,17 @@ The promotion list (`promotion_candidates`, migration 0076) holds Legend II and
 Legend III players who can be promoted into Legend I at a Monday Reset: one row
 per tag with the tier and trophies last seen and when, and no raw response.
 Every processed profile showing Legend II or III adds or refreshes its row; one
-showing any other recognized tier removes it. An older answer never overwrites
+showing any other recognized tier removes it. An unchanged answer that confirms
+the saved profile moves its row's check time forward. An older answer never overwrites
 a newer one or changes the row of a player whose saved profile was checked
 later. The migration copies inactive players whose saved profile shows Legend
 II or III, as of that profile's latest check. The lab's list is added once with
-the collector database role, from a CSV file with the header
-`tag,league_tier_id,trophies,checked_at`:
+the collector database role, from a CSV read on standard input with the header
+`tag,league_tier_id,trophies,checked_at` and each tag written as `#TAG`:
 
 ```sh
 podman exec -i clashlens-collector python -m clashlens.cli \
-  load-promotion-candidates --database-url-file /run/secrets/database-url --file - < candidates.csv
+  load-promotion-candidates --database-url-file /run/secrets/database-url < candidates.csv
 ```
 
 It prints how many lines it read and how many rows it added or updated. Tracked
@@ -66,8 +67,8 @@ Each Monday, after the Reset sweep (05:00-05:10 UTC), settlement (from 05:20)
 and the late-battle check (from 05:30), from 06:00 the collector asks for the
 profile of every listed Legend II player not checked since the Reset, oldest
 check first, at most
-`CLASHLENS_PROMOTION_RECHECK_PER_SECOND` requests a second on the regular keys
-(20 by default; 0 turns it off), at most two at once. Legend III rows stay on
+`CLASHLENS_PROMOTION_RECHECK_PER_SECOND` (set in `app.env`) requests a second
+on the regular keys (20 by default; 0 turns it off), at most two at once. Legend III rows stay on
 the list but are not asked. Just before each request, after its pacing wait,
 it is sent only while that Reset's collection and settlement checks have
 finished, no tracked player is more than two minutes late (read at most once a
