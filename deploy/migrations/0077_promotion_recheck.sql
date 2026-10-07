@@ -3,11 +3,14 @@
 -- listed player's profile without saving it. When the answer shows Legend I,
 -- this queues the ordinary discovery check for that player: one saved
 -- profile and one league-history request, processed like any other newly
--- seen player, so the player is tracked from that saved answer.
+-- seen player, so the player is tracked from that saved answer. It returns
+-- true only once the player is tracked or has a waiting tracking check; a
+-- player another job holds, or whose check this week already failed, returns
+-- false so the re-check asks again later.
 BEGIN;
 
 CREATE FUNCTION clashlens_queue_promoted_player(tag text)
-RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 AS $$
 DECLARE promoted_id bigint;
 BEGIN
@@ -15,7 +18,14 @@ BEGIN
     VALUES (tag, false, 'unknown')
     ON CONFLICT (normalized_tag) DO NOTHING;
     SELECT id INTO STRICT promoted_id FROM players WHERE normalized_tag = tag;
-    RETURN clashlens_enqueue_eligibility_profiles(ARRAY[promoted_id], clock_timestamp(), false);
+    PERFORM clashlens_enqueue_eligibility_profiles(ARRAY[promoted_id], clock_timestamp(), false);
+    RETURN EXISTS (SELECT 1 FROM players WHERE id = promoted_id AND active)
+        OR EXISTS (
+            SELECT 1 FROM collector_work
+            WHERE player_id = promoted_id
+              AND kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
+              AND status IN ('pending', 'waiting_retry')
+        );
 END $$;
 
 DO $$

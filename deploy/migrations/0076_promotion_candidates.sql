@@ -17,7 +17,7 @@ CREATE TABLE promotion_candidates (
     trophies integer CHECK (trophies >= 0),
     checked_at timestamptz NOT NULL
 );
--- The Monday re-check reads Legend II first, oldest check first.
+-- The Monday re-check reads Legend II rows, oldest check first.
 CREATE INDEX promotion_candidates_due
     ON promotion_candidates (league_tier_id, checked_at);
 

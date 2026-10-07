@@ -576,9 +576,6 @@ def complete_rankings(
                         [entry.source_row_index for entry in rankings.entries],
                     ),
                 )
-            enqueue_discovered_players(
-                connection, database, claim, player_ids.values()
-            )
             official_entries = [
                 entry for entry in rankings.entries if 1 <= entry.rank <= 200
             ]
@@ -719,6 +716,9 @@ def complete_rankings(
                 ),
                 parsed_payload_id=parsed_payload_id,
             )
+            enqueue_discovered_players(
+                connection, database, claim, player_ids.values()
+            )
             database._finish_claim(
                 connection,
                 claim,
@@ -804,9 +804,6 @@ def _complete_rankings_legacy(
                 player_ids = {
                     _text_value(tag): int(player_id) for tag, player_id in rows
                 }
-            enqueue_discovered_players(
-                connection, database, claim, player_ids.values()
-            )
             if rankings.outcome == "official_observed":
                 version = connection.execute(
                     """
@@ -877,6 +874,9 @@ def _complete_rankings_legacy(
                     if rankings.outcome == "official_observed"
                     else rankings.outcome
                 ),
+            )
+            enqueue_discovered_players(
+                connection, database, claim, player_ids.values()
             )
             database._finish_claim(
                 connection,

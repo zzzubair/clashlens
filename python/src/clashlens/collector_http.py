@@ -477,6 +477,7 @@ class KeyPool:
         self._selection_lock = asyncio.Lock()
         self._before_start = before_start
         self.starts_per_second = starts_per_second
+        self.concurrency_per_key = concurrency_per_key
 
     async def run(
         self, request: Callable[[ApiKey, StartRequest], Awaitable[T]]
@@ -564,6 +565,15 @@ class KeyPool:
                 for state in self._states
             ),
         }
+
+    def idle_slots(self) -> int:
+        """Free request slots across healthy, unpaused keys."""
+        now = monotonic()
+        return sum(
+            state.semaphore._value
+            for state in self._states
+            if state.healthy and state.paused_until <= now
+        )
 
     def key_health(self) -> list[tuple[str, bool, bool, int]]:
         """Return each key's label, health, pause state and request starts."""

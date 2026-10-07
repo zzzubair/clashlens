@@ -62,24 +62,27 @@ refuses the whole file. About 130 bytes a row with its indexes: the lab's
 October 2026 list of 250,680 players is about 33 MB, growing only with newly
 seen Legend II and III players.
 
-Each Monday from 05:30 UTC, once that Reset's collection has finished and no
-tracked player is more than two minutes late, the collector asks for the
-profile of every listed player not checked since the Reset: Legend II first,
-then Legend III, oldest check first, at most
+Each Monday from 05:30 UTC the collector asks for the profile of every listed
+Legend II player not checked since the Reset, oldest check first, at most
 `CLASHLENS_PROMOTION_RECHECK_PER_SECOND` requests a second on the regular keys
-(20 by default; 0 turns it off), at most 16 at once. It stops between batches
-of 200 whenever collection falls behind again and resumes when it catches up.
-These answers are not saved, so a player who stayed put costs one request and
-no storage. A profile showing Legend I queues the ordinary discovery check
+(20 by default; 0 turns it off), at most 16 at once. Legend III rows stay on
+the list but are not asked. Each request starts only while that Reset's
+collection and settlement checks have finished, no tracked player is more than
+two minutes late (read at most once a second), and one key's worth of regular
+request slots is idle; otherwise it waits and resumes when collection catches
+up. These answers are not saved, so a player who stayed put costs one request
+and no storage. A profile showing Legend I queues the ordinary discovery check
 above, which saves the profile, starts tracking and backfills from the first
-battle log, while fewer than 500 discovery checks wait (otherwise it stays due
-and is asked again in a later batch); any other answer refreshes or removes the list row, and a player
-whose profile fails three times is left until next week. Each stretch of work
-ends with one `promotion_recheck` line in the collector log counting promoted,
-listed, removed, failed and queued players. At the lab's October 2026 list
-this is about 59,000 Legend II requests (about 50 minutes at 20 a second) and
-192,000 Legend III requests (about 2 hours 40 minutes) each Monday, plus two
-requests for each promoted player.
+battle log. The row is marked checked only once the player is tracked or has
+a waiting check, and only while fewer than 500 discovery checks wait;
+otherwise it stays due and is asked again later. Any other answer refreshes or
+removes the list row. A failed request or an unreadable answer leaves the
+player due, asked again at most once a minute after the list is done. Each
+stretch of work ends with one `promotion_recheck` line in the collector log
+counting asked, promoted, listed, removed, failed and queued players. At the
+lab's October 2026 list this is about 59,000 Legend II requests (about 50
+minutes at 20 a second) each Monday, plus two requests for each promoted
+player.
 
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to

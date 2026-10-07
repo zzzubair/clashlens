@@ -1,14 +1,16 @@
 """Re-check the promotion list after each Monday Reset.
 
 Legend II's top finishers move into Legend I at the Monday 05:00 UTC Reset.
-From 05:30, once that Reset's collection has finished and no tracked player
-is more than two minutes late, the collector asks for the profile of every
-listed player (migration 0076) not checked since the Reset: Legend II first,
-then Legend III, at most ``CLASHLENS_PROMOTION_RECHECK_PER_SECOND`` requests
-a second (20 by default, 0 turns it off) on the regular keys. It pauses
-whenever collection falls behind again. These answers are not saved: a
-profile showing Legend I queues the ordinary discovery check, which saves the
-profile and starts tracking; any other answer only refreshes the list row.
+From 05:30 the collector asks for the profile of every listed Legend II
+player (migration 0076) not checked since the Reset, at most
+``CLASHLENS_PROMOTION_RECHECK_PER_SECOND`` requests a second (20 by default,
+0 turns it off) on the regular keys. Each request starts only while that
+Reset's collection and settlement checks have finished, no tracked player is
+more than two minutes late, and one key's worth of regular request slots is
+idle. These answers are not saved: a profile showing Legend I queues the
+ordinary discovery check, which saves the profile and starts tracking; any
+other answer only refreshes the list row. A request that fails, or an answer
+that cannot be read, leaves the player due for a later batch.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import json
 import os
 import time
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -40,14 +43,14 @@ START_DELAY = timedelta(minutes=30)
 BATCH_SIZE = 200
 IN_FLIGHT = 16
 IDLE_SECONDS = 60.0
-# A player whose profile keeps failing is left until next week.
-MAX_FAILURES = 3
+# How long a reading of the database's spare-time checks is reused.
+GUARD_SECONDS = 1.0
+LEGEND_II_TIER_ID = 105000035
 _WEEK = timedelta(days=7)
 _WEEK_ANCHOR = datetime(2000, 1, 3, 5, tzinfo=UTC)  # a Monday Reset
 
-# (tag, outcome, tier, trophies, answered at); outcome is promoted, listed,
-# removed (not found, or a recognized tier outside Legend II and III) or
-# checked (an answer the parser could not place).
+# (tag, outcome, tier, trophies, answered at); outcome is promoted, listed or
+# removed (not found, or a recognized tier outside Legend II and III).
 Answer = tuple[str, str, int | None, int | None, datetime]
 
 
@@ -56,34 +59,51 @@ def week_start(now: datetime) -> datetime:
     return _WEEK_ANCHOR + (now - _WEEK_ANCHOR) // _WEEK * _WEEK
 
 
-def due_tags(database: CollectorDatabase, now: datetime, skip: list[str]) -> list[str] | None:
-    """The next listed players to ask for, or None while collection is busy."""
-    monday = week_start(now)
+def has_spare_time(database: CollectorDatabase, now: datetime) -> bool:
+    """05:30 has passed, collection has time to spare and settlement checks are done."""
+    if now < week_start(now) + START_DELAY:
+        return False
     with database._connection() as connection, connection.transaction():
-        if now < monday + START_DELAY or not weekly_eligibility.has_time_to_spare(
+        return weekly_eligibility.has_time_to_spare(
             database, connection, now
-        ):
-            return None
+        ) and not connection.execute(
+            """
+            SELECT 1 FROM collector_work
+            WHERE kind = 'reset_settlement' AND status IN ('pending', 'waiting_retry')
+              AND sweep_id = (
+                  SELECT id FROM collector_reset_sweeps WHERE boundary_at <= %s
+                  ORDER BY boundary_at DESC LIMIT 1
+              )
+            LIMIT 1
+            """,
+            (now,),
+        ).fetchone()
+
+
+def due_tags(database: CollectorDatabase, now: datetime) -> list[str]:
+    """The next listed Legend II players not checked since the Monday Reset."""
+    with database._connection() as connection:
         return [
             str(row[0])
             for row in connection.execute(
                 """
                 SELECT normalized_tag FROM promotion_candidates
-                WHERE checked_at < %s AND NOT (normalized_tag = ANY(%s::text[]))
-                ORDER BY league_tier_id DESC, checked_at, normalized_tag
+                WHERE league_tier_id = %s AND checked_at < %s
+                ORDER BY checked_at, normalized_tag
                 LIMIT %s
                 """,
-                (monday, skip, BATCH_SIZE),
+                (LEGEND_II_TIER_ID, week_start(now), BATCH_SIZE),
             )
         ]
 
 
 def record_answers(database: CollectorDatabase, answers: list[Answer]) -> int:
-    """Save one batch's answers; returns how many discovery checks were queued.
+    """Save one batch's answers; returns how many promoted players were handed on.
 
-    Promoted players share the discovery queue's limit of DISCOVERY_QUEUE_CAP
-    waiting checks; one that does not fit keeps its old row, so it stays due
-    and is asked again in a later batch.
+    A promoted player is handed on once tracked or given a waiting discovery
+    check. Promoted players share the discovery queue's limit of
+    DISCOVERY_QUEUE_CAP waiting checks; one that does not fit, or is not
+    handed on, keeps its old row, so it stays due and is asked again later.
     """
     queued = 0
     promoted = [answer[0] for answer in answers if answer[1] == "promoted"]
@@ -101,14 +121,16 @@ def record_answers(database: CollectorDatabase, answers: list[Answer]) -> int:
                 """
             ).fetchone()[0]
             left_out = set(promoted[max(0, DISCOVERY_QUEUE_CAP - int(waiting)) :])
-            answers = [answer for answer in answers if answer[0] not in left_out]
             for tag in promoted:
-                if tag not in left_out:
-                    queued += int(
-                        connection.execute(
-                            "SELECT clashlens_queue_promoted_player(%s)", (tag,)
-                        ).fetchone()[0]
-                    )
+                if tag in left_out:
+                    continue
+                if connection.execute(
+                    "SELECT clashlens_queue_promoted_player(%s)", (tag,)
+                ).fetchone()[0]:
+                    queued += 1
+                else:
+                    left_out.add(tag)
+            answers = [answer for answer in answers if answer[0] not in left_out]
         kept = [answer for answer in answers if answer[1] != "removed"]
         # A newer answer saved by profile processing meanwhile is kept.
         connection.execute(
@@ -163,75 +185,106 @@ async def _ask(collector: Collector, tag: str) -> Answer | None:
             parser_version=PROFILE_PARSER_VERSION,
         )
     except ProfileParseError:
-        return (tag, "checked", None, None, at)
+        return None
     if profile.league_tier_id == LEGEND_I_TIER_ID:
         return (tag, "promoted", None, profile.trophies, at)
     if profile.league_tier_id in CANDIDATE_TIER_IDS:
         return (tag, "listed", profile.league_tier_id, profile.trophies, at)
     if profile.eligibility_state in {"eligible", "ineligible"}:
         return (tag, "removed", None, None, at)
-    return (tag, "checked", None, None, at)
+    return None
 
 
-async def check_batch(
-    collector: Collector, now: datetime, failures: Counter[str], rate: float
-) -> Counter[str] | None:
+class Admission:
+    """Admits one request start at a time, at most ``rate`` a second, from spare headroom."""
+
+    def __init__(
+        self,
+        collector: Collector,
+        rate: float,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._collector = collector
+        self.clock = clock
+        self._interval = 1 / rate
+        self._lock = asyncio.Lock()
+        self._next_start = 0.0
+        self._spare = False
+        self._recheck_at = 0.0
+
+    async def open(self) -> bool:
+        """Whether collection has time to spare, read at most once a GUARD_SECONDS."""
+        if time.monotonic() >= self._recheck_at:
+            self._spare = await self._collector._database_call(
+                has_spare_time, self._collector.database, self.clock()
+            )
+            self._recheck_at = time.monotonic() + GUARD_SECONDS
+        return self._spare
+
+    async def __call__(self) -> bool:
+        """Wait for the next start slot and idle keys; False once time runs out or on stop."""
+        keys = self._collector.regular_keys
+        async with self._lock:
+            while True:
+                await asyncio.sleep(max(0.0, self._next_start - time.monotonic()))
+                if self._collector._stopping.is_set() or not await self.open():
+                    return False
+                self._next_start = time.monotonic() + self._interval
+                if keys.idle_slots() >= keys.concurrency_per_key:
+                    return True
+
+
+async def check_batch(collector: Collector, admit: Admission) -> Counter[str] | None:
     """Ask for one batch of listed players; None when nothing could be asked."""
-    skip = [tag for tag, count in failures.items() if count >= MAX_FAILURES]
-    tags = await collector._database_call(due_tags, collector.database, now, skip)
-    if not tags:
+    if not await admit.open():
         return None
+    tags = await collector._database_call(due_tags, collector.database, admit.clock())
     gate = asyncio.Semaphore(IN_FLIGHT)
+    refused = 0
 
     async def ask(tag: str) -> Answer | None:
-        try:
+        nonlocal refused
+        async with gate:
+            if not await admit():
+                refused += 1
+                return None
             return await _ask(collector, tag)
-        finally:
-            gate.release()
 
-    tasks = []
-    next_start = time.monotonic()
-    for tag in tags:
-        await asyncio.sleep(max(0.0, next_start - time.monotonic()))
-        await gate.acquire()
-        next_start = max(next_start, time.monotonic()) + 1 / rate
-        tasks.append(asyncio.create_task(ask(tag)))
-    answers = await asyncio.gather(*tasks)
+    answers = await asyncio.gather(*(ask(tag) for tag in tags))
     found = [answer for answer in answers if answer is not None]
-    for tag, answer in zip(tags, answers, strict=True):
-        if answer is None:
-            failures[tag] += 1
+    asked = len(tags) - refused
+    if not asked:
+        return None
     queued = await collector._database_call(record_answers, collector.database, found)
     totals = Counter(answer[1] for answer in found)
-    totals.update(failed=len(tags) - len(found), queued=queued)
+    totals.update(asked=asked, failed=asked - len(found), queued=queued)
     return totals
 
 
 async def run(collector: Collector, stop_requested: asyncio.Event) -> None:
     """Re-check the list each Monday until stopped; never ends the collector early.
 
-    Each stretch of work ends with one printed line counting its answers.
+    A batch that was cut short or ended the list waits IDLE_SECONDS, so
+    players left due are asked again at most once a minute. Each stretch of
+    work ends with one printed line counting its answers.
     """
     rate = float(os.environ.get("CLASHLENS_PROMOTION_RECHECK_PER_SECOND", "20"))
     if rate <= 0:
         await stop_requested.wait()
         return
-    monday: datetime | None = None
-    failures: Counter[str] = Counter()
+    admit = Admission(collector, rate)
     stretch: Counter[str] = Counter()
     while not stop_requested.is_set():
-        now = datetime.now(UTC)
-        if week_start(now) != monday:
-            monday, failures = week_start(now), Counter()
-        event = {"event": "promotion_recheck", "week_start": monday.isoformat()}
+        event = {"event": "promotion_recheck", "week_start": week_start(admit.clock()).isoformat()}
         try:
-            batch = await check_batch(collector, now, failures, rate)
+            batch = await check_batch(collector, admit)
         except Exception as error:  # noqa: BLE001 - retried after a pause
             batch = None
             print(json.dumps({**event, "status": "failed", "error": repr(error)[:300]}), flush=True)
         if batch:
             stretch.update(batch)
-            continue
+            if batch["asked"] == BATCH_SIZE:
+                continue
         if stretch:
             print(json.dumps({**event, "status": "paused_or_done", **stretch}), flush=True)
             stretch = Counter()
