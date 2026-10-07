@@ -287,9 +287,9 @@ def completeness_probe() -> None:
 
     Counts players in Legend I battles of the current or previous Legend day
     who are not tracked although their first such battle was saved over an
-    hour ago, long enough for discovery to have checked them. Players whose
-    saved profile showed a lower tier after their latest such battle, such as
-    Monday demotions, are left out.
+    hour ago, long enough for discovery to have checked them. Players with a
+    saved profile showing a lower tier observed after the time of their
+    latest such battle, such as Monday demotions, are left out.
     """
     import psycopg
 
@@ -303,23 +303,30 @@ def completeness_probe() -> None:
                                     timestamptz '2000-01-01 05:00:00+00')
                            - interval '1 day' AS day_start
                 ), battlers AS (
-                    SELECT attacker_player_id AS player_id, created_at
-                    FROM legend_battles WHERE ranked_day_start >= (SELECT day_start FROM since)
-                    UNION ALL
-                    SELECT defender_player_id, created_at
-                    FROM legend_battles WHERE ranked_day_start >= (SELECT day_start FROM since)
+                    SELECT side.player_id, battle.created_at, evidence.battle_timestamp
+                    FROM legend_battles AS battle
+                    JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
+                    CROSS JOIN LATERAL (VALUES (battle.attacker_player_id),
+                                               (battle.defender_player_id))
+                        AS side (player_id)
+                    WHERE battle.ranked_day_start >= (SELECT day_start FROM since)
                 )
                 SELECT count(*) FROM (
-                    SELECT player_id, max(created_at) AS last_battle_at
+                    SELECT player_id, max(battle_timestamp) AS last_battle_at
                     FROM battlers GROUP BY player_id
                     HAVING min(created_at) < clock_timestamp() - interval '1 hour'
                 ) AS seen
                 JOIN players ON players.id = seen.player_id
                 WHERE NOT players.active
-                  AND (players.eligibility_state = 'ineligible'
-                       AND GREATEST(players.current_observed_at,
-                                    players.current_profile_confirmed_at) > seen.last_battle_at
-                      ) IS NOT TRUE
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM player_profile_versions AS demoted
+                      JOIN player_profile_effects AS demoted_seen
+                        ON demoted_seen.profile_version_id = demoted.id
+                      WHERE demoted.player_id = players.id
+                        AND demoted.eligibility_state = 'ineligible'
+                        AND demoted_seen.observed_at > seen.last_battle_at
+                  )
                 """
             ).fetchone()[0]
         )
