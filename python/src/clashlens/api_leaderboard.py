@@ -370,11 +370,15 @@ def get_frozen_leaderboard(
                   ON generation.snapshot_id = snapshot.id
                 LEFT JOIN LATERAL (
                     SELECT ranked.official_season_id, ranked.season_day_number
-                    FROM boundary_publication_manifest_rows AS member
+                    FROM (
+                        SELECT member.ranked_day_version_id
+                        FROM boundary_publication_manifest_rows AS member
+                        WHERE member.manifest_id = generation.snapshot_manifest_id
+                          AND member.ranked_day_version_id IS NOT NULL
+                        ORDER BY member.ranked_day_version_id DESC LIMIT 1
+                    ) AS member
                     JOIN ranked_day_versions AS ranked
                       ON ranked.id = member.ranked_day_version_id
-                    WHERE member.manifest_id = generation.snapshot_manifest_id
-                    ORDER BY ranked.id DESC LIMIT 1
                 ) AS generation_day ON true
                 WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
                   AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
@@ -450,11 +454,15 @@ def get_frozen_leaderboard(
                       ON generation.snapshot_id = snapshot.id
                     LEFT JOIN LATERAL (
                         SELECT ranked.official_season_id, ranked.season_day_number
-                        FROM boundary_publication_manifest_rows AS member
+                        FROM (
+                            SELECT member.ranked_day_version_id
+                            FROM boundary_publication_manifest_rows AS member
+                            WHERE member.manifest_id = generation.snapshot_manifest_id
+                              AND member.ranked_day_version_id IS NOT NULL
+                            ORDER BY member.ranked_day_version_id DESC LIMIT 1
+                        ) AS member
                         JOIN ranked_day_versions AS ranked
                           ON ranked.id = member.ranked_day_version_id
-                        WHERE member.manifest_id = generation.snapshot_manifest_id
-                        ORDER BY ranked.id DESC LIMIT 1
                     ) AS generation_day ON true
                     WHERE snapshot.id = %s
                       AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
