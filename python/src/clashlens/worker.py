@@ -78,7 +78,7 @@ NEWEST_PLAN_SIZE = 5000
 NEWEST_PLAN_MAX_AGE_SECONDS = 30.0
 NEWEST_PLAN_EMPTY_RETRY_SECONDS = 1.0
 OLDEST_FIRST_CLAIM_EVERY = 4
-# Every other claim of each lane takes Reset-priority work first while any
+# Every other job each lane claims takes Reset-priority work first while any
 # waits, so live work that has waited 20 minutes, which wins the other claims,
 # cannot hold back the previous day's board, and neither can starve the other.
 RESET_FIRST_CLAIM_EVERY = 2
@@ -565,13 +565,13 @@ class ObservationProcessor:
         limit = {} if work_types is None else {"work_types": work_types}
         with self._plan_lock:
             turn = self._lane_claims.get(owner, 0)
-            self._lane_claims[owner] = turn + 1
         limit["reset_first"] = turn % RESET_FIRST_CLAIM_EVERY == 0
         planned = False
         if work_types is None or "process_observation" in work_types:
             with self._plan_lock:
                 self._claim_count += 1
                 planned = self._claim_count % OLDEST_FIRST_CLAIM_EVERY != 0
+        claim = None
         if planned:
             for attempt in range(NEWEST_PLAN_SIZE):
                 if attempt == 0:
@@ -589,10 +589,15 @@ class ObservationProcessor:
                     **limit,
                 )
                 if claim is not None:
-                    return claim
-        return self.database.claim_job(
-            owner=owner, lease_seconds=lease_seconds, **limit
-        )
+                    break
+        if claim is None:
+            claim = self.database.claim_job(
+                owner=owner, lease_seconds=lease_seconds, **limit
+            )
+        if claim is not None:
+            with self._plan_lock:
+                self._lane_claims[owner] = turn + 1
+        return claim
 
     def _next_planned_job(self) -> int | None:
         plan_source = getattr(self.database, "newest_job_plan", None)

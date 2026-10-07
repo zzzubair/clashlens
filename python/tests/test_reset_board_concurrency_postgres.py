@@ -32,6 +32,7 @@ from test_claim_jobs_postgres import (
 from clashlens import boundary, reset_baselines
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import (
+    POPULATION_BUILD_WORK_TYPES,
     PYTHON_LIVE_PRIORITY,
     PYTHON_RESET_PRIORITY,
     RESPONSE_WORK_TYPES,
@@ -376,12 +377,13 @@ def test_reset_backlog_and_old_live_work_take_turns_in_every_lane(
     # over 20 minutes, so they win on waiting time while the ended day's
     # results the board needs are still queued. Each lane alternates, so both
     # keep moving: the Reset backlog finishes, and old live work never waits
-    # more than one turn per lane behind it.
+    # more than one turn per lane behind it, even on the lane that first
+    # checks for a build and finds none.
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             classes: dict[int, str] = {}
             for work_type, count in (
-                ("process_observation", 6), ("reconcile_ranked_day", 3)
+                ("process_observation", 6), ("reconcile_ranked_day", 6)
             ):
                 for index in range(count):
                     for kind, priority in (
@@ -430,6 +432,13 @@ def test_reset_backlog_and_old_live_work_take_turns_in_every_lane(
                     ("results", DERIVED_WITHOUT_BUILDS, 6),
                 )
             }
+            claimed["builds"] = [
+                processor._claim_next(
+                    owner="builds", lease_seconds=60, work_types=work_types
+                )
+                for _ in range(6)
+                for work_types in (POPULATION_BUILD_WORK_TYPES, DERIVED_WITHOUT_BUILDS)
+            ]
         finally:
             database.close()
         assert {
@@ -438,4 +447,6 @@ def test_reset_backlog_and_old_live_work_take_turns_in_every_lane(
         } == {
             "responses": ["reset", "live"] * 6,
             "results": ["reset", "live"] * 3,
+            "builds": ["reset", "live"] * 3,
         }
+        assert claimed["builds"][::2] == [None] * 6

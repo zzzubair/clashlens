@@ -150,7 +150,7 @@ other derived work keep moving; on a response-only thread, described below,
 that order covers responses only. If all planned claims are rejected, that call
 falls back to the existing order without refreshing the plan again. While a
 thread could take Reset-priority work, its planned claim takes that order, and
-every other claim of each thread takes that Reset work first; see
+every other job each thread claims is that Reset work; see
 [`deployment.md`](deployment.md).
 
 Worker threads share the newest-job plan, but each thread claims its own next
