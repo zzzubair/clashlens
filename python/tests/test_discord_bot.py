@@ -444,6 +444,22 @@ def test_show_all_beyond_discords_follow_up_allowance_continues_on_request(store
     assert all(f"** {tag} " in texts(*clicks) for tag in tags)
 
 
+def test_show_more_clicked_twice_sends_the_rest_once(store) -> None:
+    tags = [f"#{index:04d}" for index in range(500)]
+    store.connect(ME, [card(tag, "Wanderer", 5000) for tag in tags])
+    message = run_command(store, "me", FakeInteraction(), account=None, share=False)
+    click = FakeInteraction()
+    asyncio.run(button(message, "Show all").callback(click))
+    more = button(click.last, "Show more")
+    first, second = FakeInteraction(), FakeInteraction()
+
+    async def double_click() -> None:
+        await asyncio.gather(more.callback(first), more.callback(second))
+
+    asyncio.run(double_click())
+    assert bool(first.messages) != bool(second.messages)
+
+
 @pytest.mark.parametrize("change", ["disconnected", "other account"])
 def test_show_more_sends_nothing_once_the_players_are_no_longer_the_persons(
     store, change
@@ -610,6 +626,14 @@ def test_main_saves_only_the_persons_own_player(store) -> None:
     saved = run_command(store, "main", FakeInteraction(dm=True), account="8qq")
     assert saved["text"].startswith("Main is now Lens #8QQ.")
     assert store.mains == {1: "#8QQ"}
+
+
+def test_a_typed_tag_is_matched_only_as_written(store) -> None:
+    store.connect(ME, [card("#0QQ", "Zero", 5842), card("#8QQ", "Lens", 5100)])
+    refused = run_command(store, "main", FakeInteraction(), account="#OQQ")
+    assert refused["text"] == "That player isn't linked to your Clash Lens account."
+    saved = run_command(store, "main", FakeInteraction(), account="  #0qq ")
+    assert saved["text"].startswith("Main is now Zero #0QQ.")
 
 
 def test_only_the_person_who_ran_the_command_can_use_its_dropdown(store) -> None:

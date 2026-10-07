@@ -29,8 +29,8 @@ class StoreReads(Protocol):
 
 
 def tag_text(value: str) -> str:
-    """A typed tag as the game writes it: "#" first, upper case, no spaces."""
-    text = "".join(value.split()).upper().replace("O", "0")
+    """A typed tag as the website reads it: trimmed, upper case, "#" first."""
+    text = value.strip().upper()
     return text if text.startswith("#") else f"#{text}"
 
 
