@@ -45,6 +45,23 @@ def validate_root(root: str | Path) -> Path:
     return path
 
 
+def read_readiness(root: str | Path) -> tuple[bool, str]:
+    """Report whether saved responses can be read, without the spool lock.
+
+    Reads take no lock (see ``Spool.verify``), so proving they can run must
+    not wait for one either: the worker health check calls this every 30 s.
+    """
+    try:
+        os.close(
+            os.open(
+                Path(root) / "sha256", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
+        )
+    except OSError as error:
+        return False, f"storage_error:{type(error).__name__}"
+    return True, "ready"
+
+
 class SpoolReservation:
     def __init__(self, spool: Spool, limit: int) -> None:
         self.spool = spool
@@ -557,8 +574,12 @@ class Spool:
         return body if hashlib.sha256(body).hexdigest() == digest else None
 
     def verify(self, digest: str, expected_size: int | None = None) -> bytes | None:
-        with self._capacity_lock():
-            return self._verify_unlocked(digest, expected_size)
+        # No lock: a saved file never changes. Publishing links a finished,
+        # fsynced temporary file into place and deletion only unlinks, so an
+        # open descriptor reads the whole file or nothing, and the hash check
+        # rejects anything else. The lock is shared with the collector, and
+        # one slow holder stalled every worker read on 7 Oct 2026.
+        return self._verify_unlocked(digest, expected_size)
 
     def probe_writable(self, limit: int | None = None) -> None:
         """Prove a full-size response can be durably written and removed."""
@@ -981,12 +1002,12 @@ class Spool:
         With ``admission=False`` report only whether saved responses can still
         be read: a full spool must not stop the worker that drains it.
         """
+        if not admission:
+            return read_readiness(self.root)
         try:
             stats = self.stats()
         except (OSError, ValueError, SpoolError) as error:
             return False, f"storage_error:{type(error).__name__}"
-        if not admission:
-            return True, "ready"
         logical = (
             stats["final_bytes"] + stats["temporary_bytes"] + stats["reserved_bytes"]
         )
@@ -1046,4 +1067,4 @@ class Spool:
         return removed
 
 
-__all__ = ["Spool", "SpoolError", "SpoolReservation", "validate_root"]
+__all__ = ["Spool", "SpoolError", "SpoolReservation", "read_readiness", "validate_root"]

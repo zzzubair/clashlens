@@ -370,3 +370,46 @@ def test_upload_clocks_ignore_repeat_sightings_and_restart_for_fresh_uploads(
             assert metrics["oldest_pending_upload_age_seconds"] < 600
         finally:
             database.close()
+
+
+def test_health_metrics_count_saved_responses(database_url: str) -> None:
+    # The alert check turns this into responses saved a minute in the Reset
+    # hour; on 7 Oct 2026 a stalled collector saved 17-44 a minute.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                """INSERT INTO players (normalized_tag, active, next_due_at)
+                VALUES ('#2PP', true, clock_timestamp() + interval '1 minute')
+                RETURNING id"""
+            ).fetchone()[0]
+        database = CollectorDatabase(connection_info)
+        try:
+            assert "newest_observation_id" not in database.health_metrics()
+            completed_at = datetime.now(UTC)
+            for index in range(3):
+                body_hash = hashlib.sha256(f"body {index}".encode()).hexdigest()
+                database.record_response(
+                    ResponseHandoff(
+                        occurrence_key=f"saved-{index}",
+                        scope="player",
+                        identity_key="#2PP",
+                        endpoint="profile",
+                        player_id=int(player_id),
+                        normalized_tag="#2PP",
+                        request_started_at=completed_at - timedelta(seconds=1),
+                        response_completed_at=completed_at,
+                        http_status=200,
+                        response_hash=body_hash,
+                        content_fingerprint=body_hash,
+                        byte_size=6,
+                        spool_key=f"sha256/{body_hash[:2]}/{body_hash}",
+                        collector_version="metrics-test",
+                        key_label="regular-a",
+                        evidence_headers={"content-type": "application/json"},
+                    )
+                )
+                if index == 0:
+                    first = database.health_metrics()["newest_observation_id"]
+            assert database.health_metrics()["newest_observation_id"] == first + 2
+        finally:
+            database.close()

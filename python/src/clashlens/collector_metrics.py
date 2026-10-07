@@ -70,6 +70,8 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                (SELECT CASE WHEN newest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - newest_at)) END FROM failed_jobs),
                (SELECT CASE WHEN newest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - newest_at)) END FROM failed_uploads),
                extract(epoch FROM statement_timestamp()),
+               -- Rises by one per saved response; the alert check turns it into a rate.
+               (SELECT max(id) FROM collector_observations),
                checks.samples, checks.missing, checks.p50, checks.p95, checks.maximum,
                (SELECT json_object_agg(work_type, age) FROM processing)
         FROM checks"""
@@ -92,6 +94,7 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
         "newest_failed_processing_age_seconds",
         "newest_failed_upload_age_seconds",
         "metrics_sample_timestamp_seconds",
+        "newest_observation_id",
         "check_age_sample_players",
         "check_age_missing_players",
         "check_age_p50_seconds",
