@@ -747,8 +747,14 @@ class Collector:
                 break
             self.spool.remove_handoff(name)
             recovered += 1
-        self.spool.remove_unreferenced(self.database.referenced_spool_hashes)
+        self._sweep_unreferenced()
         return recovered
+
+    def _sweep_unreferenced(self) -> None:
+        try:
+            self.spool.remove_unreferenced(self.database.referenced_spool_hashes)
+        except psycopg.errors.QueryCanceled:  # over its time limit; next sweep
+            self._count("spool_sweep_timeout")
 
     async def upload_once(self, *, owner: str) -> bool:
         if self.archive is None or self._archive_terminal:
@@ -940,10 +946,7 @@ class Collector:
             if outage is not None:
                 outage.stop()
             await asyncio.gather(*tasks)
-            await _drain_to_thread(
-                self.spool.remove_unreferenced,
-                self.database.referenced_spool_hashes,
-            )
+            await _drain_to_thread(self._sweep_unreferenced)
         finally:
 
             async def finish() -> None:
@@ -1214,10 +1217,7 @@ class Collector:
                         # safety window alone. Revisit it here so an immediate
                         # restart cannot leave that temporary file forever.
                         await asyncio.to_thread(self.spool.cleanup_stale, 60.0)
-                        await asyncio.to_thread(
-                            self.spool.remove_unreferenced,
-                            self.database.referenced_spool_hashes,
-                        )
+                        await asyncio.to_thread(self._sweep_unreferenced)
                 except (OSError, SpoolError) as error:
                     self._record_spool_failure(error)
                 if self._spool_capacity_failed:

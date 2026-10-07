@@ -989,7 +989,7 @@ alerts, and each recovers only when its own measurement does.
   fetch-gap, backup and private-read alerts already cover their own failed
   checks and are left out, but an unreachable collector also makes spool
   usage unknown, so it can raise this alert alongside the fetch-gap alert.
-  It recovers after the usual 15 clear minutes with none of the four
+  It recovers after the usual 15 clear minutes with none of the five
   unreadable, so a different check failing during that time keeps it open.
   Time deliberately stopped does not count towards the ten minutes. This
   alert only works while `alert-check` itself runs, saves its state and

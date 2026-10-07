@@ -505,3 +505,63 @@ def test_a_failing_request_stops_the_rest_of_its_batch_first() -> None:
         assert cancelled == ["#8QQ"]
 
     asyncio.run(scenario())
+
+
+def test_stopping_mid_batch_at_a_slow_rate_ends_the_batch_quickly() -> None:
+    tags = [f"#{index}QQ" for index in range(200)]
+    asked = []
+
+    async def database_call(function, *_args):
+        return {
+            promotion_recheck.has_spare_time: True,
+            promotion_recheck.due_tags: tags,
+            promotion_recheck.record_answers: set(),
+        }[function]
+
+    async def fetch_player(_keys, tag: str, _endpoint: str):
+        asked.append(tag)
+        return SimpleNamespace(http_status=503, response_completed_at=datetime.now(UTC))
+
+    async def scenario() -> None:
+        stopping = asyncio.Event()
+        collector = SimpleNamespace(
+            _database_call=database_call,
+            _stopping=stopping,
+            database=None,
+            regular_keys=KeyPool(
+                [ApiKey("regular-1", "secret")], starts_per_second=25, concurrency_per_key=2
+            ),
+            client=SimpleNamespace(fetch_player=fetch_player),
+        )
+        now = MONDAY + timedelta(minutes=70)
+        admit = promotion_recheck.Admission(collector, 1.0, clock=lambda: now)
+        batch = asyncio.create_task(promotion_recheck.check_batch(collector, admit, set()))
+        await asyncio.sleep(0.2)
+        started = time.monotonic()
+        stopping.set()
+        result = await asyncio.wait_for(batch, timeout=5)
+        assert time.monotonic() - started < 1
+        assert asked == ["#0QQ"]
+        assert result is not None and result["asked"] == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("setting", ["20/s", "nan"])
+def test_an_unusable_rate_keeps_the_recheck_off_until_stopped(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], setting: str
+) -> None:
+    monkeypatch.setenv("CLASHLENS_PROMOTION_RECHECK_PER_SECOND", setting)
+
+    async def scenario() -> None:
+        stopping = asyncio.Event()
+        run = asyncio.create_task(promotion_recheck.run(SimpleNamespace(), stopping))
+        await asyncio.sleep(0.1)
+        assert not run.done()
+        stopping.set()
+        await asyncio.wait_for(run, timeout=1)
+
+    asyncio.run(scenario())
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    expected = [{"event": "promotion_recheck", "status": "failed"}] if setting == "20/s" else []
+    assert [{key: line[key] for key in ("event", "status")} for line in lines] == expected

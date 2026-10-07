@@ -252,6 +252,46 @@ up_stack
 
 
 @pytest.mark.parametrize(
+    ("rate", "accepted"),
+    [("20", True), ("0", True), ("2.5", True), ("20/s", False), ("-1", False), ("inf", False)],
+)
+def test_ops_rejects_a_bad_promotion_rate_before_stopping(
+    tmp_path: Path, rate: str, accepted: bool
+) -> None:
+    ops = Path(__file__).resolve().parents[2] / "ops"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$1" help >/dev/null
+STATE_DIR="$2"
+MODE=fixture
+CONFIG[CLASHLENS_PROMOTION_RECHECK_PER_SECOND]=$3
+for step in require_host load_release guard_generated_units guard_existing_resources \
+    guard_trusted_proxy_ip guard_network_subnet cleanup_stale_admin_state ensure_linger \
+    migrate_legacy_units guard_systemd_units write_alert_intent; do
+  eval "$step() { :; }"
+done
+stop_units() { touch "$STATE_DIR/stopped"; exit 0; }
+up_stack
+""",
+            "test-ops-promotion-rate",
+            str(ops),
+            str(tmp_path),
+            rate,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert (tmp_path / "stopped").exists() is accepted, result.stderr
+    if not accepted:
+        assert result.returncode != 0
+        assert "CLASHLENS_PROMOTION_RECHECK_PER_SECOND must be a number" in result.stderr
+
+
+@pytest.mark.parametrize(
     ("pids", "setting", "keys", "accepted"),
     [
         # Six keys at 25 a second: 300 save and 42 request threads, plus 64.
