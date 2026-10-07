@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .collector_db import CollectorDatabase, CollectorIntent
 
@@ -15,6 +15,14 @@ if TYPE_CHECKING:
 CHECK_INTERVAL_SECONDS = 2.0
 SCHEDULE_INTERVAL_SECONDS = 60.0
 LIVE_DELAY_LIMIT = timedelta(minutes=2)
+
+
+def has_time_to_spare(database: CollectorDatabase, connection: Any, now: datetime) -> bool:
+    """Reset collection has finished and no tracked player is over two minutes late."""
+    return database._regular_admission_open(connection, now) and not connection.execute(
+        "SELECT 1 FROM players WHERE active AND next_due_at < %s LIMIT 1",
+        (now - LIVE_DELAY_LIMIT,),
+    ).fetchone()
 
 
 def next_check(
@@ -27,13 +35,7 @@ def next_check(
     """Admit at most one check while regular collection has time to spare."""
     with database._connection() as connection:
         with connection.transaction():
-            if not database._regular_admission_open(connection, now):
-                return None
-            if connection.execute(
-                """SELECT 1 FROM players WHERE active AND next_due_at < %s
-                   LIMIT 1""",
-                (now - LIVE_DELAY_LIMIT,),
-            ).fetchone():
+            if not has_time_to_spare(database, connection, now):
                 return None
             if schedule:
                 connection.execute(

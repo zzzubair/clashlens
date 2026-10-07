@@ -60,8 +60,26 @@ players and players whose saved profile was checked later than the line are
 left out, a tag already listed keeps its newer check, and one invalid line
 refuses the whole file. About 130 bytes a row with its indexes: the lab's
 October 2026 list of 250,680 players is about 33 MB, growing only with newly
-seen Legend II and III players. The Monday promotion re-check, added in a
-following change, reads the list.
+seen Legend II and III players.
+
+Each Monday from 05:30 UTC, once that Reset's collection has finished and no
+tracked player is more than two minutes late, the collector asks for the
+profile of every listed player not checked since the Reset: Legend II first,
+then Legend III, oldest check first, at most
+`CLASHLENS_PROMOTION_RECHECK_PER_SECOND` requests a second on the regular keys
+(20 by default; 0 turns it off), at most 16 at once. It stops between batches
+of 200 whenever collection falls behind again and resumes when it catches up.
+These answers are not saved, so a player who stayed put costs one request and
+no storage. A profile showing Legend I queues the ordinary discovery check
+above, which saves the profile, starts tracking and backfills from the first
+battle log, while fewer than 500 discovery checks wait (otherwise it stays due
+and is asked again in a later batch); any other answer refreshes or removes the list row, and a player
+whose profile fails three times is left until next week. Each stretch of work
+ends with one `promotion_recheck` line in the collector log counting promoted,
+listed, removed, failed and queued players. At the lab's October 2026 list
+this is about 59,000 Legend II requests (about 50 minutes at 20 a second) and
+192,000 Legend III requests (about 2 hours 40 minutes) each Monday, plus two
+requests for each promoted player.
 
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to
