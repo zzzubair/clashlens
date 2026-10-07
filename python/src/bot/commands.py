@@ -56,9 +56,8 @@ class Commands:
         return self.store.account(discord_id)
 
     def _main(self, account: AccountContext, cards: Sequence[Mapping[str, Any]]) -> str | None:
-        if len(cards) == 1:
-            return cards[0]["tag"]
-        return self.store.main_tag(account) if cards else None
+        saved = self.store.main_tag(account)
+        return cards[0]["tag"] if len(cards) == 1 else saved
 
     def help(self, discord_id: str) -> Reply:
         now = self.now()
@@ -93,12 +92,11 @@ class Commands:
         self, account: AccountContext, player: str | None, now: datetime, show_all: bool
     ) -> Reply:
         cards = self.store.players(account, now)
+        main_tag = self._main(account, cards)
         if not cards:
             return replies.no_players(self.site, account.username, now)
         if player is None and len(cards) > 1:
-            return replies.me_overview(
-                self.site, cards, self._main(account, cards), now, show_all=show_all
-            )
+            return replies.me_overview(self.site, cards, main_tag, now, show_all=show_all)
         card = cards[0] if player is None else find_own(cards, player)
         if card is None:
             return replies.not_own()
@@ -108,7 +106,7 @@ class Commands:
             else ()
         )[: replies.MAX_CHOICES]
         status = replies.card_status(card)
-        if status is not None and not card["season_reset_pending"]:
+        if status not in (None, replies.WAITING_FOR_RESET):
             return replies.player_status(self.site, card, status, choices)
         page = self.store.player_page(card["tag"], now)
         if page is None:
@@ -120,10 +118,11 @@ class Commands:
     def main(self, account: AccountContext, player: str | None = None) -> Reply:
         now = self.now()
         cards = self.store.players(account, now)
+        main_tag = self._main(account, cards)
         if not cards:
             return replies.no_players(self.site, account.username, now)
         if player is None:
-            return replies.main_reply(cards, self._main(account, cards))
+            return replies.main_reply(cards, main_tag)
         card = find_own(cards, player)
         if card is None or not self.store.set_main(account, card["tag"]):
             return replies.not_own()
