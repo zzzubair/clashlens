@@ -32,7 +32,7 @@ website.
 
 ## Reset time in replies
 
-Only replies that show Legend data end with the next Reset as a Discord
+Only replies that show Legend data include the next Reset as a Discord
 timestamp, which each viewer sees in their own local time: a player's day or
 Season (`/me`, `/player`, `/season`, and a player's status word), `/group`
 standings, and live numbers (`/top`, `/rank`). Errors, refusals, instructions,

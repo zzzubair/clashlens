@@ -47,8 +47,9 @@ larger. Keep existing safeguards.
 `./ops` runs Clash Lens as rootless Podman containers managed by the user's
 systemd service manager. The tracked files under `deploy/quadlet/` are
 Quadlets: Podman turns them into ordinary system services. PostgreSQL, the
-collector, private API, worker, and website are owned by one
-`clashlens.target`, so they start together after reboot and stop together.
+collector, private API, worker, website and, when turned on, the
+[Discord bot](#discord-bot) are owned by one `clashlens.target`, so they start
+together after reboot and stop together.
 
 Stopping the pod applies one time limit to every container still running,
 replacing each container's own limit. `clashlens.pod` sets that limit to
