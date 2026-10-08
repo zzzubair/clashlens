@@ -156,3 +156,50 @@ def test_bot_finds_discord_accounts_and_keeps_a_main_only_while_verified(
         finally:
             bot.close()
             owner.close()
+
+
+def test_lookup_reads_run_as_the_api_role(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        owner = ApiDatabase(connection_info)
+        bot = ApiDatabase(as_api_role(connection_info))
+        try:
+            for tag, trophies in (("#2PP", 5100), ("#8QQ", 5300), ("#9RR", 5200)):
+                seed_profile(owner, tag, trophies)
+            account_id = _account(owner, "discord", DISCORD_ID, "drift")
+            group_id = uuid4()
+            with owner.pool.connection() as connection:
+                connection.execute(
+                    "INSERT INTO account_saved_players (account_id, player_id)"
+                    " SELECT %s, id FROM players WHERE normalized_tag = '#9RR'",
+                    (account_id,),
+                )
+                internal_group = connection.execute(
+                    "INSERT INTO account_groups (public_id, account_id, name, normalized_name)"
+                    " VALUES (%s, %s, 'Night Crew', 'night crew') RETURNING id",
+                    (group_id, account_id),
+                ).fetchone()[0]
+                connection.execute(
+                    "INSERT INTO account_group_players (group_id, player_id)"
+                    " SELECT %s, id FROM players WHERE normalized_tag IN ('#2PP', '#8QQ')",
+                    (internal_group,),
+                )
+            store = Store(bot)
+            account = store.account(DISCORD_ID)
+            assert account is not None
+
+            assert [item["tag"] for item in store.search("Player #8", NOW)] == ["#8QQ"]
+            assert [item["tag"] for item in store.saved(account)] == ["#9RR"]
+            top = store.board(NOW)
+            assert [item["tag"] for item in top["entries"]] == ["#8QQ", "#9RR", "#2PP"]
+            around = store.board(NOW, "#2PP")
+            assert [item["position"] for item in around["entries"]] == [1, 2, 3]
+            assert store.board(NOW, "#0UU") is None
+            (group,) = store.groups(account, NOW)
+            assert group["name"] == "Night Crew" and group["group_id"] == str(group_id)
+            compared = store.group(account, str(group_id), 7, NOW)
+            assert sorted(item["tag"] for item in compared["players"]) == ["#2PP", "#8QQ"]
+            # Another account's group reads as missing.
+            assert store.group(account, str(uuid4()), 7, NOW) is None
+        finally:
+            bot.close()
+            owner.close()

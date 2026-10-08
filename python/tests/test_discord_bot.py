@@ -23,6 +23,7 @@ from clashlens.domain import ranked_day_for
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 TODAY = ranked_day_for(NOW)
+RESET = f"Reset <t:{int(TODAY.end.timestamp())}:t> (<t:{int(TODAY.end.timestamp())}:R>)"
 SITE = Site("https://clashlens.test")
 ME = 100000000000000001
 OTHER = 100000000000000002
@@ -281,9 +282,11 @@ def links(message: dict[str, Any]) -> dict[str, str]:
     return {item.label: item.url for item in message["view"].children if getattr(item, "url", None)}
 
 
-def test_commands_install_for_users_and_servers_and_only_me_can_be_shared() -> None:
+def test_commands_install_for_users_and_servers_and_lookups_can_be_shared() -> None:
     commands = {command["name"]: command for command in command_payload()}
-    assert set(commands) == {"help", "link", "me", "main"}
+    assert set(commands) == {
+        "help", "link", "me", "main", "player", "top", "rank", "group", "season"
+    }
     for command in commands.values():
         # Guild, bot DM and group DM; installable to a server and to a user.
         assert command["contexts"] == [0, 1, 2]
@@ -292,7 +295,7 @@ def test_commands_install_for_users_and_servers_and_only_me_can_be_shared() -> N
         name for name, command in commands.items()
         if any(option["name"] == "share" for option in command["options"])
     }
-    assert shareable == {"me"}
+    assert shareable == {"me", "player", "top", "rank", "group", "season"}
 
 
 @pytest.mark.parametrize(
@@ -590,7 +593,7 @@ def test_a_player_whose_numbers_do_not_apply_gets_its_status_not_old_numbers(
     store.pages["#2PP"] = page("#2PP", "Drift", [])
     message = run_command(store, "me", FakeInteraction(), account=None, share=False)
     assert message["title"] == "Drift #2PP"
-    assert message["text"] == word
+    assert message["text"].splitlines() == [word, "", RESET]
     assert "player_page" not in store.reads
 
 
@@ -614,7 +617,7 @@ def test_a_status_change_after_the_card_was_read_comes_from_the_page_read(
         **page("#2PP", "Drifted", []), "clan": "New Clan", "state": state, "reason": reason
     }
     message = run_command(store, "me", FakeInteraction(), account=None, share=False)
-    assert message["text"] == word
+    assert message["text"].splitlines()[0] == word
     assert message["title"] == "Drifted #2PP · New Clan"
     assert message["footer"] == "Updated 2 min ago"
 
