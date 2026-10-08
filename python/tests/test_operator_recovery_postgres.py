@@ -199,7 +199,7 @@ def test_failed_items_lists_a_bounded_mixed_queue(
             item for item in direct["items"] if item["item_type"] == "transport_failure"
         )
         assert processing["processing_job_id"] == processing_job_id
-        assert processing["recovery"] == "deploy/replay-request"
+        assert processing["recovery"] == "replay"
         assert processing["source_observation_id"] is not None
         assert transport["transport_failure_id"] == transport_id
         assert transport["recovery"] == "none_evidence_only"
@@ -515,3 +515,103 @@ def test_an_accepted_failed_job_keeps_its_evidence_and_a_new_failure_still_count
         metrics = outstanding()
         assert metrics["failed_processing"] == 1
         assert metrics["newest_failed_processing_age_seconds"] < 600
+
+
+def test_failed_jobs_replay_all_or_none_through_the_replay_function(
+    database_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("INSERT INTO players (normalized_tag) VALUES ('#2PP')")
+        job_id, _transport_id = _seed_processing_and_transport_failures(connection_info)
+
+        def replays() -> list[tuple[object, ...]]:
+            with psycopg.connect(connection_info) as connection:
+                return connection.execute(
+                    """
+                    SELECT request.operator_identity, request.reason, job.id,
+                           job.work_type, job.status,
+                           job.replay_observation_id = failed.observation_id,
+                           job.parser_version = failed.parser_version
+                    FROM python_replay_requests AS request
+                    JOIN python_processing_jobs AS job ON job.id = request.job_id
+                    JOIN python_processing_jobs AS failed ON failed.id = %s
+                    """,
+                    (job_id,),
+                ).fetchall()
+
+        command = ["failed-items", "--database-url", connection_info, "--operator", "ops:zubair"]
+        replay = [*command, "--replay-job-id", str(job_id)]
+        reason = ["--reason", "replay the failed profile response"]
+        # A reason is required.
+        assert main(replay) == 1
+        capsys.readouterr()
+
+        # A preview asks the replay function, then keeps nothing.
+        assert main([*replay, *reason]) == 0
+        preview = _payload(capsys)
+        assert (preview["outcome"], preview["applied"]) == ("preview", False)
+        assert [item["outcome"] for item in preview["items"]] == ["would_enqueue"]
+        assert "replay_job_id" not in preview["items"][0]
+        assert replays() == []
+
+        # A job the function refuses: battle parser v3 reads battle logs only.
+        with psycopg.connect(connection_info) as connection:
+            parser = connection.execute(
+                "SELECT parser_version FROM python_processing_jobs WHERE id = %s", (job_id,)
+            ).fetchone()[0]
+            connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET parser_version = 'supercell-battle-parser-v3' WHERE id = %s
+                """,
+                (job_id,),
+            )
+        assert main([*replay, *reason, "--apply"]) == 1
+        refused = _payload(capsys)
+        assert (refused["applied"], refused["refused_count"]) == (False, 1)
+        assert refused["items"][0]["reason"] == "replay_not_allowed"
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE python_processing_jobs SET parser_version = %s WHERE id = %s",
+                (parser, job_id),
+            )
+
+        # One unknown job refuses the whole batch.
+        assert main([*replay, "--replay-job-id", "999999", *reason, "--apply"]) == 1
+        batch = _payload(capsys)
+        assert [(item["processing_job_id"], item["outcome"]) for item in batch["items"]] == [
+            (job_id, "not_checked"),
+            (999999, "refused"),
+        ]
+        assert replays() == []
+
+        assert main([*replay, *reason, "--apply"]) == 0
+        applied = _payload(capsys)
+        assert (applied["outcome"], applied["replayed_count"]) == ("replay_enqueued", 1)
+        replay_job_id = applied["items"][0]["replay_job_id"]
+        assert replays() == [
+            (
+                "ops:zubair",
+                "replay the failed profile response",
+                replay_job_id,
+                "replay_observation",
+                "pending",
+                True,
+                True,
+            )
+        ]
+
+        # The same request again names the same queued job; another reason is refused.
+        assert main([*replay, *reason, "--apply"]) == 0
+        assert _payload(capsys)["items"][0]["replay_job_id"] == replay_job_id
+        assert main([*replay, "--reason", "a different reason", "--apply"]) == 1
+        assert _payload(capsys)["items"][0]["reason"] == (
+            "replay_requested_with_a_different_reason"
+        )
+        # Only failed jobs replay.
+        assert main([*command, "--replay-job-id", str(replay_job_id), *reason]) == 1
+        assert _payload(capsys)["items"][0]["reason"] == "processing_job_is_pending"
+        assert len(replays()) == 1

@@ -37,7 +37,7 @@ Usage: ./ops build [--fixture]
        ./ops backup-prune [--apply]
        ./ops archive-prune [--apply]
        ./ops history-prune
-       ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256|--accept-job-id N --reason TEXT] [--apply]
+       ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256|--accept-job-id N --reason TEXT|--replay-job-id N... --reason TEXT] [--apply]
        ./ops support-recovery-exec <arguments>
 
 build creates a pinned release. up installs and starts that release; it never

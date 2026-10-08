@@ -228,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     failed_items = subparsers.add_parser(
         "failed-items",
-        help="list failures, retry collection/upload work or accept a failed job",
+        help="list failures, retry collection/upload work, replay or accept a failed job",
     )
     _database_argument(failed_items)
     failed_items.add_argument(
@@ -242,8 +242,13 @@ def build_parser() -> argparse.ArgumentParser:
     failed_selector.add_argument(
         "--accept-job-id", type=_bounded_int("processing job ID", 1, 9223372036854775807)
     )
+    failed_selector.add_argument(
+        "--replay-job-id",
+        action="append",
+        type=_bounded_int("processing job ID", 1, 9223372036854775807),
+    )
     failed_items.add_argument("--reason")
-    # ./ops passes the host account; acceptances record it.
+    # ./ops passes the host account; acceptances and replays record it.
     failed_items.add_argument("--operator")
     failed_items.add_argument("--apply", action="store_true")
 
