@@ -1229,7 +1229,9 @@ function LegendDay({
               title={
                 day.startTrophiesSource === "Season rule"
                   ? "Every Legend I player starts a Season on 5,000"
-                  : undefined
+                  : day.startTrophiesCalculation
+                    ? undefined
+                    : "The previous day's calculated end. No reading from the game has confirmed it yet."
               }
             >
               {day.startTrophiesSource}

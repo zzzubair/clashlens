@@ -327,12 +327,19 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         ? `${value.ranked_day_start} – ${value.ranked_day_end}`
         : value.ranked_day_start,
       state: value.state,
+      confidence: (value.confidence as RankedDaySummary["confidence"]) ?? null,
+      logCoverage: isOneOf(value.coverage, ["complete", "partial"] as const)
+        ? value.coverage
+        : undefined,
       startTrophies: (value.start_trophies as number | null | undefined) ?? null,
-      // The Season rule's 5,000 is the game's rule, not a reading.
+      // The Season rule's 5,000 is the game's rule, not a reading, and the
+      // previous day's calculated end is a calculation.
       startTrophiesSource:
         value.start_trophies_source === "season_rule"
           ? ("Season rule" as const)
-          : undefined,
+          : value.start_trophies_source === "previous_day_end"
+            ? ("Calculated" as const)
+            : undefined,
       offense: {
         attacks: value.attack_count as number | null,
         threeStars: value.attack_three_star_count as number | null,

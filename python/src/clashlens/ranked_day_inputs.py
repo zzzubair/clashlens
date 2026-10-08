@@ -21,6 +21,14 @@ from .reconciliation import (
     PreviousRankedDay,
 )
 
+# Reasons after which a day's end cannot start the next day: a 9th attack or
+# defense means the game returned more than its own cap, and a day the player
+# was not enrolled or not in Legend I is not a Legend day at all.
+CHAIN_BREAK_REASONS = frozenset({
+    "attack_count_exceeds_eight", "defense_count_exceeds_eight",
+    "not_enrolled", "player_not_eligible",
+})
+
 
 def _source_rows(database: Database) -> tuple[str, str, str]:
     """Where a battle log's rows live, their ID column, and how rows join their report."""
@@ -343,7 +351,9 @@ def load_previous_day(
             end_baseline_id,
             COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
             COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
-            COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0)
+            COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0),
+            expected_next_start_trophies,
+            failure_reasons
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -356,6 +366,16 @@ def load_previous_day(
             RECONCILIATION_RULE_VERSION,
         ),
     ).fetchone()
+    if previous_row is None:
+        return None
+    reasons = previous_row[14] if isinstance(previous_row[14], list) else []
+    # Continuous logs, a saved Legend day and no 9th attack or defense: every
+    # battle of that day is known, whether or not its readings were usable.
+    battles_known = bool(previous_row[5]) and _text_value(
+        previous_row[1]
+    ) in {"Complete", "Partial"} and not any(
+        reason in CHAIN_BREAK_REASONS for reason in reasons
+    )
     return (
         PreviousRankedDay(
             complete=(
@@ -386,10 +406,39 @@ def load_previous_day(
             unsettled_automatic_loss=int(previous_row[10]),
             zero_result_defense_slots=int(previous_row[11]),
             reset_reading_correction=int(previous_row[12]),
+            expected_next_start=(
+                int(previous_row[13])
+                if battles_known and previous_row[13] is not None
+                else None
+            ),
+            battles_known=battles_known,
         )
-        if previous_row is not None
-        else None
     )
+
+
+def previous_end_start(
+    baseline: dict[str, Any] | None, previous: PreviousRankedDay, *, complete: bool
+) -> dict[str, Any]:
+    """The day before's calculated end as a day's start, in the shape of a
+    Reset reading that could not give one. The saved Reset evidence, if any,
+    stays in place; ``complete`` is whether a battle log proves the day's
+    battles from the Reset."""
+    evidence = (
+        dict(baseline["evidence"])
+        if baseline is not None
+        else {"reset_reading": None, "battle_log_observation_id": None}
+    )
+    evidence["start_trophies_source"] = "previous_day_end"
+    evidence["previous_day_version_id"] = previous.version_id
+    return {
+        "id": baseline["id"] if baseline is not None else None,
+        "version": baseline["version"] if baseline is not None else None,
+        "state": baseline["state"] if baseline is not None else "previous_day_end",
+        "complete": complete,
+        "trophies": previous.expected_next_start,
+        "eligibility_state": "eligible",
+        "evidence": evidence,
+    }
 
 
 def load_zero_result_slots(

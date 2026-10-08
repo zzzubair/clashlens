@@ -383,7 +383,7 @@ CURRENT_PROFILE = """
     ("season", "season_zero"),
     ("ordinary", "tier_name"),
 ])
-def test_rejected_reset_profile_gives_no_start(
+def test_rejected_reset_profile_never_starts_a_day_itself(
     database_url: str, archive_server, kind: str, conflict: str
 ) -> None:
     boundary = BOUNDARIES[kind]
@@ -425,8 +425,15 @@ def test_rejected_reset_profile_gives_no_start(
     by_start = {row[0]: row[1:] for row in days}
     ended, opened = by_start[boundary - timedelta(days=1)], by_start[boundary]
     # Neither day uses the rejected 5,000, and its Season is unknown rather
-    # than waiting for this player's Season reset.
-    assert ended[1] is None and opened[0] is None
+    # than waiting for this player's Season reset. An ordinary day after a
+    # Legend I reading starts from the day before's calculated end (6,400
+    # with no battles); a Season's Day 1, or a day after a reading whose
+    # league we cannot recognise, has no start.
+    chain = (kind, conflict) == ("ordinary", "season_zero")
+    assert ended[1] is None and opened[0] == (6400 if chain else None)
+    assert opened[2].get("start_trophies_source") == (
+        "previous_day_end" if chain else None
+    )
     assert "season_reset_pending" not in ended[3]
     assert "season_reset_pending" not in opened[2]
     assert opened[2]["profile"]["trophies"] == 5000
@@ -437,7 +444,7 @@ def test_rejected_reset_profile_gives_no_start(
 
 
 @pytest.mark.parametrize("kind", ["ordinary", "season"])
-def test_reset_profile_read_after_the_first_battle_gives_no_start(
+def test_reset_profile_read_after_the_first_battle_never_starts_a_day_itself(
     database_url: str, archive_server, kind: str
 ) -> None:
     # Eight attacks (+320) and eight defenses (-280) from 05:06 come before
@@ -446,6 +453,9 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
     boundary = BOUNDARIES[kind]
     reading = _profile(6040) if kind == "ordinary" else _season_profile(6040, NEW_SEASON)
     rule_start = None if kind == "ordinary" else 5000
+    # An ordinary day starts from the day before's calculated end instead:
+    # 6,000 with no battles.
+    chain_start = 6000 if kind == "ordinary" else 5000
     log = json.loads(_battle_log())
     template = log["items"][0]
     log["items"] = [
@@ -500,7 +510,7 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
         (False, ["profile_after_first_event"], "accepted", 6040)
     ]
     assert days[boundary - timedelta(days=1)][:2] == (6000, rule_start)
-    assert days[boundary][0] == rule_start
+    assert days[boundary][0] == chain_start
     assert days[boundary][2:] == (8, 8, 320, 280)
     assert current == [(6040, "accepted")]
 

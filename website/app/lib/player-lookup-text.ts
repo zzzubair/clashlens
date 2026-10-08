@@ -48,6 +48,7 @@ export function lookupExplanation(
 export interface DayEvidence {
   net: number | null;
   state: string;
+  confidence?: string | null;
   coverage: string;
   codes: string[];
   attackGain: number | null;
@@ -61,7 +62,8 @@ export function dayEvidence(day: RankedDaySummary): DayEvidence {
   return {
     net: day.trophyChange,
     state: day.state,
-    coverage: day.completeness.state,
+    confidence: day.confidence ?? null,
+    coverage: day.logCoverage ?? day.completeness.state,
     codes: day.uncertainty,
     attackGain: day.offense.trophyGain,
     defenseLoss: day.defense.trophyLoss,
@@ -80,6 +82,19 @@ const BATTLE_DOUBT_CODES = new Set([
   "attack_star_total_mismatch",
   "defense_star_total_mismatch",
   "truncated_reasons",
+  "attack_count_exceeds_eight",
+  "defense_count_exceeds_eight",
+]);
+
+// Codes that mean a battle may be missing from the day's logs.
+const GAP_CODES = new Set([
+  "missing_start_battle_log_baseline",
+  "missing_end_battle_log_baseline",
+  "battle_log_row_gap",
+  "battle_log_overlap_gap",
+  "battle_log_stale_window",
+  "battle_log_row_count_exceeds_fifty",
+  "unclassified_rows",
 ]);
 
 // Only Python's calendar check makes a day current; a saved "Live" state can
@@ -100,18 +115,27 @@ export function presentDay(day: DayEvidence, isCurrentDay: boolean) {
     (day.attacks === 8 &&
       day.defenses === 8 &&
       !day.codes.some((code) => BATTLE_DOUBT_CODES.has(code)));
+  // Three labels. Verified: the Reset reading matched every part of the
+  // calculation. Calculated: the battles add up with no gap, but a reading
+  // has not confirmed every part (or any part) of the number yet. Uncertain:
+  // no number, a disputed or 9th battle, or a possible gap without all 8 of each.
+  const doubtful =
+    day.codes.some((code) => BATTLE_DOUBT_CODES.has(code)) ||
+    (!battlesComplete &&
+      (day.coverage !== "complete" || day.codes.some((code) => GAP_CODES.has(code))));
   const status = isCurrentDay
     ? "In progress"
-    : day.net === null
-      ? "Result unknown"
-      : !battlesComplete &&
-          (day.state !== "Complete" ||
-            day.coverage !== "complete" ||
-            day.codes.length > 0)
-        ? "Incomplete"
-        : "Provisional result";
+    : day.net === null || doubtful
+      ? "Uncertain"
+      : day.state === "Complete" && day.confidence === "exact" && day.codes.length === 0
+        ? "Verified"
+        : "Calculated";
   const reasons = isCurrentDay ? liveDay(day).reasons : dayReasons(day.codes, false, day);
-  if (reasons.length === 0 && status === "Incomplete")
+  if (
+    reasons.length === 0 &&
+    status !== "Verified" &&
+    (status !== "Calculated" || day.state === "Live")
+  )
     reasons.push(
       day.state === "Live"
         ? "Final evidence for this day has not been processed yet."
@@ -237,8 +261,8 @@ export function dayReasons(
 
 function excessNote(count: number | null, kind: "attacks" | "defenses"): string {
   return count === null
-    ? `Clash of Clans returned more than the usual 8 ${kind} for this day, so this day is marked partial.`
-    : `Clash of Clans returned ${count} ${kind} for this day, more than the usual 8, so this day is marked partial.`;
+    ? `Clash of Clans returned more than the usual 8 ${kind} for this day, so this day is uncertain.`
+    : `Clash of Clans returned ${count} ${kind} for this day, more than the usual 8, so this day is uncertain.`;
 }
 
 export function legendDayKey(period: string): string {

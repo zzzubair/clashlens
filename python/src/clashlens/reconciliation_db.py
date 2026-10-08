@@ -366,6 +366,24 @@ def recalculate_ranked_day(
     ):
         start_baseline = {**start_baseline, "eligibility_state": "ineligible"}
 
+    # A day whose Reset reading cannot start it, rejected, late or missing,
+    # starts from the day before's calculated end once that day's battles are
+    # all known: the ledger's own arithmetic, shown as calculated until a
+    # reading confirms it. On 7 October 2026, 3,574 days had every battle and
+    # no start for this reason alone. A Season's Day 1 keeps the Season rule.
+    if (
+        (start_baseline is None or start_baseline["trophies"] is None)
+        and (start_baseline is None
+             or start_baseline["eligibility_state"] in {None, "eligible"})
+        and previous is not None
+        and previous.expected_next_start is not None
+        and season_day is not None
+        and season_day.day_number > 1
+    ):
+        start_baseline = ranked_day_inputs.previous_end_start(
+            start_baseline, previous,
+            complete=start_battle_log_observation_id is not None,
+        )
     trophy_rule_versions = tuple(
         sorted(
             {

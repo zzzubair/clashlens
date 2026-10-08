@@ -75,6 +75,10 @@ def _first_seen(connection_info, archive_server, at, *, profile, log, tag=TAG):
 
 
 def _day_1(connection_info: str, tag: str = TAG):
+    return _day(connection_info, DAY_1, tag)
+
+
+def _day(connection_info: str, day_start: datetime, tag: str = TAG):
     with psycopg.connect(connection_info) as connection:
         return connection.execute(
             """
@@ -89,7 +93,7 @@ def _day_1(connection_info: str, tag: str = TAG):
             WHERE player.normalized_tag = %s AND day.ranked_day_start = %s
             ORDER BY day.ranked_day_start, day.version DESC
             """,
-            (tag, DAY_1),
+            (tag, day_start),
         ).fetchone()
 
 
@@ -478,3 +482,45 @@ def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
     }]
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "inferred", 5000, ending)
+
+
+def test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end(
+    database_url: str, archive_server
+) -> None:
+    """On 7 October 2026, 3,574 days held every battle and no start because
+    their Reset reading was rejected. The day before's calculated end starts
+    such a day, and that day's defenses still average the automatic loss."""
+    day_3 = DAY_2 + timedelta(days=1)
+    filler = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(44)]
+    day_2_battles = [
+        (DAY_2 + timedelta(hours=2), True), (DAY_2 + timedelta(hours=5), False),
+    ]
+    # Day 1: 2 wins and 1 loss, charged (2 - 1) missing defenses at the loss.
+    end_1 = 5000 + 2 * WIN - LOSS - LOSS
+    # Day 2: 1 win and 1 loss, charged 7 missing defenses at the two days'
+    # average loss, which needs Day 1's defenses even though Day 1 has no
+    # usable end reading.
+    end_2 = end_1 + WIN - LOSS - 7 * ((LOSS + LOSS) // 2)
+    log_1 = _log(*ATTACKS, *DEFENSE, filler=filler)
+    log_2 = _log(*ATTACKS, *DEFENSE, *day_2_battles, filler=filler)
+    # The game sends Season 0 to some signed-up players, so this Reset
+    # reading is rejected; its battle log is fine.
+    season_zero = json.loads(_profile(end_1))
+    season_zero["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _first_seen(
+            connection_info, archive_server, DAY_1 + timedelta(hours=8),
+            profile=_new_season_profile(5000 + 2 * WIN - LOSS), log=log_1,
+        )
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=json.dumps(season_zero).encode(), log=log_1)
+        jobs += _reset_work(connection_info, archive_server, day_3,
+                            profile=_new_season_profile(end_2), log=log_2)
+        _process(connection_info, archive_server, jobs)
+        day_1 = _day_1(connection_info)
+        day_2 = _day(connection_info, DAY_2)
+    assert day_1[0] == "Partial"
+    assert day_1[3] == end_1 and day_1[5] == ["missing_end_baseline"]
+    assert day_2[:2] == ("Complete", "inferred")
+    assert day_2[2] == end_1 and day_2[6] == "previous_day_end"
+    assert day_2[3] == end_2
