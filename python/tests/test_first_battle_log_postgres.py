@@ -550,6 +550,16 @@ def test_day_with_no_defense_and_no_end_reading_starts_nothing(
         jobs += _reset_work(connection_info, archive_server, day_3,
                             profile=json.dumps(season_zero).encode(), log=log_2)
         _process(connection_info, archive_server, jobs)
+        # No later Reset saves Day 3, so calculate it once it has ended.
+        database = Database(connection_info)
+        try:
+            jobs = [reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=day_3,
+                now=day_3 + timedelta(days=1), request_key="day-3",
+            )]
+        finally:
+            database.close()
+        _process(connection_info, archive_server, jobs)
         day_2 = _day(connection_info, DAY_2)
         day_3_row = _day(connection_info, day_3)
     assert day_2[0] == "Partial" and day_2[2] == end_1
