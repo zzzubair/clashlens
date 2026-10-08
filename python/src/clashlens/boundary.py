@@ -13,8 +13,8 @@ from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import DECODER_VERSION
 from .boundary_manifest import (
     _moved_decode_ids,
-    battles_after_readings,
     profiles_not_found,
+    reset_trophies,
 )
 from .boundary_manifest import (
     freeze_boundary_manifest as _freeze_boundary_manifest,
@@ -1055,10 +1055,12 @@ def queue_board_rebuilds(
 ) -> dict[str, Any]:
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
     whose frozen input still ranks a reading taken before the player's
-    profile answered "player not found", or whose saved entries miss the
-    battles after their readings. On 5 to 7 October 2026 that was 24
-    players on Day 1 and 34 on Day 2, two of them first and second on Day 2,
-    and 290 Day 2 entries.
+    profile answered "player not found", or whose saved entries differ from
+    the trophies at the Reset ``reset_trophies`` now gives, or its mark. On 5
+    to 7 October 2026 that was 24 players on Day 1 and 34 on Day 2, two of
+    them first and second on Day 2, and 290 Day 2 entries missing battles
+    after their readings; on 8 October, 3 Day 3 entries marked proven but
+    missing attacks before them.
 
     Each board gets one queued correction of both its leaderboard and army
     records, started as any other: once its build is published, outside a
@@ -1108,7 +1110,8 @@ def queue_board_rebuilds(
                     SELECT player_id,
                            input_identity->'profile_snapshot'->>'observed_at',
                            ranked_day_version_id,
-                           input_identity->'profile_snapshot'->>'observation_id'
+                           input_identity->'profile_snapshot'->>'observation_id',
+                           (input_identity->'profile_snapshot'->>'trophies')::integer
                     FROM boundary_publication_manifest_entries(%s)
                     WHERE input_identity->>'snapshot_quality' = 'eligible'
                     """,
@@ -1118,39 +1121,36 @@ def queue_board_rebuilds(
                     int(row[0]): datetime.fromisoformat(str(row[1])) for row in rows
                 }
                 not_found = profiles_not_found(connection, boundary_at, readings)
-                # Saved entries whose value or mark the battles after their
-                # reading change. A board not built yet saves them already.
-                after_reading = battles_after_readings(
+                # Saved entries whose value or mark the current rule changes.
+                # A board not built yet saves them already.
+                at_reset = reset_trophies(
                     connection,
                     boundary_at,
                     {
                         int(row[0]): (
-                            int(row[2]), int(row[3]), readings[int(row[0])]
+                            int(row[2]), int(row[3]), readings[int(row[0])],
+                            int(row[4]),
                         )
                         for row in rows
                         if row[2] is not None
                     },
                 )
+                expected = {
+                    int(row[0]): at_reset.get(int(row[0]), (int(row[4]), False))
+                    for row in rows
+                }
                 entries = connection.execute(
                     """
-                    SELECT entry.player_id, entry.trophies,
-                           (manifest.input_identity
-                               ->'profile_snapshot'->>'trophies')::integer,
-                           entry.confidence
-                    FROM leaderboard_snapshot_entries AS entry
-                    JOIN boundary_publication_manifest_entries(%s) AS manifest
-                      ON manifest.player_id = entry.player_id
-                    WHERE entry.snapshot_id = %s
+                    SELECT player_id, trophies, confidence
+                    FROM leaderboard_snapshot_entries
+                    WHERE snapshot_id = %s
                     """,
-                    (manifest_id, snapshot_id),
+                    (snapshot_id,),
                 ).fetchall()
                 late_battles = sum(
-                    (trophies, _text_value(confidence))
-                    != (
-                        reading_trophies + after_reading.get(int(player_id), 0),
-                        "confirmed" if int(player_id) in after_reading else "uncertain",
-                    )
-                    for player_id, trophies, reading_trophies, confidence in entries
+                    (trophies, _text_value(confidence) == "confirmed")
+                    != expected.get(int(player_id))
+                    for player_id, trophies, confidence in entries
                 )
                 if not not_found and not late_battles:
                     continue

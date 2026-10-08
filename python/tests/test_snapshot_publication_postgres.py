@@ -59,7 +59,10 @@ def _seed_snapshot_job(
     boundary_at: datetime,
     deduplication_key: str = "build_snapshot:test-as-of",
     ranked_day_version_id: int | None = None,
+    end_trophies: int | None = None,
 ) -> int:
+    """``end_trophies``: the seeded Complete day's start and end, with no
+    battle between."""
     ranked_day_start = boundary_at - timedelta(days=1)
     with psycopg.connect(connection_info) as connection:
         if ranked_day_version_id is None:
@@ -69,15 +72,16 @@ def _seed_snapshot_job(
                     player_id, ranked_day_start, ranked_day_end, official_season_id,
                     season_day_number, season_anchor_rule_version,
                     reconciliation_rule_version, result_hash, version,
-                    state, confidence, input_hash, coverage_complete
+                    state, confidence, input_hash, coverage_complete,
+                    start_trophies, final_trophies_before_reset
                 ) VALUES (
                     %s, %s, %s, '1783918800', 24, 'legend-season-anchor-v1',
                     'legend-ranked-day-v1', repeat('a', 64), 1,
-                    'Complete', 'exact', repeat('b', 64), true
+                    'Complete', 'exact', repeat('b', 64), true, %s, %s
                 )
                 RETURNING id
                 """,
-                (player_id, ranked_day_start, boundary_at),
+                (player_id, ranked_day_start, boundary_at, end_trophies, end_trophies),
             ).fetchone()[0]
         known_players = [
             int(row[0])
@@ -753,6 +757,7 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
             connection_info,
             player_id=player_id,
             boundary_at=boundary,
+            end_trophies=6123,
         )
         database, processor = _processor(connection_info, archive_server)
         try:

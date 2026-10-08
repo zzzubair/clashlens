@@ -669,35 +669,66 @@ def profiles_not_found(
     }
 
 
-def battles_after_readings(
+def reset_trophies(
     connection: Any,
     boundary_at: datetime,
-    readings: Mapping[int, tuple[int, int, datetime]],
-) -> dict[int, int]:
-    """Each player's trophy change from their ended day's battles stamped
-    after their reading, for players whose day proves none is missing.
+    readings: Mapping[int, tuple[int, int, datetime, int]],
+) -> dict[int, tuple[int, bool]]:
+    """Each player's trophies at the Reset before the automatic defense
+    loss, and whether they are proven.
 
     ``readings`` maps a player to the version of their day ending at
-    ``boundary_at``, their reading's saved response and its time. The
-    reading plus this change is their trophies at the Reset before the
-    automatic defense loss. A battle stamped after the reading cannot be in
-    it, so none is counted twice. Proof is the day's continuous battle logs
-    with no trophy mismatch, a reading taken at least 15 minutes into that
-    day, after the previous day's last reports and automatic defense loss, a
-    time on every battle the day counts, none stamped between the reading's
-    request and its response, no defense stamped in the 4 minutes before
-    that request, since its attack can end up to 4 minutes after the
-    defender's report, and no battle amount the two players' logs disagree
-    on; a player without it is left out, and the board keeps their reading
-    and marks it uncertain.
+    ``boundary_at``, their reading's saved response, its time and its
+    trophies. A Complete day already proves the total: its Reset readings at
+    both ends and every battle between agree, so its end plus its automatic
+    loss is the total whatever the reading shows. An attacker's profile can
+    show an attack minutes after its report time: on 7 October 2026
+    #2QCYU8C2G read 4,703 at 04:37:05 without its attack stamped 04:34:08,
+    and the board showed 4,902, not 4,931. A Reset that resets trophies
+    proves only the start, so there the reading must agree too.
+
+    Otherwise the total is the reading plus the day's battles stamped after
+    it, which needs the day's continuous battle logs with no trophy
+    mismatch, a reading taken at least 15 minutes into that day, after the
+    previous day's last reports and automatic defense loss, a time on every
+    battle the day counts, none stamped between the reading's request and its
+    response, no defense stamped in the 4 minutes before that request, since
+    its attack can end up to 4 minutes after the defender's report, and no
+    battle amount the two players' logs disagree on. A reading proves no
+    battle stamped before it, so that total is proven only when the day's
+    start reading plus all its battles, or without a start its end Reset
+    reading, with or without its known automatic loss, comes to it too.
+    Without the battles' proof the total is the reading alone; any total not
+    proven is marked uncertain.
     """
     if not readings:
         return {}
-    return {
-        int(row[0]): int(row[1])
+    days = {
+        int(row[0]): row[1:]
         for row in connection.execute(
             """
-            SELECT reading.player_id, late.trophy_change
+            SELECT reading.player_id, ranked.state,
+                   ranked.final_trophies_before_reset,
+                   ranked.automatic_defense_loss,
+                   ranked.automatic_defense_evidence_state,
+                   ranked.input_evidence->>'boundary_kind',
+                   CASE WHEN NOT ranked.failure_reasons
+                                 ?| ARRAY['missing_start_baseline',
+                                          'start_baseline_incomplete']
+                        THEN ranked.start_trophies
+                   END,
+                   CASE WHEN NOT ranked.failure_reasons
+                                 ?| ARRAY['missing_end_baseline',
+                                          'end_baseline_incomplete']
+                        THEN (ranked.input_evidence->>'next_start_trophies')::integer
+                   END,
+                   ranked.coverage_complete
+                   AND reading.observed_at
+                       >= ranked.ranked_day_start + interval '15 minutes'
+                   AND ranked.state <> 'Inconsistent'
+                   AND NOT ranked.failure_reasons ?| %s::text[]
+                   AND battles.every_battle_proven IS NOT FALSE,
+                   battles.after_reading, battles.whole_day
             FROM unnest(
                 %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
             ) AS reading (player_id, version_id, observation_id, observed_at)
@@ -708,46 +739,80 @@ def battles_after_readings(
             JOIN collector_observations AS observation
               ON observation.id = reading.observation_id
             CROSS JOIN LATERAL (
-                SELECT COALESCE(sum(
-                           CASE WHEN battle.value->>'lens' = 'offense' THEN 1
-                                ELSE -1 END
-                           * (battle.value->>'amount_used')::integer
-                       ) FILTER (
-                           WHERE (battle.value->>'battle_timestamp')::timestamptz
-                                 > reading.observed_at
+                SELECT COALESCE(sum(battle.change) FILTER (
+                           WHERE battle.stamped_at > reading.observed_at
                        ), 0),
+                       COALESCE(sum(battle.change), 0),
                        bool_and(
-                           battle.value->>'battle_timestamp' IS NOT NULL
-                           AND (battle.value->>'battle_timestamp')::timestamptz
+                           battle.stamped_at IS NOT NULL
+                           AND battle.stamped_at
                                NOT BETWEEN observation.request_started_at
-                                           - CASE WHEN battle.value->>'lens'
-                                                       = 'defense'
+                                           - CASE WHEN battle.lens = 'defense'
                                                   THEN interval '4 minutes'
                                                   ELSE interval '0' END
                                        AND reading.observed_at
-                           AND battle.value->>'disagreement'
-                               IS DISTINCT FROM 'true'
+                           AND battle.disputed IS DISTINCT FROM 'true'
                        )
                 FROM jsonb_array_elements(ranked.input_evidence->'contributions')
-                    AS battle
-                WHERE battle.value->>'included' = 'true'
-            ) AS late (trophy_change, every_battle_proven)
-            WHERE ranked.coverage_complete
-              AND reading.observed_at
-                  >= ranked.ranked_day_start + interval '15 minutes'
-              AND ranked.state <> 'Inconsistent'
-              AND NOT ranked.failure_reasons ?| %s::text[]
-              AND late.every_battle_proven IS NOT FALSE
+                    AS contribution
+                CROSS JOIN LATERAL (
+                    SELECT CASE WHEN contribution.value->>'lens' = 'offense'
+                                THEN 1 ELSE -1 END
+                           * (contribution.value->>'amount_used')::integer,
+                           (contribution.value->>'battle_timestamp')::timestamptz,
+                           contribution.value->>'lens',
+                           contribution.value->>'disagreement'
+                ) AS battle (change, stamped_at, lens, disputed)
+                WHERE contribution.value->>'included' = 'true'
+            ) AS battles (after_reading, whole_day, every_battle_proven)
             """,
             (
-                list(readings),
-                [version_id for version_id, _, _ in readings.values()],
-                [observation_id for _, observation_id, _ in readings.values()],
-                [observed_at for _, _, observed_at in readings.values()],
-                boundary_at,
                 sorted(DISPUTED_BATTLE_REASONS),
+                list(readings),
+                [reading[0] for reading in readings.values()],
+                [reading[1] for reading in readings.values()],
+                [reading[2] for reading in readings.values()],
+                boundary_at,
             ),
         ).fetchall()
+    }
+    return {
+        player_id: _reset_total(reading[3], days.get(player_id))
+        for player_id, reading in readings.items()
+    }
+
+
+def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
+    """A player's trophies at the Reset and whether they are proven, from
+    their reading and their day as ``reset_trophies`` reads it."""
+    if day is None:
+        return reading, False
+    (
+        state, final, automatic_loss, automatic_state, boundary_kind,
+        start, end, battles_proven, after_reading, whole_day,
+    ) = day
+    total = reading + int(after_reading) if battles_proven else None
+    # The game resets trophies at a Season's end, and raises a total at or
+    # below 5,000 at a weekly one, so that Reset's reading proves nothing.
+    end_reset = _text_value(boundary_kind) == "season" or (
+        _text_value(boundary_kind) == "weekly"
+        and (final if final is not None else end if end is not None else 0) <= 5000
+    )
+    if _text_value(state) == "Complete" and final is not None:
+        settled = int(final) + int(automatic_loss or 0)
+        if not end_reset or total == settled:
+            return settled, True
+    if total is None:
+        return reading, False
+    if start is not None:
+        return total, int(start) + int(whole_day) == total
+    known_loss = (
+        int(automatic_loss or 0)
+        if _text_value(automatic_state) in {"calculated", "confirmed"}
+        else 0
+    )
+    return total, end is not None and not end_reset and int(end) in {
+        total, total - known_loss
     }
 
 
