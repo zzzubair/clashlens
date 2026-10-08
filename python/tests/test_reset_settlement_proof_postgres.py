@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, store_observation, text
 from test_domain_processing_postgres import _role_connection
 from test_reconciliation_postgres import BATTLE_FIXTURE, DAY_END, _processor, _profile
 
@@ -1123,14 +1123,14 @@ def test_two_readings_at_5000_after_a_weekly_reset_prove_nothing(
 
 
 def test_late_evidence_against_a_boards_frozen_end_proof_queues_its_correction(
-    database_url: str, archive_server,
+    database_url: str, archive_server, monkeypatch,
 ) -> None:
     """A Partial day with no start is confirmed at 4,981 by its Reset reading
     at 05:06 and a reading at 05:25. A recovered battle log then shows an
     attack of the next day at 05:08, so the 05:25 reading was never the
     day's later reading: one correction of the board is queued, the same
-    one when a profile at 05:07 then disagrees, and inputs frozen again
-    from the evidence saved now no longer confirm the entry."""
+    one when a profile at 05:07 then disagrees, and the worker's correction
+    rebuilds the board from inputs frozen again, no longer confirmed."""
     from test_boundary_manifest_postgres import (
         DAY_2_RESET,
         _build_board,
@@ -1169,16 +1169,119 @@ def test_late_evidence_against_a_boards_frozen_end_proof_queues_its_correction(
             _later_profiles(connection_info, archive_server, [(tag, 5000, _october(7, 5, 7))])
             season = ranked_day_for(DAY_2_RESET - DAY).official_season_id
             rebuilds = boundary.queue_board_rebuilds(database, season, queue=False)
+            with psycopg.connect(connection_info) as connection:
+                corrections = connection.execute(
+                    "SELECT boundary_at, source_generation_id, state::text"
+                    " FROM boundary_publication_corrections"
+                ).fetchall()
+            rebuilt = _run_board_correction(database, generation_id, monkeypatch)
         finally:
             database.close()
-        with psycopg.connect(connection_info) as connection:
-            corrections = connection.execute(
-                "SELECT boundary_at, source_generation_id, state::text"
-                " FROM boundary_publication_corrections"
-            ).fetchall()
 
     assert board == [(tag, 4981, "confirmed")]
     assert corrections == [(DAY_2_RESET, generation_id, "queued")]
     assert [
         (entry["late_battles"], entry["correction"]) for entry in rebuilds["boards"]
     ] == [(1, "already_queued")]
+    assert rebuilt == [(tag, 4990, "uncertain")]
+
+
+def _run_board_correction(database, generation_id: int, monkeypatch) -> list:
+    """Publish the board built from ``generation_id`` as the coordinator
+    does, let the worker start its queued correction, and build the
+    replacement board; return its entries' tags, trophies and confidence.
+    The 04:30-07:00 hold on past Resets' corrections is lifted."""
+    from test_boundary_manifest_postgres import DAY_2_RESET
+
+    from clashlens import boundary, boundary_publication
+    from clashlens.worker import ObservationProcessor
+
+    monkeypatch.setattr(boundary_publication, "past_reset_correction_waits", lambda *_: False)
+    with database.pool.connection() as connection:
+        manifest_id, snapshot_id = connection.execute(
+            """
+            SELECT generation.snapshot_manifest_id,
+                   (SELECT max(id) FROM leaderboard_snapshots
+                    WHERE snapshot_kind = 'frozen')
+            FROM boundary_publication_generations AS generation WHERE id = %s
+            """,
+            (generation_id,),
+        ).fetchone()
+        army = boundary._freeze_boundary_manifest(
+            database, connection, generation_id=generation_id, artifact_kind="army"
+        )
+        identities = [
+            boundary._create_boundary_artifact_identity(
+                connection, generation_id=generation_id, artifact_kind=kind,
+                manifest_id=int(manifest), input_hash=digest, source_identity=source,
+            )
+            for kind, manifest, digest, source in (
+                ("analytics", manifest_id, "b" * 64, {"snapshot_id": int(snapshot_id)}),
+                ("army", army[0], "c" * 64, {"board": "correction"}),
+            )
+        ]
+        connection.execute(
+            """
+            UPDATE boundary_publication_generations
+            SET snapshot_state = 'published', snapshot_id = %s,
+                snapshot_input_hash = %s, snapshot_analytics_publication_id = %s,
+                army_state = 'published', army_input_hash = %s,
+                army_manifest_id = %s, army_publication_id = %s
+            WHERE id = %s
+            """,
+            (snapshot_id, "b" * 64, identities[0], "c" * 64, army[0], identities[1],
+             generation_id),
+        )
+    boundary_publication.reevaluate_boundary_publications(database)
+    with database.pool.connection() as connection:
+        replacement, generation = connection.execute(
+            "SELECT id, generation FROM boundary_publication_generations"
+            " WHERE source_generation_id = %s",
+            (generation_id,),
+        ).fetchone()
+        job = connection.execute(
+            "SELECT id FROM python_processing_jobs WHERE work_type = 'build_snapshot'"
+            " AND status = 'pending' AND (input_json ->> 'generation')::integer = %s",
+            (generation,),
+        ).fetchone()
+        if job is None:
+            frozen, digest = boundary._freeze_boundary_manifest(
+                database, connection, generation_id=replacement, artifact_kind="snapshot"
+            )
+            connection.execute(
+                "UPDATE boundary_publication_generations SET snapshot_state = 'ready'"
+                " WHERE id = %s",
+                (replacement,),
+            )
+            job = connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    observation_id, work_type, deduplication_key, input_json,
+                    status, due_at, max_attempts
+                ) VALUES (NULL, 'build_snapshot', 'build_snapshot:correction', %s,
+                          'pending', clock_timestamp(), 10)
+                RETURNING id
+                """,
+                (json.dumps({
+                    "boundary_at": DAY_2_RESET.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "generation": int(generation), "manifest_id": frozen,
+                    "manifest_digest": digest,
+                }),),
+            ).fetchone()
+    result = ObservationProcessor(database, None).process_job(int(job[0]), owner="correction")
+    assert result is not None and result.outcome == "processed"
+    with database.pool.connection() as connection:
+        return [
+            (text(tag), trophies, text(confidence))
+            for tag, trophies, confidence in connection.execute(
+                """
+                SELECT player.normalized_tag, entry.trophies, entry.confidence
+                FROM leaderboard_snapshot_entries AS entry
+                JOIN players AS player ON player.id = entry.player_id
+                WHERE entry.snapshot_id = (
+                    SELECT max(id) FROM leaderboard_snapshots WHERE snapshot_kind = 'frozen'
+                )
+                ORDER BY entry.position
+                """
+            ).fetchall()
+        ]

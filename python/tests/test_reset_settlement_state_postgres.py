@@ -1029,3 +1029,67 @@ def test_official_total_saved_while_the_last_day_is_calculated_is_not_missed(
     assert failures == []
     assert queued == 1
     assert after[:2] == (last_day, "Inconsistent")
+
+
+def test_a_reset_log_after_a_new_day_battle_locks_its_day_before_the_resets_board(
+    database_url: str, archive_server
+) -> None:
+    """A Reset battle log collected at 05:20, after the player's first
+    battle of the new day at 05:08, rechecks the ended day under its
+    calculation lock. It takes that lock before the Reset's publication
+    lock, as the day's calculation does, so a calculation holding the day
+    and then taking the Reset's lock finishes, and so does the log."""
+    import time
+
+    from test_first_battle_log_postgres import _log
+
+    from clashlens import ranked_day_inputs
+    from clashlens.boundary import lock_boundary_publication
+    from clashlens.domain import ranked_day_for
+
+    boundary = BOUNDARIES["ordinary"]
+    ended = boundary - timedelta(days=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, ended,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        profile_job, log_job = _reset_work(
+            connection_info, archive_server, boundary, profile=_profile(6000),
+            log=_log((boundary + timedelta(minutes=8), True)),
+            log_at=boundary + timedelta(minutes=20),
+        )
+        _process(connection_info, archive_server, [*jobs, profile_job])
+        failures: list[BaseException] = []
+
+        def process_log() -> None:
+            try:
+                _process(connection_info, archive_server, [log_job])
+            except BaseException as error:  # noqa: BLE001
+                failures.append(error)
+
+        with psycopg.connect(connection_info) as calculation:
+            player_id = calculation.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+            ).fetchone()[0]
+            ranked_day_inputs.lock_ranked_day(calculation, player_id, ranked_day_for(ended))
+            worker = threading.Thread(target=process_log)
+            worker.start()
+            deadline = time.monotonic() + 30
+            with psycopg.connect(connection_info, autocommit=True) as observer:
+                while not observer.execute(
+                    "SELECT count(*) FROM pg_locks"
+                    " WHERE locktype = 'advisory' AND NOT granted"
+                ).fetchone()[0]:
+                    assert time.monotonic() < deadline, "the log never waited"
+                    time.sleep(0.05)
+            calculation.execute("SET LOCAL lock_timeout = '10s'")
+            lock_boundary_publication(calculation, boundary)
+            calculation.commit()
+        worker.join(timeout=60)
+        log_status = _rows(
+            connection_info,
+            f"SELECT status::text FROM python_processing_jobs WHERE id = {int(log_job)}",
+        )[0][0]
+
+    assert not worker.is_alive()
+    assert failures == []
+    assert log_status == "complete"

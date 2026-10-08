@@ -629,7 +629,7 @@ stays at `days` and rebuilds no board or summary from unrepaired days;
 investigate each and retry it by hand. `receipt` writes nothing and
 shows the saved before beside the same counts now, and checks that every
 published view agrees with the days: `boards_disagreeing` lists boards whose
-entries the rules would still change, and `summaries_disagreeing` counts
+entries the rules would still change or that lack the frozen Reset proof, and `summaries_disagreeing` counts
 saved summaries that differ from their days, as the Season's closure checks
 them, which reads every summary of a finished Season. Rebuilt boards record
 the board rule that built them (`rule`). A board rebuild is finished once its
@@ -662,7 +662,9 @@ podman exec clashlens-python-worker \
 `preview` writes nothing and lists each of that Season's Reset boards whose
 frozen input still ranks such a player, with how many went missing
 (`profile_not_found`), or whose saved entries differ from those rules in
-trophies or in being marked proven, with how many (`late_battles`). `queue` adds one correction for
+trophies or in being marked proven, with how many (`late_battles`), or whose frozen input lacks the
+Reset proof boards now freeze with it, against which later evidence is checked, with how many
+entries (`missing_proof`). `queue` adds one correction for
 each, rebuilding its leaderboard and army records; `correction` reads `queued`, or
 `already_queued` when one was waiting. The worker starts each correction as
 any other: the newest Reset at once, an older one after the 04:30–07:00 UTC

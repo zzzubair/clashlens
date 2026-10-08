@@ -515,10 +515,13 @@ def _queue_board_correction(
     read with the board's frozen later reading and Reset check, and read
     with them as they are now, give other trophies or another label. The
     correction freezes the board's inputs again. Whatever the day's state;
-    one correction is queued per board."""
-    from .boundary import lock_boundary_publication, queue_board_correction
+    one correction is queued per board. The Reset's publication lock is held
+    from the start: a board frozen meanwhile is the one compared, and one
+    not frozen yet waits and reads this evidence."""
+    from .boundary import lock_boundary_members, queue_board_correction
     from .boundary_manifest import reset_trophies
 
+    lock_boundary_members(connection, boundary_at)
     newest = """
         SELECT id FROM boundary_publication_generations
         WHERE boundary_at = %(at)s
@@ -555,9 +558,7 @@ def _queue_board_correction(
         reset_proof_facts(database, connection, [version_id]),
     ):
         return
-    lock_boundary_publication(connection, boundary_at)
-    if connection.execute(newest, {"at": boundary_at}).fetchone()[0] == entry[0]:
-        queue_board_correction(connection, boundary_at, int(entry[0]), queue=True)
+    queue_board_correction(connection, boundary_at, int(entry[0]), queue=True)
 
 
 def later_reading_contradicts(

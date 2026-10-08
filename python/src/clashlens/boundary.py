@@ -1057,7 +1057,9 @@ def queue_board_rebuilds(
     whose frozen input still ranks a reading taken before the player's
     profile answered "player not found", or whose saved entries differ from
     the trophies at the Reset ``reset_trophies`` now gives from the evidence
-    saved now, or its mark. On 5
+    saved now, or its mark, or whose frozen input lacks the Reset proof a
+    board now freezes with it (``missing_proof``), which later evidence is
+    checked against. On 5
     to 7 October 2026 that was 24 players on Day 1 and 34 on Day 2, two of
     them first and second on Day 2, and 290 Day 2 entries missing battles
     after their readings; on 8 October, 3 Day 3 entries marked proven but
@@ -1115,12 +1117,18 @@ def queue_board_rebuilds(
                            input_identity->'profile_snapshot'->>'observed_at',
                            ranked_day_version_id,
                            input_identity->'profile_snapshot'->>'observation_id',
-                           (input_identity->'profile_snapshot'->>'trophies')::integer
+                           (input_identity->'profile_snapshot'->>'trophies')::integer,
+                           NOT input_identity ? 'reset_proof'
                     FROM boundary_publication_manifest_entries(%s)
                     WHERE input_identity->>'snapshot_quality' = 'eligible'
                     """,
                     (manifest_id,),
                 ).fetchall()
+                # Boards frozen before the Reset proof was frozen with them
+                # cannot be checked against later evidence; they are rebuilt.
+                missing_proof = sum(
+                    bool(row[5]) for row in rows if row[2] is not None
+                )
                 readings = {
                     int(row[0]): datetime.fromisoformat(str(row[1])) for row in rows
                 }
@@ -1158,7 +1166,7 @@ def queue_board_rebuilds(
                     != expected.get(int(player_id))
                     for player_id, trophies, confidence in entries
                 )
-                if not not_found and not late_battles:
+                if not not_found and not late_battles and not missing_proof:
                     continue
                 queued = queue_board_correction(
                     connection, boundary_at, generation_id, queue=queue
@@ -1169,6 +1177,7 @@ def queue_board_rebuilds(
                         "generation": int(generation),
                         "profile_not_found": len(not_found),
                         "late_battles": late_battles,
+                        "missing_proof": missing_proof,
                         "correction": (
                             "already_queued" if queued
                             else "queued" if queue

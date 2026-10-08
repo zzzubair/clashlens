@@ -481,6 +481,10 @@ def complete_battle_log(
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
+            reset_settlement.recheck_after_battle_log(
+                database, connection, claim.observation_id, reporter_id,
+                battle_log.observed_at, battle_log.has_row_gap,
+            )
             army_ingestion._upsert_army_decodes(
                 database,
                 connection,
@@ -500,10 +504,6 @@ def complete_battle_log(
             )
             reset_baselines._refresh_reset_baseline_evidence(
                 database, connection, claim
-            )
-            reset_settlement.recheck_after_battle_log(
-                database, connection, claim.observation_id, reporter_id,
-                battle_log.observed_at, battle_log.has_row_gap,
             )
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}
@@ -897,6 +897,10 @@ def _complete_battle_log_legacy(
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
+            reset_settlement.recheck_after_battle_log(
+                database, connection, claim.observation_id, reporter_id,
+                battle_log.observed_at, battle_log.has_row_gap,
+            )
             army_ingestion._upsert_army_decodes(
                 database,
                 connection,
@@ -921,10 +925,6 @@ def _complete_battle_log_legacy(
             )
             reset_baselines._refresh_reset_baseline_evidence(
                 database, connection, claim
-            )
-            reset_settlement.recheck_after_battle_log(
-                database, connection, claim.observation_id, reporter_id,
-                battle_log.observed_at, battle_log.has_row_gap,
             )
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}
