@@ -83,9 +83,9 @@ class DayEnd:
     between agree, and the end reading was not reset by the game. A later
     reading, taken after the end Reset reading and before the player's
     first battle of the next day, showing neither the day's end nor the end
-    before the automatic loss, makes it ``contradicted``: both Reset
-    readings can miss the same delayed credit. Anything else is
-    ``unproven``.
+    before an automatic loss its end Reset reading had not applied yet,
+    makes it ``contradicted``: both Reset readings can miss the same delayed
+    credit. Anything else is ``unproven``.
     """
 
     state: str
@@ -101,6 +101,8 @@ class DayEnd:
     official_end: bool
     settled: int | None
     boundary_at: datetime
+    # The automatic loss the end Reset reading had not applied yet.
+    unsettled_loss: int = 0
     later: int | None = None
 
     @property
@@ -129,10 +131,11 @@ class DayEnd:
         return self.final + int(self.automatic_loss or 0)
 
     def agrees(self, total: int) -> bool:
-        """Whether the later reading, if any, is ``total`` before the
-        automatic loss, or after the day's known loss."""
+        """Whether the later reading, if any, is ``total`` after the day's
+        known automatic loss, or before only the part of it the end Reset
+        reading had not applied yet."""
         return not later_reading_contradicts(
-            self.later, total - self.known_loss, self.known_loss
+            self.later, total - self.known_loss, self.unsettled_loss
         )
 
     @property
@@ -151,15 +154,14 @@ class DayEnd:
 
 
 def day_ends(
-    connection: Any, version_ids: list[int], *, later_readings: bool
+    connection: Any, version_ids: list[int], *, database: Database | None = None
 ) -> dict[int, DayEnd]:
-    """Each saved day's ``DayEnd``, keyed by its version. With
-    ``later_readings`` each also gets the latest accepted Legend I profile
-    naming the day's Season read after its end Reset reading and before
-    the player's first battle of the next day, by either player's report,
-    within a day; ``balanced`` and ``contradicted`` need it to tell apart.
-    Each step reads by an index: the 8 October 2026 board's 11,769 days
-    took about 3 seconds this way, against 33 in one statement.
+    """Each saved day's ``DayEnd``, keyed by its version. With ``database``
+    each also gets its later reading, as the day calculation reads it
+    (``ranked_day_inputs.later_reading_until``); ``balanced`` and
+    ``contradicted`` need it to tell apart. Each step reads by an index:
+    the 8 October 2026 board's 11,769 days took about 3 seconds this way,
+    against 33 in one statement.
     """
     if not version_ids:
         return {}
@@ -183,7 +185,10 @@ def day_ends(
                settlement.selected_trophies, ranked.ranked_day_end,
                ranked.player_id, ranked.official_season_id,
                (ranked.input_evidence -> 'end_baseline_evidence'
-                   -> 'profile' ->> 'observed_at')::timestamptz
+                   -> 'profile' ->> 'observed_at')::timestamptz,
+               COALESCE(
+                   (ranked.formula_components ->> 'unsettled_automatic_loss')::int, 0
+               )
         FROM ranked_day_versions AS ranked
         LEFT JOIN reset_boundary_settlements AS settlement
           ON settlement.player_id = ranked.player_id
@@ -193,85 +198,42 @@ def day_ends(
         """,
         (version_ids,),
     ).fetchall()
-    later = _later_readings(connection, rows) if later_readings else {}
+    later = _later_readings(database, connection, rows) if database else {}
     return {
         int(row[0]): DayEnd(
             state=str(row[1]), final=row[2], automatic_loss=row[3],
             automatic_state=str(row[4]), boundary_kind=row[5], start=row[6],
             end_reading=row[7], next_start=row[8], official_end=bool(row[9]),
-            settled=row[10], boundary_at=row[11], later=later.get(int(row[0])),
+            settled=row[10], boundary_at=row[11], unsettled_loss=int(row[15]),
+            later=later.get(int(row[0])),
         )
         for row in rows
     }
 
 
-def _later_readings(connection: Any, rows: list[Any]) -> dict[int, int]:
-    """For ``day_ends``: each day's latest profile read after its end Reset
-    reading and before its player's first battle of the next day."""
-    days = [row for row in rows if row[14] is not None]
-    if not days:
-        return {}
-    first_battles = {
-        (int(player), boundary_at): first_at
-        for player, boundary_at, first_at in connection.execute(
-            """
-            SELECT side.player_id, battle.ranked_day_start,
-                   min(evidence.battle_timestamp)
-            FROM legend_battles AS battle
-            JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
-            CROSS JOIN LATERAL (
-                VALUES (battle.attacker_player_id), (battle.defender_player_id)
-            ) AS side (player_id)
-            WHERE battle.ranked_day_start = ANY(%s::timestamptz[])
-            GROUP BY side.player_id, battle.ranked_day_start
-            """,
-            # Every player's, as the day's battles are read whole anyway:
-            # filtering by thousands of players made it 8 times slower.
-            (sorted({row[11] for row in days}),),
-        ).fetchall()
-    }
+def _later_readings(
+    database: Database, connection: Any, rows: list[Any]
+) -> dict[int, int]:
+    """For ``day_ends``: each day's later reading's trophies."""
+    windows = {}
+    for boundary_at in sorted({row[11] for row in rows if row[14] is not None}):
+        days = [row for row in rows if row[14] is not None and row[11] == boundary_at]
+        first = ranked_day_inputs.first_new_day_reports(connection, boundary_at)
+        unreadable = ranked_day_inputs.unreadable_report_times_by_player(
+            database, connection, sorted({int(row[12]) for row in days}),
+            boundary_at, boundary_at + DAY,
+        )
+        for row in days:
+            until = ranked_day_inputs.later_reading_until(
+                boundary_at, first.get(int(row[12])), unreadable.get(int(row[12]), [])
+            )
+            if until is not None:
+                windows[int(row[0])] = (int(row[12]), str(row[13]), row[14], until)
     return {
-        int(version_id): int(trophies)
-        for version_id, trophies in connection.execute(
-            """
-            SELECT day.version_id, later.trophies
-            FROM unnest(
-                %s::bigint[], %s::bigint[], %s::text[], %s::timestamptz[],
-                %s::timestamptz[]
-            ) AS day (version_id, player_id, season_id, read_at, until)
-            CROSS JOIN LATERAL (
-                SELECT profile.trophies
-                FROM collector_observations AS observation
-                JOIN player_profile_effects AS effect
-                  ON effect.observation_id = observation.id
-                JOIN player_profile_versions AS profile
-                  ON profile.id = effect.profile_version_id
-                WHERE observation.player_id = day.player_id
-                  AND observation.endpoint = 'profile'
-                  AND observation.response_completed_at > day.read_at
-                  AND observation.response_completed_at < day.until
-                  AND effect.observed_at > day.read_at
-                  AND profile.source_contract_state = 'accepted'
-                  AND profile.eligibility_state = 'eligible'
-                  AND profile.current_league_season_id = day.season_id
-                ORDER BY observation.response_completed_at DESC, observation.id DESC
-                LIMIT 1
-            ) AS later
-            """,
-            (
-                [int(row[0]) for row in days],
-                [int(row[12]) for row in days],
-                [str(row[13]) for row in days],
-                [row[14] for row in days],
-                [
-                    min(
-                        row[11] + DAY,
-                        first_battles.get((int(row[12]), row[11]), row[11] + DAY),
-                    )
-                    for row in days
-                ],
-            ),
-        ).fetchall()
+        version_id: trophies
+        for version_id, (_, trophies) in ranked_day_inputs.load_latest_profiles(
+            database, connection, windows
+        ).items()
     }
 
 
@@ -280,8 +242,9 @@ def later_reading_contradicts(
 ) -> bool:
     """Whether a profile read after a day's end Reset reading and before the
     player's first battle of the next day disproves the day's settled next
-    start: it shows neither that start nor that start plus an automatic loss
-    the end reading had not applied yet. Both Reset readings can miss the
+    start: it shows neither that start nor that start plus
+    ``pending_loss``, the automatic loss the end reading had not applied
+    yet. Both Reset readings can miss the
     same delayed credit, so their agreeing alone proves no day's end."""
     return later is not None and later not in {next_start, next_start + pending_loss}
 
@@ -467,8 +430,7 @@ def settle_end_reading(
         and not end_hidden_by_reset
         and clean
         and later_reading_contradicts(
-            later[1], next_start,
-            int(automatic_loss or 0) if automatic_state == "calculated" else 0,
+            later[1], next_start, unsettled_loss
         )
     )
     return EndReading(

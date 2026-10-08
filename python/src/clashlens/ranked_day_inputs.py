@@ -507,11 +507,33 @@ def load_unreadable_report_times(
 ) -> list[datetime | None]:
     """When each unreadable row in the player's battle logs saved in
     ``(after, until]`` happened; ``None`` when even that is unreadable."""
+    return unreadable_report_times_by_player(
+        database, connection, [player_id], after, until
+    ).get(player_id, [])
+
+
+def unreadable_report_times_by_player(
+    database: Database,
+    connection: Any,
+    player_ids: list[int],
+    after: datetime,
+    until: datetime,
+) -> dict[int, list[datetime | None]]:
+    """``load_unreadable_report_times`` for each of ``player_ids``. Only a
+    log saved with a gap holds an unreadable row other than a "no opponent,
+    no battle" one, so only those logs' rows are read."""
     relation, _, _ = _source_rows(database)
-    parsers = dict(_log_ids(
-        connection, "player_id = %s AND observed_at > %s AND observed_at <= %s",
-        (player_id, after, until),
-    ))
+    logs = {
+        int(log_id): (int(player_id), _text_value(parser))
+        for log_id, parser, player_id in connection.execute(
+            """
+            SELECT id, parser_version, player_id FROM battle_log_observations
+            WHERE player_id = ANY(%s) AND observed_at > %s AND observed_at <= %s
+              AND has_row_gap
+            """,
+            (player_ids, after, until),
+        ).fetchall()
+    }
     rows = connection.execute(
         f"""
         SELECT sr.battle_log_observation_id, sr.source_json FROM {relation} AS sr
@@ -522,18 +544,20 @@ def load_unreadable_report_times(
                OR sr.failure_category LIKE 'identity%%'
                OR sr.failure_category LIKE 'unclassified%%')
         """,
-        (list(parsers),),
-    ).fetchall()
-    times: list[datetime | None] = []
+        (list(logs),),
+    ).fetchall() if logs else []
+    times: dict[int, list[datetime | None]] = {}
     for log_id, source in rows:
-        if battle.is_no_opponent_row(source, parsers[log_id]):
+        player_id, parser = logs[int(log_id)]
+        if battle.is_no_opponent_row(source, parser):
             continue
         try:
-            times.append(battle._parse_battle_timestamp(
-                battle._battle_timestamp_value(source, parsers[log_id]), parsers[log_id]
-            ))
+            at: datetime | None = battle._parse_battle_timestamp(
+                battle._battle_timestamp_value(source, parser), parser
+            )
         except (AttributeError, battle.BattleLogParseError):
-            times.append(None)
+            at = None
+        times.setdefault(player_id, []).append(at)
     return times
 
 
@@ -683,28 +707,116 @@ def load_later_reading(
     one, or when such a row's time is unreadable too."""
     boundary_at = ranked_day.end
     until = boundary_at + timedelta(days=1)
-    new_day_from = domain.battle_window(boundary_at)[0]
     first_new_day = load_first_reports(
-        connection, player_id, reading_at, new_day_from, until
+        connection, player_id, reading_at, domain.battle_window(boundary_at)[0], until
     )[1]
-    unreadable = load_unreadable_report_times(
-        database, connection, player_id, boundary_at, until
+    closes = later_reading_until(
+        boundary_at, first_new_day,
+        load_unreadable_report_times(database, connection, player_id, boundary_at, until),
     )
+    if closes is None:
+        return None
+    return load_latest_profiles(
+        database, connection,
+        {player_id: (player_id, ranked_day.official_season_id, reading_at, closes)},
+    ).get(player_id)
+
+
+def later_reading_until(
+    boundary_at: datetime, first_new_day: datetime | None,
+    unreadable: list[datetime | None],
+) -> datetime | None:
+    """Until when a profile read after the end Reset reading at
+    ``boundary_at`` can be the ended day's later reading: the player's first
+    battle of the next day, ``first_new_day`` by either player's report, or
+    the first ``unreadable`` row of a battle log saved since the Reset, at
+    most a day; ``None`` when such a row's time is unreadable too, as no
+    reading then counts. The day calculation and the Daily board both read
+    a day's later reading by this."""
     if any(at is None for at in unreadable):
         return None
-    cutoffs = [
-        at for at in (first_new_day, *unreadable)
-        if at is not None and at >= new_day_from
-    ]
-    readings = [
-        (at, trophies)
-        for at, trophies in load_profile_trophies(
-            database, connection, player_id, reading_at, min([until, *cutoffs]),
-            season_id=ranked_day.official_season_id,
-        )
-        if trophies is not None
-    ]
-    return readings[-1] if readings else None
+    new_day_from = domain.battle_window(boundary_at)[0]
+    return min([
+        boundary_at + timedelta(days=1),
+        *(at for at in (first_new_day, *unreadable)
+          if at is not None and at >= new_day_from),
+    ])
+
+
+def load_latest_profiles(
+    database: Database, connection: Any,
+    windows: dict[Any, tuple[int, str, datetime, datetime]],
+) -> dict[Any, tuple[datetime, int]]:
+    """For each window, (player, Season, after, until), the last profile read
+    in ``(after, until)`` that is accepted, eligible and names that Season:
+    when it was read and its trophies. Each window is one lookup by index."""
+    if not windows:
+        return {}
+    keys = list(windows)
+    rows = connection.execute(
+        f"""
+        SELECT window_.position, latest.response_completed_at, latest.trophies
+        FROM unnest(
+            %(players)s::bigint[], %(seasons)s::text[], %(after)s::timestamptz[],
+            %(until)s::timestamptz[]
+        ) WITH ORDINALITY AS window_ (player_id, season_id, after, until, position)
+        CROSS JOIN LATERAL (
+            SELECT observed.response_completed_at, profile.trophies
+            FROM collector_observations AS observed
+            {_OUTCOME}
+            {_profile_join(database)}
+            WHERE observed.player_id = window_.player_id
+              AND observed.endpoint = 'profile'
+              AND observed.response_completed_at > window_.after
+              AND observed.response_completed_at < window_.until
+              AND observed.http_status BETWEEN 200 AND 299
+              AND outcome.outcome = 'processed'
+              AND profile.source_contract_state = 'accepted'
+              AND profile.eligibility_state = 'eligible'
+              AND profile.current_league_season_id = window_.season_id
+              AND profile.trophies IS NOT NULL
+            ORDER BY observed.response_completed_at DESC
+            LIMIT 1
+        ) AS latest
+        """,
+        {
+            "processing": PROCESSING_VERSION,
+            "players": [windows[key][0] for key in keys],
+            "seasons": [windows[key][1] for key in keys],
+            "after": [windows[key][2] for key in keys],
+            "until": [windows[key][3] for key in keys],
+        },
+    ).fetchall()
+    return {keys[int(position) - 1]: (at, int(trophies)) for position, at, trophies in rows}
+
+
+def first_new_day_reports(connection: Any, boundary_at: datetime) -> dict[int, datetime]:
+    """``load_first_reports``' first report at or after the next day's
+    battle window opens, for every player with one, by either player's
+    report: each player's first battle of the Legend day ``boundary_at``
+    starts."""
+    new_day_from = domain.battle_window(boundary_at)[0]
+    return {
+        int(player_id): first_at
+        for player_id, first_at in connection.execute(
+            """
+            SELECT side.player_id, min(evidence.battle_timestamp)
+            FROM legend_battles AS battle
+            JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
+            CROSS JOIN LATERAL (
+                VALUES (battle.attacker_player_id), (battle.defender_player_id)
+            ) AS side (player_id)
+            WHERE battle.ranked_day_start > %(new_day)s - interval '2 days'
+              AND battle.ranked_day_start < %(until)s
+              AND evidence.battle_timestamp >= %(new_day)s
+              AND evidence.battle_timestamp < %(until)s
+            GROUP BY side.player_id
+            """,
+            # Every player's, as the days' battles are read whole anyway:
+            # filtering by thousands of players made it 8 times slower.
+            {"new_day": new_day_from, "until": boundary_at + timedelta(days=1)},
+        ).fetchall()
+    }
 
 
 def load_first_reports(

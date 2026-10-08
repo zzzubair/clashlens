@@ -670,6 +670,7 @@ def profiles_not_found(
 
 
 def reset_trophies(
+    database: Database,
     connection: Any,
     boundary_at: datetime,
     readings: Mapping[int, tuple[int, int, datetime, int]],
@@ -771,7 +772,7 @@ def reset_trophies(
     ends = day_ends(
         connection,
         [reading[0] for player, reading in readings.items() if player in battles],
-        later_readings=True,
+        database=database,
     )
     return {
         player_id: _reset_total(

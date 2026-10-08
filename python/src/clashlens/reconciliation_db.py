@@ -1286,6 +1286,107 @@ def _enqueue_day_end_reconciliation(
     )
 
 
+def queue_late_reading_recalculation(
+    database: Database, connection: Any, player_id: int, observation_id: int,
+    profile: Any,
+) -> None:
+    """Queue one recalculation of the ended Legend day a just-saved profile
+    disproves (``reset_settlement.later_reading_contradicts``): one read after
+    the day's end Reset reading and before the player's first battle of the
+    next day (``ranked_day_inputs.later_reading_until``), whose trophies the
+    day's latest Complete result, ended by that Reset reading, does not show.
+    The day's own day-end recheck reads any such profile saved before it
+    runs; this covers one saved after, such as a response recovered late.
+    Queued once per day and profile, at backfill priority."""
+    from .reset_settlement import later_reading_contradicts
+
+    if (
+        profile.source_contract_state != "accepted"
+        or profile.eligibility_state != "eligible"
+        or profile.trophies is None
+    ):
+        return
+    read_at = connection.execute(
+        "SELECT response_completed_at FROM collector_observations WHERE id = %s",
+        (observation_id,),
+    ).fetchone()[0]
+    boundary_at = ranked_day_for(read_at).start
+    ended = ranked_day_for(boundary_at - timedelta(days=1))
+    if profile.current_league_season_id != ended.official_season_id:
+        return
+    day = connection.execute(
+        f"""
+        SELECT state = 'Complete' AND {ranked_day_inputs.LATER_READING_DAY_SQL},
+               next_start_trophies,
+               COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
+               (input_evidence -> 'end_baseline_evidence'
+                   -> 'profile' ->> 'observed_at')::timestamptz
+        FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s
+          AND reconciliation_rule_version = %s
+        ORDER BY version DESC LIMIT 1
+        """,
+        (player_id, ended.start, RECONCILIATION_RULE_VERSION),
+    ).fetchone()
+    if (
+        day is None
+        or not day[0]
+        or day[1] is None
+        or day[3] is None
+        or read_at <= day[3]
+        or not later_reading_contradicts(profile.trophies, int(day[1]), int(day[2]))
+    ):
+        return
+    until = boundary_at + timedelta(days=1)
+    first_new_day = ranked_day_inputs.load_first_reports(
+        connection, player_id, day[3], domain.battle_window(boundary_at)[0], until
+    )[1]
+    if first_new_day is not None and read_at >= first_new_day:
+        return
+    closes = ranked_day_inputs.later_reading_until(
+        boundary_at, first_new_day,
+        ranked_day_inputs.load_unreadable_report_times(
+            database, connection, player_id, boundary_at, until
+        ),
+    )
+    day_text = ended.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if closes is None or read_at >= closes or connection.execute(
+        """
+        SELECT 1 FROM python_processing_jobs_worker
+        WHERE deduplication_key = %s
+          AND state IN ('pending', 'waiting_retry', 'waiting_dependency')
+        """,
+        (f"reconcile:day-end:{player_id}:{day_text}:{RECONCILIATION_RULE_VERSION}",),
+    ).fetchone():
+        return
+    connection.execute(
+        """
+        INSERT INTO python_processing_jobs_worker (
+            observation_id, work_type, deduplication_key, input_json,
+            state, due_at, parser_version, processing_version,
+            domain_rule_version, analytics_rule_version, priority
+        ) VALUES (
+            NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
+            %s, %s, %s, %s, %s
+        )
+        ON CONFLICT (deduplication_key) DO NOTHING
+        """,
+        (
+            f"reconcile:late-reading:{player_id}:{day_text}:{observation_id}",
+            Jsonb({
+                "player_id": int(player_id),
+                "ranked_day_start": day_text,
+                "trigger": "late_reading",
+            }),
+            DEFAULT_PARSER_VERSION,
+            PROCESSING_VERSION,
+            DOMAIN_RULE_VERSION,
+            ANALYTICS_RULE_VERSION,
+            PYTHON_BACKFILL_PRIORITY,
+        ),
+    )
+
+
 def enqueue_reconciliation(
     database: Database,
     *,

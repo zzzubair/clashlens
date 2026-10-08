@@ -10,8 +10,8 @@ how a saved day or board comes out, then run it once:
 - ``queue`` saves that as the repair's receipt the first time, then repairs
   in order, at most ``max_jobs`` per run, at backfill priority: first the
   saved evidence days are built from (``battle_day_repair.enqueue_rebuilds``
-  and ``reset_baselines.repair_current_season_reset_baselines`` for this
-  Season's Resets); then each player's saved days of the Season, oldest
+  and ``reset_baselines.repair_current_season_reset_baselines``, each for
+  this Season only); then each player's saved days of the Season, oldest
   first in one job, each later day starting where the day before now ends;
   then, once every such job has finished and none has failed, every Reset
   board of the Season whose
@@ -296,11 +296,13 @@ def _repair_jobs(
 
 
 def _repair_inputs(database: Database, season_id: str, max_jobs: int) -> int:
-    """Queue repairs of the saved evidence first: battles moved day, then the
-    Season's Reset pairs left partial. How many it queued."""
+    """Queue repairs of the Season's saved evidence first: its battles moved
+    day, then its Reset pairs left partial. How many it queued."""
     from . import battle_day_repair, reset_baselines
 
-    moved = battle_day_repair.enqueue_rebuilds(database, max_jobs=max_jobs)
+    moved = battle_day_repair.enqueue_rebuilds(
+        database, max_jobs=max_jobs, season_id=season_id
+    )
     if moved["job_ids"]:
         return len(moved["job_ids"])
     pairs = reset_baselines.repair_current_season_reset_baselines(

@@ -266,6 +266,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 # The trophies at the Reset, before the automatic defense
                 # loss, from each reading and the ended day.
                 at_reset = reset_trophies(
+                    database,
                     connection,
                     boundary_at,
                     {

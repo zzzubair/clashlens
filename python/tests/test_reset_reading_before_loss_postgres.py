@@ -151,7 +151,7 @@ def _early_reading_days(
     return start_b, end_b
 
 
-def _day_end_recheck(connection_info: str, archive_server) -> None:
+def _queue_day_end_recheck(connection_info: str) -> None:
     with psycopg.connect(connection_info) as connection:
         player_id = connection.execute(
             "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
@@ -159,6 +159,10 @@ def _day_end_recheck(connection_info: str, archive_server) -> None:
         reconciliation_db._enqueue_day_end_reconciliation(
             connection, player_id, ranked_day_for(DAY_B)
         )
+
+
+def _day_end_recheck(connection_info: str, archive_server) -> None:
+    _queue_day_end_recheck(connection_info)
     _process(connection_info, archive_server, [])
 
 
@@ -329,19 +333,26 @@ def test_season_repair_settles_days_saved_before_the_later_reading_rule(
 
 
 @pytest.mark.parametrize(
-    ("later_gain", "day_b_state", "day_c_state", "new_versions"),
-    [(WIN, "Inconsistent", "Partial", 2), (0, "Complete", "Complete", 0)],
+    ("later_gain", "saved_late", "day_b_state", "day_c_state", "new_versions",
+     "late_jobs"),
+    [
+        (WIN, False, "Inconsistent", "Partial", 2, 0),
+        (0, False, "Complete", "Complete", 0, 0),
+        (WIN, True, "Inconsistent", "Partial", 2, 1),
+    ],
 )
 def test_later_reading_against_a_balanced_day_ends_its_proof(
-    database_url: str, archive_server, later_gain, day_b_state, day_c_state,
-    new_versions,
+    database_url: str, archive_server, later_gain, saved_late, day_b_state,
+    day_c_state, new_versions, late_jobs,
 ) -> None:
     """Day B balances on its two Reset readings, but a profile read 10
     minutes after its end Reset, before any battle of day C, shows an attack
     more: both readings missed the same delayed credit. The recheck after
     the Reset makes day B Inconsistent, so day C, with one defense, no
-    longer takes its automatic loss from day B's defenses. A later reading
-    showing day B's end changes nothing and saves nothing new."""
+    longer takes its automatic loss from day B's defenses. Saved only after
+    that recheck ran, the profile queues one recalculation of day B, at
+    backfill priority, with the same result. A later reading showing day
+    B's end changes nothing and saves nothing new."""
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
@@ -362,20 +373,29 @@ def test_later_reading_against_a_balanced_day_ends_its_proof(
         )
         _process(connection_info, archive_server, jobs)
         before = _latest_days(connection_info)
+        count = (
+            "SELECT count(*) FROM ranked_day_versions WHERE ranked_day_start = ANY(%s)"
+        )
+        with psycopg.connect(connection_info) as connection:
+            saved = connection.execute(count, ([DAY_B, DAY_C],)).fetchone()[0]
+        if saved_late:
+            _day_end_recheck(connection_info, archive_server)
+        else:
+            # Runs right after the profile below is processed.
+            _queue_day_end_recheck(connection_info)
         _, profile_job = store_observation(
             connection_info, archive_server, occurrence_key="later-profile",
             endpoint="profile", body=_profile(end_b + later_gain),
             observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
         )
         _process(connection_info, archive_server, [profile_job])
-        count = (
-            "SELECT count(*) FROM ranked_day_versions WHERE ranked_day_start = ANY(%s)"
-        )
-        with psycopg.connect(connection_info) as connection:
-            saved = connection.execute(count, ([DAY_B, DAY_C],)).fetchone()[0]
-        _day_end_recheck(connection_info, archive_server)
         with psycopg.connect(connection_info) as connection:
             added = connection.execute(count, ([DAY_B, DAY_C],)).fetchone()[0] - saved
+            queued = connection.execute(
+                "SELECT count(*) FROM python_processing_jobs"
+                " WHERE deduplication_key LIKE 'reconcile:late-reading:%'"
+            ).fetchone()[0]
+        priorities = _queued_priorities(connection_info, "reconcile:late-reading:")
         day_b_row, day_c_row = _latest_days(connection_info)
 
     assert [row[:5] for row in before] == [
@@ -383,6 +403,8 @@ def test_later_reading_against_a_balanced_day_ends_its_proof(
         ("Complete", "exact", end_b, end_c, end_c),
     ]
     assert (day_b_row[0], day_c_row[0], added) == (day_b_state, day_c_state, new_versions)
+    assert queued == late_jobs
+    assert priorities == ({PYTHON_BACKFILL_PRIORITY} if late_jobs else set())
     if later_gain:
         assert day_b_row[8] == ["later_reading_contradicts"]
         assert day_c_row[6] == "unknown"

@@ -233,7 +233,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
     proofs = {
         version_id: end.proof
         for version_id, end in day_ends(
-            connection, sorted(ranked_by_id), later_readings=False
+            connection, sorted(ranked_by_id)
         ).items()
     }
 

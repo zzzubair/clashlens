@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Callable
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -41,7 +41,7 @@ from .db import (
     Database,
     _text_value,
 )
-from .domain import SEASON_ANCHOR_RULE_VERSION
+from .domain import SEASON_ANCHOR_RULE_VERSION, SEASON_DURATION
 from .reconciliation import RECONCILIATION_RULE_VERSION
 
 
@@ -144,8 +144,11 @@ WHERE day.battles IS NOT NULL
 """
 
 
-def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
-    """Queue at most ``max_jobs`` rebuilds of players not yet done.
+def enqueue_rebuilds(
+    database: Database, *, max_jobs: int, season_id: str | None = None
+) -> dict[str, Any]:
+    """Queue at most ``max_jobs`` rebuilds of players not yet done; with
+    ``season_id``, only of that Season's days, so no other Season changes.
 
     A player with reconciliation queued or running that rebuilds one of those
     days waits for a later run. A player whose latest rebuild failed is not
@@ -155,6 +158,8 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
     """
     from .battle_ingestion import _refresh_battle_disagreements
 
+    start = datetime.fromtimestamp(int(season_id), UTC) if season_id else None
+    season = {"start": start, "end": start + SEASON_DURATION if start else None}
     with database.pool.connection() as connection, connection.transaction():
         # A battle that gained or lost a side's report compares them again.
         _refresh_battle_disagreements(
@@ -165,8 +170,12 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                     """
                     SELECT DISTINCT battle_id FROM battle_day_repairs,
                         unnest(ARRAY[from_battle_id, to_battle_id]) AS battle_id
+                    WHERE %(start)s::timestamptz IS NULL
+                       OR from_day >= %(start)s AND from_day < %(end)s
+                       OR to_day >= %(start)s AND to_day < %(end)s
                     ORDER BY battle_id
-                    """
+                    """,
+                    season,
                 ).fetchall()
             ],
         )
@@ -179,6 +188,9 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                        min(pending.ranked_day_start) AS first_day,
                        max(pending.ranked_day_start) AS last_day
                 FROM pending
+                WHERE %(start)s::timestamptz IS NULL
+                   OR pending.ranked_day_start >= %(start)s
+                  AND pending.ranked_day_start < %(end)s
                 GROUP BY pending.player_id
             ), candidates AS (
                 SELECT player.*, job.id AS job_id, job.failure_category,
@@ -235,13 +247,13 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                        ) AS position
                 FROM candidates
             ) AS ranked
-            WHERE position <= %s
+            WHERE position <= %(max_jobs)s
             ORDER BY player_id
             """,
-            (max_jobs,),
+            {**season, "max_jobs": max_jobs},
         ).fetchall()
         job_ids: list[int] = []
-        for player_id, first_day, last_day, season_id, job_id, *_ in rows:
+        for player_id, first_day, last_day, day_season, job_id, *_ in rows:
             if job_id is not None:
                 continue
             day_text = first_day.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -267,7 +279,7 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                             "last_ranked_day_start": last_day.astimezone(
                                 UTC
                             ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "recalculate_season": _text_value(season_id),
+                            "recalculate_season": _text_value(day_season),
                             "trigger": "battle_day_repair",
                         }
                     ),

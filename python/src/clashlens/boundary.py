@@ -1124,6 +1124,7 @@ def queue_board_rebuilds(
                 # Saved entries whose value or mark the current rule changes.
                 # A board not built yet saves them already.
                 at_reset = reset_trophies(
+                    database,
                     connection,
                     boundary_at,
                     {

@@ -611,8 +611,9 @@ many entries are proven (`boards`), the boards the board rules would now
 change, and how many players have saved days (`players`). The first `queue`
 saves those counts as the repair's receipt, then each run does one step, at
 most `--max-jobs` (default 100), at backfill priority, and says which in
-`phase`: `inputs`, repairs of the evidence days are built from (battles
-moved day and the Season's Reset pairs left partial); `days`, one job
+`phase`: `inputs`, repairs of the evidence days are built from (the
+Season's battles moved day and its Reset pairs left partial; no other
+Season's days change); `days`, one job
 per player recalculating every saved day of the Season, oldest first, so each
 day starts where the day before now ends; once every such job has finished,
 `boards`, one rebuild of each Reset board whose entries the rules now change,
