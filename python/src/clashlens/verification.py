@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import http.client
 import json
+import ssl
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 from urllib.parse import quote, urlsplit
 
 OFFICIAL_API_ORIGIN: Final = "https://api.clashofclans.com"
@@ -105,7 +109,49 @@ class OfficialVerificationClient:
         self._api_origin = normalized_origin
         self._authorization = authorization
         self._timeout_seconds = timeout_seconds
-        self._transport = transport or _urllib_transport
+        self._transport = transport or partial(
+            _urllib_transport, on_tunnel=self._count_tunnel
+        )
+        self._relay_lock = threading.Lock()
+        self._relay = {
+            "tunnels_open": 0,
+            "requests": 0,
+            "timeouts": 0,
+            "admission_failures": 0,
+            "reachable": None,
+        }
+
+    def relay_snapshot(self) -> dict[str, Any]:
+        """Each verification opens its own relay tunnel and closes it after."""
+        with self._relay_lock:
+            return dict(self._relay)
+
+    def _count_tunnel(self, change: int) -> None:
+        with self._relay_lock:
+            self._relay["tunnels_open"] += change
+
+    def _send(
+        self, request: OfficialVerificationRequest
+    ) -> OfficialVerificationResponse:
+        outcome = "other"
+        try:
+            response = self._transport(request)
+            outcome = "answered"
+            return response
+        except VerificationTransportError as error:
+            outcome = _transport_outcome(error.__cause__)
+            raise
+        finally:
+            with self._relay_lock:
+                relay = self._relay
+                relay["requests"] += 1
+                if outcome in ("timeout", "relay_timeout"):
+                    relay["timeouts"] += 1
+                if outcome in ("relay_failure", "relay_timeout"):
+                    relay["admission_failures"] += 1
+                    relay["reachable"] = False
+                elif outcome == "answered":
+                    relay["reachable"] = True
 
     def verify(
         self, normalized_tag: str, player_token: str
@@ -123,7 +169,7 @@ class OfficialVerificationClient:
             ).encode("utf-8"),
             timeout_seconds=self._timeout_seconds,
         )
-        response = self._transport(request)
+        response = self._send(request)
         if response.http_status == 200:
             try:
                 decoded = json.loads(response.body)
@@ -209,6 +255,17 @@ def load_official_api_key_file(path: str | Path) -> bytes:
     return raw
 
 
+def _transport_outcome(cause: BaseException | None) -> str:
+    # urllib wraps failures to connect, or to open the tunnel, in URLError.
+    reason = getattr(cause, "reason", cause)
+    wrapped = isinstance(cause, urllib.error.URLError)
+    if isinstance(reason, TimeoutError):
+        return "relay_timeout" if wrapped else "timeout"
+    if wrapped and isinstance(reason, OSError) and not isinstance(reason, ssl.SSLError):
+        return "relay_failure"
+    return "other"
+
+
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, response, code, message, headers, new_url):
         return None
@@ -227,14 +284,29 @@ class _ExplicitProxyHandler(urllib.request.ProxyHandler):
 
 def _urllib_transport(
     request: OfficialVerificationRequest,
+    on_tunnel: Callable[[int], None] | None = None,
 ) -> OfficialVerificationResponse:
     proxies = (
         {"http": request.proxy_url, "https": request.proxy_url}
         if request.proxy_url
         else {}
     )
+    connected = False
+
+    class Connection(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            nonlocal connected
+            super().connect()
+            if on_tunnel is not None and not connected:
+                connected = True
+                on_tunnel(1)
+
+    class Handler(urllib.request.HTTPSHandler):
+        def https_open(self, req: urllib.request.Request) -> Any:
+            return self.do_open(Connection, req, context=self._context)
+
     opener = urllib.request.build_opener(
-        _ExplicitProxyHandler(proxies), _NoRedirectHandler()
+        _ExplicitProxyHandler(proxies), _NoRedirectHandler(), Handler()
     )
     http_request = urllib.request.Request(
         request.url,
@@ -265,3 +337,6 @@ def _urllib_transport(
         raise VerificationTransportError(
             "official verification transport is unavailable"
         ) from error
+    finally:
+        if connected and on_tunnel is not None:
+            on_tunnel(-1)

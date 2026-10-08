@@ -23,11 +23,10 @@ from . import (
     collector_intents,
     collector_liveness,
     collector_reset,
-    collector_uploads,
     promotion_recheck,
     weekly_eligibility,
 )
-from .archive import ArchiveReadError, S3ArchiveReader
+from .archive import S3ArchiveReader
 from .battle_log_schedule import BattleLogSchedule
 from .collector_db import (
     CollectorDatabase,
@@ -49,23 +48,12 @@ from .operating import SchedulingDelayMetrics
 from .response_fields import content_fingerprint
 from .spool import Spool, SpoolError
 
-_GLOBAL_ARCHIVE_FAILURES = {
-    "archive_configuration_error",
-    "archive_marker_mismatch",
-    "archive_permission_denied",
-    "archive_reference_mismatch",
-    "archive_unsupported",
-}
-_UPLOAD_CONCURRENCY = 32
-# Upload owners share these slots to limit competition with player checks.
-# Archive writes run outside the database limit and can still overlap.
-_UPLOAD_DATABASE_SLOTS = 4
-_UPLOAD_LEASE_SECONDS = 60
-_UPLOAD_RENEW_INTERVAL = 20.0
 _HANDOFF_LOCK_STRIPES = 4096
 _HANDOFF_PROTOCOL = 2
 # 64 files share each turn's wait; one indexed lookup feeds 16, resting 30 s below one turn.
 _CLEANUP_BATCH_SIZE, _CLEANUP_LOOKUP_SIZE, _CLEANUP_IDLE_SECONDS = 64, 1024, 30.0
+# Stopping looks up only this many, so it stays quick.
+_SHUTDOWN_CLEANUP_SIZE = 32
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
 # A check fetches its profile, saves it, then maybe its battle log, one after
 # the other, so a check holds at most one request at a time. The collector
@@ -90,6 +78,7 @@ class Collector:
         interactive_fingerprint: str | None = None,
         weekly_eligibility_enabled: bool = False,
         regular_parallelism: int = _REGULAR_PARALLELISM,
+        uploads: Any | None = None,
     ) -> None:
         if regular_parallelism < 1:
             raise ValueError("regular parallelism must be positive")
@@ -105,6 +94,9 @@ class Collector:
         self.interactive_fingerprint = interactive_fingerprint
         self.weekly_eligibility_enabled = weekly_eligibility_enabled
         self.regular_parallelism = regular_parallelism
+        # Archive uploads run in their own process (uploader.py); this keeps
+        # it running. None runs none, as in tests.
+        self.uploads = uploads
         self.battle_logs = BattleLogSchedule()
         self.outcomes: dict[str, int] = {}
         self.endpoint_outcomes: dict[tuple[str, str, str], int] = {}
@@ -116,10 +108,6 @@ class Collector:
         self._retries_while_answering: dict[int, int] = {}
         self._regular_admission_lock = asyncio.Lock()
         self.archive_health = "unconfigured" if archive is None else "unknown"
-        self._archive_terminal = False
-        self._archive_identity_validated = False
-        self._next_upload_release = 0.0
-        self._upload_database_slots = asyncio.Semaphore(_UPLOAD_DATABASE_SLOTS)
         self._spool_io_failed = False
         self._spool_capacity_failed = False
         self._spool_recovery_lock = asyncio.Lock()
@@ -159,14 +147,6 @@ class Collector:
                     raise
                 await asyncio.sleep(_retry_delay(attempt))
         raise AssertionError("unreachable database retry loop")
-
-    async def _upload_database_call(
-        self, operation: Any, *args: Any, **kwargs: Any
-    ) -> Any:
-        async with self._upload_database_slots:
-            return await _drain_awaitable(
-                self._database_call(operation, *args, **kwargs)
-            )
 
     async def collect_player(
         self,
@@ -763,141 +743,6 @@ class Collector:
         except psycopg.errors.QueryCanceled:  # over its time limit; next sweep
             self._count("spool_sweep_timeout")
 
-    async def upload_once(self, *, owner: str) -> bool:
-        if self.archive is None or self._archive_terminal:
-            return False
-        # One of the upload owners releases expired leases each half lease.
-        release_expired = time.monotonic() >= self._next_upload_release
-        if release_expired:
-            self._next_upload_release = time.monotonic() + _UPLOAD_LEASE_SECONDS / 2
-        claim = await self._upload_database_call(
-            collector_uploads.claim_upload,
-            self.database,
-            owner=owner,
-            lease_seconds=_UPLOAD_LEASE_SECONDS,
-            release_expired=release_expired,
-        )
-        if claim is None:
-            return False
-        renewal_stop = asyncio.Event()
-        renewal = asyncio.create_task(self._renew_upload_lease(claim, renewal_stop))
-        try:
-            config = self.archive.instance_config
-            if config is not None and not self._archive_identity_validated:
-                if not await self._upload_database_call(
-                    self.database.validate_archive_instance, config
-                ):
-                    raise ArchiveReadError(
-                        "archive_configuration_error",
-                        "archive configuration contradicts PostgreSQL",
-                        retryable=False,
-                    )
-                self._archive_identity_validated = True
-            marker_health = await asyncio.to_thread(self.archive.check_marker_health)
-            if marker_health == "terminal":
-                raise ArchiveReadError(
-                    "archive_configuration_error",
-                    "archive marker validation failed",
-                    retryable=False,
-                )
-            if marker_health == "degraded":
-                raise ArchiveReadError(
-                    "archive_unavailable",
-                    "archive marker could not be checked",
-                    retryable=True,
-                )
-            try:
-                body = await asyncio.to_thread(
-                    self.spool.verify, claim.response_hash, claim.byte_size
-                )
-            except (OSError, SpoolError) as error:
-                self._record_spool_failure(error)
-                return True
-            if body is None:
-                raise ArchiveReadError(
-                    "spool_missing",
-                    "pending upload has no local raw response",
-                    retryable=False,
-                )
-            await self._ensure_upload_lease(renewal, claim)
-            reference = await _drain_to_thread(
-                self.archive.write_immutable,
-                body,
-                claim.response_hash,
-                generation=claim.generation or None,
-            )
-            await self._ensure_upload_lease(renewal, claim)
-            await _stop_task(renewal_stop, renewal)
-            await _drain_awaitable(
-                self._upload_database_call(
-                    collector_uploads.complete_upload,
-                    self.database,
-                    claim,
-                    archive_reference=reference,
-                    archive_instance_id=self.archive_instance_id,
-                )
-            )
-            self._count("uploaded")
-            self.archive_health = "ready"
-        except ArchiveReadError as error:
-            try:
-                await self._ensure_upload_lease(renewal, claim)
-                await _stop_task(renewal_stop, renewal)
-                await _drain_awaitable(
-                    self._upload_database_call(
-                        collector_uploads.fail_upload,
-                        self.database,
-                        claim,
-                        category=error.category,
-                        detail=str(error),
-                        retryable=error.retryable,
-                    )
-                )
-            except collector_uploads.UploadLeaseLost:
-                self._count("upload_lease_lost")
-                return True
-            self._count(error.category)
-            self._archive_terminal = error.category in _GLOBAL_ARCHIVE_FAILURES
-            self.archive_health = "terminal" if self._archive_terminal else "degraded"
-        except collector_uploads.UploadLeaseLost:
-            # A competing owner can safely retry: immutable archive writes are
-            # content-addressed, and no stale owner reaches the database commit.
-            self._count("upload_lease_lost")
-        finally:
-            renewal_stop.set()
-            await _cancel_task(renewal)
-        return True
-
-    async def _renew_upload_lease(
-        self, claim: collector_uploads.UploadClaim, stop_requested: asyncio.Event
-    ) -> None:
-        while not stop_requested.is_set():
-            try:
-                await asyncio.wait_for(
-                    stop_requested.wait(), timeout=_UPLOAD_RENEW_INTERVAL
-                )
-            except TimeoutError:
-                await self._upload_database_call(
-                    collector_uploads.renew_upload,
-                    self.database,
-                    claim,
-                    lease_seconds=_UPLOAD_LEASE_SECONDS,
-                )
-
-    async def _ensure_upload_lease(
-        self,
-        renewal: asyncio.Task[None],
-        claim: collector_uploads.UploadClaim,
-    ) -> None:
-        if renewal.done():
-            await renewal
-        await self._upload_database_call(
-            collector_uploads.renew_upload,
-            self.database,
-            claim,
-            lease_seconds=_UPLOAD_LEASE_SECONDS,
-        )
-
     def cleanup_uploaded(self, *, limit: int = _CLEANUP_LOOKUP_SIZE) -> tuple[int, int]:
         with collector_liveness.database_wait(self):
             candidates = self.database.deletable_hashes(limit=limit)
@@ -1192,26 +1037,16 @@ class Collector:
     async def _upload_loop(
         self, stop_requested: asyncio.Event, idle_seconds: float
     ) -> None:
-        owners = [
-            f"python-collector-{uuid4()}" for _index in range(_UPLOAD_CONCURRENCY)
-        ]
-        owner_tasks = {
-            owner: asyncio.create_task(
-                self._upload_owner_loop(owner, stop_requested, idle_seconds)
-            )
-            for owner in owners
-        }
+        """Keep the uploads process running and delete archived spool copies."""
+        uploads = (
+            None
+            if self.uploads is None
+            else asyncio.create_task(self.uploads.run(self, stop_requested))
+        )
         last_sweep, next_cleanup, loop = 0.0, 0.0, asyncio.get_running_loop()
-        graceful = False
         try:
             while not stop_requested.is_set():
                 collector_liveness.mark(self, "uploads")
-                for owner, task in list(owner_tasks.items()):
-                    if task.done():
-                        await task
-                        owner_tasks[owner] = asyncio.create_task(
-                            self._upload_owner_loop(owner, stop_requested, idle_seconds)
-                        )
                 if self._spool_io_failed:
                     await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
                     continue
@@ -1241,31 +1076,18 @@ class Collector:
                     # paused, so archived bytes can make room for this probe.
                     await self._spool_available()
                 await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
-            await asyncio.gather(*owner_tasks.values())
+            if uploads is not None:
+                # Let the uploads process finish its uploads, so the last
+                # cleanup pass removes their saved copies too.
+                await _drain_awaitable(asyncio.gather(uploads, return_exceptions=True))
             try:
-                await _drain_to_thread(self.cleanup_uploaded, limit=_UPLOAD_CONCURRENCY)
+                await _drain_to_thread(self.cleanup_uploaded, limit=_SHUTDOWN_CLEANUP_SIZE)
             except (OSError, SpoolError) as error:
                 self._record_spool_failure(error)
-            graceful = True
         finally:
-            if not graceful:
-                for task in owner_tasks.values():
-                    if not task.done():
-                        task.cancel()
-            if owner_tasks:
-                await _drain_awaitable(
-                    asyncio.gather(*owner_tasks.values(), return_exceptions=True)
-                )
-
-    async def _upload_owner_loop(
-        self, owner: str, stop_requested: asyncio.Event, idle_seconds: float
-    ) -> None:
-        while not stop_requested.is_set():
-            if self._spool_io_failed:
-                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
-                continue
-            if not await self.upload_once(owner=owner):
-                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
+            if uploads is not None and not uploads.done():
+                uploads.cancel()
+                await _drain_awaitable(asyncio.gather(uploads, return_exceptions=True))
 
     async def health_response(self, path: str) -> tuple[int, str, bytes]:
         if path == "/livez":
@@ -1335,6 +1157,8 @@ class Collector:
                 f"{int(self._handoff_recovery_required)}"
             ),
             f'clashlens_collector_archive_health{{state="{self.archive_health}"}} 1',
+            *getattr(self.client, "metric_lines", list)(),
+            *(() if self.uploads is None else self.uploads.metric_lines()),
         ]
         for pool_name, pool in (
             ("regular", self.regular_keys),

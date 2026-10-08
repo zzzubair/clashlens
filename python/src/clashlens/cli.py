@@ -29,6 +29,7 @@ from . import (
     api_accounts,
     api_verification,
     battle_day_repair,
+    collector_http,
     league_history_refresh,
     population,
     promotion_candidates,
@@ -48,6 +49,7 @@ from .operating import (
     write_private_snapshot,
 )
 from .profile import normalize_player_tag
+from .uploader import UploaderProcess
 from .verification import (
     OfficialVerificationClient,
     VerificationOutcome,
@@ -71,7 +73,7 @@ from .worker import (
 from .worker_liveness import ProgressMark, progress_file, worker_readiness
 
 MAX_REPORTED_RESULTS = 100
-# Save plus request threads leave 64 of the collector container's 512 for the rest.
+# Save plus request threads leave 96 of the collector's 544: 32 for uploads, 64 spare.
 _SAVE_THREADS, _THREAD_BUDGET = 384, 448
 UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -714,6 +716,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         raise ValueError("collector requires 4 to 9 regular keys and one interactive key")
     if not regular_keys or len(interactive_keys) != 1:
         raise ValueError("collector requires regular keys and one interactive key")
+    connections = collector_http.collector_connections(arguments, len(regular_keys))
     host, separator, port_text = arguments.health_listen.rpartition(":")
     if separator != ":" or not host:
         raise ValueError("collector health listen must be host:port")
@@ -748,12 +751,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
                 raise ProviderFailure(permit.reason, retryable=False)
             await asyncio.sleep(0.01)
 
-    archive_reader = _archive(
-        arguments,
-        pool_size=32,
-        database=database,
-        validate_archive_instance=False,
-    )
+    archive_reader = _archive(arguments, database=database, validate_archive_instance=False)
     if not isinstance(archive_reader, SpoolFirstReader):
         raise TypeError("collector requires a local spool root")
     concurrency = arguments.concurrency_per_key
@@ -770,8 +768,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
             proxy_url=arguments.official_proxy_url,
             allow_insecure_test_origin=arguments.allow_insecure_official_origin,
             max_body_bytes=arguments.archive_max_body_bytes,
-            max_connections=min((len(regular_keys) + 1) * concurrency,
-                                _THREAD_BUDGET - save_threads),
+            max_connections=min(connections, _THREAD_BUDGET - save_threads),
         ),
         regular_keys=KeyPool(
             regular_keys,
@@ -790,12 +787,13 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         interactive_fingerprint=interactive_fingerprint,
         weekly_eligibility_enabled=arguments.enable_weekly_eligibility,
         regular_parallelism=parallelism,
+        uploads=UploaderProcess(arguments),
     )
 
     async def serve() -> None:
         stop_requested = asyncio.Event()
         loop = asyncio.get_running_loop()
-        # A save thread per regular check, up to the cap; intent and uploads share them.
+        # A save thread per regular check, up to the cap; intent work shares them.
         loop.set_default_executor(ThreadPoolExecutor(
             max_workers=save_threads, thread_name_prefix="collector-io"
         ))

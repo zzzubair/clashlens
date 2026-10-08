@@ -349,9 +349,11 @@ def create_app(
                     production_database, now=current_time()
                 )
                 freshness_refresh_after = time.monotonic() + 30
+            relay = getattr(verification_client, "relay_snapshot", None)
             return {
                 **operating_metrics.snapshot(pool_health),
                 "live_leaderboard": leaderboard_metrics,
+                **({} if relay is None else {"player_verification_relay": relay()}),
             }
 
     @app.get("/v1/status")

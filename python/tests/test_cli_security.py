@@ -186,7 +186,7 @@ def test_collector_threads_stay_under_the_container_limit(
     with pytest.raises(Started) as started:
         _run_collector(arguments)
     assert started.value.args == threads
-    # 64 of the container's 512 processes and threads stay for everything else.
+    # 32 upload threads and 64 spare fill the rest of the container's 544.
     assert sum(started.value.args) <= 448
 
 
@@ -297,13 +297,15 @@ up_stack
 @pytest.mark.parametrize(
     ("pids", "setting", "keys", "accepted"),
     [
-        # Six keys at 25 a second: 300 save and 42 request threads, plus 64.
+        # Six keys at 25 a second: 300 save, 42 request and 32 upload
+        # threads, plus 64.
         ("512", None, 6, True),
-        ("400", None, 6, False),
-        ("400", "256", 6, True),
-        # Nine keys at 28 a second: 384 save and 60 request threads, plus 64.
-        ("512", None, 9, True),
-        ("507", None, 9, False),
+        ("437", None, 6, False),
+        ("394", "256", 6, True),
+        # Nine keys at 28 a second: 384 save, 60 request and 32 upload
+        # threads, plus 64.
+        ("540", None, 9, True),
+        ("539", None, 9, False),
     ],
 )
 def test_ops_refuses_collector_threads_beyond_its_process_limit(

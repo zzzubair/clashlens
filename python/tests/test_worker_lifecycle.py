@@ -437,7 +437,7 @@ def test_league_history_processing_produces_a_bounded_worker_snapshot() -> None:
     assert snapshot["stages"]["python_domain_league_history"]["count"] == 1
 
 
-def test_missing_new_observation_is_not_repaired_from_archive() -> None:
+def test_missing_new_observation_without_an_archived_copy_fails_as_missing_proof() -> None:
     from clashlens.archive import ArchiveReadResult
 
     class LocalSpool:
@@ -446,11 +446,12 @@ def test_missing_new_observation_is_not_repaired_from_archive() -> None:
 
     class Archive:
         spool = LocalSpool()
+        archive = SimpleNamespace(bucket="evidence")
         remote_calls = 0
 
         def read_verified(self, *_args: object, **_kwargs: object) -> ArchiveReadResult:
             self.remote_calls += 1
-            raise AssertionError("new observations must not use archive fallback")
+            raise AssertionError("no archived copy exists to read back")
 
     class Database:
         def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
@@ -459,7 +460,8 @@ def test_missing_new_observation_is_not_repaired_from_archive() -> None:
     def fail_claim(_database: object, _claim: object, *, category: str, detail: str, retryable: bool) -> str:
         assert category == "spool_missing"
         assert detail.startswith("spool_missing:")
-        assert retryable is False
+        # Spends an attempt; only the job's last one fails for good.
+        assert retryable is True
         return "failed"
 
     claim = SimpleNamespace(
@@ -480,7 +482,10 @@ def test_missing_new_observation_is_not_repaired_from_archive() -> None:
     )
     archive = Archive()
 
-    with patch.object(job_outcomes, "fail_claim", fail_claim):
+    with (
+        patch.object(job_outcomes, "fail_claim", fail_claim),
+        patch.object(worker.collector_uploads, "archived_copy", lambda *_a, **_k: None),
+    ):
         result = ObservationProcessor(Database(), archive)._process_claim(
             claim, lease_seconds=30
         )

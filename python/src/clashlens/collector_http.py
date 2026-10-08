@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import math
 import socket
 import sys
 import threading
+import weakref
 from collections import deque
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -13,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from time import monotonic
-from typing import TypeVar
+from typing import Any, TypeVar
 from urllib.parse import quote, urljoin, urlsplit
 
 import certifi
@@ -316,13 +318,49 @@ class _DeadlineHTTPConnection(HTTPConnection):
         super().request(*args, **kwargs)
 
 
+class _OpenTunnels:
+    """Relay connections that finished connecting and have not closed."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open: weakref.WeakSet[HTTPSConnection] = weakref.WeakSet()
+
+    def add(self, connection: HTTPSConnection) -> None:
+        with self._lock:
+            self._open.add(connection)
+
+    def discard(self, connection: HTTPSConnection) -> None:
+        with self._lock:
+            self._open.discard(connection)
+
+    def snapshot(self) -> set[HTTPSConnection]:
+        with self._lock:
+            return set(self._open)
+
+
 class _DeadlineHTTPSConnection(HTTPSConnection):
+    tunnels: _OpenTunnels | None = None
+
     def _new_conn(self) -> socket.socket:
         return _new_deadline_socket(self)
 
     def connect(self) -> None:
         super().connect()
+        if self.tunnels is not None:
+            self.tunnels.add(self)
         _register_request_connection(self)
+
+    def close(self) -> None:
+        if self.tunnels is not None:
+            self.tunnels.discard(self)
+        super().close()
+
+    def _tunnel(self) -> None:
+        try:
+            super()._tunnel()
+        except (OSError, http.client.HTTPException):
+            self.close()
+            raise
 
     def request(self, *args: object, **kwargs: object) -> None:
         _register_request_connection(self)
@@ -335,6 +373,12 @@ class _DeadlineHTTPConnectionPool(HTTPConnectionPool):
 
 class _DeadlineHTTPSConnectionPool(HTTPSConnectionPool):
     ConnectionCls = _DeadlineHTTPSConnection
+    tunnels: _OpenTunnels | None = None
+
+    def _new_conn(self) -> HTTPSConnection:
+        connection = super()._new_conn()
+        connection.tunnels = self.tunnels
+        return connection
 
 
 class _DeadlinePoolManager(urllib3.PoolManager):
@@ -347,12 +391,20 @@ class _DeadlinePoolManager(urllib3.PoolManager):
 
 
 class _DeadlineProxyManager(urllib3.ProxyManager):
-    def __init__(self, proxy_url: str, **connection_pool_kw: object) -> None:
+    def __init__(
+        self, proxy_url: str, *, tunnels: _OpenTunnels, **connection_pool_kw: object
+    ) -> None:
         super().__init__(proxy_url, **connection_pool_kw)
+        self.tunnels = tunnels
         self.pool_classes_by_scheme = {
             "http": _DeadlineHTTPConnectionPool,
             "https": _DeadlineHTTPSConnectionPool,
         }
+
+    def _new_pool(self, *args: Any, **kwargs: Any) -> HTTPConnectionPool:
+        pool = super()._new_pool(*args, **kwargs)
+        pool.tunnels = self.tunnels
+        return pool
 
 
 class ProviderOutage:
@@ -586,6 +638,26 @@ class FetchedResponse:
     headers: dict[str, str]
 
 
+# Transport failures that do not show whether the relay or the API failed.
+_UNCLEAR_TRANSPORT_FAILURES = frozenset(
+    {"timeout", "network_failure", "truncated_response", "other_transport_failure"}
+)
+
+
+# The Paris relay serves 96 connections at once (deploy/egress-proxy). The
+# collector may hold up to 64: six per key, nine regular keys and the
+# interactive one. The rest is for player verification and operator commands.
+RELAY_COLLECTOR_CONNECTIONS = 64
+
+
+def collector_connections(arguments: Any, regular_keys: int) -> int:
+    """Connections the collector's keys may open, refused above its relay share."""
+    connections = (regular_keys + 1) * arguments.concurrency_per_key
+    if arguments.official_proxy_url and connections > RELAY_COLLECTOR_CONNECTIONS:
+        raise ValueError("collector keys would open more relay connections than its share")
+    return connections
+
+
 class OfficialApiClient:
     def __init__(
         self,
@@ -649,7 +721,12 @@ class OfficialApiClient:
             max_workers=max_connections, thread_name_prefix="official-api"
         )
         self._executor_slots = asyncio.Semaphore(max_connections)
+        self.max_connections = max_connections
         self.provider_outage = ProviderOutage()
+        self._proxied = bool(proxy_url)
+        self._tunnels = _OpenTunnels()
+        self._relay_counts = {"requests": 0, "timeouts": 0, "admission_failures": 0}
+        self._relay_reachable: int | None = None
         pool_options = {
             "maxsize": max_connections,
             "block": True,
@@ -663,10 +740,72 @@ class OfficialApiClient:
             ),
         }
         self._http = (
-            _DeadlineProxyManager(proxy_url, **pool_options)
+            _DeadlineProxyManager(proxy_url, tunnels=self._tunnels, **pool_options)
             if proxy_url
             else _DeadlinePoolManager(**pool_options)
         )
+
+    def metric_lines(self) -> list[str]:
+        """Requests in flight, and the most connections this client keeps open.
+
+        Through the relay each open connection holds one of its tunnels, idle
+        ones kept for reuse included, so those show too.
+        """
+        in_flight = self.max_connections - self._executor_slots._value
+        lines = [
+            f"clashlens_collector_api_requests_in_flight {in_flight}",
+            f"clashlens_collector_api_connection_limit {self.max_connections}",
+        ]
+        if not self._proxied:
+            return lines
+        counts = self._relay_counts
+        lines += [
+            f"clashlens_collector_relay_tunnels_open {self._open_connections()}",
+            f"clashlens_collector_relay_requests_total {counts['requests']}",
+            f"clashlens_collector_relay_timeouts_total {counts['timeouts']}",
+            (
+                "clashlens_collector_relay_admission_failures_total "
+                f"{counts['admission_failures']}"
+            ),
+        ]
+        if self._relay_reachable is not None:
+            lines.append(f"clashlens_collector_relay_reachable {self._relay_reachable}")
+        return lines
+
+    def _open_connections(self) -> int:
+        """Set-up tunnels a request is using, or kept open for the next one.
+
+        A tunnel counts once its connection, including the handshake with the
+        official API, is done, until it closes; an idle one the relay has
+        since closed no longer counts.
+        """
+        tunnels = self._tunnels.snapshot()
+        pools = self._http.pools
+        # Iterating the container itself is refused as unsafe across threads.
+        for pool_key in pools.keys():  # noqa: SIM118
+            idle = getattr(pools.get(pool_key), "pool", None)
+            if idle is None:
+                continue
+            with idle.mutex:
+                waiting = list(idle.queue)
+            tunnels -= {
+                connection
+                for connection in waiting
+                if connection in tunnels and not connection.is_connected
+            }
+        return len(tunnels)
+
+    def _count_relay(self, outcome: str) -> None:
+        counts = self._relay_counts
+        counts["requests"] += 1
+        if outcome in ("timeout", "proxy_timeout"):
+            counts["timeouts"] += 1
+        if outcome in ("proxy_failure", "proxy_timeout"):
+            counts["admission_failures"] += 1
+            self._relay_reachable = 0
+        elif outcome not in _UNCLEAR_TRANSPORT_FAILURES:
+            # The relay opened a tunnel and the API answered through it.
+            self._relay_reachable = 1
 
     async def fetch_player(
         self,
@@ -725,23 +864,34 @@ class OfficialApiClient:
         async def request(key: ApiKey, start_request: StartRequest) -> FetchedResponse:
             await self._executor_slots.acquire()
             release_immediately = True
+            sending = False
+
+            async def start_sending() -> None:
+                nonlocal sending
+                await start_when_provider_answers(start_request)
+                sending = True
+
             try:
-                return await self._fetch_with_key(
-                    pool,
-                    endpoint,
-                    url,
-                    key,
-                    lambda: start_when_provider_answers(start_request),
+                response = await self._fetch_with_key(
+                    pool, endpoint, url, key, start_sending
                 )
             except (_DetachedTimeout, _DetachedCancellation) as error:
                 release_immediately = False
                 error.release_when.add_done_callback(
                     lambda _finished: self._executor_slots.release()
                 )
+                if isinstance(error, _DetachedTimeout):
+                    self._count_relay("timeout")
+                raise
+            except ProviderFailure as error:
+                if sending:
+                    self._count_relay(error.category)
                 raise
             finally:
                 if release_immediately:
                     self._executor_slots.release()
+            self._count_relay("answered")
+            return response
 
         try:
             async with waiting:
@@ -828,6 +978,14 @@ class OfficialApiClient:
         except (OSError, urllib3.exceptions.HTTPError) as error:
             if isinstance(error, urllib3.exceptions.TimeoutError):
                 category = "timeout"
+            elif isinstance(error, urllib3.exceptions.ProxyError):
+                # The relay refused the connection or could not be reached,
+                # in time or at all.
+                cause = error.original_error
+                timed_out = isinstance(
+                    cause, (TimeoutError, urllib3.exceptions.TimeoutError)
+                ) and not isinstance(cause, urllib3.exceptions.NewConnectionError)
+                category = "proxy_timeout" if timed_out else "proxy_failure"
             elif isinstance(error, urllib3.exceptions.ProtocolError):
                 category = "truncated_response"
             elif isinstance(error, OSError):

@@ -249,11 +249,62 @@ The private relay address is **100.122.10.22**, named
 The server runs Ubuntu 24.04, Docker and Tailscale. The relay code is in
 `/opt/clashlens/egress-proxy`; generated configuration is in
 `/root/.local/share/clashlens-egress-proxy`. `deploy/egress-proxy/deploy.sh`
-runs Tinyproxy without root privileges, with a read-only filesystem, a 64 MiB
-memory limit, at most 50 connections, and warning logs capped at three 10 MB
-files. It holds no API keys or response archive. With six regular keys and one
-interactive key, the collector's default connection limit is 42, leaving eight
-of the proxy's 50 connections for separate token-verification traffic.
+runs Tinyproxy without root privileges, with a read-only filesystem, a 128 MiB
+memory limit, 128 processes and threads, at most 96 connections, and warning
+logs capped at three 10 MB files. It holds no API keys or response archive.
+On 8 October 2026 it held 48 connections against a limit of 50 then, so a
+slower API could have run it out.
+
+The 96 connections are shared out:
+
+| Caller | At most | Why |
+| --- | ---: | --- |
+| Collector | 64 | Six per key: up to nine regular keys and the interactive key. It refuses to start with settings above 64. Eight regular keys use 54. |
+| Player verification in the API | 20 | Its calls run on the API's worker threads: 20 on rogue's 16 processor threads. |
+| Operator commands (`probe`, `recover-discord`) | 1 each | Run by hand, one request at a time. |
+
+That leaves at least 10 spare while a connection closes and another opens.
+`python/tests/test_collector_proxy.py` sends this full load at once, 54
+collector and 20 verification connections, through a stand-in relay that
+enforces `MaxClients` from the configuration `deploy.sh` writes. The stand-in
+is not Tinyproxy, so Tinyproxy's own process and memory limits are not tested.
+Tinyproxy runs a thread per connection, hence 128 processes and threads.
+A changed limit takes effect only when `deploy.sh up` is run again on the relay
+(below).
+
+The collector's `/metrics` shows its side. `clashlens_collector_api_connection_limit`
+is the most connections it keeps open, so the most relay tunnels it holds, and
+`clashlens_collector_api_requests_in_flight` how many of them a request is using.
+`clashlens_collector_relay_tunnels_open` counts the tunnels it holds now: those
+a request is using and idle ones kept open for the next request. A tunnel
+counts from when its connection is fully set up (connected to the relay, the
+relay's tunnel accepted and the encrypted handshake with the official API
+done) until the collector closes it; an idle one the relay has closed stops
+counting when next checked.
+`clashlens_collector_relay_requests_total` counts requests sent through the
+relay; `clashlens_collector_relay_admission_failures_total` those the relay
+refused, closed unanswered as it does at its connection limit, or could not be
+reached for, and `clashlens_collector_relay_timeouts_total`
+those that ran out of time, including ones queued at a full relay. A
+connection to the relay that runs out of time counts in both. Timeouts divided
+by requests, using growth between two reads, is the timeout share.
+`clashlens_collector_relay_reachable` is 1 after a request got through the relay
+and 0 after one could not reach it; it appears after the first request.
+In `clashlens_collector_requests_total`, the same failures show as
+`outcome="proxy_failure"`, `outcome="proxy_timeout"` (the relay connection ran
+out of time) and `outcome="timeout"` per endpoint.
+
+The API's `/operatorz` shows player verification's side under
+`player_verification_relay`: `tunnels_open` (each verification opens its own
+tunnel, counted from when its connection is fully set up in the same way until
+the verification call returns), `requests`, `timeouts`, `admission_failures` and
+`reachable` (`null` before the first verification). Counts on both sides reset
+when the process restarts.
+
+Both tunnel counts approximate the relay's own connection count. The relay
+counts a connection from when it is accepted, so while a connection is being
+set up, or one that stalls during setup is waiting to time out, the relay holds
+a slot these counts do not show yet.
 
 The filter allows only `CONNECT api.clashofclans.com:443`, an encrypted tunnel
 whose API certificate the caller still checks. Ordinary HTTP requests, other
@@ -880,7 +931,7 @@ without printing configuration files.
 Podman checks each container every 30 seconds and kills it after six failed
 checks in a row, about three minutes. The collector's check is `/livez` on
 port 8081. It fails only when the collector needs a restart: one of its three
-main loops (player checks, queued requests, uploads and cleanup) has not come
+main loops (player checks, queued requests, spool cleanup) has not come
 round for 20 minutes, its spool or a saved-response handoff failed, or every
 regular or interactive key is quarantined. It never waits on the database, a
 spool lock or a thread. A database call made by the loop itself, or by work it
@@ -892,7 +943,9 @@ almost all the time, so a stuck Reset or upload loop could pass for ever. Every
 collector statement also stops after 60 seconds (5 minutes for the Reset
 sweep's), five times the slowest seen from 1 to 8 Oct 2026, so no database wait
 lasts indefinitely; a stopped statement is retried, then its loop stops and the
-collector restarts. The port opens
+collector restarts. The collector restarts its uploads process by itself when
+that exits or stops reporting, so a stuck upload never restarts collection; a
+spool read failure there still fails `/livez` as `spool_io_failure`. The port opens
 before startup recovery, which answers `starting`, and failures in the first
 five minutes are ignored; the five-minute start limit still applies. `/readyz`
 still reports the database, spool capacity and keys for a person to read.
@@ -1142,8 +1195,8 @@ two thirds of them, 8 of 12) how many of them process only responses, and `CLASH
 (default 12, at most 16) each process's connections. All processes share the container's
 memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
 worker refuses to start with more than 16 connections a process or 38 in
-all; with the collector's 32 and the API's 8 that leaves two of 80 for
-operators.
+all; see [the database connection budget](architecture.md#structured-data-and-evidence)
+for how that fits with the other processes.
 
 The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
 is 2 processes of 16 threads, 12 for responses, and 16 connections each, 38

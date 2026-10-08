@@ -259,7 +259,7 @@ load_production_config() {
   POSTGRES_PIDS=$(setting CLASHLENS_POSTGRES_PIDS 512)
   COLLECTOR_MEMORY=$(setting CLASHLENS_COLLECTOR_MEMORY 2g)
   COLLECTOR_CPUS=$(setting CLASHLENS_COLLECTOR_CPUS 4)
-  COLLECTOR_PIDS=$(setting CLASHLENS_COLLECTOR_PIDS 512)
+  COLLECTOR_PIDS=$(setting CLASHLENS_COLLECTOR_PIDS 544)
   API_MEMORY=$(setting CLASHLENS_API_MEMORY 1g)
   API_CPUS=$(setting CLASHLENS_API_CPUS 2)
   API_PIDS=$(setting CLASHLENS_API_PIDS 256)
@@ -298,7 +298,7 @@ load_fixture_config() {
   CONFIG[CLASHLENS_GLOBAL_RANKINGS_ENABLED]=true
   WORKER_LEASE=60 WORKER_PROCESSES=1 WORKER_CONCURRENCY=4 WORKER_DB_POOL=4 WORKER_ARCHIVE_POOL=4
   POSTGRES_MEMORY=640m POSTGRES_SHARED_BUFFERS=128MB POSTGRES_SHM=128m POSTGRES_CPUS=2 POSTGRES_PIDS=256
-  COLLECTOR_MEMORY=384m COLLECTOR_CPUS=2 COLLECTOR_PIDS=512
+  COLLECTOR_MEMORY=384m COLLECTOR_CPUS=2 COLLECTOR_PIDS=544
   API_MEMORY=256m API_CPUS=1 API_PIDS=128
   WORKER_MEMORY=384m WORKER_CPUS=2 WORKER_PIDS=256
   WEBSITE_MEMORY=256m WEBSITE_CPUS=1 WEBSITE_PIDS=128
@@ -316,7 +316,7 @@ validate_runtime_values() {
   [[ "$WEBSITE_PORT" != "$HEALTH_PORT" ]] || die "website and health ports must differ"
   item=$(setting CLASHLENS_REGULAR_PARALLELISM ''); keys=$(( $(tr -cd , <<<"$REGULAR_KEY_NAMES" | wc -c) + 1 ))
   [[ -z "$item" || ( "$item" =~ ^[1-9][0-9]{0,2}$ && "$item" -le 384 ) ]] || die "CLASHLENS_REGULAR_PARALLELISM must be a whole number from 1 to 384"
-  (( save = ${item:-2 * keys * KEY_RATE}, save = save < 256 ? 256 : save > 384 ? 384 : save, save + ((keys + 1) * 6 < 448 - save ? (keys + 1) * 6 : 448 - save) + 64 <= COLLECTOR_PIDS )) || die "collector save and request threads plus 64 spare exceed CLASHLENS_COLLECTOR_PIDS=$COLLECTOR_PIDS"
+  (( save = ${item:-2 * keys * KEY_RATE}, save = save < 256 ? 256 : save > 384 ? 384 : save, save + ((keys + 1) * 6 < 448 - save ? (keys + 1) * 6 : 448 - save) + 32 + 64 <= COLLECTOR_PIDS )) || die "collector save, request and 32 upload threads plus 64 spare exceed CLASHLENS_COLLECTOR_PIDS=$COLLECTOR_PIDS"
   item=$(setting CLASHLENS_PROMOTION_RECHECK_PER_SECOND ''); [[ -z "$item" || "$item" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "CLASHLENS_PROMOTION_RECHECK_PER_SECOND must be a number of requests a second, 0 or more"
   for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
   for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done

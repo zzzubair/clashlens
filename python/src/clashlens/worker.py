@@ -34,6 +34,7 @@ from . import (
     army_rank_bands,
     battle_ingestion,
     boundary_publication,
+    collector_uploads,
     ingestion,
     job_outcomes,
     late_battle_sweep,
@@ -242,9 +243,8 @@ MAINTENANCE_POOL_SIZE = 2
 # Lane connections one worker process may open.
 MAX_WORKER_POOL_SIZE = 16
 # Connections all worker processes together may open: each process's lane
-# pool, maintenance pool and maintenance permit. With the collector's 32 and
-# the API's 8 that is 78, leaving two for operators within 80 of PostgreSQL's
-# 100.
+# pool, maintenance pool and maintenance permit. docs/architecture.md owns how
+# this fits the whole database connection budget.
 WORKER_CONNECTION_BUDGET = 38
 
 
@@ -1141,10 +1141,16 @@ class ObservationProcessor:
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
 
+        def renew_lease() -> None:
+            # Heartbeat from the reader: keeps the renewed lease window
+            # ahead of the bounded remote retry wall time. Lease loss
+            # raises and discards any partial fallback result.
+            self.database.renew_claim(claim, lease_seconds=lease_seconds)
+
         try:
-            # Renew before a remote read, which can retry for a bounded time; a
-            # local spool read has no fallback, so it skips this commit. The
-            # second renewal below fences the result before parsing.
+            # Renew before a remote read, which can retry for a bounded time. A
+            # local spool read skips this commit unless the saved copy is gone.
+            # The second renewal below fences the result before parsing.
             if not uses_local_spool:
                 renewal_started_at = monotonic()
                 self.database.renew_claim(claim, lease_seconds=lease_seconds)
@@ -1152,15 +1158,8 @@ class ObservationProcessor:
             archive_started_at = monotonic()
             try:
                 if uses_local_spool:
-                    archived = self._read_local(claim)
+                    archived = self._read_local(claim, renew_lease)
                 else:
-
-                    def renew_lease() -> None:
-                        # Heartbeat from the reader: keeps the renewed lease window
-                        # ahead of the bounded remote retry wall time. Lease loss
-                        # raises and discards any partial fallback result.
-                        self.database.renew_claim(claim, lease_seconds=lease_seconds)
-
                     archived = self.archive.read_verified(
                         claim.archive_reference,
                         claim.response_hash,
@@ -1290,7 +1289,9 @@ class ObservationProcessor:
             return ProcessResult(claim.job_id, "lease_lost")
         return ProcessResult(claim.job_id, outcome)
 
-    def _read_local(self, claim: Claim) -> ArchiveReadResult:
+    def _read_local(
+        self, claim: Claim, renew_lease: Callable[[], None]
+    ) -> ArchiveReadResult:
         spool = getattr(self.archive, "spool", None)
         verify = getattr(spool, "verify", None)
         if not callable(verify):
@@ -1308,16 +1309,67 @@ class ObservationProcessor:
                 "spool_io_failed", "local evidence read failed", retryable=True
             ) from error
         if body is None:
-            raise ArchiveReadError(
-                "spool_missing",
-                "new observation is missing from the local spool",
-                retryable=False,
-            )
+            return self._read_archived_copy(claim, renew_lease)
         return ArchiveReadResult(
             body=body,
             reference=claim.archive_reference or "",
             sha256=claim.response_hash or "",
         )
+
+    def _read_archived_copy(
+        self, claim: Claim, renew_lease: Callable[[], None]
+    ) -> ArchiveReadResult:
+        """Read back the archived copy of a response whose saved copy is gone.
+
+        A lost disk, or a database restored to before spool cleanup ran, leaves
+        a job without its saved copy while the archive holds one. The reader
+        checks its hash and saves it locally again. Only bytes the archive
+        cannot hold are missing proof.
+        """
+        assert claim.response_hash is not None
+        bucket = getattr(getattr(self.archive, "archive", None), "bucket", None)
+        copy = (
+            None
+            if bucket is None
+            else collector_uploads.archived_copy(
+                self.database, claim.response_hash, bucket=bucket
+            )
+        )
+        if copy is None:
+            raise ArchiveReadError(
+                "spool_missing",
+                "new observation is missing from the local spool and the archive",
+                retryable=True,
+            )
+        renew_lease()
+        try:
+            return self.archive.read_verified(
+                copy.reference, claim.response_hash, heartbeat=renew_lease
+            )
+        except ArchiveReadError as error:
+            # A recorded copy that cannot be found yet, or an upload still in
+            # flight or whose last write may yet land, is retried within the
+            # job's attempts.
+            if error.category != "archive_missing" or copy.recorded or copy.uploading:
+                raise
+            marker = self.archive.check_marker_health()
+            if marker == "degraded":
+                raise ArchiveReadError(
+                    "archive_unavailable",
+                    "archive marker could not be checked",
+                    retryable=True,
+                ) from error
+            if marker == "terminal":
+                raise ArchiveReadError(
+                    "archive_marker_mismatch",
+                    "archive marker does not match its configured hash",
+                    retryable=True,
+                ) from error
+            raise ArchiveReadError(
+                "spool_missing",
+                "new observation is missing from the local spool and was never archived",
+                retryable=True,
+            ) from error
 
     def _fail_rejected(self, claim: Claim, error: Error) -> ProcessResult:
         # PostgreSQL refused this job's writes, such as a Reset evidence row
