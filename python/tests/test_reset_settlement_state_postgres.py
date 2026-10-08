@@ -1352,6 +1352,10 @@ def test_official_total_leaves_an_older_seasons_last_day_as_saved(
             # Two Seasons on, the latest confirmed Season starts 28 days later.
             connection.execute("SET session_replication_role = replica")
             connection.execute(
+                "UPDATE legend_season_anchors SET state = 'superseded'"
+                " WHERE state = 'confirmed'"
+            )
+            connection.execute(
                 """
                 INSERT INTO legend_season_anchors (
                     current_league_season_id, previous_league_season_id,
