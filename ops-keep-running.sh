@@ -13,6 +13,10 @@ KEEP_LABELS=(MODE 'deployment mode' COLLECTOR_UNIT 'collector service definition
   POSTGRES_SECRETS 'database secrets' POD_UNIT 'pod definition' NETWORK_UNIT 'network definition'
   VOLUME_UNIT 'database volume definition' MIGRATIONS 'database migrations')
 RESTART_COLLECTOR=false
+# --keep-collector: the release changes only worker or API code, so the
+# collector keeps its running image even though the new one differs.
+KEEP_COLLECTOR=false
+COLLECTOR_RELEASE_IMAGE=
 KEEP_RUNNING=false
 declare -Ag KEEP_PARTS=()
 
@@ -48,10 +52,12 @@ image_identity() {
 }
 
 # Before stopping anything: keep the collector only if it, the database, pod
-# and network run, a record of their configuration exists and both images match.
+# and network run, a record of their configuration exists and both images
+# match, or only the collector's differs and --keep-collector was given.
 keep_running_plan() {
   local reason= unit service image running current
   KEEP_RUNNING=false
+  [[ "$RESTART_COLLECTOR" != true || "$KEEP_COLLECTOR" != true ]] || die "use either --restart-collector or --keep-collector"
   if [[ "$RESTART_COLLECTOR" == true ]]; then reason='--restart-collector was given'
   elif [[ ! -f "$KEEP_RECORD" || -L "$KEEP_RECORD" ]]; then reason='no record of the configuration it runs with'
   else
@@ -66,12 +72,17 @@ keep_running_plan() {
       image=$(normalize_image_id "$image")
       running=$(image_identity "$image" || true)
       current=$(image_identity "${RELEASE[${service^^}_IMAGE]}" || true)
-      [[ -n "$running" && "$running" == "$current" ]] || { reason="the $service image changed"; break; }
+      if [[ -z "$running" || "$running" != "$current" ]]; then
+        [[ "$service" == collector && "$KEEP_COLLECTOR" == true ]] || { reason="the $service image changed"; break; }
+        COLLECTOR_RELEASE_IMAGE=${RELEASE[COLLECTOR_IMAGE]}
+      fi
       # Same contents: keep the running image pinned so units and the active release match it.
       RELEASE[${service^^}_IMAGE]=$image
     done
   fi
   if [[ -n "$reason" ]]; then
+    [[ -z "$COLLECTOR_RELEASE_IMAGE" ]] || RELEASE[COLLECTOR_IMAGE]=$COLLECTOR_RELEASE_IMAGE
+    COLLECTOR_RELEASE_IMAGE=
     rm -f -- "$KEEP_RECORD"
     printf 'Restarting the collector with the database, pod and network: %s.\n' "$reason"
     return
@@ -121,12 +132,20 @@ keep_running_check() {
   [[ "$KEEP_RUNNING" == true ]] || return 0
   ((${#changed[@]} == 0)) || reason="changed $(IFS=,; printf '%s' "${changed[*]}" | sed 's/,/, /g')"
   if [[ -z "$reason" ]]; then
-    printf 'Leaving the collector, database, pod and network running: their images and configuration are unchanged.\n'
+    if [[ -n "$COLLECTOR_RELEASE_IMAGE" ]]; then
+      printf 'Leaving the collector, database, pod and network running: --keep-collector keeps the running collector image, and their configuration is unchanged.\n'
+    else
+      printf 'Leaving the collector, database, pod and network running: their images and configuration are unchanged.\n'
+    fi
     return
   fi
   rm -f -- "$KEEP_RECORD"
   printf 'Restarting the collector with the database, pod and network: %s.\n' "$reason"
   KEEP_RUNNING=false
+  if [[ -n "$COLLECTOR_RELEASE_IMAGE" ]]; then
+    RELEASE[COLLECTOR_IMAGE]=$COLLECTOR_RELEASE_IMAGE
+    render_units
+  fi
   stop_units
 }
 

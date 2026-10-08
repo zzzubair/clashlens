@@ -108,14 +108,10 @@ To roll back, do not reverse a migration. Revert the code change on `main`
 while keeping every migration file, then `./ops build` and `./ops up` that
 revert. The previous release can read the database only if no migration since
 it changed a table it reads; check the migrations listed between the two
-revisions before choosing this. A release that changes only the website, or
-worker and API settings, restarts only the worker, API and website, leaving
-the collector, database, pod and network running as described below. Any
-change to Python source, even worker-only or API-only code, restarts the
-collector, database, pod and network too: the collector's image copies all of
-`python/src`, and its process starts through `clashlens.cli`, which loads the
-worker and API code, so no worker-only change leaves the collector's code
-unchanged.
+revisions before choosing this. A worker-only or API-only change deploys with
+`./ops up --keep-collector`, which restarts only the worker, API and website
+and leaves the collector, database, pod and network running, as described
+below.
 
 ## Clean Fedora fixture
 
@@ -456,6 +452,17 @@ They keep running only when all of these hold since the last successful `up`:
 - the contents of their secrets are unchanged, compared by hash and never
   printed;
 - all four are running and the collector and PostgreSQL containers are healthy.
+
+The collector's image holds all of `python/src`, so a release that changes
+only worker or API code still has a different collector image. For that,
+`./ops up --keep-collector` keeps the running collector image instead of the
+new one; every other condition above must still hold, so a release that also
+changes the collector's or PostgreSQL's settings, service files or secrets,
+the PostgreSQL image, or any migration still restarts all four, on the new
+collector image. `up` cannot tell collector code from worker code, so use it
+only when the release changes no collector code; the next `up` without it
+starts the new collector image. `--keep-collector` and `--restart-collector`
+cannot be combined.
 
 Otherwise, or with `./ops up --restart-collector`, `up` restarts all four as
 before. It prints which happened and why, for example `Restarting the collector

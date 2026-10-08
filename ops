@@ -26,7 +26,7 @@ source "$ROOT/ops-keep-running.sh"
 usage() {
   cat <<'EOF'
 Usage: ./ops build [--fixture]
-       ./ops up [--fixture] [--restart-collector]
+       ./ops up [--fixture] [--restart-collector|--keep-collector]
        ./ops down
        ./ops status
        ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention|ranked-day-compaction|history-retention]
@@ -43,7 +43,8 @@ Usage: ./ops build [--fixture]
 build creates a pinned release. up installs and starts that release; it never
 builds or pulls an image. --fixture is an isolated stack with no live keys.
 up leaves the collector, database, pod and network running when their images
-and configuration are unchanged; --restart-collector restarts them anyway.
+and configuration are unchanged; --restart-collector restarts them anyway, and
+--keep-collector keeps the running collector image for a worker/API-only change.
 down disables the stack across reboot and keeps all database, spool and archive data.
 EOF
 }
@@ -1454,7 +1455,7 @@ case "$command" in
   build) acquire_mutation_lock; parse_mode "$@"; build_release ;;
   up)
     acquire_mutation_lock; up_args=()
-    for arg; do if [[ "$arg" == --restart-collector ]]; then RESTART_COLLECTOR=true; else up_args+=("$arg"); fi; done
+    for arg; do case "$arg" in --restart-collector) RESTART_COLLECTOR=true ;; --keep-collector) KEEP_COLLECTOR=true ;; *) up_args+=("$arg") ;; esac; done
     parse_mode "${up_args[@]}"; up_stack
     ;;
   down)
