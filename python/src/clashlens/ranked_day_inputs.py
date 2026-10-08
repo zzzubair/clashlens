@@ -259,7 +259,11 @@ def load_contributions(
                     THEN source_row.source_json -> 'opponent' ->> 'name'
                 ELSE source_row.source_json ->> 'opponentName'
             END,
-            source_row.source_json ->> 'battleTime'
+            CASE
+                WHEN e.parser_version <> 'supercell-source-parser-v1'
+                     AND source_row.source_json ->> 'battleTimestamp' IS NOT NULL
+                    THEN source_row.source_json ->> 'battleTime'
+            END
         FROM legend_battles AS b
         JOIN battle_perspectives AS p ON p.battle_id = b.id
         JOIN battle_evidence AS e ON e.id = p.evidence_id

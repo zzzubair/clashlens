@@ -66,7 +66,8 @@ class BattleContribution:
     stars: int | None = None
     destruction_percentage: int | None = None
     army_share_code: str | None = None
-    # The source row's battleTime: how many seconds the battle lasted.
+    # The source row's battleTime: how many seconds the battle lasted, or None
+    # for older rows, whose battleTime is the date.
     battle_seconds: int | None = None
     attacker_gain: int | None = None
     defender_loss: int | None = None

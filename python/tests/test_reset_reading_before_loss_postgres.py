@@ -475,3 +475,34 @@ def test_reset_reading_before_the_last_attack_landed_settles_both_days(
     assert day_b_row[7]["next_start_reading_correction"] == WIN
     assert len(day_b_row[7]["next_start_battles_after_reading"]) == 1
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
+
+
+def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
+    database_url: str, archive_server
+) -> None:
+    # Older saved rows have no battleTimestamp and give the date in battleTime.
+    day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 4)]
+    log = json.loads(_log(*day_b))
+    for item, (at, _attack) in zip(log["items"][1:], day_b[1:], strict=True):
+        del item["battleTimestamp"]
+        item["battleTime"] = int(at.timestamp())
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=_profile(6000 - 3 * LOSS), log=json.dumps(log).encode(),
+        )
+        _process(connection_info, archive_server, jobs)
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+            ).fetchone()[0]
+            battles = ranked_day_inputs.load_contributions(
+                connection, player_id, ranked_day_for(DAY_B)
+            )
+
+    assert sorted(
+        (battle.battle_timestamp, battle.battle_seconds) for battle in battles
+    ) == [(day_b[0][0], 120), (day_b[1][0], None), (day_b[2][0], None)]
