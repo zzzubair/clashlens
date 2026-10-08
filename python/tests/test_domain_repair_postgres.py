@@ -717,3 +717,97 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
     assert receipt["rule_revision"] == domain_repair.DAY_RULES_REVISION
     # A Season in progress has no summaries to store again.
     assert (done["phase"], done["summaries_refreshed"]) == ("done", 0)
+
+
+def test_season_repair_stores_again_a_summary_a_board_correction_changed(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Summaries are stored again one player per run, oldest player first.
+    After the first player's run, a correction of the Season's last board
+    moves it from first to second: the repair stores its summary again
+    before it reports done, and the receipt finds none differing."""
+    from test_player_season_summaries_postgres import (
+        _frozen_board,
+        _log,
+        _player,
+        _ranked,
+    )
+
+    from clashlens.domain import ranked_day_for
+    from clashlens.season_summaries import materialize_player_season
+
+    season = ranked_day_for(datetime(2026, 7, 15, 6, tzinfo=UTC))
+    season_id = season.official_season_id
+    monkeypatch.setattr(domain_repair, "_repair_inputs", lambda *_: 0)
+    # As once every board of the Season has been rebuilt.
+    monkeypatch.setattr(boundary, "queue_board_rebuilds", lambda *_, **__: {"boards": []})
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        observation_id, _job = store_observation(
+            connection_info, archive_server, occurrence_key="final-board",
+            endpoint="profile", body=b"{}", observed_at=season.season_end,
+            normalized_tag="#2PP",
+        )
+        with psycopg.connect(connection_info) as connection:
+            first = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+            ).fetchone()[0]
+            second = _player(connection, "#2QQ")
+            for player in (first, second):
+                for day in range(1, 29):
+                    start = season.season_start + (day - 1) * DAY
+                    version_id = _ranked(
+                        connection, player, day, start, start + DAY, season=season_id
+                    )
+                    _log(connection, player, day, version_id, start, season=season_id)
+            _frozen_board(
+                connection, observation_id, {first: (1, None), second: (2, None)},
+                reset=season.season_end,
+            )
+            connection.execute(
+                """
+                INSERT INTO season_repairs (
+                    official_season_id, rule_revision, before_days, before_boards,
+                    queued_through_player_id, boards_queued_at
+                ) VALUES (%s, %s, '{}', '{}', %s, clock_timestamp())
+                """,
+                (season_id, domain_repair.DAY_RULES_REVISION, second),
+            )
+            connection.commit()
+            for player in (first, second):
+                materialize_player_season(connection, player, season_id)
+                connection.commit()
+        database = Database(connection_info)
+        try:
+            def run(action: str = "queue") -> dict:
+                return domain_repair.season_repair(database, season_id, action, max_jobs=1)
+
+            runs = [run()]
+            with psycopg.connect(connection_info) as connection:
+                # As a recovered last-day battle of the second player moves it up.
+                connection.execute(
+                    "UPDATE leaderboard_snapshots SET state = 'superseded'"
+                    " WHERE snapshot_kind = 'frozen'"
+                )
+                _frozen_board(
+                    connection, observation_id, {first: (2, None), second: (1, None)},
+                    version=2, reset=season.season_end,
+                )
+            runs += [run(), run(), run()]
+            receipt = run("receipt")
+            with psycopg.connect(connection_info) as connection:
+                ranks = connection.execute(
+                    "SELECT player_id, final_rank FROM player_season_summaries"
+                    " WHERE official_season_id = %s ORDER BY player_id",
+                    (season_id,),
+                ).fetchall()
+        finally:
+            database.close()
+
+    assert [(r["phase"], r["summaries_refreshed"]) for r in runs] == [
+        ("summaries", 1), ("summaries", 1), ("summaries", 1), ("done", 0),
+    ]
+    assert ranks == [(first, 2), (second, 1)]
+    assert receipt["summaries_disagreeing"] == {
+        "stored": 2, "stale": 0, "stale_players": [],
+    }
+

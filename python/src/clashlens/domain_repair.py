@@ -219,8 +219,10 @@ def _refresh_summaries(
     database: Database, season_id: str, revision: str, through: int, limit: int
 ) -> int:
     """Store again up to ``limit`` of the Season's saved summaries, each from
-    its days as they are now, in its own transaction; how many it stored. A
-    Season still in progress has none."""
+    its days as they are now, in its own transaction; how many it stored.
+    Once every one has been, it stores again those that differ from their
+    days now, as a board correction since can leave an earlier one, until
+    none does. A Season still in progress has none."""
     from .season_summaries import materialize_player_season
 
     with database.pool.connection() as connection:
@@ -234,10 +236,13 @@ def _refresh_summaries(
                 (season_id, through, limit),
             ).fetchall()
         ]
+        stale = not players
+        if stale:
+            players = _stale_players(connection, season_id)[1][:limit]
         for player in players:
             with connection.transaction():
                 materialize_player_season(connection, player, season_id)
-        if players:
+        if players and not stale:
             with connection.transaction():
                 connection.execute(
                     """
@@ -252,6 +257,13 @@ def _refresh_summaries(
 def _stale_summaries(connection: Any, season_id: str) -> dict[str, Any]:
     """The Season's saved summaries that differ from their days now, as the
     Season's closure checks them."""
+    stored, stale = _stale_players(connection, season_id)
+    return {"stored": stored, "stale": len(stale), "stale_players": stale[:50]}
+
+
+def _stale_players(connection: Any, season_id: str) -> tuple[int, list[int]]:
+    """How many summaries the Season has saved, and the players whose saved
+    summary differs from its days now."""
     from .season_summaries import _digest, _project
 
     stale = []
@@ -266,7 +278,7 @@ def _stale_summaries(connection: Any, season_id: str) -> dict[str, Any]:
         projected = _project(int(player_id), season_id, connection)
         if projected is None or _digest(projected) != _text_value(digest):
             stale.append(int(player_id))
-    return {"stored": len(rows), "stale": len(stale), "stale_players": stale[:50]}
+    return len(rows), stale
 
 
 def _repair_jobs(

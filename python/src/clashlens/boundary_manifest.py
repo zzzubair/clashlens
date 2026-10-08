@@ -719,11 +719,14 @@ def reset_trophies(
     proven is marked uncertain.
 
     A day neither its own calculation nor the reading proves is still
-    proven when its end Reset reading and a later reading agree
-    (``DayEnd.end_proof``): its end Reset reading is the total. Replayed on
-    the 7 October 2026 Day 3 board's 11,769 entries, that corrected 8
-    entries, such as #8L2RVPU9Y from 4,901 to 4,981, changed no other
-    value, and confirmed 781 Partial and 10 Inconsistent days' entries.
+    proven when its end Reset reading and a later reading, read at least 15
+    minutes after it and 20 after the Reset, agree (``DayEnd.end_proof``):
+    its end Reset reading is the total. Two readings minutes apart can both
+    be out of date: #8RRYVCYQU read 4,814 at 05:01:16, missing 176 trophies
+    of attacks from before 04:31. Replayed on the 7 October 2026 Day 3
+    board's 11,769 entries, that corrected 8 entries, such as #8L2RVPU9Y
+    from 4,901 to 4,981, changed no other value, and confirmed 755 Partial
+    and 9 Inconsistent days' entries.
     """
     # The shared Reset proof imports the board's publication code.
     from .reset_settlement import day_ends

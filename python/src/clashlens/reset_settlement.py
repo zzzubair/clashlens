@@ -77,6 +77,10 @@ RESET_READING_BATTLE_LAG = timedelta(minutes=10)
 # Saved battles keep no length, so a defense is taken to land this long
 # after its report time, the longest a battle lasts.
 LONGEST_BATTLE = timedelta(minutes=3)
+# Two readings minutes apart can both miss the same delayed credit, so a
+# later reading proves an end only this long after the end Reset reading,
+# and after the Reset.
+LATER_READING_GAP, LATER_READING_AFTER_RESET = timedelta(minutes=15), timedelta(minutes=20)
 
 
 # How far a saved day's end is proven, weakest last.
@@ -121,6 +125,7 @@ class DayEnd:
     boundary_at: datetime
     # The automatic loss the end Reset reading had not applied yet.
     unsettled_loss: int = 0
+    end_read_at: datetime | None = None
     later: int | None = None
     later_at: datetime | None = None
     # Defense slots the day used, counting "no opponent, no battle" rows.
@@ -170,14 +175,15 @@ class DayEnd:
         loss, the loss calculated, confirmed, or none on a day that used
         defense slots (a day using none can still be charged one), read at
         least ``RESET_READING_BATTLE_LAG`` after the day's last battle
-        landed, with continuous battle logs. Never at a Season's end, and at
-        a weekly Reset only above 5,000: the day's own calculation cannot
-        tell the game's raise to 5,000 from a total it ended on. On 7
-        October 2026 a single later reading could change with
-        no battle between (#R988P2Y9 read 5,017 at 05:08:33, then 4,977 at
-        05:22:14), and a single end reading could miss 176 trophies of
-        attacks stamped half an hour before it (#8RRYVCYQU), so it needs
-        both."""
+        landed, ``LATER_READING_GAP`` after the end Reset reading and
+        ``LATER_READING_AFTER_RESET`` after the Reset, with continuous
+        battle logs. Never at a Season's end, and at a weekly Reset only
+        above 5,000: the day's own calculation cannot tell the game's raise
+        to 5,000 from a total it ended on. On 7 October 2026 a single later
+        reading could change with no battle between (#R988P2Y9 read 5,017
+        at 05:08:33, then 4,977 at 05:22:14), and two readings minutes apart
+        can both be out of date: #8RRYVCYQU read 4,814 at 05:01:16, missing
+        176 trophies of attacks from before 04:31."""
         if (
             self.proof in {VERIFIED, BALANCED}
             or self.end_reading is None
@@ -186,6 +192,9 @@ class DayEnd:
             or not self.coverage_complete
             or self.later is None
             or self.later_at is None
+            or self.end_read_at is None
+            or self.later_at < self.end_read_at + LATER_READING_GAP
+            or self.later_at < self.boundary_at + LATER_READING_AFTER_RESET
             or self.last_landed is not None
             and self.later_at < self.last_landed + RESET_READING_BATTLE_LAG
         ):
@@ -243,6 +252,8 @@ def day_ends(
                ranked.input_evidence -> 'end_baseline_evidence'
                    ? 'official_final_trophies',
                settlement.selected_trophies, ranked.ranked_day_end,
+               (ranked.input_evidence -> 'end_baseline_evidence'
+                   -> 'profile' ->> 'observed_at')::timestamptz,
                COALESCE(
                    (ranked.formula_components ->> 'unsettled_automatic_loss')::int, 0
                ),
@@ -278,11 +289,11 @@ def day_ends(
             automatic_state=str(row[4]), boundary_kind=row[5], start=row[6],
             end_reading=row[7], next_start=row[8], official_end=bool(row[9]),
             settled=row[10] if facts is None else frozen.get("settled"),
-            boundary_at=row[11], unsettled_loss=int(row[12]),
+            boundary_at=row[11], end_read_at=row[12], unsettled_loss=int(row[13]),
             later=int(later["trophies"]) if later else None,
             later_at=datetime.fromisoformat(later["read_at"]) if later else None,
-            defense_slots=int(row[13]), coverage_complete=bool(row[14]),
-            last_landed=row[15],
+            defense_slots=int(row[14]), coverage_complete=bool(row[15]),
+            last_landed=row[16],
         )
     return ends
 

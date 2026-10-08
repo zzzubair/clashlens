@@ -621,7 +621,10 @@ day starts where the day before now ends; once every such job has finished,
 until every board correction of the Season has finished
 (`boards_rebuilding`); then `summaries`, storing each saved Season summary
 again from its days, since a summary's final rank reads the Season's last
-board. Run `queue` again until `phase` is `done`; `left_to_queue` and
+board, then each one that still differs from its days, as when a board
+correction since moved an earlier player's final rank, reading every summary
+of the Season each run; it is `done` only when none differs. Run `queue`
+again until `phase` is `done`; `left_to_queue` and
 `unfinished` count the day jobs still to queue and still to run. A day that
 comes out the same saves nothing new. A recalculation that failed is kept and
 not queued again: `failed` counts them and `failed_blockers` lists at most
