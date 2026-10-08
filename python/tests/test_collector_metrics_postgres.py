@@ -26,7 +26,7 @@ from clashlens.db import (
     PROCESSING_VERSION,
 )
 from clashlens.domain import ranked_day_for
-from clashlens.operator_recovery import retry_failed_item
+from clashlens.operator_recovery import replay_failed_jobs, retry_failed_item
 
 
 def test_health_metrics_survive_restart_and_separate_failed_uploads(
@@ -714,11 +714,18 @@ def test_a_failed_battle_log_job_replays_under_its_own_parser(
                 # Battle parser v3 reads battle logs only.
                 with pytest.raises(psycopg.errors.InvalidParameterValue):
                     connection.execute(request, (profile_observation, BATTLE_PARSER_VERSION))
-                replay = connection.execute(
-                    request, (observation_id, BATTLE_PARSER_VERSION)
-                ).fetchone()
-            assert text(replay[2]) == "enqueued"
-            result = processor.process_job(int(replay[1]), owner="replay-v3")
+            # Queued the way `./ops failed-items --replay-job-id` does, as the admin login.
+            with psycopg.connect(connection_info) as connection:
+                replay = replay_failed_jobs(
+                    connection,
+                    job_ids=[failed_job],
+                    operator="ops:operator",
+                    reason="replay a failed v3 battle log",
+                    apply=True,
+                )
+            assert replay["outcome"] == "replay_enqueued"
+            replay_job = replay["items"][0]["replay_job_id"]
+            result = processor.process_job(replay_job, owner="replay-v3")
             assert result is not None and result.outcome == "processed"
             with psycopg.connect(connection_info) as connection:
                 parsers = connection.execute(

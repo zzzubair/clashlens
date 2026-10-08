@@ -791,9 +791,16 @@ and uploads with their failure category.
 
 **Fix or escalate:** retry a failed upload with `--upload-hash` and `--apply`
 once its cause is fixed. Failed processing jobs have no retry command: replay a
-failed profile or battle-log job with `deploy/replay-request`, naming the
-failed job's own parser, such as `--parser-version supercell-battle-parser-v3`
-([failed work](deployment.md#failed-work)). If its saved response truly cannot
+failed profile or battle-log job (listed with recovery `replay`) under its own
+parser and rules with
+`./ops failed-items --replay-job-id ID --reason 'why it can be processed now'`,
+repeating `--replay-job-id` for several jobs. That previews; the same with
+`--apply` queues the replays and prints each `replay_job_id`. It queues all or
+none: if any job is refused, such as one that is not failed or that the replay
+function will not take, nothing is queued. The replay request records who asked
+(`ops:` and the host account), when and why, as `deploy/replay-request` does
+([failed work](deployment.md#failed-work)). Once a replay processes the saved
+response, the failed job stops counting. If its saved response truly cannot
 be processed, accept the job with the owner's agreement:
 `./ops failed-items --accept-job-id ID --reason 'why it cannot be processed'`
 previews, and the same with `--apply` records it. The job, its attempts and its
