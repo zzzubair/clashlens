@@ -443,6 +443,8 @@ def test_reset_reading_before_the_last_attack_landed_settles_both_days(
 ) -> None:
     # As #2GL8CJL on 7 October 2026: the Reset profile is read at 05:00, and
     # the ended day's attack reported at 05:02 only reaches it afterwards.
+    # Day A, Complete, proves day B's start.
+    day_a = [(DAY_A + timedelta(hours=hour), False) for hour in range(1, 9)]
     day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
     day_b.append((DAY_C + timedelta(minutes=2), True))
     day_c = [(DAY_C + timedelta(hours=1), True)]
@@ -450,7 +452,12 @@ def test_reset_reading_before_the_last_attack_landed_settles_both_days(
     end_b = start_b + WIN - 8 * LOSS
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(
-            connection_info, archive_server, DAY_B, profile=_profile(start_b), log=_log()
+            connection_info, archive_server, DAY_A,
+            profile=_profile(start_b + 8 * LOSS), log=_log(),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_B,
+            profile=_profile(start_b), log=_log(*day_a),
         )
         jobs += _reset_work(
             connection_info, archive_server, DAY_C,

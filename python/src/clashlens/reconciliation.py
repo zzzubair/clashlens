@@ -324,6 +324,15 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     season_rule_start = (
         data.start_baseline_evidence.get("start_trophies_source") == "season_rule"
     )
+    start_proven = (
+        season_rule_start
+        or data.season_first_day
+        or (
+            data.previous_day is not None
+            and data.previous_day.complete
+            and data.previous_day.end_baseline_id == data.start_baseline_id
+        )
+    )
     start_available = _baseline_available(
         data.start_baseline_id is not None or season_rule_start,
         data.start_trophies,
@@ -466,6 +475,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 residual = 0
             if (
                 residual
+                and start_proven
                 and not end_hidden_by_reset
                 and ended
                 and coverage_complete
@@ -478,12 +488,17 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 # 2026, before its attack reported at 05:02:15 added 40. On 5
                 # and 6 October this explained 23 mismatched days, each
                 # exactly. Without a later reading, the reading plus the
-                # battles that landed last settles the day.
-                battles_after_reading = _battles_after_reading(
-                    contributions, data, expected_next
+                # battles that landed last, less any automatic loss the game
+                # had not applied yet, settles the day. A start the previous
+                # day did not prove could be wrong by just those battles.
+                battles_after_reading, unsettled_loss = _battles_after_reading(
+                    contributions, data, expected_next,
+                    automatic_loss if automatic_state == "calculated" else 0,
                 )
                 if battles_after_reading:
-                    reading_correction = expected_next - data.next_start_trophies
+                    reading_correction = (
+                        expected_next + unsettled_loss - data.next_start_trophies
+                    )
                     next_start_trophies = expected_next
                     observed_trophy_change = next_start_trophies - start_trophies
                     residual = 0
@@ -1131,15 +1146,17 @@ def _battles_after_reading(
     contributions: tuple[BattleContribution, ...],
     data: ReconciliationInput,
     expected_next: int,
-) -> tuple[str, ...]:
+    pending_loss: int,
+) -> tuple[tuple[str, ...], int]:
     """The fewest of the day's last landed battles that the end Reset reading
-    must have missed for it to equal ``expected_next``, or none. An attack
+    must have missed for it to equal ``expected_next``, with or without
+    ``pending_loss`` still to come off it, and that loss; or none. An attack
     lands at its report time and a defense at its report time plus its
     length; every battle landing after the reading is missed, and so may be
     any landing up to ``RESET_READING_BATTLE_LAG`` before it."""
     observed_at = data.end_baseline_evidence.get("profile", {}).get("observed_at")
     if not isinstance(observed_at, str) or data.next_start_trophies is None:
-        return ()
+        return (), 0
     reading_at = datetime.fromisoformat(observed_at)
 
     def landed_at(battle: BattleContribution) -> datetime:
@@ -1163,9 +1180,10 @@ def _battles_after_reading(
             (battle.amount or 0) * (1 if battle.lens == "offense" else -1)
             for battle in missed
         )
-        if data.next_start_trophies + change == expected_next:
-            return tuple(battle.battle_identity for battle in missed)
-    return ()
+        for loss in (0, pending_loss):
+            if data.next_start_trophies + change - loss == expected_next:
+                return tuple(battle.battle_identity for battle in missed), loss
+    return (), 0
 
 
 def _zero_defense_loss(data: ReconciliationInput, defense_count: int) -> int:
