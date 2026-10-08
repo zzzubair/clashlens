@@ -1250,17 +1250,7 @@ and otherwise tries again on its next pass.
 Production runs `CLASHLENS_WORKER_PROCESSES` worker processes, 1 unless set,
 each with its own queue maintenance. If maintenance in another worker process
 reaches an expired job on its last allowed attempt before restoration
-succeeds, it still fails the job as `lease_expired_max_attempts`.
-
-In `app.env`, `CLASHLENS_WORKER_CONCURRENCY` (default 12) sets each process's
-threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default 8) how many of them
-process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE` (default 12)
-its connections. All processes share the worker container's memory and CPU
-limits. The setup proposed on 8 October 2026 for a 05:30 board with fresh
-live pages is 2 processes of 16 threads, 12 for responses, and 16 connections
-each, 38 database connections in all. It is not the default: it waits for the
-owner's decision on a second worker process and a full-size trial
-(`./dev trial` runs it). See
+succeeds, it still fails the job as `lease_expired_max_attempts`. See
 [`ObservationProcessor._process_claim`](../python/src/clashlens/worker.py) and
 the recovery cases in
 [`test_claim_jobs_postgres.py`](../python/tests/test_claim_jobs_postgres.py).
@@ -1287,6 +1277,57 @@ the existing audited `deploy/replay-request --observation-id ID --reason REASON`
 path. League-history, global, and derived processing failures require
 investigation. Transport failures are evidence governed by the normal work
 policy and are not manually requeued.
+
+## Worker processes
+
+In `app.env`, `CLASHLENS_WORKER_PROCESSES` (default 1) sets how many worker
+processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
+12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default 8) how
+many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
+(default 12) each process's connections. All processes share the container's
+memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
+worker refuses to start when the processes would open more than 40 database
+connections.
+
+The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
+is 2 processes of 16 threads, 12 for responses, and 16 connections each, 38
+database connections in all. To turn it on, outside 04:00-07:00 UTC, set in
+`app.env`:
+
+```sh
+CLASHLENS_WORKER_PROCESSES=2
+CLASHLENS_WORKER_CONCURRENCY=16
+CLASHLENS_WORKER_RESPONSE_LANES=12
+CLASHLENS_WORKER_DATABASE_POOL_SIZE=16
+```
+
+then run `./ops up`. It restarts the worker, API and website, and leaves the
+collector and database running when their images and settings are unchanged.
+To undo it, remove those four lines, or set them to 1, 12, 8 and 12, and run
+`./ops up` again.
+
+Memory is expected, not yet measured, to stay well inside the 4 GB limit. At
+09:32 UTC on 8 October 2026 one process used 325 MB, with a peak of 887 MB in
+the 26 minutes since it started; earlier peaks were near 1 GB. A population
+build is the biggest use, and only one runs at a time across processes, so
+two processes are expected to peak at about 1.3 to 1.7 GB, adding roughly 0.3
+to 0.8 GB on the host, which then had 9.0 GB available.
+
+At the first Reset with two processes, check:
+
+- `./ops logs worker`: no `worker_process` lines, which mean a process exited
+  and the container restarted both. Each `worker_health` line belongs to one
+  process; the change in its `python_process_observation` and
+  `python_reconcile_ranked_day` stage counts between lines is its responses
+  and daily results per minute. Their `queue.kinds` show the overdue backlog
+  of each kind of work and how long the oldest has waited.
+- The board's first frozen publication time against 05:25 for the frozen
+  inputs and 05:30 for the published board.
+- `systemctl --user show clashlens-worker.service -p MemoryCurrent -p
+  MemoryPeak`, plus `free -m` showing at least 2 GB available and `vmstat 1 5`
+  showing little swapping.
+- At most 38 database connections for `clashlens_python_worker` in
+  `pg_stat_activity`.
 
 ## Support recovery
 
