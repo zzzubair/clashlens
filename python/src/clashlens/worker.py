@@ -1353,6 +1353,19 @@ class ObservationProcessor:
             # job's attempts.
             if error.category != "archive_missing" or copy.recorded or copy.uploading:
                 raise
+            marker = self.archive.check_marker_health()
+            if marker == "degraded":
+                raise ArchiveReadError(
+                    "archive_unavailable",
+                    "archive marker could not be checked",
+                    retryable=True,
+                ) from error
+            if marker == "terminal":
+                raise ArchiveReadError(
+                    "archive_marker_mismatch",
+                    "archive marker does not match its configured hash",
+                    retryable=True,
+                ) from error
             raise ArchiveReadError(
                 "spool_missing",
                 "new observation is missing from the local spool and was never archived",

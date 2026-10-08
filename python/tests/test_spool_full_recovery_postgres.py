@@ -306,7 +306,7 @@ def test_cleanup_lookup_reads_kept_uploads_from_the_index_in_order(
     assert all(node["Node Type"] != "Sort" for node in nodes(plans[0]))
 
 
-def _lost_copy_reader(root, endpoint: str) -> SpoolFirstReader:
+def _lost_copy_reader(root, endpoint: str, **instance: str) -> SpoolFirstReader:
     return SpoolFirstReader(
         S3ArchiveReader(
             endpoint=endpoint,
@@ -316,6 +316,7 @@ def _lost_copy_reader(root, endpoint: str) -> SpoolFirstReader:
             secure=False,
             allow_insecure_test_origin=True,
             max_retries=0,
+            **instance,
         ),
         spool_root=str(root),
         max_body_bytes=64 << 10,
@@ -461,6 +462,64 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
         assert (spool.verify(digest) == body) is (outcome[0] == "complete")
         if history == "retired" and archived_at == "original":
             assert archive_server[3].get_count == 0
+
+
+@pytest.mark.parametrize(
+    ("marker", "outcome"),
+    [
+        ("matches", ("failed", "spool_missing")),
+        # Another archive answers at the configured address: its missing
+        # object says nothing about this one.
+        ("differs", ("waiting_retry", "archive_marker_mismatch")),
+        ("unreadable", ("waiting_dependency", "archive_unavailable")),
+    ],
+)
+def test_missing_proof_needs_the_archive_marker_to_match(
+    database_url: str,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    archive_server,
+    marker: str,
+    outcome: tuple[str, str],
+) -> None:
+    root = tmp_path / "spool"
+    payload = b"fixture archive marker"
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(root, max_body_bytes=64 << 10)
+        # A restored database lists the upload as pending; the saved copy is
+        # gone and the archive has no object at the upload's location.
+        digest = _save(connection_info, database, spool, TAGS[0])
+        spool.delete_if_unreferenced(digest)
+        objects = archive_server[3].objects
+        objects.clear()
+        if marker != "unreadable":
+            objects["markers/instance"] = (
+                payload if marker == "matches" else b"another archive's marker"
+            )
+        reader = _lost_copy_reader(
+            root,
+            archive_server[0],
+            instance_id="fixture-instance",
+            marker_key="markers/instance",
+            marker_hash=hashlib.sha256(payload).hexdigest(),
+            marker_payload_version="1",
+        )
+        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+
+        assert (
+            cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
+            == 0
+        )
+        capsys.readouterr()
+        with psycopg.connect(connection_info) as connection:
+            job = connection.execute(
+                "SELECT state, failure_category FROM python_processing_jobs_worker"
+            ).fetchone()
+
+    assert job == outcome
 
 
 def test_a_write_that_may_yet_land_is_checked_again_before_missing_proof(

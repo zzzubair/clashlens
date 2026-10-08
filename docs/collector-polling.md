@@ -680,7 +680,8 @@ spool is full; that processing is what lets cleanup free space. A failed disk
 read makes the job wait and retry without spending an attempt. A saved copy
 that is gone, after a lost disk or a database restored to before spool cleanup
 ran, is read back from the archive, checked against its hash and saved again.
-Only a response the archive never received fails, as `spool_missing`.
+Only a response the archive never received fails, as `spool_missing`, and only
+once the archive's identity marker matches; otherwise the job waits.
 
 Archive uploads run in their own process. The collector starts it inside its
 container with the collector's own settings, and starts it again if it exits or
