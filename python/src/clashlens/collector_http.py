@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import math
 import socket
 import sys
@@ -323,6 +324,13 @@ class _DeadlineHTTPSConnection(HTTPSConnection):
     def connect(self) -> None:
         super().connect()
         _register_request_connection(self)
+
+    def _tunnel(self) -> None:
+        try:
+            super()._tunnel()
+        except (OSError, http.client.HTTPException):
+            self.close()
+            raise
 
     def request(self, *args: object, **kwargs: object) -> None:
         _register_request_connection(self)

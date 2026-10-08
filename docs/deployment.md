@@ -264,6 +264,10 @@ The 96 connections are shared out:
 | Operator commands (`probe`, `recover-discord`) | 1 each | Run by hand, one request at a time. |
 
 That leaves at least 10 spare while a connection closes and another opens.
+`python/tests/test_collector_proxy.py` sends this full load at once, 54
+collector and 20 verification connections, through a stand-in relay that
+enforces `MaxClients` from the configuration `deploy.sh` writes. The stand-in
+is not Tinyproxy, so Tinyproxy's own process and memory limits are not tested.
 Tinyproxy runs a thread per connection, hence 128 processes and threads.
 A changed limit takes effect only when `deploy.sh up` is run again on the relay
 (below).
@@ -275,7 +279,8 @@ is the most connections it keeps open, so the most relay tunnels it holds, and
 a request is using and idle ones kept open for the next request.
 `clashlens_collector_relay_requests_total` counts requests sent through the
 relay; `clashlens_collector_relay_admission_failures_total` those the relay
-refused or could not be reached for, and `clashlens_collector_relay_timeouts_total`
+refused, closed unanswered as it does at its connection limit, or could not be
+reached for, and `clashlens_collector_relay_timeouts_total`
 those that ran out of time, including ones queued at a full relay. A
 connection to the relay that runs out of time counts in both. Timeouts divided
 by requests, using growth between two reads, is the timeout share.

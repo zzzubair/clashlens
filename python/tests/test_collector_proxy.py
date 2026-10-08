@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import select
 import socket
 import ssl
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import pairwise
 from pathlib import Path
@@ -16,7 +18,13 @@ import pytest
 
 from clashlens import cli
 from clashlens.cli import build_parser
-from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
+from clashlens.collector_http import (
+    RELAY_COLLECTOR_CONNECTIONS,
+    ApiKey,
+    KeyPool,
+    OfficialApiClient,
+    ProviderFailure,
+)
 from clashlens.verification import (
     OfficialVerificationClient,
     VerificationTransportError,
@@ -57,11 +65,17 @@ def relay(tmp_path, monkeypatch):
         "stall": False,
         "reject": False,
         "delay": 0.0,
+        "cap": None,
+        "refused": 0,
         "tunnels": 0,
         "peak_tunnels": 0,
     }
     entered, disconnected = threading.Event(), threading.Event()
-    tunnels = threading.Lock()
+    clients = threading.Lock()
+
+    class Server(ThreadingHTTPServer):
+        # Room for every caller of a full load to connect at once.
+        request_queue_size = 128
 
     class Origin(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -89,7 +103,7 @@ def relay(tmp_path, monkeypatch):
             self.end_headers()
             self.wfile.write(body)
 
-    origin = ThreadingHTTPServer(("127.0.0.1", 0), Origin)
+    origin = Server(("127.0.0.1", 0), Origin)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(cert, key)
     origin.socket = ctx.wrap_socket(origin.socket, server_side=True)
@@ -101,9 +115,23 @@ def relay(tmp_path, monkeypatch):
             pass
 
         def do_CONNECT(self):
+            self.close_connection = True
+            with clients:
+                if state["cap"] is not None and state["tunnels"] >= state["cap"]:
+                    # Like Tinyproxy at MaxClients: closed without an answer.
+                    state["refused"] += 1
+                    return
+                state["tunnels"] += 1
+                state["peak_tunnels"] = max(state["peak_tunnels"], state["tunnels"])
+            try:
+                self._connect()
+            finally:
+                with clients:
+                    state["tunnels"] -= 1
+
+        def _connect(self):
             state["connects"].append((self.path, dict(self.headers)))
             entered.set()
-            self.close_connection = True
             if state["reject"]:
                 self.send_error(403)
                 return
@@ -122,14 +150,7 @@ def relay(tmp_path, monkeypatch):
                 self.send_response(200, "Connection established")
                 self.end_headers()
                 self.wfile.flush()
-                with tunnels:
-                    state["tunnels"] += 1
-                    state["peak_tunnels"] = max(state["peak_tunnels"], state["tunnels"])
-                try:
-                    self._relay(upstream)
-                finally:
-                    with tunnels:
-                        state["tunnels"] -= 1
+                self._relay(upstream)
 
         def _relay(self, upstream):
             peers = (self.connection, upstream)
@@ -148,7 +169,7 @@ def relay(tmp_path, monkeypatch):
                     except OSError:
                         return
 
-    proxy = ThreadingHTTPServer(("127.0.0.1", 0), Relay)
+    proxy = Server(("127.0.0.1", 0), Relay)
     threads = [
         threading.Thread(target=s.serve_forever, daemon=True) for s in (origin, proxy)
     ]
@@ -426,75 +447,181 @@ def test_a_relay_that_is_down_or_refuses_counts_as_a_relay_failure(relay, failur
     assert metrics["clashlens_collector_relay_tunnels_open"] == 0
 
 
-def test_collector_and_verification_share_the_relay_within_their_budgets(
-    relay, monkeypatch
+# Production's callers at full load: eight regular keys and the interactive
+# key at six requests each, and player verification at its share of the relay
+# in docs/deployment.md.
+REGULAR_KEYS, PER_KEY, VERIFICATION_SHARE = 8, 6, 20
+COLLECTOR_LOAD = (REGULAR_KEYS + 1) * PER_KEY
+
+
+def _configured_relay_cap(tmp_path: Path) -> int:
+    """MaxClients in the Tinyproxy configuration deploy.sh writes."""
+    deploy = Path(__file__).resolve().parents[2] / "deploy/egress-proxy/deploy.sh"
+    docker = tmp_path / "docker"
+    docker.write_text(
+        '#!/usr/bin/env bash\n[[ "${1:-} ${2:-}" != "container inspect" ]]\n'
+    )
+    docker.chmod(0o700)
+    state = tmp_path / "relay-config"
+    subprocess.run(
+        [str(deploy), "up"],
+        env={
+            **os.environ,
+            "DOCKER_BIN": str(docker),
+            "PROXY_STATE_DIR": str(state),
+            "PROXY_LISTEN_IP": "100.64.0.1",
+            "PROXY_CLIENT_IP": "100.64.0.2",
+        },
+        check=True,
+        capture_output=True,
+    )
+    directives: dict[str, list[str]] = {}
+    for line in (state / "tinyproxy.conf").read_text().splitlines():
+        name, _, value = line.strip().partition(" ")
+        if name and not name.startswith("#"):
+            directives.setdefault(name.lower(), []).append(value.strip())
+    [cap] = directives["maxclients"]
+    return int(cap)
+
+
+@pytest.mark.parametrize("over_cap", [False, True])
+def test_full_caller_load_shares_the_relay_within_its_cap_and_budgets(
+    relay, monkeypatch, tmp_path, over_cap
 ):
-    # Production sends regular keys' checks, the interactive key's requests
-    # and the API's player verification through the one relay at once.
+    # 48 regular requests, six interactive ones and 20 player verifications
+    # go through one relay at once. The stand-in relay enforces the connection
+    # cap of the configuration deploy.sh writes, closing connections over it
+    # as Tinyproxy does. It is not Tinyproxy, so Tinyproxy's own process and
+    # memory limits are not exercised here.
     monkeypatch.setenv("SSL_CERT_FILE", str(relay["cert"]))
-    relay["delay"] = 0.5
+    load = COLLECTOR_LOAD + VERIFICATION_SHARE
+    configured = _configured_relay_cap(tmp_path)
+    assert load <= configured
+    # A cap below the load shows connections over the cap are refused.
+    relay["cap"] = load - 10 if over_cap else configured
+    relay["delay"] = 1.0
     regular = KeyPool(
-        [ApiKey(f"regular-{n}", f"regular-secret-{n}") for n in range(1, 5)],
+        [
+            ApiKey(f"regular-{n}", f"regular-secret-{n}")
+            for n in range(1, REGULAR_KEYS + 1)
+        ],
         starts_per_second=28,
-        concurrency_per_key=2,
+        concurrency_per_key=PER_KEY,
     )
     interactive = KeyPool(
         [ApiKey("interactive-1", "interactive-secret")],
-        starts_per_second=20,
-        concurrency_per_key=2,
+        starts_per_second=28,
+        concurrency_per_key=PER_KEY,
     )
     client = OfficialApiClient(
         relay["origin"],
         proxy_url=relay["proxy"],
-        total_timeout_seconds=5,
-        max_connections=(4 + 1) * 2,
+        total_timeout_seconds=10,
+        max_connections=COLLECTOR_LOAD,
     )
     verifier = OfficialVerificationClient(
         api_key=b"verification-secret",
         proxy_url=relay["proxy"],
         api_origin=relay["origin"],
         allow_insecure_test_origin=True,
-        timeout_seconds=5,
+        timeout_seconds=10,
     )
+    peaks = {"collector": 0.0, "verification": 0}
 
-    async def timed(call):
-        started = monotonic()
-        result = await call
-        return result, monotonic() - started
+    async def sample(stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            peaks["collector"] = max(
+                peaks["collector"],
+                _metrics(client)["clashlens_collector_relay_tunnels_open"],
+            )
+            peaks["verification"] = max(
+                peaks["verification"], verifier.relay_snapshot()["tunnels_open"]
+            )
+            await asyncio.sleep(0.01)
 
     async def run():
-        calls = [client.fetch_player(regular, "#2PP", "profile") for _ in range(8)]
-        calls.append(client.fetch_player(interactive, "#2PP", "profile"))
-        calls.append(asyncio.to_thread(verifier.verify, "#2PP", "player-token"))
-        return await asyncio.gather(*(timed(call) for call in calls))
+        loop = asyncio.get_running_loop()
+        stop = asyncio.Event()
+        sampler = asyncio.create_task(sample(stop))
+        with ThreadPoolExecutor(max_workers=VERIFICATION_SHARE) as threads:
+            calls = [
+                client.fetch_player(regular, "#2PP", "profile")
+                for _ in range(REGULAR_KEYS * PER_KEY)
+            ]
+            calls += [
+                client.fetch_player(interactive, "#2PP", "profile")
+                for _ in range(PER_KEY)
+            ]
+            calls += [
+                loop.run_in_executor(threads, verifier.verify, "#2PP", "player-token")
+                for _ in range(VERIFICATION_SHARE)
+            ]
+            results = await asyncio.gather(*calls, return_exceptions=True)
+        stop.set()
+        await sampler
+        return results
 
     try:
+        started = monotonic()
         results = asyncio.run(run())
-        idle = _metrics(client)
-        deadline = monotonic() + 1
-        while relay["tunnels"] != 9 and monotonic() < deadline:
+        elapsed = monotonic() - started
+        metrics = _metrics(client)
+        deadline = monotonic() + 2
+        while relay["tunnels"] != metrics[
+            "clashlens_collector_relay_tunnels_open"
+        ] and monotonic() < deadline:
             sleep(0.01)
         relay_tunnels = relay["tunnels"]
     finally:
         client._http.clear()
         client._executor.shutdown()
 
-    assert [response.body for response, _elapsed in results[:9]] == [b"ok"] * 9
-    assert results[9][0].http_status == 200
-    # Every caller was answered inside its own time limit, all at once.
-    assert all(elapsed < 5 for _response, elapsed in results)
-    assert relay["peak_tunnels"] == 10
-    # The collector's nine connections stay open for reuse with no request
-    # using them, and its count of them matches the relay's.
-    assert idle["clashlens_collector_api_requests_in_flight"] == 0
-    assert idle["clashlens_collector_relay_tunnels_open"] == 9 == relay_tunnels
-    assert idle["clashlens_collector_relay_requests_total"] == 9
-    assert idle["clashlens_collector_relay_timeouts_total"] == 0
-    assert idle["clashlens_collector_relay_admission_failures_total"] == 0
-    assert idle["clashlens_collector_relay_reachable"] == 1
+    collector, verifications = results[:COLLECTOR_LOAD], results[COLLECTOR_LOAD:]
+    collector_failures = [r for r in collector if isinstance(r, BaseException)]
+    verification_failures = [r for r in verifications if isinstance(r, BaseException)]
+    # Each caller stayed inside its budget and the relay inside its cap.
+    assert relay["peak_tunnels"] <= relay["cap"]
+    assert peaks["collector"] <= min(COLLECTOR_LOAD, RELAY_COLLECTOR_CONNECTIONS)
+    assert peaks["verification"] <= VERIFICATION_SHARE
+    assert elapsed < 10
+    assert relay["refused"] == len(collector_failures) + len(verification_failures)
+    assert all(
+        isinstance(failure, ProviderFailure) and failure.category == "proxy_failure"
+        for failure in collector_failures
+    )
+    assert all(
+        isinstance(failure, VerificationTransportError)
+        for failure in verification_failures
+    )
+    assert metrics["clashlens_collector_relay_requests_total"] == COLLECTOR_LOAD
+    assert metrics["clashlens_collector_relay_admission_failures_total"] == len(
+        collector_failures
+    )
+    assert metrics["clashlens_collector_relay_timeouts_total"] == 0
+    assert verifier.relay_snapshot()["admission_failures"] == len(
+        verification_failures
+    )
+    if over_cap:
+        assert relay["refused"] == 10
+        assert relay["peak_tunnels"] == relay["cap"]
+        return
+    # Every caller was served, all at once.
+    assert relay["refused"] == 0
+    assert [response.body for response in collector] == [b"ok"] * COLLECTOR_LOAD
+    assert [response.http_status for response in verifications] == [
+        200
+    ] * VERIFICATION_SHARE
+    assert relay["peak_tunnels"] == load
+    assert peaks == {"collector": COLLECTOR_LOAD, "verification": VERIFICATION_SHARE}
+    # The collector's connections stay open for reuse with no request using
+    # them, and its count of them matches the relay's.
+    assert metrics["clashlens_collector_api_requests_in_flight"] == 0
+    assert metrics["clashlens_collector_relay_tunnels_open"] == COLLECTOR_LOAD
+    assert relay_tunnels == COLLECTOR_LOAD
+    assert metrics["clashlens_collector_relay_reachable"] == 1
     assert verifier.relay_snapshot() == {
         "tunnels_open": 0,
-        "requests": 1,
+        "requests": VERIFICATION_SHARE,
         "timeouts": 0,
         "admission_failures": 0,
         "reachable": True,
