@@ -163,6 +163,7 @@ class Uploader:
         lease = {"until": claimed_at + LEASE_SECONDS}
         renewal_stop = asyncio.Event()
         renewal = asyncio.create_task(self._renew_lease(claim, lease, renewal_stop))
+        wrote = False
         try:
             config = self.archive.instance_config
             if config is not None and not self._archive_identity_validated:
@@ -204,6 +205,7 @@ class Uploader:
                 reference = await self._archived_copy(claim)
             else:
                 await self._keep_lease(renewal, claim, lease)
+                wrote = True
                 reference = await self._timed(
                     "archive_write",
                     self.archive.write_immutable,
@@ -227,6 +229,11 @@ class Uploader:
             self.stages.record("upload_total", time.monotonic() - claimed_at)
             self.archive_health = "ready"
         except ArchiveReadError as error:
+            detail = str(error)
+            if claim.unresolved_write is not None and not wrote:
+                detail = collector_uploads.unresolved_write_detail(
+                    claim.unresolved_write, detail
+                )
             try:
                 await self._keep_lease(renewal, claim, lease)
                 await _stop_task(renewal_stop, renewal)
@@ -237,7 +244,7 @@ class Uploader:
                         self.database,
                         claim,
                         category=error.category,
-                        detail=str(error),
+                        detail=detail,
                         retryable=error.retryable,
                     )
                 )
@@ -273,7 +280,7 @@ class Uploader:
                 "archive_read", self.archive.read_verified, reference, claim.response_hash
             )
         except ArchiveReadError as error:
-            if error.category == "archive_missing" and not claim.write_unresolved:
+            if error.category == "archive_missing" and claim.unresolved_write is None:
                 raise ArchiveReadError(
                     "spool_missing",
                     "pending upload has no local raw response and no archived copy",

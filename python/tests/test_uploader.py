@@ -713,22 +713,22 @@ def test_a_lost_saved_copy_already_archived_completes_without_writing(
 
 
 @pytest.mark.parametrize(
-    ("archive_error", "write_unresolved", "outcome"),
+    ("archive_error", "unresolved_write", "outcome"),
     [
         (
             ArchiveReadError("archive_missing", "no such object", retryable=True),
-            False,
+            None,
             "fail:spool_missing:False",
         ),
-        # The last attempt's write timed out and may still land.
+        # The write of attempt 31 timed out and may still land.
         (
             ArchiveReadError("archive_missing", "no such object", retryable=True),
-            True,
+            31,
             "fail:archive_missing:True",
         ),
         (
             ArchiveReadError("archive_unavailable", "provider error", retryable=True),
-            False,
+            None,
             "fail:archive_unavailable:True",
         ),
     ],
@@ -737,7 +737,7 @@ def test_a_lost_saved_copy_already_archived_completes_without_writing(
 def test_a_lost_saved_copy_fails_for_good_only_when_the_archive_lacks_it(
     monkeypatch: pytest.MonkeyPatch,
     archive_error: ArchiveReadError,
-    write_unresolved: bool,
+    unresolved_write: int | None,
     outcome: str,
 ) -> None:
     spool = _Spool()
@@ -750,7 +750,7 @@ def test_a_lost_saved_copy_fails_for_good_only_when_the_archive_lacks_it(
         "token",
         datetime.now(UTC),
         1,
-        write_unresolved=write_unresolved,
+        unresolved_write=unresolved_write,
     )
     calls = _one_claim(monkeypatch, claim)
 
@@ -763,6 +763,71 @@ def test_a_lost_saved_copy_fails_for_good_only_when_the_archive_lacks_it(
 
     assert asyncio.run(uploader.upload_once(owner="uploader")) is True
     assert calls[-1] == outcome
+
+
+@pytest.mark.parametrize("generation", ["", "b" * 32])
+@pytest.mark.parametrize("saved", [False, True])
+def test_an_attempt_that_writes_nothing_keeps_counting_from_the_last_write(
+    monkeypatch: pytest.MonkeyPatch, generation: str, saved: bool
+) -> None:
+    # Attempt 31's write may still land. Attempt 40 finds no saved copy and no
+    # archived one, and names attempt 31 so the wait still counts from it; an
+    # attempt that writes again starts the count afresh.
+    digest = "a" * 64
+    spool = _Spool()
+    spool.verify = lambda _digest, _size: (  # type: ignore[attr-defined]
+        b"body" if saved else None
+    )
+    claim = UploadClaim(
+        digest,
+        "one",
+        4,
+        "uploader",
+        "token",
+        datetime.now(UTC),
+        40,
+        generation,
+        unresolved_write=31,
+    )
+    _one_claim(monkeypatch, claim)
+    failures: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        uploader_module.collector_uploads,
+        "fail_upload",
+        lambda _database, _claim, *, category, detail, **_kwargs: failures.append(
+            (category, detail)
+        ),
+    )
+    reads: list[str] = []
+
+    class Archive(_ReadyArchive):
+        @staticmethod
+        def read_verified(reference: str, _expected_hash: str) -> object:
+            reads.append(reference)
+            raise ArchiveReadError("archive_missing", "no such object", retryable=True)
+
+        @staticmethod
+        def write_immutable(*_args: object, **_kwargs: object) -> str:
+            raise ArchiveReadError(
+                "archive_unavailable", "write timed out", retryable=True
+            )
+
+    uploader = _uploader(spool, _Store(spool), Archive())
+
+    assert asyncio.run(uploader.upload_once(owner="uploader")) is True
+    if saved:
+        assert failures == [("archive_unavailable", "archive_unavailable: write timed out")]
+        return
+    location = f"s3://evidence/sha256/aa/{digest}" + (
+        f"/generation/{generation}" if generation else ""
+    )
+    assert reads == [location]
+    assert failures == [
+        (
+            "archive_missing",
+            "write attempt 31 may yet land: archive_missing: no such object",
+        )
+    ]
 
 
 def test_upload_step_times_and_counts_show_on_the_collector_metrics(

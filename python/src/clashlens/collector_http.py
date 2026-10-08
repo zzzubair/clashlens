@@ -806,13 +806,16 @@ class OfficialApiClient:
         async def request(key: ApiKey, start_request: StartRequest) -> FetchedResponse:
             await self._executor_slots.acquire()
             release_immediately = True
+            sending = False
+
+            async def start_sending() -> None:
+                nonlocal sending
+                await start_when_provider_answers(start_request)
+                sending = True
+
             try:
                 response = await self._fetch_with_key(
-                    pool,
-                    endpoint,
-                    url,
-                    key,
-                    lambda: start_when_provider_answers(start_request),
+                    pool, endpoint, url, key, start_sending
                 )
             except (_DetachedTimeout, _DetachedCancellation) as error:
                 release_immediately = False
@@ -823,7 +826,8 @@ class OfficialApiClient:
                     self._count_relay("timeout")
                 raise
             except ProviderFailure as error:
-                self._count_relay(error.category)
+                if sending:
+                    self._count_relay(error.category)
                 raise
             finally:
                 if release_immediately:

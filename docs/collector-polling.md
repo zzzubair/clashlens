@@ -704,8 +704,10 @@ process checks the location this upload would write to; bytes already there,
 from an upload a restored database forgot, complete it without a second write.
 A location the archive catalogue marks retired is never read. After a write
 that may still land (one that failed in a way that may pass, or whose claim ran
-out), a missing copy there is checked again on each attempt, up to the
-upload's 30th, before the response counts as never archived. A spool read
+out), a missing copy there is checked again on each of the next 30 attempts,
+before the response counts as never archived. Attempts that write nothing name
+that write in their failure detail (`write attempt N may yet land: ...`), so
+failures before a write never shorten its wait. A spool read
 failure in the uploads process pauses collection, as one in the collector does.
 [Upload waits](operating.md#uploads-waiting) shows how to read its step times.
 

@@ -22,8 +22,8 @@ class UploadClaim:
     # Non-empty when retired bytes were seen again: the upload must use the
     # hash's generation suffix so the tombstoned location stays untouched.
     generation: str = ""
-    # The previous attempt's write may yet land; see WRITE_UNRESOLVED_SQL.
-    write_unresolved: bool = False
+    # The attempt whose write may yet land, if any; see WRITE_UNRESOLVED_SQL.
+    unresolved_write: int | None = None
 
 
 class UploadLeaseLost(RuntimeError):
@@ -42,18 +42,37 @@ class ArchivedCopy:
 
 
 # Uploads retry at least 5 seconds apart, so a write that may yet land is
-# waited for through at least two and a half minutes of attempts.
+# waited for through at least two and a half minutes of later attempts.
 UNRESOLVED_WRITE_ATTEMPTS = 30
 
 
+def unresolved_write_detail(attempt: int, detail: str) -> str:
+    """The failure detail of an attempt that wrote nothing while ``attempt``'s
+    write may yet land, so the next claim still counts from that write."""
+    return f"write attempt {attempt} may yet land: {detail}"
+
+
+# The attempt whose write may yet land: the last one, unless the last one
+# wrote nothing and named that earlier write in its failure detail.
+_WRITE_ATTEMPT_SQL = """
+    COALESCE(
+        CASE WHEN upload.state = 'failed' THEN substring(
+            upload.last_error_detail FROM '^write attempt ([0-9]+) may yet land: '
+        )::integer END,
+        upload.attempt_count)
+"""
+
+
 # The last attempt's lease ran out, or it failed in a way that may pass, so a
-# write an earlier attempt made may still land: until the upload has made
-# UNRESOLVED_WRITE_ATTEMPTS attempts, a missing copy is not yet proof the
-# archive lacks these bytes.
+# write may still land: for UNRESOLVED_WRITE_ATTEMPTS attempts after that
+# write, a missing copy is not yet proof the archive lacks these bytes. This
+# gives that write's attempt number, or NULL.
 WRITE_UNRESOLVED_SQL = f"""
-    (((upload.state = 'failed' AND upload.last_error_retryable IS TRUE)
-      OR (upload.state = 'pending' AND upload.attempt_count > 0))
-     AND upload.attempt_count < {UNRESOLVED_WRITE_ATTEMPTS})
+    CASE WHEN ((upload.state = 'failed' AND upload.last_error_retryable IS TRUE)
+               OR (upload.state = 'pending' AND upload.attempt_count > 0))
+          AND upload.attempt_count
+              < {_WRITE_ATTEMPT_SQL} + {UNRESOLVED_WRITE_ATTEMPTS}
+         THEN {_WRITE_ATTEMPT_SQL} END
 """
 
 
@@ -151,7 +170,7 @@ def claim_upload(
         claimed[3],
         int(claimed[4]),
         str(claimed[5]),
-        bool(row[1]),
+        row[1],
     )
 
 
@@ -468,7 +487,7 @@ def archived_copy(
             """,
             {"hash": response_hash},
         ).fetchone()
-        uploading = state == "leased" or bool(unresolved)
+        uploading = state == "leased" or unresolved is not None
         if verified is not None:
             return ArchivedCopy(str(verified), True, uploading)
         if state is None:

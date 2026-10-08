@@ -712,3 +712,42 @@ def test_a_relay_connection_that_runs_out_of_time_is_a_timeout_and_a_relay_failu
         "reachable": False,
     }
     assert relay["requests"] == []
+
+
+@pytest.mark.parametrize(
+    "refusal", ["credential_quarantined", "credential_unknown", "credential_inactive"]
+)
+def test_a_key_refused_before_sending_leaves_the_relay_counts_alone(relay, refusal):
+    # Player verification can disable the shared interactive key; the next
+    # collection request is then refused here, before anything is sent.
+    async def refuse() -> None:
+        raise ProviderFailure(refusal, retryable=False)
+
+    refused = KeyPool(
+        [ApiKey("interactive-1", "synthetic-secret")],
+        starts_per_second=20,
+        concurrency_per_key=1,
+        before_start=refuse,
+    )
+    client = OfficialApiClient(relay["origin"], proxy_url=relay["proxy"])
+    seen = []
+
+    async def fetch() -> None:
+        for pool in (refused, key_pool(), refused):
+            try:
+                await client.fetch_player(pool, "#2PP", "profile")
+            except ProviderFailure as error:
+                assert error.category == refusal
+            seen.append(_metrics(client))
+
+    try:
+        asyncio.run(fetch())
+    finally:
+        client._http.clear()
+        client._executor.shutdown()
+    assert seen[0]["clashlens_collector_relay_requests_total"] == 0
+    assert "clashlens_collector_relay_reachable" not in seen[0]
+    for metrics in seen[1:]:
+        assert metrics["clashlens_collector_relay_requests_total"] == 1
+        assert metrics["clashlens_collector_relay_reachable"] == 1
+    assert len(relay["connects"]) == 1

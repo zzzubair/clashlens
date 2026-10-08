@@ -27,6 +27,7 @@ from clashlens.collector_uploads import (
     complete_upload,
     fail_upload,
     release_expired_uploads,
+    unresolved_write_detail,
 )
 from clashlens.spool import Spool, SpoolError
 
@@ -345,8 +346,10 @@ def _lost_copy_reader(root, endpoint: str) -> SpoolFirstReader:
         # after a later attempt found no copy.
         ("write_unresolved", None, ("waiting_dependency", "archive_missing")),
         ("missing_after_unresolved", None, ("waiting_dependency", "archive_missing")),
-        # Only for so many attempts.
+        # Only for so many attempts after that write, however many attempts
+        # failed before it.
         ("unresolved_exhausted", None, ("failed", "spool_missing")),
+        ("written_after_many_failures", None, ("waiting_dependency", "archive_missing")),
         # The archive cannot be reached: try again later.
         ("unreachable", "original", ("waiting_dependency", "archive_unavailable")),
     ],
@@ -385,6 +388,7 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
             "write_unresolved",
             "missing_after_unresolved",
             "unresolved_exhausted",
+            "written_after_many_failures",
         }:
             claim = claim_upload(database, owner="uploader")
             assert claim is not None
@@ -403,8 +407,19 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
         if history == "unresolved_exhausted":
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
+                    "UPDATE collector_response_uploads SET attempt_count = %s,"
+                    " last_error_category = 'archive_missing',"
+                    " last_error_detail = %s",
+                    (
+                        1 + UNRESOLVED_WRITE_ATTEMPTS,
+                        unresolved_write_detail(1, "no such object"),
+                    ),
+                )
+        if history == "written_after_many_failures":
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
                     "UPDATE collector_response_uploads SET attempt_count = %s",
-                    (UNRESOLVED_WRITE_ATTEMPTS,),
+                    (10 * UNRESOLVED_WRITE_ATTEMPTS,),
                 )
         if history == "retired":
             with psycopg.connect(connection_info) as connection:
@@ -457,28 +472,47 @@ def test_a_write_that_may_yet_land_is_checked_again_before_missing_proof(
         database = CollectorDatabase(connection_info)
         spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
         _save(connection_info, database, spool, TAGS[0])
-        first = claim_upload(database, owner="uploader")
-        assert first is not None and not first.write_unresolved
+        at = later
+        claim = claim_upload(database, owner="uploader", now=at)
+        # Thirty attempts that only found the archive marker unreadable, as
+        # the uploads process records them.
+        while claim is not None and claim.attempt_count <= UNRESOLVED_WRITE_ATTEMPTS:
+            detail = "archive marker could not be checked"
+            if claim.unresolved_write is not None:
+                detail = unresolved_write_detail(claim.unresolved_write, detail)
+            fail_upload(database, claim, category="archive_unavailable", detail=detail)
+            at += timedelta(minutes=2)
+            claim = claim_upload(database, owner="uploader", now=at)
+        # The next attempt writes, and the write times out.
+        assert claim is not None
+        write = claim.attempt_count
         fail_upload(
             database,
-            first,
+            claim,
             category="archive_unavailable",
             detail="archive write outcome could not be verified",
         )
-        claim = claim_upload(database, owner="uploader", now=later)
-        assert claim is not None and claim.write_unresolved
+        at += timedelta(minutes=2)
+        claim = claim_upload(database, owner="uploader", now=at)
+        # Attempts finding no archived copy do not settle it until that write
+        # has had its full allowance of later attempts.
+        while claim is not None and claim.attempt_count <= write + UNRESOLVED_WRITE_ATTEMPTS:
+            assert claim.unresolved_write == write
+            fail_upload(
+                database,
+                claim,
+                category="archive_missing",
+                detail=unresolved_write_detail(write, "no such object"),
+            )
+            at += timedelta(minutes=2)
+            claim = claim_upload(database, owner="uploader", now=at)
+        assert claim is not None and claim.unresolved_write is None
         # An attempt whose lease ran out may have written too.
-        later += timedelta(minutes=2)
-        assert release_expired_uploads(database, now=later) == 1
-        claim = claim_upload(database, owner="uploader", now=later)
-        # Attempts finding no archived copy do not settle it, until the
-        # upload has made its last such attempt.
-        while claim is not None and claim.attempt_count <= UNRESOLVED_WRITE_ATTEMPTS:
-            assert claim.write_unresolved
-            fail_upload(database, claim, category="archive_missing")
-            later += timedelta(minutes=2)
-            claim = claim_upload(database, owner="uploader", now=later)
-        assert claim is not None and not claim.write_unresolved
+        at += timedelta(minutes=2)
+        assert release_expired_uploads(database, now=at) == 1
+        expired = claim.attempt_count
+        claim = claim_upload(database, owner="uploader", now=at)
+        assert claim is not None and claim.unresolved_write == expired
 
 
 class _FinishesAfterFirstRead:
