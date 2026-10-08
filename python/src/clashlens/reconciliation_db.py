@@ -1118,8 +1118,8 @@ def _enqueue_day_end_reconciliation(
     none and nothing else calculates the day again. On 2026-10-06 that left
     2,037 ended Day 1 results Live. Due DAY_END_RECALCULATION_DELAY after the
     Reset, once its readings have landed, the job runs only when no other
-    work waits, and does nothing once the day is finished, unless it ended
-    in a trophy mismatch that a reading since the Reset may settle.
+    work waits, and does nothing once the day is finished, unless a reading
+    since the Reset may settle it (``ranked_day_inputs.LATER_READING_DAY_SQL``).
     """
     day_text = ranked_day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     connection.execute(
