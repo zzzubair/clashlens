@@ -383,7 +383,7 @@ def _upsert_army_decodes(
 def complete_army_analytics(database: Database, claim: Claim) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
+            job = database._lock_live_claim(connection, claim, build=True)
             generation_input = claim.input_json.get("generation")
             generation_row = None
             season_id_row = None

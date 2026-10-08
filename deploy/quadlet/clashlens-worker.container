@@ -29,7 +29,7 @@ HealthTimeout=20s
 HealthRetries=6
 HealthOnFailure=kill
 Notify=healthy
-Exec=worker --owner production-python-1 --max-jobs 100 --lease-seconds @@WORKER_LEASE@@ --concurrency @@WORKER_CONCURRENCY@@ --database-pool-size @@WORKER_DB_POOL@@ --archive-pool-size @@WORKER_ARCHIVE_POOL@@ --run-forever @@WORKER_ARGS@@
+Exec=worker --owner production-python-1 --max-jobs 100 --lease-seconds @@WORKER_LEASE@@ --processes @@WORKER_PROCESSES@@ --concurrency @@WORKER_CONCURRENCY@@ --response-lanes @@WORKER_RESPONSE_LANES@@ --database-pool-size @@WORKER_DB_POOL@@ --archive-pool-size @@WORKER_ARCHIVE_POOL@@ --run-forever @@WORKER_ARGS@@
 
 [Service]
 Restart=always

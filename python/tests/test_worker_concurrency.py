@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from threading import Event
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from psycopg_pool import PoolTimeout
 
-from clashlens import reconciliation_db
+from clashlens import cli, reconciliation_db
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
 from clashlens.worker import (
     MAX_CONCURRENCY,
@@ -17,6 +18,8 @@ from clashlens.worker import (
     lane_owner,
     process_concurrently,
     process_until_stopped,
+    run_processes,
+    worker_process_commands,
 )
 
 
@@ -617,3 +620,48 @@ def test_no_job_or_maintenance_starts_after_stop_during_a_slow_ready_check() -> 
     assert not thread.is_alive()
     assert processor.calls == []
     assert maintained == []
+
+
+WORKER_ARGV = ["worker", "--database-url", "postgresql://prototype@postgres/db",
+               "--owner", "production-python-1", "--run-forever", "--processes", "2",
+               "--concurrency", "16", "--response-lanes", "12"]
+
+
+def test_each_worker_process_runs_the_same_worker_under_its_own_owner() -> None:
+    arguments = cli.build_parser().parse_args(WORKER_ARGV)
+    arguments.argv = WORKER_ARGV
+    commands = worker_process_commands(arguments)
+    assert [command[:3] for command in commands] == [[sys.executable, "-m", "clashlens.cli"]] * 2
+    parsed = [cli.build_parser().parse_args(command[3:]) for command in commands]
+    assert [(each.processes, each.process_index, each.owner) for each in parsed] == [
+        (2, 1, "production-python-1.process-1"),
+        (2, 2, "production-python-1.process-2"),
+    ]
+    assert {(each.concurrency, each.response_lanes, each.run_forever) for each in parsed} == {
+        (16, 12, True)
+    }
+
+
+def test_worker_processes_over_the_connection_budget_never_start(capsys) -> None:
+    # Two processes of 32 connections each would leave the collector short.
+    assert cli.main([*WORKER_ARGV, "--database-pool-size", "32"]) == 1
+    assert "ValueError" in capsys.readouterr().err
+    assert cli.main([*WORKER_ARGV[:-2], "--response-lanes", "16"]) == 1
+
+
+def test_when_one_worker_process_exits_the_others_stop_and_the_worker_fails() -> None:
+    commands = [[sys.executable, "-c", "import time; time.sleep(60)"],
+                [sys.executable, "-c", "raise SystemExit(3)"]]
+    started = time.monotonic()
+    assert run_processes(commands, Event()) == 1
+    assert time.monotonic() - started < 10
+
+
+def test_a_requested_stop_reaches_every_worker_process() -> None:
+    graceful = ("import signal, sys, time;"
+                " signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); time.sleep(60)")
+    stop = Event()
+    threading.Timer(1.0, stop.set).start()
+    started = time.monotonic()
+    assert run_processes([[sys.executable, "-c", graceful]] * 2, stop) == 0
+    assert time.monotonic() - started < 10

@@ -56,14 +56,16 @@ from .verification import (
 from .worker import (
     MAINTENANCE_POOL_SIZE,
     MAX_CONCURRENCY,
+    MAX_PROCESSES,
     ObservationProcessor,
     ProcessResult,
     StageMetrics,
     TimedMaintenance,
     process_concurrently,
     process_until_stopped,
+    start_processes,
 )
-from .worker_liveness import ProgressMark, worker_readiness
+from .worker_liveness import ProgressMark, progress_file, worker_readiness
 
 MAX_REPORTED_RESULTS = 100
 # Save plus request threads leave 64 of the collector container's 512 for the rest.
@@ -170,39 +172,35 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--run-forever", action="store_true")
     worker.add_argument("--poll-interval-seconds", type=float, default=1.0)
     worker.add_argument(
-        "--concurrency",
-        type=_bounded_int("concurrency", 1, MAX_CONCURRENCY),
-        default=1,
-        help=(
-            "number of bounded in-process execution lanes (1 to 32; "
-            "default 1 preserves sequential behavior)"
-        ),
+        "--processes", type=_bounded_int("processes", 1, MAX_PROCESSES), default=1,
+        help="worker processes, each with its own owner, lanes and pools (default 1)",
     )
     worker.add_argument(
-        "--database-pool-size",
-        type=_bounded_int("database pool size", 1, MAX_POOL_SIZE),
-        default=None,
-        help=(
-            "PostgreSQL connection pool size (default: 8 with concurrency, "
-            "4 for the sequential worker)"
-        ),
+        "--concurrency", type=_bounded_int("concurrency", 1, MAX_CONCURRENCY), default=1,
+        help="in-process execution lanes per process, 1 to 32 (default 1: sequential)",
     )
     worker.add_argument(
-        "--archive-pool-size",
-        type=_bounded_int("archive pool size", 1, MAX_ARCHIVE_POOL_SIZE),
-        default=None,
-        help=("archive HTTP connection pool size (default: max(4, concurrency))"),
+        "--response-lanes", type=_bounded_int("response lanes", 1, MAX_CONCURRENCY - 1),
+        default=None, help="lanes that only process responses (default: two thirds)",
+    )
+    worker.add_argument(
+        "--claim-batch-size", type=_bounded_int("claim batch size", 1, 32), default=8,
+        help="jobs one claim leases for the lanes of one kind of work (default 8)",
+    )
+    worker.add_argument("--process-index", type=int, default=0, help=argparse.SUPPRESS)
+    worker.add_argument(
+        "--database-pool-size", type=_bounded_int("database pool size", 1, MAX_POOL_SIZE),
+        default=None, help="PostgreSQL pool size per process (default: 8, or 4 sequential)",
+    )
+    worker.add_argument(
+        "--archive-pool-size", type=_bounded_int("archive pool size", 1, MAX_ARCHIVE_POOL_SIZE),
+        default=None, help="archive HTTP pool size (default: max(4, concurrency))",
     )
     worker.add_argument("--operating-snapshot-file", default="")
     worker.add_argument(
-        "--terminal-snapshot-file",
-        default="",
-        help=(
-            "distinct persistent per-replica terminal snapshot, written "
-            "once after the heartbeat joins and archive work quiesces; "
-            "a write failure is a worker failure, never silent "
-            "completeness"
-        ),
+        "--terminal-snapshot-file", default="",
+        help="per-process final snapshot, written once all work has stopped; "
+        "a write failure fails the worker",
     )
     worker.add_argument(
         "--disable-player-discovery",
@@ -431,6 +429,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
+    arguments.argv = list(sys.argv[1:] if argv is None else argv)
     try:
         if arguments.command == "collector":
             return _run_collector(arguments)
@@ -812,11 +811,16 @@ def _run_collector(arguments: argparse.Namespace) -> int:
 
 def _run_worker(arguments: argparse.Namespace) -> int:
     concurrency = arguments.concurrency
+    response_lanes = getattr(arguments, "response_lanes", None)
     database_pool_size = (
         arguments.database_pool_size
         if arguments.database_pool_size is not None
         else (8 if concurrency > 1 else 4)
     )
+    process_index = getattr(arguments, "process_index", 0)
+    exit_code = start_processes(arguments, database_pool_size, _install_shutdown_handlers)
+    if exit_code is not None:
+        return exit_code
     archive_pool_size = (
         arguments.archive_pool_size
         if arguments.archive_pool_size is not None
@@ -840,6 +844,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         assert_contract_version(CONTRACT_VERSION)
     stop_requested = Event()
     _install_shutdown_handlers(stop_requested)
+    maintenance = None
     try:
         stage_metrics = StageMetrics()
         worker_metrics = WorkerMetrics()
@@ -862,12 +867,18 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         if arguments.run_forever and concurrency > 1:
             maintenance_database = open_database(MAINTENANCE_POOL_SIZE)
         maintenance = TimedMaintenance(maintenance_database, stage_metrics)
-        if maintenance_database is database:  # else the timer's first tick does
+        # Else the timer's first tick does; either way only with the permit.
+        if maintenance_database is database and (
+            maintenance.permit is None or maintenance.permit.acquire()
+        ):
             maintenance.reevaluate()
         if isinstance(processor, ObservationProcessor):
             processor.stage_metrics = database.stage_metrics = stage_metrics
+            processor.claim_batch = getattr(arguments, "claim_batch_size", 1)
+            if process_index:
+                processor.plan_share = (process_index, arguments.processes)
 
-        progress = ProgressMark()
+        progress = ProgressMark(progress_file(process_index))
 
         def process_batch() -> list[ProcessResult]:
             # Local spool and PostgreSQL own claim readiness. Remote marker
@@ -999,6 +1010,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     maintain=maintenance.run_due,
                     on_result=report_result,
                     progress=progress,
+                    response_lanes=response_lanes,
                 )
             while not stop_requested.is_set():
                 results = process_batch()
@@ -1061,6 +1073,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             return 1
         return 0
     finally:
+        if maintenance is not None:
+            maintenance.close()
         database.close()
         if maintenance_database is not database:
             maintenance_database.close()

@@ -217,3 +217,19 @@ def test_one_lane_reports_progress_before_every_job_in_a_batch() -> None:
         owner="test-worker", max_jobs=3, progress=lambda: events.append("progress")
     )
     assert events == ["progress", "job"] * 3
+
+
+def test_one_stuck_worker_process_fails_the_health_check_while_another_works(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    root = tmp_path / "spool"
+    Spool(root, max_body_bytes=1024)
+    monkeypatch.setattr(cli, "Database", _SlowDatabase)
+    worker_liveness.ProgressMark(worker_liveness.progress_file(1))()
+    stuck = Path(worker_liveness.progress_file(2))
+    stuck.touch()
+    twenty_minutes_ago = time.time() - 20 * 60
+    os.utime(stuck, (twenty_minutes_ago, twenty_minutes_ago))
+    exit_code, payload = _ready(_arguments(tmp_path, spool_root=root), capsys)
+    assert exit_code == 1
+    assert payload["reason"] == "worker_stuck"

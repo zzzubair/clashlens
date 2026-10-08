@@ -362,6 +362,15 @@ def test_past_reset_build_queued_before_the_quiet_window_starts_after_it(
                             claim.work_type,
                         )
                     )
+                    # One build runs at a time; finish it so the next starts.
+                    with database.pool.connection() as connection:
+                        connection.execute(
+                            "UPDATE python_processing_jobs SET status = 'complete',"
+                            " outcome = 'processed', lease_owner = NULL,"
+                            " lease_token = NULL, lease_expires_at = NULL,"
+                            " completed_at = clock_timestamp() WHERE id = %s",
+                            (claim.job_id,),
+                        )
                 return sorted(jobs)
 
             def both(boundary_text: str) -> list[tuple[str, int, str]]:

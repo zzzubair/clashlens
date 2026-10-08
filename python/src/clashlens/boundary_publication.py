@@ -19,15 +19,48 @@ from .db import (
     PROCESSING_VERSION,
     Claim,
     Database,
-    _hash_input,
-    _parse_utc,
-    _positive_int_input,
-    _snapshot_freshness,
     _text_value,
 )
 from .domain import DomainRuleError, battle_window
 from .domain_repair import boundary_held
 from .past_reset_pacing import past_reset_correction_waits
+
+
+def _positive_int_input(values: dict[str, Any], name: str) -> int:
+    value = values.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def _hash_input(value: Any, name: str) -> str:
+    value = _text_value(value)
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{name} must be a lowercase SHA-256 hash")
+    return value
+
+
+def _parse_utc(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise TypeError("analytics timestamps must be text")
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("analytics timestamps must include an offset")
+    return parsed.astimezone(UTC)
+
+
+def _snapshot_freshness(
+    *, included_count: int, fresh_count: int, stale_count: int
+) -> str:
+    if included_count == 0 or stale_count == 0:
+        return "fresh"
+    if fresh_count == 0:
+        return "stale"
+    return "mixed"
 
 
 def reevaluate_boundary_publications(database) -> int:
@@ -509,7 +542,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
         """
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
+            job = database._lock_live_claim(connection, claim, build=True)
             # The Reset lock comes before this snapshot's and its
             # generation's row locks; see boundary.lock_boundary_publication.
             snapshot_boundary = connection.execute(

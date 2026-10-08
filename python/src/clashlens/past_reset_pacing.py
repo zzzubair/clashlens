@@ -1,4 +1,10 @@
-"""How often a past Reset may rebuild its publication after corrections.
+"""When population builds may start.
+
+However many worker processes run, one population build runs at a time:
+its transaction holds a permit lock, and a build claimed but not yet started
+holds a live lease, so claims skip builds while either is true.
+
+A past Reset is also paced in how often it rebuilds after corrections.
 
 Each correction generation rebuilds a Reset's whole leaderboard and army
 records and freezes new manifests, so corrections to Resets before the
@@ -11,6 +17,7 @@ finish and publish. The newest swept Reset is live and never waits.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
@@ -78,3 +85,29 @@ def past_reset_correction_waits(connection: Any, boundary_at: datetime) -> bool:
         last_generation_at is not None
         and now - last_generation_at < PAST_RESET_CORRECTION_INTERVAL
     )
+
+
+BUILD_PERMIT_KEY = "population-build-permit"
+
+
+def take_build_permit(connection: Any) -> None:
+    """Hold the one-build permit until this build's transaction ends."""
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (BUILD_PERMIT_KEY,)
+    )
+
+
+def build_permit_busy(
+    connection: Any, jobs_relation: str, build_work_types: Collection[str]
+) -> bool:
+    """Whether a build runs or waits to start; else this claim holds the permit."""
+    return connection.execute(
+        f"""
+        SELECT NOT pg_try_advisory_xact_lock(hashtextextended(%s, 0))
+            OR EXISTS (
+                SELECT FROM {jobs_relation}
+                WHERE state = 'leased' AND lease_expires_at > clock_timestamp()
+                  AND work_type = ANY(%s::text[]))
+        """,
+        (BUILD_PERMIT_KEY, sorted(build_work_types)),
+    ).fetchone()[0]

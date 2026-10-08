@@ -1247,10 +1247,20 @@ job. Asking for one particular job by number still takes that job.
 The board maintenance pass waits at most 50 milliseconds for a Reset's lock
 and otherwise tries again on its next pass.
 
-Production runs one worker process, whose queue maintenance runs between
-batches. If maintenance in another worker process reaches an expired job on
-its last allowed attempt before restoration succeeds, it still fails the job
-as `lease_expired_max_attempts`. See
+Production runs `CLASHLENS_WORKER_PROCESSES` worker processes, 1 unless set,
+each with its own queue maintenance. If maintenance in another worker process
+reaches an expired job on its last allowed attempt before restoration
+succeeds, it still fails the job as `lease_expired_max_attempts`.
+
+In `app.env`, `CLASHLENS_WORKER_CONCURRENCY` (default 12) sets each process's
+threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default 8) how many of them
+process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE` (default 12)
+its connections. All processes share the worker container's memory and CPU
+limits. The setup proposed on 8 October 2026 for a 05:30 board with fresh
+live pages is 2 processes of 16 threads, 12 for responses, and 16 connections
+each, 38 database connections in all. It is not the default: it waits for the
+owner's decision on a second worker process and a full-size trial
+(`./dev trial` runs it). See
 [`ObservationProcessor._process_claim`](../python/src/clashlens/worker.py) and
 the recovery cases in
 [`test_claim_jobs_postgres.py`](../python/tests/test_claim_jobs_postgres.py).

@@ -56,7 +56,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
     profile_effect_id = "effect.id" if content_dedup else "v.id"
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
+            job = database._lock_live_claim(connection, claim, build=True)
             boundary_text = claim.input_json.get("boundary_at")
             if boundary_text is None:
                 raise ValueError("snapshot boundary is required")
