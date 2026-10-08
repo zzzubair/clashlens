@@ -1093,3 +1093,137 @@ def test_a_reset_log_after_a_new_day_battle_locks_its_day_before_the_resets_boar
     assert not worker.is_alive()
     assert failures == []
     assert log_status == "complete"
+
+
+def test_official_total_saved_days_after_a_finished_repair_ends_the_last_day(
+    database_url: str, archive_server
+) -> None:
+    """A survivor's last day is Complete at 5,020 and the Season repair has
+    recalculated it. On Day 4 of the next Season, league history fetched
+    again gives the official total, 4,980: the day is queued once, however
+    often that total is read, and ends at it."""
+    from domain_test_support import repair_season
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.domain import ranked_day_for
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    start = 5020 - WIN + 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(start), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_season_profile(5000, NEW_SEASON), log=_log(*battles))
+        _process(connection_info, archive_server, jobs)
+        repair_season(connection_info, ranked_day_for(last_day).official_season_id)
+        _process(connection_info, archive_server, [])
+        before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        history_jobs = [
+            store_observation(
+                connection_info, archive_server, occurrence_key=f"league-history-{hours}",
+                endpoint="league_history", normalized_tag=TAG,
+                observed_at=boundary + timedelta(days=3, hours=hours),
+                parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+                processing_version="clashlens-domain-processing-v1",
+                domain_rule_version="clashlens-domain-rules-v1",
+                body=json.dumps({"items": [{
+                    "leagueSeasonId": str(int(boundary.timestamp())),
+                    "leagueTrophies": 4980, "leagueTierId": 105000036,
+                    "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                    "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                    "defenseStars": 16, "maxBattles": 8,
+                }]}).encode(),
+            )[1]
+            for hours in (2, 3)
+        ]
+        _process(connection_info, archive_server, history_jobs)
+        after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        queued = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )[0][0]
+        repaired = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+            " AND status::text = 'complete'",
+        )[0][0]
+
+    assert (before[1], before[4]) == ("Complete", 5000)
+    assert repaired == 1
+    assert queued == 1
+    assert (after[1], after[4]) == ("Inconsistent", 4980)
+
+
+def test_a_recovered_log_locks_every_players_day_before_any_board(
+    database_url: str, archive_server
+) -> None:
+    """A recovered log brings the first battle of the new day, at 05:08,
+    for two tracked players: its own and its opponent #8PP. It takes both
+    players' ended-day locks before the Reset's publication lock, so a
+    calculation holding #8PP's day and then taking the Reset's lock
+    finishes, and so does the log."""
+    import time
+
+    from test_first_battle_log_postgres import _log
+
+    from clashlens import ranked_day_inputs
+    from clashlens.boundary import lock_boundary_publication
+    from clashlens.domain import ranked_day_for
+
+    boundary = BOUNDARIES["ordinary"]
+    ended = boundary - timedelta(days=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _process(connection_info, archive_server, _reset_work(
+            connection_info, archive_server, ended,
+            profile=_profile(6000), log=_battle_log(empty=True),
+        ))
+        _, log_job = store_observation(
+            connection_info, archive_server, occurrence_key="recovered-log",
+            endpoint="battle_log", body=_log((boundary + timedelta(minutes=8), True)),
+            observed_at=boundary + timedelta(minutes=20), normalized_tag=TAG,
+        )
+        with psycopg.connect(connection_info) as connection:
+            opponent = connection.execute(
+                "INSERT INTO players (normalized_tag) VALUES ('#8PP')"
+                " ON CONFLICT (normalized_tag) DO UPDATE SET normalized_tag = EXCLUDED.normalized_tag"
+                " RETURNING id"
+            ).fetchone()[0]
+        failures: list[BaseException] = []
+
+        def process_log() -> None:
+            try:
+                _process(connection_info, archive_server, [log_job])
+            except BaseException as error:  # noqa: BLE001
+                failures.append(error)
+
+        with psycopg.connect(connection_info) as calculation:
+            ranked_day_inputs.lock_ranked_day(calculation, opponent, ranked_day_for(ended))
+            worker = threading.Thread(target=process_log)
+            worker.start()
+            deadline = time.monotonic() + 30
+            with psycopg.connect(connection_info, autocommit=True) as observer:
+                while not observer.execute(
+                    "SELECT count(*) FROM pg_locks"
+                    " WHERE locktype = 'advisory' AND NOT granted"
+                ).fetchone()[0]:
+                    assert time.monotonic() < deadline, "the log never waited"
+                    time.sleep(0.05)
+            calculation.execute("SET LOCAL lock_timeout = '10s'")
+            lock_boundary_publication(calculation, boundary)
+            calculation.commit()
+        worker.join(timeout=60)
+        log_status = _rows(
+            connection_info,
+            f"SELECT status::text FROM python_processing_jobs WHERE id = {int(log_job)}",
+        )[0][0]
+
+    assert not worker.is_alive()
+    assert failures == []
+    assert log_status == "complete"

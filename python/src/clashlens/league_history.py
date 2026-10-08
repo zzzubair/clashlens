@@ -277,9 +277,7 @@ def complete_league_history(
                         Jsonb(entry.source_json),
                     ),
                 )
-            _recalculate_season_ends(
-                connection, player_id, history, observation_id, observed_at
-            )
+            _recalculate_season_ends(connection, player_id, history, observed_at)
             _record_processing_outcome(
                 database,
                 connection,
@@ -300,7 +298,7 @@ def complete_league_history(
 
 def _recalculate_season_ends(
     connection: Any, player_id: int, history: ParsedLeagueHistory,
-    observation_id: int, observed_at: datetime,
+    observed_at: datetime,
 ) -> None:
     """Queue the last day of each Season this response gives the player's
     official Legend I total for (see ``reconciliation_db._official_final``)."""
@@ -313,20 +311,21 @@ def _recalculate_season_ends(
         if ended <= observed_at.timestamp():
             queue_season_end(
                 connection, player_id, datetime.fromtimestamp(ended, UTC),
-                observation_id, observed_at, entry.league_trophies,
+                entry.league_trophies,
             )
 
 
 def queue_season_end(
-    connection: Any, player_id: int, season_end: datetime,
-    observation_id: int, observed_at: datetime, official_total: int,
+    connection: Any, player_id: int, season_end: datetime, official_total: int,
 ) -> None:
-    """Queue, once per response, the last day of the Season ending at
-    ``season_end`` when the response, read up to 3 days after it, can give
-    that day's end: the day is still saved without ``official_total`` as
-    its end, and its official Legend I total is saved. Older Seasons are
-    left as saved. The day's calculation lock makes the two meet: a
-    calculation either reads this total or has saved before this reads it."""
+    """Queue, once per official total, the last day of the Season ending at
+    ``season_end`` when a response, whenever it is read, can give that
+    day's end: the day is kept, not retired with its Season's details, and
+    still saved without ``official_total`` as its end, and its official
+    Legend I total is saved. The official total is the day's end, so it is
+    queued whatever a Season repair already did for the player. The day's
+    calculation lock makes the two meet: a calculation either reads this
+    total or has saved before this reads it."""
     from . import first_battle_log
     from .db import PYTHON_BACKFILL_PRIORITY
     from .domain import ranked_day_for
@@ -334,8 +333,6 @@ def queue_season_end(
     from .ranked_day_inputs import lock_ranked_day
     from .reconciliation import RECONCILIATION_RULE_VERSION
 
-    if observed_at > season_end + timedelta(days=3):
-        return
     day_start = season_end - timedelta(days=1)
     lock_ranked_day(connection, int(player_id), ranked_day_for(day_start))
     stale = connection.execute(
@@ -350,6 +347,10 @@ def queue_season_end(
               WHERE player_id = %s AND league_season_id = %s
                 AND league_tier_id = %s AND league_trophies IS NOT NULL
           )
+          AND NOT EXISTS (
+              SELECT 1 FROM season_detail_retirements AS retired
+              WHERE retired.official_season_id = ranked_day_versions.official_season_id
+          )
         ORDER BY version DESC, id DESC LIMIT 1
         """,
         (official_total, player_id, day_start, RECONCILIATION_RULE_VERSION,
@@ -361,7 +362,7 @@ def queue_season_end(
         connection, int(player_id), day_start, None,
         key=(f"reconcile:official-final:{player_id}:"
              f"{day_start:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}:"
-             f"{observation_id}"),
+             f"{official_total}"),
         trigger="official_final", later_days=False,
         priority=PYTHON_BACKFILL_PRIORITY,
     )

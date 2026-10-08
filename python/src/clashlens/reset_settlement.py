@@ -374,7 +374,9 @@ def recheck_after_battle_log(
     """``queue_later_reading_recheck`` for a battle log just saved: for each
     player whose first battle of a Legend day it brings first, ending the
     time a later reading of the day before can come from, and for its own
-    player when it holds a row whose battle cannot be read."""
+    player when it holds a row whose battle cannot be read. Every such
+    day's calculation lock is taken first, by player and day, before any
+    Reset's publication lock, as the day's calculation takes them."""
     firsts: dict[tuple[int, datetime], datetime] = {}
     for player_id, stamped_at in connection.execute(
         """
@@ -390,18 +392,23 @@ def recheck_after_battle_log(
     ).fetchall():
         key = (int(player_id), battle_day_for(stamped_at).start)
         firsts[key] = min(firsts.get(key, stamped_at), stamped_at)
-    for (player_id, boundary_at), stamped_at in sorted(firsts.items()):
+    days = {
+        (player_id, boundary_at)
+        for (player_id, boundary_at), stamped_at in firsts.items()
         if ranked_day_inputs.load_first_reports(
             connection, player_id, stamped_at, battle_window(boundary_at)[0],
             boundary_at + DAY,
-        )[1] == stamped_at:
-            queue_later_reading_recheck(
-                database, connection, player_id, boundary_at, f"log-{observation_id}"
-            )
+        )[1] == stamped_at
+    }
     if has_row_gap:
+        days.add((reporter_id, ranked_day_for(observed_at).start))
+    for player_id, boundary_at in sorted(days):
+        ranked_day_inputs.lock_ranked_day(
+            connection, player_id, ranked_day_for(boundary_at - DAY)
+        )
+    for player_id, boundary_at in sorted(days):
         queue_later_reading_recheck(
-            database, connection, reporter_id, ranked_day_for(observed_at).start,
-            f"log-{observation_id}",
+            database, connection, player_id, boundary_at, f"log-{observation_id}"
         )
 
 
