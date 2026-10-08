@@ -13,8 +13,8 @@ from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import DECODER_VERSION
 from .boundary_manifest import (
     _moved_decode_ids,
-    board_proof_facts,
     profiles_not_found,
+    reset_proof_facts,
     reset_trophies,
 )
 from .boundary_manifest import (
@@ -1145,7 +1145,7 @@ def queue_board_rebuilds(
                         for row in rows
                         if row[2] is not None
                     },
-                    board_proof_facts(database, connection, versions),
+                    reset_proof_facts(database, connection, versions),
                 )
                 expected = {
                     int(row[0]): at_reset.get(int(row[0]), (int(row[4]), False))

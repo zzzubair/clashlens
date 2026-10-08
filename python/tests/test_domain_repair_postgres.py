@@ -961,3 +961,80 @@ def test_a_settled_check_writes_the_summary_after_the_following_checks(
         states = _eod_states(connection_info, player_id, season_id)
 
     assert (states[3], states[4]) == ("accepted", "accepted")
+
+
+def test_a_rejected_end_stays_rejected_as_the_next_days_start(
+    database_url: str, archive_server
+) -> None:
+    """Day A ends Complete at 5,000. Day B starts there, takes eight defenses
+    and an attack at 04:31 that its readings at 05:01 and 05:25 both miss:
+    its proven start and battles contradict them, so its end is not proven,
+    read alone or as day C's day before. Day C starts from that reading, so
+    its 04:37 reading plus its battles is not confirmed."""
+    from test_reconciliation_postgres import _processor
+    from test_reset_reading_before_loss_postgres import (
+        DAY_A,
+        DAY_B,
+        DAY_C,
+        LOSS,
+        TAG,
+        WIN,
+        _day_c_entry,
+        _log,
+        _process,
+        _profile,
+        _reset_work,
+    )
+
+    from clashlens import reconciliation_db
+
+    day_a = [(DAY_A + timedelta(hours=hour), False) for hour in range(1, 9)]
+    day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)] + [
+        (DAY_C - timedelta(minutes=29), True)
+    ]
+    reading = 5000 - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _process(connection_info, archive_server, [
+            *_reset_work(
+                connection_info, archive_server, DAY_A, profile=_profile(5000 + 8 * LOSS),
+                log=_log(),
+            ),
+            *_reset_work(
+                connection_info, archive_server, DAY_B, profile=_profile(5000),
+                log=_log(*day_a),
+            ),
+            *_reset_work(
+                connection_info, archive_server, DAY_C, profile=_profile(reading),
+                log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=1),
+            ),
+            store_observation(
+                connection_info, archive_server, occurrence_key="day-b-later",
+                endpoint="profile", body=_profile(reading),
+                observed_at=DAY_C + timedelta(minutes=25), normalized_tag=TAG,
+            )[1],
+        ])
+        entry = _day_c_entry(connection_info, archive_server, reading + WIN - 8 * LOSS)
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            with database.pool.connection() as connection:
+                day_b_id, day_b_start, saved = connection.execute(
+                    """
+                    SELECT b.id, b.start_trophies,
+                           c.input_evidence -> 'previous_day' ? 'proven_end'
+                    FROM ranked_day_versions AS b
+                    JOIN ranked_day_versions AS c
+                      ON c.player_id = b.player_id AND c.ranked_day_start = %s
+                    WHERE b.ranked_day_start = %s
+                    ORDER BY b.version DESC, c.version DESC LIMIT 1
+                    """,
+                    (DAY_C, DAY_B),
+                ).fetchone()
+                direct = reconciliation_db.proven_end(database, connection, day_b_id)
+        finally:
+            database.close()
+
+    assert day_b_start == 5000
+    assert direct is None
+    assert saved is False
+    assert entry == (reading + WIN - 8 * LOSS, False)
+

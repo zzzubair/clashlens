@@ -171,7 +171,7 @@ def proven_end(database: Database, connection: Any, version_id: int) -> int | No
 
     end = reset_settlement.day_ends(
         connection, [version_id],
-        boundary_manifest.board_proof_facts(database, connection, [version_id]),
+        boundary_manifest.reset_proof_facts(database, connection, [version_id]),
     ).get(version_id)
     proven = end.proven_end if end else None
     return proven[0] if proven else None
@@ -418,7 +418,9 @@ def recalculate_ranked_day(
         connection, player_id, ranked_day
     )
     previous = ranked_day_inputs.load_previous_day(connection, player_id, ranked_day)
-    if previous is not None and not previous.complete and previous.version_id:
+    if previous is not None and previous.version_id and (
+        not previous.complete or now >= ranked_day.end
+    ):
         previous = replace(previous, proven_end=proven_end(
             database, connection, previous.version_id
         ))

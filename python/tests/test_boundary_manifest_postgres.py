@@ -1142,7 +1142,8 @@ def _seed_days(
                     json.dumps(
                         {
                             "contributions": contributions,
-                            **({"previous_day": {"version_id": player_id + 1000}}
+                            **({"previous_day": {"version_id": player_id + 1000,
+                                                 "proven_end": result["start"]}}
                                if previous else {}),
                             "next_start_trophies": result["end"],
                             "boundary_kind": result["boundary_kind"],

@@ -26,7 +26,7 @@ from test_reset_settlement_state_postgres import (
 )
 
 from clashlens import ranked_day_inputs, reconciliation_db, reset_settlement
-from clashlens.boundary_manifest import board_proof_facts, reset_trophies
+from clashlens.boundary_manifest import reset_proof_facts, reset_trophies
 from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
 
@@ -713,7 +713,7 @@ def test_season_repair_settles_an_early_reset_reading_and_its_board_entry(
                 board = reset_trophies(
                     connection, DAY_C,
                     {player_id: (version_id, reading_id, reading_at, 4839)},
-                    board_proof_facts(database, connection, [version_id]),
+                    reset_proof_facts(database, connection, [version_id]),
                 )
             finally:
                 database.close()
@@ -768,7 +768,7 @@ def _board_entry(connection_info: str, archive_server, day: datetime) -> tuple[i
             return reset_trophies(
                 connection, day + timedelta(days=1),
                 {player_id: (version_id, reading_id, reading_at, trophies)},
-                board_proof_facts(database, connection, [version_id]),
+                reset_proof_facts(database, connection, [version_id]),
             )[player_id]
         finally:
             database.close()
@@ -1370,7 +1370,7 @@ def _day_c_entry(
             return reset_trophies(
                 connection, DAY_D,
                 {player_id: (version_id, observation_id, read_at, reading)},
-                board_proof_facts(database, connection, [version_id]),
+                reset_proof_facts(database, connection, [version_id]),
             )[player_id]
         finally:
             database.close()

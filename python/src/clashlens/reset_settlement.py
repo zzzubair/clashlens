@@ -31,7 +31,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import boundary, ranked_day_inputs
-from .boundary_manifest import board_proof_facts
+from .boundary_manifest import reset_proof_facts
 from .collector_reset import COLLECTION_WINDOW, SETTLEMENT_DELAY
 from .db import (
     ANALYTICS_RULE_VERSION,
@@ -235,15 +235,16 @@ class DayEnd:
 
 def day_ends(
     connection: Any, version_ids: list[int],
-    facts: Mapping[int, Mapping[str, Any] | None] | None = None, *, previous_days: bool = True,
+    facts: Mapping[int, Mapping[str, Any] | None] | None = None,
 ) -> dict[int, DayEnd]:
     """Each saved day's ``DayEnd``, keyed by its version. ``facts`` are what
-    its proof reads besides the saved day (``boundary_manifest.board_proof_facts``),
+    its proof reads besides the saved day (``boundary_manifest.reset_proof_facts``),
     as a board froze them, so every build of that board proves the same;
     without them a day has no later reading and its Reset check is read as
     it is now, as the Season summary reads it. A day's start is proven by
-    5,000 on a Season's Day 1 or by the proven end of the day before it was
-    calculated from, read with its own facts (``previous``).
+    5,000 on a Season's Day 1 or by the proven end of the day before that
+    the day saved when it was calculated (``previous_day.proven_end``), so a
+    day reads the same alone or as the day before another.
     """
     if not version_ids:
         return {}
@@ -284,7 +285,7 @@ def day_ends(
                        AS battle
                    WHERE battle.value ->> 'included' = 'true'
                ),
-               (ranked.input_evidence -> 'previous_day' ->> 'version_id')::bigint,
+               (ranked.input_evidence -> 'previous_day' ->> 'proven_end')::int,
                ranked.season_day_number = 1
         FROM ranked_day_versions AS ranked
         LEFT JOIN reset_boundary_settlements AS settlement
@@ -295,15 +296,8 @@ def day_ends(
         """,
         (LONGEST_BATTLE, version_ids),
     ).fetchall()
-    before = sorted({int(row[17]) for row in rows if row[17] is not None})
-    previous = day_ends(connection, before, None if facts is None else {
-        int(fact["previous"]["version_id"]): fact["previous"]
-        for fact in facts.values() if fact and fact.get("previous")
-    }, previous_days=False) if previous_days and before else {}
     ends = {}
     for row in rows:
-        prior = previous.get(int(row[17])) if row[17] is not None else None
-        proven = prior.proven_end if prior is not None else None
         frozen = (facts or {}).get(int(row[0])) or {}
         later = frozen.get("later")
         ends[int(row[0])] = DayEnd(
@@ -316,8 +310,7 @@ def day_ends(
             later_at=datetime.fromisoformat(later["read_at"]) if later else None,
             defense_slots=int(row[14]), coverage_complete=bool(row[15]),
             last_landed=row[16], start_proven=row[6] is not None and (
-                bool(row[18]) and row[6] == SEASON_START_TROPHIES
-                or proven is not None and proven[0] == row[6]
+                bool(row[18]) and row[6] == SEASON_START_TROPHIES or row[17] == row[6]
             ),
         )
     return ends
@@ -575,7 +568,7 @@ def _queue_board_correction(
     if reset_trophies(
         connection, boundary_at, reading, {version_id: entry[5]}
     ) == reset_trophies(
-        connection, boundary_at, reading, board_proof_facts(database, connection, [version_id])
+        connection, boundary_at, reading, reset_proof_facts(database, connection, [version_id])
     ):
         return
     queue_board_correction(connection, boundary_at, int(entry[0]), queue=True)
@@ -1226,7 +1219,7 @@ def load_proof_inputs(
         previous_defenses=(
             (int(previous[1]), int(previous[2])) if previous and previous[3] else None
         ),
-        previous_end=day_ends(connection, [int(previous[0])], board_proof_facts(
+        previous_end=day_ends(connection, [int(previous[0])], reset_proof_facts(
             database, connection, [int(previous[0])]
         )).get(int(previous[0])) if previous else None,
         late_unreadable=tuple(ranked_day_inputs.load_unreadable_report_times(
