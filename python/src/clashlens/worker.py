@@ -1349,7 +1349,8 @@ class ObservationProcessor:
             )
         except ArchiveReadError as error:
             # A recorded copy that cannot be found yet, or an upload still in
-            # flight, is retried within the job's attempts.
+            # flight or whose last write may yet land, is retried within the
+            # job's attempts.
             if error.category != "archive_missing" or copy.recorded or copy.uploading:
                 raise
             raise ArchiveReadError(

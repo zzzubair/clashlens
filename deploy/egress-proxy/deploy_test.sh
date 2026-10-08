@@ -53,30 +53,31 @@ run_line=$(grep '^run ' "$DOCKER_LOG")
   exit 1
 }
 
-grep -q '^Allow 100.64.0.2$' "$WORK_DIR/tinyproxy.conf" || {
-  printf 'proxy client restriction is missing\n' >&2
-  exit 1
+# Tinyproxy reads one directive per line, its name in any case; a repeated
+# directive would leave the effective value unclear, so each must appear once.
+declare -A directive_values=() directive_counts=()
+while read -r directive value; do
+  [[ -z "$directive" || "$directive" == \#* ]] && continue
+  directive=${directive,,}
+  value=${value#\"}
+  value=${value%\"}
+  directive_counts[$directive]=$(( ${directive_counts[$directive]:-0} + 1 ))
+  directive_values[$directive]=$value
+done <"$WORK_DIR/tinyproxy.conf"
+
+expect_directive() {
+  local directive=$1 expected=$2 message=$3
+  [[ "${directive_counts[$directive]:-0}" == 1 && "${directive_values[$directive]:-}" == "$expected" ]] || {
+    printf '%s\n' "$message" >&2
+    exit 1
+  }
 }
-grep -q '^Listen 100.64.0.1$' "$WORK_DIR/tinyproxy.conf" || {
-  printf 'proxy does not listen on the configured Tailscale address\n' >&2
-  exit 1
-}
-grep -q '^Port 3129$' "$WORK_DIR/tinyproxy.conf" || {
-  printf 'proxy does not listen on the configured port\n' >&2
-  exit 1
-}
-if grep -Eq '^(Listen 0\.0\.0\.0|Port 8888)$' "$WORK_DIR/tinyproxy.conf"; then
-  printf 'proxy configuration still binds the bridge defaults\n' >&2
-  exit 1
-fi
-grep -q '^MaxClients 96$' "$WORK_DIR/tinyproxy.conf" || {
-  printf 'proxy does not allow the 96 connections its callers are budgeted\n' >&2
-  exit 1
-}
-grep -q '^ConnectPort 443$' "$WORK_DIR/tinyproxy.conf" || {
-  printf 'proxy CONNECT port restriction is missing\n' >&2
-  exit 1
-}
+
+expect_directive allow 100.64.0.2 'proxy client restriction is missing'
+expect_directive listen 100.64.0.1 'proxy does not listen only on the configured Tailscale address'
+expect_directive port 3129 'proxy does not listen only on the configured port'
+expect_directive maxclients 96 'proxy does not allow the 96 connections its callers are budgeted'
+expect_directive connectport 443 'proxy CONNECT port restriction is missing'
 [[ "$(stat -c '%a' "$WORK_DIR/tinyproxy.conf")" == "644" ]] || {
   printf 'proxy configuration is not readable by the unprivileged container user\n' >&2
   exit 1

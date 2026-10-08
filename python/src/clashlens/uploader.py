@@ -46,7 +46,7 @@ from .collector_db import CollectorDatabase
 from .spool import SpoolError
 from .worker import StageMetrics
 
-UPLOADS_AT_ONCE = 32
+UPLOADS_AT_ONCE = 16
 DATABASE_CONNECTIONS = 4
 LEASE_SECONDS = 60
 RENEW_INTERVAL = 20.0
@@ -262,7 +262,8 @@ class Uploader:
         A database restored to before an upload finished forgets that upload,
         and spool cleanup may already have removed the saved copy. The bytes
         are then at this upload's own location; reading them back checks their
-        hash. Only bytes the archive does not hold are missing proof.
+        hash. Only bytes the archive does not hold are missing proof, and not
+        while the last attempt's write may yet land.
         """
         reference = immutable_reference(
             self.archive.bucket, claim.response_hash, claim.generation or None
@@ -272,7 +273,7 @@ class Uploader:
                 "archive_read", self.archive.read_verified, reference, claim.response_hash
             )
         except ArchiveReadError as error:
-            if error.category == "archive_missing":
+            if error.category == "archive_missing" and not claim.write_unresolved:
                 raise ArchiveReadError(
                     "spool_missing",
                     "pending upload has no local raw response and no archived copy",

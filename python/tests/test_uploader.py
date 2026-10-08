@@ -713,25 +713,45 @@ def test_a_lost_saved_copy_already_archived_completes_without_writing(
 
 
 @pytest.mark.parametrize(
-    ("archive_error", "outcome"),
+    ("archive_error", "write_unresolved", "outcome"),
     [
         (
             ArchiveReadError("archive_missing", "no such object", retryable=True),
+            False,
             "fail:spool_missing:False",
+        ),
+        # The last attempt's write timed out and may still land.
+        (
+            ArchiveReadError("archive_missing", "no such object", retryable=True),
+            True,
+            "fail:archive_missing:True",
         ),
         (
             ArchiveReadError("archive_unavailable", "provider error", retryable=True),
+            False,
             "fail:archive_unavailable:True",
         ),
     ],
-    ids=["never-archived", "archive-unavailable"],
+    ids=["never-archived", "write-may-yet-land", "archive-unavailable"],
 )
 def test_a_lost_saved_copy_fails_for_good_only_when_the_archive_lacks_it(
-    monkeypatch: pytest.MonkeyPatch, archive_error: ArchiveReadError, outcome: str
+    monkeypatch: pytest.MonkeyPatch,
+    archive_error: ArchiveReadError,
+    write_unresolved: bool,
+    outcome: str,
 ) -> None:
     spool = _Spool()
     spool.verify = lambda _digest, _size: None  # type: ignore[attr-defined]
-    claim = UploadClaim("a" * 64, "one", 4, "uploader", "token", datetime.now(UTC), 1)
+    claim = UploadClaim(
+        "a" * 64,
+        "one",
+        4,
+        "uploader",
+        "token",
+        datetime.now(UTC),
+        1,
+        write_unresolved=write_unresolved,
+    )
     calls = _one_claim(monkeypatch, claim)
 
     class Archive(_ReadyArchive):

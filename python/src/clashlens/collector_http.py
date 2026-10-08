@@ -586,6 +586,12 @@ class FetchedResponse:
     headers: dict[str, str]
 
 
+# Transport failures that do not show whether the relay or the API failed.
+_UNCLEAR_TRANSPORT_FAILURES = frozenset(
+    {"network_failure", "truncated_response", "other_transport_failure"}
+)
+
+
 # The Paris relay serves 96 connections at once (deploy/egress-proxy). The
 # collector may hold up to 64: six per key, nine regular keys and the
 # interactive one. The rest is for player verification and operator commands.
@@ -657,6 +663,9 @@ class OfficialApiClient:
         self._executor_slots = asyncio.Semaphore(max_connections)
         self.max_connections = max_connections
         self.provider_outage = ProviderOutage()
+        self._proxied = bool(proxy_url)
+        self._relay_counts = {"requests": 0, "timeouts": 0, "admission_failures": 0}
+        self._relay_reachable: int | None = None
         pool_options = {
             "maxsize": max_connections,
             "block": True,
@@ -678,13 +687,58 @@ class OfficialApiClient:
     def metric_lines(self) -> list[str]:
         """Requests in flight, and the most connections this client keeps open.
 
-        Through the relay each open connection holds one of its tunnels.
+        Through the relay each open connection holds one of its tunnels, idle
+        ones kept for reuse included, so those show too.
         """
         in_flight = self.max_connections - self._executor_slots._value
-        return [
+        lines = [
             f"clashlens_collector_api_requests_in_flight {in_flight}",
             f"clashlens_collector_api_connection_limit {self.max_connections}",
         ]
+        if not self._proxied:
+            return lines
+        counts = self._relay_counts
+        lines += [
+            f"clashlens_collector_relay_tunnels_open {self._open_connections()}",
+            f"clashlens_collector_relay_requests_total {counts['requests']}",
+            f"clashlens_collector_relay_timeouts_total {counts['timeouts']}",
+            (
+                "clashlens_collector_relay_admission_failures_total "
+                f"{counts['admission_failures']}"
+            ),
+        ]
+        if self._relay_reachable is not None:
+            lines.append(f"clashlens_collector_relay_reachable {self._relay_reachable}")
+        return lines
+
+    def _open_connections(self) -> int:
+        """Connections a request is using, or kept open for the next one."""
+        total = 0
+        pools = self._http.pools
+        # Iterating the container itself is refused as unsafe across threads.
+        for pool_key in pools.keys():  # noqa: SIM118
+            idle = getattr(pools.get(pool_key), "pool", None)
+            if idle is None:
+                continue
+            with idle.mutex:
+                waiting = list(idle.queue)
+            total += idle.maxsize - len(waiting)
+            total += sum(
+                connection is not None and connection.is_connected
+                for connection in waiting
+            )
+        return total
+
+    def _count_relay(self, outcome: str) -> None:
+        self._relay_counts["requests"] += 1
+        if outcome == "timeout":
+            self._relay_counts["timeouts"] += 1
+        elif outcome == "proxy_failure":
+            self._relay_counts["admission_failures"] += 1
+            self._relay_reachable = 0
+        elif outcome not in _UNCLEAR_TRANSPORT_FAILURES:
+            # The relay opened a tunnel and the API answered through it.
+            self._relay_reachable = 1
 
     async def fetch_player(
         self,
@@ -744,7 +798,7 @@ class OfficialApiClient:
             await self._executor_slots.acquire()
             release_immediately = True
             try:
-                return await self._fetch_with_key(
+                response = await self._fetch_with_key(
                     pool,
                     endpoint,
                     url,
@@ -756,10 +810,17 @@ class OfficialApiClient:
                 error.release_when.add_done_callback(
                     lambda _finished: self._executor_slots.release()
                 )
+                if isinstance(error, _DetachedTimeout):
+                    self._count_relay("timeout")
+                raise
+            except ProviderFailure as error:
+                self._count_relay(error.category)
                 raise
             finally:
                 if release_immediately:
                     self._executor_slots.release()
+            self._count_relay("answered")
+            return response
 
         try:
             async with waiting:

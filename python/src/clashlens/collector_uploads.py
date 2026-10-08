@@ -22,6 +22,8 @@ class UploadClaim:
     # Non-empty when retired bytes were seen again: the upload must use the
     # hash's generation suffix so the tombstoned location stays untouched.
     generation: str = ""
+    # The previous attempt's write may yet land; see WRITE_UNRESOLVED_SQL.
+    write_unresolved: bool = False
 
 
 class UploadLeaseLost(RuntimeError):
@@ -34,15 +36,26 @@ class ArchivedCopy:
     # True when the catalogue records a verified copy there. False for the
     # upload's own location, which only bytes found there confirm.
     recorded: bool
-    # An upload of these bytes holds a lease right now.
+    # An upload of these bytes holds a lease right now, or its last write may
+    # yet land.
     uploading: bool
+
+
+# The last attempt's lease ran out, or it failed in a way that may pass other
+# than finding no archived copy, so a write it made may still land: a missing
+# copy is not yet proof the archive lacks these bytes.
+WRITE_UNRESOLVED_SQL = """
+    ((upload.state = 'failed' AND upload.last_error_retryable IS TRUE
+      AND upload.last_error_category <> 'archive_missing')
+     OR (upload.state = 'pending' AND upload.attempt_count > 0))
+"""
 
 
 # collector_response_uploads_claim_order matches this filter and order, so
 # claims can stop at the first due row they can lock without sorting the backlog.
-NEXT_DUE_UPLOAD_SQL = """
-    SELECT response_hash
-    FROM collector_response_uploads
+NEXT_DUE_UPLOAD_SQL = f"""
+    SELECT upload.response_hash, {WRITE_UNRESOLVED_SQL}
+    FROM collector_response_uploads AS upload
     WHERE state IN ('pending', 'failed')
       AND next_attempt_at <= %s
     ORDER BY next_attempt_at, created_at, response_hash
@@ -132,6 +145,7 @@ def claim_upload(
         claimed[3],
         int(claimed[4]),
         str(claimed[5]),
+        bool(row[1]),
     )
 
 
@@ -431,10 +445,10 @@ def archived_copy(
     means the archive cannot hold a copy.
     """
     with database.pool.connection() as connection:
-        verified, generation, state = connection.execute(
-            """
+        verified, generation, state, unresolved = connection.execute(
+            f"""
             SELECT verified.archive_reference, upload.upload_generation,
-                   upload.state
+                   upload.state, {WRITE_UNRESOLVED_SQL}
             FROM (SELECT 1) AS one
             LEFT JOIN LATERAL (
                 SELECT archive_reference
@@ -448,16 +462,19 @@ def archived_copy(
             """,
             {"hash": response_hash},
         ).fetchone()
+        uploading = state == "leased" or bool(unresolved)
         if verified is not None:
-            return ArchivedCopy(str(verified), True, state == "leased")
+            return ArchivedCopy(str(verified), True, uploading)
         if state is None:
             return None
         reference = immutable_reference(bucket, response_hash, generation or None)
-        # Any catalogue row here is not verified, so this location is retired.
-        retired = connection.execute(
-            "SELECT 1 FROM archive_catalogue WHERE archive_reference = %s",
+        catalogued = connection.execute(
+            "SELECT availability FROM archive_catalogue WHERE archive_reference = %s",
             (reference,),
         ).fetchone()
-    if retired is not None:
-        return None
-    return ArchivedCopy(reference, False, state == "leased")
+    if catalogued is None:
+        return ArchivedCopy(reference, False, uploading)
+    # An upload that finished after the first read recorded this copy.
+    if catalogued[0] == "verified":
+        return ArchivedCopy(reference, True, uploading)
+    return None

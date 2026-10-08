@@ -271,9 +271,23 @@ A changed limit takes effect only when `deploy.sh up` is run again on the relay
 The collector's `/metrics` shows its side. `clashlens_collector_api_connection_limit`
 is the most connections it keeps open, so the most relay tunnels it holds, and
 `clashlens_collector_api_requests_in_flight` how many of them a request is using.
-In `clashlens_collector_requests_total`, `outcome="proxy_failure"` counts
-requests the relay refused or could not be reached for, and `outcome="timeout"`
-requests that ran out of time, including ones queued at a full relay.
+`clashlens_collector_relay_tunnels_open` counts the tunnels it holds now: those
+a request is using and idle ones kept open for the next request.
+`clashlens_collector_relay_requests_total` counts requests sent through the
+relay; `clashlens_collector_relay_admission_failures_total` those the relay
+refused or could not be reached for, and `clashlens_collector_relay_timeouts_total`
+those that ran out of time, including ones queued at a full relay. Timeouts
+divided by requests, using growth between two reads, is the timeout share.
+`clashlens_collector_relay_reachable` is 1 after a request got through the relay
+and 0 after one could not reach it; it appears after the first request.
+In `clashlens_collector_requests_total`, the same failures show as
+`outcome="proxy_failure"` and `outcome="timeout"` per endpoint.
+
+The API's `/operatorz` shows player verification's side under
+`player_verification_relay`: `tunnels_open` (each verification opens a tunnel
+and closes it when answered), `requests`, `timeouts`, `admission_failures` and
+`reachable` (`null` before the first verification). Counts on both sides reset
+when the process restarts.
 
 The filter allows only `CONNECT api.clashofclans.com:443`, an encrypted tunnel
 whose API certificate the caller still checks. Ordinary HTTP requests, other

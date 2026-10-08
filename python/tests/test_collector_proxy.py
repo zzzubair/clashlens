@@ -9,7 +9,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import pairwise
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 
 import certifi
 import pytest
@@ -51,8 +51,17 @@ def relay(tmp_path, monkeypatch):
     )
     system_ca = certifi.where()
     monkeypatch.setattr(certifi, "where", lambda: str(cert))
-    state = {"connects": [], "requests": [], "stall": False, "reject": False}
+    state = {
+        "connects": [],
+        "requests": [],
+        "stall": False,
+        "reject": False,
+        "delay": 0.0,
+        "tunnels": 0,
+        "peak_tunnels": 0,
+    }
     entered, disconnected = threading.Event(), threading.Event()
+    tunnels = threading.Lock()
 
     class Origin(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -64,6 +73,7 @@ def relay(tmp_path, monkeypatch):
             state["requests"].append(
                 (self.client_address, self.headers["Authorization"], monotonic())
             )
+            sleep(state["delay"])
             self.send_response(200)
             self.send_header("Content-Length", "2")
             self.end_headers()
@@ -72,6 +82,7 @@ def relay(tmp_path, monkeypatch):
         def do_POST(self):
             state["requests"].append(self.headers["Authorization"])
             self.rfile.read(int(self.headers["Content-Length"]))
+            sleep(state["delay"])
             body = b'{"tag":"#2PP","token":"player-token","status":"ok"}'
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
@@ -111,23 +122,31 @@ def relay(tmp_path, monkeypatch):
                 self.send_response(200, "Connection established")
                 self.end_headers()
                 self.wfile.flush()
-                peers = (self.connection, upstream)
-                while True:
-                    readable, _, _ = select.select(peers, [], [], 2)
-                    if not readable:
-                        return
-                    for source in readable:
-                        try:
-                            data = source.recv(65536)
-                            if not data:
-                                return
-                            (
-                                upstream
-                                if source is self.connection
-                                else self.connection
-                            ).sendall(data)
-                        except OSError:
+                with tunnels:
+                    state["tunnels"] += 1
+                    state["peak_tunnels"] = max(state["peak_tunnels"], state["tunnels"])
+                try:
+                    self._relay(upstream)
+                finally:
+                    with tunnels:
+                        state["tunnels"] -= 1
+
+        def _relay(self, upstream):
+            peers = (self.connection, upstream)
+            while True:
+                readable, _, _ = select.select(peers, [], [], 2)
+                if not readable:
+                    return
+                for source in readable:
+                    try:
+                        data = source.recv(65536)
+                        if not data:
                             return
+                        (
+                            upstream if source is self.connection else self.connection
+                        ).sendall(data)
+                    except OSError:
+                        return
 
     proxy = ThreadingHTTPServer(("127.0.0.1", 0), Relay)
     threads = [
@@ -151,6 +170,13 @@ def relay(tmp_path, monkeypatch):
             server.server_close()
         for thread in threads:
             thread.join()
+
+
+def _metrics(client: OfficialApiClient) -> dict[str, float]:
+    return {
+        name: float(value)
+        for name, value in (line.split() for line in client.metric_lines())
+    }
 
 
 def key_pool():
@@ -253,10 +279,15 @@ def test_stalled_connect_is_interrupted_and_capacity_recovers(relay, cancel):
 
     try:
         asyncio.run(fetch())
+        metrics = _metrics(client)
     finally:
         client._http.clear()
         client._executor.shutdown()
     assert len(relay["requests"]) == 1
+    # A cancelled request is not a timeout, and the relay answered afterwards.
+    assert metrics["clashlens_collector_relay_requests_total"] == 1 + (not cancel)
+    assert metrics["clashlens_collector_relay_timeouts_total"] == (not cancel)
+    assert metrics["clashlens_collector_relay_reachable"] == 1
 
 
 @pytest.mark.parametrize(
@@ -313,6 +344,13 @@ def test_private_verification_uses_same_relay_even_with_no_proxy(
         assert client.verify("#2PP", "player-token").http_status == 200
         assert relay["requests"] == ["Bearer synthetic-secret"]
     assert len(relay["connects"]) == 1
+    assert client.relay_snapshot() == {
+        "tunnels_open": 0,
+        "requests": 1,
+        "timeouts": 0,
+        "admission_failures": int(denied),
+        "reachable": not denied,
+    }
     assert "synthetic-secret" not in str(relay["connects"])
 
 
@@ -377,9 +415,90 @@ def test_a_relay_that_is_down_or_refuses_counts_as_a_relay_failure(relay, failur
 
     try:
         assert asyncio.run(fetch()) == "proxy_failure"
+        metrics = _metrics(client)
     finally:
         client._http.clear()
         client._executor.shutdown()
+    assert metrics["clashlens_collector_relay_requests_total"] == 1
+    assert metrics["clashlens_collector_relay_admission_failures_total"] == 1
+    assert metrics["clashlens_collector_relay_timeouts_total"] == 0
+    assert metrics["clashlens_collector_relay_reachable"] == 0
+    assert metrics["clashlens_collector_relay_tunnels_open"] == 0
+
+
+def test_collector_and_verification_share_the_relay_within_their_budgets(
+    relay, monkeypatch
+):
+    # Production sends regular keys' checks, the interactive key's requests
+    # and the API's player verification through the one relay at once.
+    monkeypatch.setenv("SSL_CERT_FILE", str(relay["cert"]))
+    relay["delay"] = 0.5
+    regular = KeyPool(
+        [ApiKey(f"regular-{n}", f"regular-secret-{n}") for n in range(1, 5)],
+        starts_per_second=28,
+        concurrency_per_key=2,
+    )
+    interactive = KeyPool(
+        [ApiKey("interactive-1", "interactive-secret")],
+        starts_per_second=20,
+        concurrency_per_key=2,
+    )
+    client = OfficialApiClient(
+        relay["origin"],
+        proxy_url=relay["proxy"],
+        total_timeout_seconds=5,
+        max_connections=(4 + 1) * 2,
+    )
+    verifier = OfficialVerificationClient(
+        api_key=b"verification-secret",
+        proxy_url=relay["proxy"],
+        api_origin=relay["origin"],
+        allow_insecure_test_origin=True,
+        timeout_seconds=5,
+    )
+
+    async def timed(call):
+        started = monotonic()
+        result = await call
+        return result, monotonic() - started
+
+    async def run():
+        calls = [client.fetch_player(regular, "#2PP", "profile") for _ in range(8)]
+        calls.append(client.fetch_player(interactive, "#2PP", "profile"))
+        calls.append(asyncio.to_thread(verifier.verify, "#2PP", "player-token"))
+        return await asyncio.gather(*(timed(call) for call in calls))
+
+    try:
+        results = asyncio.run(run())
+        idle = _metrics(client)
+        deadline = monotonic() + 1
+        while relay["tunnels"] != 9 and monotonic() < deadline:
+            sleep(0.01)
+        relay_tunnels = relay["tunnels"]
+    finally:
+        client._http.clear()
+        client._executor.shutdown()
+
+    assert [response.body for response, _elapsed in results[:9]] == [b"ok"] * 9
+    assert results[9][0].http_status == 200
+    # Every caller was answered inside its own time limit, all at once.
+    assert all(elapsed < 5 for _response, elapsed in results)
+    assert relay["peak_tunnels"] == 10
+    # The collector's nine connections stay open for reuse with no request
+    # using them, and its count of them matches the relay's.
+    assert idle["clashlens_collector_api_requests_in_flight"] == 0
+    assert idle["clashlens_collector_relay_tunnels_open"] == 9 == relay_tunnels
+    assert idle["clashlens_collector_relay_requests_total"] == 9
+    assert idle["clashlens_collector_relay_timeouts_total"] == 0
+    assert idle["clashlens_collector_relay_admission_failures_total"] == 0
+    assert idle["clashlens_collector_relay_reachable"] == 1
+    assert verifier.relay_snapshot() == {
+        "tunnels_open": 0,
+        "requests": 1,
+        "timeouts": 0,
+        "admission_failures": 0,
+        "reachable": True,
+    }
 
 
 @pytest.mark.parametrize(("concurrency", "refused"), [(7, True), (6, False)])

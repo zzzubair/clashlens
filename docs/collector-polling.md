@@ -284,7 +284,7 @@ and at most 384: 384 with nine keys at 28 a second, which would otherwise be
 request threads (6 per key including the interactive key, so 60 with nine
 regular keys) share what the save threads leave of 448. The
 [uploads process](#spool-archive-and-rate-enforcement) in the same container
-counts as 48 more, and 64 of the container's 576 processes and threads stay
+counts as 32 more, and 64 of the container's 544 processes and threads stay
 spare for database and other threads. Before stopping anything, `./ops up`
 refuses settings whose save, request and upload threads plus those 64 exceed
 `CLASHLENS_COLLECTOR_PIDS`.
@@ -690,7 +690,7 @@ After the 8 October 2026 Reset they fell from about 1,300 a minute to 145–300 
 minute for two hours while the worker loaded the database, and raw responses
 waited up to 76.5 minutes for an archive copy.
 
-The uploads process makes up to 32 uploads at once, with its own threads and
+The uploads process makes up to 16 uploads at once, with its own threads and
 four database connections. An upload makes two database calls: claiming it and
 recording it done or failed. Its 60-second claim is renewed every 20 seconds in
 the background, and before a step only when less than 40 seconds are left.

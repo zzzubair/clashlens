@@ -20,7 +20,13 @@ from clashlens import spool as spool_module
 from clashlens.archive import S3ArchiveReader, SpoolFirstReader
 from clashlens.collector import _CLEANUP_LOOKUP_SIZE, Collector
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
-from clashlens.collector_uploads import claim_upload, complete_upload
+from clashlens.collector_uploads import (
+    archived_copy,
+    claim_upload,
+    complete_upload,
+    fail_upload,
+    release_expired_uploads,
+)
 from clashlens.spool import Spool, SpoolError
 
 NOW = datetime.now(UTC).replace(microsecond=0)
@@ -334,6 +340,8 @@ def _lost_copy_reader(root, endpoint: str) -> SpoolFirstReader:
         # outage, this waits without spending an attempt; once that upload
         # fails for the same missing copy, the next try fails as missing proof.
         ("uploading", None, ("waiting_dependency", "archive_missing")),
+        # An upload whose write could not be confirmed may still land.
+        ("write_unresolved", None, ("waiting_dependency", "archive_missing")),
         # The archive cannot be reached: try again later.
         ("unreachable", "original", ("waiting_dependency", "archive_unavailable")),
     ],
@@ -368,6 +376,15 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
             )
         if history == "uploading":
             assert claim_upload(database, owner="uploader") is not None
+        if history == "write_unresolved":
+            claim = claim_upload(database, owner="uploader")
+            assert claim is not None
+            fail_upload(
+                database,
+                claim,
+                category="archive_unavailable",
+                detail="archive write outcome could not be verified",
+            )
         if history == "retired":
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
@@ -408,3 +425,94 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
         assert (spool.verify(digest) == body) is (outcome[0] == "complete")
         if history == "retired" and archived_at == "original":
             assert archive_server[3].get_count == 0
+
+
+def test_a_write_that_may_yet_land_is_checked_again_before_missing_proof(
+    database_url: str, tmp_path
+) -> None:
+    later = datetime.now(UTC) + timedelta(minutes=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
+        _save(connection_info, database, spool, TAGS[0])
+        first = claim_upload(database, owner="uploader")
+        assert first is not None and not first.write_unresolved
+        fail_upload(
+            database,
+            first,
+            category="archive_unavailable",
+            detail="archive write outcome could not be verified",
+        )
+        second = claim_upload(database, owner="uploader", now=later)
+        assert second is not None and second.write_unresolved
+        # The next attempt found no archived copy either: that settles it.
+        fail_upload(database, second, category="archive_missing")
+        third = claim_upload(
+            database, owner="uploader", now=later + timedelta(minutes=1)
+        )
+        assert third is not None and not third.write_unresolved
+        # An attempt whose lease ran out may have written too.
+        assert release_expired_uploads(database, now=later + timedelta(hours=1)) == 1
+        fourth = claim_upload(
+            database, owner="uploader", now=later + timedelta(hours=1)
+        )
+        assert fourth is not None and fourth.write_unresolved
+
+
+class _FinishesAfterFirstRead:
+    """A database whose upload finishes between archived_copy's two reads."""
+
+    def __init__(self, database: CollectorDatabase, finish) -> None:
+        self._database = database
+        self._finish = finish
+        self.pool = self
+
+    @contextmanager
+    def connection(self):
+        finish = self._finish
+
+        class Connection:
+            def __init__(self, connection) -> None:
+                self._connection = connection
+
+            def execute(self, *args, **kwargs):
+                nonlocal finish
+                result = self._connection.execute(*args, **kwargs)
+                if finish is not None:
+                    finish, done = None, finish
+                    done()
+                return result
+
+        with self._database.pool.connection() as connection:
+            yield Connection(connection)
+
+
+def test_an_upload_finishing_during_the_lookup_still_counts_as_archived(
+    database_url: str, tmp_path
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
+        digest = _save(connection_info, database, spool, TAGS[0])
+        claim = claim_upload(database, owner="uploader")
+        assert claim is not None
+        reference = f"s3://evidence/sha256/{digest[:2]}/{digest}"
+
+        copy = archived_copy(
+            _FinishesAfterFirstRead(
+                database,
+                lambda: complete_upload(
+                    database,
+                    claim,
+                    archive_reference=reference,
+                    archive_instance_id="fixture-instance",
+                ),
+            ),
+            digest,
+            bucket="evidence",
+        )
+
+    assert copy is not None
+    assert (copy.reference, copy.recorded) == (reference, True)

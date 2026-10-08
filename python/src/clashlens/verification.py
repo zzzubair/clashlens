@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import ssl
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 from urllib.parse import quote, urlsplit
 
 OFFICIAL_API_ORIGIN: Final = "https://api.clashofclans.com"
@@ -106,6 +108,45 @@ class OfficialVerificationClient:
         self._authorization = authorization
         self._timeout_seconds = timeout_seconds
         self._transport = transport or _urllib_transport
+        self._relay_lock = threading.Lock()
+        self._relay = {
+            "tunnels_open": 0,
+            "requests": 0,
+            "timeouts": 0,
+            "admission_failures": 0,
+            "reachable": None,
+        }
+
+    def relay_snapshot(self) -> dict[str, Any]:
+        """Each verification opens its own relay tunnel and closes it after."""
+        with self._relay_lock:
+            return dict(self._relay)
+
+    def _send(
+        self, request: OfficialVerificationRequest
+    ) -> OfficialVerificationResponse:
+        with self._relay_lock:
+            self._relay["tunnels_open"] += 1
+        outcome = "other"
+        try:
+            response = self._transport(request)
+            outcome = "answered"
+            return response
+        except VerificationTransportError as error:
+            outcome = _transport_outcome(error.__cause__)
+            raise
+        finally:
+            with self._relay_lock:
+                relay = self._relay
+                relay["tunnels_open"] -= 1
+                relay["requests"] += 1
+                if outcome == "timeout":
+                    relay["timeouts"] += 1
+                elif outcome == "relay_failure":
+                    relay["admission_failures"] += 1
+                    relay["reachable"] = False
+                elif outcome == "answered":
+                    relay["reachable"] = True
 
     def verify(
         self, normalized_tag: str, player_token: str
@@ -123,7 +164,7 @@ class OfficialVerificationClient:
             ).encode("utf-8"),
             timeout_seconds=self._timeout_seconds,
         )
-        response = self._transport(request)
+        response = self._send(request)
         if response.http_status == 200:
             try:
                 decoded = json.loads(response.body)
@@ -207,6 +248,20 @@ def load_official_api_key_file(path: str | Path) -> bytes:
     ):
         raise ValueError("official API key file contains invalid bytes")
     return raw
+
+
+def _transport_outcome(cause: BaseException | None) -> str:
+    # urllib wraps failures to connect, or to open the tunnel, in URLError.
+    reason = getattr(cause, "reason", cause)
+    if isinstance(reason, TimeoutError):
+        return "timeout"
+    if (
+        isinstance(cause, urllib.error.URLError)
+        and isinstance(reason, OSError)
+        and not isinstance(reason, ssl.SSLError)
+    ):
+        return "relay_failure"
+    return "other"
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):

@@ -805,7 +805,12 @@ class Spool:
         if hashlib.sha256(body).hexdigest() != digest:
             raise SpoolError("archive checksum mismatch")
         if reservation is None:
-            with self.reservation() as owned:
+            # Another process may have saved or removed files since this one
+            # last counted, so a publication of its own counts them again.
+            with self._capacity_lock():
+                self._scan_locked()
+                owned = self.reservation()
+            with owned:
                 self._publish_reserved(body, digest, owned)
             return
         if reservation.spool is not self or not reservation._active:
