@@ -588,7 +588,7 @@ class FetchedResponse:
 
 # Transport failures that do not show whether the relay or the API failed.
 _UNCLEAR_TRANSPORT_FAILURES = frozenset(
-    {"network_failure", "truncated_response", "other_transport_failure"}
+    {"timeout", "network_failure", "truncated_response", "other_transport_failure"}
 )
 
 
@@ -730,11 +730,12 @@ class OfficialApiClient:
         return total
 
     def _count_relay(self, outcome: str) -> None:
-        self._relay_counts["requests"] += 1
-        if outcome == "timeout":
-            self._relay_counts["timeouts"] += 1
-        elif outcome == "proxy_failure":
-            self._relay_counts["admission_failures"] += 1
+        counts = self._relay_counts
+        counts["requests"] += 1
+        if outcome in ("timeout", "proxy_timeout"):
+            counts["timeouts"] += 1
+        if outcome in ("proxy_failure", "proxy_timeout"):
+            counts["admission_failures"] += 1
             self._relay_reachable = 0
         elif outcome not in _UNCLEAR_TRANSPORT_FAILURES:
             # The relay opened a tunnel and the API answered through it.
@@ -908,8 +909,13 @@ class OfficialApiClient:
             if isinstance(error, urllib3.exceptions.TimeoutError):
                 category = "timeout"
             elif isinstance(error, urllib3.exceptions.ProxyError):
-                # The relay refused the connection or could not be reached.
-                category = "proxy_failure"
+                # The relay refused the connection or could not be reached,
+                # in time or at all.
+                cause = error.original_error
+                timed_out = isinstance(
+                    cause, (TimeoutError, urllib3.exceptions.TimeoutError)
+                ) and not isinstance(cause, urllib3.exceptions.NewConnectionError)
+                category = "proxy_timeout" if timed_out else "proxy_failure"
             elif isinstance(error, urllib3.exceptions.ProtocolError):
                 category = "truncated_response"
             elif isinstance(error, OSError):

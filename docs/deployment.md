@@ -276,12 +276,14 @@ a request is using and idle ones kept open for the next request.
 `clashlens_collector_relay_requests_total` counts requests sent through the
 relay; `clashlens_collector_relay_admission_failures_total` those the relay
 refused or could not be reached for, and `clashlens_collector_relay_timeouts_total`
-those that ran out of time, including ones queued at a full relay. Timeouts
-divided by requests, using growth between two reads, is the timeout share.
+those that ran out of time, including ones queued at a full relay. A
+connection to the relay that runs out of time counts in both. Timeouts divided
+by requests, using growth between two reads, is the timeout share.
 `clashlens_collector_relay_reachable` is 1 after a request got through the relay
 and 0 after one could not reach it; it appears after the first request.
 In `clashlens_collector_requests_total`, the same failures show as
-`outcome="proxy_failure"` and `outcome="timeout"` per endpoint.
+`outcome="proxy_failure"`, `outcome="proxy_timeout"` (the relay connection ran
+out of time) and `outcome="timeout"` per endpoint.
 
 The API's `/operatorz` shows player verification's side under
 `player_verification_relay`: `tunnels_open` (each verification opens a tunnel

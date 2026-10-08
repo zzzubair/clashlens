@@ -140,9 +140,9 @@ class OfficialVerificationClient:
                 relay = self._relay
                 relay["tunnels_open"] -= 1
                 relay["requests"] += 1
-                if outcome == "timeout":
+                if outcome in ("timeout", "relay_timeout"):
                     relay["timeouts"] += 1
-                elif outcome == "relay_failure":
+                if outcome in ("relay_failure", "relay_timeout"):
                     relay["admission_failures"] += 1
                     relay["reachable"] = False
                 elif outcome == "answered":
@@ -253,13 +253,10 @@ def load_official_api_key_file(path: str | Path) -> bytes:
 def _transport_outcome(cause: BaseException | None) -> str:
     # urllib wraps failures to connect, or to open the tunnel, in URLError.
     reason = getattr(cause, "reason", cause)
+    wrapped = isinstance(cause, urllib.error.URLError)
     if isinstance(reason, TimeoutError):
-        return "timeout"
-    if (
-        isinstance(cause, urllib.error.URLError)
-        and isinstance(reason, OSError)
-        and not isinstance(reason, ssl.SSLError)
-    ):
+        return "relay_timeout" if wrapped else "timeout"
+    if wrapped and isinstance(reason, OSError) and not isinstance(reason, ssl.SSLError):
         return "relay_failure"
     return "other"
 

@@ -524,3 +524,64 @@ def test_collector_refuses_keys_that_could_overfill_the_relay(
     message = "relay connections" if refused else "database URL is required"
     with pytest.raises(ValueError, match=message):
         cli._run_collector(arguments)
+
+
+def test_a_relay_connection_that_runs_out_of_time_is_a_timeout_and_a_relay_failure(
+    relay,
+):
+    # A listener whose queue is full ignores new connections, as a relay
+    # host that has gone quiet does, so connecting runs out of time.
+    with socket.socket() as quiet:
+        quiet.bind(("127.0.0.1", 0))
+        quiet.listen(0)
+        queued = []
+        for _ in range(4):
+            waiting = socket.socket()
+            waiting.setblocking(False)
+            waiting.connect_ex(quiet.getsockname())
+            queued.append(waiting)
+        proxy_url = f"http://127.0.0.1:{quiet.getsockname()[1]}"
+        client = OfficialApiClient(
+            relay["origin"],
+            proxy_url=proxy_url,
+            connection_timeout_seconds=0.3,
+            total_timeout_seconds=5,
+        )
+        verifier = OfficialVerificationClient(
+            api_key=b"verification-secret",
+            proxy_url=proxy_url,
+            api_origin=relay["origin"],
+            allow_insecure_test_origin=True,
+            timeout_seconds=0.3,
+        )
+
+        async def fetch() -> str:
+            with pytest.raises(ProviderFailure) as caught:
+                await client.fetch_player(key_pool(), "#2PP", "profile")
+            return caught.value.category
+
+        try:
+            started = monotonic()
+            assert asyncio.run(fetch()) == "proxy_timeout"
+            assert monotonic() - started < 2
+            metrics = _metrics(client)
+            with pytest.raises(VerificationTransportError):
+                verifier.verify("#2PP", "player-token")
+        finally:
+            client._http.clear()
+            client._executor.shutdown()
+            for waiting in queued:
+                waiting.close()
+
+    assert metrics["clashlens_collector_relay_requests_total"] == 1
+    assert metrics["clashlens_collector_relay_timeouts_total"] == 1
+    assert metrics["clashlens_collector_relay_admission_failures_total"] == 1
+    assert metrics["clashlens_collector_relay_reachable"] == 0
+    assert verifier.relay_snapshot() == {
+        "tunnels_open": 0,
+        "requests": 1,
+        "timeouts": 1,
+        "admission_failures": 1,
+        "reachable": False,
+    }
+    assert relay["requests"] == []

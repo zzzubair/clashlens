@@ -41,13 +41,19 @@ class ArchivedCopy:
     uploading: bool
 
 
-# The last attempt's lease ran out, or it failed in a way that may pass other
-# than finding no archived copy, so a write it made may still land: a missing
-# copy is not yet proof the archive lacks these bytes.
-WRITE_UNRESOLVED_SQL = """
-    ((upload.state = 'failed' AND upload.last_error_retryable IS TRUE
-      AND upload.last_error_category <> 'archive_missing')
-     OR (upload.state = 'pending' AND upload.attempt_count > 0))
+# Uploads retry at least 5 seconds apart, so a write that may yet land is
+# waited for through at least two and a half minutes of attempts.
+UNRESOLVED_WRITE_ATTEMPTS = 30
+
+
+# The last attempt's lease ran out, or it failed in a way that may pass, so a
+# write an earlier attempt made may still land: until the upload has made
+# UNRESOLVED_WRITE_ATTEMPTS attempts, a missing copy is not yet proof the
+# archive lacks these bytes.
+WRITE_UNRESOLVED_SQL = f"""
+    (((upload.state = 'failed' AND upload.last_error_retryable IS TRUE)
+      OR (upload.state = 'pending' AND upload.attempt_count > 0))
+     AND upload.attempt_count < {UNRESOLVED_WRITE_ATTEMPTS})
 """
 
 

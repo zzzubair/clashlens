@@ -702,7 +702,10 @@ up to 6.2 s, on 8 October. See [migration 0042](../deploy/migrations/0042_upload
 for the ordered upload lookup. When a pending upload's saved copy is gone, the
 process checks the location this upload would write to; bytes already there,
 from an upload a restored database forgot, complete it without a second write.
-A location the archive catalogue marks retired is never read. A spool read
+A location the archive catalogue marks retired is never read. After a write
+that may still land (one that failed in a way that may pass, or whose claim ran
+out), a missing copy there is checked again on each attempt, up to the
+upload's 30th, before the response counts as never archived. A spool read
 failure in the uploads process pauses collection, as one in the collector does.
 [Upload waits](operating.md#uploads-waiting) shows how to read its step times.
 
