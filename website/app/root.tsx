@@ -31,6 +31,7 @@ import "./theme.css";
 import "./explore.css";
 import "./appearance.css";
 import "./header-search.css";
+import "./brand.css";
 
 export interface RootLoaderData {
   loggedIn: boolean;
@@ -73,7 +74,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#ffffff" suppressHydrationWarning />
+        <meta name="theme-color" content="#1d1426" suppressHydrationWarning />
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
         <link rel="icon" href="/favicon.ico" sizes="32x32" />

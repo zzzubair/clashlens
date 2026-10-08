@@ -1,18 +1,16 @@
-@font-face {
-  font-family: "Bricolage Grotesque";
-  font-weight: 800;
-  font-display: swap;
-  src: url("/fonts/bricolage-grotesque-800-latin.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+2212;
-}
-
 :root {
   color-scheme: light;
   --cl-input-border: var(--cl-muted);
-  --cl-glow: linear-gradient(180deg, #ffefd9 0, #fff8ef 14rem, #ffffff 28rem);
-  --cl-button-shadow: 0 2px 0 var(--cl-action-shade), 0 8px 18px -6px rgb(232 93 4 / 0.6);
-  --cl-raise: 0 1px 2px rgb(90 45 10 / 0.1), 0 6px 14px -8px rgb(90 45 10 / 0.35);
-  --cl-header-shadow: 0 10px 30px -14px rgb(90 45 10 / 0.45);
+  --cl-glow: radial-gradient(
+    120% 28rem at 50% -6rem,
+    #ffe2b0 0%,
+    #fff3dc 45%,
+    transparent 75%
+  );
+  --cl-button-shadow: 0 3px 0 var(--cl-card-line), inset 0 -3px 0 rgb(179 38 30 / 0.45);
+  --cl-raise: 0 3px 0 var(--cl-card-line);
+  --cl-header-shadow:
+    0 3px 0 var(--cl-brand-orange), 0 10px 24px -12px rgb(29 20 38 / 0.6);
   font-synthesis-weight: none;
   -webkit-text-size-adjust: 100%;
 }
@@ -25,8 +23,6 @@ body {
 }
 .site-header {
   box-shadow: var(--cl-header-shadow);
-  -webkit-backdrop-filter: saturate(1.4) blur(12px);
-  backdrop-filter: saturate(1.4) blur(12px);
 }
 
 /* Secondary controls and medals sit slightly above the page. */
@@ -42,16 +38,10 @@ body {
   box-shadow: var(--cl-raise);
 }
 
-/* In dark mode an ember edge separates the main cards from the page. */
-:root[data-theme="dark"]
-  :is(.home-leaderboard, .standings-board, .player-page .player-header) {
-  border-top: 3px solid var(--cl-action);
-}
-
-/* Headings use the one Bricolage weight that ships. */
+/* Headings use Lilita One, which ships one weight. */
 :is(h1, h2, h3, .site-brand) {
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-weight: 400;
+  letter-spacing: 0.01em;
 }
 
 /* Switch text and surfaces together, without a low-contrast intermediate frame. */
@@ -63,34 +53,31 @@ body {
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --cl-ink: #f4f4f5;
-  --cl-paper: #0f1012;
-  --cl-panel: #25262a;
-  --cl-surface: #1b1c1f;
-  --cl-muted: #a1a1aa;
-  --cl-border: #2c2d32;
-  --cl-outline: #3f4046;
-  --cl-accent: #ff9a4d;
-  --cl-accent-contrast: #ffb27a;
-  --cl-action: #ff7a1a;
-  --cl-action-hover: #ff8f3d;
-  --cl-action-shade: #b8460c;
-  --cl-header-bg: rgb(27 28 31 / 0.88);
-  --cl-header-ink: #f4f4f5;
-  --cl-header-muted: #a1a1aa;
-  --cl-header-soft: #25262a;
-  --cl-action-text: #ff9a4d;
-  --cl-action-soft: #352416;
-  --cl-action-border: #7a3d12;
-  --cl-glow: linear-gradient(180deg, rgb(255 122 26 / 0.12) 0, transparent 22rem);
-  --cl-gold: #fbbf24;
-  --cl-positive: #4ade80;
-  --cl-negative: #f87171;
-  --cl-shadow: 0 2px 4px rgb(0 0 0 / 0.4), 0 22px 44px -18px rgb(0 0 0 / 0.8);
-  --cl-raise: 0 1px 2px rgb(0 0 0 / 0.5), 0 6px 14px -8px rgb(0 0 0 / 0.7);
-  --cl-header-shadow: 0 10px 30px -14px rgb(0 0 0 / 0.8);
-  --cl-button-shadow:
-    0 2px 0 var(--cl-action-shade), 0 8px 18px -6px rgb(255 122 26 / 0.35);
+  --cl-ink: #fff4e2;
+  --cl-paper: #120d17;
+  --cl-panel: #2a2034;
+  --cl-surface: #1d1626;
+  --cl-muted: #bcaa98;
+  --cl-border: #33283f;
+  --cl-outline: #4a3b58;
+  --cl-accent: #ffb547;
+  --cl-accent-contrast: #ffb547;
+  --cl-header-bg: #0b0810;
+  --cl-header-soft: #241a2e;
+  --cl-action-text: #ffb547;
+  --cl-action-soft: #3a2a1c;
+  --cl-action-border: #7a4a1c;
+  --cl-glow: radial-gradient(
+    120% 26rem at 50% -6rem,
+    rgb(255 138 31 / 0.22) 0%,
+    transparent 70%
+  );
+  --cl-gold: #f2c641;
+  --cl-positive: #69db7c;
+  --cl-negative: #ff8787;
+  --cl-card-line: #000000;
+  --cl-header-shadow: 0 3px 0 var(--cl-brand-orange), 0 10px 24px -12px #000000;
+  --cl-button-shadow: 0 3px 0 var(--cl-card-line), inset 0 -3px 0 rgb(179 38 30 / 0.5);
 }
 
 :is(.theme-toggle, .header-search-toggle) {
