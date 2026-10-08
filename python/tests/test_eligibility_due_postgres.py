@@ -1,4 +1,4 @@
-"""Each player keeps one durable eligibility due state (migration 0082)."""
+"""Each player keeps one durable eligibility due state (migration 0084)."""
 
 from __future__ import annotations
 

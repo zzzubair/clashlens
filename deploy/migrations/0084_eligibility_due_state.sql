@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0082.
+-- Clash Lens deployment migration 0084.
 -- One durable eligibility due state per player identity.
 --
 -- Until now a player named by a battle log or ranking got one profile check,
@@ -338,7 +338,8 @@ END $$;
 
 -- As 0075, and each check created moves its player to the next try, and
 -- requested players left without a check are saved as due. A profile fetched
--- this week holds a player back only while it awaits processing.
+-- this week holds a player back only while it awaits processing or once it
+-- shows a recognized league, including an unchanged answer keeping one.
 CREATE OR REPLACE FUNCTION clashlens_enqueue_eligibility_profiles(
     requested_player_ids bigint[], instant timestamptz, scheduled boolean
 )
@@ -393,13 +394,7 @@ BEGIN
                            AND observation.response_completed_at <= instant))
           )
           AND NOT clashlens_eligibility_processing_since(player.id, boundary_at, instant)
-          AND NOT EXISTS (
-              SELECT 1 FROM player_profile_versions AS version
-              JOIN player_profile_effects AS effect ON effect.profile_version_id = version.id
-              WHERE version.player_id = player.id
-                AND version.eligibility_state IN ('eligible', 'ineligible')
-                AND effect.observed_at >= boundary_at AND effect.observed_at <= instant
-          )
+          AND NOT clashlens_eligibility_checked_since(player.id, boundary_at, instant)
         ORDER BY player.id
         LIMIT CASE WHEN scheduled THEN 30 ELSE 500 END
         FOR NO KEY UPDATE OF player SKIP LOCKED
@@ -804,6 +799,6 @@ GRANT EXECUTE ON FUNCTION clashlens_admit_due_eligibility(timestamptz),
     clashlens_population_report(timestamptz,text)
     TO clashlens_collector;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (82)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (84)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

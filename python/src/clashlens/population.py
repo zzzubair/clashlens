@@ -1,7 +1,7 @@
 """Count who is tracked and who still needs an eligibility answer.
 
 The ``population-status`` command, run with the collector database role,
-prints one JSON object (migration 0082):
+prints one JSON object (migration 0084):
 
 * ``tracked``: tracked players split into ``available`` (a current profile
   naming this Season), ``waiting_to_sign_up`` (a Legend I profile not naming

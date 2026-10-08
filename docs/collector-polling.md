@@ -26,7 +26,7 @@ Automatic discovery requirements remain in [#125](https://github.com/zzzubair/cl
 Production discovery is on: `CLASHLENS_PLAYER_DISCOVERY_ENABLED` defaults to
 `true` in `ops`, and `false` turns it off. Each battle-log opponent or Top-200
 player who is not tracked and has not had this week's check is saved as due a
-check (`players.eligibility_due_at`, migration 0082): one profile request and
+check (`players.eligibility_due_at`, migration 0084): one profile request and
 one league-history request. Unlike the scheduled weekly check, it does not
 reuse saved league history. List imports and the Monday promotion re-check
 save players the same way, so a player named by several sources is due once.
@@ -119,7 +119,7 @@ Season), waiting to sign up and unavailable (profile not found); for players
 first seen as an untracked battle opponent or first given a discovery, lookup
 or refresh check, whichever came first, in the last 7 days and now tracked,
 the median, 95th-percentile and longest time from then to their first battle
-log, so time waiting for queue space counts (first logs before migration 0082 are not recorded); untracked
+log, so time waiting for queue space counts (first logs before migration 0084 are not recorded); untracked
 players, and this week's answers, waiting checks, due retries and players not
 yet checked for battle opponents (saved on the player when a battle log first
 names them untracked, so pruning sightings does not move them) and other
@@ -177,7 +177,7 @@ discovery checks above try again.
 A successful profile fetch completed since Monday's 05:00 UTC Reset prevents
 another routine profile request while it awaits processing or once it shows a
 recognized league; once processed without one, the next check fetches the
-profile again (migration 0082). This applies both before enqueueing and when
+profile again (migration 0084). This applies both before enqueueing and when
 admitting already-queued ordinary discovery or weekly work. Unchanged
 responses also count when they retain an older observation awaiting
 processing. Reuse does

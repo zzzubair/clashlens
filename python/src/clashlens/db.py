@@ -1391,7 +1391,7 @@ def enqueue_discovered_players(
     """Save each new player named by a battle log or ranking as due a profile check.
 
     Players already tracked or already given this week's check are skipped
-    before anything else. The rest are saved as due (migration 0082); the
+    before anything else. The rest are saved as due (migration 0084); the
     collector turns due players into checks while fewer than 500 wait, so a
     full queue delays a player instead of dropping it. Waiting over a second
     for a player another job is updating raises LockNotAvailable, so the

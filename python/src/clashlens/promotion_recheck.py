@@ -16,7 +16,7 @@ start together. Two in flight at about 120 ms each gives roughly 16 requests a
 second, about an hour for 59,000 Legend II players and about three more hours
 for 192,000 Legend III players. These answers are not saved: a profile showing
 Legend I saves the player as due a discovery check newer than that answer
-(migration 0082), which saves the profile and starts tracking; any other
+(migration 0084), which saves the profile and starts tracking; any other
 answer only refreshes the list row, so a Legend III player promoted to Legend
 II is asked with Legend II next Monday. A request that fails, or an answer that
 cannot be read or shows an uncertain tier, leaves the player due; it is asked
