@@ -104,6 +104,22 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 if latest is None or not latest[0]:
                     day_starts = set()
             pending = sorted(day_starts)
+            if pending:
+                for locked_day in sorted({*pending, *(
+                    row[0] for row in connection.execute(
+                        """
+                        SELECT DISTINCT ranked_day_start FROM ranked_day_versions
+                        WHERE player_id = %s AND ranked_day_start > %s
+                          AND ranked_day_start < %s
+                          AND reconciliation_rule_version = %s
+                        """,
+                        (player_id, pending[0], ranked_day_for(pending[-1]).season_end,
+                         RECONCILIATION_RULE_VERSION),
+                    ).fetchall()
+                )}):
+                    ranked_day_inputs.lock_ranked_day(
+                        connection, player_id, ranked_day_for(locked_day)
+                    )
             while pending:
                 day_start = pending.pop(0)
                 following = day_start + timedelta(days=1)

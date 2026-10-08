@@ -6,11 +6,18 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import first_battle_log, job_outcomes, reset_baselines, reset_settlement
+from . import (
+    first_battle_log,
+    job_outcomes,
+    ranked_day_inputs,
+    reset_baselines,
+    reset_settlement,
+)
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     DomainRuleError,
+    battle_window,
     ranked_day_for,
     validate_season_anchor,
 )
@@ -33,8 +40,11 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
     Nor is one read in the first RESET_SETTLING_WINDOW after a Reset, while
     the game finishes crediting the ended day and charges its automatic
     defense loss: such a reading can settle the ended day's end (see
-    ``ranked_day_inputs.load_later_reading``). Every other profile can still
-    be skipped, so a post-Reset backlog costs at most that window's profiles.
+    ``ranked_day_inputs.load_later_reading``). A profile read before the
+    player's first battle of the day is covered only by a newer one also
+    read before it: it may be the ended day's later reading, which a reading
+    after that battle cannot replace. Every other profile can still be
+    skipped, so a post-Reset backlog costs at most that window's profiles.
     """
     if claim.normalized_tag is None or claim.observed_at is None:
         return False
@@ -44,20 +54,33 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
     day_end = day.end
 
     def covered(connection: Any) -> bool:
+        player = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (claim.normalized_tag,)
+        ).fetchone()
+        if player is None:
+            return False
+        first_battle = ranked_day_inputs.load_first_reports(
+            connection, int(player[0]), claim.observed_at,
+            battle_window(day.start)[0], day_end,
+        )[1]
+        until = (
+            first_battle
+            if first_battle is not None and claim.observed_at < first_battle
+            else day_end
+        )
         return connection.execute(
             """
             SELECT EXISTS (
                 SELECT 1
-                FROM players AS player
-                JOIN player_profile_versions AS version ON version.player_id = player.id
+                FROM player_profile_versions AS version
                 JOIN player_profile_effects AS effect
                   ON effect.profile_version_id = version.id
-                WHERE player.normalized_tag = %s
+                WHERE version.player_id = %s
                   AND version.source_contract_state = 'accepted'
                   AND effect.observed_at > %s AND effect.observed_at < %s
             )
             """,
-            (claim.normalized_tag, claim.observed_at, day_end),
+            (int(player[0]), claim.observed_at, until),
         ).fetchone()[0]
 
     return job_outcomes.complete_superseded(database, claim, covered)
@@ -313,6 +336,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 and profile.eligibility_state == "eligible"
                 else ([], None)
             )
+            reset_settlement.lock_publications(connection, observation_id, rechecks)
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
             reset_settlement.recheck_later_readings(
                 database, connection, rechecks, f"profile-{observation_id}",
@@ -506,6 +530,7 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                 and profile.eligibility_state == "eligible"
                 else ([], None)
             )
+            reset_settlement.lock_publications(connection, observation_id, rechecks)
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
             reset_settlement.recheck_later_readings(
                 database, connection, rechecks, f"profile-{observation_id}",

@@ -300,8 +300,8 @@ def _recalculate_season_ends(
     connection: Any, player_id: int, history: ParsedLeagueHistory,
     observed_at: datetime,
 ) -> None:
-    """Queue the last day of each Season this response gives the player's
-    official Legend I total for (see ``reconciliation_db._official_final``)."""
+    """Queue the last day of each Season this response names an official
+    Legend I total for (see ``reconciliation_db._official_final``)."""
     from .profile import LEGEND_I_TIER_ID
 
     for entry in history.entries:
@@ -309,23 +309,19 @@ def _recalculate_season_ends(
             continue
         ended = int(entry.league_season_id)
         if ended <= observed_at.timestamp():
-            queue_season_end(
-                connection, player_id, datetime.fromtimestamp(ended, UTC),
-                entry.league_trophies,
-            )
+            queue_season_end(connection, player_id, datetime.fromtimestamp(ended, UTC))
 
 
-def queue_season_end(
-    connection: Any, player_id: int, season_end: datetime, official_total: int,
-) -> None:
-    """Queue, once per official total, the last day of the Season ending at
-    ``season_end`` when a response, whenever it is read, can give that
-    day's end: the day is kept, not retired with its Season's details, and
-    still saved without ``official_total`` as its end, and its official
-    Legend I total is saved. The official total is the day's end, so it is
-    queued whatever a Season repair already did for the player. The day's
-    calculation lock makes the two meet: a calculation either reads this
-    total or has saved before this reads it."""
+def queue_season_end(connection: Any, player_id: int, season_end: datetime) -> None:
+    """Queue the last day of the Season ending at ``season_end`` when the
+    player's saved official Legend I total for it, whichever response saved
+    it, is not yet the day's end, and the day is kept, not retired with its
+    Season's details. The official total is the day's end, so it is queued
+    whatever a Season repair already did for the player, once per total and
+    saved result of the day: a job that ran without making the day end on
+    it, as when the saved total changed since, leaves another to queue. The
+    day's calculation lock makes the two meet: a calculation either reads
+    this total or has saved before this reads it."""
     from . import first_battle_log
     from .db import PYTHON_BACKFILL_PRIORITY
     from .domain import ranked_day_for
@@ -337,32 +333,39 @@ def queue_season_end(
     lock_ranked_day(connection, int(player_id), ranked_day_for(day_start))
     stale = connection.execute(
         """
-        SELECT (input_evidence -> 'end_baseline_evidence'
-                ->> 'official_final_trophies')::integer IS DISTINCT FROM %s
-        FROM ranked_day_versions
-        WHERE player_id = %s AND ranked_day_start = %s
-          AND reconciliation_rule_version = %s
-          AND EXISTS (
-              SELECT 1 FROM player_league_history_entries
-              WHERE player_id = %s AND league_season_id = %s
-                AND league_tier_id = %s AND league_trophies IS NOT NULL
-          )
+        SELECT version.id, official.league_trophies
+        FROM ranked_day_versions AS version
+        JOIN player_league_history_entries AS official
+          ON official.player_id = version.player_id
+         AND official.league_season_id = %s AND official.league_tier_id = %s
+         AND official.league_trophies IS NOT NULL
+        WHERE version.player_id = %s AND version.ranked_day_start = %s
+          AND version.reconciliation_rule_version = %s
           AND NOT EXISTS (
               SELECT 1 FROM season_detail_retirements AS retired
-              WHERE retired.official_season_id = ranked_day_versions.official_season_id
+              WHERE retired.official_season_id = version.official_season_id
           )
-        ORDER BY version DESC, id DESC LIMIT 1
+          AND (version.input_evidence -> 'end_baseline_evidence'
+               ->> 'official_final_trophies')::integer
+              IS DISTINCT FROM official.league_trophies
+          AND version.version = (
+              SELECT max(latest.version) FROM ranked_day_versions AS latest
+              WHERE latest.player_id = version.player_id
+                AND latest.ranked_day_start = version.ranked_day_start
+                AND latest.reconciliation_rule_version = %s
+          )
+        ORDER BY version.id DESC LIMIT 1
         """,
-        (official_total, player_id, day_start, RECONCILIATION_RULE_VERSION,
-         player_id, str(int(season_end.timestamp())), LEGEND_I_TIER_ID),
+        (str(int(season_end.timestamp())), LEGEND_I_TIER_ID, player_id, day_start,
+         RECONCILIATION_RULE_VERSION, RECONCILIATION_RULE_VERSION),
     ).fetchone()
-    if stale is None or not stale[0]:
+    if stale is None:
         return
     first_battle_log._queue(
         connection, int(player_id), day_start, None,
         key=(f"reconcile:official-final:{player_id}:"
              f"{day_start:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}:"
-             f"{official_total}"),
+             f"{stale[1]}:{stale[0]}"),
         trigger="official_final", later_days=False,
         priority=PYTHON_BACKFILL_PRIORITY,
     )

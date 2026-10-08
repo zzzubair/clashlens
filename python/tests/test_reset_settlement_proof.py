@@ -16,7 +16,7 @@ from clashlens.domain import HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION as OLD_RU
 from clashlens.domain import TROPHY_ALLOCATION_RULE_VERSION
 from clashlens.ranked_day_inputs import Reading
 from clashlens.reconciliation import BattleContribution, CoverageObservation
-from clashlens.reset_settlement import ProofInputs, Root, evaluate_boundary
+from clashlens.reset_settlement import DayEnd, ProofInputs, Root, evaluate_boundary
 
 RESET = datetime(2026, 8, 5, 5, tzinfo=UTC)  # an ordinary Wednesday Reset
 MINUTE, DAY = timedelta(minutes=1), timedelta(days=1)
@@ -30,7 +30,8 @@ def reading(observation_id: int, completed: datetime, trophies: int | None) -> R
 def check(*, boundary: datetime = RESET, start: int = 4746,
           prior: list[int] | None = None, defenses: list[int] | None = None,
           attacks: list[int] | None = None) -> ProofInputs:
-    """A named check passing every guard, on a settled previous Reset."""
+    """A named check passing every guard, on a settled previous Reset, the
+    day before saved with ``prior`` defenses."""
     prior = [37] * 7 + [39] if prior is None else prior  # 8 defenses, 298 lost
     defenses = [30] * 6 + [29] if defenses is None else defenses  # 7, 209 lost
     attacks = [40] * 7 + [20] if attacks is None else attacks  # 300 won
@@ -69,8 +70,9 @@ def check(*, boundary: datetime = RESET, start: int = 4746,
                 source_rule_version=TROPHY_ALLOCATION_RULE_VERSION,
                 opponent_tag="#OPP", battle_timestamp=at,
             )
-            for identity, lens, at, amount in reports if at >= prior_from
+            for identity, lens, at, amount in reports if at >= ended_from
         ),
+        previous_defenses=(len(prior), sum(prior)),
         root=Root(boundary - DAY, start, "root-fingerprint", 1, (11, 12, 13)),
     )
 
@@ -117,18 +119,18 @@ def settles_on(inputs: ProofInputs, loss: int, target: int) -> ProofInputs:
 
 def test_no_opponent_rows_are_used_slots_for_the_automatic_loss() -> None:
     # 6 defenses for 180 plus one "no opponent, no battle" defense row, and
-    # one such row the day before: the loss is floor((298 + 180) / (9 + 7))
-    # for one missing defense, 29, not floor(478 / 14) * 2 = 68.
+    # a saved day before with one such row besides its 8 defenses: the loss
+    # is floor((298 + 180) / (9 + 7)) for one missing defense, 29, not
+    # floor(478 / 14) * 2 = 68.
     inputs = settles_on(replace(check(defenses=[30] * 6), zero_result_slots=frozenset({
-        (RESET - DAY + 300 * MINUTE, False), (RESET - 2 * DAY + 300 * MINUTE, False),
-    })), 29, 4746 + 300 - 180 - 29)
+        (RESET - DAY + 300 * MINUTE, False),
+    }), previous_defenses=(9, 298)), 29, 4746 + 300 - 180 - 29)
     verdict = evaluate_boundary(inputs)
 
     assert (verdict.state, verdict.trophies) == ("settled", 4837)
     assert verdict.proof["automatic_loss_basis"] == {
-        "prior_defenses": 8, "prior_defense_loss": 298, "defenses": 6,
+        "prior_defenses": 9, "prior_defense_loss": 298, "defenses": 6,
         "defense_loss": 180, "automatic_loss": 29, "zero_result_defenses": 1,
-        "zero_result_prior_defenses": 1,
     }
     assert judged(replace(inputs, zero_result_slots=frozenset()))[0] == "unresolved"
 
@@ -262,7 +264,7 @@ def test_profile_and_log_order_uses_wire_request_and_both_participants() -> None
                           first_report_after_early=done + timedelta(seconds=1)))[0] == "settled"
 
 
-def test_two_day_source_proof_requires_complete_classified_history() -> None:
+def test_ended_day_source_proof_requires_complete_classified_history() -> None:
     passing = check()
     coverage, battles = passing.log_coverage, passing.battles
     in_window = RESET - 30 * MINUTE
@@ -271,8 +273,11 @@ def test_two_day_source_proof_requires_complete_classified_history() -> None:
         return replace(passing, battles=(replace(battles[0], **fields), *battles[1:]))
 
     cases = [
-        # Fifty-row truncation: the log no longer reaches before both days.
-        (replace(passing, log_reports=passing.log_reports[1:]), "battle_log_too_short"),
+        # Fifty-row truncation: the log no longer reaches before the ended day.
+        (replace(passing, log_reports=tuple(
+            report for report in passing.log_reports
+            if report[2] >= RESET - DAY + 5 * MINUTE
+        )), "battle_log_too_short"),
         (replace(passing, log_coverage=replace(coverage, has_row_gap=True)), "battle_log_unreadable"),
         (replace(passing, log_coverage=replace(coverage, malformed_row_count=1)), "battle_log_unreadable"),
         (replace(passing, log_coverage=replace(coverage, unclassified_row_count=1)), "battle_log_unreadable"),
@@ -286,7 +291,7 @@ def test_two_day_source_proof_requires_complete_classified_history() -> None:
         (changed(valid=False, failure_reason="malformed"), "battle_report_unusable"),
         (changed(source_rule_version=OLD_RULE), "rule_correction_pending"),
         # A row saved after the named log: a late battle, a corrected amount,
-        # or an unreadable row from the two days, however late it arrived.
+        # or an unreadable row from the ended day, however late it arrived.
         (changed(battle_identity="late"), "battle_reports_changed_after_log"),
         (changed(trophy_amount=31), "battle_reports_changed_after_log"),
         (replace(passing, late_unreadable=(None,)), "late_battle_log_unreadable"),
@@ -296,9 +301,11 @@ def test_two_day_source_proof_requires_complete_classified_history() -> None:
     for inputs, reason in cases:
         state, reasons, _ = judged(inputs)
         assert state == "unresolved" and reason in reasons, (reason, reasons)
-    # An unreadable row from the new day, or before both days, does not matter.
-    assert judged(replace(passing, late_unreadable=(RESET + 6 * MINUTE,
-                                                    RESET - 3 * DAY)))[0] == "settled"
+    # An unreadable row from the new day, or before the ended day, does not
+    # matter.
+    assert judged(replace(passing, late_unreadable=(
+        RESET + 6 * MINUTE, RESET - DAY - 60 * MINUTE, RESET - 3 * DAY,
+    )))[0] == "settled"
 
 
 @pytest.mark.parametrize("prior,defenses,expected", [
@@ -359,3 +366,48 @@ def test_unfinished_and_unprocessed_checks_stay_provisional() -> None:
         assert judged(replace(passing, **{field: unusable})) == (
             "unresolved", (f"{name}_unusable",), None)
     assert judged(replace(passing, early=None))[1] == ("early_reading_unusable",)
+
+
+def test_a_log_reaching_back_only_into_the_ended_day_settles() -> None:
+    """On 7 October 2026 a named log reached back to 07:31 the day before,
+    two hours short of that day: 10,490 checks failed so. Only the ended
+    day's battles need the log; the day before's defenses come from its
+    saved day."""
+    passing = check()
+    ended_from = RESET - DAY + 5 * MINUTE
+    shorter = replace(passing, log_reports=(
+        ("prior-late", "defense", ended_from - 60 * MINUTE, 30),
+        *(report for report in passing.log_reports if report[2] >= ended_from),
+    ))
+    assert min(report[2] for report in shorter.log_reports) > RESET - 2 * DAY + 5 * MINUTE
+    assert judged(shorter) == ("settled", (), 4804)
+    # The saved day before's defenses, not the log's, set the loss: 8 for
+    # 400 pool with 7 for 209 to floor(609 / 15) = 40 for the missing one.
+    saved = settles_on(replace(shorter, previous_defenses=(8, 400)), 40, 4746 + 300 - 209 - 40)
+    assert judged(saved) == ("settled", (), 4797)
+    assert evaluate_boundary(saved).proof["automatic_loss_basis"]["prior_defense_loss"] == 400
+    # A day before saved with a gap in its battle logs or a disputed battle.
+    assert judged(replace(shorter, previous_defenses=None)) == (
+        "unresolved", ("previous_day_defenses_unknown",), None,
+    )
+
+
+def test_ended_day_start_is_proven_by_the_day_before_or_the_season_rule() -> None:
+    passing = check()
+    balanced = DayEnd(
+        state="Complete", final=4746, automatic_loss=None,
+        automatic_state="not_applicable", boundary_kind=None, start=4700,
+        end_reading=4746, next_start=4746, official_end=False, settled=None,
+        boundary_at=RESET - DAY,
+    )
+    # No settled previous Reset: the day before's balanced end roots it.
+    assert judged(replace(passing, root=None, previous_end=balanced)) == ("settled", (), 4804)
+    # A day before disproved by a later reading, or only Partial, roots nothing.
+    for unproven in (replace(balanced, later=4786), replace(balanced, state="Partial")):
+        assert judged(replace(passing, root=None, previous_end=unproven)) == (
+            "unresolved", ("independent_root_missing",), None,
+        )
+    # Day 1 ended at this Reset: every Legend I player started it at 5,000.
+    day_2 = datetime(2026, 10, 6, 5, tzinfo=UTC)
+    day_1 = settles_on(check(boundary=day_2, start=5000), 29, 5000 + 300 - 209 - 29)
+    assert judged(replace(day_1, root=None, previous_defenses=None)) == ("settled", (), 5062)

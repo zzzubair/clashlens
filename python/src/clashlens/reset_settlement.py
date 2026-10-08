@@ -43,6 +43,7 @@ from .db import (
 )
 from .domain import (
     BATTLE_DAY_GRACE,
+    SEASON_START_TROPHIES,
     TROPHY_ALLOCATION_RULE_VERSION,
     battle_day_for,
     battle_window,
@@ -51,6 +52,7 @@ from .domain import (
 )
 from .ranked_day_inputs import Reading
 from .reconciliation import (
+    DISPUTED_BATTLE_REASONS,
     MAX_DAILY_DEFENSES,
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
@@ -60,7 +62,7 @@ from .reconciliation import (
     automatic_defense_loss,
 )
 
-PROOF_RULE_VERSION = "reset-settlement-observed-adjustment-v1"
+PROOF_RULE_VERSION = "reset-settlement-observed-adjustment-v2"
 NEW_PROOFS_SWITCH = "CLASHLENS_ENABLE_NEW_RESET_PROOFS"
 PROVISIONAL, SETTLED, UNRESOLVED = "provisional", "settled", "unresolved"
 TERMINAL_WORK = frozenset({"complete", "failed", "cancelled"})
@@ -425,6 +427,27 @@ def lock_rechecked_days(
             connection, player_id, ranked_day_for(boundary_at - DAY)
         )
     return days
+
+
+def lock_publications(
+    connection: Any, observation_id: int, days: list[tuple[int, datetime]]
+) -> None:
+    """For a profile just saved, before its Reset proof locks: its Reset
+    pair's work lock, then the publication locks of that pair's Reset and
+    of ``days``, oldest first, as a battle log's army decodes take them."""
+    from .boundary import lock_boundary_members
+    from .reset_baselines import _load_reset_baseline_context
+
+    boundaries = {boundary_at for _, boundary_at in days}
+    context = _load_reset_baseline_context(connection, observation_id)
+    if context is not None:
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"reset-baseline:{context[0]}",),
+        )
+        boundaries.add(context[4])
+    for boundary_at in sorted(at.astimezone(UTC) for at in boundaries):
+        lock_boundary_members(connection, boundary_at)
 
 
 def recheck_later_readings(
@@ -917,8 +940,14 @@ class ProofInputs:
     # Each "no opponent, no battle" row in the named battle log, as
     # (report time, is an attack): used slots for the automatic loss only.
     zero_result_slots: frozenset[tuple[datetime, bool]] = frozenset()
-    # Every saved own-side report of the ended day and the day before.
+    # Every saved own-side report of the ended day.
     battles: tuple[BattleContribution, ...] = ()
+    # The saved day before's defense slots, counting "no opponent, no
+    # battle" rows, and their losses, when its battle logs were continuous
+    # and no battle disputed.
+    previous_defenses: tuple[int, int] | None = None
+    # The saved day before's shared proof (``DayEnd``).
+    previous_end: DayEnd | None = None
     # Report times of unreadable rows in battle logs saved after the named one.
     late_unreadable: tuple[datetime | None, ...] = ()
     # Earliest report time, from either player, at or after the early reading.
@@ -941,8 +970,10 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     """Judge one Reset's named settlement check against guards 1-6, in order.
 
     Only an ordinary Reset whose delayed profile shows exactly the
-    calculated automatic loss, on top of an independently settled previous
-    Reset plus every battle of the ended day, can be ``settled``. Anything
+    calculated automatic loss, on top of an independently proven start of
+    the ended day plus every battle of it, can be ``settled``. The start is
+    the previous Reset's settled check, else 5,000 on a Season's Day 1, else
+    the day before's end by its shared proof, verified or balanced. Anything
     not yet known stays ``provisional``; anything unproven is ``unresolved``.
     """
     boundary = inputs.boundary_at
@@ -996,21 +1027,20 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     assert early is not None and early.trophies is not None
     assert profile.trophies is not None
 
-    # 3. Complete battle evidence for the ended day and the day before,
-    # from the named battle log, unchanged by every report saved since.
+    # 3. Complete battle evidence for the ended day, from the named battle
+    # log, unchanged by every report saved since.
     ended_from, ended_until = battle_window(boundary - DAY)
-    prior_from = battle_window(boundary - 2 * DAY)[0]
     coverage = inputs.log_coverage
     if (coverage is None or not coverage.valid or coverage.has_row_gap
             or coverage.malformed_row_count or coverage.unclassified_row_count
             or len(set(coverage.battle_identities)) != len(coverage.battle_identities)):
         reasons.append("battle_log_unreadable")
-    if not inputs.log_reports or min(r[2] for r in inputs.log_reports) >= prior_from:
+    if not inputs.log_reports or min(r[2] for r in inputs.log_reports) >= ended_from:
         reasons.append("battle_log_too_short")
     pinned = {
         identity: (lens, amount)
         for identity, lens, at, amount in inputs.log_reports
-        if prior_from <= at < ended_until
+        if ended_from <= at < ended_until
     }
     for battle in inputs.battles:
         if (not battle.valid or battle.failure_reason or battle.disagreement
@@ -1020,15 +1050,14 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
             reasons.append("rule_correction_pending")
     if {b.battle_identity: (b.lens, b.amount) for b in inputs.battles} != pinned:
         reasons.append("battle_reports_changed_after_log")
-    if any(at is None or prior_from <= at < ended_until for at in inputs.late_unreadable):
+    if any(at is None or ended_from <= at < ended_until for at in inputs.late_unreadable):
         reasons.append("late_battle_log_unreadable")
     def amounts(lens: str, since: datetime, until: datetime) -> list[int]:
         return [a for _, kind, at, a in inputs.log_reports if kind == lens and since <= at < until]
 
     attacks = amounts("offense", ended_from, ended_until)
     defenses = amounts("defense", ended_from, ended_until)
-    prior_defenses = amounts("defense", prior_from, ended_from)
-    if max(len(attacks), len(defenses), len(prior_defenses)) > MAX_DAILY_DEFENSES:
+    if max(len(attacks), len(defenses)) > MAX_DAILY_DEFENSES:
         reasons.append("battle_count_exceeds_eight")
     proof["coverage"] = {
         "battle_log_observed_at": _iso(coverage.observed_at if coverage else None),
@@ -1060,38 +1089,49 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     if boundary.weekday() == 0 or is_season_boundary(boundary):
         return verdict(UNRESOLVED, ["special_reset_unsupported"])
 
-    # 5 and 6. An independently settled previous Reset, plus the ended
-    # day's battles and its positive automatic loss, gives the target; the
-    # early reading must sit exactly that loss above it, and the named
-    # profile exactly on it.
+    # 5 and 6. The ended day's independently proven start, plus its battles
+    # and its positive automatic loss, gives the target; the early reading
+    # must sit exactly that loss above it, and the named profile exactly on
+    # it. The automatic loss pools the saved day before's defenses.
     zero_attacks, zero_defenses = ranked_day_inputs.slot_counts(
         inputs.zero_result_slots, ended_from, ended_until)
-    zero_prior_defenses = ranked_day_inputs.slot_counts(
-        inputs.zero_result_slots, prior_from, ended_from)[1]
+    season_first_day = is_season_boundary(boundary - DAY)
+    previous = (0, 0) if season_first_day else inputs.previous_defenses
     automatic = None
     if 1 <= len(defenses) + zero_defenses < MAX_DAILY_DEFENSES:
-        automatic = automatic_defense_loss(
-            attacks=len(attacks) + zero_attacks,
-            defenses=len(defenses) + zero_defenses,
-            defense_loss=sum(defenses),
-            previous_defenses=len(prior_defenses) + zero_prior_defenses,
-            previous_defense_loss=sum(prior_defenses),
-            season_first_day=is_season_boundary(boundary - DAY),
-        )
+        if previous is None:
+            reasons.append("previous_day_defenses_unknown")
+        else:
+            automatic = automatic_defense_loss(
+                attacks=len(attacks) + zero_attacks,
+                defenses=len(defenses) + zero_defenses,
+                defense_loss=sum(defenses),
+                previous_defenses=previous[0],
+                previous_defense_loss=previous[1],
+                season_first_day=season_first_day,
+            )
     proof["automatic_loss_basis"] = {
-        "prior_defenses": len(prior_defenses), "prior_defense_loss": sum(prior_defenses),
+        "prior_defenses": previous[0] if previous else None,
+        "prior_defense_loss": previous[1] if previous else None,
         "defenses": len(defenses), "defense_loss": sum(defenses), "automatic_loss": automatic,
         # Only present when the log holds such rows, so other proofs are unchanged.
         **{name: count for name, count in (
             ("zero_result_attacks", zero_attacks), ("zero_result_defenses", zero_defenses),
-            ("zero_result_prior_defenses", zero_prior_defenses)) if count},
+        ) if count},
     }
     root = inputs.root
+    if root is None and season_first_day:
+        root = Root(boundary - DAY, SEASON_START_TROPHIES, "season-rule", 0, ())
+    elif root is None and inputs.previous_end is not None and (
+        inputs.previous_end.proof in {VERIFIED, BALANCED}
+    ):
+        root = Root(boundary - DAY, int(inputs.previous_end.final),
+                    f"previous-day-{inputs.previous_end.proof}", 0, ())
     if root is None:
         reasons.append("independent_root_missing")
     elif root.boundary_at >= boundary or set(root.observations) & set(proof["observations"]):
         reasons.append("independent_root_circular")
-    if not automatic:
+    if not automatic and "previous_day_defenses_unknown" not in reasons:
         reasons.append("no_positive_automatic_loss")
     if reasons:
         return verdict(UNRESOLVED, reasons)
@@ -1188,6 +1228,21 @@ def load_proof_inputs(
         """,
         (player_id, boundary_at - DAY),
     ).fetchone()
+    previous = connection.execute(
+        """
+        SELECT id,
+               defense_count
+               + COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
+               observed_defense_loss,
+               coverage_complete AND NOT failure_reasons ?| %s::text[]
+        FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s
+          AND reconciliation_rule_version = %s
+        ORDER BY version DESC, id DESC LIMIT 1
+        """,
+        (sorted(DISPUTED_BATTLE_REASONS), player_id, boundary_at - 2 * DAY,
+         RECONCILIATION_RULE_VERSION),
+    ).fetchone()
     return replace(
         inputs,
         log_coverage=coverage,
@@ -1195,9 +1250,15 @@ def load_proof_inputs(
             database, connection, log.observation_id, log.parser_version),
         zero_result_slots=ranked_day_inputs.load_zero_result_slots(
             connection, (coverage,) if coverage else ()),
-        battles=tuple(battle for day in (boundary_at - 2 * DAY, boundary_at - DAY)
-                      for battle in ranked_day_inputs.load_contributions(
-                          connection, player_id, ranked_day_for(day))),
+        battles=ranked_day_inputs.load_contributions(
+            connection, player_id, ranked_day_for(boundary_at - DAY)),
+        previous_defenses=(
+            (int(previous[1]), int(previous[2])) if previous and previous[3] else None
+        ),
+        previous_end=(
+            day_ends(connection, [int(previous[0])]).get(int(previous[0]))
+            if previous else None
+        ),
         late_unreadable=tuple(ranked_day_inputs.load_unreadable_report_times(
             database, connection, player_id, log_observed_at, boundary_at + DAY
         )),
