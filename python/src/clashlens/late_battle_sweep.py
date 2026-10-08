@@ -269,6 +269,9 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
                         domain_rule_version=DOMAIN_RULE_VERSION,
                         analytics_rule_version=ANALYTICS_RULE_VERSION,
                     )
+                reconciliation_db.finish_recalculation(
+                    database, connection, player_id, [row[0] for row in saved_days]
+                )
         except Exception as error:  # noqa: BLE001 - rolled back, retried next run
             failed += 1
             print(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -148,28 +149,47 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 ).fetchone() is not None:
                     day_starts.add(following)
                     pending.insert(0, following)
-            _rejudge_settlement_checks(database, connection, player_id, day_starts)
+            finish_recalculation(database, connection, player_id, day_starts)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
 
 
-def _rejudge_settlement_checks(
-    database: Database, connection: Any, player_id: int, day_starts: set[datetime]
+def finish_recalculation(
+    database: Database, connection: Any, player_id: int, day_starts: Iterable[datetime]
 ) -> None:
-    """Judge again, oldest Reset first and after every day's publication
-    lock, each Reset settlement check that roots its start or pools its
-    automatic loss on one of these ended days, the day before its own."""
+    """Finish saving a player's days, as every caller of
+    ``recalculate_ranked_day`` does once its days are saved: judge again,
+    oldest Reset first and after every day's publication lock, each Reset
+    settlement check that roots its start or pools its automatic loss on one
+    of these ended days, the day before its own, and the checks after it
+    that verdict roots; then store again the player's saved Season summaries
+    of those days, whose accepted ends and movements read those checks."""
     from . import reset_settlement
 
-    if not reset_settlement._has_settlements(database, connection):
+    days = sorted(set(day_starts))
+    if days and reset_settlement._has_settlements(database, connection):
+        now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        for day_start in days:
+            if day_start + timedelta(days=1) <= now:
+                reset_settlement.refresh_boundary(
+                    database, connection, player_id, day_start + timedelta(days=2)
+                )
+    if not getattr(database, "_supports_season_summaries", False):
         return
-    now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
-    for day_start in sorted(day_starts):
-        if day_start + timedelta(days=1) <= now:
-            reset_settlement.refresh_boundary(
-                database, connection, player_id, day_start + timedelta(days=2)
-            )
+    for season_id in sorted({
+        ranked_day_for(day_start + offset).official_season_id
+        for day_start in days for offset in (timedelta(0), timedelta(days=1))
+    }):
+        acquire_player_season_lock(connection, player_id, season_id)
+        if connection.execute(
+            """
+            SELECT 1 FROM player_season_summaries
+            WHERE player_id = %s AND official_season_id = %s
+            """,
+            (player_id, season_id),
+        ).fetchone():
+            materialize_player_season(connection, player_id=player_id, season_id=season_id)
 
 
 def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> bool:

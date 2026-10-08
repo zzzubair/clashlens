@@ -1338,3 +1338,104 @@ def test_season_repair_judges_old_rule_checks_again(
 
         assert _verdict(connection_info)[:3] == ("settled", scenario["target"], [])
     assert rule == reset_settlement.PROOF_RULE_VERSION
+
+
+def test_late_battle_sweep_judges_the_check_its_day_before_feeds_again(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The scheduled late-battle sweep recalculates the day before the
+    ended day with a gap in its battle logs: the settled check that pooled
+    that day's defenses is judged again and no longer settles."""
+    from dataclasses import replace
+
+    from clashlens import late_battle_sweep, reconciliation_db
+
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        settled = _verdict(connection_info)[:3]
+        # The sweep finds the day before's late report.
+        monkeypatch.setattr(late_battle_sweep, "_STALE_DAYS", f"""
+            SELECT player.id, %(boundary)s::timestamptz - interval '2 days'
+            FROM players AS player
+            WHERE player.normalized_tag = '{TAG}'
+              AND %(window_start)s::timestamptz IS NOT NULL AND %(rule)s IS NOT NULL
+        """)
+        monkeypatch.setattr(late_battle_sweep, "_OUTDATED_DAYS", """
+            SELECT NULL::bigint, NULL::timestamptz WHERE %(rule)s IS NULL
+        """)
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(
+            reconciliation_db, "reconcile_ranked_day",
+            lambda data: replace(original(data), coverage_complete=False),
+        )
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            assert late_battle_sweep.sweep_late_battles(
+                database, now=RESET + timedelta(hours=1)
+            ) == (1, 0)
+        finally:
+            database.close()
+        rejudged = _verdict(connection_info)[:3]
+
+    assert settled == ("settled", scenario["target"], [])
+    assert rejudged == ("unresolved", None, ["previous_day_defenses_unknown"])
+
+
+def test_a_stored_season_summary_follows_the_rejudged_check(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """A Season summary is stored while the day before the ended day has a
+    gap and the check is unresolved. Calculated again whole, that day
+    settles the check, and the stored summary is stored again from it: it
+    is what the summary's days and their proofs give now."""
+    from dataclasses import replace
+
+    from clashlens import reconciliation_db
+    from clashlens.season_summaries import _digest, _project, materialize_player_season
+
+    monkeypatch.setenv(SWITCH, "true")
+    prior_day = RESET - 2 * DAY
+    season = ranked_day_for(RESET - DAY).official_season_id
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        player = scenario["player"]
+
+        def recalculate(key: str) -> None:
+            database, _ = _processor(connection_info, archive_server)
+            try:
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=prior_day, now=RESET,
+                    request_key=key,
+                )
+            finally:
+                database.close()
+            _process(connection_info, archive_server, [job])
+
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(
+            reconciliation_db, "reconcile_ranked_day",
+            lambda data: replace(original(data), coverage_complete=False),
+        )
+        recalculate("with-gap")
+        with psycopg.connect(connection_info) as connection:
+            materialize_player_season(connection, player_id=player, season_id=season)
+        unresolved = _verdict(connection_info)[:3]
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
+        recalculate("whole")
+        settled = _verdict(connection_info)[:3]
+        with psycopg.connect(connection_info) as connection:
+            stored = connection.execute(
+                "SELECT content_digest FROM player_season_summaries"
+                " WHERE player_id = %s AND official_season_id = %s",
+                (player, season),
+            ).fetchone()[0]
+            projected = _digest(_project(player, season, connection))
+
+    assert unresolved == ("unresolved", None, ["previous_day_defenses_unknown"])
+    assert settled == ("settled", scenario["target"], [])
+    assert str(stored) == projected
