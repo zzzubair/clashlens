@@ -169,7 +169,7 @@ def test_40_trophy_lag_rejects_stale_target_and_fixed_quiet_margin() -> None:
     assert pinned["trophies"] == 5135
 
 
-def test_163_late_attacks_are_not_auto_loss_or_a_settled_end() -> None:
+def test_163_late_attacks_are_not_auto_loss_or_a_settled_end(monkeypatch) -> None:
     """Five old-day attacks after 04:43 were missing from the 4,780 reading."""
     late = check(prior=[30] * 8, defenses=[30] * 7 + [35], attacks=[28, 40, 15, 40, 40, 39, 40],
                  start=4946)
@@ -178,13 +178,17 @@ def test_163_late_attacks_are_not_auto_loss_or_a_settled_end() -> None:
     state, reasons, _ = judged(stale_end)
     assert state == "unresolved" and "no_positive_automatic_loss" in reasons
     assert evaluate_boundary(stale_end).proof["automatic_loss_basis"]["automatic_loss"] is None
-    # Later post-battle totals are never a start: a new-day battle came first.
+    # Later post-battle totals are no start without their battles: those
+    # are not saved here, so nothing comes off the reading.
     after_battles = replace(
         stale_end, profile=reading(2, RESET + 25 * MINUTE, 5106),
         battle_log=reading(3, RESET + 26 * MINUTE, None),
         first_new_day_report=RESET + 10 * MINUTE,
         first_report_after_early=RESET + 10 * MINUTE,
     )
+    assert judged(after_battles)[:2] == ("unresolved", ("no_positive_automatic_loss",))
+    # A new-day battle first refuses the check when late readings are rejected.
+    monkeypatch.setattr("clashlens.domain.LATE_RESET_READING", "reject")
     assert judged(after_battles)[1] == (
         "new_day_battle_before_profile", "battle_between_readings",
     )
@@ -229,7 +233,10 @@ def test_target_is_independent_and_rooted() -> None:
     assert judged(passing)[0] == "settled"
 
 
-def test_profile_and_log_order_uses_wire_request_and_both_participants() -> None:
+def test_profile_and_log_order_uses_wire_request_and_both_participants(monkeypatch) -> None:
+    # A new-day battle first refuses the check when late readings are
+    # rejected; see the next test for when they are not.
+    monkeypatch.setattr("clashlens.domain.LATE_RESET_READING", "reject")
     passing = check()
     profile, log = passing.profile, passing.battle_log
     done = profile.response_completed_at
@@ -260,6 +267,40 @@ def test_profile_and_log_order_uses_wire_request_and_both_participants() -> None
     # A new-day battle after the profile arrived does not matter.
     assert judged(replace(passing, first_new_day_report=done + timedelta(seconds=1),
                           first_report_after_early=done + timedelta(seconds=1)))[0] == "settled"
+
+
+def test_new_day_battles_before_the_profile_come_off_it() -> None:
+    """Under the late-reading rule a new-day battle before the 05:20 profile
+    is in it once landed: an attack 4 minutes after its report time, a
+    defense 2 minutes after it ends. Taken off, the profile still proves the
+    target; a battle that cannot be judged still refuses the check."""
+    passing = check()
+    new_day = (
+        BattleContribution(battle_identity="next-attack", lens="offense", trophy_amount=40,
+                           battle_timestamp=RESET + 8 * MINUTE),
+        BattleContribution(battle_identity="next-defense", lens="defense", trophy_amount=20,
+                           battle_timestamp=RESET + 15 * MINUTE, battle_seconds=120),
+    )
+    with_battles = replace(
+        passing, new_day_battles=new_day,
+        profile=replace(passing.profile, trophies=passing.profile.trophies + 20),
+        first_new_day_report=RESET + 8 * MINUTE, first_report_after_early=RESET + 8 * MINUTE,
+    )
+    assert judged(with_battles) == ("settled", (), 4804)
+    # Left on the reading, the battles leave it 20 above the target.
+    assert judged(replace(with_battles, new_day_battles=()))[:2] == (
+        "unresolved", ("observed_drop_mismatch", "profile_catchup_unknown"),
+    )
+    disputed = (*new_day, BattleContribution(
+        battle_identity="next-disputed", lens="offense", trophy_amount=30,
+        disagreement=True, battle_timestamp=RESET + 12 * MINUTE))
+    assert judged(replace(with_battles, new_day_battles=disputed))[:2] == (
+        "unresolved", ("new_day_battles_unclear",),
+    )
+    # An old-day report between the readings still refuses it.
+    assert judged(replace(with_battles, first_report_after_early=RESET + 2 * MINUTE))[:2] == (
+        "unresolved", ("battle_between_readings",),
+    )
 
 
 def test_two_day_source_proof_requires_complete_classified_history() -> None:

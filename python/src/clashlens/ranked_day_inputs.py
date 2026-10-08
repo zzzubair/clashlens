@@ -343,7 +343,9 @@ def load_previous_day(
             end_baseline_id,
             COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
             COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
-            COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0)
+            COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0),
+            CASE WHEN input_evidence -> 'late_end_reading' ->> 'outcome' = 'verified'
+                 THEN next_start_trophies END
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -386,6 +388,9 @@ def load_previous_day(
             unsettled_automatic_loss=int(previous_row[10]),
             zero_result_defense_slots=int(previous_row[11]),
             reset_reading_correction=int(previous_row[12]),
+            late_reading_start=(
+                int(previous_row[13]) if previous_row[13] is not None else None
+            ),
         )
         if previous_row is not None
         else None

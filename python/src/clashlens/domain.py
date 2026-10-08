@@ -31,8 +31,12 @@ BATTLE_DAY_GRACE = timedelta(minutes=5)
 #
 # A Reset profile read after the player's first battle of the new day
 # (reset_baselines): "reject" leaves both days it bounds without that
-# Reset's trophies. A rule recovering such readings plugs in there.
-LATE_RESET_READING = "reject"
+# Reset's trophies. "verify" (decided 8 October 2026) reads it less the new
+# day's battles that had landed: matching the calculated end, it ends one
+# day and starts the next; unable to judge it, the day ends on its
+# calculated end; otherwise the day is Inconsistent
+# (reset_settlement.settle_late_reading).
+LATE_RESET_READING = "verify"
 # Whose day before can give the automatic defense loss its defense count
 # and losses (reconciliation, cl-partial-chain-rule): "complete_day" needs
 # that whole day Complete; "covered_day" any day whose battle logs are

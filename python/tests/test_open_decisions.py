@@ -21,7 +21,7 @@ def test_switches_default_to_todays_behaviour() -> None:
         domain.LATE_RESET_READING, domain.PREVIOUS_DAY_DEFENSES,
         domain.DAILY_BOARD_VALUE, domain.TIE_ORDER, domain.UNSIGNED_UP_PLAYERS,
         domain.MAX_INFERRED_SHIELD_DAYS,
-    ) == ("reject", "complete_day", "before_automatic_loss", "per_board", "hidden", 2)
+    ) == ("verify", "complete_day", "before_automatic_loss", "per_board", "hidden", 2)
 
 
 def test_a_partial_day_before_gives_its_defenses_only_by_the_covered_day_rule(

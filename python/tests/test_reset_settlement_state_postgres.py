@@ -493,14 +493,17 @@ def test_reset_profile_read_after_the_first_battle_gives_no_start(
             WHERE evidence.boundary_at = '{boundary.isoformat()}'
             ORDER BY evidence.version DESC, evidence.id DESC LIMIT 1""")
         current = _rows(connection_info, CURRENT_PROFILE)
-    # The accepted 6,040 is kept as evidence but starts neither day. It is
+    # The accepted 6,040 is kept as evidence, rejected as a start. Less the
+    # sixteen battles before it, it verifies the ended day's 6,000 end, so
+    # an ordinary next day starts there (domain.LATE_RESET_READING). It is
     # still the current profile, so the player page can calculate a 6,000
     # start from it and the sixteen recorded battles.
     assert evidence == [
         (False, ["profile_after_first_event"], "accepted", 6040)
     ]
-    assert days[boundary - timedelta(days=1)][:2] == (6000, rule_start)
-    assert days[boundary][0] == rule_start
+    verified = 6000 if kind == "ordinary" else rule_start
+    assert days[boundary - timedelta(days=1)][:2] == (6000, verified)
+    assert days[boundary][0] == verified
     assert days[boundary][2:] == (8, 8, 320, 280)
     assert current == [(6040, "accepted")]
 

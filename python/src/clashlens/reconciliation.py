@@ -111,6 +111,21 @@ class PreviousRankedDay:
     # How far a later reading settled that day's end Reset reading, which
     # the game had not finished crediting (see ``later_next_start_reading``).
     reset_reading_correction: int = 0
+    # That day's next start, when a late Reset reading proved it (see
+    # ``reset_settlement.settle_late_reading``): this day starts from it.
+    late_reading_start: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LateEndReading:
+    """The day's end Reset reading, rejected as taken after the new day's
+    first battle, with the new day's saved own battles and whether the Reset
+    battle log was read after it (see ``reset_settlement``)."""
+
+    trophies: int
+    read_at: datetime
+    new_day_contributions: tuple[BattleContribution, ...]
+    log_after_reading: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +181,7 @@ class ReconciliationInput:
     # slots it shows uncharged, or one settled by battles the end reading
     # missed (see ``reads_later_reading``).
     later_next_start_reading: tuple[datetime, int] | None = None
+    late_end_reading: LateEndReading | None = None
 
     def __post_init__(self) -> None:
         if self.boundary_kind not in {None, "weekly", "season"}:
@@ -320,6 +336,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     unsettled_loss = 0
     reading_correction = 0
     battles_after_reading: tuple[str, ...] = ()
+    late = None
 
     ended = data.now >= data.ranked_day.end
     # The Season rule can start Day 1 without a saved Reset reading.
@@ -327,10 +344,11 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         data.start_baseline_evidence.get("start_trophies_source") == "season_rule"
     )
     start_proven = season_rule_start or reset_settlement.start_proven(data)
+    late_start = data.start_trophies is None and start_trophies is not None
     start_available = _baseline_available(
         data.start_baseline_id is not None or season_rule_start,
-        data.start_trophies,
-        data.start_baseline_complete,
+        start_trophies,
+        True if late_start else data.start_baseline_complete,
         "start",
         failures,
     )
@@ -381,24 +399,34 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         )
         expected_next = final_trophies + boundary_adjustment
 
-        if end_available and data.next_start_trophies is not None:
-            end = reset_settlement.settle_end_reading(
-                data,
-                contributions,
-                expected_next=expected_next,
-                final_trophies=final_trophies,
-                automatic_loss=automatic_loss,
-                automatic_state=automatic_state,
-                defense_count=defense_count,
-                end_hidden_by_reset=end_hidden_by_reset,
-                start_proven=start_proven,
-                clean=(
-                    ended
-                    and coverage_complete
-                    and not failures
-                    and not malformed_evidence
-                    and not inconsistent_evidence
-                ),
+        settled_clean = (
+            ended and coverage_complete and not malformed_evidence
+            and not inconsistent_evidence
+        )
+        settle: dict[str, Any] = {
+            "expected_next": expected_next,
+            "final_trophies": final_trophies,
+            "automatic_loss": automatic_loss,
+            "automatic_state": automatic_state,
+            "defense_count": defense_count,
+            "end_hidden_by_reset": end_hidden_by_reset,
+            "start_proven": start_proven,
+            "clean": settled_clean and not failures,
+        }
+        if data.next_start_trophies is None and failures == ["missing_end_baseline"]:
+            late = reset_settlement.settle_late_reading(
+                data, contributions, **{**settle, "clean": settled_clean}
+            )
+            if late is not None:
+                # The late reading stands in for the missing one, or nothing
+                # checks the calculated end.
+                failures.clear()
+                end_available = True
+        if late is not None and late.end is None:
+            next_start_trophies = None
+        elif end_available and (late is not None or data.next_start_trophies is not None):
+            end = late.end if late is not None else reset_settlement.settle_end_reading(
+                data, contributions, **settle
             )
             final_trophies -= end.zero_defense_loss
             net_trophy_change = final_trophies - start_trophies
@@ -550,8 +578,19 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         or unsettled_loss
         # A later reading, not the Reset one, settled the day's end.
         or reading_correction
+        # Nothing read checks the calculated end.
+        or (late is not None and late.end is None)
     ):
         confidence = "inferred"
+    input_evidence = _input_evidence(
+        data,
+        coverage_evidence=coverage_evidence,
+        contribution_evidence=contribution_evidence,
+    )
+    if late is not None:
+        # Only days with a late reading carry this key, so every other saved
+        # result keeps its hash.
+        input_evidence["late_end_reading"] = late.evidence
 
     return _result(
         state=state,
@@ -595,11 +634,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             battles_after_reading=battles_after_reading,
         ),
         shield_evidence=shield_evidence,
-        input_evidence=_input_evidence(
-            data,
-            coverage_evidence=coverage_evidence,
-            contribution_evidence=contribution_evidence,
-        ),
+        input_evidence=input_evidence,
     )
 
 

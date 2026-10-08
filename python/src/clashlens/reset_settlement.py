@@ -30,7 +30,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, ranked_day_inputs
+from . import boundary, domain, ranked_day_inputs
 from .collector_reset import COLLECTION_WINDOW, SETTLEMENT_DELAY
 from .db import PROCESSING_VERSION, Database
 from .domain import (
@@ -46,6 +46,7 @@ from .reconciliation import (
     BattleContribution,
     CoverageObservation,
     ReconciliationInput,
+    _deduplicate_contributions,
     _zero_defense_loss,
     automatic_defense_loss,
 )
@@ -62,6 +63,13 @@ MAX_CASCADE = 28
 # measured on 7 October 2026, so a Reset reading can miss a battle that
 # landed shortly before it.
 RESET_READING_BATTLE_LAG = timedelta(minutes=10)
+# When a battle's trophies reach the profile: an attack about 4 minutes after
+# its report time, a defense about 2 minutes after it ends (report time plus
+# length), measured on 7 October 2026.
+ATTACK_LANDING, DEFENSE_LANDING = timedelta(minutes=4), timedelta(minutes=2)
+# A battle reported from this long before a reading to this long after it
+# may or may not be in it.
+NEAR_BEFORE, NEAR_AFTER = timedelta(minutes=6), timedelta(minutes=2)
 
 
 # How far a saved day's end is proven, weakest last.
@@ -299,6 +307,16 @@ def settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     previous = data.previous_day
     if (
         data.start_trophies is None
+        and previous is not None
+        and previous.complete
+        and previous.late_reading_start is not None
+        and previous.end_baseline_id == data.start_baseline_id
+        and domain.LATE_RESET_READING == "verify"
+    ):
+        # A late reading the day before proved is its own start too.
+        return previous.late_reading_start, 0, 0
+    if (
+        data.start_trophies is None
         or previous is None
         or not previous.complete
         or not (previous.unsettled_automatic_loss or previous.reset_reading_correction)
@@ -447,6 +465,107 @@ def settle_end_reading(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class LateEnd:
+    """What a late end Reset reading proves (see ``settle_late_reading``):
+    ``end`` as an on-time reading would, or ``None`` when the day ends on its
+    calculated end; ``evidence`` is saved with the day."""
+
+    end: EndReading | None
+    evidence: dict[str, Any]
+
+
+def new_day_change(
+    battles: tuple[BattleContribution, ...], read_at: datetime, *, by_landing: bool
+) -> int:
+    """The trophy change of ``battles`` already in a reading taken at
+    ``read_at``: those landed before it, or reported before it."""
+
+    def counted(battle: BattleContribution) -> bool:
+        assert battle.battle_timestamp is not None
+        at = battle.battle_timestamp
+        if by_landing:
+            at += ATTACK_LANDING if battle.lens == "offense" else (
+                timedelta(seconds=battle.battle_seconds or 0) + DEFENSE_LANDING)
+        return at < read_at
+
+    return sum((battle.amount or 0) * (1 if battle.lens == "offense" else -1)
+               for battle in battles if counted(battle))
+
+
+def settle_late_reading(
+    data: ReconciliationInput,
+    contributions: tuple[BattleContribution, ...],
+    **settle: Any,
+) -> LateEnd | None:
+    """The ended day's end from a Reset reading taken after the new day's
+    first battle, or ``None`` to leave the day without it.
+
+    The reading holds the new day's battles that had landed. Less those, by
+    landing time or by report time, it is read as an on-time reading
+    (``settle_end_reading``): matching the day's calculated next start, it
+    verifies the end and starts the next day. Otherwise a battle of either
+    day reported within ``NEAR_BEFORE`` before it or ``NEAR_AFTER`` after
+    it, or new-day battles that cannot be judged, leave the reading unable
+    to judge the day, which ends on its calculated end; anything else
+    contradicts it. On 6 October 2026, 3,623 ended days lacked only this
+    reading; landing verified about 92.8%. A day with no used defense slot,
+    whose automatic loss only a reading shows, never ends on a calculated
+    end. ``settle`` is ``settle_end_reading``'s keywords; ``clean`` ignores
+    the missing reading.
+    """
+    late = data.late_end_reading
+    if late is None or domain.LATE_RESET_READING != "verify" or not settle["clean"]:
+        return None
+    if settle["end_hidden_by_reset"] or "official_final_trophies" in data.end_baseline_evidence:
+        return None
+    # Battles after the reading cannot be in it, disputed or not.
+    relevant = tuple(
+        battle for battle in late.new_day_contributions
+        if battle.battle_timestamp is None or battle.battle_timestamp < late.read_at + NEAR_AFTER
+    )
+    new_day, _, reasons, malformed, inconsistent = _deduplicate_contributions(relevant)
+    unclear = bool(
+        reasons or malformed or inconsistent or not late.log_after_reading
+        or any(battle.battle_timestamp is None for battle in new_day)
+    )
+    near = any(
+        battle.battle_timestamp is None
+        or late.read_at - NEAR_BEFORE <= battle.battle_timestamp <= late.read_at + NEAR_AFTER
+        for battle in (*contributions, *new_day)
+    )
+    evidence: dict[str, Any] = {
+        "reading_trophies": late.trophies,
+        "read_at": late.read_at.isoformat(),
+        "new_day_battles": [
+            {"battle_identity": battle.battle_identity, "lens": battle.lens,
+             "trophies": battle.amount,
+             "battle_timestamp": _iso(battle.battle_timestamp),
+             "battle_seconds": battle.battle_seconds}
+            for battle in new_day
+        ],
+    }
+    first = None
+    for basis, by_landing in (("landing", True), ("report_time", False)):
+        if unclear:
+            break
+        change = new_day_change(new_day, late.read_at, by_landing=by_landing)
+        end = settle_end_reading(
+            replace(data, next_start_trophies=late.trophies - change), contributions, **settle
+        )
+        evidence[f"{basis}_change"] = change
+        if end.residual == 0:
+            return LateEnd(end, {**evidence, "outcome": "verified", "basis": basis})
+        first = first or end
+    if not (unclear or near):
+        assert first is not None
+        return LateEnd(first, {**evidence, "outcome": "contradicted"})
+    if not settle["defense_count"] + data.zero_result_defense_slots:
+        return None
+    return LateEnd(None, {**evidence, "outcome": "calculated_not_reset_verified",
+                          "unclear": unclear})
+
+
 def _battles_after_reading(
     contributions: tuple[BattleContribution, ...],
     data: ReconciliationInput,
@@ -575,6 +694,8 @@ class ProofInputs:
     # Earliest report time, from either player, at or after the early reading.
     first_report_after_early: datetime | None = None
     first_new_day_report: datetime | None = None
+    # Every saved own-side report of the new day.
+    new_day_battles: tuple[BattleContribution, ...] = ()
     # Trophies of later profiles before any new-day battle; None if unprocessed.
     later_profiles: tuple[tuple[datetime, int | None], ...] = ()
     root: Root | None = None
@@ -694,11 +815,25 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     # disagrees with it.
     proof["ordering"] = {"first_report_after_early": _iso(inputs.first_report_after_early),
                          "first_new_day_report": _iso(inputs.first_new_day_report)}
+    # A new-day battle before a reading is in it once landed, and comes off
+    # it as in ``settle_late_reading``; only one that cannot be judged
+    # refuses the check.
+    subtract = domain.LATE_RESET_READING == "verify"
+    new_day_from = battle_window(boundary)[0]
+    if subtract:
+        battles, _, unclear, malformed, disputed = _deduplicate_contributions(
+            inputs.new_day_battles)
+        if unclear or malformed or disputed or any(
+            battle.battle_timestamp is None for battle in battles
+        ):
+            reasons.append("new_day_battles_unclear")
     for first, reason in (
-        (inputs.first_new_day_report, "new_day_battle_before_profile"),
+        (None if subtract else inputs.first_new_day_report, "new_day_battle_before_profile"),
         (inputs.first_report_after_early, "battle_between_readings"),
     ):
-        if first is not None and first <= profile.response_completed_at:
+        if first is not None and first <= profile.response_completed_at and not (
+            subtract and first >= new_day_from
+        ):
             reasons.append(reason)
     if early.response_completed_at >= profile.request_started_at:
         reasons.append("early_reading_after_profile")
@@ -753,15 +888,32 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
                  "fingerprint": root.fingerprint, "change_number": root.change_number},
         "attack_gain": sum(attacks), "defense_loss": sum(defenses), "target": target,
     }
-    if early.trophies != target + automatic:
+    early_shown = _shown(early, inputs, target + automatic)
+    profile_shown = _shown(profile, inputs, target)
+    if early_shown != target + automatic:
         reasons.append("early_reading_mismatch")
-    if early.trophies - profile.trophies != automatic:
+    if early_shown - profile_shown != automatic:
         reasons.append("observed_drop_mismatch")
-    if profile.trophies != target:
+    if profile_shown != target:
         reasons.append("profile_catchup_unknown")
     if reasons:
         return verdict(UNRESOLVED, reasons)
     return verdict(SETTLED, [], target)
+
+
+def _shown(reading: Reading, inputs: ProofInputs, expected: int) -> int:
+    """The reading's trophies less the new-day battles already in it: by
+    landing time, or by report time when only that gives ``expected``."""
+    assert reading.trophies is not None
+    if domain.LATE_RESET_READING != "verify" or not inputs.new_day_battles:
+        return reading.trophies
+    battles = _deduplicate_contributions(inputs.new_day_battles)[0]
+    shown = [
+        reading.trophies - new_day_change(
+            battles, reading.response_completed_at, by_landing=by_landing)
+        for by_landing in (True, False)
+    ]
+    return expected if expected in shown else shown[0]
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -854,6 +1006,8 @@ def load_proof_inputs(
         )),
         first_report_after_early=reports[0],
         first_new_day_report=reports[1],
+        new_day_battles=ranked_day_inputs.load_contributions(
+            connection, player_id, ranked_day_for(boundary_at)),
         later_profiles=later_profiles,
         root=Root(root[0], int(root[1]), str(root[2]), int(root[3]),
                   tuple(int(value) for value in root[4])) if root else None,

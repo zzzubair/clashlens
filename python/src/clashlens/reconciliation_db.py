@@ -37,6 +37,8 @@ from .domain import (
 from .profile import LEGEND_I_TIER_ID, normalize_player_tag
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
+    CoverageObservation,
+    LateEndReading,
     ReconciliationInput,
     ReconciliationResult,
     reads_later_reading,
@@ -103,6 +105,12 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 ).fetchone()
                 if latest is None or not latest[0]:
                     day_starts = set()
+            if day_starts:
+                first = min(day_starts)
+                earliest = recalculation_start(connection, player_id, first)
+                while earliest < first:
+                    day_starts.add(earliest)
+                    earliest += timedelta(days=1)
             pending = sorted(day_starts)
             while pending:
                 day_start = pending.pop(0)
@@ -135,6 +143,78 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
+
+
+def _late_end_reading(
+    connection: Any,
+    player_id: int,
+    ranked_day: RankedDay,
+    end_baseline: dict[str, Any] | None,
+    coverage: tuple[CoverageObservation, ...],
+) -> LateEndReading | None:
+    """The end Reset reading rejected only for coming after the new day's
+    first battle, with the new day's own battles; ``None`` otherwise or
+    while ``domain.LATE_RESET_READING`` rejects such readings."""
+    evidence = end_baseline["evidence"] if end_baseline is not None else {}
+    profile = evidence.get("profile") or {}
+    if (
+        domain.LATE_RESET_READING != "verify"
+        or evidence.get("failure_reasons") != ["profile_after_first_event"]
+        or evidence.get("season_reset_pending")
+        or profile.get("trophies") is None
+        or profile.get("observed_at") is None
+    ):
+        return None
+    read_at = datetime.fromisoformat(profile["observed_at"])
+    end_log = next(
+        (item for item in coverage
+         if item.observation_id == evidence.get("battle_log_observation_id")),
+        None,
+    )
+    return LateEndReading(
+        trophies=int(profile["trophies"]),
+        read_at=read_at,
+        new_day_contributions=ranked_day_inputs.load_contributions(
+            connection, player_id, ranked_day_for(ranked_day.end)
+        ),
+        log_after_reading=end_log is not None and end_log.observed_at >= read_at,
+    )
+
+
+def recalculation_start(
+    connection: Any, player_id: int, first_day: datetime
+) -> datetime:
+    """Hold the player's days, then the oldest day a recalculation from
+    ``first_day`` must start at.
+
+    A day whose end a late Reset reading settled read the next day's battles,
+    so a change to those redoes it, and the day before it if a late reading
+    settled that one too, within the Season. Both recalculations, a job and
+    the late-battle sweep, start here, and each takes this player's lock
+    first, before any day's, so neither misses a day the other is saving.
+    """
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"ranked-days:{player_id}",),
+    )
+    season_id = ranked_day_for(first_day).official_season_id
+    start = first_day
+    while (
+        ranked_day_for(start - timedelta(days=1)).official_season_id == season_id
+        and connection.execute(
+            """
+            SELECT input_evidence ? 'late_end_reading'
+            FROM ranked_day_versions
+            WHERE player_id = %s AND ranked_day_start = %s
+              AND reconciliation_rule_version = %s
+            ORDER BY version DESC, id DESC
+            LIMIT 1
+            """,
+            (player_id, start - timedelta(days=1), RECONCILIATION_RULE_VERSION),
+        ).fetchone() in {(True,)}
+    ):
+        start -= timedelta(days=1)
+    return start
 
 
 def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> bool:
@@ -465,6 +545,9 @@ def recalculate_ranked_day(
         season_first_day=season_day is not None and season_day.day_number == 1,
         zero_result_attack_slots=zero_result_attacks,
         zero_result_defense_slots=zero_result_defenses,
+        late_end_reading=_late_end_reading(
+            connection, player_id, ranked_day, end_baseline, coverage
+        ),
     )
     result = reconcile_ranked_day(data)
     reading_at = (

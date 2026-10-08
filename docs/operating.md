@@ -762,6 +762,23 @@ battles have stayed untracked for over an hour, not counting players whose
 saved profile showed a lower tier after their latest such battle, such as
 Monday demotions.
 
+### Battles may be in the wrong day
+
+**What it means:** a battle report belongs to the Legend day of its stamp
+less five minutes. That holds because the game lets no new-day attack start
+until about 05:07:20 and every ended-day attack had ended by 05:03:38 at all
+11 Resets to 8 October 2026. A saved day of the current or previous Legend
+day with 9 attacks or 9 defenses, or a report stamped 05:03:30 to 05:07:00
+after a Reset, means that window moved.
+
+**First checks:** `./ops logs worker --since '2 hours ago' --no-pager`, then
+look at the days and reports the alert counts.
+
+**Fix or escalate:** escalate; the battle-day rule needs re-measuring before
+any change. Nothing is moved automatically.
+
+**Recovered:** neither sign appears in the current or previous Legend day.
+
 ### Season final ranks missing
 
 Ended-Season pages show "Not published yet" until Clash of Clans league history
