@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -14,6 +13,7 @@ from . import (
     domain,
     first_battle_log,
     ranked_day_inputs,
+    reading_rule,
     reset_baselines,
 )
 from .db import (
@@ -37,9 +37,9 @@ from .domain import (
 from .profile import LEGEND_I_TIER_ID, normalize_player_tag
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
+    BattleContribution,
     ReconciliationInput,
     ReconciliationResult,
-    reads_later_reading,
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
@@ -422,6 +422,28 @@ def recalculate_ranked_day(
     perspective_disagreement = any(
         contribution.disagreement for contribution in contributions
     )
+    # Once the day has ended, every reading from its end Reset on judges it
+    # (reading_rule), and the new day's battles say what each reading
+    # already showed.
+    readings: tuple[reading_rule.Reading, ...] = ()
+    new_day_contributions: tuple[BattleContribution, ...] = ()
+    if now >= ranked_day.end:
+        reading_at = (
+            end_baseline["evidence"]["profile"]["observed_at"]
+            if end_baseline is not None and end_baseline["trophies"] is not None
+            else None
+        )
+        readings = ranked_day_inputs.load_readings(
+            database, connection, player_id, ranked_day,
+            after=(
+                datetime.fromisoformat(reading_at)
+                if isinstance(reading_at, str)
+                else ranked_day.end
+            ),
+        )
+        new_day_contributions = ranked_day_inputs.load_contributions(
+            connection, player_id, ranked_day_for(ranked_day.end)
+        )
     data = ReconciliationInput(
         ranked_day=ranked_day,
         now=now,
@@ -490,28 +512,10 @@ def recalculate_ranked_day(
         season_first_day=season_day is not None and season_day.day_number == 1,
         zero_result_attack_slots=zero_result_attacks,
         zero_result_defense_slots=zero_result_defenses,
+        readings=readings,
+        new_day_contributions=new_day_contributions,
     )
     result = reconcile_ranked_day(data)
-    reading_at = (
-        end_baseline["evidence"]["profile"]["observed_at"]
-        if end_baseline is not None else None
-    )
-    # The official total already counts every credit and the automatic loss,
-    # so a profile read before the game applied them never settles it.
-    if (
-        reading_at and official_final is None
-        and reads_later_reading(data, result)
-    ):
-        # A later reading can settle an end Reset reading taken before the
-        # game finished crediting the day or charging its automatic loss.
-        later = ranked_day_inputs.load_later_reading(
-            database, connection, player_id, ranked_day,
-            datetime.fromisoformat(reading_at),
-        )
-        if later is not None:
-            result = reconcile_ranked_day(
-                replace(data, later_next_start_reading=later)
-            )
     result_data = {
         "state": result.state,
         "confidence": result.confidence,

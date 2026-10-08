@@ -224,11 +224,11 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
         day_1_joiner = _day_1(connection_info)
 
     # No Reset reading ends the opponent's Day 1, but their first log holds
-    # all of it, so it shows its end-of-day total. With no reading, whether
-    # they were shielded stays unknown.
-    assert opponent[:3] == ("Partial", "uncertain", 5000)
+    # all of it, and their first profile, read on Day 2 after its battle
+    # landed, equals Day 1's end plus that battle: it proves Day 1.
+    assert opponent[:3] == ("Complete", "inferred", 5000)
     assert opponent[3] == 5000 + WIN and opponent[4] is True
-    assert "missing_end_baseline" in opponent[5]
+    assert opponent[5] == []
     assert not_in_season is None
     assert day_1_joiner[:4] == ("Complete", "inferred", 5000, 5000 + 2 * WIN)
     # The backfill lists the Day 1 joiner and the opponent, not the crawl
@@ -272,7 +272,7 @@ def test_opponent_whose_battle_log_is_processed_before_their_profile_gets_day_1(
         opponent = _day_1(connection_info, "#2YY")
 
     assert (waiting["waiting_for_profile"], waiting["queued"]) == (1, 0)
-    assert opponent[:4] == ("Partial", "uncertain", 5000, 5000 + WIN)
+    assert opponent[:4] == ("Complete", "inferred", 5000, 5000 + WIN)
     assert opponent[4] is True and opponent[6] == "season_rule"
 
 
@@ -328,7 +328,7 @@ def test_older_first_log_processed_after_a_newer_one_recalculates_day_1(
         from_older = _day_1(connection_info, "#2YY")
 
     assert from_newer[2] == 5000 and from_newer[4] is False
-    assert from_older[:4] == ("Partial", "uncertain", 5000, 5000 + WIN)
+    assert from_older[:4] == ("Complete", "inferred", 5000, 5000 + WIN)
     assert from_older[4] is True and from_older[6] == "season_rule"
 
 
