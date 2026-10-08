@@ -335,7 +335,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         failures,
     )
     end_available = _baseline_available(
-        data.end_baseline_id is not None,
+        data.end_baseline_id is not None
+        or "official_final_trophies" in data.end_baseline_evidence,
         data.next_start_trophies,
         data.end_baseline_complete,
         "end",

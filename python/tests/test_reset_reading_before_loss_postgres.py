@@ -681,7 +681,7 @@ def test_season_repair_settles_an_early_reset_reading_and_its_board_entry(
         )
         _process(connection_info, archive_server, jobs)
         # Saved, as production's were, before a later reading settled a day.
-        monkeypatch.setattr(reset_settlement, "recheck_after_profile", lambda *_: None)
+        monkeypatch.setattr(reset_settlement, "profile_rechecks", lambda *_: ([], None))
         _process(connection_info, archive_server, [store_observation(
             connection_info, archive_server, occurrence_key="later-profile",
             endpoint="profile", body=_profile(4869),

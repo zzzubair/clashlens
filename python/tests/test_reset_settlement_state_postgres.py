@@ -1227,3 +1227,180 @@ def test_a_recovered_log_locks_every_players_day_before_any_board(
     assert not worker.is_alive()
     assert failures == []
     assert log_status == "complete"
+
+
+def test_official_total_ends_a_last_day_whose_season_end_reset_was_never_read(
+    database_url: str, archive_server
+) -> None:
+    """The Season-ending Reset was never collected for the player, so their
+    last day had no end. League history then gives the official total: the
+    queued recalculation ends the day at it, and the day stays Partial, as
+    nothing shows the day's battles after its last battle log."""
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="day-log",
+            endpoint="battle_log", body=_log(*battles),
+            observed_at=last_day + timedelta(hours=10), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=6),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )[1]])
+        after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        recalculations = _rows(
+            connection_info,
+            "SELECT status::text FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )
+
+    assert (before[1], before[4]) == ("Partial", None)
+    assert recalculations == [("complete",)]
+    assert (after[1], after[4]) == ("Partial", final)
+
+
+def _log_finishes_beside(connection_info, archive_server, log_job, hold, boundary) -> None:
+    """Process ``log_job`` while another transaction holds the lock ``hold``
+    takes on its connection, then, once the log waits, takes ``boundary``'s
+    publication lock, as a job holding that lock first would. Both finish."""
+    import time
+
+    from clashlens.boundary import lock_boundary_publication
+
+    failures: list[BaseException] = []
+
+    def process_log() -> None:
+        try:
+            _process(connection_info, archive_server, [log_job])
+        except BaseException as error:  # noqa: BLE001
+            failures.append(error)
+
+    with psycopg.connect(connection_info) as other:
+        hold(other)
+        worker = threading.Thread(target=process_log)
+        worker.start()
+        deadline = time.monotonic() + 30
+        with psycopg.connect(connection_info, autocommit=True) as observer:
+            while not observer.execute(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+            ).fetchone()[0]:
+                assert time.monotonic() < deadline, "the log never waited"
+                time.sleep(0.05)
+        other.execute("SET LOCAL lock_timeout = '10s'")
+        lock_boundary_publication(other, boundary)
+        other.commit()
+    worker.join(timeout=60)
+    assert not worker.is_alive()
+    assert failures == []
+    assert _rows(
+        connection_info,
+        f"SELECT status::text FROM python_processing_jobs WHERE id = {int(log_job)}",
+    ) == [("complete",)]
+
+
+def test_a_recovered_log_takes_army_battle_locks_before_the_resets_board(
+    database_url: str, archive_server
+) -> None:
+    """A recovered log holds the first battle of the new day, at 05:08, and
+    an ended-day battle at 02:00 whose army decode must be saved again. An
+    army redecode of that battle holds its army lock and then takes the
+    Reset's publication lock: the log waits for the army lock without
+    holding any publication lock, so both finish."""
+    from test_first_battle_log_postgres import _log
+
+    boundary = BOUNDARIES["ordinary"]
+    ended = boundary - timedelta(days=1)
+    earlier = (boundary - timedelta(hours=3), True)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, ended,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="day-log",
+            endpoint="battle_log", body=_log(earlier),
+            observed_at=boundary - timedelta(hours=2), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        with psycopg.connect(connection_info) as connection:
+            battle_id = connection.execute(
+                "SELECT id FROM legend_battles WHERE ranked_day_start = %s", (ended,)
+            ).fetchone()[0]
+            # As decodes saved under an older decoder, to be saved again.
+            connection.execute("SET LOCAL session_replication_role = replica")
+            connection.execute(
+                "UPDATE battle_army_decodes SET is_active = false WHERE battle_id = %s",
+                (battle_id,),
+            )
+        _, log_job = store_observation(
+            connection_info, archive_server, occurrence_key="recovered-log",
+            endpoint="battle_log",
+            body=_log((boundary + timedelta(minutes=8), True), earlier),
+            observed_at=boundary + timedelta(minutes=20), normalized_tag=TAG,
+        )
+        _log_finishes_beside(
+            connection_info, archive_server, log_job,
+            lambda other: other.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"army-redecode-battle:{battle_id}",),
+            ),
+            boundary,
+        )
+
+
+def test_a_reset_log_takes_its_pairs_work_lock_before_the_resets_board(
+    database_url: str, archive_server
+) -> None:
+    """A Reset battle log collected at 05:20 holds the first battle of the
+    new day, at 05:08. Its pair's profile holds the pair's work lock and
+    then takes the Reset's publication lock: the log waits for the work
+    lock without holding any publication lock, so both finish."""
+    from test_first_battle_log_postgres import _log
+
+    boundary = BOUNDARIES["ordinary"]
+    ended = boundary - timedelta(days=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, ended,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        _, log_job = _reset_work(
+            connection_info, archive_server, boundary, profile=_profile(6000),
+            log=_log((boundary + timedelta(minutes=8), True)),
+            log_at=boundary + timedelta(minutes=20),
+        )
+        _process(connection_info, archive_server, jobs)
+        work_id = _rows(
+            connection_info,
+            "SELECT work.id FROM collector_work AS work"
+            " JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id"
+            f" WHERE sweep.boundary_at = '{boundary.isoformat()}'",
+        )[0][0]
+        _log_finishes_beside(
+            connection_info, archive_server, log_job,
+            lambda other: other.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"reset-baseline:{work_id}",),
+            ),
+            boundary,
+        )

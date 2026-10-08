@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import warnings
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -55,8 +56,12 @@ def _upsert_army_decodes(
     reset_baseline: tuple[int, int, datetime] | None = None,
     observation_id: int | None = None,
     reset_lock_wait: str | None = None,
+    publication_boundaries: Collection[datetime] = (),
 ) -> None:
-    if not battle_ids:
+    """Save the battles' army decodes. ``publication_boundaries`` are Resets
+    whose publication locks the caller needs after this, taken in the same
+    oldest-first pass even when no decode changes."""
+    if not battle_ids and not publication_boundaries:
         return
     exists = connection.execute("SELECT to_regclass('battle_army_decodes')").fetchone()
     if exists is None or exists[0] is None:
@@ -138,7 +143,7 @@ def _upsert_army_decodes(
     # Most battle logs repeat battles whose decodes are already saved. Those
     # change nothing a Reset publishes, so they skip the Reset locks below,
     # which every battle log for the same Legend day would otherwise queue on.
-    if not decoded_rows:
+    if not decoded_rows and not publication_boundaries:
         return
     # Lock order everywhere: battle locks, then a Reset baseline's work lock,
     # then Reset publication locks, then Reset settlement locks, then army
@@ -168,7 +173,9 @@ def _upsert_army_decodes(
     # lock. A Reset with no sweep yet is only shared, so battle logs for the
     # current Legend day do not queue behind each other, and stays shared for
     # this transaction: two jobs upgrading their shared locks would deadlock.
-    boundaries = {day_start + timedelta(days=1) for day_start in players_by_day}
+    boundaries = {day_start + timedelta(days=1) for day_start in players_by_day} | {
+        boundary_at.astimezone(UTC) for boundary_at in publication_boundaries
+    }
     resets: list[tuple[int, datetime]] = []
     if reset_lock_wait is not None:
         # Give up on a busy Reset after this wait; the whole transaction rolls

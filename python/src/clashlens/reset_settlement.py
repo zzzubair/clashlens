@@ -353,30 +353,36 @@ def reset_proof_facts(
     return facts
 
 
-def recheck_after_profile(
-    database: Database, connection: Any, player_id: int, observation_id: int
-) -> None:
-    """``queue_later_reading_recheck`` for a profile just saved."""
+def profile_rechecks(
+    connection: Any, player_id: int, observation_id: int
+) -> tuple[list[tuple[int, datetime]], datetime]:
+    """The (player, Reset) day whose later reading a profile just saved can
+    change, none when it was read after the player's first battle of the
+    next day, with its day lock taken (``lock_rechecked_days``), and when
+    the profile was read."""
     read_at = connection.execute(
         "SELECT response_completed_at FROM collector_observations WHERE id = %s",
         (observation_id,),
     ).fetchone()[0]
-    queue_later_reading_recheck(
-        database, connection, player_id, ranked_day_for(read_at).start,
-        f"profile-{observation_id}", read_at=read_at,
-    )
+    boundary_at = ranked_day_for(read_at).start
+    first_new_day = ranked_day_inputs.load_first_reports(
+        connection, player_id, read_at, battle_window(boundary_at)[0],
+        boundary_at + DAY,
+    )[1]
+    if first_new_day is not None and read_at >= first_new_day:
+        return [], read_at
+    return lock_rechecked_days(connection, [(player_id, boundary_at)]), read_at
 
 
-def recheck_after_battle_log(
-    database: Database, connection: Any, observation_id: int, reporter_id: int,
+def battle_log_rechecks(
+    connection: Any, observation_id: int, reporter_id: int,
     observed_at: datetime, has_row_gap: bool,
-) -> None:
-    """``queue_later_reading_recheck`` for a battle log just saved: for each
-    player whose first battle of a Legend day it brings first, ending the
-    time a later reading of the day before can come from, and for its own
-    player when it holds a row whose battle cannot be read. Every such
-    day's calculation lock is taken first, by player and day, before any
-    Reset's publication lock, as the day's calculation takes them."""
+) -> list[tuple[int, datetime]]:
+    """The (player, Reset) days whose later reading a battle log just saved
+    can move, with their day locks taken (``lock_rechecked_days``): each
+    player's whose first battle of a Legend day it brings first, ending the
+    time a later reading of the day before can come from, and its own
+    player's when it holds a row whose battle cannot be read."""
     firsts: dict[tuple[int, datetime], datetime] = {}
     for player_id, stamped_at in connection.execute(
         """
@@ -392,23 +398,49 @@ def recheck_after_battle_log(
     ).fetchall():
         key = (int(player_id), battle_day_for(stamped_at).start)
         firsts[key] = min(firsts.get(key, stamped_at), stamped_at)
-    days = {
+    days = [
         (player_id, boundary_at)
         for (player_id, boundary_at), stamped_at in firsts.items()
         if ranked_day_inputs.load_first_reports(
             connection, player_id, stamped_at, battle_window(boundary_at)[0],
             boundary_at + DAY,
         )[1] == stamped_at
-    }
+    ]
     if has_row_gap:
-        days.add((reporter_id, ranked_day_for(observed_at).start))
-    for player_id, boundary_at in sorted(days):
+        days.append((reporter_id, ranked_day_for(observed_at).start))
+    return lock_rechecked_days(connection, days)
+
+
+def lock_rechecked_days(
+    connection: Any, days: list[tuple[int, datetime]]
+) -> list[tuple[int, datetime]]:
+    """Take the calculation lock of each (player, Reset) day, by player and
+    day, and return them so. The saving job takes them before its army
+    battle locks, its Reset pair's work lock and any Reset's publication
+    lock, the day calculation's order; ``recheck_later_readings`` then runs
+    after that work."""
+    days = sorted(set(days))
+    for player_id, boundary_at in days:
         ranked_day_inputs.lock_ranked_day(
             connection, player_id, ranked_day_for(boundary_at - DAY)
         )
-    for player_id, boundary_at in sorted(days):
+    return days
+
+
+def recheck_later_readings(
+    database: Database, connection: Any, days: list[tuple[int, datetime]],
+    cause: str, *, read_at: datetime | None = None,
+) -> None:
+    """``queue_later_reading_recheck`` for each day ``profile_rechecks`` or
+    ``battle_log_rechecks`` locked, taking the Resets' publication locks
+    oldest first."""
+    from .boundary import lock_boundary_members
+
+    for boundary_at in sorted({boundary_at for _, boundary_at in days}):
+        lock_boundary_members(connection, boundary_at)
+    for player_id, boundary_at in days:
         queue_later_reading_recheck(
-            database, connection, player_id, boundary_at, f"log-{observation_id}"
+            database, connection, player_id, boundary_at, cause, read_at=read_at
         )
 
 
@@ -431,13 +463,6 @@ def queue_later_reading_recheck(
     Whatever the day's state, the Reset's board is checked too
     (``_queue_board_correction``)."""
     ended = ranked_day_for(boundary_at - DAY)
-    if read_at is not None:
-        first_new_day = ranked_day_inputs.load_first_reports(
-            connection, player_id, read_at, battle_window(boundary_at)[0],
-            boundary_at + DAY,
-        )[1]
-        if first_new_day is not None and read_at >= first_new_day:
-            return
     ranked_day_inputs.lock_ranked_day(connection, player_id, ended)
     _queue_board_correction(database, connection, player_id, boundary_at)
     day = connection.execute(

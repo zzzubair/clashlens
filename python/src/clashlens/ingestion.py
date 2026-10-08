@@ -307,14 +307,17 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 "SELECT clashlens_cancel_inactive_discovery_work(%s)",
                 (player[0],),
             )
-            if (
-                profile.source_contract_state == "accepted"
+            rechecks, read_at = (
+                reset_settlement.profile_rechecks(connection, player[0], observation_id)
+                if profile.source_contract_state == "accepted"
                 and profile.eligibility_state == "eligible"
-            ):
-                reset_settlement.recheck_after_profile(
-                    database, connection, player[0], observation_id
-                )
+                else ([], None)
+            )
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
+            reset_settlement.recheck_later_readings(
+                database, connection, rechecks, f"profile-{observation_id}",
+                read_at=read_at,
+            )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
@@ -497,14 +500,17 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                     else None
                 ),
             )
-            if (
-                profile.source_contract_state == "accepted"
+            rechecks, read_at = (
+                reset_settlement.profile_rechecks(connection, player[0], observation_id)
+                if profile.source_contract_state == "accepted"
                 and profile.eligibility_state == "eligible"
-            ):
-                reset_settlement.recheck_after_profile(
-                    database, connection, player[0], observation_id
-                )
+                else ([], None)
+            )
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
+            reset_settlement.recheck_later_readings(
+                database, connection, rechecks, f"profile-{observation_id}",
+                read_at=read_at,
+            )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )

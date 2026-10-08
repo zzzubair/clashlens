@@ -481,8 +481,8 @@ def complete_battle_log(
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
-            reset_settlement.recheck_after_battle_log(
-                database, connection, claim.observation_id, reporter_id,
+            rechecks = reset_settlement.battle_log_rechecks(
+                connection, claim.observation_id, reporter_id,
                 battle_log.observed_at, battle_log.has_row_gap,
             )
             army_ingestion._upsert_army_decodes(
@@ -492,6 +492,7 @@ def complete_battle_log(
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
                 observation_id=claim.observation_id,
                 reset_lock_wait=RESET_LOCK_WAIT,
+                publication_boundaries={boundary_at for _, boundary_at in rechecks},
             )
 
             outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -504,6 +505,9 @@ def complete_battle_log(
             )
             reset_baselines._refresh_reset_baseline_evidence(
                 database, connection, claim
+            )
+            reset_settlement.recheck_later_readings(
+                database, connection, rechecks, f"log-{claim.observation_id}"
             )
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}
@@ -897,8 +901,8 @@ def _complete_battle_log_legacy(
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
-            reset_settlement.recheck_after_battle_log(
-                database, connection, claim.observation_id, reporter_id,
+            rechecks = reset_settlement.battle_log_rechecks(
+                connection, claim.observation_id, reporter_id,
                 battle_log.observed_at, battle_log.has_row_gap,
             )
             army_ingestion._upsert_army_decodes(
@@ -908,6 +912,7 @@ def _complete_battle_log_legacy(
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
                 observation_id=claim.observation_id,
                 reset_lock_wait=RESET_LOCK_WAIT,
+                publication_boundaries={boundary_at for _, boundary_at in rechecks},
             )
 
             job_outcomes._record_parsed_payload(
@@ -925,6 +930,9 @@ def _complete_battle_log_legacy(
             )
             reset_baselines._refresh_reset_baseline_evidence(
                 database, connection, claim
+            )
+            reset_settlement.recheck_later_readings(
+                database, connection, rechecks, f"log-{claim.observation_id}"
             )
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}

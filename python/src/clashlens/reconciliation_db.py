@@ -312,22 +312,28 @@ def recalculate_ranked_day(
     # history, which includes the automatic defense loss, is the last day's
     # end instead, so a day that ends anywhere else is Inconsistent: 778 of
     # 9,593 such Complete days on 5 October 2026 did. No reset to 5,000
-    # follows it; the next Season starts by the Season rule.
+    # follows it; the next Season starts by the Season rule. It ends the day
+    # even when no Season-ending Reset reading was saved; the day's battle
+    # logs still decide whether its battles are all known.
     official_final = (
         _official_final(connection, player_id, ranked_day.end)
-        if boundary_kind == "season" and end_baseline is not None
+        if boundary_kind == "season"
         else None
     )
     if official_final is not None:
-        assert end_baseline is not None
         boundary_kind = None
         end_baseline = {
-            **end_baseline,
+            **(end_baseline or {"id": None}),
             "trophies": official_final,
             "eligibility_state": None,
-            "complete": bool(end_baseline["evidence"]["battle_log_valid"]),
+            "complete": end_baseline is None
+            or bool(end_baseline["evidence"]["battle_log_valid"]),
             "evidence": {
-                **end_baseline["evidence"], "official_final_trophies": official_final,
+                **(end_baseline["evidence"] if end_baseline else {
+                    "profile": {"observed_at": None},
+                    "battle_log_observation_id": None,
+                }),
+                "official_final_trophies": official_final,
             },
         }
     # A player ranked below 10,000 at a weekly Monday Reset drops to Legend
@@ -404,7 +410,7 @@ def recalculate_ranked_day(
         ),
         end_baseline_id=(
             int(end_baseline["id"])
-            if end_baseline is not None
+            if end_baseline is not None and end_baseline["id"] is not None
             else None
         ),
         start_trophies=(
