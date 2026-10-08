@@ -1277,49 +1277,60 @@ def _publish_boards(database) -> list:
         ]
 
 
+def _recalculate_day_before(connection_info: str, archive_server, key: str) -> None:
+    """Calculate again the day before the check's ended day, and what it queues."""
+    from clashlens import reconciliation_db
+
+    database, _ = _processor(connection_info, archive_server)
+    try:
+        job = reconciliation_db.enqueue_reconciliation(
+            database, player_tag=TAG, day_start=RESET - 2 * DAY, now=RESET, request_key=key
+        )
+    finally:
+        database.close()
+    _process(connection_info, archive_server, [job])
+
+
+def _stored_check(connection_info: str) -> str | None:
+    """The settled check the ended day's latest saved version stored."""
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT formula_components -> 'reset_proof' ->> 'settled' FROM ranked_day_versions"
+            " WHERE ranked_day_start = %s ORDER BY version DESC LIMIT 1", (RESET - DAY,),
+        ).fetchone()[0]
+
+
 def test_a_check_is_judged_again_when_the_day_before_its_ended_day_changes(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """The check pools the saved day before's defenses. Calculated again
     with a gap in its battle logs, that day leaves the settled check
-    unresolved; calculated again whole, the check settles again."""
+    unresolved; calculated again whole, the check settles again, and the
+    ended day, calculated again, stores that verdict once more."""
     from dataclasses import replace
 
     from clashlens import reconciliation_db
 
     monkeypatch.setenv(SWITCH, "true")
-    prior_day = RESET - 2 * DAY
     with domain_database(database_url, include_coordinator=True) as connection_info:
         scenario = _scenario(connection_info, archive_server)
         _process(connection_info, archive_server,
                  [scenario[job] for job in ORDERS["named_check_last"]])
         settled = _verdict(connection_info)[:3]
-
-        def recalculate(key: str) -> None:
-            database, _ = _processor(connection_info, archive_server)
-            try:
-                job = reconciliation_db.enqueue_reconciliation(
-                    database, player_tag=TAG, day_start=prior_day, now=RESET,
-                    request_key=key,
-                )
-            finally:
-                database.close()
-            _process(connection_info, archive_server, [job])
-
         original = reconciliation_db.reconcile_ranked_day
-        monkeypatch.setattr(
-            reconciliation_db, "reconcile_ranked_day",
-            lambda data: replace(original(data), coverage_complete=False),
-        )
-        recalculate("with-gap")
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day",
+                            lambda data: replace(original(data), coverage_complete=False))
+        _recalculate_day_before(connection_info, archive_server, "with-gap")
         gap = _verdict(connection_info)[:3]
         monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
-        recalculate("whole")
+        _recalculate_day_before(connection_info, archive_server, "whole")
         whole = _verdict(connection_info)[:3]
+        stored = _stored_check(connection_info)
 
     assert settled == ("settled", scenario["target"], [])
     assert gap == ("unresolved", None, ["previous_day_defenses_unknown"])
     assert whole == settled
+    assert stored == str(scenario["target"])
 
 
 def test_season_repair_judges_old_rule_checks_again(
@@ -1455,37 +1466,23 @@ def test_a_stored_season_summary_follows_the_rejudged_check(
     from clashlens.season_summaries import _digest, _project, materialize_player_season
 
     monkeypatch.setenv(SWITCH, "true")
-    prior_day = RESET - 2 * DAY
     season = ranked_day_for(RESET - DAY).official_season_id
     with domain_database(database_url, include_coordinator=True) as connection_info:
         scenario = _scenario(connection_info, archive_server)
         _process(connection_info, archive_server,
                  [scenario[job] for job in ORDERS["named_check_last"]])
         player = scenario["player"]
-
-        def recalculate(key: str) -> None:
-            database, _ = _processor(connection_info, archive_server)
-            try:
-                job = reconciliation_db.enqueue_reconciliation(
-                    database, player_tag=TAG, day_start=prior_day, now=RESET,
-                    request_key=key,
-                )
-            finally:
-                database.close()
-            _process(connection_info, archive_server, [job])
-
         original = reconciliation_db.reconcile_ranked_day
-        monkeypatch.setattr(
-            reconciliation_db, "reconcile_ranked_day",
-            lambda data: replace(original(data), coverage_complete=False),
-        )
-        recalculate("with-gap")
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day",
+                            lambda data: replace(original(data), coverage_complete=False))
+        _recalculate_day_before(connection_info, archive_server, "with-gap")
         with psycopg.connect(connection_info) as connection:
             materialize_player_season(connection, player_id=player, season_id=season)
         unresolved = _verdict(connection_info)[:3]
         monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
-        recalculate("whole")
+        _recalculate_day_before(connection_info, archive_server, "whole")
         settled = _verdict(connection_info)[:3]
+        saved_check = _stored_check(connection_info)
         with psycopg.connect(connection_info) as connection:
             stored = connection.execute(
                 "SELECT content_digest FROM player_season_summaries"
@@ -1496,4 +1493,5 @@ def test_a_stored_season_summary_follows_the_rejudged_check(
 
     assert unresolved == ("unresolved", None, ["previous_day_defenses_unknown"])
     assert settled == ("settled", scenario["target"], [])
+    assert saved_check == str(scenario["target"])
     assert str(stored) == projected

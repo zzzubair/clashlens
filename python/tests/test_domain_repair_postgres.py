@@ -981,18 +981,26 @@ def test_a_balanced_day_is_accepted_only_once_a_new_version_stores_its_check(
     provisional. Its delayed check then settles on that end: the saved
     version still stores balanced and the summary stays provisional until
     the ended day, queued by that verdict, is calculated again, storing
-    verified; then the summary accepts the end."""
+    verified; then the summary accepts the end. A gap in the day before's
+    battle logs then withdraws the check, and closing it settles the check
+    as it was: the ended day is calculated again and stores verified once
+    more, and the summary accepts the end again."""
+    from dataclasses import replace
+
     from test_reconciliation_postgres import _profile
     from test_reset_reading_before_loss_postgres import _log_before
     from test_reset_settlement_proof_postgres import (
         RESET,
         SWITCH,
         _processor,
+        _recalculate_day_before,
         _scenario,
+        _verdict,
     )
     from test_reset_settlement_proof_postgres import _process as _drain
     from test_reset_settlement_state_postgres import _reset_work
 
+    from clashlens import reconciliation_db
     from clashlens.domain import allocate_trophies, ranked_day_for
     from clashlens.season_summaries import materialize_player_season
 
@@ -1036,10 +1044,20 @@ def test_a_balanced_day_is_accepted_only_once_a_new_version_stores_its_check(
         settled = state(connection_info)
         _drain(connection_info, archive_server, [])
         verified = state(connection_info)
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day",
+                            lambda data: replace(original(data), coverage_complete=False))
+        _recalculate_day_before(connection_info, archive_server, "with-gap")
+        withdrawn = _verdict(connection_info)[0]
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
+        _recalculate_day_before(connection_info, archive_server, "whole")
+        restored = (_verdict(connection_info)[0], *state(connection_info))
 
     assert balanced == ("balanced", "provisional")
     assert settled == ("balanced", "provisional")
     assert verified == ("verified", "accepted")
+    assert withdrawn == "unresolved"
+    assert restored == ("settled", "verified", "accepted")
 
 
 def test_a_rejected_end_stays_rejected_as_the_next_days_start(

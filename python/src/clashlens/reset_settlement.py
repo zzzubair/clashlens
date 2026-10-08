@@ -1306,7 +1306,7 @@ def refresh_boundary(
         return
     if "early" in current[4]:
         candidate["early"] = current[4]["early"]
-    connection.execute(
+    change = connection.execute(
         """
         UPDATE reset_boundary_settlements
         SET state = %s, selected_trophies = %s, proof_kind = %s,
@@ -1314,15 +1314,16 @@ def refresh_boundary(
             reasons = %s, change_number = change_number + 1,
             updated_at = clock_timestamp()
         WHERE player_id = %s AND boundary_at = %s
+        RETURNING change_number
         """,
         (verdict.state, verdict.trophies,
          "observed_adjustment" if verdict.state == SETTLED else None,
          PROOF_RULE_VERSION, fingerprint, Jsonb(candidate),
          Jsonb(list(verdict.reasons)), player_id, boundary_at),
-    )
+    ).fetchone()[0]
     if SETTLED in (current[0], verdict.state):
         _queue_recalculation(
-            connection, player_id, ranked_day_for(boundary_at - DAY), f"check-{fingerprint[:16]}"
+            connection, player_id, ranked_day_for(boundary_at - DAY), f"check-{change}"
         )
         if depth < MAX_CASCADE:
             refresh_boundary(database, connection, player_id, boundary_at + DAY, depth=depth + 1)
