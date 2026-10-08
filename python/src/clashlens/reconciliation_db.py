@@ -342,28 +342,28 @@ def recalculate_ranked_day(
     # Reset, so a Reset reading taken before a profile showing the lower
     # league is that player's last Legend I total: no raise to 5,000 follows
     # it, and the day it starts is not a Legend I day. Legend I has no
-    # weekly official total to check it against.
-    if (
-        boundary_kind == "weekly"
-        and end_baseline is not None
-        and end_baseline["trophies"] is not None
-        and _dropped_after_reading(connection, player_id, end_baseline, ranked_day.end)
+    # weekly official total to check it against. Without a Reset reading,
+    # any such profile read from the Reset counts.
+    if boundary_kind == "weekly" and _dropped_after_reading(
+        connection, player_id, end_baseline, ranked_day.end
     ):
         boundary_kind = None
-        end_baseline = {
-            **end_baseline,
-            "evidence": {**end_baseline["evidence"], "dropped_from_legend_i": True},
-        }
-    if (
-        start_baseline is not None
-        and start_baseline["eligibility_state"] == "eligible"
+        if end_baseline is not None:
+            end_baseline = {
+                **end_baseline,
+                "evidence": {**end_baseline["evidence"], "dropped_from_legend_i": True},
+            }
+    start_dropped = (
+        (start_baseline is None
+         or start_baseline["eligibility_state"] in {None, "eligible"})
         and ranked_day.start.weekday() == 0
         and season_day is not None
         and season_day.day_number > 1
         and _dropped_after_reading(
             connection, player_id, start_baseline, ranked_day.start
         )
-    ):
+    )
+    if start_dropped and start_baseline is not None:
         start_baseline = {**start_baseline, "eligibility_state": "ineligible"}
 
     # A day whose Reset reading cannot start it, rejected, late or missing,
@@ -375,6 +375,7 @@ def recalculate_ranked_day(
         (start_baseline is None or start_baseline["trophies"] is None)
         and (start_baseline is None
              or start_baseline["eligibility_state"] in {None, "eligible"})
+        and not start_dropped
         and previous is not None
         and previous.expected_next_start is not None
         and season_day is not None
@@ -792,13 +793,20 @@ def _official_final(connection: Any, player_id: int, season_end: datetime) -> in
 
 
 def _dropped_after_reading(
-    connection: Any, player_id: int, baseline: dict[str, Any], reset: datetime
+    connection: Any, player_id: int, baseline: dict[str, Any] | None,
+    reset: datetime,
 ) -> bool:
-    """Whether a profile read after this Reset reading, and before the next
-    Reset, shows a league below Legend I: the player dropped at ``reset``."""
-    reading_at = baseline["evidence"]["profile"]["observed_at"]
-    return reading_at is not None and _dropped_from_legend_i(
-        connection, player_id, datetime.fromisoformat(reading_at),
+    """Whether a profile read after this Reset reading, or after ``reset``
+    without one, and before the next Reset, shows a league below Legend I:
+    the player dropped at ``reset``."""
+    reading_at = (
+        baseline["evidence"]["profile"]["observed_at"]
+        if baseline is not None
+        else None
+    )
+    return _dropped_from_legend_i(
+        connection, player_id,
+        datetime.fromisoformat(reading_at) if reading_at is not None else reset,
         until=reset + timedelta(days=1),
     )
 

@@ -117,8 +117,8 @@ class PreviousRankedDay:
     # the game had not finished crediting (see ``later_next_start_reading``).
     reset_reading_correction: int = 0
     # That day's calculated end, after any weekly or Season reset, when its
-    # battles are all known: the next day's start when its own Reset reading
-    # cannot give one (see ``reconciliation_db.recalculate_ranked_day``).
+    # battles and automatic loss are known: the next day's start when its
+    # Reset reading cannot give one (see ``recalculate_ranked_day``).
     expected_next_start: int | None = None
     # Continuous battle logs and established counts, whether or not that
     # day's readings were usable; ``None`` keeps the older meaning, Complete

@@ -208,6 +208,14 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
       attacks: value.attack_count as number | null,
       defenses: value.defense_count as number | null,
       state: value.state as string,
+      confidence: isOneOf(value.confidence, [
+        "exact",
+        "inferred",
+        "partial",
+        "uncertain",
+      ] as const)
+        ? value.confidence
+        : null,
       coverage: value.coverage as string,
       hasAdjustment: value.has_adjustment as boolean,
       adjustmentTotal: value.adjustment_total as number | null,

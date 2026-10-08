@@ -524,3 +524,34 @@ def test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end(
     assert day_2[:2] == ("Complete", "inferred")
     assert day_2[2] == end_1 and day_2[6] == "previous_day_end"
     assert day_2[3] == end_2
+
+
+def test_day_with_no_defense_and_no_end_reading_starts_nothing(
+    database_url: str, archive_server
+) -> None:
+    """A day with no defense slot used can lose the automatic loss for all 8
+    at the Reset, which only a reading shows: with that reading rejected, the
+    next day has no start rather than one up to 8 losses too high."""
+    day_3 = DAY_2 + timedelta(days=1)
+    filler = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(44)]
+    end_1 = 5000 + 2 * WIN - LOSS - LOSS
+    log_1 = _log(*ATTACKS, *DEFENSE, filler=filler)
+    # Day 2: one attack and no defense.
+    log_2 = _log(*ATTACKS, *DEFENSE, (DAY_2 + timedelta(hours=2), True), filler=filler)
+    season_zero = json.loads(_profile(end_1 + WIN))
+    season_zero["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _first_seen(
+            connection_info, archive_server, DAY_1 + timedelta(hours=8),
+            profile=_new_season_profile(5000 + 2 * WIN - LOSS), log=log_1,
+        )
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=_new_season_profile(end_1), log=log_1)
+        jobs += _reset_work(connection_info, archive_server, day_3,
+                            profile=json.dumps(season_zero).encode(), log=log_2)
+        _process(connection_info, archive_server, jobs)
+        day_2 = _day(connection_info, DAY_2)
+        day_3_row = _day(connection_info, day_3)
+    assert day_2[0] == "Partial" and day_2[2] == end_1
+    assert "missing_end_baseline" in day_2[5]
+    assert day_3_row[2] is None and day_3_row[6] is None

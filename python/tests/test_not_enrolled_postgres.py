@@ -226,8 +226,7 @@ def test_earlier_legend_battles_in_the_season_rule_out_sign_up(
         day = _sign_up_day(connection_info)
         players = _sign_up_days(connection_info)
 
-    # Not a sign-up day: Day 2 starts from Day 1's calculated end instead.
-    assert (day[2], day[4], players) == (5000 + WIN, "previous_day_end", 0)
+    assert (day[2], day[4], players) == (None, None, 0)
 
 
 def test_a_battle_before_a_delayed_reset_reading_rules_out_sign_up(

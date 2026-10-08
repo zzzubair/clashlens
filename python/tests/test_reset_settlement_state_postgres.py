@@ -383,7 +383,7 @@ CURRENT_PROFILE = """
     ("season", "season_zero"),
     ("ordinary", "tier_name"),
 ])
-def test_rejected_reset_profile_never_starts_a_day_itself(
+def test_rejected_reset_profile_gives_no_start(
     database_url: str, archive_server, kind: str, conflict: str
 ) -> None:
     boundary = BOUNDARIES[kind]
@@ -425,15 +425,8 @@ def test_rejected_reset_profile_never_starts_a_day_itself(
     by_start = {row[0]: row[1:] for row in days}
     ended, opened = by_start[boundary - timedelta(days=1)], by_start[boundary]
     # Neither day uses the rejected 5,000, and its Season is unknown rather
-    # than waiting for this player's Season reset. An ordinary day after a
-    # Legend I reading starts from the day before's calculated end (6,400
-    # with no battles); a Season's Day 1, or a day after a reading whose
-    # league we cannot recognise, has no start.
-    chain = (kind, conflict) == ("ordinary", "season_zero")
-    assert ended[1] is None and opened[0] == (6400 if chain else None)
-    assert opened[2].get("start_trophies_source") == (
-        "previous_day_end" if chain else None
-    )
+    # than waiting for this player's Season reset.
+    assert ended[1] is None and opened[0] is None
     assert "season_reset_pending" not in ended[3]
     assert "season_reset_pending" not in opened[2]
     assert opened[2]["profile"]["trophies"] == 5000
@@ -444,7 +437,7 @@ def test_rejected_reset_profile_never_starts_a_day_itself(
 
 
 @pytest.mark.parametrize("kind", ["ordinary", "season"])
-def test_reset_profile_read_after_the_first_battle_never_starts_a_day_itself(
+def test_reset_profile_read_after_the_first_battle_gives_no_start(
     database_url: str, archive_server, kind: str
 ) -> None:
     # Eight attacks (+320) and eight defenses (-280) from 05:06 come before
@@ -453,9 +446,6 @@ def test_reset_profile_read_after_the_first_battle_never_starts_a_day_itself(
     boundary = BOUNDARIES[kind]
     reading = _profile(6040) if kind == "ordinary" else _season_profile(6040, NEW_SEASON)
     rule_start = None if kind == "ordinary" else 5000
-    # An ordinary day starts from the day before's calculated end instead:
-    # 6,000 with no battles.
-    chain_start = 6000 if kind == "ordinary" else 5000
     log = json.loads(_battle_log())
     template = log["items"][0]
     log["items"] = [
@@ -510,7 +500,7 @@ def test_reset_profile_read_after_the_first_battle_never_starts_a_day_itself(
         (False, ["profile_after_first_event"], "accepted", 6040)
     ]
     assert days[boundary - timedelta(days=1)][:2] == (6000, rule_start)
-    assert days[boundary][0] == chain_start
+    assert days[boundary][0] == rule_start
     assert days[boundary][2:] == (8, 8, 320, 280)
     assert current == [(6040, "accepted")]
 
@@ -931,3 +921,48 @@ def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(
     assert len(due) == 1
     assert due[0][0] >= boundary + reconciliation_db.DAY_END_RECALCULATION_DELAY
     assert ended == [("Complete", final)]
+
+
+def test_weekly_drop_without_a_reset_reading_gives_no_legend_i_monday(
+    database_url: str, archive_server
+) -> None:
+    # The Monday Reset profile fails and its battle log arrives; Legend II
+    # shows 13 minutes later. Sunday's end gets no raise to 5,000, and the
+    # Monday is no Legend I day, so it does not start from Sunday's end.
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    boundary = BOUNDARIES["monday"]
+    last_day = boundary - timedelta(days=1)
+    final = 4900 + WIN - 8 * LOSS
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(4900), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            log=_log(*battles))
+        jobs.append(_store_dropped_login(
+            connection_info, archive_server, "dropped-login",
+            boundary + timedelta(minutes=13), final,
+        ))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=boundary,
+                now=boundary + timedelta(days=1), request_key="monday",
+            )
+            assert processor.process_job(job, owner="monday") is not None
+        finally:
+            database.close()
+        days = {row[0]: row[1:] for row in _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   expected_next_start_trophies, start_trophies, failure_reasons,
+                   input_evidence -> 'start_baseline_evidence'
+                       ->> 'start_trophies_source'
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+
+    assert days[last_day][0] == final
+    assert days[boundary][1] is None and days[boundary][3] is None
+    assert "player_not_eligible" in days[boundary][2]

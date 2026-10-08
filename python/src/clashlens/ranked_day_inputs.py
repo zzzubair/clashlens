@@ -376,6 +376,13 @@ def load_previous_day(
     ) in {"Complete", "Partial"} and not any(
         reason in CHAIN_BREAK_REASONS for reason in reasons
     )
+    # With no defense slot used, only a reading shows the automatic loss for
+    # all 8 (see ``reconciliation._zero_defense_loss``), so an end no
+    # reading settled cannot start the next day.
+    end_known = battles_known and (
+        _text_value(previous_row[1]) == "Complete"
+        or int(previous_row[3]) + int(previous_row[11]) > 0
+    )
     return (
         PreviousRankedDay(
             complete=(
@@ -408,7 +415,7 @@ def load_previous_day(
             reset_reading_correction=int(previous_row[12]),
             expected_next_start=(
                 int(previous_row[13])
-                if battles_known and previous_row[13] is not None
+                if end_known and previous_row[13] is not None
                 else None
             ),
             battles_known=battles_known,

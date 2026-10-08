@@ -354,6 +354,7 @@ export interface HistoricalSeasonDayEntry {
   attacks: number | null;
   defenses: number | null;
   state: string;
+  confidence?: RankedDaySummary["confidence"];
   coverage: string;
   hasAdjustment: boolean;
   adjustmentTotal: number | null;

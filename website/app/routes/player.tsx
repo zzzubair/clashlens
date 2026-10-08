@@ -1045,6 +1045,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 {
                   net: day.netChange,
                   state: day.state,
+                  confidence: day.confidence,
                   coverage: day.coverage,
                   codes: day.flags,
                   attackGain: day.attackGain,
