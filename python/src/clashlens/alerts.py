@@ -66,7 +66,7 @@ CONDITIONS = {
     "failed_work": (
         (
             "Failed processing jobs or raw-response uploads are waiting for a person;"
-            " they stay failed until retried or replayed"
+            " they count until retried, replayed or accepted"
         ),
         "./ops failed-items",
     ),
@@ -673,7 +673,7 @@ def observe(
             state["details"]["processing"] = (
                 f"Oldest waiting: {WORK_NAMES.get(work, work)}, {int(age // 60)} minutes"
             )
-        # Failed work stays failed, however old, until someone retries it.
+        # Failed work counts, however old, until retried, replayed or accepted.
         jobs, uploads = (metrics.get(f"{prefix}failed_{kind}") for kind in ("processing", "uploads"))
         findings["failed_work"] = None if None in (jobs, uploads) else jobs + uploads > 0
         if findings["failed_work"]:

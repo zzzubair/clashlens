@@ -226,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     failed_items = subparsers.add_parser(
         "failed-items",
-        help="list collector failures or explicitly retry collection/upload work",
+        help="list failures, retry collection/upload work or accept a failed job",
     )
     _database_argument(failed_items)
     failed_items.add_argument(
@@ -237,6 +237,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--work-id", type=_bounded_int("collector work ID", 1, 9223372036854775807)
     )
     failed_selector.add_argument("--upload-hash")
+    failed_selector.add_argument(
+        "--accept-job-id", type=_bounded_int("processing job ID", 1, 9223372036854775807)
+    )
+    failed_items.add_argument("--reason")
+    # ./ops passes the host account; acceptances record it.
+    failed_items.add_argument("--operator")
     failed_items.add_argument("--apply", action="store_true")
 
     prune_history = subparsers.add_parser(
@@ -450,30 +456,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 database.close()
             return 0
         if arguments.command == "failed-items":
-            import psycopg
+            from .operator_recovery import failed_items_command
 
-            from .operator_recovery import inspect_failed_items, retry_failed_item
-
-            if (
-                arguments.apply
-                and arguments.work_id is None
-                and arguments.upload_hash is None
-            ):
-                raise ValueError("--apply requires --work-id or --upload-hash")
-            if arguments.upload_hash is not None and not re.fullmatch(
-                r"[0-9a-f]{64}", arguments.upload_hash
-            ):
-                raise ValueError("upload hash must be a lowercase SHA-256 digest")
-            with psycopg.connect(_database_url(arguments)) as connection:
-                if arguments.work_id is None and arguments.upload_hash is None:
-                    report = inspect_failed_items(connection, limit=arguments.limit)
-                else:
-                    report = retry_failed_item(
-                        connection,
-                        work_id=arguments.work_id,
-                        upload_hash=arguments.upload_hash,
-                        apply=arguments.apply,
-                    )
+            report = failed_items_command(arguments, _database_url(arguments))
             print(json.dumps(report, sort_keys=True, default=str))
             return 1 if report.get("outcome") == "refused" else 0
         if arguments.command == "prune-archive":
