@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="60 -14 660 404">
+<title>Clash Lens</title>
+<defs>
+  <linearGradient id="g-letters" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe45c"/><stop offset="1" stop-color="#ff8a1f"/></linearGradient>
+  <linearGradient id="g-gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff1a8"/><stop offset="1" stop-color="#f2c641"/></linearGradient>
+  <radialGradient id="g-glass" cx="0.35" cy="0.3" r="0.8"><stop offset="0" stop-color="#ffffff"/><stop offset="0.6" stop-color="#cfeaff"/><stop offset="1" stop-color="#7fb6e0"/></radialGradient>
+  <path id="gl-C" d="M10 0H74V30H32V70H74V100H10L0 90V10Z"/>
+  <path id="gl-L" d="M0 0H31V70H70V100H0Z"/>
+  <path id="gl-A" d="M20 0H62L82 100H53L50 82H32L29 100H0ZM36 56H46L42 28H40Z"/>
+  <path id="gl-S" d="M7 0H74V28H31V37H67L74 44V93L67 100H0V72H43V63H7L0 56V7Z"/>
+  <path id="gl-H" d="M0 0H29V35H47V0H76V100H47V64H29V100H0Z"/>
+  <path id="gl-E" d="M0 0H70V27H31V37H62V63H31V73H70V100H0Z"/>
+  <path id="gl-N" d="M0 0H27L51 50V0H78V100H53L27 50V100H0Z"/>
+</defs>
+<g class="arrow" transform="translate(95 18) rotate(36.9)" stroke="#1d1426" stroke-width="5.0" stroke-linejoin="round">
+  <rect x="0" y="-5.5" width="150.0" height="11.0" rx="5.5" fill="#e0a76b"/>
+  
+  <path d="M4.4 0L-6.6 -24.2H33.0L55.0 0Z" fill="#ff5a3c"/>
+  <path d="M4.4 0L-6.6 24.2H33.0L55.0 0Z" fill="#b3261e"/>
+</g>
+<g class="arrow" transform="translate(680 18) rotate(143.1)" stroke="#1d1426" stroke-width="5.0" stroke-linejoin="round">
+  <rect x="0" y="-5.5" width="150.0" height="11.0" rx="5.5" fill="#e0a76b"/>
+  
+  <path d="M4.4 0L-6.6 -24.2H33.0L55.0 0Z" fill="#ff5a3c"/>
+  <path d="M4.4 0L-6.6 24.2H33.0L55.0 0Z" fill="#b3261e"/>
+</g>
+
+<g class="word-CLASH"><g fill="#1d1426" stroke="#1d1426" stroke-width="18" stroke-linejoin="round"><g transform="translate(167.5 70.0) scale(1.25) rotate(-4 37.0 50)"><use href="#gl-C" transform="translate(0 10)"/><use href="#gl-C"/></g><g transform="translate(251.2 63.8) scale(1.25) rotate(3 35.0 50)"><use href="#gl-L" transform="translate(0 10)"/><use href="#gl-L"/></g><g transform="translate(330.0 68.8) scale(1.25) rotate(-2 41.0 50)"><use href="#gl-A" transform="translate(0 10)"/><use href="#gl-A"/></g><g transform="translate(423.8 65.0) scale(1.25) rotate(4 37.0 50)"><use href="#gl-S" transform="translate(0 10)"/><use href="#gl-S"/></g><g transform="translate(507.5 71.2) scale(1.25) rotate(-3 38.0 50)"><use href="#gl-H" transform="translate(0 10)"/><use href="#gl-H"/></g></g><g fill="#b3261e"><use href="#gl-C" transform="translate(167.5 70.0) scale(1.25) rotate(-4 37.0 50) translate(0 10)"/><use href="#gl-L" transform="translate(251.2 63.8) scale(1.25) rotate(3 35.0 50) translate(0 10)"/><use href="#gl-A" transform="translate(330.0 68.8) scale(1.25) rotate(-2 41.0 50) translate(0 10)"/><use href="#gl-S" transform="translate(423.8 65.0) scale(1.25) rotate(4 37.0 50) translate(0 10)"/><use href="#gl-H" transform="translate(507.5 71.2) scale(1.25) rotate(-3 38.0 50) translate(0 10)"/></g><g fill="url(#g-letters)" stroke="#1d1426" stroke-width="3" stroke-linejoin="round"><use href="#gl-C" transform="translate(167.5 70.0) scale(1.25) rotate(-4 37.0 50)"/><use href="#gl-L" transform="translate(251.2 63.8) scale(1.25) rotate(3 35.0 50)"/><use href="#gl-A" transform="translate(330.0 68.8) scale(1.25) rotate(-2 41.0 50)"/><use href="#gl-S" transform="translate(423.8 65.0) scale(1.25) rotate(4 37.0 50)"/><use href="#gl-H" transform="translate(507.5 71.2) scale(1.25) rotate(-3 38.0 50)"/></g></g>
+<g class="word-LENS"><g fill="#1d1426" stroke="#1d1426" stroke-width="18" stroke-linejoin="round"><g transform="translate(197.5 198.0) scale(1.25) rotate(-4 35.0 50)"><use href="#gl-L" transform="translate(0 10)"/><use href="#gl-L"/></g><g transform="translate(276.2 191.8) scale(1.25) rotate(3 35.0 50)"><use href="#gl-E" transform="translate(0 10)"/><use href="#gl-E"/></g><g transform="translate(391.2 196.8) scale(1.25) rotate(-2 39.0 50)"><use href="#gl-N" transform="translate(0 10)"/><use href="#gl-N"/></g><g transform="translate(480.0 193.0) scale(1.25) rotate(4 37.0 50)"><use href="#gl-S" transform="translate(0 10)"/><use href="#gl-S"/></g></g><g fill="#b3261e"><use href="#gl-L" transform="translate(197.5 198.0) scale(1.25) rotate(-4 35.0 50) translate(0 10)"/><use href="#gl-E" transform="translate(276.2 191.8) scale(1.25) rotate(3 35.0 50) translate(0 10)"/><use href="#gl-N" transform="translate(391.2 196.8) scale(1.25) rotate(-2 39.0 50) translate(0 10)"/><use href="#gl-S" transform="translate(480.0 193.0) scale(1.25) rotate(4 37.0 50) translate(0 10)"/></g><g fill="url(#g-letters)" stroke="#1d1426" stroke-width="3" stroke-linejoin="round"><use href="#gl-L" transform="translate(197.5 198.0) scale(1.25) rotate(-4 35.0 50)"/><use href="#gl-E" transform="translate(276.2 191.8) scale(1.25) rotate(3 35.0 50)"/><use href="#gl-N" transform="translate(391.2 196.8) scale(1.25) rotate(-2 39.0 50)"/><use href="#gl-S" transform="translate(480.0 193.0) scale(1.25) rotate(4 37.0 50)"/></g></g>
+<g class="lens" transform="translate(380 246)">
+  <g transform="rotate(-25)" stroke="#1d1426" stroke-width="4.8" stroke-linejoin="round">
+    <rect x="-9.6" y="54.0" width="19.2" height="72.0" rx="7.7" fill="#e0a76b"/>
+    <rect x="-9.6" y="98.6" width="19.2" height="8.6" fill="#9a6232" stroke="none"/>
+    <rect x="-11.9" y="52.8" width="23.8" height="18.0" rx="3.8" fill="#f2c641"/>
+  </g>
+  <circle r="60.0" fill="url(#g-gold)" stroke="#1d1426" stroke-width="4.8"/>
+  <circle r="44.4" fill="url(#g-glass)" stroke="#1d1426" stroke-width="3.8"/>
+  <ellipse cx="-18.0" cy="-19.2" rx="8.4" ry="6.0" fill="#fff" stroke="#1d1426" stroke-width="1.7" transform="rotate(-35 -18.0 -19.2)"/>
+  <circle cx="-4.8" cy="-27.6" r="3.6" fill="#fff" stroke="#1d1426" stroke-width="1.4"/>
+  <circle cx="18.0" cy="22.8" r="3.0" fill="#fff" opacity="0.8"/>
+  
+</g>
+</svg>
