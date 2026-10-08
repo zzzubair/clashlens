@@ -228,6 +228,28 @@ def test_zero_defense_day_read_before_its_loss_takes_it_from_a_later_reading() -
     assert (quiet.state, quiet.automatic_defense_loss) == ("Complete", None)
     assert quiet.next_start_trophies == 4695
 
+    # As #Q0RUJC9J2, but its Reset reading also missed the day's 250 attack
+    # gain: only the later reading shows both the gain and the 248 loss.
+    gains = (31, 31, 31, 31, 31, 31, 32, 32)
+    both = _input(
+        start_trophies=4751, next_start_trophies=4751,
+        contributions=tuple(
+            BattleContribution(f"#Q0RUJC9J2-attack-{index}", "offense", gain)
+            for index, gain in enumerate(gains)
+        ),
+        previous_day=PreviousRankedDay(True, 8, 249, 0),
+    )
+    unread = reconcile_ranked_day(both)
+    settled = reconcile_ranked_day(
+        replace(both, later_next_start_reading=(later_at, 4753))
+    )
+
+    assert unread.state == "Inconsistent"
+    assert (settled.state, settled.confidence) == ("Complete", "inferred")
+    assert settled.automatic_defense_loss == 248
+    assert settled.final_trophies_before_reset == settled.next_start_trophies == 4753
+    assert settled.formula_components["next_start_reading_correction"] == 2
+
     # The next day starts from the Reset reading less the loss.
     next_day = reconcile_ranked_day(
         _input(

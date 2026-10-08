@@ -254,6 +254,33 @@ def test_recheck_refreshes_saved_days_until_one_stays_the_same(
     )
 
 
+def test_finishing_a_day_saved_live_refreshes_the_following_day(
+    database_url: str, archive_server
+) -> None:
+    # Day B is still saved Live, as when its Reset calculation is delayed,
+    # while day C was already saved from B's early Reset reading.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        start_b, end_b = _early_reading_days(
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
+        )
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                UPDATE ranked_day_versions SET state = 'Live'
+                WHERE id = (
+                    SELECT id FROM ranked_day_versions
+                    WHERE ranked_day_start = %s ORDER BY version DESC LIMIT 1
+                )
+                """,
+                (DAY_B,),
+            )
+        _day_end_recheck(connection_info, archive_server)
+        day_b_row, day_c_row = _latest_days(connection_info)
+
+    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
+
+
 def test_mismatch_batch_settles_days_saved_before_the_later_reading_rule(
     database_url: str, archive_server
 ) -> None:

@@ -379,9 +379,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 and (
                     residual == -zero_defense_loss
                     or (
-                        residual == 0
-                        and later is not None
-                        and later[1] == data.next_start_trophies - zero_defense_loss
+                        later is not None
+                        and later[1] == expected_next - zero_defense_loss
                     )
                 )
                 and not end_hidden_by_reset
@@ -403,8 +402,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 # same battle counts on the days around them. Only a reading
                 # after the Reset tells them apart, so only one exactly this
                 # loss below the day's end takes it. A Reset reading showing
-                # no change, followed by one before any new-day battle
-                # showing the loss, was read before the game applied it.
+                # no change, or missing the day's credit, followed by one
+                # before any new-day battle showing the loss, was read before
+                # the game applied it.
                 automatic_loss = zero_defense_loss
                 automatic_state = "calculated"
                 final_trophies -= zero_defense_loss

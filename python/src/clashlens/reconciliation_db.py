@@ -189,8 +189,8 @@ def recalculate_ranked_day(
     analytics_rule_version: str,
 ) -> bool:
     """Recalculate and publish one player-day in the caller's transaction;
-    whether that changed the state, end or next start of its saved ended
-    result."""
+    whether the day has ended and this changed the state, end or next start
+    of its saved result, or saved its first."""
     ranked_day = ranked_day_for(day_start)
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
@@ -688,10 +688,9 @@ def recalculate_ranked_day(
             ranked_day_input_hash=input_hash,
             reset_lock_wait=RESET_LOCK_WAIT,
         )
-    return (
-        previous_version is not None
-        and _text_value(previous_version[4]) != "Live"
-        and (_text_value(previous_version[4]), *previous_version[5:7]) != (
+    return now >= ranked_day.end and (
+        previous_version is None
+        or (_text_value(previous_version[4]), *previous_version[5:7]) != (
             result.state,
             result.final_trophies_before_reset,
             result_data["next_start_trophies"],
