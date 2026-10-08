@@ -1195,8 +1195,8 @@ two thirds of them, 8 of 12) how many of them process only responses, and `CLASH
 (default 12, at most 16) each process's connections. All processes share the container's
 memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
 worker refuses to start with more than 16 connections a process or 38 in
-all; with the collector's 32 and the API's 8 that leaves two of 80 for
-operators.
+all; see [the database connection budget](architecture.md#structured-data-and-evidence)
+for how that fits with the other processes.
 
 The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
 is 2 processes of 16 threads, 12 for responses, and 16 connections each, 38

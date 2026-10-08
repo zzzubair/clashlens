@@ -219,8 +219,10 @@ any process exits the others are stopped and the container restarts them
 all. Their database connections are budgeted: each process's
 `--database-pool-size` is at most 16, and processes times (pool size plus the
 two maintenance connections and the maintenance lock's one) may not exceed
-38. With the collector's 32 and the API's 8 that leaves two for operators
-within 80 of PostgreSQL's 100.
+38. With the collector's 32, the uploads process's 4 and the API's 8 that
+leaves two for operators within an application budget of 84 of PostgreSQL's
+100 (checked on 8 October 2026). The 16 outside the budget, 13 ordinary plus
+the 3 reserved for superusers, stay free for maintenance and inspection.
 
 All threads in a process share its one `--database-pool-size` pool; giving response and
 derived threads separate connection limits is deferred. A thread that waits

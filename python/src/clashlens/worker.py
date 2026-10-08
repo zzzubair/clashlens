@@ -243,9 +243,8 @@ MAINTENANCE_POOL_SIZE = 2
 # Lane connections one worker process may open.
 MAX_WORKER_POOL_SIZE = 16
 # Connections all worker processes together may open: each process's lane
-# pool, maintenance pool and maintenance permit. With the collector's 32 and
-# the API's 8 that is 78, leaving two for operators within 80 of PostgreSQL's
-# 100.
+# pool, maintenance pool and maintenance permit. docs/architecture.md owns how
+# this fits the whole database connection budget.
 WORKER_CONNECTION_BUDGET = 38
 
 
