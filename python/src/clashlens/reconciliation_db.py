@@ -202,8 +202,9 @@ def _start_moved(
 def proven_end_moved(
     database: Database, connection: Any, player_id: int, day_start: datetime
 ) -> bool:
-    """Whether the day's proven end the evidence saved now gives is not the
-    one its saved version stored, or a reader of that stored one
+    """Whether the day's proven end or proof the evidence saved now gives,
+    its Reset check included, is not what its saved version stored, or a
+    reader of that stored end
     (``proven_end``) used another, whatever the day's state: the next saved
     day's start (``_start_moved``), or the settlement check of the Reset
     after the day's end, rooted on that end or left without a root."""
@@ -211,7 +212,8 @@ def proven_end_moved(
 
     latest = connection.execute(
         """
-        SELECT id, formula_components -> 'reset_proof' -> 'proven_end'
+        SELECT id, formula_components -> 'reset_proof' -> 'proven_end',
+               formula_components -> 'reset_proof' ->> 'proof'
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -223,8 +225,10 @@ def proven_end_moved(
         now = reset_settlement.day_ends(
             connection, [int(latest[0])],
             boundary_manifest.reset_proof_facts(database, connection, [int(latest[0])]),
-        )[int(latest[0])].proven_end
-        if (list(now) if now else None) != latest[1]:
+        )[int(latest[0])]
+        if (list(now.proven_end) if now.proven_end else None, now.proof) != (
+            latest[1], latest[2] or reset_settlement.UNPROVEN
+        ):
             return True
     if _start_moved(database, connection, player_id, day_start):
         return True
@@ -259,19 +263,18 @@ def finish_recalculation(
     settlement check that roots its start or pools its automatic loss on one
     of these ended days, the day before its own, and the checks after it
     that verdict roots; then, after every such check, store again the
-    player's saved Season summaries of those days and of the checks that
-    changed, whose accepted ends and movements read them, or the first one
-    once the Season's Day 28 is published Complete."""
+    player's saved Season summaries of those days, whose accepted ends and
+    movements read the proofs those days stored, or the first one once the
+    Season's Day 28 is published Complete."""
     from . import reset_settlement
 
     days = sorted(set(day_starts))
-    changed: set[tuple[int, str]] = set()
     if days and reset_settlement._has_settlements(database, connection):
         now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         for day_start in days:
             if day_start + timedelta(days=1) <= now:
                 reset_settlement.refresh_boundary(
-                    database, connection, player_id, day_start + timedelta(days=2), changed
+                    database, connection, player_id, day_start + timedelta(days=2)
                 )
     seasons = connection.execute(
         """
@@ -281,7 +284,7 @@ def finish_recalculation(
         (player_id, [day + offset for day in days for offset in (timedelta(0), timedelta(days=1))]),
     ).fetchall()
     refresh_stored_seasons(
-        database, connection, changed | {(player_id, _text_value(row[0])) for row in seasons}
+        database, connection, {(player_id, _text_value(row[0])) for row in seasons}
     )
 
 
@@ -337,8 +340,9 @@ def recalculate_ranked_day(
     analytics_rule_version: str,
 ) -> bool:
     """Recalculate and publish one player-day in the caller's transaction;
-    whether the day has ended and this changed the state, end, next start or
-    stored proven end of its saved result, or saved its first."""
+    whether the day has ended and this changed the state, end, next start,
+    stored proven end or stored proof of its saved result, or saved its
+    first."""
     ranked_day = ranked_day_for(day_start)
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
@@ -733,7 +737,8 @@ def recalculate_ranked_day(
         """
         SELECT id, version, result_hash, replaces_version_id, state,
                final_trophies_before_reset, next_start_trophies,
-               formula_components -> 'reset_proof' -> 'proven_end'
+               formula_components -> 'reset_proof' -> 'proven_end',
+               formula_components -> 'reset_proof' ->> 'proof'
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -920,11 +925,12 @@ def recalculate_ranked_day(
         )
     return now >= ranked_day.end and (
         previous_version is None
-        or (_text_value(previous_version[4]), *previous_version[5:8]) != (
+        or (_text_value(previous_version[4]), *previous_version[5:9]) != (
             result.state,
             result.final_trophies_before_reset,
             result_data["next_start_trophies"],
             result.formula_components.get("reset_proof", {}).get("proven_end"),
+            result.formula_components.get("reset_proof", {}).get("proof"),
         )
     )
 

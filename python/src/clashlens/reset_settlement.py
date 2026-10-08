@@ -61,7 +61,6 @@ from .reconciliation import (
     _zero_defense_loss,
     automatic_defense_loss,
 )
-from .season_summaries import refresh_stored_seasons
 
 PROOF_RULE_VERSION = "reset-settlement-observed-adjustment-v2"
 NEW_PROOFS_SWITCH = "CLASHLENS_ENABLE_NEW_RESET_PROOFS"
@@ -238,10 +237,11 @@ def day_ends(
     facts: Mapping[int, Mapping[str, Any] | None] | None = None,
 ) -> dict[int, DayEnd]:
     """Each saved day's ``DayEnd``, keyed by its version (``day_end``). Its
-    proof reads what the day stored when it was calculated (``stored_proof``)
-    and its Reset check as it is now, as the Season summary reads it, or
-    ``facts``, what a board froze or what the evidence saved now gives
-    (``boundary_manifest.reset_proof_facts``), checked against it.
+    proof reads what the day stored when it was calculated, its later reading
+    and settled Reset check (``boundary_manifest.stored_proof``), so every
+    reader of one saved version gets its stored proof and end, or ``facts``,
+    what the evidence saved now gives (``boundary_manifest.reset_proof_facts``),
+    checked against it.
     """
     if not version_ids:
         return {}
@@ -266,12 +266,8 @@ def day_ends(
                    'contributions', ranked.input_evidence -> 'contributions'
                ),
                ranked.formula_components, ranked.defense_count, ranked.coverage_complete,
-               ranked.season_day_number, ranked.ranked_day_end, settlement.selected_trophies
+               ranked.season_day_number, ranked.ranked_day_end
         FROM ranked_day_versions AS ranked
-        LEFT JOIN reset_boundary_settlements AS settlement
-          ON settlement.player_id = ranked.player_id
-         AND settlement.boundary_at = ranked.ranked_day_end
-         AND settlement.state = 'settled'
         WHERE ranked.id = ANY(%s)
         """,
         (version_ids,),
@@ -288,9 +284,7 @@ def day_ends(
         frozen = (saved["formula_components"] or {}).get("reset_proof") or {}
         if facts is not None:
             frozen = facts.get(int(row[0])) or {}
-        ends[int(row[0])] = day_end(
-            saved, row[14] if facts is None else frozen.get("settled"), frozen
-        )
+        ends[int(row[0])] = day_end(saved, frozen.get("settled"), frozen)
     return ends
 
 
@@ -513,6 +507,13 @@ def queue_later_reading_recheck(
 
         if not proven_end_moved(database, connection, player_id, ended.start):
             return
+    _queue_recalculation(connection, player_id, ended, cause)
+
+
+def _queue_recalculation(connection: Any, player_id: int, ended: Any, cause: str) -> None:
+    """Queue one recalculation of the player's Legend day ``ended``, once
+    per day and ``cause``, at backfill priority, unless its day-end
+    calculation, which makes the same check, waits already."""
     day_text = ended.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if connection.execute(
         """
@@ -1265,7 +1266,7 @@ def load_proof_inputs(
 
 def refresh_boundary(
     database: Database, connection: Any, player_id: int, boundary_at: datetime,
-    changed: set[tuple[int, str]], *, depth: int = 0,
+    *, depth: int = 0,
 ) -> None:
     """Re-judge one Reset and record a changed verdict (guard 7).
 
@@ -1273,8 +1274,9 @@ def refresh_boundary(
     inputs are re-read after any concurrent writer finished. A finalized
     Season keeps its verdict. Admitting a new ``settled`` verdict needs the
     switch; losing one never does. A change to a settled verdict re-judges
-    the next Reset, whose target it roots, and adds (player, Season) to
-    ``changed``, whose summaries the caller stores again last.
+    the next Reset, whose target it roots, and calculates again the day it
+    ends, whose saved version stores the verdict it proves its end by; that
+    calculation stores the Season summary again.
     """
     from .season_retirement import is_season_detail_retired
 
@@ -1320,11 +1322,11 @@ def refresh_boundary(
          Jsonb(list(verdict.reasons)), player_id, boundary_at),
     )
     if SETTLED in (current[0], verdict.state):
-        changed.add((player_id, season_id))
+        _queue_recalculation(
+            connection, player_id, ranked_day_for(boundary_at - DAY), f"check-{fingerprint[:16]}"
+        )
         if depth < MAX_CASCADE:
-            refresh_boundary(
-                database, connection, player_id, boundary_at + DAY, changed, depth=depth + 1
-            )
+            refresh_boundary(database, connection, player_id, boundary_at + DAY, depth=depth + 1)
 
 
 def _lock_reset(connection: Any, player_id: int, boundary_at: datetime) -> str:
@@ -1362,11 +1364,9 @@ def _has_settlements(database: Database, connection: Any) -> bool:
     return bool(known)
 
 
-def refresh_for_observation(
-    database: Database, connection: Any, observation_id: int, changed: set[tuple[int, str]]
-) -> None:
-    """Re-judge the Resets a newly processed response can change, adding to
-    ``changed`` as ``refresh_boundary`` does. A named check's own responses
+def refresh_for_observation(database: Database, connection: Any, observation_id: int) -> None:
+    """Re-judge the Resets a newly processed response can change
+    (``refresh_boundary``). A named check's own responses
     always count. Any other response of the player, or of an opponent in its
     battles, from up to three days after a Reset, re-judges only a finished
     check that is settled, passed every guard, or met a later profile that
@@ -1377,7 +1377,7 @@ def refresh_for_observation(
         return
     lock_resets(database, connection, observation_id, [])
     for player_id, boundary_at in _observation_resets(connection, observation_id):
-        refresh_boundary(database, connection, player_id, boundary_at, changed)
+        refresh_boundary(database, connection, player_id, boundary_at)
 
 
 def _observation_resets(connection: Any, observation_id: int | None, *,
@@ -1438,9 +1438,8 @@ def _observation_resets(connection: Any, observation_id: int | None, *,
 
 def refresh_terminal_work(database: Database, *, batch: int = 100) -> int:
     """Judge up to ``batch`` finished checks that no processed response
-    will, as one that failed or expired before saving both responses, each
-    with the Season summaries it changes; how many it judged. A finalized
-    Season keeps its verdicts."""
+    will, as one that failed or expired before saving both responses; how
+    many it judged. A finalized Season keeps its verdicts."""
     with database.pool.connection() as connection:
         if not _has_settlements(database, connection):
             return 0
@@ -1470,7 +1469,5 @@ def refresh_terminal_work(database: Database, *, batch: int = 100) -> int:
             ).fetchall()
         for player_id, boundary_at in rows:
             with connection.transaction():
-                changed: set[tuple[int, str]] = set()
-                refresh_boundary(database, connection, int(player_id), boundary_at, changed)
-                refresh_stored_seasons(database, connection, changed)
+                refresh_boundary(database, connection, int(player_id), boundary_at)
     return len(rows)

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, store_observation, text
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
@@ -893,13 +893,23 @@ def _eod_states(connection_info: str, player_id: int, season_id: str) -> dict:
         }
 
 
-def test_a_finished_check_that_settles_stores_the_season_summary_again(
+def _recalculations(connection_info: str) -> list[str]:
+    with psycopg.connect(connection_info) as connection:
+        return [text(key) for (key,) in connection.execute(
+            "SELECT deduplication_key FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:later-reading:%check-%'"
+            " AND status = 'pending' ORDER BY id"
+        ).fetchall()]
+
+
+def test_a_finished_check_that_settles_queues_its_days_recalculation(
     database_url: str, monkeypatch
 ) -> None:
     """The Season's summary is stored while day 3's check is provisional, so
-    day 3's end is not accepted. Maintenance judges the finished check, which
-    settles on that end, with no day calculated again: the stored summary is
-    stored again and accepts it."""
+    day 3's end is not accepted. Maintenance judges the finished check,
+    which settles on that end: day 3's saved version keeps the proof it was
+    calculated with, so the summary stays provisional, and day 3 is queued
+    to be calculated again, which stores the verdict."""
     from clashlens import reset_settlement
 
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -912,27 +922,28 @@ def test_a_finished_check_that_settles_stores_the_season_summary_again(
         finally:
             database.close()
         after = _eod_states(connection_info, player_id, season_id)[3]
+        queued = _recalculations(connection_info)
 
     assert judged == 1
-    assert (before, after) == ("provisional", "accepted")
+    assert (before, after) == ("provisional", "provisional")
+    day_3 = (resets[0] - DAY).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert [key.split(":")[3] for key in queued] == [day_3]
 
 
-def test_a_settled_check_writes_the_summary_after_the_following_checks(
+def test_a_settled_check_waits_for_the_following_check_holding_no_summary(
     database_url: str, monkeypatch
 ) -> None:
     """Judging day 3's check settles it, which judges day 4's after it.
     Maintenance holds day 4's check and then wants the summary: the first
-    judgment waits for day 4's check holding no summary, so both finish, and
-    the summary, written last, accepts both ends."""
+    judgment waits for day 4's check holding no summary, so both finish,
+    and both days are queued to be calculated again, which stores their
+    verdicts and then the summary."""
     from concurrent.futures import ThreadPoolExecutor
 
     from test_reset_settlement_proof_postgres import _wait_for_advisory_wait
 
     from clashlens import reset_settlement
-    from clashlens.season_summaries import (
-        acquire_player_season_lock,
-        refresh_stored_seasons,
-    )
+    from clashlens.season_summaries import acquire_player_season_lock
 
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id, season_id, resets = _summarized_season(connection_info, [3, 4])
@@ -941,11 +952,7 @@ def test_a_settled_check_writes_the_summary_after_the_following_checks(
 
         def judge() -> None:
             with database.pool.connection() as connection, connection.transaction():
-                changed: set[tuple[int, str]] = set()
-                reset_settlement.refresh_boundary(
-                    database, connection, player_id, resets[0], changed
-                )
-                refresh_stored_seasons(database, connection, changed)
+                reset_settlement.refresh_boundary(database, connection, player_id, resets[0])
 
         try:
             with psycopg.connect(connection_info) as maintenance, ThreadPoolExecutor(1) as pool:
@@ -958,9 +965,81 @@ def test_a_settled_check_writes_the_summary_after_the_following_checks(
                 judging.result(timeout=60)
         finally:
             database.close()
-        states = _eod_states(connection_info, player_id, season_id)
+        queued = _recalculations(connection_info)
 
-    assert (states[3], states[4]) == ("accepted", "accepted")
+    assert [key.split(":")[3] for key in queued] == [
+        (reset - DAY).strftime("%Y-%m-%dT%H:%M:%SZ") for reset in resets
+    ]
+
+
+def test_a_balanced_day_is_accepted_only_once_a_new_version_stores_its_check(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The day before ends Complete at 5,000; the ended day starts there
+    and its Reset reading comes before its automatic loss, so its saved
+    version stores a balanced proof, and the Season summary keeps its end
+    provisional. Its delayed check then settles on that end: the saved
+    version still stores balanced and the summary stays provisional until
+    the ended day, queued by that verdict, is calculated again, storing
+    verified; then the summary accepts the end."""
+    from test_reconciliation_postgres import _profile
+    from test_reset_reading_before_loss_postgres import _log_before
+    from test_reset_settlement_proof_postgres import (
+        RESET,
+        SWITCH,
+        _processor,
+        _scenario,
+    )
+    from test_reset_settlement_proof_postgres import _process as _drain
+    from test_reset_settlement_state_postgres import _reset_work
+
+    from clashlens.domain import allocate_trophies, ranked_day_for
+    from clashlens.season_summaries import materialize_player_season
+
+    monkeypatch.setenv(SWITCH, "true")
+    prior = 5000 + sum(allocate_trophies(1, 40 + 5 * i).defender_loss for i in range(8))
+    ended = RESET - DAY
+    season_id = ranked_day_for(ended).official_season_id
+
+    def state(connection_info: str) -> tuple:
+        with psycopg.connect(connection_info) as connection:
+            stored = connection.execute(
+                "SELECT player_id, formula_components -> 'reset_proof' ->> 'proof'"
+                " FROM ranked_day_versions WHERE ranked_day_start = %s"
+                " ORDER BY version DESC LIMIT 1",
+                (ended,),
+            ).fetchone()
+        return stored[1], _eod_states(connection_info, stored[0], season_id)[
+            ranked_day_for(ended).day_number
+        ]
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _drain(connection_info, archive_server, [
+            *_reset_work(connection_info, archive_server, ended - DAY,
+                         profile=_profile(prior), log=_log_before(ended - DAY)),
+            *_reset_work(connection_info, archive_server, ended,
+                         profile=_profile(5000), log=_log_before(ended)),
+        ])
+        scenario = _scenario(connection_info, archive_server, with_root=False)
+        _drain(connection_info, archive_server, [scenario[job] for job in (
+            "early_profile", "early_log", "newer_profile", "newer_log", "profile",
+        )])
+        with psycopg.connect(connection_info) as connection:
+            materialize_player_season(connection, scenario["player"], season_id)
+            connection.commit()
+        balanced = state(connection_info)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(scenario["log"], owner="check") is not None
+        finally:
+            database.close()
+        settled = state(connection_info)
+        _drain(connection_info, archive_server, [])
+        verified = state(connection_info)
+
+    assert balanced == ("balanced", "provisional")
+    assert settled == ("balanced", "provisional")
+    assert verified == ("verified", "accepted")
 
 
 def test_a_rejected_end_stays_rejected_as_the_next_days_start(

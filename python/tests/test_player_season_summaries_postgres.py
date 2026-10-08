@@ -176,6 +176,8 @@ def _days(connection, player_id, eods, *, version=1):
 
 
 def _settle(connection, player_id, day, trophies):
+    """A settled check at the end of ``day``, and that day's version storing
+    it, as the day's calculation after the check settled stores it."""
     connection.execute(
         """
         INSERT INTO reset_boundary_settlements (
@@ -185,6 +187,14 @@ def _settle(connection, player_id, day, trophies):
         """,
         (player_id, DAY0 + timedelta(days=day), trophies),
     )
+    connection.execute("SET LOCAL session_replication_role = replica")
+    connection.execute(
+        "UPDATE ranked_day_versions SET formula_components = jsonb_set("
+        "COALESCE(formula_components, '{}'), '{reset_proof}', jsonb_build_object('settled', %s::int))"
+        " WHERE player_id = %s AND ranked_day_end = %s",
+        (trophies, player_id, DAY0 + timedelta(days=day)),
+    )
+    connection.execute("SET LOCAL session_replication_role = origin")
 
 
 def _movement(connection, player_id):
