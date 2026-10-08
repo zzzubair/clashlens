@@ -1242,7 +1242,8 @@ responses can run one while responses still wait. On a thread's Reset-first
 turn, a claim from the newest-job plan takes its planned job only if, in the
 same database statement, no Reset-priority work it could take is waiting: due,
 waiting on its saved response, or with an expired lease. If there is any, the
-same claim uses that order instead. On the other turn it takes its planned job. Asking for one particular job by number still takes that job.
+same claim uses that order instead. On the other turn it takes its planned
+job. Asking for one particular job by number still takes that job.
 The board maintenance pass waits at most 50 milliseconds for a Reset's lock
 and otherwise tries again on its next pass.
 
