@@ -339,8 +339,8 @@ def add_republish_command(
     # automatic loss in its Reset reading.
     republish_current_season.add_argument("--mismatch", choices=("preview", "queue"))
     # With --boards, preview or queue rebuilds of the Season's Reset boards
-    # still ranking a reading the board now leaves out; see
-    # boundary.queue_board_rebuilds.
+    # still ranking a reading the board now leaves out or missing the battles
+    # after their readings; see boundary.queue_board_rebuilds.
     republish_current_season.add_argument("--boards", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 

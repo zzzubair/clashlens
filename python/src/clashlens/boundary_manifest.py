@@ -21,6 +21,7 @@ from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .db import Database, _text_value
 from .domain import RANKED_DAY_DURATION, season_is_current
+from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
     "complete": "Complete",
@@ -430,6 +431,88 @@ def profiles_not_found(
             WHERE latest.http_status = 404
             """,
             (list(readings), list(readings.values()), boundary_at),
+        ).fetchall()
+    }
+
+
+def battles_after_readings(
+    connection: Any,
+    boundary_at: datetime,
+    readings: Mapping[int, tuple[int, int, datetime]],
+) -> dict[int, int]:
+    """Each player's trophy change from their ended day's battles stamped
+    after their reading, for players whose day proves none is missing.
+
+    ``readings`` maps a player to the version of their day ending at
+    ``boundary_at``, their reading's saved response and its time. The
+    reading plus this change is their trophies at the Reset before the
+    automatic defense loss. A battle stamped after the reading cannot be in
+    it, so none is counted twice. Proof is the day's continuous battle logs
+    with no trophy mismatch, a reading taken at least 15 minutes into that
+    day, after the previous day's last reports and automatic defense loss, a
+    time on every battle the day counts, none stamped between the reading's
+    request and its response, no defense stamped in the 4 minutes before
+    that request, since its attack can end up to 4 minutes after the
+    defender's report, and no battle amount the two players' logs disagree
+    on; a player without it is left out, and the board keeps their reading
+    and marks it uncertain.
+    """
+    if not readings:
+        return {}
+    return {
+        int(row[0]): int(row[1])
+        for row in connection.execute(
+            """
+            SELECT reading.player_id, late.trophy_change
+            FROM unnest(
+                %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
+            ) AS reading (player_id, version_id, observation_id, observed_at)
+            JOIN ranked_day_versions AS ranked
+              ON ranked.id = reading.version_id
+             AND ranked.player_id = reading.player_id
+             AND ranked.ranked_day_end = %s
+            JOIN collector_observations AS observation
+              ON observation.id = reading.observation_id
+            CROSS JOIN LATERAL (
+                SELECT COALESCE(sum(
+                           CASE WHEN battle.value->>'lens' = 'offense' THEN 1
+                                ELSE -1 END
+                           * (battle.value->>'amount_used')::integer
+                       ) FILTER (
+                           WHERE (battle.value->>'battle_timestamp')::timestamptz
+                                 > reading.observed_at
+                       ), 0),
+                       bool_and(
+                           battle.value->>'battle_timestamp' IS NOT NULL
+                           AND (battle.value->>'battle_timestamp')::timestamptz
+                               NOT BETWEEN observation.request_started_at
+                                           - CASE WHEN battle.value->>'lens'
+                                                       = 'defense'
+                                                  THEN interval '4 minutes'
+                                                  ELSE interval '0' END
+                                       AND reading.observed_at
+                           AND battle.value->>'disagreement'
+                               IS DISTINCT FROM 'true'
+                       )
+                FROM jsonb_array_elements(ranked.input_evidence->'contributions')
+                    AS battle
+                WHERE battle.value->>'included' = 'true'
+            ) AS late (trophy_change, every_battle_proven)
+            WHERE ranked.coverage_complete
+              AND reading.observed_at
+                  >= ranked.ranked_day_start + interval '15 minutes'
+              AND ranked.state <> 'Inconsistent'
+              AND NOT ranked.failure_reasons ?| %s::text[]
+              AND late.every_battle_proven IS NOT FALSE
+            """,
+            (
+                list(readings),
+                [version_id for version_id, _, _ in readings.values()],
+                [observation_id for _, observation_id, _ in readings.values()],
+                [observed_at for _, _, observed_at in readings.values()],
+                boundary_at,
+                sorted(DISPUTED_BATTLE_REASONS),
+            ),
         ).fetchall()
     }
 

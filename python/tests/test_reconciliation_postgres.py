@@ -759,7 +759,14 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 ("live", 2, 6039),
             ]
             assert all(text(row[4]) == "fresh" for row in entries)
-            assert all(text(row[5]) == "confirmed" for row in entries)
+            # The corrected day has a trophy mismatch, so it cannot prove its
+            # readings: they stay as they are and are marked uncertain.
+            assert [(row[1], text(row[5])) for row in entries] == [
+                (1, "confirmed"),
+                (2, "uncertain"),
+                (1, "confirmed"),
+                (2, "uncertain"),
+            ]
             assert all(row[6] is None for row in entries)
             assert len(summaries) == 4
             assert {text(row[0]) for row in summaries} == {"offense", "defense"}

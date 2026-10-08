@@ -229,6 +229,7 @@ it.each([
     expect(html.includes("These standings are incomplete.")).toBe(incomplete);
     if (incomplete) {
       expect(html).toContain("No player updates were saved in the 4 hours before");
+      expect(html).toContain("Battles recorded after it are added where we can confirm");
       expect(html).toMatch(
         /the newest is from <time[^>]+dateTime="2026-10-03T00:00:19Z"/,
       );
@@ -277,7 +278,8 @@ it("describes Daily trophies as values saved before the Reset, even with recent 
   mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
   const { html } = await render("view=daily&season=1788757200&day=28&page=1");
   expect(html).toContain('id="leaderboard-title">Day 28 standings</h1>');
-  expect(html).toContain("last value saved before this Reset");
+  expect(html).toContain("saved before the Reset plus the battles recorded after it");
+  expect(html).toContain("and not rebuilt since, show the saved");
   expect(html).toContain("7,211");
   expect(html).not.toContain("These standings are incomplete.");
   // The Live board's Season-reset rule never applies to a frozen day.

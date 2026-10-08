@@ -14,6 +14,7 @@ from .analytics import (
     SNAPSHOT_ORDERING_RULE_VERSION,
     deterministic_tag_hash,
 )
+from .boundary_manifest import battles_after_readings
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -198,6 +199,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 boundary_at - RANKED_DAY_DURATION
             ).official_season_id
             profile_version_ids: dict[int, int] = {}
+            after_reading: dict[int, int] | None = None
             if generation_row is None:
                 # Direct snapshots use the newest accepted historical
                 # profile. Coordinated snapshots never execute this query:
@@ -231,12 +233,18 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     """
                     SELECT player_id, input_identity->'profile_snapshot',
                            input_identity->>'profile_version_id',
-                           input_identity->>'snapshot_quality'
+                           input_identity->>'snapshot_quality',
+                           ranked_day_version_id
                     FROM boundary_publication_manifest_rows
                     WHERE manifest_id = %s
                     """,
                     (generation_row[4],),
                 ).fetchall()
+                ranked_day_versions = {
+                    int(row[0]): int(row[4])
+                    for row in manifest_profiles
+                    if row[4] is not None
+                }
                 profile_version_ids = {
                     int(row[0]): int(row[2])
                     for row in manifest_profiles
@@ -258,6 +266,17 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     and _text_value(row[1].get("eligibility_state")) == "eligible"
                     and _text_value(row[3]) == "eligible"
                 ]
+                # Each reading plus the ended day's battles after it: the
+                # trophies at the Reset, before the automatic defense loss.
+                after_reading = battles_after_readings(
+                    connection,
+                    boundary_at,
+                    {
+                        row[0]: (ranked_day_versions[row[0]], row[3], row[4])
+                        for row in profile_rows
+                        if row[0] in ranked_day_versions
+                    },
+                )
 
             official_rows = connection.execute(
                 f"""
@@ -316,6 +335,13 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
 
             entries: list[dict[str, Any]] = []
             for row in profile_rows:
+                # Without proof of the battles after it, a reading stays as
+                # it is and is marked uncertain.
+                late = (
+                    after_reading.get(int(row[0]))
+                    if after_reading is not None
+                    else 0
+                )
                 age_seconds = int((boundary_at - row[4]).total_seconds())
                 if age_seconds < 0:
                     raise ValueError("snapshot selected future profile evidence")
@@ -326,13 +352,13 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     {
                         "player_id": int(row[0]),
                         "tag": _text_value(row[1]),
-                        "trophies": int(row[2]),
+                        "trophies": int(row[2]) + (late or 0),
                         "observation_id": int(row[3]),
                         "profile_version_id": profile_version_ids.get(int(row[0])),
                         "observed_at": row[4],
                         "age_seconds": age_seconds,
                         "freshness": freshness,
-                        "confidence": "confirmed",
+                        "confidence": "uncertain" if late is None else "confirmed",
                         "tie_hash": deterministic_tag_hash(_text_value(row[1])),
                         "official": official_by_player.get(int(row[0])),
                     }

@@ -69,11 +69,11 @@ def _seed_snapshot_job(
                     player_id, ranked_day_start, ranked_day_end, official_season_id,
                     season_day_number, season_anchor_rule_version,
                     reconciliation_rule_version, result_hash, version,
-                    state, confidence, input_hash
+                    state, confidence, input_hash, coverage_complete
                 ) VALUES (
                     %s, %s, %s, '1783918800', 24, 'legend-season-anchor-v1',
                     'legend-ranked-day-v1', repeat('a', 64), 1,
-                    'Complete', 'exact', repeat('b', 64)
+                    'Complete', 'exact', repeat('b', 64), true
                 )
                 RETURNING id
                 """,
@@ -845,7 +845,8 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
                 boundary - timedelta(seconds=30),
                 30,
                 "fresh",
-                "confirmed",
+                # No Legend day proves the battles after this reading.
+                "uncertain",
             )
             assert text(by_tag["#2PP"][10]) == deterministic_tag_hash("#2PP")
             assert text(by_tag["#28"][10]) == deterministic_tag_hash("#28")
