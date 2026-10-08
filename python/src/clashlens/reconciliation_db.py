@@ -163,18 +163,15 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             )
 
 
-def proven_end(database: Database, connection: Any, version_id: int) -> int | None:
-    """The saved day's proven end after its automatic loss, or None
-    (``reset_settlement.DayEnd.proven_end``), as the evidence saved now
-    gives it."""
-    from . import reset_settlement
-
-    end = reset_settlement.day_ends(
-        connection, [version_id],
-        boundary_manifest.reset_proof_facts(database, connection, [version_id]),
-    ).get(version_id)
-    proven = end.proven_end if end else None
-    return proven[0] if proven else None
+def proven_end(connection: Any, version_id: int) -> int | None:
+    """The saved day's proven end after its automatic loss, as it stored it
+    when calculated (``boundary_manifest.stored_proof``), or None."""
+    row = connection.execute(
+        "SELECT formula_components -> 'reset_proof' -> 'proven_end' FROM ranked_day_versions"
+        " WHERE id = %s",
+        (version_id,),
+    ).fetchone()
+    return int(row[0][0]) if row and row[0] else None
 
 
 def _start_moved(
@@ -199,16 +196,36 @@ def _start_moved(
     ).fetchall()
     if len(rows) < 2 or rows[0][1]:
         return False
-    return proven_end(database, connection, int(rows[0][0])) != rows[1][2]
+    return proven_end(connection, int(rows[0][0])) != rows[1][2]
 
 
 def proven_end_moved(
     database: Database, connection: Any, player_id: int, day_start: datetime
 ) -> bool:
-    """Whether a reader of the day's proven end (``proven_end``) used another
-    one than the day gives now, whatever the day's state: the next saved
+    """Whether the day's proven end the evidence saved now gives is not the
+    one its saved version stored, or a reader of that stored one
+    (``proven_end``) used another, whatever the day's state: the next saved
     day's start (``_start_moved``), or the settlement check of the Reset
     after the day's end, rooted on that end or left without a root."""
+    from . import reset_settlement
+
+    latest = connection.execute(
+        """
+        SELECT id, formula_components -> 'reset_proof' -> 'proven_end'
+        FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s
+          AND reconciliation_rule_version = %s
+        ORDER BY version DESC LIMIT 1
+        """,
+        (player_id, day_start, RECONCILIATION_RULE_VERSION),
+    ).fetchone()
+    if latest is not None:
+        now = reset_settlement.day_ends(
+            connection, [int(latest[0])],
+            boundary_manifest.reset_proof_facts(database, connection, [int(latest[0])]),
+        )[int(latest[0])].proven_end
+        if (list(now) if now else None) != latest[1]:
+            return True
     if _start_moved(database, connection, player_id, day_start):
         return True
     check = connection.execute(
@@ -230,7 +247,7 @@ def proven_end_moved(
     if check is None or check[3] is None or not (check[0] or check[1]):
         return False
     used = check[2] if check[1] else None
-    return proven_end(database, connection, int(check[3])) != used
+    return proven_end(connection, int(check[3])) != used
 
 
 def finish_recalculation(
@@ -320,8 +337,8 @@ def recalculate_ranked_day(
     analytics_rule_version: str,
 ) -> bool:
     """Recalculate and publish one player-day in the caller's transaction;
-    whether the day has ended and this changed the state, end or next start
-    of its saved result, or saved its first."""
+    whether the day has ended and this changed the state, end, next start or
+    stored proven end of its saved result, or saved its first."""
     ranked_day = ranked_day_for(day_start)
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
@@ -421,9 +438,7 @@ def recalculate_ranked_day(
     if previous is not None and previous.version_id and (
         not previous.complete or now >= ranked_day.end
     ):
-        previous = replace(previous, proven_end=proven_end(
-            database, connection, previous.version_id
-        ))
+        previous = replace(previous, proven_end=proven_end(connection, previous.version_id))
     zero_result_attacks, zero_result_defenses = ranked_day_inputs.slot_counts(
         ranked_day_inputs.load_zero_result_slots(connection, coverage)
         | ranked_day_inputs.load_late_zero_result_slots(
@@ -633,6 +648,14 @@ def recalculate_ranked_day(
                 and result.formula_components == settled.formula_components
             ):
                 result = settled
+    if now >= ranked_day.end:
+        result = replace(result, formula_components={
+            **result.formula_components,
+            "reset_proof": boundary_manifest.stored_proof(
+                database, connection, player_id, official_season_id,
+                season_day_number, ranked_day, result,
+            ),
+        })
     result_data = {
         "state": result.state,
         "confidence": result.confidence,
@@ -709,7 +732,8 @@ def recalculate_ranked_day(
     previous_version = connection.execute(
         """
         SELECT id, version, result_hash, replaces_version_id, state,
-               final_trophies_before_reset, next_start_trophies
+               final_trophies_before_reset, next_start_trophies,
+               formula_components -> 'reset_proof' -> 'proven_end'
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -896,10 +920,11 @@ def recalculate_ranked_day(
         )
     return now >= ranked_day.end and (
         previous_version is None
-        or (_text_value(previous_version[4]), *previous_version[5:7]) != (
+        or (_text_value(previous_version[4]), *previous_version[5:8]) != (
             result.state,
             result.final_trophies_before_reset,
             result_data["next_start_trophies"],
+            result.formula_components.get("reset_proof", {}).get("proven_end"),
         )
     )
 

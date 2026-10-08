@@ -1029,7 +1029,7 @@ def test_a_rejected_end_stays_rejected_as_the_next_days_start(
                     """,
                     (DAY_C, DAY_B),
                 ).fetchone()
-                direct = reconciliation_db.proven_end(database, connection, day_b_id)
+                direct = reconciliation_db.proven_end(connection, day_b_id)
         finally:
             database.close()
 
@@ -1037,4 +1037,53 @@ def test_a_rejected_end_stays_rejected_as_the_next_days_start(
     assert direct is None
     assert saved is False
     assert entry == (reading + WIN - 8 * LOSS, False)
+
+
+def test_a_day_stores_its_proven_end_and_a_recovered_reading_saves_a_new_one(
+    database_url: str, archive_server
+) -> None:
+    """Day B, with no start, takes eight defenses; its Reset reading at 05:01
+    shows 4,988. Saved with that reading alone, its version stores no proven
+    end, and day C records none. A quiet reading of 4,988 at 05:25,
+    recovered after, saves a new version of day B storing 4,988 after no
+    automatic loss, and day C, calculated again, records it."""
+    from test_reset_reading_before_loss_postgres import (
+        DAY_B,
+        DAY_C,
+        DAY_D,
+        _log,
+        _process,
+        _proven_partial_day_b,
+        _quiet_day_b,
+        _reset_work,
+    )
+
+    def stored(connection_info: str) -> tuple:
+        with psycopg.connect(connection_info) as connection:
+            return connection.execute(
+                """
+                SELECT b.version, b.formula_components -> 'reset_proof' -> 'proven_end',
+                       c.input_evidence -> 'previous_day' ->> 'proven_end'
+                FROM ranked_day_versions AS b
+                JOIN ranked_day_versions AS c
+                  ON c.player_id = b.player_id AND c.ranked_day_start = %s
+                WHERE b.ranked_day_start = %s
+                ORDER BY b.version DESC, c.version DESC LIMIT 1
+                """,
+                (DAY_C, DAY_B),
+            ).fetchone()
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _proven_partial_day_b(connection_info, archive_server, quiet=False)
+        _process(connection_info, archive_server, _reset_work(
+            connection_info, archive_server, DAY_D,
+            log=_log((DAY_C + timedelta(hours=2), False)),
+        ))
+        before = stored(connection_info)
+        _quiet_day_b(connection_info, archive_server)
+        after = stored(connection_info)
+
+    assert before[1:] == (None, None)
+    assert after[0] > before[0]
+    assert after[1:] == ([4988, 0], "4988")
 

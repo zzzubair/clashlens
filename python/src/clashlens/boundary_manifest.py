@@ -546,7 +546,7 @@ def _snapshot_rows(
     }
     # What each day's Reset proof reads besides the day, frozen so every
     # build of this board proves the same (``reset_trophies``).
-    proof_facts = reset_proof_facts(
+    proof_facts = saved_proof_facts(
         database, connection,
         [int(row[1]) for row in members if row[1] is not None and int(row[0]) in profiles],
     )
@@ -710,7 +710,35 @@ def reset_proof_facts(
         """,
         (version_ids,),
     ).fetchall()
-    untils: dict[int, datetime | None] = {}
+    return day_proof_facts(database, connection, rows)
+
+
+def saved_proof_facts(
+    database: Database, connection: Any, version_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """What each saved day's Reset proof read when the day was calculated,
+    as it stored it (``stored_proof``); a day saved before proofs were
+    stored, as the evidence saved now gives it (``reset_proof_facts``)."""
+    stored = {
+        int(row[0]): row[1] for row in connection.execute(
+            """
+            SELECT id, formula_components -> 'reset_proof' FROM ranked_day_versions
+            WHERE id = ANY(%s) AND formula_components ? 'reset_proof'
+            """,
+            (list(version_ids),),
+        ).fetchall()
+    }
+    return {**reset_proof_facts(
+        database, connection, [version for version in version_ids if version not in stored]
+    ), **stored}
+
+
+def day_proof_facts(
+    database: Database, connection: Any, rows: list[Any]
+) -> dict[Any, dict[str, Any]]:
+    """``reset_proof_facts`` of each (key, Reset, player, Season, end Reset
+    reading's time, settled Reset check's trophies) row."""
+    untils: dict[Any, datetime | None] = {}
     windows = {}
     for boundary_at in sorted({row[1] for row in rows if row[4] is not None}):
         days = [row for row in rows if row[4] is not None and row[1] == boundary_at]
@@ -728,17 +756,17 @@ def reset_proof_facts(
             boundary_at, boundary_at + RANKED_DAY_DURATION,
         )
         for row in days:
-            until = untils[int(row[0])] = ranked_day_inputs.later_reading_until(
+            until = untils[row[0]] = ranked_day_inputs.later_reading_until(
                 boundary_at, first.get(int(row[2])), unreadable.get(int(row[2]), [])
             )
             if until is not None:
-                windows[int(row[0])] = (int(row[2]), str(row[3]), row[4], until)
+                windows[row[0]] = (int(row[2]), str(row[3]), row[4], until)
     later = ranked_day_inputs.load_latest_profiles(database, connection, windows)
     facts = {}
     for row in rows:
-        until = untils.get(int(row[0]))
-        found = later.get(int(row[0]))
-        facts[int(row[0])] = {
+        until = untils.get(row[0])
+        found = later.get(row[0])
+        facts[row[0]] = {
             "settled": None if row[5] is None else int(row[5]),
             "later_until": until.astimezone(UTC).isoformat() if until else None,
             "later": {
@@ -750,11 +778,65 @@ def reset_proof_facts(
     return facts
 
 
+def stored_proof(
+    database: Database, connection: Any, player_id: int, season_id: str,
+    season_day_number: int, ranked_day: Any, result: Any,
+) -> dict[str, Any]:
+    """What an ended day stores with its result as its Reset proof: what the
+    proof reads besides the day as the evidence saved now gives it, the
+    proof and the proven end after the automatic loss with that loss, or
+    None. Every reader of the day reads these, so one saved version always
+    answers the same; evidence that would change them calculates the day
+    again (``reconciliation_db.proven_end_moved``). A later reading that
+    leaves a Complete day's proof as it is is not stored, so it saves
+    nothing new."""
+    from .reset_settlement import day_end
+
+    saved = {
+        "state": result.state,
+        "final_trophies_before_reset": result.final_trophies_before_reset,
+        "automatic_defense_loss": result.automatic_defense_loss,
+        "automatic_defense_evidence_state": result.automatic_defense_evidence_state,
+        "failure_reasons": list(result.failure_reasons),
+        "start_trophies": result.start_trophies,
+        "next_start_trophies": result.next_start_trophies,
+        "input_evidence": result.input_evidence,
+        "formula_components": result.formula_components,
+        "defense_count": result.defense_count,
+        "coverage_complete": result.coverage_complete,
+        "season_day_number": season_day_number,
+        "ranked_day_end": ranked_day.end,
+    }
+    read_at = ((result.input_evidence.get("end_baseline_evidence") or {}).get(
+        "profile") or {}).get("observed_at")
+    settled = connection.execute(
+        """
+        SELECT selected_trophies FROM reset_boundary_settlements
+        WHERE player_id = %s AND boundary_at = %s AND state = 'settled'
+        """,
+        (player_id, ranked_day.end),
+    ).fetchone()
+    facts = day_proof_facts(database, connection, [(
+        0, ranked_day.end, player_id, season_id,
+        datetime.fromisoformat(str(read_at)) if read_at else None,
+        settled[0] if settled else None,
+    )])[0]
+    end = day_end(saved, facts["settled"], facts)
+    if result.state == "Complete" and facts["later"]:
+        alone = day_end(saved, facts["settled"], {**facts, "later": None})
+        if (alone.proof, alone.proven_end) == (end.proof, end.proven_end):
+            facts = {**facts, "later": None}
+    return {
+        **facts, "proof": end.proof,
+        "proven_end": list(end.proven_end) if end.proven_end else None,
+    }
+
+
 def reset_trophies(
     connection: Any,
     boundary_at: datetime,
     readings: Mapping[int, tuple[int, int, datetime, int]],
-    facts: Mapping[int, Mapping[str, Any] | None],
+    facts: Mapping[int, Mapping[str, Any] | None] | None = None,
 ) -> dict[int, tuple[int, bool]]:
     """Each player's trophies at the Reset before the automatic defense
     loss, and whether they are proven.

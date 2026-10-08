@@ -14,8 +14,8 @@ from .army_decoder import DECODER_VERSION
 from .boundary_manifest import (
     _moved_decode_ids,
     profiles_not_found,
-    reset_proof_facts,
     reset_trophies,
+    saved_proof_facts,
 )
 from .boundary_manifest import (
     freeze_boundary_manifest as _freeze_boundary_manifest,
@@ -35,6 +35,7 @@ from .db import (
 from .domain import SEASON_DURATION, is_season_boundary
 from .domain_repair import boundary_held
 from .past_reset_pacing import past_reset_build_waits, past_reset_correction_waits
+from .reconciliation import RECONCILIATION_RULE_VERSION
 
 
 def lock_boundary_publication(
@@ -1131,21 +1132,34 @@ def queue_board_rebuilds(
                     int(row[0]): datetime.fromisoformat(str(row[1])) for row in rows
                 }
                 not_found = profiles_not_found(connection, boundary_at, readings)
-                # Saved entries whose value or mark the current rule changes.
-                # A board not built yet saves them already.
-                versions = [int(row[2]) for row in rows if row[2] is not None]
+                # Saved entries whose value or mark the current rule, or a
+                # day calculated again since, changes. A board not built yet
+                # saves them already.
+                latest = dict(connection.execute(
+                    """
+                    SELECT DISTINCT ON (player_id) player_id, id
+                    FROM ranked_day_versions
+                    WHERE player_id = ANY(%s) AND ranked_day_end = %s
+                      AND reconciliation_rule_version = %s
+                    ORDER BY player_id, version DESC
+                    """,
+                    ([int(row[0]) for row in rows if row[2] is not None], boundary_at,
+                     RECONCILIATION_RULE_VERSION),
+                ).fetchall())
                 at_reset = reset_trophies(
                     connection,
                     boundary_at,
                     {
                         int(row[0]): (
-                            int(row[2]), int(row[3]), readings[int(row[0])],
-                            int(row[4]),
+                            int(latest.get(row[0], row[2])), int(row[3]),
+                            readings[int(row[0])], int(row[4]),
                         )
                         for row in rows
                         if row[2] is not None
                     },
-                    reset_proof_facts(database, connection, versions),
+                    saved_proof_facts(database, connection, [
+                        int(latest.get(row[0], row[2])) for row in rows if row[2] is not None
+                    ]),
                 )
                 expected = {
                     int(row[0]): at_reset.get(int(row[0]), (int(row[4]), False))
