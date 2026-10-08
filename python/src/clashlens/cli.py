@@ -29,6 +29,7 @@ from . import (
     api_accounts,
     api_verification,
     battle_day_repair,
+    collector_http,
     league_history_refresh,
     population,
     promotion_candidates,
@@ -39,13 +40,7 @@ from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
 from .collector import Collector
 from .collector_db import CollectorDatabase
-from .collector_http import (
-    RELAY_COLLECTOR_CONNECTIONS,
-    ApiKey,
-    KeyPool,
-    OfficialApiClient,
-    ProviderFailure,
-)
+from .collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
 from .db import CONTRACT_VERSION, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
 from .operating import (
@@ -721,9 +716,9 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         raise ValueError("collector requires 4 to 9 regular keys and one interactive key")
     if not regular_keys or len(interactive_keys) != 1:
         raise ValueError("collector requires regular keys and one interactive key")
+    relay_connections = (len(regular_keys) + 1) * arguments.concurrency_per_key
     if arguments.official_proxy_url and (
-        (len(regular_keys) + 1) * arguments.concurrency_per_key
-        > RELAY_COLLECTOR_CONNECTIONS
+        relay_connections > collector_http.RELAY_COLLECTOR_CONNECTIONS
     ):
         raise ValueError("collector keys would open more relay connections than its share")
     host, separator, port_text = arguments.health_listen.rpartition(":")
