@@ -1292,8 +1292,16 @@ operators.
 
 The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
 is 2 processes of 16 threads, 12 for responses, and 16 connections each, 38
-database connections in all. To turn it on, outside 04:00-07:00 UTC, set in
-`app.env`:
+database connections in all. Production keeps one worker process until both
+of these are true:
+
+- The owner has decided to run the second worker process.
+- A `./dev` trial of this setup has shown the combined resources and recovery:
+  both processes together under 3 GB of memory with one build running, swap
+  barely used, at most 38 worker database connections, and an interrupted
+  20,000-job backlog finished with every job done once.
+
+Only then, outside 04:00-07:00 UTC, turn it on by setting in `app.env`:
 
 ```sh
 CLASHLENS_WORKER_PROCESSES=2

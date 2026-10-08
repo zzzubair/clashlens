@@ -8,7 +8,6 @@ processes have, against one queue.
 
 from __future__ import annotations
 
-import random
 import threading
 import time
 from threading import Event
@@ -30,6 +29,7 @@ from clashlens.db import (
     Database,
     LeaseLost,
 )
+from clashlens.past_reset_pacing import build_permit_busy
 from clashlens.worker import (
     MaintenancePermit,
     ObservationProcessor,
@@ -168,12 +168,26 @@ def test_only_one_build_runs_across_worker_processes(
 def test_a_claim_overlapping_a_build_claim_sees_its_committed_lease(
     database_url: str, archive_server
 ) -> None:
-    # The first process's claim leases a build and holds its transaction open;
-    # the second keeps claiming while it commits. A claim that took the permit
-    # as the first let it go must still see the build it just leased.
+    # The first process's claim leases a build and holds its transaction
+    # open. The second process's permit check starts while it does, and is
+    # made to wait after it starts reading, on an index another session is
+    # rebuilding, until the first has committed. It must still see the build
+    # the first leased once it can take the permit.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         _queue_builds(connection_info, 3)
-        first, second = Database(connection_info), Database(connection_info, max_size=4)
+        with psycopg.connect(connection_info, autocommit=True) as setup:
+            setup.execute(
+                "CREATE TABLE permit_race_blocker"
+                " (state text, lease_expires_at timestamptz, work_type text)"
+            )
+            setup.execute("CREATE INDEX permit_race_blocker_state ON permit_race_blocker (state)")
+            setup.execute(
+                "CREATE VIEW permit_race_jobs AS"
+                " SELECT state::text AS state, lease_expires_at, work_type::text AS work_type"
+                " FROM python_processing_jobs_worker"
+                " UNION ALL SELECT state, lease_expires_at, work_type FROM permit_race_blocker"
+            )
+        first = Database(connection_info)
         leased, commit = Event(), Event()
         lease_rows = first._lease_rows
 
@@ -184,43 +198,59 @@ def test_a_claim_overlapping_a_build_claim_sees_its_committed_lease(
             return claims
 
         first._lease_rows = lease_and_hold
-        overlapping: list = []
+        second = psycopg.connect(connection_info)
+        rebuild = psycopg.connect(connection_info)
+        monitor = psycopg.connect(connection_info, autocommit=True)
+        held: list = []
+        busy: list = []
+        claimer = threading.Thread(target=lambda: held.append(first.claim_job(
+            owner="process-1", lease_seconds=60, work_types=POPULATION_BUILD_WORK_TYPES)))
+        checker = threading.Thread(target=lambda: busy.append(_permit_busy(second)))
         try:
-            for _trial in range(300):
-                leased.clear()
-                commit.clear()
-                stop = Event()
-                held: list = []
-                claimer = threading.Thread(target=lambda held=held: held.append(first.claim_job(
-                    owner="process-1", lease_seconds=60,
-                    work_types=POPULATION_BUILD_WORK_TYPES)))
-                claimer.start()
-                assert leased.wait(10)
-
-                def keep_claiming(stop: Event = stop) -> None:
-                    while not stop.is_set():
-                        overlapping.extend(second.claim_jobs(
-                            owner="process-2", work_types=POPULATION_BUILD_WORK_TYPES))
-
-                rivals = [threading.Thread(target=keep_claiming) for _ in range(4)]
-                for rival in rivals:
-                    rival.start()
-                time.sleep(random.random() / 1000)
-                commit.set()
-                claimer.join(10)
-                time.sleep(0.002)
-                stop.set()
-                for rival in rivals:
-                    rival.join(10)
-                assert held and held[0] is not None
-                first.release_claims([*held, *overlapping])
-                if overlapping:
+            # Plan each check once, so the next reads its index only after
+            # its statement has started.
+            second.prepare_threshold = 0
+            second.execute("SET plan_cache_mode = force_generic_plan")
+            second.execute("SET enable_seqscan = off")
+            second.commit()
+            assert _permit_busy(second) is False
+            claimer.start()
+            assert leased.wait(10)
+            rebuild.execute("REINDEX INDEX permit_race_blocker_state")
+            checker.start()
+            deadline = time.monotonic() + 10
+            while checker.is_alive() and time.monotonic() < deadline:
+                waiting = monitor.execute(
+                    "SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s",
+                    (second.info.backend_pid,),
+                ).fetchone()[0]
+                if waiting == "Lock":
                     break
+                time.sleep(0.01)
+            commit.set()
+            claimer.join(10)
+            rebuild.commit()
+            checker.join(10)
+            committed = monitor.execute(
+                "SELECT count(*) FROM python_processing_jobs WHERE status = 'leased'"
+                " AND lease_expires_at > clock_timestamp() AND work_type::text = ANY(%s)",
+                (list(POPULATION_BUILD_WORK_TYPES),),
+            ).fetchone()[0]
         finally:
             commit.set()
+            for connection in (rebuild, second, monitor):
+                connection.close()
             first.close()
-            second.close()
-    assert overlapping == []
+    assert held and held[0] is not None
+    assert committed == 1
+    assert busy == [True]
+
+
+def _permit_busy(connection: psycopg.Connection) -> bool:
+    with connection.transaction():
+        return build_permit_busy(
+            connection, "permit_race_jobs", POPULATION_BUILD_WORK_TYPES
+        )
 
 
 def test_one_process_at_a_time_runs_publication_maintenance(database_url: str) -> None:

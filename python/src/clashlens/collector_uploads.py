@@ -50,7 +50,7 @@ def claim_upload(
     """Lease the next due upload.
 
     ``release_expired`` first returns expired leases to pending. An index of
-    leased rows only (migration 0081) keeps that step small; the collector
+    leased rows only (migration 0082) keeps that step small; the collector
     still runs it once every half lease rather than on every claim.
     """
     if not owner or lease_seconds < 1:

@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0081.
+-- Clash Lens deployment migration 0082.
 -- Every 30 seconds the collector returns upload leases that ran out to the
 -- waiting list. With no index for leased uploads, each pass read the whole
 -- upload table to find the few dozen leased rows: 404 ms on average, and
@@ -16,5 +16,5 @@ CREATE INDEX CONCURRENTLY collector_response_uploads_lease_expiry
     ON collector_response_uploads (lease_expires_at)
     WHERE state = 'leased';
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (81)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (82)
 ON CONFLICT (version) DO NOTHING;
