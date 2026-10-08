@@ -12,7 +12,6 @@ from clashlens.reconciliation import (
     CoverageObservation,
     PreviousRankedDay,
     ReconciliationInput,
-    reads_later_reading,
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
@@ -219,12 +218,12 @@ def test_zero_defense_day_read_before_its_loss_takes_it_from_a_later_reading() -
         replace(day, later_next_start_reading=(later_at, 4695))
     )
 
-    assert (charged.state, charged.confidence) == ("Complete", "inferred")
+    assert (charged.state, charged.confidence) == ("Complete", "exact")
     assert charged.automatic_defense_loss == 304
-    assert charged.automatic_defense_evidence_state == "calculated"
+    assert charged.automatic_defense_evidence_state == "confirmed"
     assert charged.final_trophies_before_reset == 4391
     assert charged.next_start_trophies == 4391
-    assert charged.unsettled_automatic_loss == 304
+    assert charged.unsettled_automatic_loss == 0
     assert charged.failure_reasons == ()
     assert (quiet.state, quiet.automatic_defense_loss) == ("Complete", None)
     assert quiet.next_start_trophies == 4695
@@ -246,7 +245,7 @@ def test_zero_defense_day_read_before_its_loss_takes_it_from_a_later_reading() -
     )
 
     assert unread.state == "Inconsistent"
-    assert (settled.state, settled.confidence) == ("Complete", "inferred")
+    assert (settled.state, settled.confidence) == ("Complete", "exact")
     assert settled.automatic_defense_loss == 248
     assert settled.final_trophies_before_reset == settled.next_start_trophies == 4753
     assert settled.formula_components["next_start_reading_correction"] == 2
@@ -350,7 +349,8 @@ def test_later_reading_settles_a_reset_reading_missing_the_days_credit() -> None
         )
 
         assert unsettled.state == wrong_later.state == "Inconsistent", tag
-        assert (first.state, first.confidence) == ("Complete", "inferred")
+        # A later reading that equals the calculated end proves the day.
+        assert (first.state, first.confidence) == ("Complete", "exact")
         assert first.final_trophies_before_reset == later
         assert first.next_start_trophies == later
         assert first.unexplained_residual == 0
@@ -520,7 +520,6 @@ def test_a_later_reading_other_than_the_end_disproves_missed_battles() -> None:
     )
 
     assert (guessed.state, guessed.next_start_trophies) == ("Complete", 5000)
-    assert reads_later_reading(day, guessed)
     assert disproved.state == "Inconsistent"
     assert disproved.unexplained_residual == -32
     assert "next_start_battles_after_reading" not in disproved.formula_components

@@ -33,7 +33,7 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
     Nor is one read in the first RESET_SETTLING_WINDOW after a Reset, while
     the game finishes crediting the ended day and charges its automatic
     defense loss: such a reading can settle the ended day's end (see
-    ``ranked_day_inputs.load_later_reading``). Every other profile can still
+    ``ranked_day_inputs.load_readings``). Every other profile can still
     be skipped, so a post-Reset backlog costs at most that window's profiles.
     """
     if claim.normalized_tag is None or claim.observed_at is None:

@@ -507,3 +507,44 @@ def test_battle_reported_just_after_reset_belongs_to_the_day_before(
     assert battle is not None
     assert battle.ranked_day_start == datetime.fromisoformat(f"{day}T05:00:00+00:00")
     assert battle.battle_timestamp.strftime("%Y%m%dT%H%M%S.000Z") == battle_timestamp
+
+
+def test_a_live_row_without_a_timestamp_is_malformed_not_a_battle_in_1970() -> None:
+    """Live battleTime is the battle's length in seconds; a row missing its
+    battleTimestamp must not become a battle dated 1970 (lab finding F4)."""
+    payload = json.loads(FIXTURE.read_bytes())
+    row = payload["items"][0]
+    del row["battleTimestamp"]
+    row["battleTime"] = 180
+    parsed = parse_battle_log(
+        json.dumps(payload).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 8, 4, 12, 5, tzinfo=UTC),
+        parser_version=LIVE_SOURCE_PARSER_VERSION,
+    )
+
+    assert parsed.rows[0].battle is None
+    assert parsed.rows[0].outcome == "malformed_legend_row"
+    assert parsed.has_row_gap is True
+
+
+def test_a_row_whose_type_is_not_recognised_is_a_gap_not_an_ignored_mode() -> None:
+    """"LEGEND" or a non-text type may be a Legend battle in a shape we do not
+    read: a gap. Another mode spelt in plain text is ignored as before."""
+    payload = json.loads(FIXTURE.read_bytes())
+    legend, other = payload["items"]
+    shouting = {**legend, "battleType": "LEGEND"}
+    untyped = {**legend, "battleType": None}
+    payload["items"] = [legend, shouting, untyped, other]
+    parsed = parse_battle_log(
+        json.dumps(payload).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 8, 4, 12, 5, tzinfo=UTC),
+        parser_version=LIVE_SOURCE_PARSER_VERSION,
+    )
+
+    assert [row.outcome for row in parsed.rows] == [
+        "valid_legend", "malformed_legend_row", "malformed_legend_row",
+        "ignored_non_legend",
+    ]
+    assert parsed.has_row_gap is True

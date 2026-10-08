@@ -14,6 +14,7 @@ import json
 from datetime import timedelta
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, repair_season, store_observation
 from test_first_battle_log_postgres import LOSS, WIN, _log, _queued_priorities
 from test_reconciliation_postgres import DAY_START, _profile
@@ -177,7 +178,7 @@ def test_later_reading_settles_a_reset_reading_missing_an_attack(
         _day_end_recheck(connection_info, archive_server)
         day_b_row, day_c_row = _latest_days(connection_info)
 
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_b_row[7]["next_start_reading_trophies"] == end_b - WIN
     assert day_b_row[7]["next_start_reading_correction"] == WIN
     assert day_b_row[8] == []
@@ -203,7 +204,7 @@ def test_reading_soon_after_the_reset_is_kept_when_a_newer_one_came_first(
         _day_end_recheck(connection_info, archive_server)
         day_b_row, _ = _latest_days(connection_info)
 
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_b_row[7]["next_start_reading_correction"] == WIN
 
 
@@ -283,7 +284,7 @@ def test_finishing_a_day_saved_live_refreshes_the_following_day(
         _day_end_recheck(connection_info, archive_server)
         day_b_row, day_c_row = _latest_days(connection_info)
 
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
 
 
@@ -302,7 +303,7 @@ def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
         day_b_row, day_c_row = _latest_days(connection_info)
 
     assert before == [("Live", start_b), ("Live", end_b - WIN)]
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
     assert day_c_row[7]["start_reading_correction"] == WIN
 
@@ -323,16 +324,19 @@ def test_season_repair_settles_days_saved_before_the_later_reading_rule(
     assert (preview["players"], preview["left_to_queue"]) == (1, 1)
     assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
 
 
-def test_rejected_later_reading_does_not_settle_the_day(
-    database_url: str, archive_server
+@pytest.mark.parametrize("right", [True, False])
+def test_a_season_zero_later_reading_can_confirm_the_day_but_never_contradict_it(
+    database_url: str, archive_server, right: bool
 ) -> None:
-    # The later profile has the right trophies, but reports Season ID 0, so
-    # it is rejected and proves nothing.
-    payload = json.loads(_profile(6000 + WIN - 8 * LOSS))
+    # The game sends Season ID 0 to some signed-up players. Such a profile's
+    # trophies can confirm the calculated end; one that disagrees proves
+    # nothing, because the profile itself is not trusted.
+    end_b = 6000 + WIN - 8 * LOSS
+    payload = json.loads(_profile(end_b if right else end_b + 3))
     payload["currentLeagueSeasonId"] = 0
     with domain_database(database_url, include_coordinator=True) as connection_info:
         _early_reading_days(
@@ -341,8 +345,12 @@ def test_rejected_later_reading_does_not_settle_the_day(
         _day_end_recheck(connection_info, archive_server)
         rows = _latest_days(connection_info)
 
-    assert [row[0] for row in rows] == ["Inconsistent", "Inconsistent"]
-    assert "next_start_reading_correction" not in rows[0][7]
+    if right:
+        assert [row[0] for row in rows] == ["Complete", "Complete"]
+        assert rows[0][7]["next_start_reading_correction"] == WIN
+    else:
+        assert [row[0] for row in rows] == ["Inconsistent", "Inconsistent"]
+        assert "next_start_reading_correction" not in rows[0][7]
 
 
 def _zero_defense_day_read_early(
@@ -400,13 +408,17 @@ def test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck(
         start_b, end_b = _zero_defense_day_read_early(connection_info, archive_server)
         day_b_row, day_c_row = _latest_days(connection_info)
 
+    # The reading that showed the charge proves it.
     assert day_b_row[:7] == (
-        "Complete", "inferred", start_b, end_b, end_b, 8 * LOSS, "calculated",
+        "Complete", "exact", start_b, end_b, end_b, 8 * LOSS, "confirmed",
     )
     assert day_b_row[7]["next_start_reading_trophies"] == start_b
-    assert day_b_row[7]["unsettled_automatic_loss"] == 8 * LOSS
+    # The Reset reading was read before the charge: day C starts from it
+    # less the charge the later reading showed.
+    assert day_b_row[7]["next_start_reading_correction"] == -8 * LOSS
+    assert "unsettled_automatic_loss" not in day_b_row[7]
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
-    assert day_c_row[7]["start_unsettled_automatic_loss"] == 8 * LOSS
+    assert day_c_row[7]["start_reading_correction"] == -8 * LOSS
 
 
 def test_unreadable_new_day_battle_before_the_later_reading_charges_nothing(
@@ -460,6 +472,7 @@ def test_reset_reading_before_the_last_attack_landed_settles_both_days(
         _process(connection_info, archive_server, jobs)
         day_b_row, day_c_row = _latest_days(connection_info)
 
+    # Read before the last attack landed, the reading fits only as a guess.
     assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
     assert day_b_row[7]["next_start_reading_correction"] == WIN
     assert len(day_b_row[7]["next_start_battles_after_reading"]) == 1
