@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 from . import (
     battle_day_repair,
     boundary,
+    boundary_manifest,
     domain,
     first_battle_log,
     ranked_day_inputs,
@@ -170,7 +171,7 @@ def proven_end(database: Database, connection: Any, version_id: int) -> int | No
 
     end = reset_settlement.day_ends(
         connection, [version_id],
-        reset_settlement.reset_proof_facts(database, connection, [version_id]),
+        boundary_manifest.board_proof_facts(database, connection, [version_id]),
     ).get(version_id)
     proven = end.proven_end if end else None
     return proven[0] if proven else None

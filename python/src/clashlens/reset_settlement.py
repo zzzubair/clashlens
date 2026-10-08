@@ -31,6 +31,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import boundary, ranked_day_inputs
+from .boundary_manifest import board_proof_facts
 from .collector_reset import COLLECTION_WINDOW, SETTLEMENT_DELAY
 from .db import (
     ANALYTICS_RULE_VERSION,
@@ -132,6 +133,8 @@ class DayEnd:
     coverage_complete: bool = False
     # When the day's last counted battle reached the profile at the latest.
     last_landed: datetime | None = None
+    # Its start is 5,000 on a Season's Day 1 or the day before's proven end.
+    start_proven: bool = False
 
     @property
     def known_loss(self) -> int:
@@ -183,7 +186,10 @@ class DayEnd:
         2026 one reading changed with no battle between (#R988P2Y9: 5,017 at
         05:08:33, 4,977 at 05:22:14), and two minutes apart can both be out
         of date (#8RRYVCYQU read 4,814 at 05:01:16, missing 176 trophies of
-        attacks from before 04:31)."""
+        attacks from before 04:31). A day whose start is proven
+        (``start_proven``) and whose calculated end, that start plus its
+        battles less its automatic loss, is not the later reading proves
+        nothing so: both readings can miss the same credit."""
         if self.proof in {VERIFIED, BALANCED}:
             return int(self.final or 0), int(self.automatic_loss or 0)
         if (
@@ -206,7 +212,11 @@ class DayEnd:
             loss = 0
         else:
             return None
-        return (self.later, loss) if self.end_reading == self.later + loss else None
+        if self.end_reading != self.later + loss or (
+            self.start_proven and self.final is not None and self.final != self.later
+        ):
+            return None
+        return self.later, loss
 
     @property
     def proof(self) -> str:
@@ -225,13 +235,15 @@ class DayEnd:
 
 def day_ends(
     connection: Any, version_ids: list[int],
-    facts: Mapping[int, Mapping[str, Any] | None] | None = None,
+    facts: Mapping[int, Mapping[str, Any] | None] | None = None, *, previous_days: bool = True,
 ) -> dict[int, DayEnd]:
     """Each saved day's ``DayEnd``, keyed by its version. ``facts`` are what
-    its proof reads besides the saved day (``reset_proof_facts``), as a
-    board froze them, so every build of that board proves the same; without
-    them a day has no later reading and its Reset check is read as it is
-    now, as the Season summary reads it.
+    its proof reads besides the saved day (``boundary_manifest.board_proof_facts``),
+    as a board froze them, so every build of that board proves the same;
+    without them a day has no later reading and its Reset check is read as
+    it is now, as the Season summary reads it. A day's start is proven by
+    5,000 on a Season's Day 1 or by the proven end of the day before it was
+    calculated from, read with its own facts (``previous``).
     """
     if not version_ids:
         return {}
@@ -271,7 +283,9 @@ def day_ends(
                    FROM jsonb_array_elements(ranked.input_evidence -> 'contributions')
                        AS battle
                    WHERE battle.value ->> 'included' = 'true'
-               )
+               ),
+               (ranked.input_evidence -> 'previous_day' ->> 'version_id')::bigint,
+               ranked.season_day_number = 1
         FROM ranked_day_versions AS ranked
         LEFT JOIN reset_boundary_settlements AS settlement
           ON settlement.player_id = ranked.player_id
@@ -281,8 +295,15 @@ def day_ends(
         """,
         (LONGEST_BATTLE, version_ids),
     ).fetchall()
+    before = sorted({int(row[17]) for row in rows if row[17] is not None})
+    previous = day_ends(connection, before, None if facts is None else {
+        int(fact["previous"]["version_id"]): fact["previous"]
+        for fact in facts.values() if fact and fact.get("previous")
+    }, previous_days=False) if previous_days and before else {}
     ends = {}
     for row in rows:
+        prior = previous.get(int(row[17])) if row[17] is not None else None
+        proven = prior.proven_end if prior is not None else None
         frozen = (facts or {}).get(int(row[0])) or {}
         later = frozen.get("later")
         ends[int(row[0])] = DayEnd(
@@ -294,77 +315,12 @@ def day_ends(
             later=int(later["trophies"]) if later else None,
             later_at=datetime.fromisoformat(later["read_at"]) if later else None,
             defense_slots=int(row[14]), coverage_complete=bool(row[15]),
-            last_landed=row[16],
+            last_landed=row[16], start_proven=row[6] is not None and (
+                bool(row[18]) and row[6] == SEASON_START_TROPHIES
+                or proven is not None and proven[0] == row[6]
+            ),
         )
     return ends
-
-
-def reset_proof_facts(
-    database: Database, connection: Any, version_ids: list[int]
-) -> dict[int, dict[str, Any]]:
-    """What each saved day's Reset proof reads besides the day, as it is now:
-    the settled Reset check's trophies, until when a later reading can count
-    (``ranked_day_inputs.later_reading_until``), and the day's later reading,
-    its saved response, when it was read and its trophies. A board freezes
-    these with its inputs. Each step reads by an index: the 8 October 2026
-    board's 11,769 days took about 3 seconds this way, against 33 in one
-    statement."""
-    if not version_ids:
-        return {}
-    rows = connection.execute(
-        """
-        SELECT ranked.id, ranked.ranked_day_end, ranked.player_id,
-               ranked.official_season_id,
-               (ranked.input_evidence -> 'end_baseline_evidence'
-                   -> 'profile' ->> 'observed_at')::timestamptz,
-               settlement.selected_trophies
-        FROM ranked_day_versions AS ranked
-        LEFT JOIN reset_boundary_settlements AS settlement
-          ON settlement.player_id = ranked.player_id
-         AND settlement.boundary_at = ranked.ranked_day_end
-         AND settlement.state = 'settled'
-        WHERE ranked.id = ANY(%s)
-        """,
-        (version_ids,),
-    ).fetchall()
-    untils: dict[int, datetime | None] = {}
-    windows = {}
-    for boundary_at in sorted({row[1] for row in rows if row[4] is not None}):
-        days = [row for row in rows if row[4] is not None and row[1] == boundary_at]
-        players = sorted({int(row[2]) for row in days})
-        # One player's first report reads by index; a population's, the
-        # day's battles whole.
-        first = ranked_day_inputs.first_new_day_reports(
-            connection, boundary_at
-        ) if len(players) > 1 else {players[0]: ranked_day_inputs.load_first_reports(
-            connection, players[0], boundary_at, battle_window(boundary_at)[0],
-            boundary_at + DAY,
-        )[1]}
-        unreadable = ranked_day_inputs.unreadable_report_times_by_player(
-            database, connection, sorted({int(row[2]) for row in days}),
-            boundary_at, boundary_at + DAY,
-        )
-        for row in days:
-            until = untils[int(row[0])] = ranked_day_inputs.later_reading_until(
-                boundary_at, first.get(int(row[2])), unreadable.get(int(row[2]), [])
-            )
-            if until is not None:
-                windows[int(row[0])] = (int(row[2]), str(row[3]), row[4], until)
-    later = ranked_day_inputs.load_latest_profiles(database, connection, windows)
-    facts = {}
-    for row in rows:
-        until = untils.get(int(row[0]))
-        found = later.get(int(row[0]))
-        facts[int(row[0])] = {
-            "settled": None if row[5] is None else int(row[5]),
-            "later_until": until.astimezone(UTC).isoformat() if until else None,
-            "later": {
-                "observation_id": found[2],
-                "read_at": found[0].astimezone(UTC).isoformat(),
-                "trophies": found[1],
-            } if found else None,
-        }
-    return facts
 
 
 def profile_rechecks(
@@ -584,7 +540,7 @@ def _queue_board_correction(
     from the start: a board frozen meanwhile is the one compared, and one
     not frozen yet waits and reads this evidence."""
     from .boundary import lock_boundary_members, queue_board_correction
-    from .boundary_manifest import board_proof_facts, reset_trophies
+    from .boundary_manifest import reset_trophies
 
     lock_boundary_members(connection, boundary_at)
     newest = """
@@ -1270,7 +1226,7 @@ def load_proof_inputs(
         previous_defenses=(
             (int(previous[1]), int(previous[2])) if previous and previous[3] else None
         ),
-        previous_end=day_ends(connection, [int(previous[0])], reset_proof_facts(
+        previous_end=day_ends(connection, [int(previous[0])], board_proof_facts(
             database, connection, [int(previous[0])]
         )).get(int(previous[0])) if previous else None,
         late_unreadable=tuple(ranked_day_inputs.load_unreadable_report_times(

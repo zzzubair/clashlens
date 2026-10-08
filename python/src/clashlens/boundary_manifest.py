@@ -22,10 +22,15 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from . import ranked_day_inputs
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .db import Database, _text_value
-from .domain import RANKED_DAY_DURATION, SEASON_START_TROPHIES, season_is_current
+from .domain import (
+    RANKED_DAY_DURATION,
+    battle_window,
+    season_is_current,
+)
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -677,15 +682,81 @@ def profiles_not_found(
     }
 
 
+def reset_proof_facts(
+    database: Database, connection: Any, version_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """What each saved day's Reset proof reads besides the day, as it is now:
+    the settled Reset check's trophies, until when a later reading can count
+    (``ranked_day_inputs.later_reading_until``), and the day's later reading,
+    its saved response, when it was read and its trophies. A board freezes
+    these with its inputs. Each step reads by an index: the 8 October 2026
+    board's 11,769 days took about 3 seconds this way, against 33 in one
+    statement."""
+    if not version_ids:
+        return {}
+    rows = connection.execute(
+        """
+        SELECT ranked.id, ranked.ranked_day_end, ranked.player_id,
+               ranked.official_season_id,
+               (ranked.input_evidence -> 'end_baseline_evidence'
+                   -> 'profile' ->> 'observed_at')::timestamptz,
+               settlement.selected_trophies
+        FROM ranked_day_versions AS ranked
+        LEFT JOIN reset_boundary_settlements AS settlement
+          ON settlement.player_id = ranked.player_id
+         AND settlement.boundary_at = ranked.ranked_day_end
+         AND settlement.state = 'settled'
+        WHERE ranked.id = ANY(%s)
+        """,
+        (version_ids,),
+    ).fetchall()
+    untils: dict[int, datetime | None] = {}
+    windows = {}
+    for boundary_at in sorted({row[1] for row in rows if row[4] is not None}):
+        days = [row for row in rows if row[4] is not None and row[1] == boundary_at]
+        players = sorted({int(row[2]) for row in days})
+        # One player's first report reads by index; a population's, the
+        # day's battles whole.
+        first = ranked_day_inputs.first_new_day_reports(
+            connection, boundary_at
+        ) if len(players) > 1 else {players[0]: ranked_day_inputs.load_first_reports(
+            connection, players[0], boundary_at, battle_window(boundary_at)[0],
+            boundary_at + RANKED_DAY_DURATION,
+        )[1]}
+        unreadable = ranked_day_inputs.unreadable_report_times_by_player(
+            database, connection, sorted({int(row[2]) for row in days}),
+            boundary_at, boundary_at + RANKED_DAY_DURATION,
+        )
+        for row in days:
+            until = untils[int(row[0])] = ranked_day_inputs.later_reading_until(
+                boundary_at, first.get(int(row[2])), unreadable.get(int(row[2]), [])
+            )
+            if until is not None:
+                windows[int(row[0])] = (int(row[2]), str(row[3]), row[4], until)
+    later = ranked_day_inputs.load_latest_profiles(database, connection, windows)
+    facts = {}
+    for row in rows:
+        until = untils.get(int(row[0]))
+        found = later.get(int(row[0]))
+        facts[int(row[0])] = {
+            "settled": None if row[5] is None else int(row[5]),
+            "later_until": until.astimezone(UTC).isoformat() if until else None,
+            "later": {
+                "observation_id": found[2],
+                "read_at": found[0].astimezone(UTC).isoformat(),
+                "trophies": found[1],
+            } if found else None,
+        }
+    return facts
+
+
 def board_proof_facts(
     database: Database, connection: Any, version_ids: list[int]
 ) -> dict[int, dict[str, Any]]:
     """What each day's Reset proof reads besides the day
-    (``reset_settlement.reset_proof_facts``), with the same for the day
+    (``reset_proof_facts``), with the same for the day
     before it was calculated from under ``previous``, whose proven end proves
     its start (``reset_trophies``): what a board freezes with its inputs."""
-    from .reset_settlement import reset_proof_facts
-
     facts = reset_proof_facts(database, connection, version_ids)
     previous = {
         int(row[0]): int(row[1]) for row in connection.execute(
@@ -716,7 +787,7 @@ def reset_trophies(
     ``readings`` maps a player to the version of their day ending at
     ``boundary_at``, their reading's saved response, its time and its
     trophies; ``facts`` maps each version to what its Reset proof reads
-    besides the day (``reset_settlement.reset_proof_facts``), as the board
+    besides the day (``board_proof_facts``), as the board
     froze them, so a retry gives the same totals. A day whose end is proven
     (``reset_settlement.DayEnd``, the proof the Season summary reads too)
     gives the total: its end plus its automatic loss, whatever the reading
@@ -771,9 +842,7 @@ def reset_trophies(
                AND ranked.state <> 'Inconsistent'
                AND NOT ranked.failure_reasons ?| %s::text[]
                AND battles.every_battle_proven IS NOT FALSE,
-               battles.after_reading, battles.whole_day,
-               (ranked.input_evidence -> 'previous_day' ->> 'version_id')::bigint,
-               ranked.season_day_number = 1
+               battles.after_reading, battles.whole_day
         FROM unnest(
             %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
         ) AS reading (player_id, version_id, observation_id, observed_at)
@@ -826,40 +895,21 @@ def reset_trophies(
         [reading[0] for player, reading in readings.items() if player in battles],
         facts,
     )
-    previous = day_ends(
-        connection, sorted({int(row[4]) for row in rows if row[4] is not None}), {
-            int(fact["previous"]["version_id"]): fact["previous"]
-            for fact in facts.values() if fact and fact.get("previous")
-        },
-    )
-
-    def start_proven(row: Any, end: Any) -> bool:
-        prior = previous.get(int(row[4])) if row[4] is not None else None
-        proven = prior.proven_end if prior is not None else None
-        return end is not None and end.start is not None and (
-            bool(row[5]) and end.start == SEASON_START_TROPHIES
-            or proven is not None and proven[0] == end.start
-        )
-
-    starts = {
-        int(row[0]): start_proven(row, ends.get(readings[int(row[0])][0])) for row in rows
-    }
     return {
         player_id: _reset_total(
-            reading[3], ends.get(reading[0]), battles.get(player_id),
-            starts.get(player_id, False),
+            reading[3], ends.get(reading[0]), battles.get(player_id)
         )
         for player_id, reading in readings.items()
     }
 
 
 def _reset_total(
-    reading: int, end: Any, battles: tuple[bool, int, int] | None, start_proven: bool
+    reading: int, end: Any, battles: tuple[bool, int, int] | None
 ) -> tuple[int, bool]:
     """A player's trophies at the Reset before the automatic defense loss
     and whether they are proven, from their reading, their day's end
-    (``DayEnd``), its battles and whether its start is proven, as
-    ``reset_trophies`` reads them."""
+    (``DayEnd``, which knows whether its start is proven) and its battles,
+    as ``reset_trophies`` reads them."""
     from .reset_settlement import CONTRADICTED
 
     if end is None or battles is None:
@@ -875,8 +925,8 @@ def _reset_total(
         return total, False
     if end.before_loss is not None:
         # A Complete day ending at a Reset that resets trophies.
-        return total, start_proven and total == end.before_loss
-    return total, start_proven and (
+        return total, end.start_proven and total == end.before_loss
+    return total, end.start_proven and (
         (end.end_reset or end.agrees(total)) and end.start + whole_day == total
     )
 

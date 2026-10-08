@@ -430,8 +430,12 @@ def test_two_readings_minutes_apart_do_not_prove_a_days_end() -> None:
     """A Season's Day 1 starts at 5,000, and its eight defenses and its
     attack for 40 at 04:31 total zero, but readings at 05:01 and 05:02 both
     show 4,960 without that attack: the day is Inconsistent, its end is not
-    proven and its board entry stays uncertain. Readings 20 minutes apart,
-    the later one after 05:20, prove a Partial day's end."""
+    proven and its board entry stays uncertain. Read again at 05:25 still
+    without it, the readings are spaced enough but its proven start and
+    battles end it at 5,000, so its end is still not proven, and the next
+    Reset's check does not start from 4,960. Readings 20 minutes apart, the
+    later one after 05:20, prove a Partial day's end, whose start is not
+    known."""
     from clashlens.boundary_manifest import _reset_total
 
     reset = ranked_day_for(RESET).season_start + DAY
@@ -441,16 +445,24 @@ def test_two_readings_minutes_apart_do_not_prove_a_days_end() -> None:
         end_reading=4960, next_start=4960, official_end=False, settled=None,
         boundary_at=reset, end_read_at=reset + MINUTE, later=4960,
         later_at=reset + 2 * MINUTE, defense_slots=8, coverage_complete=True,
-        last_landed=reset - 29 * MINUTE,
+        last_landed=reset - 29 * MINUTE, start_proven=True,
     )
     assert day_1.proven_end is None
-    assert _reset_total(4960, day_1, (False, 0, 0), True) == (4960, False)
+    assert _reset_total(4960, day_1, (False, 0, 0)) == (4960, False)
+    late = replace(day_1, later_at=reset + 25 * MINUTE)
+    assert late.proven_end is None
+    assert _reset_total(4960, late, (False, 0, 0)) == (4960, False)
+    assert judged(replace(check(), root=None, previous_end=late)) == (
+        "unresolved", ("independent_root_missing",), None,
+    )
+    # Without a proven start nothing contradicts the two readings.
+    assert replace(late, start_proven=False).proven_end == (4960, 0)
     partial = replace(
         day_1, state="Partial", final=None, start=None, end_reading=5000,
-        next_start=5000, later=5000, later_at=reset + 21 * MINUTE,
+        next_start=5000, later=5000, later_at=reset + 21 * MINUTE, start_proven=False,
     )
     assert partial.proven_end == (5000, 0)
-    assert _reset_total(4960, partial, (False, 0, 0), False) == (5000, True)
+    assert _reset_total(4960, partial, (False, 0, 0)) == (5000, True)
     # 14 minutes after the end Reset reading, or before 05:20, is too soon.
     assert replace(partial, later_at=reset + 15 * MINUTE).proven_end is None
     assert replace(partial, end_read_at=reset, later_at=reset + 19 * MINUTE).proven_end is None
