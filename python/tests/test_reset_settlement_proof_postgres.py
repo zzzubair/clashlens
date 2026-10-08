@@ -795,7 +795,7 @@ def test_settlement_lookup_skips_its_reads_only_while_none_are_saved(
 
 
 def test_a_later_reading_against_a_complete_day_keeps_its_board_entry_uncertain(
-    database_url: str,
+    database_url: str, archive_server,
 ) -> None:
     """A Complete day can balance on two Reset readings that both miss the
     same delayed credit: a start reading of 5,200 that misses the day
@@ -805,7 +805,6 @@ def test_a_later_reading_against_a_complete_day_keeps_its_board_entry_uncertain(
     disproves it, so the board shows the last reading plus later battles,
     uncertain. One showing the day's end, or none, leaves it proven."""
     from test_boundary_manifest_postgres import (
-        _ARCHIVE,
         DAY_2_RESET,
         _build_board,
         _october,
@@ -835,45 +834,19 @@ def test_a_later_reading_against_a_complete_day_keeps_its_board_entry_uncertain(
             connection_info, generation_id, {player: (True, battles) for player in (1, 2, 3)},
             {player: complete for player in (1, 2, 3)},
         )
-        season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
-        later_at = _october(7, 5, 10)
+        season = int(ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id)
+        later_jobs = []
         for player, trophies in ((1, 5240), (2, 5200)):
-            tag = readings[player - 1][0]
-            observation_id = store_observation(
-                connection_info, _ARCHIVE, occurrence_key=f"later-{player}",
-                endpoint="profile", body=f"later {player}".encode(),
-                observed_at=later_at, normalized_tag=tag,
-            )[0]
-            with psycopg.connect(connection_info) as connection:
-                connection.execute("SET LOCAL session_replication_role = replica")
-                connection.execute(
-                    """
-                    WITH later AS (
-                        INSERT INTO player_profile_versions (
-                            player_id, observation_id, normalized_tag,
-                            endpoint_version, schema_version, parser_version,
-                            observed_at, source_http_status, name, trophies,
-                            league_tier_id, league_tier_name, eligibility_state,
-                            profile_json, source_contract_state,
-                            current_league_season_id
-                        ) VALUES (%(player)s, %(observation)s, %(tag)s, 'v1', 'v1',
-                                  'parser', %(at)s, 200, %(tag)s, %(trophies)s,
-                                  105000034, 'Legend League', 'eligible', '{}',
-                                  'accepted', %(season)s)
-                        RETURNING id
-                    )
-                    INSERT INTO player_profile_effects (
-                        profile_version_id, observation_id, effect_kind,
-                        observed_at, source_http_status, endpoint_version,
-                        schema_version, parser_version
-                    )
-                    SELECT id, %(observation)s, 'current_profile', %(at)s, 200,
-                           'v1', 'v1', 'parser'
-                    FROM later
-                    """,
-                    {"player": player, "observation": observation_id, "tag": tag,
-                     "at": later_at, "trophies": trophies, "season": season},
-                )
+            payload = json.loads(_profile(trophies, readings[player - 1][0]))
+            payload["currentLeagueSeasonId"] = season
+            payload["previousLeagueSeasonId"] = season - 28 * 86400
+            later_jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=f"later-{player}",
+                endpoint="profile", body=json.dumps(payload).encode(),
+                observed_at=_october(7, 5, 10), normalized_tag=readings[player - 1][0],
+                parser_version=PROFILE_PARSER_VERSION,
+            )[1])
+        _process(connection_info, archive_server, later_jobs)
         database = Database(connection_info)
         try:
             board = _build_board(connection_info, database, generation_id)
@@ -885,3 +858,56 @@ def test_a_later_reading_against_a_complete_day_keeps_its_board_entry_uncertain(
         ("#8R8URPPLR", 5200, "confirmed"),
         ("#GURYYP99", 5200, "confirmed"),
     ]
+
+
+def test_board_takes_a_complete_days_end_over_a_reading_it_cannot_place(
+    database_url: str,
+) -> None:
+    """Two Day 2 rows of the October 2026 research report, each a Complete
+    day whose next Reset reading equals its end. #QQ98LYP2 read 5,139 at
+    01:09:53, 4 minutes after a defense at 01:06:01, so the reading may or
+    may not hold it, and lost 40 more at 04:53:17: its day starts at 5,025,
+    nets +74 and ends at 5,099. #PVL2L2YQ8 read 5,167 with no battle after
+    it, but its day starts at 5,109, nets +32 and ends at 5,141 with no
+    automatic loss. Each board entry is the day's end, proven."""
+    from test_boundary_manifest_postgres import (
+        _build_board,
+        _october,
+        _seed_board,
+        _seed_days,
+    )
+
+    from clashlens.db import Database
+
+    readings = [
+        ("#QQ98LYP2", 5139, datetime(2026, 10, 7, 1, 9, 53, tzinfo=UTC)),
+        ("#PVL2L2YQ8", 5167, _october(7, 4, 40)),
+    ]
+    days = {
+        1: (True, [
+            ("offense", 40, _october(6, 10), True),
+            ("offense", 40, _october(6, 12), True),
+            ("offense", 40, _october(6, 14), True),
+            ("defense", 6, datetime(2026, 10, 7, 1, 6, 1, tzinfo=UTC), True),
+            ("defense", 40, datetime(2026, 10, 7, 4, 53, 17, tzinfo=UTC), True),
+        ]),
+        2: (True, [
+            ("offense", 40, _october(6, 8), True),
+            ("defense", 8, _october(6, 20), True),
+        ]),
+    }
+    complete = {"state": "Complete", "failure_reasons": [], "end_read_at": _october(7, 5, 2)}
+    results = {
+        1: {**complete, "start": 5025, "final": 5099, "end": 5099},
+        2: {**complete, "start": 5109, "final": 5141, "end": 5141},
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(connection_info, generation_id, days, results)
+        database = Database(connection_info)
+        try:
+            board = _build_board(connection_info, database, generation_id)
+        finally:
+            database.close()
+
+    assert board == [("#PVL2L2YQ8", 5141, "confirmed"), ("#QQ98LYP2", 5099, "confirmed")]

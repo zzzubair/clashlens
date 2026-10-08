@@ -195,10 +195,7 @@ def recalculate_ranked_day(
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
     # allowing unrelated player-days to reconcile concurrently.
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
-    )
+    _lock_ranked_day(connection, player_id, ranked_day)
     now_row = connection.execute("SELECT clock_timestamp()").fetchone()
     assert now_row is not None
     now = now_row[0]
@@ -1286,6 +1283,13 @@ def _enqueue_day_end_reconciliation(
     )
 
 
+def _lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> None:
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
+    )
+
+
 def queue_late_reading_recalculation(
     database: Database, connection: Any, player_id: int, observation_id: int,
     profile: Any,
@@ -1297,6 +1301,8 @@ def queue_late_reading_recalculation(
     day's latest Complete result, ended by that Reset reading, does not show.
     The day's own day-end recheck reads any such profile saved before it
     runs; this covers one saved after, such as a response recovered late.
+    The day's calculation lock makes the two meet: a calculation either
+    reads this profile or has finished before this reads its result.
     Queued once per day and profile, at backfill priority."""
     from .reset_settlement import later_reading_contradicts
 
@@ -1314,6 +1320,7 @@ def queue_late_reading_recalculation(
     ended = ranked_day_for(boundary_at - timedelta(days=1))
     if profile.current_league_season_id != ended.official_season_id:
         return
+    _lock_ranked_day(connection, player_id, ended)
     day = connection.execute(
         f"""
         SELECT state = 'Complete' AND {ranked_day_inputs.LATER_READING_DAY_SQL},
