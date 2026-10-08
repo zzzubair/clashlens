@@ -63,7 +63,7 @@ deletion still require their specific approvals.
 
 The [domain rules](domain.md#identity-and-eligibility) own the agreed eligibility
 cadence and evidence requirements. Weekly scheduling and response reuse are
-implemented behind a switch that defaults to off; see the
+implemented behind a switch; see the
 [runtime contract and isolated request measurement](collector-polling.md#weekly-eligibility-switch).
 Database validation of the final response-reuse and restart corrections remains
 pending. Combined live-player capacity and production scheduling remain

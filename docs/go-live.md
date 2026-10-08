@@ -515,7 +515,7 @@ Unfinished checks are still reused, but a pre-Reset profile completed after Rese
 does not satisfy that week. Repeat step 5 after those checks finish to queue any
 still due, then step 7, retaining `$POOL_TAGS` as `monday-pool.txt`. In a new
 operator session, restore that path before resuming. Automatic Monday scheduling
-is implemented behind a switch that defaults to off. Production approval and
+is implemented behind a switch. Production approval and
 validation remain separate work due by October 12; see the
 [weekly eligibility switch](collector-polling.md#weekly-eligibility-switch).
 
