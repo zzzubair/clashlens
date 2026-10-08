@@ -1278,26 +1278,36 @@ class Database:
                 return len(job_ids)
 
     def renew_claim(self, claim: Claim, *, lease_seconds: int) -> None:
+        """Raise LeaseLost unless the claim still holds the job; extend it if due.
+
+        A lease with at least half of ``lease_seconds`` left is only checked:
+        each rewrite changed the job row and its lookup lists, and the worker
+        renews a response's job just after claiming it.
+        """
         if lease_seconds <= 0:
             raise ValueError("lease duration must be positive")
+        live = """id = %s AND state = 'leased' AND lease_owner = %s
+                      AND lease_token = %s AND lease_expires_at > clock_timestamp()"""
+        fence = (claim.job_id, claim.lease_owner, claim.lease_token)
         with self._timed_connection() as connection:
             with connection.transaction():
+                due = connection.execute(
+                    f"""SELECT lease_expires_at < clock_timestamp() + (%s * interval '0.5 second')
+                    FROM {self._jobs_relation} WHERE {live}""",
+                    (lease_seconds, *fence),
+                ).fetchone()
+                if due is None:
+                    raise LeaseLost("job lease could not be renewed")
+                if not due[0]:
+                    return
                 renewed = connection.execute(
                     f"""
                     UPDATE {self._jobs_relation}
-                    SET lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
-                        updated_at = clock_timestamp()
-                    WHERE id = %s AND state = 'leased'
-                      AND lease_owner = %s AND lease_token = %s
-                      AND lease_expires_at > clock_timestamp()
+                    SET lease_expires_at = clock_timestamp() + (%s * interval '1 second')
+                    WHERE {live}
                     RETURNING lease_expires_at
                     """,
-                    (
-                        lease_seconds,
-                        claim.job_id,
-                        claim.lease_owner,
-                        claim.lease_token,
-                    ),
+                    (lease_seconds, *fence),
                 ).fetchone()
                 if renewed is None:
                     raise LeaseLost("job lease could not be renewed")
@@ -1308,13 +1318,7 @@ class Database:
                     WHERE id = %s AND job_id = %s AND state = 'running'
                       AND lease_owner = %s AND lease_token = %s
                     """,
-                    (
-                        renewed[0],
-                        claim.attempt_id,
-                        claim.job_id,
-                        claim.lease_owner,
-                        claim.lease_token,
-                    ),
+                    (renewed[0], claim.attempt_id, *fence),
                 )
                 if attempt.rowcount != 1:
                     raise LeaseLost("processing attempt lease could not be renewed")

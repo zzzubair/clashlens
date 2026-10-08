@@ -380,11 +380,11 @@ relation files or imply that retained WAL/backups have expired. Do not run
 ## Implemented raw expiry and required recovery protection
 
 Do **not** configure an upload-age lifecycle on the evidence namespace. A raw
-response becomes due **86 days after its latest sighting**. A body returned
-again later moves its deadline later; an earlier sighting never shortens it.
-An unchanged poll within 10 minutes of the previous sighting does not move it,
-so deletion can come up to 10 minutes before the exact latest sighting plus 86
-days.
+response becomes due **86 days after the end of its latest sighting's UTC
+day**: never less than 86 days after the sighting, at most one day more. A body
+returned again on a later day moves its deadline later; an earlier sighting
+never shortens it. Every sighting on the same day gives the same deadline, so
+only a body's first sighting each day rewrites it (migration 0087).
 Uploading late does not start another retention clock.
 
 Migration 0046 recalculates existing stored responses from the later of their
@@ -416,8 +416,8 @@ production keeps running, follow the
 [restore procedure](deployment.md#restore-into-a-separate-database).
 
 A response therefore stays usable for at least 86 days after its latest
-sighting, less at most 10 minutes. With no unfinished work and cleanup keeping
-up, its bytes stay about 95 days, plus the wait for the next cleanup batch. The
+sighting. With no unfinished work and cleanup keeping up, its bytes stay about
+95 to 96 days, plus the wait for the next cleanup batch. The
 measured 21.83 GB/day of new raw responses (October 2) means about 2.07 TB
 stored, roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
 

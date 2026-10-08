@@ -1141,45 +1141,46 @@ class CollectorDatabase:
         ).fetchone()
         if retained is None:
             return False
-        # A shared body sighted under 10 minutes ago is not locked or updated: that
-        # time only orders spool cleanup and sets a retention deadline at most 10
-        # minutes early, never one due now; no metric reads it. Marked ones never pass.
-        fresh = not saved and connection.execute(
-            """SELECT EXISTS (SELECT FROM collector_response_uploads
-            WHERE response_hash = %(h)s AND latest_sighting_at > %(at)s - interval '10 minutes')""",
-            {"h": retained[0], "at": handoff.response_completed_at},
-        ).fetchone()[0]
-        if retained[1] is not None:
-            availability = connection.execute(
-                """SELECT availability, retire_after > clashlens_season_retire_after(%s) - interval '10 minutes'
-                FROM archive_catalogue WHERE response_hash = %s AND archive_reference = %s"""
-                + ("" if fresh else " FOR UPDATE" + skip),
-                (handoff.response_completed_at, *retained),
-            ).fetchone()
-            if availability is None or availability[0] != "verified" or (fresh and not availability[1]):
-                return False
+        # A deadline runs to the end of its sighting's UTC day (migration 0087), so
+        # a row already holding this day's deadline is not locked or updated. It is
+        # 86 days off, never due now; the sighting time also orders spool cleanup,
+        # which a day's precision serves. Marked ones never pass.
+        at = handoff.response_completed_at
+        sighted, deadline = connection.execute(
+            """SELECT EXISTS (SELECT FROM collector_response_uploads WHERE response_hash = %(h)s
+                AND clashlens_season_retire_after(latest_sighting_at) >= clashlens_season_retire_after(%(at)s)),
+            (SELECT availability = 'verified' AND retire_after >= clashlens_season_retire_after(%(at)s)
+                FROM archive_catalogue WHERE response_hash = %(h)s AND archive_reference = %(r)s)""",
+            {"h": retained[0], "r": retained[1], "at": at},
+        ).fetchone()
+        moves_deadline = retained[1] is not None and not deadline
+        if moves_deadline and connection.execute(
+            """SELECT availability FROM archive_catalogue
+            WHERE response_hash = %s AND archive_reference = %s FOR UPDATE""" + skip, retained,
+        ).fetchone() != ("verified",):
+            return False
         # The 0040 trigger locks the player on a successful profile check.
         if skip and handoff.endpoint == "profile" and 200 <= handoff.http_status < 300:
             held = "SELECT 1 FROM players WHERE id = %s FOR NO KEY UPDATE SKIP LOCKED"
             if connection.execute(held, (handoff.player_id,)).fetchone() is None:
                 return False
-        sighted = fresh or connection.execute(
+        sighted = sighted or connection.execute(
             """UPDATE collector_response_uploads SET latest_sighting_at = GREATEST(latest_sighting_at, %s)
             WHERE response_hash = (SELECT response_hash FROM collector_response_uploads
                 WHERE response_hash = %s FOR UPDATE""" + skip + ")",
-            (handoff.response_completed_at, retained[0]),
+            (at, retained[0]),
         ).rowcount
         if not (saved or sighted):
             return False
         self._upsert_response_state(connection, handoff, state[2], saved)
         self._record_intent_endpoint(connection, handoff, state[2])
         # Ignored duplicates still extend the deadline: retention follows raw sightings.
-        if not fresh:
+        if moves_deadline:
             connection.execute(
                 """UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after(%s)
                 WHERE response_hash = %s AND archive_reference = %s AND availability = 'verified'
                   AND retire_after < clashlens_season_retire_after(%s)""",
-                (handoff.response_completed_at, *retained, handoff.response_completed_at),
+                (at, *retained, at),
             )
         return True
 

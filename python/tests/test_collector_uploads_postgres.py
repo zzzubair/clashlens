@@ -46,6 +46,11 @@ def upload_database(database_url: str) -> Iterator[str]:
         yield connection_info
 
 
+def _kept_until(seen: datetime) -> datetime:
+    """A raw response is kept to the end of its sighting's UTC day, plus 86 days."""
+    return seen.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=87)
+
+
 def _hash(byte: str) -> str:
     import hashlib
 
@@ -510,7 +515,7 @@ def test_late_upload_counts_86_days_from_its_latest_sighting(
                 """,
                 (response_hash,),
             ).fetchone()
-        assert row == (response_at + timedelta(days=86), uploaded_later)
+        assert row == (_kept_until(response_at), uploaded_later)
 
 
 def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
@@ -583,7 +588,7 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
                 (seen_next_season, upload_at, response_hash),
             ).fetchone()
         assert row is not None
-        assert row[0] == row[1] == seen_next_season + timedelta(days=86)
+        assert row[0] == row[1] == _kept_until(seen_next_season)
         assert row[0] != row[2]
 
 
@@ -855,11 +860,11 @@ def test_upload_never_reuses_a_tombstoned_legacy_location(
             ).fetchone()[0]
         if destination != reference:
             assert bound == destination
-            assert retire_after == NOW + timedelta(days=86)
+            assert retire_after == _kept_until(NOW)
             return
         if at_completion == "verified":
             assert bound == destination
-            assert retire_after == NOW + timedelta(days=86)
+            assert retire_after == _kept_until(NOW)
             return
         # Marked between claim and completion: never attached, uploaded again.
         assert bound is None
