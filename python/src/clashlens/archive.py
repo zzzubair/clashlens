@@ -4,6 +4,7 @@ import base64
 import hashlib
 import math
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -203,6 +204,8 @@ class S3ArchiveReader:
             else None
         )
         self._marker_checked_at = 0.0
+        # Held while a check runs, so no caller reads its result unfinished.
+        self._marker_lock = threading.Lock()
         self._marker_error: ArchiveReadError | None = None
         self.remote_attempts = {"get": 0, "bucket": 0, "marker": 0}
         self.secure = secure
@@ -275,27 +278,28 @@ class S3ArchiveReader:
         config = self.instance_config
         if config is None:
             return "unconfigured"
-        now = time.monotonic()
-        if now - self._marker_checked_at < 300:
-            return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
-        self._marker_checked_at = now
-        try:
-            self.remote_attempts["marker"] += 1
-            response = self.client.get_object(self.bucket, config.marker_key)
+        with self._marker_lock:
+            now = time.monotonic()
+            if now - self._marker_checked_at < 300:
+                return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
+            self._marker_checked_at = now
             try:
-                body = response.read(1_048_577)
-            finally:
-                response.close()
-                response.release_conn()
-            if len(body) > 1_048_576 or hashlib.sha256(body).hexdigest() != config.marker_hash:
-                raise ArchiveReadError("archive_marker_mismatch", "archive marker does not match its configured hash", retryable=False)
-            self._marker_error = None
-        except ArchiveReadError as error:
-            self._marker_error = error
-        except Exception as error:  # noqa: BLE001 - marker health never gates local duplicates
-            self._marker_error = ArchiveReadError("archive_unavailable", "archive marker request failed", retryable=True)
-            del error
-        return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
+                self.remote_attempts["marker"] += 1
+                response = self.client.get_object(self.bucket, config.marker_key)
+                try:
+                    body = response.read(1_048_577)
+                finally:
+                    response.close()
+                    response.release_conn()
+                if len(body) > 1_048_576 or hashlib.sha256(body).hexdigest() != config.marker_hash:
+                    raise ArchiveReadError("archive_marker_mismatch", "archive marker does not match its configured hash", retryable=False)
+                self._marker_error = None
+            except ArchiveReadError as error:
+                self._marker_error = error
+            except Exception as error:  # noqa: BLE001 - marker health never gates local duplicates
+                self._marker_error = ArchiveReadError("archive_unavailable", "archive marker request failed", retryable=True)
+                del error
+            return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
 
     def read_verified(
         self,

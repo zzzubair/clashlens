@@ -765,9 +765,11 @@ class OfficialApiClient:
         return lines
 
     def _open_connections(self) -> int:
-        """Connected tunnels a request is using, or kept open for the next one.
+        """Set-up tunnels a request is using, or kept open for the next one.
 
-        An idle one the relay has since closed no longer counts.
+        A tunnel counts once its connection, including the handshake with the
+        official API, is done, until it closes; an idle one the relay has
+        since closed no longer counts.
         """
         tunnels = self._tunnels.snapshot()
         pools = self._http.pools

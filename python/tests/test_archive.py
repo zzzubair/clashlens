@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor, wait
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -466,3 +467,49 @@ def test_s3_archive_reader_counts_remote_attempts(archive_server) -> None:
     reader.check_ready()
     assert reader.remote_attempts["bucket"] == 1
     assert reader.remote_attempts["get"] == 1
+
+
+def test_a_marker_check_still_running_is_never_reported_ready() -> None:
+    # Two lost-copy jobs check the archive marker at once. The second must not
+    # read "ready" from a check that has not finished, or a missing object at
+    # a different archive could pass as missing proof.
+    reader = S3ArchiveReader(
+        endpoint="127.0.0.1:9",
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
+        instance_id="fixture-instance",
+        marker_key="markers/instance",
+        marker_hash=hashlib.sha256(b"this archive's marker").hexdigest(),
+        marker_payload_version="1",
+    )
+    fetching, release = threading.Event(), threading.Event()
+
+    class Response:
+        def read(self, _limit: int) -> bytes:
+            return b"another archive's marker"
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class Client:
+        def get_object(self, _bucket: str, _key: str) -> Response:
+            fetching.set()
+            assert release.wait(5)
+            return Response()
+
+    reader.client = Client()
+    with ThreadPoolExecutor(max_workers=2) as threads:
+        first = threads.submit(reader.check_marker_health)
+        assert fetching.wait(5)
+        second = threads.submit(reader.check_marker_health)
+        # The second caller waits for the first check's result.
+        assert not second.done() and wait([second], timeout=0.2).not_done
+        release.set()
+        assert first.result(5) == "terminal"
+        assert second.result(5) == "terminal"
