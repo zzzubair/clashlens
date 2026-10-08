@@ -476,6 +476,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 residual = 0
             if (
                 residual
+                and later is None
                 and start_proven
                 and not end_hidden_by_reset
                 and ended
@@ -491,7 +492,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 # exactly. Without a later reading, the reading plus the
                 # battles that landed last, less any automatic loss the game
                 # had not applied yet, settles the day. A start the previous
-                # day did not prove could be wrong by just those battles.
+                # day did not prove could be wrong by just those battles, and
+                # a later reading other than the calculated end disproves it.
                 battles_after_reading, unsettled_loss = _battles_after_reading(
                     contributions, data, expected_next,
                     automatic_loss if automatic_state == "calculated" else 0,
@@ -1135,8 +1137,12 @@ def reads_later_reading(
 ) -> bool:
     """Whether a profile read after the day's end Reset reading could settle
     it: the day ended in a trophy mismatch, or used no defense slots and its
-    Reset reading shows no automatic loss the game may not have applied yet."""
-    return "trophy_equation_mismatch" in result.failure_reasons or (
+    Reset reading shows no automatic loss the game may not have applied yet;
+    or disprove it: battles the Reset reading missed settled it."""
+    return (
+        "trophy_equation_mismatch" in result.failure_reasons
+        or "next_start_battles_after_reading" in result.formula_components
+    ) or (
         result.unexplained_residual == 0
         and result.automatic_defense_evidence_state == "not_applicable"
         and _zero_defense_loss(data, result.defense_count) > 0

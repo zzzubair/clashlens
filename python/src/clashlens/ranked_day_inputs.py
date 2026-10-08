@@ -652,10 +652,12 @@ def load_profile_trophies(
 
 # A saved result a profile read after its end Reset reading may still
 # settle: one ending in a trophy mismatch, or a complete day after Day 1 with
-# no used defense slots whose Reset reading showed no automatic loss (see
+# no used defense slots whose Reset reading showed no automatic loss; or
+# disprove: one settled by battles its Reset reading missed (see
 # ``reconciliation.reads_later_reading``).
 LATER_READING_DAY_SQL = """(
     failure_reasons ? 'trophy_equation_mismatch'
+    OR formula_components ? 'next_start_battles_after_reading'
     OR (state = 'Complete' AND defense_count = 0 AND season_day_number > 1
         AND automatic_defense_evidence_state = 'not_applicable'
         AND unexplained_residual = 0

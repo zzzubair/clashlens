@@ -12,6 +12,7 @@ from clashlens.reconciliation import (
     CoverageObservation,
     PreviousRankedDay,
     ReconciliationInput,
+    reads_later_reading,
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
@@ -456,6 +457,40 @@ def test_battles_landing_after_the_reset_reading_settle_the_day() -> None:
     assert unproven.state == "Inconsistent"
     assert unproven.unexplained_residual == 40
     assert "next_start_battles_after_reading" not in unproven.formula_components
+
+
+def test_a_later_reading_other_than_the_end_disproves_missed_battles() -> None:
+    # Season Day 1 from a proven 5,000: 7 attacks for 224 and 7 defenses for
+    # 224 calculate an end of 5,000, but the game charged 32 for the missing
+    # defense. The last attack, +32, reported at 05:02, after the 05:00:31
+    # reading of 4,968; readings at 05:10 and 05:20 show 4,968 too.
+    reading_at = DAY.end + timedelta(seconds=31)
+    day = _input(
+        start_trophies=5000,
+        next_start_trophies=4968,
+        season_first_day=True,
+        end_baseline_evidence={"profile": {"observed_at": reading_at.isoformat()}},
+        contributions=(
+            *(BattleContribution(f"attack-{hour}", "offense", 32,
+                                 battle_timestamp=DAY.start + timedelta(hours=hour))
+              for hour in range(6)),
+            BattleContribution("attack-late", "offense", 32,
+                               battle_timestamp=DAY.end + timedelta(minutes=2)),
+            *(BattleContribution(f"defense-{hour}", "defense", 32,
+                                 battle_timestamp=DAY.start + timedelta(hours=hour, minutes=30))
+              for hour in range(7)),
+        ),
+    )
+    guessed = reconcile_ranked_day(day)
+    disproved = reconcile_ranked_day(
+        replace(day, later_next_start_reading=(DAY.end + timedelta(minutes=20), 4968))
+    )
+
+    assert (guessed.state, guessed.next_start_trophies) == ("Complete", 5000)
+    assert reads_later_reading(day, guessed)
+    assert disproved.state == "Inconsistent"
+    assert disproved.unexplained_residual == -32
+    assert "next_start_battles_after_reading" not in disproved.formula_components
 
 
 def test_coverage_gap_or_missing_overlap_makes_ended_day_partial() -> None:
