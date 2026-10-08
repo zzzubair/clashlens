@@ -11,8 +11,9 @@ how a saved day or board comes out, then run it once:
   in order, at most ``max_jobs`` per run, at backfill priority: first the
   saved evidence days are built from (``battle_day_repair.enqueue_rebuilds``
   and ``reset_baselines.repair_current_season_reset_baselines``, each for
-  this Season only); then each player's saved days of the Season, oldest
-  first in one job, each later day starting where the day before now ends;
+  this Season only); then, once every such repair has finished and none has
+  failed, each player's saved days of the Season, oldest first in one job,
+  each later day starting where the day before now ends;
   then, once every such job has finished and none has failed, every Reset
   board of the Season whose
   entries the rules now change (``boundary.queue_board_rebuilds``); then,
@@ -172,9 +173,11 @@ def season_repair(
                 (season_id, revision, Jsonb(_day_counts(connection, start)),
                  Jsonb(_board_counts(connection, start))),
             )
-    inputs = _repair_inputs(database, season_id, max_jobs)
-    if inputs:
-        return {**report, "phase": "inputs", "queued": inputs}
+    inputs = _repair_inputs(database, season_id, start, max_jobs)
+    if inputs["queued"] or inputs["unfinished"] or inputs["failed"]:
+        # Days wait for every repair of their evidence; a failed one holds
+        # them until it is investigated and retried by hand.
+        return {**report, "phase": "inputs", **inputs}
     if report["left_to_queue"]:
         batch = [player for player in players if player > through][:max_jobs]
         _queue_days(database, season_id, revision, start, batch)
@@ -285,7 +288,7 @@ def _repair_jobs(
     connection: Any, revision: str, season_id: str, players: list[int], limit: int
 ) -> dict[str, Any]:
     """How many of the players' day jobs are unfinished, and the failed ones."""
-    rows = connection.execute(
+    return _job_states(connection.execute(
         """
         SELECT id, state, failure_category, (input_json ->> 'player_id')::bigint
         FROM python_processing_jobs_worker
@@ -294,7 +297,11 @@ def _repair_jobs(
         ORDER BY id
         """,
         (players, [_repair_key(revision, season_id, player) for player in players]),
-    ).fetchall()
+    ).fetchall(), limit)
+
+
+def _job_states(rows: list[Any], limit: int) -> dict[str, Any]:
+    """How many of the jobs are unfinished, and the failed ones."""
     failed = [row for row in rows if _text_value(row[1]) == "failed"]
     return {
         "unfinished": sum(_text_value(row[1]) in _UNFINISHED_JOB_STATES for row in rows),
@@ -307,20 +314,50 @@ def _repair_jobs(
     }
 
 
-def _repair_inputs(database: Database, season_id: str, max_jobs: int) -> int:
+def _repair_inputs(
+    database: Database, season_id: str, start: datetime, max_jobs: int
+) -> dict[str, Any]:
     """Queue repairs of the Season's saved evidence first: its battles moved
-    day, then its Reset pairs left partial. How many it queued."""
+    day, then its Reset pairs left partial, each pair at most one job. How
+    many it queued or re-checked, and how many of the Season's such repairs
+    are unfinished or failed."""
     from . import battle_day_repair, reset_baselines
 
     moved = battle_day_repair.enqueue_rebuilds(
         database, max_jobs=max_jobs, season_id=season_id
     )
-    if moved["job_ids"]:
-        return len(moved["job_ids"])
-    pairs = reset_baselines.repair_current_season_reset_baselines(
-        database, max_works=max_jobs, season_id=season_id
-    )
-    return max(len(pairs["job_ids"]), pairs["evaluated_count"])
+    queued = len(moved["job_ids"])
+    if not queued:
+        pairs = reset_baselines.repair_current_season_reset_baselines(
+            database, max_works=max_jobs, season_id=season_id
+        )
+        queued = max(len(pairs["job_ids"]), pairs["evaluated_count"])
+    with database.pool.connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT job.id, job.state, job.failure_category,
+                   (job.input_json ->> 'player_id')::bigint
+            FROM python_processing_jobs_worker AS job
+            WHERE job.work_type = 'reconcile_ranked_day'
+              AND job.state::text = ANY(%s)
+              AND (
+                  job.deduplication_key LIKE 'reconcile:battle-day:%%'
+                  OR job.deduplication_key LIKE 'reconcile:reset-baseline:%%'
+                  OR job.deduplication_key LIKE 'reconcile:reset-recovery:%%'
+              )
+              AND (job.input_json ->> 'ranked_day_start')::timestamptz >= %s
+              AND (job.input_json ->> 'ranked_day_start')::timestamptz < %s
+              -- A failed Reset repair queued again counts as its retry.
+              AND NOT EXISTS (
+                  SELECT 1 FROM python_processing_jobs_worker AS retry
+                  WHERE retry.deduplication_key
+                        = 'reconcile:reset-recovery:' || job.id::text
+              )
+            ORDER BY job.id
+            """,
+            ([*_UNFINISHED_JOB_STATES, "failed"], start, start + SEASON_DURATION),
+        ).fetchall()
+    return {"queued": queued, **_job_states(rows, max_jobs)}
 
 
 def _queue_days(

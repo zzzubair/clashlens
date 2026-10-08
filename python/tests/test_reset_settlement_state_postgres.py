@@ -1138,13 +1138,15 @@ def test_official_total_saved_days_after_a_finished_repair_ends_the_last_day(
     assert (after[1], after[4]) == ("Inconsistent", 4980)
 
 
+@pytest.mark.parametrize("gap,state", [(0, "Partial"), (-40, "Inconsistent")])
 def test_official_total_ends_a_last_day_whose_season_end_reset_was_never_read(
-    database_url: str, archive_server
+    database_url: str, archive_server, gap: int, state: str
 ) -> None:
     """The Season-ending Reset was never collected for the player, so their
     last day had no end. League history then gives the official total: the
-    queued recalculation ends the day at it, and the day stays Partial, as
-    nothing shows the day's battles after its last battle log."""
+    queued recalculation checks the day against it. Matching, the day stays
+    Partial, as nothing shows the day's battles after its last battle log;
+    40 below the calculated end, it is Inconsistent."""
     from test_first_battle_log_postgres import LOSS, WIN, _log
 
     from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
@@ -1179,7 +1181,7 @@ def test_official_total_ends_a_last_day_whose_season_end_reset_was_never_read(
             domain_rule_version="clashlens-domain-rules-v1",
             body=json.dumps({"items": [{
                 "leagueSeasonId": str(int(boundary.timestamp())),
-                "leagueTrophies": final, "leagueTierId": 105000036,
+                "leagueTrophies": final + gap, "leagueTierId": 105000036,
                 "placement": 10568, "attackWins": 1, "attackLosses": 0,
                 "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
                 "defenseStars": 16, "maxBattles": 8,
@@ -1194,4 +1196,50 @@ def test_official_total_ends_a_last_day_whose_season_end_reset_was_never_read(
 
     assert (before[1], before[4]) == ("Partial", None)
     assert recalculations == [("complete",)]
-    assert (after[1], after[4]) == ("Partial", final)
+    assert (after[1], after[4]) == (state, final + gap)
+
+
+def test_a_late_attack_never_explains_a_survivors_official_total(
+    database_url: str, archive_server
+) -> None:
+    """A survivor's Season-ending Reset reading, 5,000, came 3 minutes after
+    their last attack, on a day whose start the Complete day before proves.
+    The official total is that attack's gain below the day's calculated end.
+    The attack cannot explain the gap, as the official total counts every
+    battle, so the day stays Inconsistent at the official total."""
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=hour), False) for hour in range(1, 9)]
+    battles.append((boundary - timedelta(minutes=3), True))
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = []
+        for reset in (last_day - timedelta(days=1), last_day):
+            jobs += _reset_work(connection_info, archive_server, reset,
+                                profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_season_profile(5000, NEW_SEASON), log=_log(*battles))
+        _process(connection_info, archive_server, jobs)
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=6),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final - WIN, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )[1]])
+        days = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}
+
+    assert days[last_day - timedelta(days=1)][1] == "Complete"
+    assert days[last_day][1:5] == ("Inconsistent", "uncertain", 6000, final - WIN)

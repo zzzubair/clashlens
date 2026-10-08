@@ -739,7 +739,10 @@ def test_season_repair_stores_again_a_summary_a_board_correction_changed(
 
     season = ranked_day_for(datetime(2026, 7, 15, 6, tzinfo=UTC))
     season_id = season.official_season_id
-    monkeypatch.setattr(domain_repair, "_repair_inputs", lambda *_: 0)
+    monkeypatch.setattr(
+        domain_repair, "_repair_inputs",
+        lambda *_: {"queued": 0, "unfinished": 0, "failed": 0, "failed_blockers": []},
+    )
     # As once every board of the Season has been rebuilt.
     monkeypatch.setattr(boundary, "queue_board_rebuilds", lambda *_, **__: {"boards": []})
     with domain_database(database_url, include_coordinator=True) as connection_info:

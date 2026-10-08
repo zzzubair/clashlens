@@ -315,11 +315,11 @@ def _recalculate_season_ends(
 def queue_season_end(connection: Any, player_id: int, season_end: datetime) -> None:
     """Queue the last day of the Season ending at ``season_end`` when the
     player's saved official Legend I total for it, whichever response saved
-    it, is not yet the day's end, and the day is kept, not retired with its
-    Season's details. The official total is the day's end, so it is queued
-    whatever a Season repair already did for the player, once per total and
-    saved result of the day: a job that ran without making the day end on
-    it, as when the saved total changed since, leaves another to queue. The
+    it, is not yet the end the day is checked against, and the day is kept,
+    not retired with its Season's details. It is queued whatever a Season
+    repair already did for the player, once per total and saved result of
+    the day: a job that ran without checking the day against it, as when the
+    saved total changed since, leaves another to queue. The
     day's calculation lock makes the two meet: a calculation either reads
     this total or has saved before this reads it."""
     from . import first_battle_log

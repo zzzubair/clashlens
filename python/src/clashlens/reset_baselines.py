@@ -14,6 +14,8 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
+    PYTHON_LIVE_PRIORITY,
     Claim,
     Database,
     _text_value,
@@ -94,6 +96,8 @@ def repair_current_season_reset_baselines(
     have been finished without it. Within the same batch limit, repairs of
     complete pairs that failed and left an ended day Live are queued again
     (counted as checked); ``failed_blockers`` lists those it cannot retry.
+    With ``season_id``, as a Season repair, every job runs at backfill
+    priority and a pair queues at most one, of that Season's days only.
     """
 
     only_no_opponent = ranked_day_inputs.only_no_opponent_gaps_sql(
@@ -214,6 +218,7 @@ def repair_current_season_reset_baselines(
                     ends_day=bool(ends_day),
                     starts_ended_day=bool(starts_ended_day),
                     recalculate_season=_text_value(official_season_id),
+                    season_repair=season_id is not None,
                 )
             job_ids.extend(pair_job_ids)
             failure_reasons.update(reasons)
@@ -428,10 +433,10 @@ def _recover_failed_reset_repairs(
             INSERT INTO python_processing_jobs_worker (
                 observation_id, work_type, deduplication_key, input_json,
                 state, due_at, parser_version, processing_version,
-                domain_rule_version, analytics_rule_version
+                domain_rule_version, analytics_rule_version, priority
             ) VALUES (
                 NULL, 'reconcile_ranked_day', %s, %s, 'pending',
-                clock_timestamp(), %s, %s, %s, %s
+                clock_timestamp(), %s, %s, %s, %s, %s
             )
             ON CONFLICT (deduplication_key) DO NOTHING
             RETURNING id
@@ -443,6 +448,7 @@ def _recover_failed_reset_repairs(
                 PROCESSING_VERSION,
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
+                PYTHON_BACKFILL_PRIORITY if season_id else PYTHON_LIVE_PRIORITY,
             ),
         ).fetchone()
         if row is not None:
@@ -523,6 +529,7 @@ def _evaluate_reset_baseline(
     starts_ended_day: bool = False,
     recalculate_season: str | None = None,
     work_id: int | None = None,
+    season_repair: bool = False,
 ) -> tuple[list[int], list[str]]:
     """Record Reset pair evidence and return queued job IDs and failure reasons.
 
@@ -718,6 +725,7 @@ def _evaluate_reset_baseline(
         ranked_day_start=day_starts[0],
         last_ranked_day_start=day_starts[-1],
         recalculate_season=recalculate_season,
+        priority=PYTHON_BACKFILL_PRIORITY if season_repair else None,
     )
     job_ids = [job_id] if job_id is not None else []
     # The ended Season's last day and the new Season's first were built at
@@ -726,9 +734,10 @@ def _evaluate_reset_baseline(
     # Season that finds the rule holds rebuilds them and every saved day
     # since, once per player: the newest saved results, always kept, then
     # show Day 1 starting by the Season rule and built on the ended day's
-    # newest result, which ends by it.
+    # newest result, which ends by it. A Season repair leaves the ended
+    # Season as it is and recalculates every day of its own Season anyway.
     opening = ranked_day_for(boundary_at - timedelta(days=1)).season_start
-    if ends_day:
+    if ends_day and not season_repair:
         opening_baseline = _load_reset_baseline(
             database, connection, int(player_id), opening, processing_version
         )
@@ -1341,6 +1350,7 @@ def _enqueue_reset_reconciliation(
     last_ranked_day_start: datetime,
     recalculate_season: str | None,
     deduplication_key: str | None = None,
+    priority: int | None = None,
 ) -> int | None:
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
@@ -1392,7 +1402,7 @@ def _enqueue_reset_reconciliation(
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
-            ended_day_priority(ranked_day_start),
+            ended_day_priority(ranked_day_start) if priority is None else priority,
         ),
     ).fetchone()
     return int(row[0]) if row is not None else None

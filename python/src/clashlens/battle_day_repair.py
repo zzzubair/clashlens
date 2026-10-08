@@ -38,6 +38,8 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
+    PYTHON_LIVE_PRIORITY,
     Database,
     _text_value,
 )
@@ -148,7 +150,8 @@ def enqueue_rebuilds(
     database: Database, *, max_jobs: int, season_id: str | None = None
 ) -> dict[str, Any]:
     """Queue at most ``max_jobs`` rebuilds of players not yet done; with
-    ``season_id``, only of that Season's days, so no other Season changes.
+    ``season_id``, as a Season repair, only of that Season's days, so no
+    other Season changes, at backfill priority.
 
     A player with reconciliation queued or running that rebuilds one of those
     days waits for a later run. A player whose latest rebuild failed is not
@@ -262,10 +265,10 @@ def enqueue_rebuilds(
                 INSERT INTO python_processing_jobs_worker (
                     observation_id, work_type, deduplication_key, input_json,
                     state, due_at, parser_version, processing_version,
-                    domain_rule_version, analytics_rule_version
+                    domain_rule_version, analytics_rule_version, priority
                 ) VALUES (
                     NULL, 'reconcile_ranked_day', %s, %s, 'pending',
-                    clock_timestamp(), %s, %s, %s, %s
+                    clock_timestamp(), %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (deduplication_key) DO NOTHING
                 RETURNING id
@@ -287,6 +290,7 @@ def enqueue_rebuilds(
                     PROCESSING_VERSION,
                     DOMAIN_RULE_VERSION,
                     ANALYTICS_RULE_VERSION,
+                    PYTHON_BACKFILL_PRIORITY if season_id else PYTHON_LIVE_PRIORITY,
                 ),
             ).fetchone()
             if row is not None:

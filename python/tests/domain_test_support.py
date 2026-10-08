@@ -233,15 +233,6 @@ def _connection_scope(connection_info: str, existing: Any | None):
             yield connection
 
 
-@contextmanager
-def _connection_scope(connection_info: str, existing: Any | None):
-    if existing is not None:
-        yield existing
-    else:
-        with psycopg.connect(connection_info) as connection:
-            yield connection
-
-
 def store_observation(
     connection_info: str,
     archive_server: tuple[str, str, str, Any],

@@ -309,12 +309,13 @@ def recalculate_ranked_day(
     # survivor reset to 5,000, and a player dropped from Legend I, ranked
     # below 10,000, has no Legend I reading at all (1,993 players on 5 October
     # 2026). The game's official Season-end total in the player's league
-    # history, which includes the automatic defense loss, is the last day's
-    # end instead, so a day that ends anywhere else is Inconsistent: 778 of
-    # 9,593 such Complete days on 5 October 2026 did. No reset to 5,000
-    # follows it; the next Season starts by the Season rule. It ends the day
-    # even when no Season-ending Reset reading was saved; the day's battle
-    # logs still decide whether its battles are all known.
+    # history, which includes the automatic defense loss, is instead the end
+    # the last day's calculation is checked against and its saved next start;
+    # a day whose calculation differs is Inconsistent and keeps its
+    # calculated EOD: 778 of 9,593 such Complete days on 5 October 2026 did.
+    # No reset to 5,000 follows it; the next Season starts by the Season
+    # rule. It counts even when no Season-ending Reset reading was saved; the
+    # day's battle logs still decide whether its battles are all known.
     official_final = (
         _official_final(connection, player_id, ranked_day.end)
         if boundary_kind == "season"

@@ -656,15 +656,19 @@ by reason (`days`), each Reset's published Daily board with its rule and how
 many entries are proven (`boards`), the boards the board rules would now
 change, and how many players have saved days (`players`). The first `queue`
 saves those counts as the repair's receipt, then each run does one step, at
-most `--max-jobs` (default 100), at backfill priority, and says which in
+most `--max-jobs` (default 100) jobs at backfill priority, and says which in
 `phase`: `inputs`, repairs of the evidence days are built from (the
-Season's battles moved day and its Reset pairs left partial; no other
-Season's days change); `days`, one job
+Season's battles moved day, one job per player, and its Reset pairs left
+partial, at most `--max-jobs` pairs each queuing at most one job; no other
+Season's days change), until every such repair of the Season has finished
+and none has failed (`unfinished`, `failed` and `failed_blockers` count
+them while it is at `inputs`); `days`, one job
 per player recalculating every saved day of the Season, oldest first, so each
 day starts where the day before now ends; once every such job has finished,
 `boards`, one rebuild of each Reset board whose entries the rules now change,
-until every board correction of the Season has finished
-(`boards_rebuilding`); then `summaries`, storing each saved Season summary
+every such board in one run, at most one per Reset (28 per Season), at the
+normal publication priority, not backfill, until every board correction of
+the Season has finished (`boards_rebuilding`); then `summaries`, storing each saved Season summary
 again from its days, since a summary's final rank reads the Season's last
 board, then each one that still differs from its days, as when a board
 correction since moved an earlier player's final rank, reading every summary
@@ -675,7 +679,10 @@ comes out the same saves nothing new. A recalculation that failed is kept and
 not queued again: `failed` counts them and `failed_blockers` lists at most
 `--max-jobs` (job, player, failure reason). While any has failed, the repair
 stays at `days` and rebuilds no board or summary from unrepaired days;
-investigate each and retry it by hand. `receipt` writes nothing and
+investigate each and retry it by hand. Normal processing can still rebuild a
+board while the repair runs, since a recalculated day whose result changes
+can start a new board for its Reset; the `boards` step re-checks every
+board of the Season after all day jobs finish. `receipt` writes nothing and
 shows the saved before beside the same counts now, and checks that every
 published view agrees with the days: `boards_disagreeing` lists boards whose
 entries the rules would still change, and `summaries_disagreeing` counts
