@@ -402,6 +402,19 @@ def test_ended_day_start_is_proven_by_the_day_before_or_the_season_rule() -> Non
     )
     # No settled previous Reset: the day before's balanced end roots it.
     assert judged(replace(passing, root=None, previous_end=balanced)) == ("settled", (), 4804)
+    # So does a Partial day before whose end two readings prove: its later
+    # reading, 25 minutes after its Reset, is its end after no automatic loss.
+    two_readings = replace(
+        balanced, state="Partial", final=None, start=None, defense_slots=8,
+        coverage_complete=True, end_read_at=RESET - DAY + MINUTE,
+        later=4746, later_at=RESET - DAY + 25 * MINUTE,
+    )
+    assert evaluate_boundary(
+        replace(passing, root=None, previous_end=two_readings)
+    ).proof["catchup"]["root"]["fingerprint"] == "previous-day-two-readings"
+    assert judged(replace(passing, root=None, previous_end=two_readings)) == (
+        "settled", (), 4804,
+    )
     # A day before disproved by a later reading, or only Partial, roots nothing.
     for unproven in (replace(balanced, later=4786), replace(balanced, state="Partial")):
         assert judged(replace(passing, root=None, previous_end=unproven)) == (
@@ -430,14 +443,14 @@ def test_two_readings_minutes_apart_do_not_prove_a_days_end() -> None:
         later_at=reset + 2 * MINUTE, defense_slots=8, coverage_complete=True,
         last_landed=reset - 29 * MINUTE,
     )
-    assert day_1.end_proof is None
+    assert day_1.proven_end is None
     assert _reset_total(4960, day_1, (False, 0, 0)) == (4960, False)
     partial = replace(
         day_1, state="Partial", final=None, start=None, end_reading=5000,
         next_start=5000, later=5000, later_at=reset + 21 * MINUTE,
     )
-    assert partial.end_proof == 5000
+    assert partial.proven_end == (5000, 0)
     assert _reset_total(4960, partial, (False, 0, 0)) == (5000, True)
     # 14 minutes after the end Reset reading, or before 05:20, is too soon.
-    assert replace(partial, later_at=reset + 15 * MINUTE).end_proof is None
-    assert replace(partial, end_read_at=reset, later_at=reset + 19 * MINUTE).end_proof is None
+    assert replace(partial, later_at=reset + 15 * MINUTE).proven_end is None
+    assert replace(partial, end_read_at=reset, later_at=reset + 19 * MINUTE).proven_end is None

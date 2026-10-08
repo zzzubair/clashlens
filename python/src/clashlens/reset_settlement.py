@@ -106,8 +106,7 @@ class DayEnd:
     makes it ``contradicted``: both Reset readings can miss the same delayed
     credit. Anything else is ``unproven``.
 
-    A day its own calculation does not prove can still have its end proven
-    by two readings (``end_proof``).
+    ``proven_end`` is what every reader of a day's end takes from it.
     """
 
     state: str
@@ -168,25 +167,27 @@ class DayEnd:
         )
 
     @property
-    def end_proof(self) -> int | None:
-        """The trophies at the Reset before the automatic loss, proven by
-        two readings, for a day its own calculation does not prove: the end
-        Reset reading, when the later reading is it less the day's automatic
-        loss, the loss calculated, confirmed, or none on a day that used
-        defense slots (a day using none can still be charged one), read at
-        least ``RESET_READING_BATTLE_LAG`` after the day's last battle
-        landed, ``LATER_READING_GAP`` after the end Reset reading and
-        ``LATER_READING_AFTER_RESET`` after the Reset, with continuous
-        battle logs. Never at a Season's end, and at a weekly Reset only
-        above 5,000: the day's own calculation cannot tell the game's raise
-        to 5,000 from a total it ended on. On 7 October 2026 a single later
-        reading could change with no battle between (#R988P2Y9 read 5,017
-        at 05:08:33, then 4,977 at 05:22:14), and two readings minutes apart
-        can both be out of date: #8RRYVCYQU read 4,814 at 05:01:16, missing
-        176 trophies of attacks from before 04:31."""
+    def proven_end(self) -> tuple[int, int] | None:
+        """The proven end of the day ending at this Reset, after its
+        automatic loss, and that loss, or None: the Daily board shows their
+        sum, the next day of a day not Complete starts from the end
+        (``settled_start``), and the next Reset's settlement check roots on
+        it. A verified or balanced day proves its own. Any other is proven
+        by two readings: the later reading, when the end Reset reading is it
+        plus the day's automatic loss (calculated, confirmed, or none on a
+        day that used defense slots), read ``RESET_READING_BATTLE_LAG`` after
+        the day's last battle landed, ``LATER_READING_GAP`` after the end
+        Reset reading and ``LATER_READING_AFTER_RESET`` after the Reset, with
+        continuous battle logs; never at a Season's end, nor at a weekly
+        Reset at 5,000 or below, which can be the game's raise. On 7 October
+        2026 one reading changed with no battle between (#R988P2Y9: 5,017 at
+        05:08:33, 4,977 at 05:22:14), and two minutes apart can both be out
+        of date (#8RRYVCYQU read 4,814 at 05:01:16, missing 176 trophies of
+        attacks from before 04:31)."""
+        if self.proof in {VERIFIED, BALANCED}:
+            return int(self.final or 0), int(self.automatic_loss or 0)
         if (
-            self.proof in {VERIFIED, BALANCED}
-            or self.end_reading is None
+            self.end_reading is None
             or self.boundary_kind == "season"
             or self.boundary_kind == "weekly" and self.end_reading <= 5000
             or not self.coverage_complete
@@ -205,7 +206,7 @@ class DayEnd:
             loss = 0
         else:
             return None
-        return self.end_reading if self.end_reading == self.later + loss else None
+        return (self.later, loss) if self.end_reading == self.later + loss else None
 
     @property
     def proof(self) -> str:
@@ -661,16 +662,21 @@ def settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     it landed. On 2 October 2026 that explained 728 of 733 next days whose
     start was too high and a later reading could check. It can instead say a
     later reading settled the Reset reading; the day then starts from that.
+    A previous day not Complete whose end two readings prove
+    (``DayEnd.proven_end``) starts the day from that end.
     """
     previous = data.previous_day
     if (
         data.start_trophies is None
         or previous is None
-        or not previous.complete
-        or not (previous.unsettled_automatic_loss or previous.reset_reading_correction)
         or previous.end_baseline_id is None
         or previous.end_baseline_id != data.start_baseline_id
     ):
+        return data.start_trophies, 0, 0
+    if not previous.complete:
+        start = data.start_trophies if previous.proven_end is None else previous.proven_end
+        return start, data.start_trophies - start, 0
+    if not (previous.unsettled_automatic_loss or previous.reset_reading_correction):
         return data.start_trophies, 0, 0
     loss = previous.unsettled_automatic_loss
     correction = previous.reset_reading_correction
@@ -1134,10 +1140,11 @@ def evaluate_boundary(inputs: ProofInputs) -> Verdict:
     if root is None and season_first_day:
         root = Root(boundary - DAY, SEASON_START_TROPHIES, "season-rule", 0, ())
     elif root is None and inputs.previous_end is not None and (
-        inputs.previous_end.proof in {VERIFIED, BALANCED}
+        proven := inputs.previous_end.proven_end
     ):
-        root = Root(boundary - DAY, int(inputs.previous_end.final),
-                    f"previous-day-{inputs.previous_end.proof}", 0, ())
+        kind = inputs.previous_end.proof
+        root = Root(boundary - DAY, proven[0], "previous-day-" + (
+            kind if kind in {VERIFIED, BALANCED} else "two-readings"), 0, ())
     if root is None:
         reasons.append("independent_root_missing")
     elif root.boundary_at >= boundary or set(root.observations) & set(proof["observations"]):
@@ -1266,10 +1273,9 @@ def load_proof_inputs(
         previous_defenses=(
             (int(previous[1]), int(previous[2])) if previous and previous[3] else None
         ),
-        previous_end=(
-            day_ends(connection, [int(previous[0])]).get(int(previous[0]))
-            if previous else None
-        ),
+        previous_end=day_ends(connection, [int(previous[0])], reset_proof_facts(
+            database, connection, [int(previous[0])]
+        )).get(int(previous[0])) if previous else None,
         late_unreadable=tuple(ranked_day_inputs.load_unreadable_report_times(
             database, connection, player_id, log_observed_at, boundary_at + DAY
         )),

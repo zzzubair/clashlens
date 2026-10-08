@@ -1384,6 +1384,56 @@ def test_late_battle_sweep_judges_the_check_its_day_before_feeds_again(
     assert rejudged == ("unresolved", None, ["previous_day_defenses_unknown"])
 
 
+def test_late_battle_sweep_locks_every_day_before_any_reset(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """A recovered battle log holds the ended day's lock and then wants the
+    Reset ending the day before. The sweep recalculating both days waits for
+    the ended day's lock before it recalculates the day before, so it holds
+    no lock of that Reset meanwhile, and both finish."""
+    from dataclasses import replace
+
+    from clashlens import late_battle_sweep, ranked_day_inputs, reconciliation_db
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        monkeypatch.setattr(late_battle_sweep, "_STALE_DAYS", f"""
+            SELECT player.id, %(boundary)s::timestamptz - interval '2 days'
+            FROM players AS player
+            WHERE player.normalized_tag = '{TAG}'
+              AND %(window_start)s::timestamptz IS NOT NULL AND %(rule)s IS NOT NULL
+        """)
+        monkeypatch.setattr(late_battle_sweep, "_OUTDATED_DAYS", """
+            SELECT NULL::bigint, NULL::timestamptz WHERE %(rule)s IS NULL
+        """)
+        # The day before's result changes, so recalculating it locks its Reset.
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(
+            reconciliation_db, "reconcile_ranked_day",
+            lambda data: replace(original(data), coverage_complete=False),
+        )
+        monkeypatch.setattr(reconciliation_db, "limit_lock_waits", lambda _connection: None)
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            with psycopg.connect(connection_info) as late_log, ThreadPoolExecutor(1) as pool:
+                ranked_day_inputs.lock_ranked_day(
+                    late_log, scenario["player"], ranked_day_for(RESET - DAY)
+                )
+                sweep = pool.submit(
+                    late_battle_sweep.sweep_late_battles, database,
+                    now=RESET + timedelta(hours=1),
+                )
+                _wait_for_advisory_wait(late_log, sweep)
+                late_log.execute("SET LOCAL lock_timeout = '5s'")
+                lock_boundary_publication(late_log, RESET - DAY)
+                late_log.commit()
+                assert sweep.result(timeout=60) == (1, 0)
+        finally:
+            database.close()
+
+
 def test_a_stored_season_summary_follows_the_rejudged_check(
     database_url: str, archive_server, monkeypatch
 ) -> None:

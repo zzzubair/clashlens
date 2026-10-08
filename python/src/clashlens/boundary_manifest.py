@@ -720,8 +720,8 @@ def reset_trophies(
 
     A day neither its own calculation nor the reading proves is still
     proven when its end Reset reading and a later reading, read at least 15
-    minutes after it and 20 after the Reset, agree (``DayEnd.end_proof``):
-    its end Reset reading is the total. Two readings minutes apart can both
+    minutes after it and 20 after the Reset, agree (``DayEnd.proven_end``,
+    as the next day's start reads it): its end Reset reading is the total. Two readings minutes apart can both
     be out of date: #8RRYVCYQU read 4,814 at 05:01:16, missing 176 trophies
     of attacks from before 04:31. Replayed on the 7 October 2026 Day 3
     board's 11,769 entries, that corrected 8 entries, such as #8L2RVPU9Y
@@ -811,17 +811,15 @@ def _reset_total(
     """A player's trophies at the Reset before the automatic defense loss
     and whether they are proven, from their reading, their day's end
     (``DayEnd``) and its battles as ``reset_trophies`` reads them."""
-    from .reset_settlement import BALANCED, CONTRADICTED, VERIFIED
+    from .reset_settlement import CONTRADICTED
 
     if end is None or battles is None:
         return reading, False
     battles_proven, after_reading, whole_day = battles
     total = reading + after_reading if battles_proven else None
     proof = end.proof
-    if proof in {VERIFIED, BALANCED}:
-        return end.before_loss, True
-    if end.end_proof is not None:
-        return end.end_proof, True
+    if (proven := end.proven_end) is not None:
+        return sum(proven), True
     if total is None:
         return reading, False
     if proof == CONTRADICTED:

@@ -1142,3 +1142,69 @@ def test_profiles_saved_before_the_log_of_the_first_new_day_battle_are_kept(
         "Inconsistent", ["later_reading_contradicts"], end_b + WIN,
     )
     assert board[1] is False
+
+
+def test_a_day_proven_by_two_readings_starts_the_next_day_after_its_loss(
+    database_url: str, archive_server
+) -> None:
+    """Day B, after day A's 8 defenses, has an attack and a defense, so an
+    automatic loss of 7 * LOSS, and is Inconsistent: its Reset reading at
+    05:01 is 40 above its calculated end before that loss. A reading at
+    05:25, before day C's first battle, is that Reset reading less the loss,
+    so the two prove day B's end: the board shows the 05:01 reading as
+    proven, and day C, saved before the 05:25 reading, starts from that
+    reading less the loss and balances. Day B stays Inconsistent, and the
+    Season summary does not accept its end."""
+    from clashlens.season_summaries import _project
+
+    day_a = [(DAY_A + timedelta(hours=hour), False) for hour in range(1, 9)]
+    day_b = [(DAY_B + timedelta(hours=1), True), (DAY_B + timedelta(hours=3), False)]
+    day_c = [(DAY_C + timedelta(hours=1), True)] + [
+        (DAY_C + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    start_b = 6000 - 8 * LOSS
+    reading = start_b + WIN - LOSS + 40
+    proven = reading - 7 * LOSS
+    end_c = proven + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_A, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_B,
+            profile=_profile(start_b), log=_log(*day_a),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(reading),
+            log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=1),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D, profile=_profile(end_c),
+            log=_log(*day_c),
+        )
+        _process(connection_info, archive_server, jobs)
+        before = _latest_days(connection_info, (DAY_C,))[0]
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="later-profile",
+            endpoint="profile", body=_profile(proven),
+            observed_at=DAY_C + timedelta(minutes=25), normalized_tag=TAG,
+        )[1]])
+        day_b_row, day_c_row = _latest_days(connection_info)
+        board = _board_entry(connection_info, archive_server, DAY_B)
+        with psycopg.connect(connection_info) as connection:
+            summary = _project(
+                _player_id(connection_info), ranked_day_for(DAY_B).official_season_id,
+                connection,
+            )
+
+    assert (before[0], before[2]) == ("Inconsistent", reading)
+    assert day_b_row[0] == "Inconsistent"
+    assert board == (reading, True)
+    assert (day_c_row[0], *day_c_row[2:5]) == ("Complete", proven, end_c, end_c)
+    assert day_c_row[7]["start_reading_trophies"] == reading
+    assert day_c_row[7]["start_unsettled_automatic_loss"] == 7 * LOSS
+    assert {
+        entry["season_day_number"]: entry["eod_state"]
+        for entry in summary["daily_entries"]
+    }[ranked_day_for(DAY_B).day_number] != "accepted"
+

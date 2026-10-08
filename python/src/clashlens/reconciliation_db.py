@@ -126,7 +126,7 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 following = day_start + timedelta(days=1)
                 # A changed ended result changes the following saved day of
                 # its Season too, until a day's result stays the same.
-                if recalculate_ranked_day(
+                if (recalculate_ranked_day(
                     database,
                     connection,
                     player_id=player_id,
@@ -135,7 +135,9 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     processing_version=claim.processing_version,
                     domain_rule_version=claim.domain_rule_version,
                     analytics_rule_version=claim.analytics_rule_version,
-                ) and following not in day_starts and (
+                ) or _start_moved(
+                    database, connection, player_id, day_start
+                )) and following not in day_starts and (
                     ranked_day_for(following).official_season_id
                     == ranked_day_for(day_start).official_season_id
                 ) and connection.execute(
@@ -153,6 +155,49 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
+
+
+def proven_end(database: Database, connection: Any, version_id: int) -> int | None:
+    """The saved day's proven end after its automatic loss, or None
+    (``reset_settlement.DayEnd.proven_end``), as the evidence saved now
+    gives it."""
+    from . import reset_settlement
+
+    end = reset_settlement.day_ends(
+        connection, [version_id],
+        reset_settlement.reset_proof_facts(database, connection, [version_id]),
+    ).get(version_id)
+    proven = end.proven_end if end else None
+    return proven[0] if proven else None
+
+
+def _start_moved(
+    database: Database, connection: Any, player_id: int, day_start: datetime
+) -> bool:
+    """Whether the following saved day of this day, not Complete, started
+    from another proven end than the day's now (``proven_end``), as when a
+    later reading saved since proves or no longer proves it."""
+    rows = connection.execute(
+        """
+        SELECT DISTINCT ON (ranked_day_start)
+               id, state = 'Complete' AND coverage_complete, start_trophies,
+               COALESCE(
+                   (formula_components ->> 'start_reading_trophies')::int,
+                   start_trophies
+               ),
+               end_baseline_id, start_baseline_id
+        FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start IN (%s, %s)
+          AND reconciliation_rule_version = %s
+        ORDER BY ranked_day_start, version DESC
+        """,
+        (player_id, day_start, day_start + timedelta(days=1),
+         RECONCILIATION_RULE_VERSION),
+    ).fetchall()
+    if len(rows) < 2 or rows[0][1] or rows[0][4] is None or rows[0][4] != rows[1][5]:
+        return False
+    proven = proven_end(database, connection, int(rows[0][0]))
+    return rows[1][2] != (rows[1][3] if proven is None else proven)
 
 
 def finish_recalculation(
@@ -342,6 +387,10 @@ def recalculate_ranked_day(
         connection, player_id, ranked_day
     )
     previous = ranked_day_inputs.load_previous_day(connection, player_id, ranked_day)
+    if previous is not None and not previous.complete and previous.version_id:
+        previous = replace(previous, proven_end=proven_end(
+            database, connection, previous.version_id
+        ))
     zero_result_attacks, zero_result_defenses = ranked_day_inputs.slot_counts(
         ranked_day_inputs.load_zero_result_slots(connection, coverage)
         | ranked_day_inputs.load_late_zero_result_slots(

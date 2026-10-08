@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import Any
 
-from . import reconciliation_db
+from . import ranked_day_inputs, reconciliation_db
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -257,7 +257,12 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
                     (player_id, first_day),
                 ).fetchall()
                 # Each day's result reads the day before it, so they are
-                # recalculated oldest first.
+                # recalculated oldest first, after every day's lock is taken
+                # in that order, before any Reset's.
+                for (day_start,) in saved_days:
+                    ranked_day_inputs.lock_ranked_day(
+                        connection, player_id, ranked_day_for(day_start)
+                    )
                 for (day_start,) in saved_days:
                     reconciliation_db.recalculate_ranked_day(
                         database,
