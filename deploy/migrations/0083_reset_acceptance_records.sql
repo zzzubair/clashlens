@@ -43,6 +43,6 @@ ALTER TABLE collector_work
 GRANT SELECT ON TABLE observation_processing_outcomes, ranked_day_versions
     TO clashlens_collector;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (82)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (83)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

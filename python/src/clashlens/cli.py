@@ -64,8 +64,8 @@ from .worker import (
     TimedMaintenance,
     process_concurrently,
     process_until_stopped,
-    start_processes,
     response_lane_count,
+    start_processes,
 )
 from .worker_liveness import ProgressMark, progress_file, worker_readiness
 
