@@ -29,6 +29,7 @@ from .db import (
     ended_day_priority,
 )
 from .domain import RANKED_DAY_DURATION, ranked_day_for
+from .profile import normalize_player_tag
 
 
 def complete_snapshot(database: Database, claim: Claim) -> None:
@@ -348,6 +349,17 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     and row[3] is not None
                 }
 
+            # A board orders by the rule of the generation its inputs were
+            # frozen for. One frozen under the older rule, whose inputs may
+            # hold no Season attacks, keeps that rule's SHA-256 tag hash
+            # order until the board rebuild check
+            # (boundary.queue_board_rebuilds) rebuilds it.
+            ordering_rule_version = (
+                _text_value(generation_row[8])
+                if generation_row is not None
+                else SNAPSHOT_ORDERING_RULE_VERSION
+            )
+            older_order = ordering_rule_version != SNAPSHOT_ORDERING_RULE_VERSION
             entries: list[dict[str, Any]] = []
             for row in profile_rows:
                 # Without proof, a reading stays as it is and is marked
@@ -374,7 +386,13 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         "age_seconds": age_seconds,
                         "freshness": freshness,
                         "confidence": "confirmed" if proven else "uncertain",
-                        "tie_hash": deterministic_tag_hash(_text_value(row[1])),
+                        "tie_hash": (
+                            hashlib.sha256(
+                                normalize_player_tag(_text_value(row[1])).encode("ascii")
+                            ).hexdigest()
+                            if older_order
+                            else deterministic_tag_hash(_text_value(row[1]))
+                        ),
                         "official": official_by_player.get(int(row[0])),
                         "season_attacks": season_attacks.get(int(row[0]), (0, 0)),
                     }
@@ -382,7 +400,11 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
             entries.sort(
                 key=lambda item: (
                     -int(item["trophies"]),
-                    *tie_order_key(*item["season_attacks"], str(item["tag"])),
+                    *(
+                        (str(item["tie_hash"]), str(item["tag"]))
+                        if older_order
+                        else tie_order_key(*item["season_attacks"], str(item["tag"]))
+                    ),
                 )
             )
 
@@ -622,15 +644,6 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 }
                 for entry in entries
             ]
-            # A board keeps the ordering rule of the generation its inputs
-            # were frozen for. Inputs frozen before the shared tie order hold
-            # no Season attacks, so such a board keeps the older rule and the
-            # board rebuild check (boundary.queue_board_rebuilds) rebuilds it.
-            ordering_rule_version = (
-                _text_value(generation_row[8])
-                if generation_row is not None
-                else SNAPSHOT_ORDERING_RULE_VERSION
-            )
             if generation_row is not None:
                 hash_payload = {
                     "manifest_digest": manifest_digest_value,

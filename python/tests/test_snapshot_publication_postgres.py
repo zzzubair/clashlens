@@ -966,8 +966,9 @@ def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
 ) -> None:
     boundary = datetime(2026, 8, 5, 5, tzinfo=UTC)
     season_start = ranked_day_for(boundary - timedelta(days=1)).season_start
-    # The tag hash alone would put ``first`` ahead.
-    first, second = sorted(("#2PP", "#28"), key=deterministic_tag_hash)
+    # The tag hash alone would put ``first`` ahead; the older rule's SHA-256
+    # tag hash puts ``second`` ahead.
+    first, second = sorted(("#2PP", "#8PY"), key=deterministic_tag_hash)
     with domain_database(database_url) as connection_info:
         for tag in (first, second):
             _process_profile(
@@ -1041,10 +1042,11 @@ def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
         finally:
             database.close()
     if frozen_before:
-        # Labelled by the older rule, so the board rebuild check rebuilds it.
+        # Ordered and labelled by the older rule, so the board rebuild check
+        # rebuilds it.
         assert [(text(row[0]), row[1], text(row[2])) for row in order] == [
-            (first, 6123, "tracked-player-order-v1"),
             (second, 6123, "tracked-player-order-v1"),
+            (first, 6123, "tracked-player-order-v1"),
         ]
         assert frozen == {ids[first]: None, ids[second]: None}
         return
