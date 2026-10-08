@@ -49,7 +49,7 @@ deletion still require their specific approvals.
 
 | Area | Agreed behavior and implementation gap | Supporting detail |
 | --- | --- | --- |
-| Collection and discovery | Keep every confirmed real tag regardless of Town Hall or league. Automatically track eligible Legend I players, without a Start tracking button or public-lookup login. Manual list imports are locally verified using existing database/eligibility functions; no reusable import feature is required for launch. Production discovers untracked battle opponents and Top-200 players, at most 500 waiting checks at once, and re-checks listed Legend II players for promotion each Monday from 06:00 UTC ([collector polling](collector-polling.md)); clan fetching is missing. | [#125](https://github.com/zzzubair/clashlens/issues/125), [manual verification](manual-list-import-validation.md) |
+| Collection and discovery | Keep every confirmed real tag regardless of Town Hall or league. Automatically track eligible Legend I players, without a Start tracking button or public-lookup login. Manual list imports are locally verified using existing database/eligibility functions; no reusable import feature is required for launch. Production discovers untracked battle opponents and Top-200 players, keeping each one due a check until answered with at most 500 waiting checks at once, and re-checks listed Legend II, then Legend III, players for promotion each Monday from 06:00 UTC ([collector polling](collector-polling.md)). Clan players arrive only through lab list imports, which use the same due state; production clan fetching is a follow-up. | [#125](https://github.com/zzzubair/clashlens/issues/125), [manual verification](manual-list-import-validation.md) |
 | Clan discovery | Fetch a clan on first encounter and its member list daily. Reuse identities across lists, opponents, user input and clans. Size automatic growth before enabling it; a permanent newcomer waiting list is not the chosen product. | #125, [#128](https://github.com/zzzubair/clashlens/issues/128) |
 | Search and player pages | Name search includes currently tracked players or players with recorded history. Other known tags remain directly accessible with an eligibility explanation and any history, without a full current profile. Automatic first lookup and these search/page rules are implemented in source; see [website behavior and checks](../website/README.md). Production rollout remains separate. | #125, [#127](https://github.com/zzzubair/clashlens/issues/127) |
 | Accuracy, Reset and rankings | Preserve evidence, honest missing/partial results, one battle across duplicate reports, 05:00 UTC Legend days and 28-day seasons. Public rank is among Clash Lens tracked players. A full real Legend day at 12,500 active players, plus weekly known-player checks, is still unproven. | [Domain contract](domain.md), #128 |
@@ -63,7 +63,7 @@ deletion still require their specific approvals.
 
 The [domain rules](domain.md#identity-and-eligibility) own the agreed eligibility
 cadence and evidence requirements. Weekly scheduling and response reuse are
-implemented behind a switch that defaults to off; see the
+implemented behind a switch; see the
 [runtime contract and isolated request measurement](collector-polling.md#weekly-eligibility-switch).
 Database validation of the final response-reuse and restart corrections remains
 pending. Combined live-player capacity and production scheduling remain

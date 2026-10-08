@@ -269,6 +269,31 @@ def test_discovery_prune_preview_apply_and_rerun(database_url: str, archive_serv
             assert rerun["deleted_known_player_discoveries"] == 0
 
 
+def test_a_pruned_battle_opponent_sighting_keeps_the_player_a_battle_opponent(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _process(connection_info, archive_server, "opponent-kept")
+        _age_work(connection_info)
+        _confirm_anchor(connection_info, archive_server)
+
+        def opponents(connection) -> int:
+            report = connection.execute(
+                "SELECT clashlens_population_report(now(), '0')"
+            ).fetchone()[0]
+            return report["untracked_this_week"]["battle_opponents"]["total"]
+
+        with psycopg.connect(connection_info) as connection:
+            assert opponents(connection) == 1
+            assert prune_completed_history(connection, apply=True)[
+                "deleted_known_player_discoveries"
+            ] == 1
+            assert connection.execute(
+                "SELECT count(*) FROM known_player_discoveries"
+            ).fetchone()[0] == 0
+            assert opponents(connection) == 1
+
+
 def test_discovery_prune_unknown_boundary_live_season_and_recent(
     database_url: str, archive_server
 ) -> None:
@@ -586,7 +611,7 @@ def test_discovery_scheduling_and_replay_survive_cleanup(
                     (fresh_observation,),
                 ).fetchone()[0] == 1
                 assert connection.execute(
-                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
+                    "SELECT count(*) FROM players WHERE eligibility_due_at IS NOT NULL"
                 ).fetchone()[0] > 0
         finally:
             database.close()

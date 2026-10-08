@@ -32,8 +32,8 @@ caps at 20,000 tags and rejects duplicate input and later new imports. Launch
 lists will use the [verified manual operator procedure](manual-list-import-validation.md),
 which preserves existing identities and queues checks through existing functions.
 No reusable import feature is needed. Live import remains pending. Weekly
-scheduling and reuse are implemented behind the
-[default-off switch](collector-polling.md#weekly-eligibility-switch); production
+scheduling and reuse are implemented behind a
+[switch](collector-polling.md#weekly-eligibility-switch); production
 verification remains pending. For trial sizes and commands, see
 [local development](../README.md#local-development).
 For production key allocation and expansion, see

@@ -814,11 +814,16 @@ migration.
 
 **First checks:** `./ops logs worker --since '2 hours ago' --no-pager` for
 processing failures, then `./ops queue-status` and
-`./ops failed-items --limit 20`: opponent discovery queues one profile check
-per newly seen player, so a stalled collector or worker leaves them untracked.
+`./ops failed-items --limit 20`: opponent discovery saves each newly seen
+player as due a profile check, so a stalled collector or worker leaves them
+untracked. `podman exec clashlens-collector python -m clashlens.cli
+population-status --database-url-file /run/secrets/database-url` counts due
+players, this week's answers and players never answered
+([collector polling](collector-polling.md)).
 
-**Fix or escalate:** escalate; a player missed by discovery is checked again
-the next time a changed battle log names them.
+**Fix or escalate:** escalate; a due player is checked again 5 minutes after
+its check started, doubling to 6 hours, until answered. `population-status
+--repair` saves every never-answered untracked player as due again.
 
 **Recovered:** at most 10 players from the current or previous Legend day's
 battles have stayed untracked for over an hour, not counting players whose
