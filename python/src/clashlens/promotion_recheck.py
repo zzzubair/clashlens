@@ -18,9 +18,11 @@ for 192,000 Legend III players. These answers are not saved: a profile showing
 Legend I saves the player as due a discovery check newer than that answer
 (migration 0082), which saves the profile and starts tracking; any other
 answer only refreshes the list row, so a Legend III player promoted to Legend
-II is asked with Legend II next Monday. A request that fails, or an answer that cannot
-be read or shows an uncertain tier, leaves the player due; it is asked again
-once the rest of the list has been asked.
+II is asked with Legend II next Monday. A request that fails, or an answer that
+cannot be read or shows an uncertain tier, leaves the player due; it is asked
+again once the rest of its tier has been asked. Legend III players are asked
+only once no Legend II player is due, so a Legend II player left due is asked
+again before any Legend III player.
 """
 
 from __future__ import annotations
@@ -92,26 +94,26 @@ def has_spare_time(database: CollectorDatabase, now: datetime) -> bool:
 
 
 def due_tags(database: CollectorDatabase, now: datetime, skip: list[str]) -> list[str]:
-    """The next listed players not checked since the Monday Reset, Legend II first."""
-    tags: list[str] = []
+    """The next listed players not checked since the Monday Reset, outside ``skip``.
+
+    Legend III players come only once no Legend II player is due; while only
+    skipped Legend II players are due, nothing is returned.
+    """
     with database._connection() as connection:
         for tier in (LEGEND_II_TIER_ID, LEGEND_III_TIER_ID):
-            tags += [
-                str(row[0])
-                for row in connection.execute(
-                    """
-                    SELECT normalized_tag FROM promotion_candidates
-                    WHERE league_tier_id = %s AND checked_at < %s
-                      AND NOT (normalized_tag = ANY(%s::text[]))
-                    ORDER BY checked_at, normalized_tag
-                    LIMIT %s
-                    """,
-                    (tier, week_start(now), skip, BATCH_SIZE - len(tags)),
-                )
-            ]
-            if len(tags) == BATCH_SIZE:
-                break
-    return tags
+            due = connection.execute(
+                """
+                SELECT normalized_tag, normalized_tag = ANY(%s::text[])
+                FROM promotion_candidates
+                WHERE league_tier_id = %s AND checked_at < %s
+                ORDER BY normalized_tag = ANY(%s::text[]), checked_at, normalized_tag
+                LIMIT %s
+                """,
+                (skip, tier, week_start(now), skip, BATCH_SIZE),
+            ).fetchall()
+            if due:
+                return [str(tag) for tag, skipped in due if not skipped]
+    return []
 
 
 def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[str]:
@@ -250,9 +252,9 @@ async def check_batch(
 ) -> Counter[str] | None:
     """Ask for one batch of listed players; None when nothing could be asked.
 
-    Players asked this pass and left due are skipped until no other player is
-    due; that ends the pass, so ``attempted`` is cleared and None returned, and
-    the next pass asks them again.
+    Players asked this pass and left due are skipped until no other player of
+    their tier is due; that ends the pass, so ``attempted`` is cleared and None
+    returned, and the next pass asks them again.
     """
     if not await admit.open():
         return None

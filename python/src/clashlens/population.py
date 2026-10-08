@@ -7,8 +7,15 @@ prints one JSON object (migration 0082):
   naming this Season), ``waiting_to_sign_up`` (a Legend I profile not naming
   this Season, such as Season ID 0) and ``unavailable`` (the profile is no
   longer found), and how many still wait for their first battle log;
-* ``untracked``: known players not tracked, by eligibility, and how many of
-  them have this week's answer, a check waiting, a retry due, or no check;
+* ``first_battle_log_delay``: players whose first check was added in the last
+  7 days and who are now tracked, how many have a first battle log, and the
+  median, 95th-percentile and longest seconds from that check to the log;
+* ``untracked``: known players not tracked, by eligibility;
+* ``untracked_this_week``: for untracked battle opponents and for other known
+  players (imports, rankings, lookups, the promotion list) separately, how
+  many have this week's answer, a check waiting, a retry due, or no check;
+* ``old_classifications_remaining``: untracked players with a saved profile
+  but no recognized league, queued or not, until a recognized one is saved;
 * ``checks_this_week``: this week's weekly and discovery checks by outcome,
   with how many of their players are now tracked;
 * ``eligibility_due``: players saved as due an eligibility check;

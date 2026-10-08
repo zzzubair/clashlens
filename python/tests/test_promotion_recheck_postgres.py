@@ -169,16 +169,21 @@ def test_monday_recheck_queues_promoted_players_and_refreshes_the_list(
         now = MONDAY + timedelta(minutes=70)
         database = CollectorDatabase(connection_info)
         try:
-            # Legend II first, then Legend III; players checked since the Reset wait.
+            # Legend II first; players checked since the Reset wait.
             assert promotion_recheck.due_tags(database, now, []) == [
-                "#2QQ", "#8QQ", "#9QQ", "#CQQ", "#UQQ",
+                "#2QQ", "#8QQ", "#9QQ", "#CQQ",
             ]
         finally:
             database.close()
         assert _check(origin, connection_info, tmp_path, now) == Counter(
-            asked=5, promoted=1, listed=2, removed=2, failed=0, queued=1
+            asked=4, promoted=1, listed=1, removed=2, failed=0, queued=1
         )
-        assert sorted(_Provider.asked) == ["#2QQ", "#8QQ", "#9QQ", "#CQQ", "#UQQ"]
+        assert sorted(_Provider.asked) == ["#2QQ", "#8QQ", "#9QQ", "#CQQ"]
+        # Legend III once no Legend II player is due.
+        assert _check(origin, connection_info, tmp_path, now) == Counter(
+            asked=1, listed=1, failed=0, queued=0
+        )
+        assert _Provider.asked[-1] == "#UQQ"
         with psycopg.connect(connection_info) as connection:
             listed = connection.execute(
                 "SELECT normalized_tag, league_tier_id, trophies, checked_at > %s"
@@ -237,7 +242,7 @@ def test_monday_recheck_waits_for_06_00_late_live_players_and_settlement(
         assert _Provider.asked == []
         with psycopg.connect(connection_info) as connection:
             connection.execute("UPDATE collector_work SET status = 'cancelled'")
-        assert _check(origin, connection_info, tmp_path, now)["asked"] == 5
+        assert _check(origin, connection_info, tmp_path, now)["asked"] == 4
 
 
 def test_requests_go_out_paced_and_only_while_a_key_is_idle(
@@ -247,9 +252,9 @@ def test_requests_go_out_paced_and_only_while_a_key_is_idle(
         _seed(connection_info)
         now = MONDAY + timedelta(minutes=70)
         # After an idle stretch, requests still reach the API a twentieth of a second apart.
-        assert _check(origin, connection_info, tmp_path, now, rate=20.0)["asked"] == 5
+        assert _check(origin, connection_info, tmp_path, now, rate=20.0)["asked"] == 4
         gaps = [b - a for a, b in itertools.pairwise(_Provider.started)]
-        assert len(gaps) == 4 and min(gaps) >= 0.04
+        assert len(gaps) == 3 and min(gaps) >= 0.04
 
         with psycopg.connect(connection_info) as connection:
             connection.execute(
@@ -486,6 +491,30 @@ def test_players_left_due_are_asked_again_after_the_rest_of_the_list(
         # asked again only after the pass ends and its pause.
         assert [result and result["asked"] for result in results] == [1, 1, None, 1]
         assert _Provider.asked == ["#8QQ", "#9QQ", "#8QQ"]
+
+
+def test_a_legend_ii_player_left_due_is_asked_again_before_any_legend_iii_player(
+    database_url: str, tmp_path: Path
+) -> None:
+    answers = {
+        "#8QQ": (200, b"{not json"),
+        "#UQQ": (200, _profile("#UQQ", 105000034, "Legend III", 4650)),
+    }
+    with domain_database(database_url) as connection_info, _provider(answers) as origin:
+        _seed(connection_info)
+        now = MONDAY + timedelta(minutes=70)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "DELETE FROM promotion_candidates WHERE normalized_tag NOT IN ('#8QQ', '#UQQ')"
+            )
+        attempted: set[str] = set()
+        results = [_check(origin, connection_info, tmp_path, now, attempted) for _ in range(3)]
+        # The pass ends at the Legend II player left due instead of moving on.
+        assert [result and result["asked"] for result in results] == [1, None, 1]
+        answers["#8QQ"] = (200, _profile("#8QQ", 105000035, "Legend II", 5100))
+        results = [_check(origin, connection_info, tmp_path, now, attempted) for _ in range(3)]
+        assert [result and result["listed"] for result in results] == [None, 1, 1]
+        assert _Provider.asked == ["#8QQ", "#8QQ", "#8QQ", "#UQQ"]
 
 
 def test_a_failing_request_stops_the_rest_of_its_batch_first() -> None:

@@ -18,9 +18,14 @@
 -- (clashlens_admit_due_eligibility, run from clashlens_admit_discovery_profiles)
 -- clears a due player who is tracked or has a recognized profile or a
 -- not-found answer this week, waits for one with a check still waiting or a
--- profile fetched this week, and otherwise adds a discovery check, oldest due
--- first, while fewer than 500 wait. So a full queue only delays a player, and
--- a failed check is tried again without anyone naming the player again.
+-- profile fetched this week still being processed, and otherwise adds a
+-- discovery check, oldest due first, while fewer than 500 wait. So a full
+-- queue only delays a player, a failed check is tried again without anyone
+-- naming the player again, and a profile processed without a recognized
+-- league is fetched again on the next try instead of standing in for the week.
+-- Saving a player as due does not depend on waiting work, and every untracked
+-- player with an unfinished check, or this week's check, when this migration
+-- runs is saved as due now, so a check that later fails is still tried again.
 --
 -- eligibility_answer_after raises that week boundary for one player: the
 -- Monday re-check's unsaved answer showing Legend I needs a saved answer newer
@@ -29,14 +34,22 @@
 -- player nor stands in for the new check. Admission and the post-profile
 -- cancellation use the same raised boundary.
 --
--- About 26,600 players today; the two timestamps and the count add 20 bytes a
--- row, and the index holds only due players. The check index below holds only
+-- players.first_battle_log_at records when a player's first successful battle
+-- log arrived, for the discovery-to-first-log delay; it is set where
+-- first_battle_pending is cleared, and stays empty for players logged before
+-- this migration.
+--
+-- About 26,600 players today; the three timestamps and the count add 28 bytes
+-- a row, and the index holds only due players. The check index below holds only
 -- waiting discovery checks, at most about 500 rows.
 --
 -- clashlens_population_report and clashlens_repair_population back the
 -- collector-role population-status command: separate available, waiting to
--- sign up and unavailable tracked totals, this week's eligibility answers,
--- the due players, and the promotion list by tier. The repair marks due every
+-- sign up and unavailable tracked totals, the delay from a player's first
+-- check to their first battle log, this week's eligibility answers for
+-- battle opponents and other known players separately, the due players,
+-- saved profiles still without a recognized league, and the promotion list
+-- by tier. The repair marks due every
 -- untracked player with no recognized answer and no not-found answer, and adds
 -- to the promotion list every untracked player whose latest recognized
 -- profile shows Legend II or III (0076 copied only those with an accepted
@@ -48,6 +61,7 @@ ALTER TABLE players
     ADD COLUMN eligibility_due_at timestamptz,
     ADD COLUMN eligibility_answer_after timestamptz,
     ADD COLUMN eligibility_attempts integer NOT NULL DEFAULT 0,
+    ADD COLUMN first_battle_log_at timestamptz,
     ADD CONSTRAINT players_eligibility_due_state CHECK (
         eligibility_attempts >= 0
         AND (eligibility_due_at IS NOT NULL
@@ -60,6 +74,19 @@ CREATE INDEX collector_work_discovery_waiting
     ON collector_work (id)
     WHERE kind = 'discovery_profile' AND NOT eligibility_recheck
       AND status IN ('pending', 'waiting_retry');
+GRANT UPDATE (first_battle_log_at) ON TABLE players TO clashlens_collector;
+
+UPDATE players AS player SET eligibility_due_at = now()
+WHERE NOT player.active AND EXISTS (
+    SELECT 1 FROM collector_work AS work
+    WHERE work.player_id = player.id
+      AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
+      AND (work.status IN ('pending', 'waiting_retry')
+           OR (work.kind = 'discovery_profile'
+               AND work.coalescing_key = 'discovery-profile:' || player.id || ':'
+                   || to_char(clashlens_eligibility_week(now()) AT TIME ZONE 'UTC',
+                              'YYYY-MM-DD"T"HH24:MI:SS"Z"')))
+);
 
 -- A recognized profile or a not-found answer within the window. The
 -- recognized part is 0037's clashlens_eligibility_checked_since, found
@@ -117,6 +144,26 @@ AS $$
     LIMIT 1;
 $$;
 
+-- A successful profile fetch within the window while a successful profile
+-- response is still awaiting processing: either that fetch's own response or,
+-- for an unchanged answer, the earlier one it kept.
+CREATE FUNCTION clashlens_eligibility_processing_since(
+    requested_player_id bigint, boundary_at timestamptz, instant timestamptz
+)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+AS $$
+    SELECT clashlens_eligibility_fetched_since(requested_player_id, boundary_at, instant)
+       AND EXISTS (
+        SELECT 1 FROM collector_observations AS observation
+        JOIN python_processing_jobs AS job ON job.observation_id = observation.id
+        WHERE observation.player_id = requested_player_id
+          AND observation.endpoint = 'profile'
+          AND observation.http_status BETWEEN 200 AND 299
+          AND observation.response_completed_at <= instant
+          AND job.status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
+    );
+$$;
+
 CREATE FUNCTION clashlens_eligibility_retry_delay(attempts integer)
 RETURNS interval LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 RETURN least(
@@ -124,9 +171,9 @@ RETURN least(
     interval '6 hours'
 );
 
--- Save untracked players with no answer this week and no waiting check as
--- due now. A player already due keeps its next try and backoff. Returns how
--- many became due.
+-- Save untracked players with no answer this week as due now, whether or not
+-- a check is waiting. A player already due keeps its next try and backoff.
+-- Returns how many became due.
 CREATE FUNCTION clashlens_mark_eligibility_due(
     requested_player_ids bigint[], instant timestamptz
 )
@@ -152,13 +199,7 @@ BEGIN
     WHERE player.id = locked.id
       AND NOT player.active AND player.eligibility_due_at IS NULL
       AND NOT clashlens_eligibility_answered_since(
-          player.id, clashlens_eligibility_week(instant), instant)
-      AND NOT EXISTS (
-          SELECT 1 FROM collector_work AS work
-          WHERE work.player_id = player.id
-            AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
-            AND work.status IN ('pending', 'waiting_retry')
-      );
+          player.id, clashlens_eligibility_week(instant), instant);
     GET DIAGNOSTICS marked = ROW_COUNT;
     RETURN marked;
 END $$;
@@ -210,9 +251,9 @@ BEGIN
             WHERE work.player_id = candidate.id
               AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
               AND work.status IN ('pending', 'waiting_retry')
-        ) OR clashlens_eligibility_fetched_since(candidate.id, boundary_at, instant) THEN
-            -- A check is still waiting, its profile still awaits processing, or
-            -- this week's answer showed no recognized league: try again later.
+        ) OR clashlens_eligibility_processing_since(candidate.id, boundary_at, instant) THEN
+            -- A check is still waiting or this week's profile still awaits
+            -- processing: try again later.
             UPDATE players
             SET eligibility_due_at = instant
                 + clashlens_eligibility_retry_delay(candidate.eligibility_attempts)
@@ -247,7 +288,8 @@ BEGIN
 END $$;
 
 -- As 0075, and each check created moves its player to the next try, and
--- requested players left without a check are saved as due.
+-- requested players left without a check are saved as due. A profile fetched
+-- this week holds a player back only while it awaits processing.
 CREATE OR REPLACE FUNCTION clashlens_enqueue_eligibility_profiles(
     requested_player_ids bigint[], instant timestamptz, scheduled boolean
 )
@@ -301,12 +343,7 @@ BEGIN
                            AND observation.response_completed_at >= boundary_at
                            AND observation.response_completed_at <= instant))
           )
-          AND NOT EXISTS (
-              SELECT 1 FROM collector_response_state AS state
-              WHERE state.scope = 'player' AND state.identity_key = player.normalized_tag
-                AND state.endpoint = 'profile'
-                AND state.last_success_at >= boundary_at AND state.last_success_at <= instant
-          )
+          AND NOT clashlens_eligibility_processing_since(player.id, boundary_at, instant)
           AND NOT EXISTS (
               SELECT 1 FROM player_profile_versions AS version
               JOIN player_profile_effects AS effect ON effect.profile_version_id = version.id
@@ -353,6 +390,9 @@ BEGIN
 END $$;
 
 -- As 0068, with each player's raised answer boundary, then admit due players.
+-- Waiting work reuses this week's profile only while it awaits processing or
+-- once it shows a recognized league, so one processed without a recognized
+-- league is fetched again.
 CREATE OR REPLACE FUNCTION clashlens_admit_discovery_profiles(instant timestamptz)
 RETURNS void LANGUAGE sql SECURITY DEFINER
 AS $$
@@ -389,7 +429,7 @@ AS $$
     ) AS fresh
     WHERE work.player_id = player.id AND work.kind = 'discovery_profile'
       AND work.status IN ('pending', 'waiting_retry')
-      AND (clashlens_eligibility_fetched_since(
+      AND (clashlens_eligibility_processing_since(
           player.id,
           GREATEST(clashlens_eligibility_week(instant), player.eligibility_answer_after),
           instant)
@@ -510,7 +550,7 @@ AS $$
     ), known AS MATERIALIZED (
         SELECT player.id, player.active, player.eligibility_state,
                player.eligibility_due_at, player.eligibility_attempts,
-               player.first_battle_pending,
+               player.eligibility_answer_after, player.first_battle_pending,
                state.last_not_found_at IS NOT NULL
                    AND (state.last_success_at IS NULL
                         OR state.last_not_found_at > state.last_success_at) AS gone,
@@ -524,15 +564,32 @@ AS $$
           ON profile.id = player.current_profile_version_id
     ), untracked AS MATERIALIZED (
         SELECT known.*,
-               clashlens_eligibility_answered_since(known.id, week.start_at, instant)
+               clashlens_eligibility_answered_since(
+                   known.id, GREATEST(week.start_at, known.eligibility_answer_after), instant)
                    AS answered,
                EXISTS (
                    SELECT 1 FROM collector_work AS work
                    WHERE work.player_id = known.id
                      AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
                      AND work.status IN ('pending', 'waiting_retry')
-               ) AS waiting
+               ) AS waiting,
+               EXISTS (
+                   SELECT 1 FROM known_player_discoveries AS discovery
+                   WHERE discovery.player_id = known.id
+                     AND discovery.source_kind = 'battle_opponent'
+               ) AS opponent
         FROM known CROSS JOIN week WHERE NOT known.active
+    ), first_checks AS (
+        SELECT work.player_id, min(work.created_at) AS first_at
+        FROM collector_work AS work
+        JOIN players AS player ON player.id = work.player_id AND player.active
+        WHERE work.kind = 'discovery_profile'
+        GROUP BY work.player_id
+        HAVING min(work.created_at) >= instant - interval '7 days'
+    ), first_logs AS (
+        SELECT extract(epoch FROM player.first_battle_log_at - first_checks.first_at)::double precision
+                   AS seconds
+        FROM first_checks JOIN players AS player ON player.id = first_checks.player_id
     ), checks AS (
         SELECT work.eligibility_recheck AS weekly,
                jsonb_build_object(
@@ -577,6 +634,15 @@ AS $$
                 'first_battle_log_pending', count(*) FILTER (WHERE first_battle_pending)
             ) FROM known WHERE active
         ),
+        'first_battle_log_delay', (
+            SELECT jsonb_build_object(
+                'players', count(*),
+                'with_first_log', count(seconds),
+                'median_seconds', percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds),
+                'p95_seconds', percentile_cont(0.95) WITHIN GROUP (ORDER BY seconds),
+                'max_seconds', max(seconds)
+            ) FROM first_logs
+        ),
         'untracked', (
             SELECT jsonb_build_object(
                 'total', count(*),
@@ -586,14 +652,27 @@ AS $$
             ) FROM untracked
         ),
         'untracked_this_week', (
-            SELECT jsonb_build_object(
-                'answered', count(*) FILTER (WHERE answered),
-                'check_waiting', count(*) FILTER (WHERE NOT answered AND waiting),
-                'due_for_retry', count(*) FILTER (
-                    WHERE NOT answered AND NOT waiting AND eligibility_due_at IS NOT NULL),
-                'not_checked', count(*) FILTER (
-                    WHERE NOT answered AND NOT waiting AND eligibility_due_at IS NULL)
-            ) FROM untracked
+            SELECT jsonb_object_agg(population.name, (
+                SELECT jsonb_build_object(
+                    'total', count(*),
+                    'answered', count(*) FILTER (WHERE answered),
+                    'check_waiting', count(*) FILTER (WHERE NOT answered AND waiting),
+                    'due_for_retry', count(*) FILTER (
+                        WHERE NOT answered AND NOT waiting AND eligibility_due_at IS NOT NULL),
+                    'not_checked', count(*) FILTER (
+                        WHERE NOT answered AND NOT waiting AND eligibility_due_at IS NULL)
+                ) FROM untracked WHERE untracked.opponent = population.opponent
+            ))
+            FROM (VALUES ('battle_opponents', true), ('other_known', false))
+                AS population(name, opponent)
+        ),
+        'old_classifications_remaining', (
+            SELECT count(*) FROM untracked
+            WHERE eligibility_state IN ('unknown', 'uncertain') AND NOT gone
+              AND EXISTS (
+                  SELECT 1 FROM player_profile_versions AS version
+                  WHERE version.player_id = untracked.id
+              )
         ),
         'checks_this_week', jsonb_build_object(
             'weekly', COALESCE((SELECT outcome FROM checks WHERE weekly), '{}'),
@@ -636,6 +715,7 @@ BEGIN
     FOREACH signature IN ARRAY ARRAY[
         'clashlens_eligibility_answered_since(bigint,timestamptz,timestamptz)',
         'clashlens_latest_recognized_tier(bigint)',
+        'clashlens_eligibility_processing_since(bigint,timestamptz,timestamptz)',
         'clashlens_eligibility_retry_delay(integer)',
         'clashlens_mark_eligibility_due(bigint[],timestamptz)',
         'clashlens_admit_due_eligibility(timestamptz)',
@@ -653,6 +733,7 @@ END $$;
 REVOKE ALL ON FUNCTION
     clashlens_eligibility_answered_since(bigint,timestamptz,timestamptz),
     clashlens_latest_recognized_tier(bigint),
+    clashlens_eligibility_processing_since(bigint,timestamptz,timestamptz),
     clashlens_eligibility_retry_delay(integer),
     clashlens_mark_eligibility_due(bigint[],timestamptz),
     clashlens_admit_due_eligibility(timestamptz),

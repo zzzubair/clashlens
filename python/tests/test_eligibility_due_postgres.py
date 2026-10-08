@@ -12,9 +12,11 @@ import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from test_collector_db_postgres import _handoff, _hash
 from test_domain_processing_postgres import _processor
 
 from clashlens import population, promotion_candidates
+from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database, enqueue_discovered_players
 
 PROFILE = json.loads(
@@ -74,6 +76,13 @@ def _waiting(connection_info: str) -> int:
         return connection.execute(
             "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
             " AND status IN ('pending', 'waiting_retry')"
+        ).fetchone()[0]
+
+
+def _report(connection_info: str) -> dict:
+    with psycopg.connect(_as(connection_info, "clashlens_collector")) as connection:
+        return connection.execute(
+            "SELECT clashlens_population_report(now(), %s)", (SEASON_ID,)
         ).fetchone()[0]
 
 
@@ -171,6 +180,102 @@ def test_a_failed_check_is_retried_with_backoff_until_answered(database_url: str
         assert len(_checks(connection_info, player)) == 2
 
 
+def test_a_player_whose_waiting_check_fails_is_still_retried(
+    database_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with domain_database(database_url) as connection_info:
+        imported, repaired = _players(connection_info, 2)
+        with psycopg.connect(connection_info) as connection:
+            # This week's checks, added before the players were saved as due.
+            connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
+                    profile_status, battle_log_status, league_history_status
+                ) SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag, now(),
+                         'discovery-profile:' || id || ':' || to_char(
+                             clashlens_eligibility_week(now()) AT TIME ZONE 'UTC',
+                             'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                         'pending', 'not_applicable', 'pending'
+                  FROM players WHERE id = ANY(%s::bigint[])
+                """,
+                ([imported, repaired],),
+            )
+            # A list import names one player; the repair finds the other.
+            assert connection.execute(
+                "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])", ([imported],)
+            ).fetchone()[0] == 0
+        assert population.run_command(_as(connection_info, "clashlens_collector"), repair=True) == 0
+        assert json.loads(capsys.readouterr().out)["repair"]["marked_due"] == 1
+        now = datetime.now(UTC)
+        _admit(connection_info, now)
+        assert _waiting(connection_info) == 2
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE collector_work SET status = 'failed', failure_category = 'provider_failure'"
+            )
+        _admit(connection_info, now + timedelta(minutes=6))
+        for player in (imported, repaired):
+            assert _checks(connection_info, player) == [("week", "failed"), ("1", "pending")]
+
+
+def test_a_profile_without_a_recognized_league_is_fetched_again_once_processed(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        observed_at = datetime.now(UTC) - timedelta(seconds=30)
+        observation_id, _job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="unrecognized-this-week",
+            endpoint="profile",
+            body=json.dumps(
+                {**PROFILE, "tag": "#9QQ", "leagueTier": {"id": 105000099, "name": "New League"}}
+            ).encode(),
+            observed_at=observed_at,
+            normalized_tag="#9QQ",
+        )
+        with psycopg.connect(connection_info) as connection:
+            player = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#9QQ'"
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO collector_response_state (
+                    scope, identity_key, endpoint, player_id, normalized_tag,
+                    last_response_hash, last_content_fingerprint, last_occurrence_key,
+                    last_applied_occurrence_key, last_seen_at, last_success_at,
+                    last_observation_id
+                ) VALUES ('player', '#9QQ', 'profile', %s, '#9QQ', repeat('a', 64),
+                          repeat('a', 64), 'unrecognized-this-week', 'unrecognized-this-week',
+                          %s, %s, %s)
+                """,
+                (player, observed_at, observed_at, observation_id),
+            )
+        _discover(connection_info, [player])
+        now = datetime.now(UTC)
+        _admit(connection_info, now)
+        # While the profile is still being processed, the player waits.
+        assert _checks(connection_info, player) == []
+        assert _due(connection_info, player) == (now + timedelta(minutes=5), 0)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_once(owner="unrecognized") is not None
+        finally:
+            database.close()
+        _admit(connection_info, now + timedelta(minutes=6))
+        _admit(connection_info, now + timedelta(minutes=7))
+        # Processed without a recognized league, it neither settles the player
+        # nor stands in for the new check's profile.
+        assert _checks(connection_info, player) == [("week", "pending")]
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                "SELECT profile_status, profile_observation_id FROM collector_work"
+                " WHERE player_id = %s",
+                (player,),
+            ).fetchone() == ("pending", None)
+
+
 def test_one_check_for_a_player_named_by_several_sources(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         (player,) = _players(connection_info, 1)
@@ -245,6 +350,10 @@ def test_a_promotion_answer_needs_a_saved_profile_newer_than_this_weeks_answer(
                 " WHERE player_id = %s AND status = 'pending'",
                 (player,),
             ).fetchone() == ("pending", None)
+        # The report counts the player as waiting for that newer answer.
+        assert _report(connection_info)["untracked_this_week"]["other_known"] == {
+            "total": 1, "answered": 0, "check_waiting": 1, "due_for_retry": 0, "not_checked": 0,
+        }
 
 
 def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
@@ -256,7 +365,7 @@ def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
             ("#8QQ", LEGEND_II, "repair-legend-ii"),
             ("#9QQ", {"id": 105000099, "name": "New League"}, "repair-unknown-tier"),
         ):
-            store_observation(
+            observation_id, _job = store_observation(
                 connection_info,
                 archive_server,
                 occurrence_key=key,
@@ -290,12 +399,30 @@ def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
             unknown_tier = connection.execute(
                 "SELECT id, eligibility_state FROM players WHERE normalized_tag = '#9QQ'"
             ).fetchone()
+            # One player was seen as a battle opponent.
+            connection.execute(
+                "INSERT INTO known_player_discoveries"
+                " (player_id, observation_id, source_row_index, source_kind, discovered_at)"
+                " VALUES (%s, %s, 0, 'battle_opponent', now())",
+                (never, observation_id),
+            )
         assert unknown_tier[1] == "unknown"
 
         assert population.run_command(_as(connection_info, "clashlens_collector"), repair=False) == 0
         before = json.loads(capsys.readouterr().out)
         assert before["repair_candidates"] == 3
         assert before["promotion_list"]["known_but_unlisted"] == 1
+        assert before["old_classifications_remaining"] == 1
+        assert before["untracked_this_week"] == {
+            "battle_opponents": {
+                "total": 1, "answered": 0, "check_waiting": 0, "due_for_retry": 0,
+                "not_checked": 1,
+            },
+            "other_known": {
+                "total": 4, "answered": 1, "check_waiting": 0, "due_for_retry": 0,
+                "not_checked": 3,
+            },
+        }
 
         assert population.run_command(_as(connection_info, "clashlens_collector"), repair=True) == 0
         after = json.loads(capsys.readouterr().out)
@@ -307,10 +434,14 @@ def test_repair_marks_never_answered_players_due_and_lists_known_lower_legends(
         assert after["promotion_list"]["known_but_unlisted"] == 0
         assert after["eligibility_due"]["total"] == 3
         assert after["untracked"]["not_found"] == 1
+        assert after["untracked_this_week"]["battle_opponents"]["due_for_retry"] == 1
+        assert after["untracked_this_week"]["other_known"]["due_for_retry"] == 2
         _admit(connection_info, datetime.now(UTC))
         for player in (never, uncertain, unknown_tier[0]):
             assert _checks(connection_info, player) == [("week", "pending")]
         assert _checks(connection_info, gone) == []
+        # A queued check does not count as a new classification.
+        assert _report(connection_info)["old_classifications_remaining"] == 1
 
 
 def test_tracked_players_are_split_into_available_waiting_and_unavailable(
@@ -358,6 +489,43 @@ def test_tracked_players_are_split_into_available_waiting_and_unavailable(
         assert report["tracked"] == {
             "total": 3, "available": 1, "waiting_to_sign_up": 1, "unavailable": 1,
             "first_battle_log_pending": 3,
+        }
+
+
+def test_the_delay_from_a_first_check_to_the_first_battle_log_is_reported(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        logged, waiting = _players(connection_info, 2)
+        _discover(connection_info, [logged, waiting])
+        _admit(connection_info, datetime.now(UTC))
+        with psycopg.connect(connection_info) as connection:
+            # Profile processing found both in Legend I.
+            connection.execute(
+                "UPDATE players SET active = true, eligibility_state = 'eligible'"
+                " WHERE id = ANY(%s::bigint[])",
+                ([logged, waiting],),
+            )
+            first_at = connection.execute(
+                "SELECT created_at FROM collector_work WHERE player_id = %s", (logged,)
+            ).fetchone()[0]
+        collector = CollectorDatabase(_as(connection_info, "clashlens_collector"))
+        try:
+            collector.record_response(
+                _handoff(
+                    occurrence_key="first-battle-log",
+                    response_hash=_hash("first-battle-log"),
+                    player_id=logged,
+                    tag="#Q1",
+                    endpoint="battle_log",
+                    completed_at=first_at + timedelta(seconds=90),
+                )
+            )
+        finally:
+            collector.close()
+        assert _report(connection_info)["first_battle_log_delay"] == {
+            "players": 2, "with_first_log": 1,
+            "median_seconds": 90, "p95_seconds": 90, "max_seconds": 90,
         }
 
 

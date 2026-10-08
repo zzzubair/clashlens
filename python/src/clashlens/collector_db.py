@@ -1057,9 +1057,9 @@ class CollectorDatabase:
             and 200 <= handoff.http_status < 300
         ):
             connection.execute(
-                """UPDATE players SET first_battle_pending = false
+                """UPDATE players SET first_battle_pending = false, first_battle_log_at = %s
                 WHERE id = %s AND first_battle_pending""",
-                (handoff.player_id,),
+                (handoff.response_completed_at, handoff.player_id),
             )
 
     def record_response(self, handoff: ResponseHandoff) -> ResponseResult:

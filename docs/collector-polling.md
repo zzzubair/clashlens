@@ -38,9 +38,12 @@ A player stays due until tracked or until this week brings a recognized
 profile or a not-found answer, so a full queue only delays them. Each check
 moves the player's next try 5 minutes later, doubling with each check to at
 most 6 hours: when a check fails, the player is checked again then without
-anything naming them again. A due player whose check is still waiting, or
-whose profile fetched this week is still being processed or shows no
-recognized league, waits for the next try instead of getting another check.
+anything naming them again. Saving a player as due does not depend on a
+waiting check, so one that later fails is still tried again. A due player
+whose check is still waiting, or whose profile fetched this week is still
+being processed, waits for the next try instead of getting another check;
+once that profile is processed without a recognized league, the next try
+fetches the profile again.
 Legend I gains about 2,000 players a
 week, so this costs about 570 requests a day, plus about 4,000 once for the
 roughly 2,000 Legend I players not yet tracked. Each player found eligible is
@@ -98,7 +101,9 @@ the check. The row is marked checked once the player is tracked or saved as
 due; a player another job holds is asked again later. Any other answer
 refreshes or removes the list row. A failed request, or an answer that cannot
 be read or shows an uncertain tier, leaves the player due; it is asked again
-once the rest of the list has been asked, at most once a minute. Each stretch
+once the rest of its tier has been asked, at most once a minute. Legend III
+players are asked only once no Legend II player is due, so a Legend II player
+left due is asked again before any Legend III player. Each stretch
 of work ends with one `promotion_recheck` line in the collector log counting
 asked, promoted, listed, removed, failed and queued players. At the lab's
 October 2026 list this is about 59,000 Legend II requests each Monday, plus
@@ -108,11 +113,16 @@ Legend II takes about an hour and Legend III about three more.
 
 The `population-status` command, run like `load-promotion-candidates`,
 prints tracked players split into available (a current profile naming this
-Season), waiting to sign up and unavailable (profile not found); untracked
-players and this week's answers, waiting checks, due retries and players not
-yet checked; this week's weekly and discovery checks by outcome, with how
-many of their players are now tracked; the due players; and the
-promotion list by tier, with how many were asked since the Reset and known
+Season), waiting to sign up and unavailable (profile not found); for players
+whose first check was added in the last 7 days and who are now tracked, the
+median, 95th-percentile and longest time from that check to their first
+battle log (first logs before migration 0082 are not recorded); untracked
+players, and this week's answers, waiting checks, due retries and players not
+yet checked for battle opponents and other known players separately; this
+week's weekly and discovery checks by outcome, with how many of their players
+are now tracked; the due players; untracked players whose saved profile still
+shows no recognized league, which drops only as recognized profiles are
+saved; and the promotion list by tier, with how many were asked since the Reset and known
 Legend II and III players missing from it. `--repair` first saves as due
 every untracked player that never had a recognized or not-found answer, and
 lists every untracked player whose latest recognized profile shows Legend II
@@ -159,11 +169,13 @@ unrecognized response never becomes proof of eligibility. Each such check,
 weekly ones included, leaves the player due, so once it fails the ordinary
 discovery checks above try again.
 
-Successful profile fetches completed since Monday's 05:00 UTC Reset prevent
-another routine profile request, even while processing is pending or after a
-later fetch fails. This reuse applies both before enqueueing and when admitting
-already-queued ordinary discovery or weekly work. Unchanged responses also
-count when they retain an older observation awaiting processing. Reuse does
+A successful profile fetch completed since Monday's 05:00 UTC Reset prevents
+another routine profile request while it awaits processing or once it shows a
+recognized league; once processed without one, the next check fetches the
+profile again (migration 0082). This applies both before enqueueing and when
+admitting already-queued ordinary discovery or weekly work. Unchanged
+responses also count when they retain an older observation awaiting
+processing. Reuse does
 not confirm eligibility; only processing recognized tier evidence does that.
 An unchanged answer to discovery work is saved and processed again when the
 retained profile was processed without a recognized league tier.
