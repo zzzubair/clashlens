@@ -1316,3 +1316,74 @@ def test_a_late_attack_never_explains_a_survivors_official_total(
 
     assert days[last_day - timedelta(days=1)][1] == "Complete"
     assert days[last_day][1:5] == ("Inconsistent", "uncertain", 6000, final - WIN)
+
+
+def test_official_total_leaves_an_older_seasons_last_day_as_saved(
+    database_url: str, archive_server
+) -> None:
+    """League history gives the official total for a Season two Seasons back,
+    as one read on 9 October 2026 does for the last day of 6 September. The
+    day's calculation accepts only the current and previous Seasons, so
+    nothing is queued and the saved result stays as it was."""
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.domain import SEASON_ANCHOR_RULE_VERSION
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    later = boundary + timedelta(days=28)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    saved = (
+        "SELECT id, state, next_start_trophies FROM ranked_day_versions"
+        f" WHERE ranked_day_start = '{last_day.isoformat()}' ORDER BY id"
+    )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_dropped_profile(final), log=_log(*battles))
+        _process(connection_info, archive_server, jobs)
+        before = _rows(connection_info, saved)
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            # Two Seasons on, the latest confirmed Season starts 28 days later.
+            connection.execute("SET session_replication_role = replica")
+            connection.execute(
+                """
+                INSERT INTO legend_season_anchors (
+                    current_league_season_id, previous_league_season_id,
+                    current_start, previous_start, anchor_rule_version,
+                    source_profile_version_id, state
+                ) VALUES (%s, %s, %s, %s, %s, 1, 'confirmed')
+                """,
+                (str(int(later.timestamp())), str(int(boundary.timestamp())),
+                 later, boundary, SEASON_ANCHOR_RULE_VERSION),
+            )
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=later + timedelta(days=4),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final - 30, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )[1]])
+        after = _rows(connection_info, saved)
+        queued = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )[0][0]
+
+    assert before
+    assert queued == 0
+    assert after == before

@@ -903,10 +903,9 @@ schedules 0 while the first run's requests are still waiting, and a fresh set
 once they finished. The collector sends them on the ordinary lane within the
 normal key budget, about 13,000 requests at October 2026 membership. Each
 official Season-end total saved recalculates the player's kept last day of
-that Season at backfill priority. It corrects that day only for the current
-or previous Season; an older Season's kept last day is saved again as Partial
-(`season_anchor_conflict`), as a day's calculation accepts only days of those
-two Seasons.
+that Season at backfill priority, only for the current or previous Season,
+the two Seasons a day's calculation accepts; an older Season's kept last day
+is not recalculated and stays as saved.
 
 ### Website unreachable from outside
 
