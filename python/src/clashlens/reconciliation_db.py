@@ -200,6 +200,37 @@ def _start_moved(
     return rows[1][2] != (rows[1][3] if proven is None else proven)
 
 
+def proven_end_moved(
+    database: Database, connection: Any, player_id: int, day_start: datetime
+) -> bool:
+    """Whether a reader of the day's proven end (``proven_end``) used another
+    one than the day gives now, whatever the day's state: the next saved
+    day's start (``_start_moved``), or the settlement check of the Reset
+    after the day's end, rooted on that end or left without a root."""
+    if _start_moved(database, connection, player_id, day_start):
+        return True
+    check = connection.execute(
+        """
+        SELECT reasons ? 'independent_root_missing',
+               proof_json -> 'catchup' -> 'root' ->> 'fingerprint'
+                   LIKE 'previous-day-%%',
+               (proof_json -> 'catchup' -> 'root' ->> 'trophies')::int,
+               (SELECT id FROM ranked_day_versions
+                WHERE player_id = %s AND ranked_day_start = %s
+                  AND reconciliation_rule_version = %s
+                ORDER BY version DESC LIMIT 1)
+        FROM reset_boundary_settlements
+        WHERE player_id = %s AND boundary_at = %s
+        """,
+        (player_id, day_start, RECONCILIATION_RULE_VERSION, player_id,
+         day_start + timedelta(days=2)),
+    ).fetchone()
+    if check is None or check[3] is None or not (check[0] or check[1]):
+        return False
+    used = check[2] if check[1] else None
+    return proven_end(database, connection, int(check[3])) != used
+
+
 def finish_recalculation(
     database: Database, connection: Any, player_id: int, day_starts: Iterable[datetime]
 ) -> None:

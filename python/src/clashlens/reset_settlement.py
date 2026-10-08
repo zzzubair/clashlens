@@ -487,13 +487,15 @@ def queue_later_reading_recheck(
     ``boundary_at`` when evidence just saved, named by ``cause``, changes its
     later reading (``ranked_day_inputs.load_later_reading``): a profile read
     at ``read_at``, or a battle or unreadable row moving where that reading
-    can come from. Only a day whose result a later reading settles or
-    disproves is checked (``ranked_day_inputs.LATER_READING_DAY_SQL``), a
-    Complete one saved without a later reading only when the new one
-    disproves it. The day's calculation lock makes the two meet: a
-    calculation either reads this evidence or has finished before this reads
-    its result. The day's own day-end recheck reads any such evidence saved
-    before it runs; this covers evidence saved after, such as a response
+    can come from: a day whose result a later reading settles or disproves
+    (``ranked_day_inputs.LATER_READING_DAY_SQL``), a Complete one saved
+    without a later reading only when the new one disproves it, and, whatever
+    its state, a day whose proven end a reader used is no longer the one it
+    proves (``reconciliation_db.proven_end_moved``), whose recalculation
+    judges again the checks it roots. The day's calculation lock makes the
+    two meet: a calculation either reads this evidence or has finished
+    before this reads its result. The day-end recheck reads evidence saved
+    before it; this covers evidence saved after, such as a response
     recovered late. Queued once per day and cause, at backfill priority.
     Whatever the day's state, the Reset's board is checked too
     (``_queue_board_correction``)."""
@@ -515,27 +517,26 @@ def queue_later_reading_recheck(
         """,
         (player_id, ended.start, RECONCILIATION_RULE_VERSION),
     ).fetchone()
-    if (
-        day is None
-        or not day[0]
-        or day[4] is None
-        or read_at is not None and read_at <= day[4]
-    ):
+    if day is None or day[4] is None or read_at is not None and read_at <= day[4]:
         return
     current = ranked_day_inputs.load_later_reading(
         database, connection, player_id, ended, day[4]
-    )
+    ) if day[0] else None
     saved = (
         (datetime.fromisoformat(day[5]["read_at"]), int(day[5]["trophies"]))
         if day[5] else None
     )
     if day[1] == "Complete" and saved is None:
-        if current is None or day[2] is None or not later_reading_contradicts(
+        moved = current is not None and day[2] is not None and later_reading_contradicts(
             current[1], int(day[2]), int(day[3])
-        ):
+        )
+    else:
+        moved = current != saved
+    if not (day[0] and moved):
+        from .reconciliation_db import proven_end_moved
+
+        if not proven_end_moved(database, connection, player_id, ended.start):
             return
-    elif current == saved:
-        return
     day_text = ended.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if connection.execute(
         """

@@ -1208,3 +1208,77 @@ def test_a_day_proven_by_two_readings_starts_the_next_day_after_its_loss(
         for entry in summary["daily_entries"]
     }[ranked_day_for(DAY_B).day_number] != "accepted"
 
+
+def _check_on_the_day_before(
+    connection_info: str, archive_server, readings: list[tuple[int, int]],
+    recovered: tuple[int, int],
+) -> tuple[tuple, tuple, int]:
+    """The settlement check of ``test_reset_settlement_proof_postgres``, with
+    no settled Reset before it: the day before its ended day is Partial,
+    with no start reading, 8 defenses and a Reset reading of 5,000 at 05:01.
+    Profiles (minutes after that Reset, trophies) ``readings`` are saved
+    before the check, ``recovered`` after it. Return the check's verdict
+    before and after ``recovered``, and its target."""
+    from test_reset_settlement_proof_postgres import (
+        ORDERS,
+        RESET,
+        START,
+        _battles,
+        _save,
+        _scenario,
+        _verdict,
+    )
+    from test_reset_settlement_proof_postgres import _process as _drain
+
+    ended = RESET - timedelta(days=1)
+    stamp = ended.strftime("%Y%m%dT%H%M%S.000Z")
+    log = {"items": [
+        row for row in json.loads(_battles(RESET)[0])["items"]
+        if row["battleTimestamp"] < stamp
+    ]}
+    _drain(connection_info, archive_server, _reset_work(
+        connection_info, archive_server, ended, profile=_profile(START),
+        log=json.dumps(log).encode(), profile_at=ended + timedelta(minutes=1),
+    ))
+
+    def profiles(saved: list[tuple[int, int]]) -> None:
+        _drain(connection_info, archive_server, [
+            _save(connection_info, archive_server, "profile", _profile(trophies),
+                  ended + timedelta(minutes=minutes))[1]
+            for minutes, trophies in saved
+        ])
+
+    profiles(readings)
+    scenario = _scenario(connection_info, archive_server, with_root=False)
+    _drain(connection_info, archive_server,
+           [scenario[job] for job in ORDERS["named_check_last"]])
+    before = _verdict(connection_info)[:3]
+    profiles([recovered])
+    return before, _verdict(connection_info)[:3], scenario["target"]
+
+
+def test_a_recovered_reading_of_the_day_before_judges_the_check_again(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """A quiet reading of 5,000 at 05:25, recovered after the check found no
+    start to root on, proves the Partial day before's end, and the check is
+    judged again and settles on it. Saved before the check, it roots the
+    check; a reading of 5,040 at 05:30, recovered after, takes that proof
+    away, and the settled check is judged again and loses its root."""
+    from test_reset_settlement_proof_postgres import START, SWITCH
+
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        missing, proven, target = _check_on_the_day_before(
+            connection_info, archive_server, [], (25, START)
+        )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        settled, withdrawn, _ = _check_on_the_day_before(
+            connection_info, archive_server, [(25, START)], (30, START + 40)
+        )
+
+    assert missing[0] == "unresolved" and "independent_root_missing" in missing[2]
+    assert proven == ("settled", target, [])
+    assert settled == ("settled", target, [])
+    assert withdrawn[0] == "unresolved" and "independent_root_missing" in withdrawn[2]
+
