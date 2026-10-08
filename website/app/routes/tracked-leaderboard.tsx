@@ -276,8 +276,10 @@ export default function TrackedLeaderboardRoute() {
               <strong>These standings are incomplete.</strong> No player updates were
               saved in the {formatAge(secondsBeforeReset(newestInput))} before this
               day&apos;s Reset; the newest is from <LocalTimestamp value={newestInput} />.
-              Trophies are each player&apos;s last saved value before then, not their
-              end-of-day result.
+              Trophies start from each player&apos;s last saved value before then.
+              Battles recorded after it are added where we can confirm them, except on
+              boards published before we started adding them, so trophies may still miss
+              changes made before the Reset.
             </p>
           </div>
         ) : null}

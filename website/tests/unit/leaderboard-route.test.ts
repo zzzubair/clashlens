@@ -229,6 +229,7 @@ it.each([
     expect(html.includes("These standings are incomplete.")).toBe(incomplete);
     if (incomplete) {
       expect(html).toContain("No player updates were saved in the 4 hours before");
+      expect(html).toContain("Battles recorded after it are added where we can confirm");
       expect(html).toMatch(
         /the newest is from <time[^>]+dateTime="2026-10-03T00:00:19Z"/,
       );
