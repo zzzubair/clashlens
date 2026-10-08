@@ -458,7 +458,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 observed_trophy_change = next_start_trophies - start_trophies
                 residual = 0
             if (
-                zero_defense_loss
+                not defense_count + data.zero_result_defense_slots
                 and automatic_state == "not_applicable"
                 and "dropped_from_legend_i" in data.end_baseline_evidence
             ):

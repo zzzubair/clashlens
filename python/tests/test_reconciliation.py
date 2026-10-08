@@ -298,6 +298,11 @@ def test_dropped_zero_defense_day_stays_partial_until_a_reading_shows_its_loss()
     )
     assert (charged.state, charged.automatic_defense_loss) == ("Complete", 240)
     assert charged.next_start_trophies == 4700
+    # Without a complete previous day the loss has no basis, so stays unproven.
+    for previous in (None, PreviousRankedDay(False, 8, 240, 0)):
+        assert reconcile_ranked_day(replace(day, previous_day=previous)).state == (
+            "Partial"
+        )
 
 
 def _battles(tag: str, lens: str, count: int, total: int) -> tuple[BattleContribution, ...]:
