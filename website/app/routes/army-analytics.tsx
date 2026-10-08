@@ -1086,8 +1086,11 @@ export default function ArmyAnalyticsRoute() {
                 ? `No player was in the top ${streakTop} on every selected day.`
                 : `${cohortPlayers.toLocaleString()} ${cohortPlayers === 1 ? "player was" : "players were"} in the top ${streakTop} on every selected day.`}{" "}
               Top {streakTop} on a day means the top {streakTop} of the leaderboard saved
-              just before that day’s Reset (05:00 UTC), ranked by the last trophy count we
-              saw for each player.
+              just before that day’s Reset (05:00 UTC), ranked by each player’s total at
+              that Reset, before the game’s automatic defense loss: their last value saved
+              before the Reset plus the battles recorded after it. Boards published before
+              we started adding those battles, and not rebuilt since, use the saved value
+              alone, as do players whose later battles we can’t confirm.
               {oldTrophyPlayers > 0
                 ? ` ${oldTrophyPlayers.toLocaleString()} of these players had a trophy count over 10 minutes old at Reset on at least one day.`
                 : ""}{" "}
