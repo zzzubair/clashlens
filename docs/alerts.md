@@ -97,8 +97,8 @@ use the [operating notes](operating.md#respond-to-alerts).
   upload that failed permanently, however long ago, from the collector's
   `failed_processing` and `failed_uploads` counts. The alert says how many of
   each and how long ago the oldest failed, and recovers only when none are
-  left, through `./ops failed-items` (retry, or accepting a failed processing
-  job that cannot be repaired) or the replay path. A failed job keeps its
+  left, through `./ops failed-items` (retry, replay, or accepting a failed
+  processing job that cannot be repaired). A failed job keeps its
   failed state and history, but stops counting once a replay has processed the
   same saved response, shown by that response's successful processing result
   (`observation_processing_outcomes`), which stays after the finished replay
