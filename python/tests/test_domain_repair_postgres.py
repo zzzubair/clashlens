@@ -1209,13 +1209,15 @@ def test_a_board_from_an_unchanged_version_stays_uncertain_until_recalculated(
     assert recalculated == (4988, True)
 
 
+@pytest.mark.parametrize("day_end_waiting", [False, True])
 def test_season_repair_waits_for_the_calculations_its_jobs_queue_again(
-    database_url: str,
+    database_url: str, day_end_waiting: bool,
 ) -> None:
     """A Season repair's day job has run, but queued the day to be
-    calculated again, as when a Reset check it judged settled: until that
-    calculation has run, the repair stays at its days, and while it has
-    failed it holds the boards and summaries like any failed day job."""
+    calculated again, as when a Reset check it judged settled, even while
+    the day's own day-end calculation waits: until that calculation has
+    run, the repair stays at its days, and while it has failed it holds the
+    boards and summaries like any failed day job."""
     from domain_test_support import repair_season
     from test_boundary_manifest_postgres import (
         DAY_2_RESET,
@@ -1224,7 +1226,7 @@ def test_season_repair_waits_for_the_calculations_its_jobs_queue_again(
         _seed_days,
     )
 
-    from clashlens import reset_settlement
+    from clashlens import reconciliation_db, reset_settlement
     from clashlens.domain import ranked_day_for
 
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -1243,6 +1245,10 @@ def test_season_repair_waits_for_the_calculations_its_jobs_queue_again(
                     "UPDATE python_processing_jobs SET status = 'complete'"
                     " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
                 )
+                if day_end_waiting:
+                    reconciliation_db._enqueue_day_end_reconciliation(
+                        connection, 1, ranked_day_for(DAY_2_RESET - DAY)
+                    )
                 reset_settlement._queue_recalculation(
                     connection, 1, ranked_day_for(DAY_2_RESET - DAY), "check-follow-up"
                 )

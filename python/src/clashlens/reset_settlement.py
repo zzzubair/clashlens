@@ -134,6 +134,8 @@ class DayEnd:
     last_landed: datetime | None = None
     # Its start is 5,000 on a Season's Day 1 or the day before's proven end.
     start_proven: bool = False
+    # Whether the saved version stored its proof; one saved without proves nothing.
+    stored: bool = True
 
     @property
     def known_loss(self) -> int:
@@ -192,7 +194,8 @@ class DayEnd:
         if self.proof in {VERIFIED, BALANCED}:
             return int(self.final or 0), int(self.automatic_loss or 0)
         if (
-            self.end_reading is None
+            not self.stored
+            or self.end_reading is None
             or self.boundary_kind == "season"
             or self.boundary_kind == "weekly" and self.end_reading <= 5000
             or not self.coverage_complete
@@ -219,7 +222,7 @@ class DayEnd:
 
     @property
     def proof(self) -> str:
-        if self.before_loss is None:
+        if not self.stored or self.before_loss is None:
             return UNPROVEN
         if self.official_end or (
             self.settled is not None
@@ -295,7 +298,9 @@ def day_end(
     its calculation is about to save it, its settled Reset check's trophies
     and what its proof reads besides the day (``facts``). Its start is
     proven by 5,000 on a Season's Day 1 or by the proven end of the day
-    before that it saved when calculated (``previous_day.proven_end``)."""
+    before that it saved when calculated (``previous_day.proven_end``). With
+    no ``facts``, a version saved before proofs were stored, it proves
+    neither its start nor its end."""
     evidence = saved["input_evidence"] or {}
     reasons = set(saved["failure_reasons"] or ())
     end_evidence = evidence.get("end_baseline_evidence") or {}
@@ -330,8 +335,8 @@ def day_end(
         defense_slots=int(saved["defense_count"] or 0)
         + int(evidence.get("zero_result_defense_slots") or 0),
         coverage_complete=bool(saved["coverage_complete"]),
-        last_landed=max(landed, default=None),
-        start_proven=start is not None and (
+        last_landed=max(landed, default=None), stored=bool(facts),
+        start_proven=bool(facts) and start is not None and (
             saved["season_day_number"] == 1 and start == SEASON_START_TROPHIES
             or (evidence.get("previous_day") or {}).get("proven_end") == start
         ),
@@ -512,18 +517,10 @@ def queue_later_reading_recheck(
 
 def _queue_recalculation(connection: Any, player_id: int, ended: Any, cause: str) -> None:
     """Queue one recalculation of the player's Legend day ``ended``, once
-    per day and ``cause``, at backfill priority, unless its day-end
-    calculation, which makes the same check, waits already."""
+    per day and ``cause``, at backfill priority, even while its day-end
+    calculation waits, so a Season repair counts it
+    (``domain_repair._repair_jobs``)."""
     day_text = ended.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if connection.execute(
-        """
-        SELECT 1 FROM python_processing_jobs_worker
-        WHERE deduplication_key = %s
-          AND state IN ('pending', 'waiting_retry', 'waiting_dependency')
-        """,
-        (f"reconcile:day-end:{player_id}:{day_text}:{RECONCILIATION_RULE_VERSION}",),
-    ).fetchone():
-        return
     connection.execute(
         """
         INSERT INTO python_processing_jobs_worker (
@@ -621,11 +618,12 @@ def later_reading_contradicts(
 def start_proven(data: ReconciliationInput) -> bool:
     """Whether the day's start is proven apart from its own Reset reading:
     a Season's first day starts at 5,000, and a day before ending on that
-    same reading proves it, Complete or with its end proven (``proven_end``)."""
+    same reading proves it, whose saved version stored its proven end
+    (``proven_end``)."""
     previous = data.previous_day
     return data.season_first_day or (
         previous is not None
-        and (previous.complete or previous.proven_end is not None)
+        and previous.proven_end is not None
         and previous.end_baseline_id == data.start_baseline_id
     )
 
@@ -641,19 +639,20 @@ def settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     start was too high and a later reading could check. It can instead say a
     later reading settled the Reset reading; the day then starts from that.
     A previous day not Complete whose end two readings prove
-    (``DayEnd.proven_end``) starts the day from that end.
+    (``DayEnd.proven_end``) starts the day from that end. A previous day
+    whose saved version stored no proven end adjusts nothing.
     """
     previous = data.previous_day
     if (
         data.start_trophies is None
         or previous is None
+        or previous.proven_end is None
         or previous.end_baseline_id is None
         or previous.end_baseline_id != data.start_baseline_id
     ):
         return data.start_trophies, 0, 0
     if not previous.complete:
-        start = data.start_trophies if previous.proven_end is None else previous.proven_end
-        return start, data.start_trophies - start, 0
+        return previous.proven_end, data.start_trophies - previous.proven_end, 0
     if not (previous.unsettled_automatic_loss or previous.reset_reading_correction):
         return data.start_trophies, 0, 0
     loss = previous.unsettled_automatic_loss

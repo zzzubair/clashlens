@@ -269,7 +269,7 @@ def test_zero_defense_day_read_before_its_loss_takes_it_from_a_later_reading() -
                 *_battles("#9R2LRYY8V-2", "defense", 8, 240),
             ),
             previous_day=PreviousRankedDay(
-                True, 0, 0, 0, end_baseline_id=11, unsettled_automatic_loss=304,
+                True, 0, 0, 0, end_baseline_id=11, unsettled_automatic_loss=304, proven_end=4391,
             ),
         )
     )
@@ -375,7 +375,7 @@ def test_later_reading_settles_a_reset_reading_missing_the_days_credit() -> None
                 ),
                 previous_day=PreviousRankedDay(
                     True, defenses, loss, 0, end_baseline_id=11,
-                    reset_reading_correction=later - reading,
+                    reset_reading_correction=later - reading, proven_end=later,
                 ),
             )
         )
@@ -398,7 +398,7 @@ def test_battles_landing_after_the_reset_reading_settle_the_day() -> None:
             "next_start_trophies": reading,
             "end_baseline_evidence": {"profile": {"observed_at": reading_at.isoformat()}},
             "contributions": (*others, late),
-            "previous_day": PreviousRankedDay(True, 2, 20, 0, end_baseline_id=10),
+            "previous_day": PreviousRankedDay(True, 2, 20, 0, end_baseline_id=10, proven_end=start),
         }
         return reconcile_ranked_day(_input(**(values | overrides)))
 
@@ -454,7 +454,7 @@ def test_battles_landing_after_the_reset_reading_settle_the_day() -> None:
     )
     pending = day(
         last_defense, 5000, 5040, *attacks, *defenses_40[:6],
-        previous_day=PreviousRankedDay(True, 8, 320, 0, end_baseline_id=10),
+        previous_day=PreviousRankedDay(True, 8, 320, 0, end_baseline_id=10, proven_end=5000),
     )
     assert (pending.state, pending.confidence) == ("Complete", "inferred")
     assert (pending.automatic_defense_loss, pending.unsettled_automatic_loss) == (40, 40)
@@ -467,7 +467,7 @@ def test_battles_landing_after_the_reset_reading_settle_the_day() -> None:
         start_trophies=5040,
         previous_day=PreviousRankedDay(
             True, 7, 280, 0, end_baseline_id=11, unsettled_automatic_loss=40,
-            reset_reading_correction=-40,
+            reset_reading_correction=-40, proven_end=4960,
         ),
     ))
     assert next_day.start_trophies == 4960
@@ -1281,7 +1281,7 @@ def test_the_next_day_starts_from_the_reading_less_the_unsettled_loss() -> None:
     # Their reading at 05:17:25 was 4,770. On 3 October they won 215 in 8
     # attacks and lost 240 in 8 defenses, and the 4 October reading was 4,745.
     previous = PreviousRankedDay(
-        True, 3, 92, 0, unsettled_automatic_loss=155, end_baseline_id=93593
+        True, 3, 92, 0, unsettled_automatic_loss=155, end_baseline_id=93593, proven_end=4770
     )
     day = {
         "start_trophies": 4925,
@@ -1323,7 +1323,7 @@ def test_a_day_can_both_start_and_end_on_readings_taken_before_the_loss() -> Non
             next_start_trophies=4659,
             contributions=(*_attacks(21, 20, 13, 13, 28, 11), *_defenses(31, 22, 14, 14, 32)),
             previous_day=PreviousRankedDay(
-                True, 2, 62, 0, unsettled_automatic_loss=198, end_baseline_id=82547
+                True, 2, 62, 0, unsettled_automatic_loss=198, end_baseline_id=82547, proven_end=4666
             ),
         )
     )

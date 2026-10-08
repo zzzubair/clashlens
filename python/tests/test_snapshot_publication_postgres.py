@@ -62,7 +62,7 @@ def _seed_snapshot_job(
     end_trophies: int | None = None,
 ) -> int:
     """``end_trophies``: the seeded Complete day's start and end, with no
-    battle between."""
+    battle between, and the proof its calculation stores."""
     ranked_day_start = boundary_at - timedelta(days=1)
     with psycopg.connect(connection_info) as connection:
         if ranked_day_version_id is None:
@@ -73,11 +73,12 @@ def _seed_snapshot_job(
                     season_day_number, season_anchor_rule_version,
                     reconciliation_rule_version, result_hash, version,
                     state, confidence, input_hash, coverage_complete,
-                    start_trophies, final_trophies_before_reset
+                    start_trophies, final_trophies_before_reset, formula_components
                 ) VALUES (
                     %s, %s, %s, '1783918800', 24, 'legend-season-anchor-v1',
                     'legend-ranked-day-v1', repeat('a', 64), 1,
-                    'Complete', 'exact', repeat('b', 64), true, %s, %s
+                    'Complete', 'exact', repeat('b', 64), true, %s, %s,
+                    '{"reset_proof": {"settled": null}}'
                 )
                 RETURNING id
                 """,

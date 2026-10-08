@@ -439,9 +439,7 @@ def recalculate_ranked_day(
         connection, player_id, ranked_day
     )
     previous = ranked_day_inputs.load_previous_day(connection, player_id, ranked_day)
-    if previous is not None and previous.version_id and (
-        not previous.complete or now >= ranked_day.end
-    ):
+    if previous is not None and previous.version_id:
         previous = replace(previous, proven_end=proven_end(connection, previous.version_id))
     zero_result_attacks, zero_result_defenses = ranked_day_inputs.slot_counts(
         ranked_day_inputs.load_zero_result_slots(connection, coverage)
@@ -1391,7 +1389,7 @@ def _enqueue_day_end_reconciliation(
     work waits, and does nothing once the day is finished, unless a reading
     since the Reset may settle or disprove it
     (``ranked_day_inputs.LATER_READING_DAY_SQL``) or its proven end moved
-    (``proven_end_moved``), as evidence saved while it waits leaves to it.
+    (``proven_end_moved``).
     """
     day_text = ranked_day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     connection.execute(

@@ -1035,7 +1035,7 @@ def _seed_days(
     reasons, end, automatic loss and its state, start and end Reset readings,
     the end reading's time and Reset kind instead. A day with a start and no
     given state, or given ``proven_start``, follows a Complete day ending on
-    that start, which proves it."""
+    that start, which proves it. Each stores its proof unless ``stored`` is false."""
     season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
     with psycopg.connect(connection_info) as connection:
         observations = {
@@ -1122,11 +1122,11 @@ def _seed_days(
                     result_hash, version, state, confidence, input_hash,
                     coverage_complete, failure_reasons, start_trophies,
                     final_trophies_before_reset, automatic_defense_loss,
-                    automatic_defense_evidence_state, input_evidence
+                    automatic_defense_evidence_state, input_evidence, formula_components
                 ) OVERRIDING SYSTEM VALUE
                 VALUES (%s, %s, %s, %s, %s, 2, 'anchor', 'rules', repeat('a', 64),
                         1, %s, 'exact', repeat('b', 64), %s, %s, %s, %s, %s,
-                        %s, %s)
+                        %s, %s, %s)
                 """,
                 (
                     player_id, player_id, DAY_2_RESET - RANKED_DAY_DURATION,
@@ -1153,6 +1153,7 @@ def _seed_days(
                             }},
                         }
                     ),
+                    json.dumps({"reset_proof": {"settled": None}} if result.get("stored", True) else {}),
                 ),
             )
             connection.execute(

@@ -111,9 +111,9 @@ class PreviousRankedDay:
     # How far a later reading settled that day's end Reset reading, which
     # the game had not finished crediting (see ``later_next_start_reading``).
     reset_reading_correction: int = 0
-    # That day's proven end after its automatic loss, when it is not
-    # Complete or this day has ended (``reset_settlement.DayEnd.proven_end``):
-    # saved with this day, it proves this day's start.
+    # That day's proven end after its automatic loss, as its saved version
+    # stored it (``reset_settlement.DayEnd.proven_end``): saved with this
+    # day, it proves this day's start.
     proven_end: int | None = None
 
 

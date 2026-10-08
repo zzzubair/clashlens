@@ -869,7 +869,9 @@ def test_board_takes_a_complete_days_end_over_a_reading_it_cannot_place(
     may not hold it, and lost 40 more at 04:53:17: its day starts at 5,025,
     nets +74 and ends at 5,099. #PVL2L2YQ8 read 5,167 with no battle after
     it, but its day starts at 5,109, nets +32 and ends at 5,141 with no
-    automatic loss. Each board entry is the day's end, proven."""
+    automatic loss. Its saved version stores its proof, so its entry is that
+    end, proven; #QQ98LYP2's was saved before versions stored one, so its
+    entry stays its uncertain reading until its day is calculated again."""
     from test_boundary_manifest_postgres import (
         _build_board,
         _october,
@@ -898,7 +900,7 @@ def test_board_takes_a_complete_days_end_over_a_reading_it_cannot_place(
     }
     complete = {"state": "Complete", "failure_reasons": [], "end_read_at": _october(7, 5, 2)}
     results = {
-        1: {**complete, "start": 5025, "final": 5099, "end": 5099},
+        1: {**complete, "start": 5025, "final": 5099, "end": 5099, "stored": False},
         2: {**complete, "start": 5109, "final": 5141, "end": 5141},
     }
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -910,7 +912,7 @@ def test_board_takes_a_complete_days_end_over_a_reading_it_cannot_place(
         finally:
             database.close()
 
-    assert board == [("#PVL2L2YQ8", 5141, "confirmed"), ("#QQ98LYP2", 5099, "confirmed")]
+    assert board == [("#PVL2L2YQ8", 5141, "confirmed"), ("#QQ98LYP2", 5139, "uncertain")]
 
 
 def _later_profiles(
