@@ -266,8 +266,7 @@
   border-radius: var(--cl-card-radius);
   box-shadow: var(--cl-card-drop);
 }
-:root
-  :is(.home-leaderboard, .standings-board, .table-wrap, .season-summary, .legend-day) {
+:root :is(.home-leaderboard, .standings-board, .season-summary, .legend-day) {
   overflow: hidden;
 }
 /* A card inside a card is just a section of it. */
