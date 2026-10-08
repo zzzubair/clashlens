@@ -748,7 +748,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       {visibleStatus ? (
         <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
       ) : null}
-      <p role="status">Now tracking in Legend I.</p>
+      <p role="status">
+        {trackedPlayer.profile.notFoundAt
+          ? "Player not found. Clash of Clans did not find this tag at its latest check."
+          : "Now tracking in Legend I."}
+      </p>
       {data.selectedSeason === null ? (
         <PlayerTrends player={trackedPlayer} now={statisticsTime} />
       ) : null}

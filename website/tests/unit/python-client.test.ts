@@ -747,6 +747,8 @@ describe("server-only Python client response boundary", () => {
     };
     const profileOnly = {
       ...full,
+      public_confidence: "uncertain",
+      profile_not_found_at: "2026-08-06T12:30:00+00:00",
       screen_ready: {
         ...full.screen_ready,
         days: [],
@@ -827,6 +829,7 @@ describe("server-only Python client response boundary", () => {
     });
     expect(mapped.seasonDays.map((day) => day.dayNumber)).toEqual([3, 2]);
     expect(mapped.recentDays.map((day) => day.dayNumber)).toEqual([2]);
+    expect(mapped.profile.notFoundAt).toBeNull();
     const mappedCurrentDay = mapped.currentDay;
     if (mappedCurrentDay === null) throw new Error("expected active day");
     const mapExpectedEvent = (event: (typeof offenseEvents)[number]) => ({
@@ -846,6 +849,7 @@ describe("server-only Python client response boundary", () => {
       currentDay: null,
       seasonDays: [],
       dataQuality: [{ code: "unavailable" }],
+      profile: { notFoundAt: "2026-08-06T12:30:00+00:00", confidence: "uncertain" },
     });
     await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
       status: 502,

@@ -143,7 +143,16 @@ def get_player_page(
                    profile.current_league_season_id,
                    {_frozen_trophies_sql("player.id", "%s")},
                    {_opening_day_battles_sql("player.id", "%s")},
-                   player.id
+                   player.id,
+                   -- The Live Leaderboard's rule: a profile check newer than
+                   -- the last good one said the game has no such player.
+                   (SELECT checked.last_not_found_at
+                    FROM collector_response_state AS checked
+                    WHERE checked.scope = 'player'
+                      AND checked.identity_key = player.normalized_tag
+                      AND checked.endpoint = 'profile'
+                      AND (checked.last_success_at IS NULL
+                           OR checked.last_not_found_at > checked.last_success_at))
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
@@ -156,6 +165,7 @@ def get_player_page(
         if row is None:
             return None
         observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
+        not_found_at = None if row[16] is None else row[16].astimezone(UTC)
         # A profile naming an earlier Season, or still showing the frozen
         # pre-Reset trophies on a Season's first day, shows trophies from
         # before this player's Season reset, not their current Season total.
@@ -344,6 +354,14 @@ def get_player_page(
                     "detail": current_day["completeness"]["reason"],
                 }
             )
+        if not_found_at is not None:
+            data_quality.append(
+                {
+                    "code": "unavailable",
+                    "label": "Player not found",
+                    "detail": "Clash of Clans did not find this player at its latest check, so they are left off the Live Leaderboard. The trophies shown are from the last check that found them, and saved Legend days stay as recorded.",
+                }
+            )
         if season_reset_pending:
             data_quality.append(
                 {
@@ -380,7 +398,12 @@ def get_player_page(
             "schema_version": _text(row[8]),
             "parser_version": _text(row[9]),
             "clan": None if row[10] is None else _text(row[10]),
-            "public_confidence": public_confidence,
+            # A missing player's saved profile is not current; saved days
+            # keep their own confidence.
+            "public_confidence": "uncertain" if not_found_at else public_confidence,
+            "profile_not_found_at": (
+                None if not_found_at is None else not_found_at.isoformat()
+            ),
             "screen_ready": {
                 "days": sorted(
                     days.values(), key=lambda day: day["ranked_day_start"], reverse=True
@@ -409,7 +432,9 @@ def get_player_page(
                     "freshness": "fresh"
                     if age_seconds <= freshness_seconds
                     else "stale",
-                    "confidence": public_confidence,
+                    "confidence": (
+                        "uncertain" if not_found_at else public_confidence
+                    ),
                     "coverage": (
                         current_day["completeness"]["state"]
                         if current_day is not None
