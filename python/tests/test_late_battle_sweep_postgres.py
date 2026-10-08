@@ -988,18 +988,22 @@ def test_indexed_selection_picks_the_same_player_days_as_before(
                     else [([], [])] * 9
                 )
 
-            # An existing job corrects only the late day, so the next day is
-            # left built from the late day's outdated version.
-            _process(
-                processor,
-                reconciliation_db.enqueue_reconciliation(
+            # Recalculating only the late day leaves the next day built from
+            # the late day's outdated version. A job refreshes the next day
+            # only when the late day's state, end or next start changes.
+            with database.pool.connection() as connection, connection.transaction():
+                reconciliation_db.recalculate_ranked_day(
                     database,
-                    player_tag=TAG,
+                    connection,
+                    player_id=connection.execute(
+                        "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                    ).fetchone()[0],
                     day_start=DAY,
-                    now=DAY + timedelta(days=2),
-                    request_key="existing-first-day-job",
-                ),
-            )
+                    parser_version=DEFAULT_PARSER_VERSION,
+                    processing_version=PROCESSING_VERSION,
+                    domain_rule_version=DOMAIN_RULE_VERSION,
+                    analytics_rule_version=ANALYTICS_RULE_VERSION,
+                )
             assert [
                 outdated for _, outdated in _selections(connection_info).values()
             ] == [[(TAG, DAY + timedelta(days=1))]] * 8 + [[]]
