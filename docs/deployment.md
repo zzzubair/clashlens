@@ -657,8 +657,8 @@ protected copy off rogue so losing the host does not also lose recovery access.
 Rotate credentials by replacing the file, running the approved `ops up`,
 verifying backup and restore, then revoking the old key in Cloudflare.
 
-The timer starts a full backup every day at 12:00 UTC, well away from the
-04:00–07:00 UTC Reset work. Missed calendar runs are
+The timer starts a full backup every 12 hours, at 00:00 and 12:00 UTC, well
+away from the 04:00–07:00 UTC Reset work. Missed calendar runs are
 caught up; restarting the stack does not add another full backup. Run
 `./ops backup` once during the approved initial rollout. PostgreSQL continuously uploads
 its change log, called WAL, with `archive_timeout=300`. A restore can target any
@@ -672,8 +672,8 @@ the full backup its chain starts from (`wal-g delete before FIND_FULL`). Only
 full and delta backup names are accepted. Delta backups are not switched on.
 Until such a backup exists, pruning deletes nothing. Extra manual backups cannot
 shorten the recovery window. The one-hour margin covers scheduling and backup
-duration; right after the 12:00 prune this keeps 12 daily full backups and about
-11 days of WAL, growing to about 12 days before the next prune.
+duration; right after each prune this keeps about 21–22 full backups and about
+10.5–11 days of WAL.
 
 ```sh
 ./ops backup                  # upload now, then apply age-based retention
@@ -693,7 +693,7 @@ Release fingerprints use byte-ordered filenames so terminal and scheduled-servic
 language settings cannot make unchanged code appear different. Rebuild and deploy
 after upgrading this check; do not edit a saved fingerprint or bypass the guard.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
-missing/unreachable remote backups, a newest full backup older than 36 hours, disabled
+missing/unreachable remote backups, a newest full backup older than 24 hours, disabled
 archiving, or completed WAL files waiting over ten minutes. No WAL activity during
 an idle period is not itself failure. It also prints how many GB of WAL a restore
 to now would replay after the newest backup, the part of a restore that grows
@@ -805,31 +805,33 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
 Expected timings, from the 8 October 2026 real-size rehearsal (2 processor
 cores at the lowest scheduling priority, beside live production): fetching a
 15.55 GB compressed full backup took 268 seconds, about 58 MB/s, and replay ran
-at about 51 GB of change log an hour. With a full backup every day, a restore
-replays at most about one day of change log after its full backup: about 105 GB
-before upload compression (89 GB as stored), so about 2 hours of replay plus
-5–8 minutes of fetching, and about half that on average. It falls to about
-1.5 hours once a day's change log is about 75 GB before upload compression.
-The rehearsal did not measure
+at about 51 GB of change log an hour. With a full backup every 12 hours, a
+restore replays at most about 12 hours of change log after its full backup:
+about 53 GB before upload compression (about 45 GB as stored, from 105 GB/day
+before compression and 89.36 GB/day stored), so about 1 hour of replay plus
+5–8 minutes to fetch a 16–27 GB compressed full backup, and about half that on
+average. The rehearsal did not measure
 an unthrottled replay or the raw-object check time.
 
 ### Targets, cost and remaining rollout checks
 
 The intended maximum data loss is **5 minutes plus upload delay**, not a hard
 five-minute guarantee. A provider outage can exceed it. The worst-case restore
-time accepted on 2026-10-08 is about **1.5 hours** with daily full backups,
-instead of the earlier 60-minute target, which would need a full backup about
-every 12 hours; at today's change-log rate it is about 2 hours (see
+time target is about **1 hour** at today's change-log rate, with a full backup
+every 12 hours, chosen by the owner on 2026-10-08 over daily full backups with
+a 2-hour worst case (see
 [expected timings](#restore-into-a-separate-database)).
 Ten-day recovery starts only after ten days of uninterrupted archived history.
 
 On 8 October 2026 R2 held 707.87 GB of WAL, uploaded at 89.36 GB/day after
 compression, and the newest full backup was 15.55 GB compressed (37.47 GB
 before compression); the 64.77 GB database implies about 26.8 GB per full.
-Keeping 12–13 daily fulls of 16–27 GB plus 11–12 days of WAL models about
-**1.17–1.42 TB**, about **$17.55–$21.30/month** at R2 Standard's
-$0.015/GB-month, against 1.25–1.88 TB of WAL alone with weekly fulls. Larger
-databases make each daily full bigger. This is a model, not
+Keeping 21–22 fulls of 16–27 GB (about 330–590 GB) plus 10.5–11 days of WAL
+(about 940–985 GB) models about **1.27–1.57 TB**, about **$19–24/month** at R2
+Standard's $0.015/GB-month, against 1.25–1.88 TB of WAL alone with weekly
+fulls. Each extra full adds its size, so the cost grows with the database. The
+owner accepted roughly 3–6 GBP/month of added storage for the 12-hour
+schedule. This is a model, not
 measured production growth. Manual backups add up to another full backup each
 until they age out; failed uploads can leave partial objects requiring separately
 reviewed cleanup. Real traffic must be measured before accepting the €60 total

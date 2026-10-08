@@ -696,7 +696,7 @@ def test_retention_refuses_unexpected_backup_names(runtime):
 def test_status_reports_change_log_a_restore_replays(runtime):
     rows = [
         backup_row(1, 6, start_lsn=1_000_000_000),
-        backup_row(2, 1, start_lsn=3_000_000_000),
+        backup_row(2, 0.5, start_lsn=3_000_000_000),
     ]
     # 0x1/0x2A05F200 is 4,294,967,296 + 705,032,704 = 5,000,000,000.
     result = run_ops(runtime, rows, "backup-status", current_lsn="1/2A05F200")
@@ -741,7 +741,7 @@ def test_invalid_catalogue_refuses_deletion(runtime):
     assert not runtime[1].exists()
 
 
-@pytest.mark.parametrize("rows", [[], [backup_row(1, 1.6)]])
+@pytest.mark.parametrize("rows", [[], [backup_row(1, 1.1)]])
 def test_status_reports_missing_or_stale_remote_backup(runtime, rows):
     result = run_ops(runtime, rows, "backup-status")
     assert result.returncode != 0

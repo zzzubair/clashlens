@@ -1365,7 +1365,7 @@ if "/" in sys.argv[1]:
     high, low = (int(part, 16) for part in sys.argv[1].split("/"))
     replay = (high << 32 | low) - rows[times.index(max(times))]["start_lsn"]
     print(f"A restore to now replays {replay / 1e9:.1f} GB of change log after the newest backup")
-if not 0 <= age <= 129600:
+if not 0 <= age <= 86400:
     sys.exit("Latest remote base backup is stale or has an invalid time")
 ' "$("$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" psql -X -At -c "SELECT pg_current_wal_lsn()" 2>/dev/null || true)"
   "$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" sh -ec '
