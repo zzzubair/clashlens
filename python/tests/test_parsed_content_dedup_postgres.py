@@ -586,6 +586,9 @@ def test_profile_confirmation_backfill_preserves_proven_checks(
                 connection.execute(
                     (ROOT / "deploy/migrations/0040_profile_confirmation.sql").read_text()
                 )
+                connection.execute(
+                    (ROOT / "deploy/migrations/0043_api_profile_not_found_read.sql").read_text()
+                )
             for tag, expected in (
                 ("#2PP", confirmed_at), ("#8PY", accepted_at), ("#9PY", accepted_at)
             ):

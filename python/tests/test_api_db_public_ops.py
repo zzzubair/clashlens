@@ -277,6 +277,55 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             database.close()
 
 
+def test_player_page_reports_a_player_the_game_no_longer_finds(
+    database_url: str,
+) -> None:
+    # #2VUQ8JLC2 on 7 October 2026: saved at 4,930, then "player not found".
+    from test_freshness_metrics_postgres import seed_check  # imports this module
+
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2VUQ8JLC2", 4930)
+            seed_profile(database, "#8PY", 6100)
+            missing_at = NOW + timedelta(minutes=5)
+            with database.pool.connection() as connection:
+                seed_check(connection, "#2VUQ8JLC2", "profile", NOW, not_found=missing_at)
+            missing = api_players.get_player_page(
+                database, "#2VUQ8JLC2", now=NOW, freshness_seconds=900
+            )
+            live = api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW)
+            # A later successful check makes the profile current again.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE collector_response_state SET last_success_at = %s",
+                    (missing_at + timedelta(minutes=5),),
+                )
+            found = api_players.get_player_page(
+                database, "#2VUQ8JLC2", now=NOW, freshness_seconds=900
+            )
+        finally:
+            database.close()
+
+    assert missing is not None and found is not None
+    assert [entry["tag"] for entry in live["entries"]] == ["#8PY"]
+    assert missing["profile_not_found_at"] == missing_at.isoformat()
+    assert missing["trophies"] == 4930
+    assert missing["public_confidence"] == "uncertain"
+    assert missing["screen_ready"]["provenance"]["confidence"] == "uncertain"
+    assert "Player not found" in [
+        item["label"] for item in missing["screen_ready"]["data_quality"]
+    ]
+    assert missing["screen_ready"]["days"] == found["screen_ready"]["days"]
+    assert found["profile_not_found_at"] is None
+    assert found["public_confidence"] == "high"
+    assert "Player not found" not in [
+        item["label"] for item in found["screen_ready"]["data_quality"]
+    ]
+
+
 def test_known_player_name_search_uses_current_profiles_and_escapes_wildcards(
     database_url: str,
 ) -> None:

@@ -401,6 +401,9 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       battleHistoryUpdatedAt: isUtcTimestamp(payload.battle_history_updated_at)
         ? payload.battle_history_updated_at
         : null,
+      notFoundAt: isUtcTimestamp(payload.profile_not_found_at)
+        ? payload.profile_not_found_at
+        : null,
       confidence: isOneOf(payload.public_confidence, [
         "high",
         "partial",

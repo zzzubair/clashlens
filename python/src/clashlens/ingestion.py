@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -17,6 +18,11 @@ from .profile import PROFILE_PARSER_VERSION, ParsedProfile
 from .rankings import ParsedOfficialRankings
 from .response_fields import content_fingerprint
 
+# The game applies the automatic defense loss about 7 to 13 minutes after the
+# Reset, and on 6 October 2026 a reading at 05:09:56 first showed the ended
+# day's attack gains; see ``supersede_profile``.
+RESET_SETTLING_WINDOW = timedelta(minutes=30)
+
 
 def supersede_profile(database: Database, claim: Claim) -> bool:
     """Skip a profile when a later one from the same Legend day was applied.
@@ -24,10 +30,18 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
     Only the newest profile sets the leaderboard. Each Legend day's last
     profile is never skipped: end-of-day snapshots read the latest profile at
     or before the Reset, so only a newer profile from the same day covers one.
+    Nor is one read in the first RESET_SETTLING_WINDOW after a Reset, while
+    the game finishes crediting the ended day and charges its automatic
+    defense loss: such a reading can settle the ended day's end (see
+    ``ranked_day_inputs.load_later_reading``). Every other profile can still
+    be skipped, so a post-Reset backlog costs at most that window's profiles.
     """
     if claim.normalized_tag is None or claim.observed_at is None:
         return False
-    day_end = ranked_day_for(claim.observed_at).end
+    day = ranked_day_for(claim.observed_at)
+    if claim.observed_at < day.start + RESET_SETTLING_WINDOW:
+        return False
+    day_end = day.end
 
     def covered(connection: Any) -> bool:
         return connection.execute(

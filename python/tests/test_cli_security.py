@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from clashlens import ranked_day_inputs
 from clashlens.cli import (
     _archive,
     _file_value,
@@ -715,6 +716,36 @@ def test_overlap_gap_recalculation_needs_a_season_and_runs_alone(
     else:
         assert main(arguments) == 0
         assert calls == [("1791176400", queue, 100)]
+
+
+@pytest.mark.parametrize("extra,queue", [
+    (["--mismatch", "preview", "--season", "1791176400"], False),
+    (["--mismatch", "queue", "--season", "1791176400"], True),
+    (["--mismatch", "queue"], None),
+    (["--mismatch", "queue", "--overlap-gap", "queue", "--season", "1791176400"], None),
+])
+def test_mismatch_recalculation_needs_a_season_and_runs_alone(
+    monkeypatch, extra: list[str], queue: bool | None
+) -> None:
+    calls = []
+    monkeypatch.setattr("clashlens.battle_day_repair.Database",
+                        lambda url: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(
+        "clashlens.first_battle_log.requeue_overlap_gap",
+        lambda database, season, **options: calls.append((season, options)) or {},
+    )
+    arguments = ["republish-current-season", "--database-url",
+                 "postgresql://worker@postgres/clashlens", *extra]
+    if queue is None:
+        with pytest.raises(SystemExit):
+            main(arguments)
+        assert calls == []
+    else:
+        assert main(arguments) == 0
+        assert calls == [("1791176400", {
+            "queue": queue, "max_jobs": 100,
+            "condition": ranked_day_inputs.LATER_READING_DAY_SQL, "trigger": "mismatch",
+        })]
 
 
 @pytest.mark.parametrize("value", ["0", "1001", "many"])

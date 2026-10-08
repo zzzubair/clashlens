@@ -137,6 +137,8 @@ export interface PlayerProfile {
   currentLeagueSeasonId?: string | null;
   freshness: Freshness;
   battleHistoryUpdatedAt?: string | null;
+  /** When Clash of Clans last did not find this player, if after its last successful check. */
+  notFoundAt?: string | null;
   confidence: ConfidenceState;
   coverage: CoverageState;
   eligibility: "legend-i" | "uncertain";

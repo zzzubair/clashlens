@@ -200,6 +200,7 @@ applied, when newer processed evidence from the same player and Legend day
 already covers it: a later accepted profile, or a newer battle log while every
 row of the older one is already stored and each battle's currently selected
 attacker or defender report was confirmed at or after the older log. The last
-profile before a Reset, Reset sweep, Refresh, first lookup,
+profile before a Reset, profiles read in the first 30 minutes after a Reset
+(they can settle the ended day's end), Reset sweep, Refresh, first lookup,
 discovery and replay responses always run. Superseded responses keep their
 observation and raw bytes, so they can still be replayed.
