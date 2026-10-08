@@ -345,6 +345,23 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>Unknown</td><td>Unknown</td><td>8</td>");
   });
 
+  it("keeps a saved day Verified when its Reset reading matched exactly", async () => {
+    const html = await loadAndRender(
+      {
+        getPlayer: vi.fn().mockResolvedValue(PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+        getPlayerSeason: vi.fn().mockResolvedValue({
+          ...SUMMARY,
+          dailyEntries: [{ ...DAY, confidence: "exact" }],
+        }),
+      },
+      SEASON,
+    );
+    expect(html).toContain('title="Verified"');
+    expect(html).toContain("<strong>Verified.</strong> A reading from the game matched");
+    expect(html).not.toContain('title="Calculated"');
+  });
+
   it("shows an unknown total as Unknown without a separate note", async () => {
     const html = await loadAndRender(
       {

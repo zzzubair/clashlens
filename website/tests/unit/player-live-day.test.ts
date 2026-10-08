@@ -170,7 +170,7 @@ describe("today's Legend day wording", () => {
     const entry = todayEntry(html);
     expect(entry).not.toContain("In progress");
     expect(entry).not.toContain("Ending evidence arrives after Reset.");
-    expect(entry).toContain("Result unknown");
+    expect(entry).toContain("Uncertain");
     expect(html).not.toContain('id="legend-day-2026-10-08" open=""');
   });
 

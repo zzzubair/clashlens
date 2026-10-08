@@ -231,6 +231,12 @@ export interface RankedDaySummary {
   label: string;
   period: string;
   state: "Live" | "Complete" | "Partial" | "Uncertain";
+  // How the saved day was proven: "exact" when its Reset reading matched
+  // every part of its calculation, "inferred" when a part is calculated.
+  confidence?: "exact" | "inferred" | "partial" | "uncertain" | null;
+  // Whether the day's battle logs form an unbroken chain, so no battle can
+  // be missing; separate from completeness, which also needs the readings.
+  logCoverage?: "complete" | "partial";
   startTrophies?: number | null;
   startTrophiesCalculation?: { trophies: number; netChange: number };
   startTrophiesSource?: "Calculated" | "Season rule";
@@ -348,6 +354,7 @@ export interface HistoricalSeasonDayEntry {
   attacks: number | null;
   defenses: number | null;
   state: string;
+  confidence?: RankedDaySummary["confidence"];
   coverage: string;
   hasAdjustment: boolean;
   adjustmentTotal: number | null;

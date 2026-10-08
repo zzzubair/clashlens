@@ -1045,6 +1045,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 {
                   net: day.netChange,
                   state: day.state,
+                  confidence: day.confidence,
                   coverage: day.coverage,
                   codes: day.flags,
                   attackGain: day.attackGain,
@@ -1229,7 +1230,9 @@ function LegendDay({
               title={
                 day.startTrophiesSource === "Season rule"
                   ? "Every Legend I player starts a Season on 5,000"
-                  : undefined
+                  : day.startTrophiesCalculation
+                    ? undefined
+                    : "The previous day's calculated end. No reading from the game has confirmed it yet."
               }
             >
               {day.startTrophiesSource}

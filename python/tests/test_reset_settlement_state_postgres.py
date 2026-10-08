@@ -921,3 +921,48 @@ def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(
     assert len(due) == 1
     assert due[0][0] >= boundary + reconciliation_db.DAY_END_RECALCULATION_DELAY
     assert ended == [("Complete", final)]
+
+
+def test_weekly_drop_without_a_reset_reading_gives_no_legend_i_monday(
+    database_url: str, archive_server
+) -> None:
+    # The Monday Reset profile fails and its battle log arrives; Legend II
+    # shows 13 minutes later. Sunday's end gets no raise to 5,000, and the
+    # Monday is no Legend I day, so it does not start from Sunday's end.
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    boundary = BOUNDARIES["monday"]
+    last_day = boundary - timedelta(days=1)
+    final = 4900 + WIN - 8 * LOSS
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(4900), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            log=_log(*battles))
+        jobs.append(_store_dropped_login(
+            connection_info, archive_server, "dropped-login",
+            boundary + timedelta(minutes=13), final,
+        ))
+        _process(connection_info, archive_server, jobs)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=boundary,
+                now=boundary + timedelta(days=1), request_key="monday",
+            )
+            assert processor.process_job(job, owner="monday") is not None
+        finally:
+            database.close()
+        days = {row[0]: row[1:] for row in _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                   expected_next_start_trophies, start_trophies, failure_reasons,
+                   input_evidence -> 'start_baseline_evidence'
+                       ->> 'start_trophies_source'
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+
+    assert days[last_day][0] == final
+    assert days[boundary][1] is None and days[boundary][3] is None
+    assert "player_not_eligible" in days[boundary][2]

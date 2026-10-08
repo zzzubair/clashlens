@@ -191,8 +191,8 @@
   align-items: center;
   gap: 0.75rem;
 }
-/* An ended day's status: a hollow dot when provisional, a filled one when
-   evidence is missing. */
+/* An ended day's status: a filled dot when Verified, a hollow one when
+   Calculated, a gold one when Uncertain. */
 .player-page .day-mark {
   /* Keeps its hidden label inside a scrolling table. */
   position: relative;
@@ -203,6 +203,9 @@
   border: 1.5px solid var(--cl-muted);
   border-radius: 50%;
   vertical-align: middle;
+}
+.player-page .day-mark-verified {
+  background: var(--cl-muted);
 }
 .player-page .day-mark-gap {
   border-color: var(--cl-gold);

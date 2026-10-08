@@ -430,6 +430,7 @@ describe("historical player-season client boundary", () => {
           ranked_day_end: "2026-05-03T05:00:00+00:00",
           state: "Partial",
           coverage: "partial",
+          confidence: "partial",
           has_adjustment: true,
           adjustment_total: -15,
           flags: ["late_data"],
@@ -454,6 +455,8 @@ describe("historical player-season client boundary", () => {
     const [completeDay, partialDay] = summary.dailyEntries;
     expect(completeDay.state).toBe("Complete");
     expect(completeDay.coverage).toBe("complete");
+    expect(completeDay.confidence).toBe("exact");
+    expect(partialDay.confidence).toBe("partial");
     expect(completeDay.flags).toEqual([]);
     expect(completeDay.hasAdjustment).toBe(false);
     expect(completeDay.adjustmentTotal).toBeNull();

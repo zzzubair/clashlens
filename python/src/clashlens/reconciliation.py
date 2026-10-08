@@ -116,6 +116,14 @@ class PreviousRankedDay:
     # How far a later reading settled that day's end Reset reading, which
     # the game had not finished crediting (see ``later_next_start_reading``).
     reset_reading_correction: int = 0
+    # That day's calculated end, after any weekly or Season reset, when its
+    # battles and automatic loss are known: the next day's start when its
+    # Reset reading cannot give one (see ``recalculate_ranked_day``).
+    expected_next_start: int | None = None
+    # Continuous battle logs and established counts, whether or not that
+    # day's readings were usable; ``None`` keeps the older meaning, Complete
+    # with continuous coverage.
+    battles_known: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,10 +330,12 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     battles_after_reading: tuple[str, ...] = ()
 
     ended = data.now >= data.ranked_day.end
-    # The Season rule can start Day 1 without a saved Reset reading.
-    season_rule_start = (
-        data.start_baseline_evidence.get("start_trophies_source") == "season_rule"
-    )
+    # The Season rule can start Day 1 without a saved Reset reading, and the
+    # day before's calculated end can start any other day whose reading
+    # cannot; both are calculations, not readings.
+    start_source = data.start_baseline_evidence.get("start_trophies_source")
+    season_rule_start = start_source == "season_rule"
+    chain_start = start_source == "previous_day_end"
     start_proven = (
         season_rule_start
         or data.season_first_day
@@ -336,7 +346,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         )
     )
     start_available = _baseline_available(
-        data.start_baseline_id is not None or season_rule_start,
+        data.start_baseline_id is not None or season_rule_start or chain_start,
         data.start_trophies,
         data.start_baseline_complete,
         "start",
@@ -642,8 +652,10 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     if state == "Complete" and (
         shield_state == "inferred_shielded"
         or end_hidden_by_reset
-        # A start from the Season rule is the game's rule, not a reading.
+        # A start from the Season rule is the game's rule, not a reading,
+        # and one from the day before's end is a calculation.
         or season_rule_start
+        or chain_start
         # The reading predates the loss, so the day's end is calculated.
         or unsettled_loss
         # A later reading, not the Reset one, settled the day's end.
@@ -1115,11 +1127,10 @@ def _automatic_defense_adjustment(
     if data.season_first_day:
         # Day 1 needs nothing from the previous Season's last day; see
         # ``automatic_defense_loss``.
-        previous = PreviousRankedDay(True, 0, 0, 0)
+        previous = PreviousRankedDay(True, 0, 0, 0, battles_known=True)
     if (
         previous is None
-        or not previous.complete
-        or not previous.coverage_complete
+        or not _battles_known(previous)
         or not coverage_complete
         or previous.observed_defense_count < 0
     ):
@@ -1208,8 +1219,7 @@ def _zero_defense_loss(data: ReconciliationInput, defense_count: int) -> int:
         defense_count + data.zero_result_defense_slots
         or data.season_first_day
         or previous is None
-        or not previous.complete
-        or not previous.coverage_complete
+        or not _battles_known(previous)
     ):
         return 0
     previous_defenses = (
@@ -1225,6 +1235,14 @@ def _zero_defense_loss(data: ReconciliationInput, defense_count: int) -> int:
         previous_defense_loss=previous.observed_defense_loss,
         season_first_day=False,
     )
+
+
+def _battles_known(previous: PreviousRankedDay) -> bool:
+    """Whether the day before's battles are all known, so its defenses can
+    average the automatic loss: a missing reading does not change that."""
+    if previous.battles_known is None:
+        return previous.complete and previous.coverage_complete
+    return previous.battles_known
 
 
 def automatic_defense_loss(
