@@ -163,9 +163,11 @@ of daily results and redecodes the same way; a build is always claimed alone.
 One thread at a time claims each kind's next batch, so a process holds at most
 one unstarted batch of each kind, and each batch takes turns as a thread's
 single claims do: every other batch takes Reset-priority work first, and three
-response batches in four start from the newest-job plan. When the worker
-stops, claims no thread started are given back: each job returns to the state
-its claim found it in, keeps its attempt budget and can be claimed at once.
+response batches in four start from the newest-job plan. A claim that waited
+half its lease in a batch, behind slow jobs such as army redecodes, has its
+lease renewed before it starts. When the worker stops, claims no thread
+started are given back: each job returns to the state its claim found it in,
+keeps its attempt budget and can be claimed at once.
 An empty plan is refreshed at most once per second; claims still use the
 ordinary claim query when it has no candidate. That query measured about 4 ms
 when it found nothing.

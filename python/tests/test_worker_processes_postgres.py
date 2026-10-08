@@ -296,3 +296,32 @@ def test_each_process_plans_its_own_share_of_the_newest_jobs(
             database.close()
     assert shares[0].isdisjoint(shares[1])
     assert shares[0] | shares[1] == set(job_ids)
+
+
+def test_a_batched_claim_that_waited_half_its_lease_is_renewed_before_it_starts(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _queue_profiles(connection_info, archive_server, TAGS[:3])
+        database = Database(connection_info)
+        try:
+            processor = ObservationProcessor(database, archive=None, claim_batch=3)
+            first = processor._claim_next(
+                owner="slow", lease_seconds=2, work_types=RESPONSE_WORK_TYPES
+            )
+            assert first is not None
+            time.sleep(1.1)  # the next waited more than half its 2-second lease
+            second = processor._claim_next(
+                owner="slow", lease_seconds=2, work_types=RESPONSE_WORK_TYPES
+            )
+            assert second is not None
+            with psycopg.connect(connection_info) as connection:
+                remaining = connection.execute(
+                    "SELECT extract(epoch FROM lease_expires_at - clock_timestamp())"
+                    " FROM python_processing_jobs WHERE id = %s",
+                    (second.job_id,),
+                ).fetchone()[0]
+            assert remaining > 1.5  # without renewal, under 0.9 seconds were left
+            assert processor.release_batched_claims() == 1
+        finally:
+            database.close()

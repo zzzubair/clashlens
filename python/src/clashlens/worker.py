@@ -702,9 +702,9 @@ class ObservationProcessor:
         # Response lanes, and derived lanes outside builds, share one batch of
         # claims per kind: one transaction leases up to ``claim_batch`` jobs
         # and whichever lane frees up first takes the next. A build is never
-        # batched.
+        # batched. Each claim waits with the time it was claimed.
         self.claim_batch = claim_batch
-        self._batches: dict[tuple[str, ...], deque[Claim]] = {
+        self._batches: dict[tuple[str, ...], deque[tuple[float, Claim]]] = {
             RESPONSE_WORK_TYPES: deque(), DERIVED_WITHOUT_BUILDS: deque()
         }
         self._batch_locks = {kind: Lock() for kind in self._batches}
@@ -745,8 +745,21 @@ class ObservationProcessor:
             with self._batch_locks[work_types]:
                 batch = self._batches[work_types]
                 if not batch:
-                    batch.extend(self._claim_batch(owner, lease_seconds, work_types))
-                return batch.popleft() if batch else None
+                    claimed_at = monotonic()
+                    batch.extend((claimed_at, claim) for claim in
+                                 self._claim_batch(owner, lease_seconds, work_types))
+                while batch:
+                    claimed_at, claim = batch.popleft()
+                    if monotonic() - claimed_at < lease_seconds / 2:
+                        return claim
+                    # Slow jobs ahead of it, such as army redecodes, used half
+                    # its lease: renew it before it starts, unless it is lost.
+                    try:
+                        self.database.renew_claim(claim, lease_seconds=lease_seconds)
+                    except LeaseLost:
+                        continue
+                    return claim
+                return None
         # The newest-first plan holds only responses, so derived lanes skip it.
         limit = {} if work_types is None else {"work_types": work_types}
         with self._plan_lock:
@@ -820,7 +833,7 @@ class ObservationProcessor:
         claims: list[Claim] = []
         for kind, batch in self._batches.items():
             with self._batch_locks[kind]:
-                claims.extend(batch)
+                claims.extend(claim for _claimed_at, claim in batch)
                 batch.clear()
         return self.database.release_claims(claims) if claims else 0
 
