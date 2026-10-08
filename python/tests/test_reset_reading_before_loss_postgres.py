@@ -22,7 +22,6 @@ from test_reset_settlement_state_postgres import (
     TAG,
     _process,
     _reset_work,
-    _store_dropped_login,
 )
 
 from clashlens import first_battle_log, ranked_day_inputs, reconciliation_db
@@ -151,13 +150,13 @@ def _early_reading_days(
     return start_b, end_b
 
 
-def _day_end_recheck(connection_info: str, archive_server, day=DAY_B) -> None:
+def _day_end_recheck(connection_info: str, archive_server) -> None:
     with psycopg.connect(connection_info) as connection:
         player_id = connection.execute(
             "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
         ).fetchone()[0]
         reconciliation_db._enqueue_day_end_reconciliation(
-            connection, player_id, ranked_day_for(day)
+            connection, player_id, ranked_day_for(DAY_B)
         )
     _process(connection_info, archive_server, [])
 
@@ -437,44 +436,3 @@ def test_unreadable_new_day_battle_before_the_later_reading_charges_nothing(
     assert day_b_row[0] == "Complete"
     assert day_b_row[4:6] == (start_b, None)
     assert "unsettled_automatic_loss" not in day_b_row[7]
-
-
-def test_dropped_zero_defense_day_is_settled_by_a_reading_processed_after_the_drop(
-    database_url: str, archive_server
-) -> None:
-    # Saturday takes 8 defenses, Sunday none, and the Monday Reset reads
-    # Sunday's start before the game charged 8 * LOSS. Legend II at 05:13 is
-    # processed before the Legend I reading at 05:08 that shows the loss.
-    monday = BOUNDARIES["monday"]
-    sunday, saturday = monday - timedelta(days=1), monday - timedelta(days=2)
-    start = 6000 - 8 * LOSS
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        jobs = _reset_work(
-            connection_info, archive_server, saturday, profile=_profile(6000), log=_log()
-        )
-        jobs += _reset_work(
-            connection_info, archive_server, sunday, profile=_profile(start),
-            log=_log(*[(saturday + timedelta(hours=hour), False) for hour in range(1, 9)]),
-        )
-        jobs += _reset_work(
-            connection_info, archive_server, monday, profile=_profile(start), log=_log()
-        )
-        jobs.append(_store_dropped_login(
-            connection_info, archive_server, "dropped-login",
-            monday + timedelta(minutes=13), start - 8 * LOSS,
-        ))
-        _process(connection_info, archive_server, jobs)
-        unproven = _latest_days(connection_info, (sunday,))
-        _process(connection_info, archive_server, [store_observation(
-            connection_info, archive_server, occurrence_key="later-profile",
-            endpoint="profile", body=_profile(start - 8 * LOSS),
-            observed_at=monday + timedelta(minutes=8), normalized_tag=TAG,
-        )[1]])
-        _day_end_recheck(connection_info, archive_server, sunday)
-        settled = _latest_days(connection_info, (sunday,))
-
-    assert (unproven[0][0], unproven[0][8]) == (
-        "Partial", ["automatic_defense_basis_unavailable"]
-    )
-    assert settled[0][4:6] == (start - 8 * LOSS, 8 * LOSS)
-    assert (settled[0][0], settled[0][8]) == ("Complete", [])
