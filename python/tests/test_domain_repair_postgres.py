@@ -814,3 +814,48 @@ def test_season_repair_stores_again_a_summary_a_board_correction_changed(
     assert receipt["summaries_disagreeing"] == {
         "stored": 2, "stale": 0, "stale_players": [],
     }
+
+
+def test_season_repair_recalculates_days_saved_before_their_season_was_known(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Two ended days of the Season were saved as Season 'unknown' before a
+    profile named it. The repair's one job for the player recalculates both,
+    oldest first, though the first comes out the same."""
+    from domain_test_support import repair_season
+    from test_player_season_summaries_postgres import _log, _player, _ranked
+    from test_reconciliation_postgres import _processor
+
+    from clashlens import reconciliation_db
+    from clashlens.domain import ranked_day_for
+
+    season = ranked_day_for(datetime(2026, 7, 15, 6, tzinfo=UTC))
+    days = [season.season_start, season.season_start + DAY]
+    calculated: list[datetime] = []
+    # The first stays Partial, saving nothing new.
+    monkeypatch.setattr(
+        reconciliation_db, "recalculate_ranked_day",
+        lambda *_, day_start, **__: calculated.append(day_start) or False,
+    )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            player = _player(connection)
+            for number, start in enumerate(days, start=1):
+                version_id = _ranked(
+                    connection, player, number, start, start + DAY, season="unknown"
+                )
+                _log(connection, player, number, version_id, start, season="unknown")
+        repair_season(connection_info, season.official_season_id)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            with database.pool.connection() as connection:
+                jobs = connection.execute(
+                    "SELECT id FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+                ).fetchall()
+            assert len(jobs) == 1
+            assert processor.process_job(int(jobs[0][0]), owner="repair") is not None
+        finally:
+            database.close()
+
+    assert calculated == days

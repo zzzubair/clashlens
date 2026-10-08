@@ -81,10 +81,11 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     SELECT DISTINCT ranked_day_start
                     FROM api_player_daily_logs
                     WHERE player_id = %s AND ranked_day_start >= %s
-                      AND official_season_id = %s
+                      AND (official_season_id = %s OR ranked_day_start < %s)
                     ORDER BY ranked_day_start
                     """,
-                    (player_id, day_start, claim.input_json["recalculate_season"]),
+                    (player_id, day_start, claim.input_json["recalculate_season"],
+                     ranked_day_for(day_start).season_end),
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)
             if claim.input_json.get("trigger") == "day_end":
@@ -327,8 +328,7 @@ def recalculate_ranked_day(
             **(end_baseline or {"id": None}),
             "trophies": official_final,
             "eligibility_state": None,
-            "complete": end_baseline is None
-            or bool(end_baseline["evidence"]["battle_log_valid"]),
+            "complete": True,
             "evidence": {
                 **(end_baseline["evidence"] if end_baseline else {
                     "profile": {"observed_at": None},

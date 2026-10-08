@@ -665,7 +665,8 @@ Season, including one that started on the previous Season's last day, has
 finished and none has failed (`unfinished`, `failed` and `failed_blockers`
 count them while it is at `inputs`; a failed one is not retried
 automatically, so investigate it and retry it by hand); `days`, one job
-per player recalculating every saved day of the Season, oldest first, so each
+per player recalculating every saved day in the Season's 28 days, oldest
+first, even one saved before its Season was known, so each
 day starts where the day before now ends; once every such job has finished,
 `boards`, one rebuild of each Reset board whose entries the rules now change,
 every such board in one run, at most one per Reset (28 per Season), at the

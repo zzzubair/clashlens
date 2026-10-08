@@ -319,7 +319,8 @@ def queue_season_end(connection: Any, player_id: int, season_end: datetime) -> N
     not retired with its Season's details. It is queued whatever a Season
     repair already did for the player, once per total and saved result of
     the day: a job that ran without checking the day against it, as when the
-    saved total changed since, leaves another to queue. The
+    saved total changed since, leaves another to queue. A day last saved
+    under older calculation rules is queued under the current ones. The
     day's calculation lock makes the two meet: a calculation either reads
     this total or has saved before this reads it."""
     from . import first_battle_log
@@ -340,24 +341,24 @@ def queue_season_end(connection: Any, player_id: int, season_end: datetime) -> N
          AND official.league_season_id = %s AND official.league_tier_id = %s
          AND official.league_trophies IS NOT NULL
         WHERE version.player_id = %s AND version.ranked_day_start = %s
-          AND version.reconciliation_rule_version = %s
           AND NOT EXISTS (
               SELECT 1 FROM season_detail_retirements AS retired
               WHERE retired.official_season_id = version.official_season_id
           )
-          AND (version.input_evidence -> 'end_baseline_evidence'
-               ->> 'official_final_trophies')::integer
-              IS DISTINCT FROM official.league_trophies
-          AND version.version = (
-              SELECT max(latest.version) FROM ranked_day_versions AS latest
+          AND (
+              version.reconciliation_rule_version <> %s
+              OR (version.input_evidence -> 'end_baseline_evidence'
+                  ->> 'official_final_trophies')::integer
+                 IS DISTINCT FROM official.league_trophies
+          )
+          AND version.id = (
+              SELECT max(latest.id) FROM ranked_day_versions AS latest
               WHERE latest.player_id = version.player_id
                 AND latest.ranked_day_start = version.ranked_day_start
-                AND latest.reconciliation_rule_version = %s
           )
-        ORDER BY version.id DESC LIMIT 1
         """,
         (str(int(season_end.timestamp())), LEGEND_I_TIER_ID, player_id, day_start,
-         RECONCILIATION_RULE_VERSION, RECONCILIATION_RULE_VERSION),
+         RECONCILIATION_RULE_VERSION),
     ).fetchone()
     if stale is None:
         return
