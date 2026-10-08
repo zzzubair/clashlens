@@ -201,6 +201,59 @@ def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows()
     assert other.automatic_defense_loss is day_1.automatic_defense_loss is None
 
 
+def test_zero_defense_day_read_before_its_loss_takes_it_from_a_later_reading() -> None:
+    # As #9R2LRYY8V on 6 October 2026, but with the Reset reading at 05:02
+    # before the game charged 8 times the previous day's average (305 / 8),
+    # and a reading at 05:10, before any new-day battle, after it.
+    day = _input(
+        start_trophies=4695, next_start_trophies=4695, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 305, 0),
+    )
+    later_at = DAY.end + timedelta(minutes=10)
+    charged = reconcile_ranked_day(
+        replace(day, later_next_start_reading=(later_at, 4391))
+    )
+    # A quiet day's later reading still shows its start: it stays uncharged.
+    quiet = reconcile_ranked_day(
+        replace(day, later_next_start_reading=(later_at, 4695))
+    )
+
+    assert (charged.state, charged.confidence) == ("Complete", "inferred")
+    assert charged.automatic_defense_loss == 304
+    assert charged.automatic_defense_evidence_state == "calculated"
+    assert charged.final_trophies_before_reset == 4391
+    assert charged.next_start_trophies == 4391
+    assert charged.unsettled_automatic_loss == 304
+    assert charged.failure_reasons == ()
+    assert (quiet.state, quiet.automatic_defense_loss) == ("Complete", None)
+    assert quiet.next_start_trophies == 4695
+
+    # The next day starts from the Reset reading less the loss.
+    next_day = reconcile_ranked_day(
+        _input(
+            ranked_day=ranked_day_for(DAY.end + timedelta(hours=1)),
+            now=DAY.end + timedelta(days=1, minutes=1),
+            start_baseline_id=11,
+            end_baseline_id=12,
+            start_trophies=4695,
+            next_start_trophies=4391 + 40,
+            coverage_observations=tuple(
+                replace(item, observed_at=item.observed_at + timedelta(days=1))
+                for item in _coverage()
+            ),
+            contributions=(
+                *_battles("#9R2LRYY8V-2", "offense", 8, 280),
+                *_battles("#9R2LRYY8V-2", "defense", 8, 240),
+            ),
+            previous_day=PreviousRankedDay(
+                True, 0, 0, 0, end_baseline_id=11, unsettled_automatic_loss=304,
+            ),
+        )
+    )
+
+    assert (next_day.state, next_day.start_trophies) == ("Complete", 4391)
+
+
 def _battles(tag: str, lens: str, count: int, total: int) -> tuple[BattleContribution, ...]:
     amounts = [total // count] * (count - 1) + [total - total // count * (count - 1)]
     return tuple(

@@ -10,6 +10,7 @@ starts from the reading less that loss. On 2 October 2026 this explained
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import psycopg
@@ -23,7 +24,7 @@ from test_reset_settlement_state_postgres import (
     _reset_work,
 )
 
-from clashlens import first_battle_log, reconciliation_db
+from clashlens import first_battle_log, ranked_day_inputs, reconciliation_db
 from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import ranked_day_for
 
@@ -102,63 +103,94 @@ def test_reading_before_the_loss_completes_the_day_and_settles_the_next_start(
     assert day_c_row[8] == []
 
 
-def test_later_reading_settles_a_reset_reading_missing_an_attack(
-    database_url: str, archive_server
-) -> None:
-    # As #P20G0CUJY on 6 October 2026: the Reset reading leaves out the
-    # ended day's attack gain, and a reading before any new-day battle has it.
+def _early_reading_days(
+    connection_info: str, archive_server, later_profile: bytes
+) -> tuple[int, int]:
+    """As #P20G0CUJY on 6 October 2026: the Reset reading ending day B leaves
+    out its attack gain, and ``later_profile`` is read before any new-day
+    battle. Return day B's start and calculated end."""
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     day_c = [(DAY_C + timedelta(hours=1), True)]
     start_b = 6000
     end_b = start_b + WIN - 8 * LOSS
+    jobs = _reset_work(
+        connection_info, archive_server, DAY_B, profile=_profile(start_b), log=_log()
+    )
+    jobs += _reset_work(
+        connection_info, archive_server, DAY_C,
+        profile=_profile(end_b - WIN), log=_log(*day_b),
+    )
+    jobs += _reset_work(
+        connection_info, archive_server, DAY_D,
+        profile=_profile(end_b + WIN), log=_log(*day_c),
+    )
+    _process(connection_info, archive_server, jobs)
+    assert [row[0] for row in _latest_days(connection_info)] == [
+        "Inconsistent", "Inconsistent",
+    ]
+    _, profile_job = store_observation(
+        connection_info, archive_server, occurrence_key="later-profile",
+        endpoint="profile", body=later_profile,
+        observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
+    )
+    _process(connection_info, archive_server, [profile_job])
+    return start_b, end_b
+
+
+def _day_end_recheck(connection_info: str, archive_server) -> None:
+    with psycopg.connect(connection_info) as connection:
+        player_id = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+        ).fetchone()[0]
+        reconciliation_db._enqueue_day_end_reconciliation(
+            connection, player_id, ranked_day_for(DAY_B)
+        )
+    _process(connection_info, archive_server, [])
+
+
+def test_later_reading_settles_a_reset_reading_missing_an_attack(
+    database_url: str, archive_server
+) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        jobs = _reset_work(
-            connection_info, archive_server, DAY_B, profile=_profile(start_b), log=_log()
+        start_b, end_b = _early_reading_days(
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
         )
-        jobs += _reset_work(
-            connection_info, archive_server, DAY_C,
-            profile=_profile(end_b - WIN), log=_log(*day_b),
-        )
-        jobs += _reset_work(
-            connection_info, archive_server, DAY_D,
-            profile=_profile(end_b + WIN), log=_log(*day_c),
-        )
-        _process(connection_info, archive_server, jobs)
+        # The later reading alone recalculates nothing.
         assert [row[0] for row in _latest_days(connection_info)] == [
             "Inconsistent", "Inconsistent",
         ]
+        # The recheck after the Reset settles day B, which changes its next
+        # start, so day C, saved before, is calculated again too.
+        _day_end_recheck(connection_info, archive_server)
+        day_b_row, day_c_row = _latest_days(connection_info)
 
-        # The later reading arrives; the recheck after the Reset uses it.
-        _, profile_job = store_observation(
-            connection_info, archive_server, occurrence_key="later-profile",
-            endpoint="profile", body=_profile(end_b),
-            observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
+    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[7]["next_start_reading_trophies"] == end_b - WIN
+    assert day_b_row[7]["next_start_reading_correction"] == WIN
+    assert day_b_row[8] == []
+    assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
+    assert day_c_row[7]["start_reading_correction"] == WIN
+
+
+def test_mismatch_batch_settles_days_saved_before_the_later_reading_rule(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        start_b, end_b = _early_reading_days(
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
         )
-        with psycopg.connect(connection_info) as connection:
-            player_id = connection.execute(
-                "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
-            ).fetchone()[0]
-            reconciliation_db._enqueue_day_end_reconciliation(
-                connection, player_id, ranked_day_for(DAY_B)
-            )
-        _process(connection_info, archive_server, [profile_job])
-        assert [row[0] for row in _latest_days(connection_info)] == [
-            "Complete", "Inconsistent",
-        ]
-
-        # Day C, saved before day B settled, needs the --mismatch batch.
         season = ranked_day_for(DAY_B).official_season_id
         database = Database(connection_info)
         try:
             preview = first_battle_log.requeue_overlap_gap(
                 database, season, queue=False, max_jobs=100,
-                reason="trophy_equation_mismatch", trigger="mismatch",
+                condition=ranked_day_inputs.LATER_READING_DAY_SQL, trigger="mismatch",
             )
             queued = first_battle_log.requeue_overlap_gap(
                 database, season, queue=True, max_jobs=100,
-                reason="trophy_equation_mismatch", trigger="mismatch",
+                condition=ranked_day_inputs.LATER_READING_DAY_SQL, trigger="mismatch",
             )
         finally:
             database.close()
@@ -169,10 +201,71 @@ def test_later_reading_settles_a_reset_reading_missing_an_attack(
     assert (preview["players"], preview["queued"], preview["left_to_queue"]) == (1, 0, 1)
     assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
-
     assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
-    assert day_b_row[7]["next_start_reading_trophies"] == end_b - WIN
-    assert day_b_row[7]["next_start_reading_correction"] == WIN
-    assert day_b_row[8] == []
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
-    assert day_c_row[7]["start_reading_correction"] == WIN
+
+
+def test_rejected_later_reading_does_not_settle_the_day(
+    database_url: str, archive_server
+) -> None:
+    # The later profile has the right trophies, but reports Season ID 0, so
+    # it is rejected and proves nothing.
+    payload = json.loads(_profile(6000 + WIN - 8 * LOSS))
+    payload["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _early_reading_days(
+            connection_info, archive_server, json.dumps(payload).encode()
+        )
+        _day_end_recheck(connection_info, archive_server)
+        rows = _latest_days(connection_info)
+
+    assert [row[0] for row in rows] == ["Inconsistent", "Inconsistent"]
+    assert "next_start_reading_correction" not in rows[0][7]
+
+
+def test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck(
+    database_url: str, archive_server
+) -> None:
+    # As #9R2LRYY8V on 6 October 2026, but read early: day A takes 8
+    # defenses, day B none, and the Reset reading ending day B still shows
+    # its start; a reading 10 minutes later, before any new-day battle, shows
+    # the 8 * LOSS the game then charged.
+    day_a = [(DAY_A + timedelta(hours=hour), False) for hour in range(1, 9)]
+    day_c = [(DAY_C + timedelta(hours=1), True)]
+    start_b = 6000 - 8 * LOSS
+    end_b = start_b - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_A, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_B,
+            profile=_profile(start_b), log=_log(*day_a),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=_profile(start_b), log=_log(),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D,
+            profile=_profile(end_b + WIN), log=_log(*day_c),
+        )
+        _process(connection_info, archive_server, jobs)
+        before = [row[0] for row in _latest_days(connection_info)]
+        _, profile_job = store_observation(
+            connection_info, archive_server, occurrence_key="later-profile",
+            endpoint="profile", body=_profile(end_b),
+            observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
+        )
+        _process(connection_info, archive_server, [profile_job])
+        _day_end_recheck(connection_info, archive_server)
+        day_b_row, day_c_row = _latest_days(connection_info)
+
+    assert before == ["Complete", "Inconsistent"]
+    assert day_b_row[:7] == (
+        "Complete", "inferred", start_b, end_b, end_b, 8 * LOSS, "calculated",
+    )
+    assert day_b_row[7]["next_start_reading_trophies"] == start_b
+    assert day_b_row[7]["unsettled_automatic_loss"] == 8 * LOSS
+    assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
+    assert day_c_row[7]["start_unsettled_automatic_loss"] == 8 * LOSS

@@ -574,16 +574,19 @@ def requeue_zero_result_slots(
 
 def requeue_overlap_gap(
     database: Database, season_id: str, *, queue: bool, max_jobs: int,
-    reason: str = "battle_log_overlap_gap", trigger: str = "overlap_gap",
+    condition: str = "failure_reasons ? 'battle_log_overlap_gap'",
+    trigger: str = "overlap_gap",
 ) -> dict[str, Any]:
     """Find, and with ``queue`` recalculate, each player's oldest ended day
-    of the Season whose latest result reports ``reason``, and their later
+    of the Season whose latest result meets ``condition``, and their later
     saved days. Before October 2026 two full logs overlapped only through a
     shared Legend battle, so logs sharing only other battles were a gap: 911
-    ended days on 5 and 6 October 2026. With ``trophy_equation_mismatch``, it
-    recalculates days that zero-defense charges or a later reading settling
-    the Reset reading can now finish: 123 ended days on 5 and 6 October
-    2026. A day is queued once
+    ended days on 5 and 6 October 2026. With
+    ``ranked_day_inputs.LATER_READING_DAY_SQL``, it recalculates days that
+    zero-defense charges or a later reading settling the Reset reading can
+    now finish: 123 ended days ending in a mismatch on 5 and 6 October
+    2026, and zero-defense days whose Reset reading came before the game
+    charged them. A day is queued once
     while its finished request is kept, about 48 hours; a later run queues a
     day still reporting a gap again, which only recalculates it. A failed
     request is kept and not queued again: it is counted in ``failed`` and up
@@ -600,10 +603,10 @@ def requeue_overlap_gap(
     with database.pool.connection() as connection:
         with connection.transaction():
             rows = connection.execute(
-                """
+                f"""
                 WITH latest AS (
                     SELECT DISTINCT ON (player_id, ranked_day_start)
-                           player_id, ranked_day_start, failure_reasons
+                           player_id, ranked_day_start, {condition} AS selected
                     FROM ranked_day_versions
                     WHERE ranked_day_start >= %(start)s
                       AND ranked_day_start < %(end)s
@@ -612,11 +615,10 @@ def requeue_overlap_gap(
                 )
                 SELECT DISTINCT ON (player_id) player_id, ranked_day_start
                 FROM latest
-                WHERE failure_reasons ? %(reason)s
+                WHERE selected
                 ORDER BY player_id, ranked_day_start
                 """,
-                {"start": season_start, "end": season_start + domain.SEASON_DURATION,
-                 "reason": reason},
+                {"start": season_start, "end": season_start + domain.SEASON_DURATION},
             ).fetchall()
             queued = {
                 row[0]: row[1:] for row in connection.execute(

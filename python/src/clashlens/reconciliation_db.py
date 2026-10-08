@@ -39,6 +39,7 @@ from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
     ReconciliationInput,
     ReconciliationResult,
+    reads_later_reading,
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
@@ -87,12 +88,12 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)
             if claim.input_json.get("trigger") == "day_end":
-                # Its Reset reading usually finished the day already. A
-                # mismatch runs again: a reading since may settle it.
+                # Its Reset reading usually finished the day already. A day a
+                # reading since may settle runs again.
                 latest = connection.execute(
-                    """
+                    f"""
                     SELECT state = 'Live'
-                           OR failure_reasons ? 'trophy_equation_mismatch'
+                           OR {ranked_day_inputs.LATER_READING_DAY_SQL}
                     FROM ranked_day_versions
                     WHERE player_id = %s AND ranked_day_start = %s
                       AND reconciliation_rule_version = %s
@@ -102,8 +103,13 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 ).fetchone()
                 if latest is None or not latest[0]:
                     day_starts = set()
-            for day_start in sorted(day_starts):
-                recalculate_ranked_day(
+            pending = sorted(day_starts)
+            while pending:
+                day_start = pending.pop(0)
+                following = day_start + timedelta(days=1)
+                # A changed next start changes the following saved day's
+                # start too.
+                if recalculate_ranked_day(
                     database,
                     connection,
                     player_id=player_id,
@@ -112,7 +118,17 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     processing_version=claim.processing_version,
                     domain_rule_version=claim.domain_rule_version,
                     analytics_rule_version=claim.analytics_rule_version,
-                )
+                ) and following not in day_starts and connection.execute(
+                    """
+                    SELECT 1 FROM ranked_day_versions
+                    WHERE player_id = %s AND ranked_day_start = %s
+                      AND reconciliation_rule_version = %s
+                    LIMIT 1
+                    """,
+                    (player_id, following, RECONCILIATION_RULE_VERSION),
+                ).fetchone() is not None:
+                    day_starts.add(following)
+                    pending.insert(0, following)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
@@ -168,8 +184,9 @@ def recalculate_ranked_day(
     processing_version: str,
     domain_rule_version: str,
     analytics_rule_version: str,
-) -> None:
-    """Recalculate and publish one player-day in the caller's transaction."""
+) -> bool:
+    """Recalculate and publish one player-day in the caller's transaction;
+    whether that changed its saved next start."""
     ranked_day = ranked_day_for(day_start)
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
@@ -395,11 +412,11 @@ def recalculate_ranked_day(
         end_baseline["evidence"]["profile"]["observed_at"]
         if end_baseline is not None else None
     )
-    if "trophy_equation_mismatch" in result.failure_reasons and reading_at:
+    if reading_at and reads_later_reading(data, result):
         # A later reading can settle an end Reset reading taken before the
-        # game finished crediting the day; only a mismatched day reads one.
+        # game finished crediting the day or charging its automatic loss.
         later = ranked_day_inputs.load_later_reading(
-            database, connection, player_id, ranked_day.end,
+            database, connection, player_id, ranked_day,
             datetime.fromisoformat(reading_at),
         )
         if later is not None:
@@ -481,7 +498,7 @@ def recalculate_ranked_day(
     contribution_evidence = input_evidence.get("contributions", [])
     previous_version = connection.execute(
         """
-        SELECT id, version, result_hash, replaces_version_id
+        SELECT id, version, result_hash, replaces_version_id, next_start_trophies
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -666,6 +683,11 @@ def recalculate_ranked_day(
             ranked_day_input_hash=input_hash,
             reset_lock_wait=RESET_LOCK_WAIT,
         )
+    return (
+        previous_version is not None
+        and previous_version[4] is not None
+        and previous_version[4] != result_data["next_start_trophies"]
+    )
 
 
 def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:

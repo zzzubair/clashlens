@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from clashlens import ranked_day_inputs
 from clashlens.cli import (
     _archive,
     _file_value,
@@ -743,7 +744,7 @@ def test_mismatch_recalculation_needs_a_season_and_runs_alone(
         assert main(arguments) == 0
         assert calls == [("1791176400", {
             "queue": queue, "max_jobs": 100,
-            "reason": "trophy_equation_mismatch", "trigger": "mismatch",
+            "condition": ranked_day_inputs.LATER_READING_DAY_SQL, "trigger": "mismatch",
         })]
 
 

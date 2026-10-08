@@ -156,10 +156,11 @@ class ReconciliationInput:
     # charges the automatic defense loss.
     zero_result_attack_slots: int = 0
     zero_result_defense_slots: int = 0
-    # The last processed profile read after the end Reset reading and
-    # before the player's first battle of the next day, by either player's
-    # report, as (read at, trophies). Loaded only for a day the end reading
-    # does not reconcile.
+    # The last accepted, eligible profile naming the day's Season read after
+    # the end Reset reading and before the player's first battle of the next
+    # day, by either player's report, as (read at, trophies). Loaded only for
+    # a day the end reading does not reconcile, or one with no used defense
+    # slots it shows uncharged (see ``reads_later_reading``).
     later_next_start_reading: tuple[datetime, int] | None = None
 
     def __post_init__(self) -> None:
@@ -372,9 +373,17 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         if end_available and data.next_start_trophies is not None:
             residual = data.next_start_trophies - expected_next
             zero_defense_loss = _zero_defense_loss(data, defense_count)
+            later = data.later_next_start_reading
             if (
                 zero_defense_loss
-                and residual == -zero_defense_loss
+                and (
+                    residual == -zero_defense_loss
+                    or (
+                        residual == 0
+                        and later is not None
+                        and later[1] == data.next_start_trophies - zero_defense_loss
+                    )
+                )
                 and not end_hidden_by_reset
                 and (
                     data.boundary_kind is None
@@ -391,15 +400,17 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 # do not say which. On 6 October 2026, 3 such days lost
                 # exactly this (304, 272 and 248) and 86 kept their trophies,
                 # including every one read again later that day, with the
-                # same battle counts on the days around them. Only the next
-                # Reset reading tells them apart, so only a reading exactly
-                # this loss below the day's end takes it.
+                # same battle counts on the days around them. Only a reading
+                # after the Reset tells them apart, so only one exactly this
+                # loss below the day's end takes it. A Reset reading showing
+                # no change, followed by one before any new-day battle
+                # showing the loss, was read before the game applied it.
                 automatic_loss = zero_defense_loss
                 automatic_state = "calculated"
                 final_trophies -= zero_defense_loss
                 net_trophy_change = final_trophies - start_trophies
                 expected_next = final_trophies
-                residual = 0
+                residual += zero_defense_loss
             if (
                 automatic_loss
                 and residual == automatic_loss
@@ -423,7 +434,6 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 next_start_trophies = data.next_start_trophies - unsettled_loss
                 observed_trophy_change = next_start_trophies - start_trophies
                 residual = 0
-            later = data.later_next_start_reading
             if (
                 residual
                 and later is not None
@@ -1072,10 +1082,24 @@ def _automatic_defense_adjustment(
     ), "calculated"
 
 
+def reads_later_reading(
+    data: ReconciliationInput, result: ReconciliationResult
+) -> bool:
+    """Whether a profile read after the day's end Reset reading could settle
+    it: the day ended in a trophy mismatch, or used no defense slots and its
+    Reset reading shows no automatic loss the game may not have applied yet."""
+    return "trophy_equation_mismatch" in result.failure_reasons or (
+        result.unexplained_residual == 0
+        and result.automatic_defense_evidence_state == "not_applicable"
+        and _zero_defense_loss(data, result.defense_count) > 0
+    )
+
+
 def _zero_defense_loss(data: ReconciliationInput, defense_count: int) -> int:
     """The automatic loss for all 8 defense slots of a day with none used,
     averaged over the previous day alone, or 0 without a complete previous
-    day to average. Charged only when the next Reset reading shows it."""
+    day to average. Charged only when the next Reset reading, or a later
+    one before any new-day battle, shows it."""
     previous = data.previous_day
     if (
         defense_count + data.zero_result_defense_slots

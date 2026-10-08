@@ -612,14 +612,21 @@ def load_reading(
 
 
 def load_profile_trophies(
-    database: Database, connection: Any, player_id: int, after: datetime, until: datetime
+    database: Database, connection: Any, player_id: int, after: datetime, until: datetime,
+    *, season_id: str | None = None,
 ) -> tuple[tuple[datetime, int | None], ...]:
     """The trophies of each profile read in ``(after, until)``, or ``None``
-    for one with no processed profile."""
+    for one with no processed profile or, with ``season_id``, none accepted,
+    eligible and naming that Season."""
     rows = connection.execute(
         f"""
         SELECT observed.response_completed_at,
-               CASE WHEN outcome.outcome = 'processed' THEN profile.trophies END
+               CASE WHEN outcome.outcome = 'processed'
+                     AND (%(season)s::text IS NULL
+                          OR (profile.source_contract_state = 'accepted'
+                              AND profile.eligibility_state = 'eligible'
+                              AND profile.current_league_season_id = %(season)s))
+                    THEN profile.trophies END
         FROM collector_observations AS observed
         {_OUTCOME}
         {_profile_join(database)}
@@ -630,18 +637,33 @@ def load_profile_trophies(
         ORDER BY observed.response_completed_at
         """,
         {"processing": PROCESSING_VERSION, "player": player_id,
-         "after": after, "until": until},
+         "after": after, "until": until, "season": season_id},
     ).fetchall()
     return tuple((at, None if trophies is None else int(trophies)) for at, trophies in rows)
 
 
+# A saved result a profile read after its end Reset reading may still
+# settle: one ending in a trophy mismatch, or a complete day after Day 1 with
+# no used defense slots whose Reset reading showed no automatic loss (see
+# ``reconciliation.reads_later_reading``).
+LATER_READING_DAY_SQL = """(
+    failure_reasons ? 'trophy_equation_mismatch'
+    OR (state = 'Complete' AND defense_count = 0 AND season_day_number > 1
+        AND automatic_defense_evidence_state = 'not_applicable'
+        AND unexplained_residual = 0
+        AND NOT input_evidence ? 'zero_result_defense_slots')
+)"""
+
+
 def load_later_reading(
-    database: Database, connection: Any, player_id: int, boundary_at: datetime,
+    database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
     reading_at: datetime,
 ) -> tuple[datetime, int] | None:
-    """The last processed profile read after the Reset reading at
-    ``reading_at`` and before the player's first battle of the new day, by
-    either player's report, within a day; ``None`` without one."""
+    """The last accepted, eligible profile naming the day's Season read after
+    its end Reset reading at ``reading_at`` and before the player's first
+    battle of the next day, by either player's report, within a day;
+    ``None`` without one."""
+    boundary_at = ranked_day.end
     until = boundary_at + timedelta(days=1)
     first_new_day = load_first_reports(
         connection, player_id, reading_at, domain.battle_window(boundary_at)[0], until
@@ -649,7 +671,8 @@ def load_later_reading(
     readings = [
         (at, trophies)
         for at, trophies in load_profile_trophies(
-            database, connection, player_id, reading_at, first_new_day or until
+            database, connection, player_id, reading_at, first_new_day or until,
+            season_id=ranked_day.official_season_id,
         )
         if trophies is not None
     ]

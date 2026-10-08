@@ -27,7 +27,13 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, domain_repair, first_battle_log, reset_baselines
+from . import (
+    boundary,
+    domain_repair,
+    first_battle_log,
+    ranked_day_inputs,
+    reset_baselines,
+)
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -329,7 +335,8 @@ def add_republish_command(
     # first_battle_log.requeue_overlap_gap.
     republish_current_season.add_argument("--overlap-gap", choices=("preview", "queue"))
     # With --mismatch, the same for each player's oldest ended day reporting
-    # trophy_equation_mismatch.
+    # trophy_equation_mismatch, or with no used defense slots and no
+    # automatic loss in its Reset reading.
     republish_current_season.add_argument("--mismatch", choices=("preview", "queue"))
     # With --boards, preview or queue rebuilds of the Season's Reset boards
     # still ranking a reading the board now leaves out; see
@@ -385,7 +392,7 @@ def run_republish_command(database_url: str, arguments: argparse.Namespace) -> i
             report = first_battle_log.requeue_overlap_gap(
                 database, arguments.season, queue=mismatch == "queue",
                 max_jobs=arguments.max_jobs,
-                reason="trophy_equation_mismatch", trigger="mismatch",
+                condition=ranked_day_inputs.LATER_READING_DAY_SQL, trigger="mismatch",
             )
         elif day_1 is not None:
             report = first_battle_log.requeue_day_1(
