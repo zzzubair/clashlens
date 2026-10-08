@@ -36,7 +36,8 @@ def refresh(
         connection.execute("SET LOCAL lock_timeout = '1s'")
         # The settlement count reads the whole settlement table once a day.
         connection.execute("SET LOCAL statement_timeout = '20s'")
-        # The previous Reset too, for a stage the check was not running for.
+        # The previous Reset too, for a stage the check was not running for,
+        # and any kept sweep the check never recorded while it was down.
         sweeps = connection.execute(
             """
             SELECT id, boundary_at, cardinality(member_ids), membership_captured_at
@@ -46,6 +47,7 @@ def refresh(
                OR boundary_at IN (
                    SELECT boundary_at FROM reset_acceptance_records
                    WHERE proof_processed_at IS NULL OR readable_at IS NULL)
+               OR boundary_at NOT IN (SELECT boundary_at FROM reset_acceptance_records)
             ORDER BY boundary_at
             """
         ).fetchall()
@@ -100,24 +102,33 @@ def _refresh_one(
     if record["proof_processed_at"] is None and collection_done:
         # Every response a Reset item saved counts, even when a later request
         # of that item failed or a newer response replaced it. Unchanged
-        # readings reuse an older saved response whose finished job may
-        # already be cleaned up; only an unfinished job holds this back.
-        pending, processed_at = connection.execute(
+        # readings reuse a response saved before the Reset, whose finished job
+        # may already be cleaned up. A response saved since the Reset, or no
+        # longer kept, whose job is gone was cleaned up before the check saw it
+        # finish: the time is then unknown and stays empty, never the
+        # collection time.
+        pending, gone, processed_at = connection.execute(
             """
-            SELECT count(*) FILTER (WHERE job.state <> 'complete'), max(job.completed_at)
+            SELECT count(*) FILTER (WHERE job.state <> 'complete'),
+                   count(*) FILTER (WHERE job.id IS NULL
+                                      AND COALESCE(observation.created_at >= %s, true)),
+                   max(job.completed_at)
             FROM collector_work AS work
             CROSS JOIN LATERAL unnest(
                 ARRAY[work.profile_observation_id, work.battle_log_observation_id,
                       work.league_history_observation_id] || work.replaced_observation_ids
             ) AS reading (observation_id)
+            LEFT JOIN collector_observations AS observation
+              ON observation.id = reading.observation_id
             LEFT JOIN python_processing_jobs_worker AS job
               ON job.observation_id = reading.observation_id
             WHERE work.sweep_id = %s AND work.kind = 'reset_baseline'
+              AND reading.observation_id IS NOT NULL
             """,
-            (sweep_id,),
+            (boundary_at, sweep_id),
         ).fetchone()
-        if pending == 0:
-            changes["proof_processed_at"] = processed_at or finished_at
+        if pending == 0 and gone == 0 and processed_at is not None:
+            changes["proof_processed_at"] = processed_at
     frozen_at, published_at, manifest_id = connection.execute(
         """
         SELECT manifest.frozen_at, snapshot.published_at, manifest.id

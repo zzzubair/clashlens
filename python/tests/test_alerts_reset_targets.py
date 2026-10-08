@@ -154,6 +154,17 @@ def test_a_board_the_website_cannot_show_by_0530_alerts(rt, website, board_page)
     assert "recovered at 2026-10-08T05:40:00+00:00" in posts(rt, "not readable")[-1]
 
 
+def test_a_board_without_a_public_website_address_misses_0530(rt) -> None:
+    # Only the address visitors use proves the board readable.
+    reset = at(rt, 5, 30)
+    rt.reset = f"{reset} 13251 13251 {reset + 1500} 0"
+    rt.config["public_origin"] = ""
+    assert rt.run() == 1
+    assert len(posts(rt, "not readable by 05:30")) == 1
+    probe = next(args for args in rt.calls if "--reset" in args)
+    assert probe[-2:] == ["0", "0"]
+
+
 def test_a_failed_website_read_after_the_board_was_readable_stays_quiet(rt) -> None:
     reset = at(rt, 14)
     rt.reset = f"{reset} 13251 13251 {reset + 1200} {reset + 1500}"

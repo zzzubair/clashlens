@@ -206,7 +206,7 @@ def runtime(tmp_path, monkeypatch):
         "spool_root": str(tmp_path),
         "max_bytes": 100,
         "max_objects": 100,
-        "website_port": server.server_port,
+        "public_origin": f"http://127.0.0.1:{server.server_port}",
     }
     rt.state_dir = tmp_path / "state"
     rt.run = lambda: alerts.run(rt.config, rt.state_dir, ROOT)
@@ -359,7 +359,7 @@ def test_missing_or_public_webhook_fails_loudly(runtime, monkeypatch, capsys, mo
             rt.config["spool_root"],
             "100",
             "100",
-            str(rt.config["website_port"]),
+            rt.config["public_origin"],
         ],
     )
     assert alerts.main() == 1

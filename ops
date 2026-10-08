@@ -1445,7 +1445,7 @@ alert_check() {
   load_kv_file "$ENV_FILE" CONFIG
   python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" "$(alert_webhook_file)" \
     "$(setting CLASHLENS_HEALTH_PORT 8081)" "$(setting CLASHLENS_SPOOL_ROOT /srv/clashlens-data/spool)" \
-    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)" "$(setting CLASHLENS_WEBSITE_PORT 3000)"
+    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)" "$(setting CLASHLENS_PUBLIC_ORIGIN)"
 }
 
 command=${1:-}

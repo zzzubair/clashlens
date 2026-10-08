@@ -192,7 +192,8 @@ def test_changed_secret_restarts_without_printing_it(stack):
 
 def test_worker_only_change_keeps_the_running_collector(stack):
     # The collector image holds all Python source, so a worker-only change
-    # differs from the running one.
+    # differs from the running one; the person deploying chooses the manual
+    # --keep-collector for it. Choosing automatically is a follow-up.
     images = json.loads(stack["env"]["IMAGES"])
     images[NEW_COLLECTOR] = SAME_CONTENTS.replace("aa", "bb")
     result = deploy(stack, IMAGES=json.dumps(images), KEEP="true")
@@ -200,7 +201,7 @@ def test_worker_only_change_keeps_the_running_collector(stack):
     assert f"keep=true collector={OLD_COLLECTOR}" in result.stdout
     assert not KEPT & result.stopped
     assert {"clashlens-api", "clashlens-worker", "clashlens-website"} <= result.stopped
-    # Without the option the next up starts the new collector image.
+    # A plain up restarts all four for any Python change.
     assert_restarted(deploy(stack, IMAGES=json.dumps(images)), "the collector image changed")
 
 

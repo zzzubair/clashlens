@@ -249,8 +249,10 @@ it again, and confirm the PostgreSQL and collector start times are unchanged
 use the database. `./ops down` stops the whole stack. `./ops up` restarts it,
 but leaves the collector, PostgreSQL, pod and network running when none of them
 changed ([rule](deployment.md#when-up-restarts-the-collector));
-`./ops up --restart-collector` restarts them anyway, and `./ops up
---keep-collector` keeps them running for a worker-only or API-only change.
+`./ops up --restart-collector` restarts them anyway. Any Python change makes a
+plain `./ops up` restart them; for a worker-only or API-only change, run `./ops
+up --keep-collector` by hand to keep them running (choosing this automatically
+is a follow-up).
 
 Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
 to interpret messages. Confirm both the measurements below and the recovery

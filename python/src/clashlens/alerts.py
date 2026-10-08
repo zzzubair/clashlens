@@ -386,16 +386,18 @@ def reset_probe(served: str, read_at: str) -> None:
     )
 
 
-def website_daily_board(port: int) -> list[str]:
+def website_daily_board(origin: str) -> list[str]:
     """The Season and day of the Daily leaderboard the website's public page
-    shows, or an empty list when it shows none yet.
+    shows at its public address ``origin``, or an empty list when it shows
+    none yet.
 
     The page sends a visitor on to the board's own address only once the
     website has read the newest frozen board from the API and accepted it, and
     that address must then show the board's own heading, so a board the
     website cannot reach, rejects or fails to show does not count.
     """
-    origin = f"http://127.0.0.1:{port}"
+    if not origin:
+        raise CheckError("No public website address; set CLASHLENS_PUBLIC_ORIGIN")
     try:
         request(origin + "/leaderboards/tracked?view=daily&page=1")
     except urllib.error.HTTPError as error:
@@ -828,9 +830,9 @@ def observe(
         state.pop("leaderboard_stale_since", None)
         findings["leaderboard"] = False
     # The board counts as readable only once the website's public Daily
-    # leaderboard page shows it.
+    # leaderboard page shows it at the address visitors use.
     try:
-        daily = website_daily_board(int(config["website_port"]))
+        daily = website_daily_board(config["public_origin"])
         read_at = int(time.time())
     except (OSError, ValueError, CheckError, http.client.HTTPException):
         errors.append("Reset publication status unavailable; run ./ops logs website")
@@ -1115,12 +1117,12 @@ def main() -> int:
                 None,
                 observe_site,
             )
-        state_dir, root, webhook, health, spool, max_bytes, max_objects, website = sys.argv[1:]
+        state_dir, root, webhook, health, spool, max_bytes, max_objects, origin = sys.argv[1:]
         return run(
             {
                 "webhook_file": webhook,
                 "health_port": health,
-                "website_port": website,
+                "public_origin": origin,
                 "spool_root": spool,
                 "max_bytes": max_bytes,
                 "max_objects": max_objects,

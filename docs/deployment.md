@@ -454,15 +454,18 @@ They keep running only when all of these hold since the last successful `up`:
 - all four are running and the collector and PostgreSQL containers are healthy.
 
 The collector's image holds all of `python/src`, so a release that changes
-only worker or API code still has a different collector image. For that,
-`./ops up --keep-collector` keeps the running collector image instead of the
-new one; every other condition above must still hold, so a release that also
-changes the collector's or PostgreSQL's settings, service files or secrets,
-the PostgreSQL image, or any migration still restarts all four, on the new
-collector image. `up` cannot tell collector code from worker code, so use it
-only when the release changes no collector code; the next `up` without it
-starts the new collector image. `--keep-collector` and `--restart-collector`
-cannot be combined.
+only worker or API code still has a different collector image, and a plain
+`./ops up` restarts all four on any Python change. The narrow path for a
+worker-only or API-only change is the manual `./ops up --keep-collector`,
+which the person deploying chooses: it keeps the running collector image
+instead of the new one. Every other condition above must still hold, so a
+release that also changes the collector's or PostgreSQL's settings, service
+files or secrets, the PostgreSQL image, or any migration still restarts all
+four, on the new collector image. `up` cannot tell collector code from worker
+code, so use it only when the release changes no collector code; the next
+`up` without it starts the new collector image. Choosing the collector image
+automatically is a recorded follow-up. `--keep-collector` and
+`--restart-collector` cannot be combined.
 
 Otherwise, or with `./ops up --restart-collector`, `up` restarts all four as
 before. It prints which happened and why, for example `Restarting the collector
@@ -1103,7 +1106,9 @@ use the [operating notes](operating.md#respond-to-alerts).
   collector 13 times and the worker 4 times in 34 minutes with no alert.
 - **The latest Reset's frozen leaderboard not readable at 05:30 UTC**, on
   every day including Mondays and Season ends. The check opens the website's
-  public Daily leaderboard page on its local port. The page sends a visitor
+  public Daily leaderboard page at its public address, `CLASHLENS_PUBLIC_ORIGIN`,
+  the one visitors use; with none set, the board can never count as readable.
+  The page sends a visitor
   on to the board's own address, by Season and day, only once the website has
   read the newest frozen board from the API and accepted it; the check
   follows that address, then enters the private API container to find which
@@ -1143,10 +1148,14 @@ use the [operating notes](operating.md#respond-to-alerts).
   second of that read; that board's input states (Complete, Partial,
   Inconsistent and the rest); and how many of the Reset's boundaries were
   settled, provisional or unresolved when the website first showed it. Each
-  value is kept as first seen. A record that has not yet seen its readings
-  processed or its board shown keeps being updated every minute for as long as
-  its Reset sweep is kept, since a reading can wait days for the archive. One
-  row a day, under 1 KB: about 0.4 MB a year.
+  value is kept as first seen. The processed time comes only from finished
+  jobs: if the finished-job cleanup removed one of a response saved since the
+  Reset before the check saw it finish, the time stays empty as unknown, never
+  the collection time. A record that has not yet seen its readings processed
+  or its board shown keeps being updated every minute for as long as its Reset
+  sweep is kept, since a reading can wait days for the archive, and a kept
+  sweep the check never recorded while it was down gets its record when the
+  check returns. One row a day, under 1 KB: about 0.4 MB a year.
 - **More than 10 untracked recent Legend I battlers**: players in a saved
   Legend I battle of the current or previous Legend day who are not tracked
   although their first such battle was saved over an hour ago. Players with a

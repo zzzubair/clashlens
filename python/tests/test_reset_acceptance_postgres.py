@@ -275,6 +275,55 @@ def test_an_older_reset_record_keeps_updating_until_its_readings_are_processed(
         assert refresh_and_read() == (RESET + timedelta(days=10, hours=3),)
 
 
+def test_a_reset_the_check_never_saw_gets_its_record_when_it_returns(
+    database_url: str,
+) -> None:
+    # The alert check was down across three Resets.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            _seed_reset(owner, RESET)
+            for days in (1, 2):
+                owner.execute(
+                    "INSERT INTO collector_reset_sweeps (boundary_at, member_ids)"
+                    " VALUES (%s, '{}')",
+                    (RESET + timedelta(days=days),),
+                )
+        with psycopg.connect(_as_worker(connection_info)) as connection:
+            reset_acceptance.refresh(connection, readable_boundary=None, readable_at=None)
+        with psycopg.connect(connection_info) as owner:
+            recorded = owner.execute(
+                "SELECT boundary_at, captured_count, collection_finished_at"
+                " FROM reset_acceptance_records ORDER BY boundary_at"
+            ).fetchall()
+        assert recorded[0] == (RESET, 3, RESET + timedelta(minutes=9))
+        assert [row[0] for row in recorded] == [RESET + timedelta(days=d) for d in (0, 1, 2)]
+
+
+def test_a_processed_time_whose_jobs_were_cleaned_up_stays_unknown(
+    database_url: str,
+) -> None:
+    # Processing finished, but the finished-job cleanup removed one job before
+    # the check saw it: the time is unknown, never the collection time.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            _seed_reset(owner, RESET)
+            owner.execute(
+                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s",
+                (RESET + timedelta(minutes=26),),
+            )
+            owner.execute("DELETE FROM python_processing_jobs WHERE observation_id = 9003")
+        for _check in range(2):
+            with psycopg.connect(_as_worker(connection_info)) as connection:
+                record = reset_acceptance.refresh(
+                    connection, readable_boundary=None, readable_at=None
+                )
+            assert record is not None
+            assert record["collection_finished_at"] == RESET + timedelta(minutes=9)
+            assert record["proof_processed_at"] is None
+
+
 def test_a_replaced_reset_response_still_holds_back_the_processed_time(
     database_url: str,
 ) -> None:
