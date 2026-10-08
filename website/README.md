@@ -469,9 +469,10 @@ the same notice. Its browser test checks the complete rendered text, link, and
 and wrapping remain unchanged.
 
 Shared orange accent colours use `--cl-accent` and `--cl-accent-contrast` in
-`theme.css` and the dark overrides in `appearance.css`. The contrast variant is
-darker in light mode and lighter in dark mode. All four values and every use
-were preserved when renaming the former blue-named settings.
+`theme.css` and the dark overrides in `appearance.css`. Both now hold the
+brand's link and accent text colour for each theme, listed in
+[`../brand/README.md`](../brand/README.md). All four values and every use were
+preserved when renaming the former blue-named settings.
 
 For that rename, full-page Chrome screenshots before and after changing only
 the colour names showed zero changed pixels on both Home in light mode
