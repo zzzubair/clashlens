@@ -1197,7 +1197,7 @@ def _load_reset_baseline(
     # Reset read before the player signed up for the Season: a Legend I
     # profile at 5,000 naming Season 0, as #YPG2LRYQ's at 05:00 on 6 October
     # 2026 before it signed up at 05:19, when no profile read before it named
-    # the Season and no Legend battle came earlier in the Season: the game
+    # the Season and no Legend battle of the Season came before it: the game
     # also sends Season 0 to players already signed up. The
     # reading's trophies stay unused; the Reset is complete only once its
     # battle log proves the day's battles from the Reset.
@@ -1294,8 +1294,8 @@ def _season_rule_holds(
 ) -> bool:
     """Whether the player has an accepted Legend I profile naming the Season
     of the Legend day starting at ``boundary_at``. With ``before``, only a
-    profile read before it counts, or a Legend battle on an earlier Legend
-    day of that Season."""
+    profile read before it counts, or a Legend battle of that Season fought
+    before it."""
     day = ranked_day_for(boundary_at)
     return bool(
         connection.execute(
@@ -1315,15 +1315,16 @@ def _season_rule_holds(
                        OR COALESCE(effect.observed_at, profile.observed_at)
                           < %(before)s)
             ) OR (%(before)s::timestamptz IS NOT NULL AND EXISTS (
-                SELECT 1 FROM legend_battles
-                WHERE ranked_day_start >= %(season_start)s
-                  AND ranked_day_start < %(day)s
-                  AND (attacker_player_id = %(player)s
-                       OR defender_player_id = %(player)s)
+                SELECT 1 FROM battle_evidence AS evidence
+                JOIN legend_battles AS battle ON battle.id = evidence.battle_id
+                WHERE (battle.attacker_player_id = %(player)s
+                       OR battle.defender_player_id = %(player)s)
+                  AND evidence.battle_timestamp >= %(season_start)s
+                  AND evidence.battle_timestamp < %(before)s
             ))
             """,
             {"player": player_id, "season": day.official_season_id,
-             "before": before, "season_start": day.season_start, "day": day.start},
+             "before": before, "season_start": day.season_start},
         ).fetchone()[0]
     )
 

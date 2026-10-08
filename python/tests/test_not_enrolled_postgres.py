@@ -227,3 +227,29 @@ def test_earlier_legend_battles_in_the_season_rule_out_sign_up(
         players = _sign_up_days(connection_info)
 
     assert (day[2], day[4], players) == (None, None, 0)
+
+
+def test_a_battle_before_a_delayed_reset_reading_rules_out_sign_up(
+    database_url: str, archive_server
+) -> None:
+    # Already signed up: a battle at 05:06, the Season 0 reading at 05:10,
+    # then a profile naming the Season at 05:20.
+    battle = (DAY_2 + timedelta(minutes=6), True)
+    read_at = DAY_2 + timedelta(minutes=10)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, DAY_2,
+                           profile=_not_signed_up(), log=_log(battle),
+                           profile_at=read_at, log_at=read_at)
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="signed",
+            endpoint="profile", body=_new_season_profile(5140 + WIN),
+            observed_at=DAY_2 + timedelta(minutes=20), normalized_tag=TAG,
+        )[1])
+        jobs += _reset_work(connection_info, archive_server, DAY_3,
+                            profile=_new_season_profile(5140 + WIN),
+                            log=_log(battle))
+        _process(connection_info, archive_server, jobs)
+        day = _sign_up_day(connection_info)
+        players = _sign_up_days(connection_info)
+
+    assert (day[2], day[4], players) == (None, None, 0)

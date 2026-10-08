@@ -578,9 +578,9 @@ def requeue_sign_up_days(
     """Find, and with ``queue`` recalculate, each player's oldest ended day
     of the Season whose start Reset reading was taken before they signed up
     (a Legend I profile at 5,000 naming Season 0, no profile read before it
-    naming the Season nor Legend battle earlier in the Season, a later
-    profile that does), from the day before it, and their
-    later saved days. Before October 2026 only a Season's first Reset started
+    naming the Season nor Legend battle of the Season fought before it, a
+    later profile that does), from the day before it, and their later saved
+    days. Before October 2026 only a Season's first Reset started
     at 5,000 by the Season rule: 48 ended sign-up days on 6 October 2026.
     Each player and day is queued once, at backfill priority, as
     ``requeue_day_1``."""
@@ -653,11 +653,13 @@ def requeue_sign_up_days(
                         AND COALESCE(effect.observed_at, signed.observed_at)
                             < read.observed_at)
                   AND NOT EXISTS (
-                      SELECT 1 FROM legend_battles
-                      WHERE ranked_day_start >= %(start)s
-                        AND ranked_day_start < day.ranked_day_start
-                        AND (attacker_player_id = day.player_id
-                             OR defender_player_id = day.player_id))
+                      SELECT 1 FROM battle_evidence AS evidence
+                      JOIN legend_battles AS battle
+                        ON battle.id = evidence.battle_id
+                      WHERE (battle.attacker_player_id = day.player_id
+                             OR battle.defender_player_id = day.player_id)
+                        AND evidence.battle_timestamp >= %(start)s
+                        AND evidence.battle_timestamp < read.observed_at)
                 ORDER BY day.player_id, day.ranked_day_start
                 """,
                 {"start": season_start, "end": season_start + domain.SEASON_DURATION,
