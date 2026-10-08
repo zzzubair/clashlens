@@ -1,0 +1,38 @@
+-- One record per Reset of how it went against the 05:30 board target, kept
+-- apart from the board itself: how many members were captured; when their
+-- Reset readings were collected and processed; when the first frozen board's
+-- inputs froze, when it was saved as published and when it was first read
+-- back through the request the website makes; that board's input states;
+-- and the ended Legend day's results and boundary settlement at 06:00 and
+-- just before the next Reset. The alert check fills it once a minute through
+-- the worker's role (reset_acceptance.py). Under 1 KB a row, one row a day:
+-- about 0.4 MB a year. Nothing deletes these rows.
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS reset_acceptance_records (
+    boundary_at timestamptz PRIMARY KEY
+        CHECK ((boundary_at AT TIME ZONE 'UTC')::time = TIME '05:00'),
+    -- Not a foreign key, so the record outlives the sweep's own retention.
+    sweep_id bigint NOT NULL,
+    captured_count integer NOT NULL CHECK (captured_count >= 0),
+    membership_captured_at timestamptz,
+    collected_count integer NOT NULL DEFAULT 0 CHECK (collected_count >= 0),
+    not_collected_count integer NOT NULL DEFAULT 0 CHECK (not_collected_count >= 0),
+    collection_finished_at timestamptz,
+    proof_processed_at timestamptz,
+    inputs_frozen_at timestamptz,
+    published_at timestamptz,
+    readable_at timestamptz,
+    board_inputs jsonb CHECK (jsonb_typeof(board_inputs) = 'object'),
+    at_0600 jsonb CHECK (jsonb_typeof(at_0600) = 'object'),
+    at_next_reset jsonb CHECK (jsonb_typeof(at_next_reset) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+GRANT SELECT, INSERT, UPDATE ON TABLE reset_acceptance_records
+    TO clashlens_python_worker;
+
+INSERT INTO clash_lens_schema_migrations(version) VALUES (82)
+ON CONFLICT (version) DO NOTHING;
+COMMIT;

@@ -140,10 +140,10 @@ class Collector:
         self._metrics_lock = asyncio.Lock()
         self._metrics_refresh_after = 0.0
         self._database_metrics: dict[str, int | float] = {}
-        # When each main loop last came round, and database calls running,
-        # for the container health check.
+        # When each main loop last came round, and database calls running with
+        # their loop and start, for the container health check.
         self.loop_passes: dict[str, float] = {}
-        self.database_waits: set[object] = set()
+        self.database_waits: dict[object, tuple[str, float]] = {}
         collector_liveness.mark(self, "start")
 
     async def _database_call(self, operation: Any, *args: Any, **kwargs: Any) -> Any:

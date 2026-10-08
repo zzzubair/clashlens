@@ -14,7 +14,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from . import collector_metrics, collector_reset, collector_uploads
+from . import collector_liveness, collector_metrics, collector_reset, collector_uploads
 from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
 
 UploadClaim = collector_uploads.UploadClaim
@@ -155,6 +155,7 @@ class CollectorDatabase:
             min_size=1,
             max_size=max_size,
             open=True,
+            configure=collector_liveness.bound_statements,
         )
 
     def close(self) -> None:

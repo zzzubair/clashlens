@@ -61,7 +61,7 @@ for check in require_host load_release load_production_config validate_runtime_v
   cleanup_stale_admin_state ensure_linger migrate_legacy_units guard_systemd_units; do
   eval "$check() { :; }"
 done
-MODE=production PREFIX=clashlens MAIN_PID=$$
+MODE=production PREFIX=clashlens MAIN_PID=$$ POSTGRES_USER=clashlens POSTGRES_DB=clashlens
 export MAIN_PID
 RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 up_stack

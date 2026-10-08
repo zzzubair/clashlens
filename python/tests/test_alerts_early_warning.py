@@ -117,7 +117,7 @@ def test_a_health_warning_is_sent_before_the_slow_checks_run(rt, monkeypatch) ->
     warned_before = []
 
     def command(args, timeout=15):
-        if "{{.State.Health.FailingStreak}}" not in args:
+        if not any("{{.State.Health." in arg for arg in args):
             warned_before.append(bool(warnings(rt)))
         return run_command(args, timeout)
 

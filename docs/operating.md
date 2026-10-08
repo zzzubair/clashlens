@@ -394,8 +394,10 @@ player's correction for a Reset has succeeded, `retrying` after a
 `player_failed` line, or `failed` if the check itself errored; after either
 of those it tries again 10 minutes later.
 
-A waiting upload with `oldest_pending_upload_age_seconds` over an hour points
-at the archive: look for upload errors in `./ops logs collector`.
+A waiting upload with `oldest_pending_upload_age_seconds` over 15 minutes
+points at the archive or the collector's upload work: look for upload errors in
+`./ops logs collector`. Until it is archived, a raw response exists only on the
+server's disk.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
@@ -754,19 +756,48 @@ alert means a new permanent failure in the last 24 hours; its recovery means no 
 24 hours, not that anything was repaired. A manual retry of a failed item
 clears the alert early; a repeat failure raises a fresh alert.
 
+The separate **failed work waiting for a person** alert stays open while any
+failed job or upload is left, however old, and says how many there are. It
+recovers 15 minutes after the last one is retried or replayed.
+
 ### Reset publication missing
 
-**First checks:** `./ops logs worker --since '2 hours ago' --no-pager`, then:
+This alert fires when the latest Reset's frozen leaderboard is not readable
+by 05:30 UTC, and when an earlier Reset is still unpublished. The **Reset
+behind its 05:30 target** early warning comes first and names the stage:
+collection not ended at 05:10, Reset work projected past 05:25 at 05:15, or
+inputs not frozen at 05:25.
+
+**First checks:** `./ops queue-status` for Reset work left, `./ops logs worker
+--since '2 hours ago' --no-pager`, then:
 
 ```sh
 podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
   "SELECT boundary_at, generation, snapshot_state, army_state FROM boundary_publication_generations ORDER BY 1, 2"
+podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
+  "SELECT * FROM reset_acceptance_records ORDER BY boundary_at DESC LIMIT 2"
 ```
+
+The second shows, for the latest Resets, when collection ended, when the Reset
+readings were processed, when the board's inputs froze, when it was saved as
+published and when it was first readable.
 
 **Fix or escalate:** escalate; repairing a publication needs an approved change.
 
-**Recovered:** every Reset since the first one has published its frozen
-leaderboard and army results.
+**Recovered:** the latest board is readable and every Reset since the first
+one has published its frozen leaderboard and army results.
+
+### Deploy failed
+
+**First checks:** `./ops status`, then `./ops logs` for the step that failed.
+`./ops up` printed it when it stopped.
+
+**Fix or escalate:** fix the cause and run `./ops up` again, or escalate. To go
+back to the earlier code, follow the
+[rollback](deployment.md#existing-service-lifecycle) steps; never reverse a
+migration.
+
+**Recovered:** 15 minutes after an `./ops up` succeeds.
 
 ### Untracked Legend I battlers
 

@@ -598,8 +598,9 @@ def process_until_stopped(
     A batch of claims is never larger than the lanes of its kind not running
     a job, and claims no lane started are given back once every lane stops.
 
-    Each lane calls ``progress`` every time round its loop, never the timer,
-    so the health check sees a stuck worker even while maintenance ticks.
+    Each lane and the timer call ``progress`` every time round their loops;
+    the health check tracks each thread, so a stuck lane shows even while the
+    other lanes and maintenance keep going.
     """
     _validate_lanes(concurrency, owner, lease_seconds)
     report_lock = threading.Lock()
@@ -613,6 +614,7 @@ def process_until_stopped(
 
     def maintenance_timer() -> None:
         while not stop_requested.is_set():
+            progress()
             if claims_ready() and not stop_requested.is_set():
                 try:
                     maintain(derived_turns)

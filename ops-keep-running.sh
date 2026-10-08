@@ -1,5 +1,6 @@
-# Sourced by ./ops: stopping the stack, and leaving the collector running
-# through an up that changes nothing it runs on.
+# Sourced by ./ops: what up checks before it stops anything, stopping the
+# stack, leaving the collector running through an up that changes nothing it
+# runs on, and the alerts' view of all that.
 #
 # The collector Requires the database and pod and exits about a second into a
 # database outage, so it keeps running only if all of these keep running too.
@@ -138,4 +139,40 @@ keep_running_record() {
     printf '%s=%s\n' "${KEEP_LABELS[index]}" "${KEEP_PARTS[${KEEP_LABELS[index]}]}" >> "$temporary"
   done
   mv -f "$temporary" "$KEEP_RECORD"
+}
+
+# What the alert check should make of the stack: stopped while ./ops stops or
+# starts it on purpose, running once up succeeds, failed when up left it stopped.
+write_alert_intent() {
+  local temporary
+  temporary=$(mktemp "$STATE_DIR/alert-intent.XXXXXX")
+  chmod 600 "$temporary"
+  printf '%s\n' "$1" > "$temporary"
+  mv -f "$temporary" "$STATE_DIR/alert-intent"
+}
+
+alert_webhook_file() {
+  setting CLASHLENS_DISCORD_ALERT_WEBHOOK_FILE "$(setting CLASHLENS_API_KEY_HOST_DIR /srv/clashlens-secrets)/clashlens-discord-alert-webhook"
+}
+
+# Before anything stops: the release must ship every migration the database
+# has applied, or its code would run on tables it does not know. A rollback is
+# a new release that keeps them; ./ops never reverses a migration.
+check_migrations() {
+  local applied known missing migration
+  [[ "$(container_state "$(container_name "$PREFIX" postgres)")" == healthy ]] || return 0
+  applied=$(psql_exec --tuples-only --no-align --command 'SELECT version FROM clash_lens_schema_migrations') || \
+    die "could not read the database's migrations; nothing was stopped"
+  known=$(for migration in "$ROOT"/deploy/migrations/*.sql; do migration=${migration##*/}; printf '%d\n' "$((10#${migration%%_*}))"; done)
+  missing=$(comm -23 <(sort <<< "$applied") <(sort <<< "$known") | sort -n | paste -sd, -)
+  [[ -z "$missing" ]] || die "the database has migrations $missing that this release lacks; nothing was stopped"
+}
+
+# A failed up has stopped the stack and the alert timer with it, so it sends
+# this alert itself; the next ./ops up that succeeds clears it.
+deploy_failed_alert() {
+  write_alert_intent failed || return 0
+  [[ "$MODE" == production ]] || return 0
+  python3 "$ROOT/python/src/clashlens/alerts.py" --deploy-failed "$STATE_DIR" "$(alert_webhook_file)" || \
+    printf 'ops: the failed-deploy alert was not delivered; ./ops alert-check retries it\n' >&2
 }

@@ -83,6 +83,73 @@ def test_slow_cleanup_batches_do_not_fail_the_container_check(monkeypatch) -> No
     assert answers[-1] == b"stuck\n"
 
 
+def _livez_during_a_slow_call(collector, loop: str, set_up) -> bytes:
+    """Answer /livez while ``loop`` waits on a database call that has not returned."""
+    started, release = threading.Event(), threading.Event()
+
+    def slow_statement() -> None:
+        started.set()
+        assert release.wait(timeout=10)
+
+    async def loop_turn() -> None:
+        collector_liveness.mark(collector, loop)
+        await collector._database_call(slow_statement)
+
+    async def scenario() -> bytes:
+        call = asyncio.create_task(loop_turn())
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            set_up()
+            return (await collector.health_response("/livez"))[2]
+        finally:
+            release.set()
+            await call
+
+    return asyncio.run(scenario())
+
+
+def test_a_stalled_loop_fails_while_another_loops_database_call_runs() -> None:
+    # Player checks keep a database call running almost all the time. Until
+    # 8 Oct 2026 any running call held off the verdict for every loop, so a
+    # stalled Reset and intent loop could pass the check for ever.
+    collector = _running_collector()
+
+    def intents_stall() -> None:
+        collector.loop_passes["intents"] = time.monotonic() - STUCK_SECONDS - 1
+
+    assert _livez_during_a_slow_call(collector, "regular", intents_stall) == b"stuck\n"
+
+
+def test_a_loops_own_slow_database_call_holds_off_stuck_for_twenty_minutes(
+    monkeypatch,
+) -> None:
+    collector = _running_collector()
+    now = [time.monotonic()]
+    monkeypatch.setattr(
+        collector_liveness, "time", SimpleNamespace(monotonic=lambda: now[0])
+    )
+
+    def regular_waits(seconds: float):
+        def set_up() -> None:
+            collector.loop_passes.update(
+                regular=now[0] - STUCK_SECONDS - 600,
+                intents=now[0] + seconds,
+                uploads=now[0] + seconds,
+            )
+            now[0] += seconds
+
+        return set_up
+
+    # The call began just now: a slow database, not a stuck loop.
+    assert _livez_during_a_slow_call(collector, "regular", regular_waits(60)) == (
+        b"live\n"
+    )
+    # The same call still running twenty minutes after it began is stuck.
+    assert _livez_during_a_slow_call(
+        collector, "regular", regular_waits(STUCK_SECONDS)
+    ) == b"stuck\n"
+
+
 def test_startup_that_never_finishes_fails_after_twenty_minutes() -> None:
     spool = _Spool()
     collector = _collector(spool, _Store(spool), _Client(spool))

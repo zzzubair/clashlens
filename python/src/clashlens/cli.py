@@ -65,6 +65,7 @@ from .worker import (
     process_concurrently,
     process_until_stopped,
     start_processes,
+    response_lane_count,
 )
 from .worker_liveness import ProgressMark, progress_file, worker_readiness
 
@@ -880,7 +881,11 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             if process_index:
                 processor.plan_share = (process_index, arguments.processes)
 
-        progress = ProgressMark(progress_file(process_index))
+        # Only these threads may run a population build or the timer's checks.
+        build_lane = response_lane_count(concurrency, response_lanes) + 1
+        progress = ProgressMark(progress_file(process_index), long_running=(
+            "MainThread", "clashlens-worker-maintenance",
+            f"clashlens-worker-lane-{build_lane}"))
 
         def process_batch() -> list[ProcessResult]:
             # Local spool and PostgreSQL own claim readiness. Remote marker

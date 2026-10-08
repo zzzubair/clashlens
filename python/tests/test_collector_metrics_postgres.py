@@ -418,3 +418,68 @@ def test_health_metrics_count_saved_responses(database_url: str) -> None:
             assert database.health_metrics()["responses_saved_last_minute"] == 3
         finally:
             database.close()
+
+
+def test_metrics_show_finished_work_reset_work_left_and_old_failures(
+    database_url: str,
+) -> None:
+    # The early warning needs to see work that waits while nothing of its kind
+    # finishes, how much Reset work is left, and failures nobody has fixed.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = CollectorDatabase(connection_info)
+        try:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "INSERT INTO players (normalized_tag) VALUES ('#2PP'), ('#8QQ'), ('#9RR')"
+                )
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, priority, created_at, due_at
+                    )
+                    SELECT 'reconcile_ranked_day', 'metrics-progress-' || normalized_tag,
+                           jsonb_build_object('player_id', id,
+                               'ranked_day_start', '2026-10-01T05:00:00Z'),
+                           300, clock_timestamp(), clock_timestamp()
+                    FROM players
+                    """
+                )
+            metrics = database.health_metrics()
+            assert metrics["reset_work_remaining"] == 3
+            assert metrics["claimable_job_reconcile_ranked_day_age_seconds"] < 60
+            assert metrics["completed_jobs_2m"] == 0
+            assert "completed_job_reconcile_ranked_day_2m" not in metrics
+            assert "oldest_failed_processing_age_seconds" not in metrics
+
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs
+                    SET status = CASE deduplication_key
+                        WHEN 'metrics-progress-#2PP' THEN 'complete' ELSE 'failed' END,
+                        updated_at = CASE deduplication_key
+                        WHEN 'metrics-progress-#2PP' THEN clock_timestamp()
+                        WHEN 'metrics-progress-#8QQ' THEN clock_timestamp() - interval '3 days'
+                        ELSE clock_timestamp() - interval '1 hour' END
+                    """
+                )
+            metrics = database.health_metrics()
+            assert metrics["reset_work_remaining"] == 0
+            assert "claimable_job_reconcile_ranked_day_age_seconds" not in metrics
+            assert metrics["completed_jobs_2m"] == 1
+            assert metrics["completed_job_reconcile_ranked_day_2m"] == 1
+            assert metrics["failed_processing"] == 2
+            assert metrics["oldest_failed_processing_age_seconds"] >= 3 * 86400
+            assert 3600 <= metrics["newest_failed_processing_age_seconds"] < 7200
+
+            # Finished three minutes ago is no longer recent progress.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET updated_at = clock_timestamp()"
+                    " - interval '3 minutes' WHERE status = 'complete'"
+                )
+            metrics = database.health_metrics()
+            assert metrics["completed_jobs_2m"] == 0
+            assert "completed_job_reconcile_ranked_day_2m" not in metrics
+        finally:
+            database.close()

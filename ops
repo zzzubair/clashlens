@@ -70,6 +70,7 @@ finish() {
   cleanup_admin_secret || result=1
   if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
     (stop_units) || true
+    deploy_failed_alert
   fi
   exit "$result"
 }
@@ -670,6 +671,7 @@ promote_active_release() {
   local temporary
   temporary=$(mktemp "$STATE_DIR/active-release.env.XXXXXX")
   chmod 600 "$temporary"
+  [[ ! -f "$ACTIVE_RELEASE_FILE" ]] || cp -p -- "$ACTIVE_RELEASE_FILE" "$STATE_DIR/previous-release.env"
   { grep -v -e '^COLLECTOR_IMAGE=' -e '^POSTGRES_IMAGE=' -- "$RELEASE_FILE"; printf 'COLLECTOR_IMAGE=%s\nPOSTGRES_IMAGE=%s\n' "${RELEASE[COLLECTOR_IMAGE]}" "${RELEASE[POSTGRES_IMAGE]}"; } > "$temporary"
   mv -f "$temporary" "$ACTIVE_RELEASE_FILE"
 }
@@ -981,7 +983,7 @@ prepare_secrets() {
 
 wait_postgres() {
   local attempt
-  for attempt in $(seq 1 90); do
+  for attempt in $(seq 1 900); do
     if "$PODMAN_BIN" exec "$PREFIX-postgres" pg_isready -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
       [[ "$(psql_exec --tuples-only --no-align --command 'SHOW hba_file')" == /etc/clashlens/pg_hba.conf ]] || die "PostgreSQL is not using deploy/postgres/pg_hba.conf"
       return
@@ -1163,6 +1165,7 @@ up_stack() {
   ensure_linger
   migrate_legacy_units
   guard_systemd_units
+  check_migrations
   keep_running_plan
   write_alert_intent stopped
   UP_IN_PROGRESS=true
@@ -1433,20 +1436,11 @@ history_prune() {
     "${RELEASE[PYTHON_IMAGE]}" prune-history --jobs-only --retention-hours 48 --max-jobs 1000 --apply
 }
 
-write_alert_intent() {
-  local temporary
-  temporary=$(mktemp "$STATE_DIR/alert-intent.XXXXXX")
-  chmod 600 "$temporary"
-  printf '%s\n' "$1" > "$temporary"
-  mv -f "$temporary" "$STATE_DIR/alert-intent"
-}
-
 alert_check() {
   [[ "$(current_prefix)" == clashlens ]] || die "alert-check is unavailable in fixture mode"
   validate_directory_ancestry "$STATE_DIR"
   load_kv_file "$ENV_FILE" CONFIG
-  python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" \
-    "$(setting CLASHLENS_DISCORD_ALERT_WEBHOOK_FILE "$(setting CLASHLENS_API_KEY_HOST_DIR /srv/clashlens-secrets)/clashlens-discord-alert-webhook")" \
+  python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" "$(alert_webhook_file)" \
     "$(setting CLASHLENS_HEALTH_PORT 8081)" "$(setting CLASHLENS_SPOOL_ROOT /srv/clashlens-data/spool)" \
     "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
 }

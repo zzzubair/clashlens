@@ -80,6 +80,25 @@ migration, and unit input; `up` refuses to mix those images with changed init
 files. A new build is only staged: operator and recovery commands keep using
 the last successfully started release until `up` promotes the new one.
 
+Before it stops anything, `up` checks the release's images, settings and
+secret files, and that the release includes every migration the running
+database has already applied; otherwise it refuses with `the database has
+migrations N that this release lacks; nothing was stopped`. A release without
+them would run code on tables it does not know. If `up` fails after it has
+stopped services, it leaves them stopped, records the deploy as failed and
+sends the private alert `A deploy failed and left Clash Lens stopped` itself,
+because the alert timer is stopped too; the next `up` that succeeds clears it.
+Each successful `up` keeps the release it replaced in `previous-release.env`
+in the state directory, with that release's images and source revision.
+
+To roll back, do not reverse a migration. Revert the code change on `main`
+while keeping every migration file, then `./ops build` and `./ops up` that
+revert. The previous release can read the database only if no migration since
+it changed a table it reads; check the migrations listed between the two
+revisions before choosing this. Worker-only and API-only changes restart only
+the worker, API and website, leaving the collector, database, pod and network
+running as described below.
+
 ## Clean Fedora fixture
 
 Install Git and rootless Podman, clone this repository as the service account,
@@ -620,10 +639,14 @@ Commit flushing, full-page writes, checksums and archiving are unchanged. A
 Crash recovery replays the change log written since the last checkpoint.
 `max_wal_size` is a soft limit that heavy load or stalled archiving can exceed,
 so 2 GB is the usual size, not a ceiling: on rogue 845 MB took 90 seconds plus
-14 seconds to save, so 2 GB takes about four minutes. The health check ignores
-failures for its first five minutes, but the unit still waits for a healthy
-check within its five-minute start limit (`TimeoutStartSec`), so a replay that
-runs longer is stopped and started again.
+14 seconds to save, so 2 GB takes about four minutes. From 30 Sep to 8 Oct
+2026 the most written between two of its 3,008 checkpoints was 1.1 GB, so a
+crash just before a checkpoint finishes replays up to about 2.2 GB. A stopped
+replay only starts again from the beginning, so the health check ignores
+failures and the unit waits for a healthy check for 15 minutes
+(`HealthStartPeriod` and `TimeoutStartSec`), enough for about 8 GB, and
+`./ops up` waits as long. The alert check warns once the database has been
+starting for five minutes; `./ops logs postgres` shows the replay's progress.
 
 The collector remembers, in memory, the used fields it last committed for each
 player and endpoint. An ordinary response that matches them is recorded in the
@@ -822,15 +845,27 @@ Podman checks each container every 30 seconds and kills it after six failed
 checks in a row, about three minutes. The collector's check is `/livez` on
 port 8081. It fails only when the collector needs a restart: one of its three
 main loops (player checks, queued requests, uploads and cleanup) has not come
-round for 20 minutes and no database call is running, its spool or a
-saved-response handoff failed, or every regular or interactive key is
-quarantined. It never waits on the database, a spool lock or a thread, and time
-spent in a database call never counts as stuck, so a slow database slows
-collection without getting the collector killed; on 7 Oct 2026 it was killed
-13 times for that. The port opens
+round for 20 minutes, its spool or a saved-response handoff failed, or every
+regular or interactive key is quarantined. It never waits on the database, a
+spool lock or a thread. A database call made by the loop itself, or by work it
+started, holds that verdict off for up to 20 minutes from when the call began,
+so a slow database slows collection without getting the collector killed; on
+7 Oct 2026 it was killed 13 times for that. Another loop's call never holds it
+off: until 8 Oct 2026 any running call did, and player checks keep one running
+almost all the time, so a stuck Reset or upload loop could pass for ever. Every
+collector statement also stops after 60 seconds (5 minutes for the Reset
+sweep's), five times the slowest seen from 1 to 8 Oct 2026, so no database wait
+lasts indefinitely; a stopped statement is retried, then its loop stops and the
+collector restarts. The port opens
 before startup recovery, which answers `starting`, and failures in the first
 five minutes are ignored; the five-minute start limit still applies. `/readyz`
 still reports the database, spool capacity and keys for a person to read.
+
+The worker's check is `clashlens.cli ready`. Each worker thread and the
+maintenance timer write when they last came round, and the check fails when one
+of them has not for 20 minutes while the others keep going, or for an hour for
+the thread that runs board builds and for the timer. The longest finished job
+from 1 to 8 Oct 2026 took 465 seconds, or 844 seconds for an army build.
 
 PostgreSQL logs statements slower than 5 seconds, waits for a lock longer than
 1 second, and every automatic vacuum and statistics refresh, without query
@@ -840,7 +875,7 @@ seen since 18 Sep, these add roughly 2–3 MB a day, more on a slow day.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the fourteen conditions below and posts changes to the
+`./ops alert-check` checks the eighteen conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
@@ -856,7 +891,8 @@ Both units use `PartOf=clashlens.target`. The service has no dependency on a
 healthy collector or API, so failed processes cannot prevent the check starting.
 Fixture mode does not install or start Discord alerts. `./ops down` records an
 intentional stop and stops the timer; manual checks also stay quiet until a
-successful `./ops up`. Checks also stay quiet while `up` starts the stack.
+successful `./ops up`. Checks also stay quiet while `up` starts the stack,
+unless it fails after stopping services: then they report the failed deploy.
 Time deliberately stopped does not count as a fetch gap.
 
 ### Alert conditions
@@ -903,11 +939,12 @@ use the [operating notes](operating.md#respond-to-alerts).
   **5%** of entries last updated over ten minutes ago, or any one entry over
   **20 minutes** ago, on every check for **300 seconds** (six checks in a
   row; an unavailable check restarts the count but keeps an open alert open).
-  Exactly 5% or exactly 20 minutes does not count. It is neither raised nor
-  cleared during the **04:55–05:00 UTC** Reset pause or while Reset work is
-  unfinished or unknown, measured as for the overdue-check alert, because both
-  leave most players over ten minutes old for a while; the five minutes start
-  again afterwards. Staleness uses the
+  Exactly 5% or exactly 20 minutes does not count. From **04:55 to 05:15
+  UTC**, while ordinary checks pause and the Reset sweep refreshes every player
+  (normally by 05:10), only an entry over 20 minutes counts. From 05:15 both
+  limits apply again, even if Reset collection has not finished: until 8 Oct
+  2026 unfinished or unknown Reset work paused this check, so a slow Reset hid
+  stale live pages. Staleness uses the
   [Live Leaderboard membership and freshness rules](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
   printing only the stale count, the entry count and the oldest entry's age in
@@ -953,6 +990,13 @@ use the [operating notes](operating.md#respond-to-alerts).
   Seeing a failed upload's bytes again does not restart its 24 hours.
   A manual retry of a failed item clears the alert early; a repeat failure
   raises a fresh alert.
+- **Failed work waiting for a person**: any processing job or raw-response
+  upload that failed permanently, however long ago, from the collector's
+  `failed_processing` and `failed_uploads` counts. The alert says how many of
+  each and how long ago the oldest failed, and recovers only when none are
+  left, through `./ops failed-items` or the replay path. On 8 Oct 2026 nine
+  jobs from 1–2 Oct were still failed while the 24-hour alert above had long
+  recovered.
 - **Saved work waiting too long**, as two separate alerts:
   - ordinary processing work waiting too long: daily result calculations
     waiting at least **15 minutes**, from the collector's
@@ -968,8 +1012,10 @@ use the [operating notes](operating.md#respond-to-alerts).
     minutes, which would have kept this alert open and hidden a real backlog.
     The alert names the oldest kind of waiting work and its age, from the
     collector's per-type `oldest_job_<work_type>_age_seconds`;
-  - a raw response waiting at least **one hour** to be uploaded to the
-    archive, from `oldest_pending_upload_age_seconds`. An upload's wait
+  - a raw response waiting at least **15 minutes** to be uploaded to the
+    archive, from `oldest_pending_upload_age_seconds`; the early warning below
+    starts at 5. On 8 Oct 2026 responses saved after the Reset waited up to
+    76.5 minutes, and one not yet archived is lost with the server's disk. An upload's wait
     starts when it is first saved, or when retired bytes come back for a
     fresh upload. Retries, including an operator retry of a failed upload,
     keep the original wait.
@@ -989,7 +1035,10 @@ use the [operating notes](operating.md#respond-to-alerts).
   streak. Podman kills a container at 6, about three minutes, and its own
   status stays `healthy` until then. The alert check reads this before its
   slower checks and again after each one, and sends it as soon as it appears.
-  It is its own alert so an open backlog warning never hides it.
+  It is its own alert so an open backlog warning never hides it. The same
+  warning names PostgreSQL when it has been starting for **5 minutes**, from
+  `podman inspect`'s health status and start time: after a crash it replays
+  its change log first, and `./ops logs postgres` shows how far it has got.
 - **An early warning when work falls behind**, one alert naming every reason
   that holds:
   - the oldest overdue job has waited **10 minutes**, or **45 minutes** between
@@ -998,23 +1047,54 @@ use the [operating notes](operating.md#respond-to-alerts).
   - fewer than **100 responses a minute** saved between 05:00 and 06:00 UTC,
     from the collector's `responses_saved_last_minute`, counted from saved
     rows (up to 1,000) in the minute before its sample. Normal Reset hours
-    save 420–2,700 a minute.
+    save 420–2,700 a minute;
+  - a raw response waiting **5 minutes** to be uploaded to the archive;
+  - saved API responses or daily result calculations free to claim for
+    **2 minutes** while none of that kind finished in the last 2 minutes,
+    from the collector's `claimable_job_<work_type>_age_seconds` and
+    `completed_job_<work_type>_2m`. This holds however busy the worker's
+    threads look: threads that keep claiming and failing, or keep finding
+    nothing they may claim, finish nothing. A job that is running, or waits
+    for another, is not free to claim.
 
   For either warning, a container that cannot be inspected, missing
   measurements, or a sampled minute that starts before 05:00 leave it
   unknown, so an open warning stays open. On 7 Oct 2026 Podman killed the
   collector 13 times and the worker 4 times in 34 minutes with no alert.
-- **A Reset publication over an hour past its target time**: no publication
-  record for that Reset has published both its frozen leaderboard and its army
-  results an hour after the existing target, five minutes after Reset or ten
-  on Mondays. A Reset with no publication record at all counts 70 minutes
-  after it, for every Reset since the first record. The check enters the
-  private API container and prints only the count. It recovers only when
-  every counted Reset is published; a fresh Live Leaderboard does not clear it.
-  The one-hour grace is provisional: no Reset has published normally on
-  production yet. On Oct 2 collection took about 8 minutes and the Live
-  Leaderboard was fully fresh about 13 minutes after Reset. Tighten it once
-  real publication times can be measured.
+- **The latest Reset's frozen leaderboard not readable at 05:30 UTC**, on
+  every day including Mondays and Season ends. The check enters the private
+  API container and reads the newest frozen leaderboard through the API with
+  the website's own signed request, so a board saved as published but not yet
+  readable does not count. It also alerts when an earlier Reset has not
+  published both its frozen leaderboard and its army results an hour after
+  the internal target, five minutes after Reset or ten on Mondays, or has no
+  publication record at all 70 minutes after it. It recovers only when the
+  latest board is readable and every earlier Reset is published; a fresh Live
+  Leaderboard does not clear it. On 8 Oct 2026 the first board published at
+  06:26, when the one-hour grace this replaced could alert only from 06:05.
+- **An early warning that the Reset is behind its 05:30 board target**, one
+  alert naming every stage that holds, until that Reset's board is readable:
+  - at **05:10** the Reset sweep has not started, or has not ended for every
+    captured member (8 Oct 2026: all 13,251 by 05:09:42);
+  - from **05:15** to 05:25, while the board's inputs are not frozen, the
+    Reset-priority work left (`reset_work_remaining`: Reset readings,
+    ended-day results and board builds created since the Reset) would not
+    finish by 05:25 at the pace it fell over the last ten minutes;
+  - at **05:25** the board's inputs are not frozen, leaving under five minutes
+    to publish.
+
+  The check enters the private worker container, whose database role writes
+  each Reset's record (below), and prints only the Reset, its member count,
+  how many members' Reset collection ended, and when the inputs froze and the
+  board was first readable.
+
+  Each Reset's record is one row of `reset_acceptance_records`: members
+  captured; when their Reset readings were all collected and all processed;
+  when the first frozen board's inputs froze, when it was saved as published
+  and when the alert check first read it back; that board's input states; and
+  the ended Legend day's result states and boundary settlement at 06:00 and
+  just before the next Reset. Each time is kept as first seen, to the minute
+  for the read-back. One row a day, under 1 KB: about 0.4 MB a year.
 - **More than 10 untracked recent Legend I battlers**: players in a saved
   Legend I battle of the current or previous Legend day who are not tracked
   although their first such battle was saved over an hour ago. Players with a
@@ -1031,24 +1111,30 @@ use the [operating notes](operating.md#respond-to-alerts).
 Missing collector measurements or a failed publication check never clear these
 alerts, and each recovers only when its own measurement does.
 
-- **A disk, restart-history, Live Leaderboard, Reset publication or untracked
-  battler check unreadable for 10 minutes** (600 seconds). These five checks otherwise
+- **A disk, restart-history, Live Leaderboard, Reset publication, Reset
+  progress or untracked battler check unreadable for 10 minutes** (600
+  seconds). These six checks otherwise
   only log a diagnostic and stay unknown, which can hide their own problem
   indefinitely. Each keeps its own first-failure time, so a check that
   becomes readable and later fails again starts a new ten minutes, and one
   check's failure never inherits another's. Several unreadable checks send
   one alert. A readable check that reports a problem is not unreadable; its
-  own alert covers it. A valid Live Leaderboard result ignored during the
-  Reset pause or an unfinished Reset sweep is not unreadable either. The
+  own alert covers it. The
   fetch-gap, backup and private-read alerts already cover their own failed
   checks and are left out, but an unreachable collector also makes spool
   usage unknown, so it can raise this alert alongside the fetch-gap alert.
-  It recovers after the usual 15 clear minutes with none of the five
+  It recovers after the usual 15 clear minutes with none of the six
   unreadable, so a different check failing during that time keeps it open.
   Time deliberately stopped does not count towards the ten minutes. This
   alert only works while `alert-check` itself runs, saves its state and
   reaches Discord; it cannot report a dead timer, a crashed checker or a
   broken webhook.
+- **A deploy that failed and left Clash Lens stopped**: `./ops up` failed
+  after it had stopped services, so it stopped them all, including the alert
+  timer, and sent this alert itself. Until 8 Oct 2026 a failed `up` left
+  everything stopped with alerts switched off. It stays open, with the other
+  alerts a stopped stack raises when `./ops alert-check` runs, until an
+  `./ops up` succeeds, and recovers 15 minutes after that.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.
@@ -1064,10 +1150,11 @@ A problem that never alerted never sends a recovery.
 Missing disk measurements or restart history never clear an existing alert.
 `alerts.json` and `alerts.lock` live under the existing private ops state
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
-replaced with mode 600 and contains twelve condition records with at most one
+replaced with mode 600 and contains one record per condition with at most one
 pending transition, one first-clear time and one last alert delivery time
 each, plus when backup check timeouts or errors and Live Leaderboard staleness
-began, and when each of at most four currently unreadable checks first failed.
+began, when each of at most six currently unreadable checks first failed, and
+at most ten minutes of Reset work left, one sample a minute.
 It keeps no growing event history, keys, URLs, player lists or account data.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other

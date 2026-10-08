@@ -24,11 +24,15 @@ HealthInterval=10s
 HealthTimeout=5s
 HealthRetries=12
 HealthOnFailure=kill
-# Crash recovery replays the log since the last checkpoint, usually up to
-# max_wal_size (a soft limit): 845 MB took 90 s on rogue, so 2 GB is about
-# 3.5 minutes. Failed checks are ignored meanwhile, but TimeoutStartSec below
-# still stops a replay that outlasts five minutes.
-HealthStartPeriod=5m
+# Crash recovery replays the change log since the last finished checkpoint.
+# From 30 Sep to 8 Oct 2026 the most written between two checkpoints was
+# 1.1 GB (3,008 checkpoints), so a crash just before one finishes replays up to
+# about 2.2 GB: four minutes at the 9.4 MB/s rogue replayed (845 MB in 90 s).
+# The old five-minute limit left almost no room, and stopping a replay only
+# starts it again from the beginning. Failed checks are ignored and the start
+# is allowed 15 minutes, enough for 8 GB; the alert check warns from minute
+# five, and ./ops logs postgres shows the replay's progress.
+HealthStartPeriod=15m
 Notify=healthy
 # Write volume: data checksums log a full 8 KB page the first time each page
 # changes after a checkpoint, so checkpoints are spaced out and those copies
@@ -44,5 +48,5 @@ Exec=postgres -c hba_file=/etc/clashlens/pg_hba.conf -c shared_preload_libraries
 [Service]
 Restart=always
 RestartMode=direct
-TimeoutStartSec=5min
+TimeoutStartSec=15min
 TimeoutStopSec=90
