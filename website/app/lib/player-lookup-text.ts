@@ -98,10 +98,9 @@ const GAP_CODES = new Set([
 ]);
 
 // Only Python's calendar check makes a day current; a saved "Live" state can
-// outlast its day. No saved result proves the Reset settled yet, so a finished
-// day with a number is still provisional. A finished day with every battle
-// recorded (all 8 of each) has nothing missing from its number. Python marks
-// this for recent days; saved Season entries carry only their counts and codes.
+// outlast its day. A finished day with every battle recorded (all 8 of each)
+// has nothing missing from its number. Python marks this for recent days;
+// saved Season entries carry only their counts, codes and confidence.
 export function presentDay(day: DayEvidence, isCurrentDay: boolean) {
   // Saved profiles prove the player had not signed up for the Season yet.
   if (!isCurrentDay && day.codes.includes("not_enrolled"))
