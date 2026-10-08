@@ -692,9 +692,19 @@ def _dropped_profile(trophies: int) -> bytes:
     return json.dumps(payload).encode()
 
 
-@pytest.mark.parametrize("official_gap,state", [(0, "Complete"), (-30, "Inconsistent")])
+@pytest.mark.parametrize("reset_reading,official_gaps,state", [
+    ("dropped", (0,), "Complete"),
+    ("dropped", (-30,), "Inconsistent"),
+    # The Reset still reads Legend I and the old Season; Legend II comes later.
+    ("old_season", (0,), "Complete"),
+    # A row without a total changes nothing; the next one with it still counts.
+    ("dropped", (None, 0), "Complete"),
+    # A newer official total replaces the one the day already used.
+    ("dropped", (0, -30), "Inconsistent"),
+])
 def test_player_dropped_at_the_season_end_ends_at_the_official_total(
-    database_url: str, archive_server, official_gap: int, state: str
+    database_url: str, archive_server, reset_reading: str,
+    official_gaps: tuple[int | None, ...], state: str,
 ) -> None:
     from test_first_battle_log_postgres import LOSS, WIN, _log
 
@@ -709,27 +719,40 @@ def test_player_dropped_at_the_season_end_ends_at_the_official_total(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(connection_info, archive_server, last_day,
                            profile=_profile(6000), log=_battle_log(empty=True))
-        jobs += _reset_work(connection_info, archive_server, boundary,
-                            profile=_dropped_profile(final), log=_log(*battles))
+        jobs += _reset_work(
+            connection_info, archive_server, boundary,
+            profile=(_dropped_profile(final) if reset_reading == "dropped"
+                     else _season_profile(final, OLD_SEASON)),
+            log=_log(*battles),
+        )
+        if reset_reading == "old_season":
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key="dropped-login",
+                endpoint="profile", body=_dropped_profile(final),
+                observed_at=boundary + timedelta(hours=2), normalized_tag=TAG,
+            )[1])
         _process(connection_info, archive_server, jobs)
         before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
         # The official Season-end placement arrives hours later.
-        _, history_job = store_observation(
-            connection_info, archive_server, occurrence_key="league-history",
-            endpoint="league_history", normalized_tag=TAG,
-            observed_at=boundary + timedelta(hours=6),
-            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
-            processing_version="clashlens-domain-processing-v1",
-            domain_rule_version="clashlens-domain-rules-v1",
-            body=json.dumps({"items": [{
-                "leagueSeasonId": str(int(boundary.timestamp())),
-                "leagueTrophies": final + official_gap, "leagueTierId": 105000036,
-                "placement": 10568, "attackWins": 1, "attackLosses": 0,
-                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
-                "defenseStars": 16, "maxBattles": 8,
-            }]}).encode(),
-        )
-        _process(connection_info, archive_server, [history_job])
+        for hours, gap in enumerate(official_gaps, start=6):
+            _, history_job = store_observation(
+                connection_info, archive_server,
+                occurrence_key=f"league-history-{hours}",
+                endpoint="league_history", normalized_tag=TAG,
+                observed_at=boundary + timedelta(hours=hours),
+                parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+                processing_version="clashlens-domain-processing-v1",
+                domain_rule_version="clashlens-domain-rules-v1",
+                body=json.dumps({"items": [{
+                    "leagueSeasonId": str(int(boundary.timestamp())),
+                    "leagueTrophies": None if gap is None else final + gap,
+                    "leagueTierId": 105000036, "placement": 10568,
+                    "attackWins": 1, "attackLosses": 0, "attackStars": 3,
+                    "defenseWins": 0, "defenseLosses": 8, "defenseStars": 16,
+                    "maxBattles": 8,
+                }]}).encode(),
+            )
+            _process(connection_info, archive_server, [history_job])
         after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
 
     assert before[:2] == (last_day, "Partial")

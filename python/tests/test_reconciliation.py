@@ -965,6 +965,32 @@ def test_a_monday_reading_above_5000_taken_before_the_loss_is_accepted_too() -> 
     assert (raised.state, raised.unsettled_automatic_loss) == ("Complete", 0)
 
 
+def test_an_official_season_total_above_the_end_by_the_loss_is_a_mismatch() -> None:
+    # 6,000 + 40 - 30, less 210 for 7 missing defenses at 30 each, ends on
+    # 5,800. The game's official total already includes that loss.
+    day = {
+        "contributions": (*_attacks(40), *_defenses(30)),
+        "previous_day": PreviousRankedDay(True, 8, 240, 0),
+    }
+    reading = reconcile_ranked_day(_input(next_start_trophies=6010, **day))
+    official = reconcile_ranked_day(_input(
+        next_start_trophies=6010,
+        end_baseline_evidence={"official_final_trophies": 6010}, **day,
+    ))
+    matching = reconcile_ranked_day(_input(
+        next_start_trophies=5800,
+        end_baseline_evidence={"official_final_trophies": 5800}, **day,
+    ))
+
+    assert reading.unsettled_automatic_loss == 210
+    assert reading.state == "Complete"
+    assert official.state == "Inconsistent"
+    assert official.unsettled_automatic_loss == 0
+    assert official.unexplained_residual == 210
+    assert (matching.state, matching.confidence) == ("Complete", "exact")
+    assert matching.final_trophies_before_reset == 5800
+
+
 def test_season_day_1_charges_attacks_minus_defenses_unless_attacks_are_fewer() -> None:
     # Production, 5 October 2026 (Day 1), profiles read on 6 October after
     # the loss landed and before any Day 2 battle. #P9VPRRJU: 3 attacks for

@@ -292,7 +292,7 @@ def recalculate_ranked_day(
         _official_final(connection, player_id, ranked_day.end)
         if boundary_kind == "season"
         and end_baseline is not None
-        and end_baseline["evidence"]["profile"]["eligibility_state"] == "ineligible"
+        and _dropped_from_legend_i(connection, player_id, ranked_day.end)
         else None
     )
     if official_final is not None:
@@ -685,6 +685,42 @@ def _official_final(connection: Any, player_id: int, season_end: datetime) -> in
         (player_id, str(int(season_end.timestamp())), LEGEND_I_TIER_ID),
     ).fetchone()
     return None if row is None or row[0] is None else int(row[0])
+
+
+def _dropped_from_legend_i(
+    connection: Any, player_id: int, season_end: datetime
+) -> bool:
+    """Whether a profile of the player read since ``season_end`` shows a
+    league below Legend I before any Legend I profile for the next Season."""
+    return bool(
+        connection.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM players AS player
+                JOIN player_profile_versions AS dropped
+                  ON dropped.normalized_tag = player.normalized_tag
+                WHERE player.id = %(player)s
+                  AND dropped.observed_at >= %(end)s
+                  AND dropped.eligibility_state = 'ineligible'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM player_profile_versions AS kept
+                      WHERE kept.normalized_tag = player.normalized_tag
+                        AND kept.observed_at >= %(end)s
+                        AND kept.observed_at < dropped.observed_at
+                        AND kept.eligibility_state = 'eligible'
+                        AND kept.source_contract_state = 'accepted'
+                        AND kept.current_league_season_id = %(season)s
+                  )
+            )
+            """,
+            {
+                "player": player_id,
+                "end": season_end,
+                "season": ranked_day_for(season_end).official_season_id,
+            },
+        ).fetchone()[0]
+    )
 
 
 def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:
