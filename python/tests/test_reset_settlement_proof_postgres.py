@@ -1120,3 +1120,65 @@ def test_two_readings_at_5000_after_a_weekly_reset_prove_nothing(
             database.close()
 
     assert board == [("#Q8RU2PJ0", 4980, "uncertain")]
+
+
+def test_late_evidence_against_a_boards_frozen_end_proof_queues_its_correction(
+    database_url: str, archive_server,
+) -> None:
+    """A Partial day with no start is confirmed at 4,981 by its Reset reading
+    at 05:06 and a reading at 05:25. A recovered battle log then shows an
+    attack of the next day at 05:08, so the 05:25 reading was never the
+    day's later reading: one correction of the board is queued, the same
+    one when a profile at 05:07 then disagrees, and inputs frozen again
+    from the evidence saved now no longer confirm the entry."""
+    from test_boundary_manifest_postgres import (
+        DAY_2_RESET,
+        _build_board,
+        _october,
+        _seed_board,
+        _seed_days,
+    )
+
+    from clashlens import boundary
+    from clashlens.db import Database
+
+    tag = "#2Q8PRV0LG"
+    battles = [("defense", 5, _october(6, 6 + hour), True) for hour in range(8)]
+    template = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
+    recovered_log = json.dumps({"items": [{
+        **template, "attack": True, "stars": 3, "destructionPercentage": 100,
+        "battleTimestamp": "20261007T050800.000Z", "opponentPlayerTag": "#Q28",
+    }]}).encode()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, [(tag, 4990, _october(7, 4, 40))])
+        _seed_days(connection_info, generation_id, {1: (True, battles)}, {1: {
+            "state": "Partial", "failure_reasons": ["missing_start_baseline"],
+            "start": None, "end": 4981, "end_read_at": _october(7, 5, 6),
+        }})
+        _set_defenses(connection_info, {1: 8})
+        _later_profiles(connection_info, archive_server, [(tag, 4981, _october(7, 5, 25))])
+        database = Database(connection_info)
+        try:
+            board = _build_board(connection_info, database, generation_id)
+            _process(connection_info, archive_server, [store_observation(
+                connection_info, archive_server, occurrence_key="recovered-log",
+                endpoint="battle_log", body=recovered_log,
+                observed_at=_october(7, 5, 9), normalized_tag=tag,
+                parser_version=BATTLE_PARSER_VERSION,
+            )[1]])
+            _later_profiles(connection_info, archive_server, [(tag, 5000, _october(7, 5, 7))])
+            season = ranked_day_for(DAY_2_RESET - DAY).official_season_id
+            rebuilds = boundary.queue_board_rebuilds(database, season, queue=False)
+        finally:
+            database.close()
+        with psycopg.connect(connection_info) as connection:
+            corrections = connection.execute(
+                "SELECT boundary_at, source_generation_id, state::text"
+                " FROM boundary_publication_corrections"
+            ).fetchall()
+
+    assert board == [(tag, 4981, "confirmed")]
+    assert corrections == [(DAY_2_RESET, generation_id, "queued")]
+    assert [
+        (entry["late_battles"], entry["correction"]) for entry in rebuilds["boards"]
+    ] == [(1, "already_queued")]

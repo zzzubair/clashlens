@@ -1160,38 +1160,9 @@ def queue_board_rebuilds(
                 )
                 if not not_found and not late_battles:
                     continue
-                queued = connection.execute(
-                    """
-                    SELECT id FROM boundary_publication_corrections
-                    WHERE boundary_at = %s AND source_generation_id = %s
-                      AND state IN ('queued', 'pending_inputs')
-                    ORDER BY id DESC LIMIT 1
-                    FOR UPDATE
-                    """,
-                    (boundary_at, generation_id),
-                ).fetchone()
-                if queue and queued is not None:
-                    connection.execute(
-                        """
-                        UPDATE boundary_publication_corrections
-                        SET affected_artifacts = ARRAY(
-                                SELECT DISTINCT unnest(
-                                    affected_artifacts || ARRAY['snapshot', 'army'])
-                            )
-                        WHERE id = %s
-                        """,
-                        (queued[0],),
-                    )
-                elif queue:
-                    connection.execute(
-                        """
-                        INSERT INTO boundary_publication_corrections
-                            (boundary_at, source_generation_id,
-                             affected_artifacts, pending_inputs)
-                        VALUES (%s, %s, ARRAY['snapshot', 'army'], '[]'::jsonb)
-                        """,
-                        (boundary_at, generation_id),
-                    )
+                queued = queue_board_correction(
+                    connection, boundary_at, generation_id, queue=queue
+                )
                 boards.append(
                     {
                         "boundary_at": boundary_at.astimezone(UTC).isoformat(),
@@ -1199,13 +1170,56 @@ def queue_board_rebuilds(
                         "profile_not_found": len(not_found),
                         "late_battles": late_battles,
                         "correction": (
-                            "already_queued" if queued is not None
+                            "already_queued" if queued
                             else "queued" if queue
                             else "not_queued"
                         ),
                     }
                 )
     return {"season_id": season_id, "queue": queue, "boards": boards}
+
+
+def queue_board_correction(
+    connection: Any, boundary_at: datetime, generation_id: int, *, queue: bool
+) -> bool:
+    """Whether a correction of both the leaderboard and army records of the
+    Reset's board built from ``generation_id`` is already queued; with
+    ``queue``, add both to it, or queue one. The caller holds the Reset's
+    publication lock, so a correction is never queued against a board a
+    worker has already replaced."""
+    queued = connection.execute(
+        """
+        SELECT id FROM boundary_publication_corrections
+        WHERE boundary_at = %s AND source_generation_id = %s
+          AND state IN ('queued', 'pending_inputs')
+        ORDER BY id DESC LIMIT 1
+        FOR UPDATE
+        """,
+        (boundary_at, generation_id),
+    ).fetchone()
+    if queue and queued is not None:
+        connection.execute(
+            """
+            UPDATE boundary_publication_corrections
+            SET affected_artifacts = ARRAY(
+                    SELECT DISTINCT unnest(
+                        affected_artifacts || ARRAY['snapshot', 'army'])
+                )
+            WHERE id = %s
+            """,
+            (queued[0],),
+        )
+    elif queue:
+        connection.execute(
+            """
+            INSERT INTO boundary_publication_corrections
+                (boundary_at, source_generation_id,
+                 affected_artifacts, pending_inputs)
+            VALUES (%s, %s, ARRAY['snapshot', 'army'], '[]'::jsonb)
+            """,
+            (boundary_at, generation_id),
+        )
+    return queued is not None
 
 
 def _boundary_population_hash(player_ids: list[int]) -> str:

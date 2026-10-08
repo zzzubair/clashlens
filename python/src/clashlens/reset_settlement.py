@@ -317,7 +317,15 @@ def reset_proof_facts(
     windows = {}
     for boundary_at in sorted({row[1] for row in rows if row[4] is not None}):
         days = [row for row in rows if row[4] is not None and row[1] == boundary_at]
-        first = ranked_day_inputs.first_new_day_reports(connection, boundary_at)
+        players = sorted({int(row[2]) for row in days})
+        # One player's first report reads by index; a population's, the
+        # day's battles whole.
+        first = ranked_day_inputs.first_new_day_reports(
+            connection, boundary_at
+        ) if len(players) > 1 else {players[0]: ranked_day_inputs.load_first_reports(
+            connection, players[0], boundary_at, battle_window(boundary_at)[0],
+            boundary_at + DAY,
+        )[1]}
         unreadable = ranked_day_inputs.unreadable_report_times_by_player(
             database, connection, sorted({int(row[2]) for row in days}),
             boundary_at, boundary_at + DAY,
@@ -412,7 +420,9 @@ def queue_later_reading_recheck(
     calculation either reads this evidence or has finished before this reads
     its result. The day's own day-end recheck reads any such evidence saved
     before it runs; this covers evidence saved after, such as a response
-    recovered late. Queued once per day and cause, at backfill priority."""
+    recovered late. Queued once per day and cause, at backfill priority.
+    Whatever the day's state, the Reset's board is checked too
+    (``_queue_board_correction``)."""
     ended = ranked_day_for(boundary_at - DAY)
     if read_at is not None:
         first_new_day = ranked_day_inputs.load_first_reports(
@@ -422,6 +432,7 @@ def queue_later_reading_recheck(
         if first_new_day is not None and read_at >= first_new_day:
             return
     ranked_day_inputs.lock_ranked_day(connection, player_id, ended)
+    _queue_board_correction(database, connection, player_id, boundary_at)
     day = connection.execute(
         f"""
         SELECT {ranked_day_inputs.LATER_READING_DAY_SQL}, state,
@@ -494,6 +505,59 @@ def queue_later_reading_recheck(
             PYTHON_BACKFILL_PRIORITY,
         ),
     )
+
+
+def _queue_board_correction(
+    database: Database, connection: Any, player_id: int, boundary_at: datetime
+) -> None:
+    """Queue a correction of the Reset's newest board when evidence saved
+    since it froze its inputs changes the player's entry: the day's proof
+    read with the board's frozen later reading and Reset check, and read
+    with them as they are now, give other trophies or another label. The
+    correction freezes the board's inputs again. Whatever the day's state;
+    one correction is queued per board."""
+    from .boundary import lock_boundary_publication, queue_board_correction
+    from .boundary_manifest import reset_trophies
+
+    newest = """
+        SELECT id FROM boundary_publication_generations
+        WHERE boundary_at = %(at)s
+          AND snapshot_state <> 'superseded' AND army_state <> 'superseded'
+        ORDER BY generation DESC LIMIT 1
+    """
+    entry = connection.execute(
+        f"""
+        SELECT generation.id, entry.ranked_day_version_id,
+               (entry.input_identity -> 'profile_snapshot' ->> 'observation_id')::bigint,
+               (entry.input_identity -> 'profile_snapshot' ->> 'observed_at')::timestamptz,
+               (entry.input_identity -> 'profile_snapshot' ->> 'trophies')::integer,
+               entry.input_identity -> 'reset_proof'
+        FROM boundary_publication_generations AS generation
+        CROSS JOIN LATERAL boundary_publication_manifest_entries(
+            generation.snapshot_manifest_id
+        ) AS entry
+        WHERE generation.id = ({newest})
+          AND entry.player_id = %(player)s
+          AND entry.ranked_day_version_id IS NOT NULL
+          AND entry.input_identity ->> 'snapshot_quality' = 'eligible'
+          AND entry.input_identity ? 'reset_proof'
+        """,
+        {"at": boundary_at, "player": player_id},
+    ).fetchone()
+    if entry is None:
+        return
+    version_id = int(entry[1])
+    reading = {player_id: (version_id, int(entry[2]), entry[3], int(entry[4]))}
+    if reset_trophies(
+        connection, boundary_at, reading, {version_id: entry[5]}
+    ) == reset_trophies(
+        connection, boundary_at, reading,
+        reset_proof_facts(database, connection, [version_id]),
+    ):
+        return
+    lock_boundary_publication(connection, boundary_at)
+    if connection.execute(newest, {"at": boundary_at}).fetchone()[0] == entry[0]:
+        queue_board_correction(connection, boundary_at, int(entry[0]), queue=True)
 
 
 def later_reading_contradicts(
