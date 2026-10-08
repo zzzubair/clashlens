@@ -1113,7 +1113,9 @@ def _build_board(connection_info: str, database: Database, generation_id: int) -
             (
                 json.dumps(
                     {
-                        "boundary_at": DAY_2_RESET.isoformat(),
+                        # As the coordinator writes it, so the 04:30-07:00
+                        # past-Reset build hold doesn't hold this newest Reset.
+                        "boundary_at": DAY_2_RESET.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "generation": 1,
                         "manifest_id": manifest_id,
                         "manifest_digest": digest,
