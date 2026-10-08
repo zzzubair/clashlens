@@ -70,6 +70,17 @@ def test_a_later_reading_settles_a_reset_reading_taken_too_early() -> None:
         "verified", True, 1)
 
 
+def test_a_clean_reading_after_an_exact_match_still_contradicts_the_day() -> None:
+    result = verdict(Reading(at(20), 5870), Reading(at(40), 5880))
+
+    assert (result.outcome, result.residual) == ("contradicted", 10)
+    assert result.reading is not None and result.reading.read_at == at(40)
+    # A later match outranks every contradiction before it.
+    settled = verdict(Reading(at(20), 5880), Reading(at(30), 5875), Reading(at(40), 5870))
+    assert (settled.outcome, settled.exact, settled.earlier_contradictions) == (
+        "verified", True, 2)
+
+
 def test_a_reading_in_a_battles_landing_span_is_read_both_ways() -> None:
     late_attack = Effect("attack-late", 40, RESET - timedelta(minutes=2))
     day = (*DAY_BATTLES, late_attack)
@@ -109,8 +120,11 @@ def test_a_late_reading_less_the_new_day_battles_it_shows_verifies_the_day() -> 
     result = verdict(Reading(at(41), 5885), new_day=new_day)
 
     assert (result.outcome, result.exact, result.new_day_change) == ("verified", True, 15)
-    # 5,885 is 5,940 - 70 + 30 - 15; one trophy off and nothing explains it.
-    assert verdict(Reading(at(41), 5886), new_day=new_day).outcome == "contradicted"
+    # 5,885 is 5,940 - 70 + 30 - 15. One trophy off, it may show a new-day
+    # battle not known yet, so it settles nothing.
+    assert verdict(Reading(at(41), 5886), new_day=new_day).outcome == "unverified"
+    # Before the first new-day battle it can still contradict.
+    assert verdict(Reading(at(15), 5871), new_day=new_day).outcome == "contradicted"
 
 
 def test_a_new_day_battle_in_flight_at_the_reading_leaves_it_read_both_ways() -> None:

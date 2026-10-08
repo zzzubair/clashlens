@@ -768,10 +768,12 @@ def _settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     it landed. On 2 October 2026 that explained 728 of 733 next days whose
     start was too high and a later reading could check. It can instead say a
     later reading settled the Reset reading; the day then starts from that.
+    A start taken from the day before's calculated end already has both.
     """
     previous = data.previous_day
     if (
         data.start_trophies is None
+        or data.start_baseline_evidence.get("start_trophies_source") == "previous_day_end"
         or previous is None
         or not previous.complete
         or not (previous.unsettled_automatic_loss or previous.reset_reading_correction)
@@ -1059,11 +1061,7 @@ def _coverage_is_continuous(
         if observation.row_count < 0 or observation.row_count > BATTLE_LOG_MAX_ROWS:
             failures.append("battle_log_row_count_exceeds_fifty")
             malformed = True
-        if (
-            not observation.valid
-            or observation.has_row_gap
-            or observation.malformed_row_count
-        ):
+        if log_has_row_gap(observation):
             failures.append("battle_log_row_gap")
             malformed = True
         if observation.unclassified_row_count:
@@ -1077,16 +1075,31 @@ def _coverage_is_continuous(
             malformed = True
 
     for previous, current in pairwise(observations):
-        # A saved source row shared by both logs is the same reported row,
-        # Legend or not: each row's saved identity includes its battle time.
-        if current.row_count >= BATTLE_LOG_MAX_ROWS and not (
-            set(previous.battle_identities) & set(current.battle_identities)
-            or set(previous.source_row_ids) & set(current.source_row_ids)
-        ):
+        if logs_leave_gap(previous, current):
             failures.append("battle_log_overlap_gap")
 
     complete = not any(reason in COVERAGE_GAP_REASONS for reason in failures)
     return complete, evidence, malformed
+
+
+def log_has_row_gap(observation: CoverageObservation) -> bool:
+    """A battle log that may be missing a row of its own."""
+    return (
+        not observation.valid
+        or observation.has_row_gap
+        or bool(observation.malformed_row_count)
+    )
+
+
+def logs_leave_gap(previous: CoverageObservation, current: CoverageObservation) -> bool:
+    """A full battle log sharing no row with the log before it: battles
+    between the two may be in neither."""
+    # A saved source row shared by both logs is the same reported row,
+    # Legend or not: each row's saved identity includes its battle time.
+    return current.row_count >= BATTLE_LOG_MAX_ROWS and not (
+        set(previous.battle_identities) & set(current.battle_identities)
+        or set(previous.source_row_ids) & set(current.source_row_ids)
+    )
 
 
 def _automatic_defense_adjustment(

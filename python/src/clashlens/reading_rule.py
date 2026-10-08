@@ -4,9 +4,10 @@ At the moment a profile was read, its trophy count must equal what the
 ledger says the player had then: the day's start plus every battle the game
 had shown by then, less the automatic defense loss once the game applied it,
 plus any battle of the new day the profile already showed. A reading that
-equals it confirms the day; a reading that cannot contradicts it; a reading
-taken while a battle may or may not have landed yet is read both ways and
-can only confirm.
+equals it confirms the day; a reading that cannot contradicts it, unless
+it was taken at or after the player's first new-day battle; a reading taken
+while a battle may or may not have landed yet is read both ways and can only
+confirm. The last reading that is not read both ways decides.
 
 This one rule replaces four: a Reset reading taken before the automatic
 loss landed, a later reading settling a Reset reading taken too early, a
@@ -173,15 +174,17 @@ def decide(
 ) -> Verdict:
     """The day's verdict from every reading taken from its end Reset on.
 
-    The earliest reading that equals the ledger with every battle landed
-    and none in flight proves the day, with the loss landed when one is
-    certain; one read before the loss only confirms the battles and leaves
-    the loss unsettled. A reading that equals nothing, with nothing in
-    flight, contradicts the day unless a reading after it proves the loss
-    landed; a reading the ledger reads both ways settles nothing on its own,
-    except the Reset reading, which contradicts when no way fits. A reading
-    that fits only with a battle not yet shown, or read one way, is a guess:
-    taken when the day's start is proven and no clean reading contradicts.
+    A clean reading, one with every battle landed and none in flight,
+    either equals the ledger or contradicts it, and the last clean reading
+    decides: a match proves the day, with the loss landed when one is
+    certain, or, read before the loss, confirms the battles and leaves the
+    loss unsettled; it outranks every contradiction before it. A reading
+    taken at or after the player's first new-day battle can only confirm:
+    a new-day battle it shows may not be known. A reading the ledger reads
+    both ways settles nothing on its own, except the Reset reading, which
+    contradicts when no way fits. A reading that fits only with a battle not
+    yet shown, or read one way, is a guess: taken when the day's start is
+    proven and no clean reading decided.
     """
     judged = [
         judged for judged in (
@@ -202,47 +205,35 @@ def decide(
         # defense slot used) is uncharged until a reading shows otherwise.
         return not (item.missed or item.ambiguous) and bool(item.loss or not loss_certain)
 
-    # A reading proves the day only when every battle had landed and none
-    # was in flight; one that fits with a battle not yet shown, or read one
-    # way, is a guess.
-    proofs = [
-        item for item in judged
-        if item.matched and not item.ambiguous and not item.missed
-    ]
-    # A reading that shows the loss landed outranks an earlier one that did
-    # not: a day with no defense slot used can be charged at any time.
-    exact = next(
-        (item for item in proofs if item.loss),
-        next((item for item in proofs if exactness(item)), None),
-    )
-    confirmed = exact or (proofs[0] if proofs else None)
-    contradiction = next(
-        (
-            item for item in judged
-            if not item.matched
+    first_new_day = min((effect.lands_from for effect in new_day_effects), default=None)
+
+    def contradicts(item: _Judged) -> bool:
+        return (
+            not item.matched
             and not item.reading.confirm_only
             and (not item.ambiguous or item.reading.reset_reading)
+            and (first_new_day is None or item.reading.read_at < first_new_day)
+        )
+
+    decider = next(
+        (
+            item for item in reversed(judged)
+            if (item.matched and not item.ambiguous and not item.missed)
+            or contradicts(item)
         ),
         None,
     )
-    if confirmed is not None and (
-        contradiction is None
-        or contradiction.reading.read_at < confirmed.reading.read_at
-        or exactness(confirmed)
-    ):
+    if decider is not None and decider.matched:
         return Verdict(
-            "verified", confirmed.reading, confirmed.loss, exactness(confirmed),
-            confirmed.missed, confirmed.new_day_change, None,
+            "verified", decider.reading, decider.loss, exactness(decider),
+            decider.missed, decider.new_day_change, None,
             sum(
                 1 for item in judged
-                if not item.matched and not item.reading.confirm_only
-                and item.reading.read_at < confirmed.reading.read_at
+                if contradicts(item) and item.reading.read_at < decider.reading.read_at
             ),
         )
-    if contradiction is not None:
-        return Verdict(
-            "contradicted", contradiction.reading, residual=contradiction.residual
-        )
+    if decider is not None:
+        return Verdict("contradicted", decider.reading, residual=decider.residual)
     guessed = next((item for item in judged if item.matched), None)
     if guessed is not None and start_proven:
         return Verdict(
