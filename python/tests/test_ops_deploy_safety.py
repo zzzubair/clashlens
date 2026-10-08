@@ -106,8 +106,10 @@ def test_a_release_missing_an_applied_migration_is_refused_before_stopping(
 
 
 def test_a_failing_migration_leaves_the_old_release_running(stack) -> None:  # noqa: F811
-    # Tried in a transaction that is rolled back: nothing is applied.
-    result = up(stack, KNOWN[:-1], failing="reset_acceptance_records")
+    # Tried in a transaction that is rolled back: nothing is applied. The
+    # newest migration fails on its first line, whichever migration that is.
+    (newest,) = (ROOT / "deploy/migrations").glob(f"{KNOWN[-1]:04d}_*.sql")
+    result = up(stack, KNOWN[:-1], failing=newest.read_text().splitlines()[0])
     assert result.returncode != 0
     assert "a pending migration failed when tried on the running database" in result.stderr
     assert "psql trial" in result.calls
