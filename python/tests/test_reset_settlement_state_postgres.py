@@ -713,6 +713,9 @@ def _store_dropped_login(connection_info, archive_server, key, at, final) -> int
     ("dropped", None, (None, 0), "Complete"),
     # A newer official total replaces the one the day already used.
     ("dropped", None, (0, -30), "Inconsistent"),
+    # A Legend I reading after the Reset matching the calculated end, before
+    # the game applied what the official total counts, cannot overrule it.
+    ("old_season", "later_reading", (-30,), "Inconsistent"),
 ])
 def test_player_dropped_at_the_season_end_ends_at_the_official_total(
     database_url: str, archive_server, reset_reading: str, login: str | None,
@@ -743,7 +746,13 @@ def test_player_dropped_at_the_season_end_ends_at_the_official_total(
                      else _season_profile(final, OLD_SEASON)),
             log=_log(*battles),
         )
-        if login in {"before_history", "seen_before_season"}:
+        if login == "later_reading":
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key="later-reading",
+                endpoint="profile", body=_season_profile(final, OLD_SEASON),
+                observed_at=boundary + timedelta(minutes=5), normalized_tag=TAG,
+            )[1])
+        if login in {"before_history", "seen_before_season", "later_reading"}:
             jobs.append(_store_dropped_login(
                 connection_info, archive_server, "dropped-login",
                 boundary + timedelta(hours=2), final,
@@ -783,3 +792,73 @@ def test_player_dropped_at_the_season_end_ends_at_the_official_total(
     assert after[:2] == (last_day, state)
     if state == "Complete":
         assert after[2:5] == ("exact", 6000, final)
+
+
+@pytest.mark.parametrize("reading,drop_at,ended,next_start,monday_eligible", [
+    # Ranked below 10,000: the Reset still reads Legend I, Legend II about
+    # 13 minutes later, processed after or before the Reset's own work.
+    ("final", "after_reset", "Complete", "final", False),
+    ("final", "before_reset", "Complete", "final", False),
+    # Kept in Legend I: raised to 5,000 as before.
+    (5000, None, "Complete", 5000, True),
+    # Legend II only after the next Reset is not a drop at this one.
+    ("final", "next_day", "Inconsistent", "final", True),
+])
+def test_player_dropped_at_a_weekly_reset_ends_at_the_reset_reading(
+    database_url: str, archive_server, reading: object, drop_at: str | None,
+    ended: str, next_start: object, monday_eligible: bool,
+) -> None:
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    boundary = BOUNDARIES["monday"]
+    last_day = boundary - timedelta(days=1)
+    final = 4900 + WIN - 8 * LOSS
+    assert final < 5000
+    reading_trophies = final if reading == "final" else reading
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    login_at = {
+        "after_reset": boundary + timedelta(minutes=13),
+        "before_reset": boundary + timedelta(minutes=13),
+        "next_day": boundary + timedelta(days=1, hours=1),
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(4900), log=_battle_log(empty=True))
+        reset_jobs = _reset_work(connection_info, archive_server, boundary,
+                                 profile=_profile(reading_trophies),
+                                 log=_log(*battles))
+        login = [] if drop_at is None else [_store_dropped_login(
+            connection_info, archive_server, "dropped-login",
+            login_at[drop_at], final,
+        )]
+        if drop_at == "before_reset":
+            jobs, login = jobs + login, []
+        _process(connection_info, archive_server, jobs + reset_jobs)
+        # The Monday's own day, saved before or after the drop is seen.
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=boundary,
+                now=boundary + timedelta(days=1), request_key="monday",
+            )
+            assert processor.process_job(job, owner="monday") is not None
+        finally:
+            database.close()
+        _process(connection_info, archive_server, login)
+        days = {row[0]: row[1:] for row in _rows(connection_info, """
+            SELECT DISTINCT ON (ranked_day_start) ranked_day_start, state,
+                   next_start_trophies, failure_reasons
+            FROM ranked_day_versions ORDER BY ranked_day_start, version DESC""")}
+        # Off the live board and its count, and on the promotion list.
+        tracked = _rows(connection_info, f"""
+            SELECT player.active, candidate.league_tier_id
+            FROM players AS player LEFT JOIN promotion_candidates AS candidate
+              USING (normalized_tag) WHERE normalized_tag = '{TAG}'""")
+
+    assert days[last_day][:2] == (
+        ended, final if next_start == "final" else next_start
+    )
+    assert ("player_not_eligible" not in days[boundary][2]) == monday_eligible
+    assert tracked == [(False, 105000035) if drop_at else (True, None)]

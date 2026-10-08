@@ -225,6 +225,9 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                     ranked_day_for(profile.observed_at).season_start,
                     observation_id, profile.observed_at,
                 )
+                first_battle_log.queue_weekly_drop(
+                    connection, player[0], profile.observed_at
+                )
             if (
                 profile.eligibility_state == "eligible"
                 and profile.current_league_season_id == "0"

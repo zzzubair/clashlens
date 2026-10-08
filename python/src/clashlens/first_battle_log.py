@@ -285,6 +285,30 @@ def queue_not_enrolled(connection: Any, player_id: int, observed_at: datetime) -
         day_start += timedelta(days=1)
 
 
+def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) -> None:
+    """Once a profile read on a weekly Monday's Legend day shows a league
+    below Legend I, recalculate the saved day before that Reset and each
+    saved day after it, which then show the drop (see
+    ``reconciliation_db._dropped_after_reading``). Runs once per player and
+    Monday, when no other work waits, after that Reset's own calculations."""
+    day = domain.ranked_day_for(observed_at)
+    ended = day.start - timedelta(days=1)
+    if day.start.weekday() != 0 or day.start == day.season_start or connection.execute(
+        """
+        SELECT 1 FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s LIMIT 1
+        """,
+        (player_id, ended),
+    ).fetchone() is None:
+        return
+    _queue(
+        connection, player_id, ended, None,
+        key=(f"reconcile:weekly-drop:{player_id}:"
+             f"{ended:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}"),
+        trigger="weekly_drop", priority=PYTHON_BACKFILL_PRIORITY,
+    )
+
+
 def backfill(
     database: Database, season_id: str, *, queue: bool, max_jobs: int
 ) -> dict[str, Any]:
