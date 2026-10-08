@@ -191,10 +191,8 @@ def get_player_page(
                        daily.defense_three_star_count, daily.defense_loss,
                        daily.net_trophy_change, daily.adjustments, daily.battles,
                        daily.partial_reasons, ranked_day.start_trophies,
-                       -- Only Day 1 can start by the Season rule.
-                       CASE WHEN daily.season_day_number = 1
-                           THEN ranked_day.input_evidence
-                           #>> '{start_baseline_evidence,start_trophies_source}' END
+                       ranked_day.input_evidence
+                           #>> '{start_baseline_evidence,start_trophies_source}'
                            AS start_trophies_source,
                        daily.published_at
                 FROM api_player_daily_logs AS daily
@@ -282,9 +280,8 @@ def get_player_page(
                            daily.defense_loss, daily.net_trophy_change,
                            daily.adjustments, daily.battles, daily.partial_reasons,
                            ranked_day.start_trophies,
-                           CASE WHEN daily.season_day_number = 1
-                           THEN ranked_day.input_evidence
-                           #>> '{start_baseline_evidence,start_trophies_source}' END
+                           ranked_day.input_evidence
+                           #>> '{start_baseline_evidence,start_trophies_source}'
                                AS start_trophies_source
                     FROM api_player_daily_logs AS daily
                     LEFT JOIN ranked_day_versions AS ranked_day

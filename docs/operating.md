@@ -621,6 +621,14 @@ it again until `left_to_queue` is 0; each player and day is queued once. It
 reads the Season's saved battle rows, those above the lowest row a battle of
 two days before the Season used, so run it outside 04:00–07:00 UTC.
 
+**Mid-Season sign-up days:** a Reset read before the player signed up for
+the Season (a Legend I profile at 5,000 naming Season 0) now starts that day
+at 5,000 by the Season rule. Days calculated before that have no start; on
+2026-10-08 the October 2026 Season had 48 such ended days on 6 October.
+`--sign-up preview|queue --season <Season ID>` counts or queues, at backfill
+priority, each such player's day before the sign-up day and every later
+saved day; run it outside 04:00–07:00 UTC until `left_to_queue` is 0.
+
 **Full logs that share only other battles:** two full 50-row battle logs
 overlap when they share any saved row, not only a Legend battle. Days
 calculated before that report `battle_log_overlap_gap` falsely; on

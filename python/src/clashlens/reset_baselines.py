@@ -1193,12 +1193,23 @@ def _load_reset_baseline(
     failure_reasons = row[11] if isinstance(row[11], list) else []
     # A Season's first Reset whose reading cannot give the start itself,
     # whatever the reason, starts the Season at 5,000 by the Season rule once
-    # the player has a Legend I profile for the new Season. The reading's
-    # trophies stay unused; the Reset is complete only once its battle log
-    # proves the day's battles from the Reset.
+    # the player has a Legend I profile for the new Season. So does any
+    # Reset read before the player signed up for the Season: a Legend I
+    # profile at 5,000 naming Season 0, as #YPG2LRYQ's at 05:00 on 6 October
+    # 2026 before it signed up at 05:19, when no profile before it named the
+    # Season: the game also sends Season 0 to players already signed up. The
+    # reading's trophies stay unused; the Reset is complete only once its
+    # battle log proves the day's battles from the Reset.
+    before_sign_up = bool(
+        _text_value(row[25]) == "0"
+        and profile_eligible
+        and row[16] == SEASON_START_TROPHIES
+        and row[19] is not None
+        and not _season_rule_holds(connection, player_id, row[14], before=row[19])
+    )
     season_rule = bool(
         not reading_starts
-        and is_season_boundary(row[14])
+        and (is_season_boundary(row[14]) or before_sign_up)
         and _season_rule_holds(connection, player_id, row[14])
     )
     complete = complete or bool(
@@ -1277,10 +1288,12 @@ def _load_reset_baseline(
 
 
 def _season_rule_holds(
-    connection: Any, player_id: int, boundary_at: datetime
+    connection: Any, player_id: int, boundary_at: datetime,
+    *, before: datetime | None = None,
 ) -> bool:
     """Whether the player has an accepted Legend I profile naming the Season
-    that opens at ``boundary_at``."""
+    of the Legend day starting at ``boundary_at``, read before ``before``
+    when given."""
     return bool(
         connection.execute(
             """
@@ -1293,9 +1306,11 @@ def _season_rule_holds(
                   AND profile.current_league_season_id = %s
                   AND profile.eligibility_state = 'eligible'
                   AND profile.source_contract_state = 'accepted'
+                  AND (%s::timestamptz IS NULL OR profile.observed_at < %s)
             )
             """,
-            (player_id, ranked_day_for(boundary_at).official_season_id),
+            (player_id, ranked_day_for(boundary_at).official_season_id,
+             before, before),
         ).fetchone()[0]
     )
 
