@@ -1109,9 +1109,8 @@ def queue_board_rebuilds(
                            input_identity->'profile_snapshot'->>'observed_at',
                            ranked_day_version_id,
                            input_identity->'profile_snapshot'->>'observation_id'
-                    FROM boundary_publication_manifest_rows
-                    WHERE manifest_id = %s
-                      AND input_identity->>'snapshot_quality' = 'eligible'
+                    FROM boundary_publication_manifest_entries(%s)
+                    WHERE input_identity->>'snapshot_quality' = 'eligible'
                     """,
                     (manifest_id,),
                 ).fetchall()
@@ -1139,9 +1138,8 @@ def queue_board_rebuilds(
                                ->'profile_snapshot'->>'trophies')::integer,
                            entry.confidence
                     FROM leaderboard_snapshot_entries AS entry
-                    JOIN boundary_publication_manifest_rows AS manifest
-                      ON manifest.manifest_id = %s
-                     AND manifest.player_id = entry.player_id
+                    JOIN boundary_publication_manifest_entries(%s) AS manifest
+                      ON manifest.player_id = entry.player_id
                     WHERE entry.snapshot_id = %s
                     """,
                     (manifest_id, snapshot_id),

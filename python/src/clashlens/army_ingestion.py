@@ -503,8 +503,8 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     for row in connection.execute(
                         """
                         SELECT ranked_day_version_id
-                        FROM boundary_publication_manifest_rows
-                        WHERE manifest_id = %s AND ranked_day_version_id IS NOT NULL
+                        FROM boundary_publication_manifest_entries(%s)
+                        WHERE ranked_day_version_id IS NOT NULL
                         ORDER BY ordinal
                         """,
                         (manifest_id,),
@@ -725,8 +725,13 @@ def _build_manifest_army_facts(
         if getattr(database, "_supports_coordinator_contract", False)
         else ""
     )
-    after_ordinal = 0
-    while True:
+    # Pages are ordinal ranges: rebuilding a reused proof's rows in order
+    # to take the next 500 would rebuild every remaining row for each page.
+    last_ordinal = connection.execute(
+        "SELECT max(ordinal) FROM boundary_publication_manifest_entries(%s)",
+        (manifest_id,),
+    ).fetchone()[0]
+    for after_ordinal in range(0, last_ordinal or 0, ARMY_FACT_PLAYER_BATCH):
         rows = connection.execute(
             f"""
             SELECT m.ordinal, rv.id, d.player_id, d.battles,
@@ -734,7 +739,7 @@ def _build_manifest_army_facts(
                    m.input_identity -> 'battle_ids',
                    m.input_identity -> 'decode_ids',
                    m.input_identity -> 'evidence_ids'
-            FROM boundary_publication_manifest_rows AS m
+            FROM boundary_publication_manifest_entries(%s) AS m
             LEFT JOIN api_player_daily_logs AS d
               ON d.id = (m.input_identity ->> 'daily_log_id')::bigint
              AND d.player_id = m.player_id
@@ -744,15 +749,18 @@ def _build_manifest_army_facts(
               ON rv.id = m.ranked_day_version_id
              AND rv.player_id = d.player_id
              AND rv.ranked_day_start = d.ranked_day_start
-            WHERE m.manifest_id = %s AND m.ordinal > %s
+            WHERE m.ordinal > %s AND m.ordinal <= %s
             ORDER BY m.ordinal
-            LIMIT %s
             """,
-            (ranked_day_start, manifest_id, after_ordinal, ARMY_FACT_PLAYER_BATCH),
+            (
+                manifest_id,
+                ranked_day_start,
+                after_ordinal,
+                after_ordinal + ARMY_FACT_PLAYER_BATCH,
+            ),
         ).fetchall()
         if not rows:
-            break
-        after_ordinal = int(rows[-1][0])
+            continue
         battle_ids, decode_ids, evidence_ids = (
             sorted(
                 {
@@ -773,8 +781,6 @@ def _build_manifest_army_facts(
             evidence_ids=evidence_ids,
             active_keys=active_keys,
         )
-        if len(rows) < ARMY_FACT_PLAYER_BATCH:
-            break
 
 
 def _build_listed_army_facts(

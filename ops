@@ -1351,13 +1351,16 @@ if not rows:
 times = [dt.datetime.fromisoformat(r["finish_time"].replace("Z", "+00:00")) for r in rows]
 now = dt.datetime.now(dt.timezone.utc)
 age = (now - max(times)).total_seconds()
-print(f"Remote base backups: {len(rows)}; newest age: {age:.0f} seconds")
-print(f"Oldest completed base backup: {min(times).isoformat()}")
+print(f"Remote base backups: {len(rows)}; newest age: {age:.0f} seconds\nOldest completed base backup: {min(times).isoformat()}")
 if min(times) > now - dt.timedelta(days=7):
     print("Seven-day window is still warming up")
+if "/" in sys.argv[1]:
+    high, low = (int(part, 16) for part in sys.argv[1].split("/"))
+    replay = (high << 32 | low) - rows[times.index(max(times))]["start_lsn"]
+    print(f"A restore to now replays {replay / 1e9:.1f} GB of change log after the newest backup")
 if not 0 <= age <= 691200:
     sys.exit("Latest remote base backup is stale or has an invalid time")
-'
+' "$("$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" psql -X -At -c "SELECT pg_current_wal_lsn()" 2>/dev/null || true)"
   "$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" sh -ec '
     test "$(psql -X -At -v ON_ERROR_STOP=1 -c "SHOW archive_mode")" = on
     stale=$(find "$PGDATA/pg_wal/archive_status" -name "*.ready" -mmin +10 -print)
@@ -1373,29 +1376,26 @@ backup_prune() {
     apply=--confirm
   fi
   prepare_backup
-  # Keep the full backup completed before the recovery boundary and every
-  # later backup/WAL. Extra manual backups must not shorten the promised window.
+  # Keep the newest backup completed before the recovery boundary, the full
+  # backup a delta backup builds on (FIND_FULL), and every later backup/WAL.
+  # Extra manual backups must not shorten the promised window.
   anchor=$(wal_g backup-list --detail --json | python3 -c '
 import datetime as dt, json, re, sys
 now = dt.datetime.now(dt.timezone.utc)
-cutoff = now - dt.timedelta(days=7, hours=1)
-rows = json.load(sys.stdin)
-candidates = []
-for row in rows:
-    name = row["backup_name"]
-    if not re.fullmatch(r"base_[0-9A-F]{24}", name):
-        sys.exit("Retention refuses unexpected or incremental backup names")
-    start = dt.datetime.fromisoformat(row["start_time"].replace("Z", "+00:00"))
-    finish = dt.datetime.fromisoformat(row["finish_time"].replace("Z", "+00:00"))
+cutoff, candidates = now - dt.timedelta(days=7, hours=1), []
+for row in json.load(sys.stdin):
+    if not re.fullmatch(r"base_[0-9A-F]{24}(_D_[0-9A-F]{24})?", row["backup_name"]):
+        sys.exit("Retention refuses unexpected backup names")
+    start, finish = (dt.datetime.fromisoformat(row[key].replace("Z", "+00:00")) for key in ("start_time", "finish_time"))
     if not start.tzinfo or not finish.tzinfo or not dt.datetime(2020,1,1,tzinfo=dt.timezone.utc) < start <= finish <= now:
         sys.exit("Retention refuses invalid backup times")
     if finish <= cutoff:
-        candidates.append((start, name))
+        candidates.append((start, row["backup_name"]))
 if candidates:
     print(max(candidates)[1])
 ') || die "could not choose a safe retention boundary"
   [[ -n "$anchor" ]] || { printf 'No backup predates the seven-day window; nothing will be deleted.\n'; return; }
-  wal_g delete before "$anchor" --use-sentinel-time ${apply:+"$apply"}
+  wal_g delete before FIND_FULL "$anchor" --use-sentinel-time ${apply:+"$apply"}
 }
 
 archive_retention_enabled() { [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]; }

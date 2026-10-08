@@ -1038,9 +1038,8 @@ def _boundary_army_manifest_needs_correction(
     rows = connection.execute(
         """
         SELECT input_identity
-        FROM boundary_publication_manifest_rows
-        WHERE manifest_id = %s
-          AND (%s::bigint[] IS NULL OR player_id = ANY(%s::bigint[]))
+        FROM boundary_publication_manifest_entries(%s)
+        WHERE %s::bigint[] IS NULL OR player_id = ANY(%s::bigint[])
         ORDER BY ordinal
         """,
         (manifest_id, player_ids, player_ids),
