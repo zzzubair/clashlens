@@ -649,10 +649,12 @@ reason) for investigating.
 
 **Days ending in a trophy mismatch:** a day with no defenses can now take the
 automatic loss its next Reset reading, or a later one, shows, and a later
-reading can settle a Reset reading taken before the game finished crediting the
-day. Days calculated before that report `trophy_equation_mismatch`, or show a
-day with no defenses uncharged; on 2026-10-08 the October 2026 Season had 123
-mismatched ended days on 5 and 6 October, about 27 of them now fixable.
+reading, or the ended day's last battles, can settle a Reset reading taken
+before the game finished crediting the day. Days calculated before that report
+`trophy_equation_mismatch`, or show a day with no defenses uncharged; on
+2026-10-08 the October 2026 Season had 123 mismatched ended days on 5 and 6
+October, about 27 of them fixable by a later reading or the zero-defense charge
+and 23 by the last battles.
 `--mismatch preview|queue --season <Season ID>` works as `--overlap-gap` does
 for both kinds of day, at backfill priority; run it outside 04:00–07:00 UTC. A
 day still reporting the mismatch afterwards has a real one.

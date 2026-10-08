@@ -258,6 +258,11 @@ def load_contributions(
                 WHEN 'supercell-source-parser-v1'
                     THEN source_row.source_json -> 'opponent' ->> 'name'
                 ELSE source_row.source_json ->> 'opponentName'
+            END,
+            CASE
+                WHEN e.parser_version <> 'supercell-source-parser-v1'
+                     AND source_row.source_json ->> 'battleTimestamp' IS NOT NULL
+                    THEN source_row.source_json ->> 'battleTime'
             END
         FROM legend_battles AS b
         JOIN battle_perspectives AS p ON p.battle_id = b.id
@@ -310,6 +315,9 @@ def load_contributions(
             ),
             opponent_name=(
                 _text_value(row[17]) if row[17] is not None else None
+            ),
+            battle_seconds=(
+                int(row[18]) if row[18] is not None and str(row[18]).isdigit() else None
             ),
         )
         for row in contribution_rows
@@ -644,10 +652,12 @@ def load_profile_trophies(
 
 # A saved result a profile read after its end Reset reading may still
 # settle: one ending in a trophy mismatch, or a complete day after Day 1 with
-# no used defense slots whose Reset reading showed no automatic loss (see
+# no used defense slots whose Reset reading showed no automatic loss; or
+# disprove: one settled by battles its Reset reading missed (see
 # ``reconciliation.reads_later_reading``).
 LATER_READING_DAY_SQL = """(
     failure_reasons ? 'trophy_equation_mismatch'
+    OR formula_components ? 'next_start_battles_after_reading'
     OR (state = 'Complete' AND defense_count = 0 AND season_day_number > 1
         AND automatic_defense_evidence_state = 'not_applicable'
         AND unexplained_residual = 0

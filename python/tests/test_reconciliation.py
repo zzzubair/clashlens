@@ -12,6 +12,7 @@ from clashlens.reconciliation import (
     CoverageObservation,
     PreviousRankedDay,
     ReconciliationInput,
+    reads_later_reading,
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
@@ -351,6 +352,145 @@ def test_later_reading_settles_a_reset_reading_missing_the_days_credit() -> None
         assert second.final_trophies_before_reset == end_2
         assert second.formula_components["start_reading_trophies"] == reading
         assert second.formula_components["start_reading_correction"] == later - reading
+
+
+def test_battles_landing_after_the_reset_reading_settle_the_day() -> None:
+    # 7 October 2026 Reset readings taken before the ended day's last battle
+    # reached the profile, with no later reading before the next battle.
+    reading_at = DAY.end + timedelta(seconds=31)
+
+    def day(late: BattleContribution, start: int, reading: int, *others, **overrides):
+        values = {
+            "start_trophies": start,
+            "next_start_trophies": reading,
+            "end_baseline_evidence": {"profile": {"observed_at": reading_at.isoformat()}},
+            "contributions": (*others, late),
+            "previous_day": PreviousRankedDay(True, 2, 20, 0, end_baseline_id=10),
+        }
+        return reconcile_ranked_day(_input(**(values | overrides)))
+
+    defenses = tuple(
+        BattleContribution(f"defense-{index}", "defense", 10,
+                           battle_timestamp=DAY.start + timedelta(hours=index + 1))
+        for index in range(7)
+    )
+    # #2GL8CJL: read 4,839 at 05:00:31; its attack reported at 05:02:15 adds 40.
+    attack = BattleContribution(
+        "attack-late", "offense", 40, battle_timestamp=DAY.end + timedelta(seconds=135)
+    )
+    noon_attack = BattleContribution(
+        "attack-noon", "offense", 70, battle_timestamp=DAY.start + timedelta(hours=7)
+    )
+    defense_8 = BattleContribution(
+        "defense-7", "defense", 10, battle_timestamp=DAY.start + timedelta(hours=9)
+    )
+    late_attack = day(attack, 4849, 4839, noon_attack, *defenses, defense_8)
+    # #82RV9CV8C: read 5,113 at 05:01:00; its 155-second defense from 04:57:32
+    # cost 32 and had not reached the profile.
+    defense = BattleContribution(
+        "defense-late", "defense", 32, battle_timestamp=DAY.end - timedelta(seconds=148),
+        battle_seconds=155,
+    )
+    late_defense = day(defense, 5183, 5113, *defenses)
+    # A battle that landed 15 minutes before the reading was in it.
+    early = replace(attack, battle_timestamp=DAY.end - timedelta(minutes=15))
+    too_early = day(early, 4849, 4839, noon_attack, *defenses, defense_8)
+
+    assert (late_attack.state, late_attack.confidence) == ("Complete", "inferred")
+    assert late_attack.next_start_trophies == 4879
+    assert late_attack.formula_components["next_start_reading_correction"] == 40
+    assert late_attack.formula_components["next_start_battles_after_reading"] == [
+        "attack-late"
+    ]
+    assert (late_defense.state, late_defense.next_start_trophies) == ("Complete", 5081)
+    assert late_defense.formula_components["next_start_reading_correction"] == -32
+    assert too_early.state == "Inconsistent"
+
+    # Start 5,000, 8 attacks for 280, 7 defenses for 280 after 8 for 320 the
+    # day before: an automatic loss of 40. Read 5,040 at 05:00:31, before the
+    # last defense's 40, landing at 05:01:00, and the automatic 40.
+    attacks = tuple(
+        BattleContribution(f"attack-{hour}", "offense", 35,
+                           battle_timestamp=DAY.start + timedelta(hours=hour, minutes=15))
+        for hour in range(8)
+    )
+    defenses_40 = tuple(replace(item, trophy_amount=40) for item in defenses)
+    last_defense = replace(
+        defense, trophy_amount=40, battle_timestamp=DAY.end - timedelta(seconds=60),
+        battle_seconds=120,
+    )
+    pending = day(
+        last_defense, 5000, 5040, *attacks, *defenses_40[:6],
+        previous_day=PreviousRankedDay(True, 8, 320, 0, end_baseline_id=10),
+    )
+    assert (pending.state, pending.confidence) == ("Complete", "inferred")
+    assert (pending.automatic_defense_loss, pending.unsettled_automatic_loss) == (40, 40)
+    assert pending.next_start_trophies == pending.final_trophies_before_reset == 4960
+    assert pending.formula_components["next_start_reading_correction"] == -40
+    assert pending.formula_components["next_start_battles_after_reading"] == ["defense-late"]
+    next_day = reconcile_ranked_day(_input(
+        ranked_day=ranked_day_for(DAY.end + timedelta(hours=1)),
+        start_baseline_id=11,
+        start_trophies=5040,
+        previous_day=PreviousRankedDay(
+            True, 7, 280, 0, end_baseline_id=11, unsettled_automatic_loss=40,
+            reset_reading_correction=-40,
+        ),
+    ))
+    assert next_day.start_trophies == 4960
+
+    # A start its Inconsistent previous day left 40 gains short of 6,040: this
+    # day, 8 attacks for 280 and 8 defenses for 320, really ends at 6,000, as
+    # read. A last 40 defense landing at 04:58 only looks missed by it.
+    unproven_day = (
+        replace(last_defense, battle_timestamp=DAY.end - timedelta(minutes=4)),
+        6000, 6000, *attacks, *defenses_40,
+    )
+    proven = day(*unproven_day)
+    unproven = day(
+        *unproven_day,
+        previous_day=PreviousRankedDay(
+            False, 8, 320, 0, state="Inconsistent", end_baseline_id=10
+        ),
+    )
+    assert (proven.state, proven.next_start_trophies) == ("Complete", 5960)
+    assert unproven.state == "Inconsistent"
+    assert unproven.unexplained_residual == 40
+    assert "next_start_battles_after_reading" not in unproven.formula_components
+
+
+def test_a_later_reading_other_than_the_end_disproves_missed_battles() -> None:
+    # Season Day 1 from a proven 5,000: 7 attacks for 224 and 7 defenses for
+    # 224 calculate an end of 5,000, but the game charged 32 for the missing
+    # defense. The last attack, +32, reported at 05:02, after the 05:00:31
+    # reading of 4,968; readings at 05:10 and 05:20 show 4,968 too.
+    reading_at = DAY.end + timedelta(seconds=31)
+    day = _input(
+        start_trophies=5000,
+        next_start_trophies=4968,
+        season_first_day=True,
+        end_baseline_evidence={"profile": {"observed_at": reading_at.isoformat()}},
+        contributions=(
+            *(BattleContribution(f"attack-{hour}", "offense", 32,
+                                 battle_timestamp=DAY.start + timedelta(hours=hour))
+              for hour in range(6)),
+            BattleContribution("attack-late", "offense", 32,
+                               battle_timestamp=DAY.end + timedelta(minutes=2)),
+            *(BattleContribution(f"defense-{hour}", "defense", 32,
+                                 battle_timestamp=DAY.start + timedelta(hours=hour, minutes=30))
+              for hour in range(7)),
+        ),
+    )
+    guessed = reconcile_ranked_day(day)
+    disproved = reconcile_ranked_day(
+        replace(day, later_next_start_reading=(DAY.end + timedelta(minutes=20), 4968))
+    )
+
+    assert (guessed.state, guessed.next_start_trophies) == ("Complete", 5000)
+    assert reads_later_reading(day, guessed)
+    assert disproved.state == "Inconsistent"
+    assert disproved.unexplained_residual == -32
+    assert "next_start_battles_after_reading" not in disproved.formula_components
 
 
 def test_coverage_gap_or_missing_overlap_makes_ended_day_partial() -> None:
