@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS reset_acceptance_records (
 GRANT SELECT, INSERT, UPDATE ON TABLE reset_acceptance_records
     TO clashlens_python_worker;
 
+-- A Reset item that saves a newer response of an endpoint keeps the one it
+-- replaced here, so the record still waits for that response's processing.
+-- Only replaced Reset readings are kept: a few ids on a retried item.
+ALTER TABLE collector_work
+    ADD COLUMN IF NOT EXISTS replaced_observation_ids bigint[] NOT NULL DEFAULT '{}';
+
 INSERT INTO clash_lens_schema_migrations(version) VALUES (82)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

@@ -11,9 +11,9 @@ board's inputs froze, when it was saved as published and when the website
 first showed it; that board's input states (Complete, Partial, Inconsistent
 and the rest); and how many of the Reset's boundaries were settled when the
 website first showed it. Each value is set once, when first seen. A record
-stays open to its later stages for a week: a reading can wait days for the
-archive before it is processed. Rows are never deleted: one a day, under 1 KB
-each.
+stays open to its later stages until its readings are processed and its board
+shown, for as long as its sweep is kept: a reading can wait days for the
+archive. Rows are never deleted: one a day, under 1 KB each.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def refresh(
     readable_boundary: datetime | None,
     readable_at: datetime | None,
 ) -> dict[str, Any] | None:
-    """Update the latest Reset's record, and any unfinished from the last week,
+    """Update the latest Reset's record, and any older one still unfinished,
     and return the latest; None before any sweep."""
     with connection.transaction():
         connection.execute("SET LOCAL lock_timeout = '1s'")
@@ -45,9 +45,7 @@ def refresh(
                                   FROM collector_reset_sweeps)
                OR boundary_at IN (
                    SELECT boundary_at FROM reset_acceptance_records
-                   WHERE (proof_processed_at IS NULL OR readable_at IS NULL)
-                     AND boundary_at > (SELECT max(boundary_at) - interval '7 days'
-                                        FROM collector_reset_sweeps))
+                   WHERE proof_processed_at IS NULL OR readable_at IS NULL)
             ORDER BY boundary_at
             """
         ).fetchall()
@@ -101,17 +99,17 @@ def _refresh_one(
         changes["collection_finished_at"] = finished_at
     if record["proof_processed_at"] is None and collection_done:
         # Every response a Reset item saved counts, even when a later request
-        # of that item failed. Unchanged readings reuse an older saved response
-        # whose finished job may already be cleaned up; only an unfinished job
-        # holds this back.
+        # of that item failed or a newer response replaced it. Unchanged
+        # readings reuse an older saved response whose finished job may
+        # already be cleaned up; only an unfinished job holds this back.
         pending, processed_at = connection.execute(
             """
             SELECT count(*) FILTER (WHERE job.state <> 'complete'), max(job.completed_at)
             FROM collector_work AS work
-            CROSS JOIN LATERAL (VALUES (work.profile_observation_id),
-                                       (work.battle_log_observation_id),
-                                       (work.league_history_observation_id))
-                AS reading (observation_id)
+            CROSS JOIN LATERAL unnest(
+                ARRAY[work.profile_observation_id, work.battle_log_observation_id,
+                      work.league_history_observation_id] || work.replaced_observation_ids
+            ) AS reading (observation_id)
             LEFT JOIN python_processing_jobs_worker AS job
               ON job.observation_id = reading.observation_id
             WHERE work.sweep_id = %s AND work.kind = 'reset_baseline'

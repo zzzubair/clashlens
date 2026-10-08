@@ -1317,6 +1317,10 @@ class CollectorDatabase:
             f"""
             UPDATE collector_work
             SET {status_column} = 'observed',
+                replaced_observation_ids = CASE
+                    WHEN kind = 'reset_baseline' AND {observation_column} <> %s
+                    THEN array_append(replaced_observation_ids, {observation_column})
+                    ELSE replaced_observation_ids END,
                 {observation_column} = %s,
                 status = CASE WHEN kind = 'initial_collection' AND %s
                               THEN 'failed' ELSE status END,
@@ -1336,7 +1340,8 @@ class CollectorDatabase:
                          OR kept.request_started_at >= profile.response_completed_at)
               ))
             """,
-            (observation_id, handoff.endpoint == 'profile' and handoff.http_status == 404,
+            (observation_id, observation_id,
+             handoff.endpoint == 'profile' and handoff.http_status == 404,
              handoff.endpoint == 'profile' and handoff.http_status == 404,
              handoff.collector_work_id),
         )

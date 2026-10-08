@@ -4,6 +4,7 @@ worker's database role as the alert check writes it."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import psycopg
@@ -12,6 +13,7 @@ from domain_test_support import as_api_role, domain_database
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from clashlens import alerts, reset_acceptance
+from clashlens.collector_db import CollectorDatabase
 
 runtime = test_alerts.runtime
 RESET = datetime(2026, 10, 8, 5, tzinfo=UTC)
@@ -235,7 +237,8 @@ def test_the_reset_record_keeps_each_stage_time_and_the_board_counts(
 def test_an_older_reset_record_keeps_updating_until_its_readings_are_processed(
     database_url: str,
 ) -> None:
-    # A reading can wait days for the archive while newer Resets go by.
+    # A reading can wait days, even beyond a week, for the archive while newer
+    # Resets go by.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
@@ -252,10 +255,10 @@ def test_an_older_reset_record_keeps_updating_until_its_readings_are_processed(
                 ).fetchone()
 
         assert refresh_and_read() == (None,)
-        # Two newer Resets go by before the reading is processed.
+        # Newer Resets go by before the reading is processed.
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
-            for days in (1, 2):
+            for days in (1, 10):
                 owner.execute(
                     "INSERT INTO collector_reset_sweeps (boundary_at, member_ids)"
                     " VALUES (%s, '{}')",
@@ -267,9 +270,58 @@ def test_an_older_reset_record_keeps_updating_until_its_readings_are_processed(
             owner.execute(
                 "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s"
                 " WHERE status = 'pending'",
-                (RESET + timedelta(days=2, hours=3),),
+                (RESET + timedelta(days=10, hours=3),),
             )
-        assert refresh_and_read() == (RESET + timedelta(days=2, hours=3),)
+        assert refresh_and_read() == (RESET + timedelta(days=10, hours=3),)
+
+
+def test_a_replaced_reset_response_still_holds_back_the_processed_time(
+    database_url: str,
+) -> None:
+    # A retried Reset item saves a newer battle log; the one it replaced was
+    # saved too and must be processed before the readings count as processed.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            players = _seed_reset(owner, RESET)
+            owner.execute(
+                "INSERT INTO python_processing_jobs (work_type, deduplication_key,"
+                " input_json, observation_id, status) VALUES"
+                " ('process_observation', 'reading-9010', '{}', 9010, 'pending'),"
+                " ('process_observation', 'reading-9011', '{}', 9011, 'complete')"
+            )
+            work_id = owner.execute(
+                "SELECT id FROM collector_work WHERE player_id = %s", (players[1],)
+            ).fetchone()[0]
+            for observation in (9010, 9011):
+                handoff = SimpleNamespace(
+                    endpoint="battle_log", http_status=200, collector_work_id=work_id
+                )
+                with owner.transaction():
+                    CollectorDatabase._record_intent_endpoint(owner, handoff, observation)
+            owner.execute(
+                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s"
+                " WHERE observation_id IN (9002, 9003)",
+                (RESET + timedelta(minutes=15),),
+            )
+
+        def refresh() -> dict:
+            with psycopg.connect(_as_worker(connection_info)) as connection:
+                record = reset_acceptance.refresh(
+                    connection, readable_boundary=None, readable_at=None
+                )
+            assert record is not None
+            return record
+
+        assert refresh()["proof_processed_at"] is None
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            owner.execute(
+                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s"
+                " WHERE observation_id = 9010",
+                (RESET + timedelta(minutes=20),),
+            )
+        assert refresh()["proof_processed_at"] == RESET + timedelta(minutes=20)
 
 
 def test_the_alert_probe_prints_the_latest_resets_progress(

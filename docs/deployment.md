@@ -108,9 +108,14 @@ To roll back, do not reverse a migration. Revert the code change on `main`
 while keeping every migration file, then `./ops build` and `./ops up` that
 revert. The previous release can read the database only if no migration since
 it changed a table it reads; check the migrations listed between the two
-revisions before choosing this. Worker-only and API-only changes restart only
-the worker, API and website, leaving the collector, database, pod and network
-running as described below.
+revisions before choosing this. A release that changes only the website, or
+worker and API settings, restarts only the worker, API and website, leaving
+the collector, database, pod and network running as described below. Any
+change to Python source, even worker-only or API-only code, restarts the
+collector, database, pod and network too: the collector's image copies all of
+`python/src`, and its process starts through `clashlens.cli`, which loads the
+worker and API code, so no worker-only change leaves the collector's code
+unchanged.
 
 ## Clean Fedora fixture
 
@@ -1124,15 +1129,17 @@ use the [operating notes](operating.md#respond-to-alerts).
   Each Reset's record is one row of `reset_acceptance_records`: members
   captured; when their Reset readings were all collected and all processed,
   counting every response a Reset item saved even if a later request of that
-  item failed; when the first frozen board's inputs froze, when it was saved
+  item failed or a newer response replaced it (the collector keeps replaced
+  ones in `collector_work.replaced_observation_ids`, a few ids on a retried
+  item); when the first frozen board's inputs froze, when it was saved
   as published and when the website's public page first showed it, to the
   second of that read; that board's input states (Complete, Partial,
   Inconsistent and the rest); and how many of the Reset's boundaries were
   settled, provisional or unresolved when the website first showed it. Each
   value is kept as first seen. A record that has not yet seen its readings
-  processed or its board shown keeps being updated for a week, since a reading
-  can wait days for the archive. One row a day, under 1 KB: about 0.4 MB a
-  year.
+  processed or its board shown keeps being updated every minute for as long as
+  its Reset sweep is kept, since a reading can wait days for the archive. One
+  row a day, under 1 KB: about 0.4 MB a year.
 - **More than 10 untracked recent Legend I battlers**: players in a saved
   Legend I battle of the current or previous Legend day who are not tracked
   although their first such battle was saved over an hour ago. Players with a
