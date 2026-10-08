@@ -325,15 +325,19 @@ def queue_season_end(
     ``season_end`` when the response, read up to 3 days after it, can give
     that day's end: the day is still saved without ``official_total`` as
     its end, and its official Legend I total is saved. Older Seasons are
-    left as saved."""
+    left as saved. The day's calculation lock makes the two meet: a
+    calculation either reads this total or has saved before this reads it."""
     from . import first_battle_log
     from .db import PYTHON_BACKFILL_PRIORITY
+    from .domain import ranked_day_for
     from .profile import LEGEND_I_TIER_ID
+    from .ranked_day_inputs import lock_ranked_day
     from .reconciliation import RECONCILIATION_RULE_VERSION
 
     if observed_at > season_end + timedelta(days=3):
         return
     day_start = season_end - timedelta(days=1)
+    lock_ranked_day(connection, int(player_id), ranked_day_for(day_start))
     stale = connection.execute(
         """
         SELECT (input_evidence -> 'end_baseline_evidence'

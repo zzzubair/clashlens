@@ -1078,3 +1078,45 @@ def test_board_proves_a_days_end_by_its_end_and_later_readings(
         ("#Y9J9QC90Q", 4802, "uncertain"),
     ]
     assert state == "Inconsistent"
+
+
+def test_two_readings_at_5000_after_a_weekly_reset_prove_nothing(
+    database_url: str, archive_server,
+) -> None:
+    """At a Monday Reset the game raises a total at or below 5,000 to
+    5,000. An Inconsistent day whose wrong start of 4,974 puts its end at
+    5,020, though it really ended at 4,980, read 5,000 at 05:06 and 05:25:
+    those readings can be the raise, so its entry stays uncertain."""
+    from test_boundary_manifest_postgres import (
+        _build_board,
+        _october,
+        _seed_board,
+        _seed_days,
+    )
+
+    from clashlens.db import Database
+
+    battles = [
+        ("offense", 40, _october(6, 10), True),
+        ("offense", 38, _october(6, 12), True),
+    ] + [("defense", 4, _october(6, 13 + hour), True) for hour in range(8)]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(
+            connection_info, [("#Q8RU2PJ0", 4980, _october(7, 4, 40))]
+        )
+        _seed_days(connection_info, generation_id, {1: (True, battles)}, {1: {
+            "state": "Inconsistent", "failure_reasons": ["trophy_equation_mismatch"],
+            "start": 4974, "final": 5020, "end": 5000,
+            "end_read_at": _october(7, 5, 6), "boundary_kind": "weekly",
+        }})
+        _set_defenses(connection_info, {1: 8})
+        _later_profiles(
+            connection_info, archive_server, [("#Q8RU2PJ0", 5000, _october(7, 5, 25))]
+        )
+        database = Database(connection_info)
+        try:
+            board = _build_board(connection_info, database, generation_id)
+        finally:
+            database.close()
+
+    assert board == [("#Q8RU2PJ0", 4980, "uncertain")]

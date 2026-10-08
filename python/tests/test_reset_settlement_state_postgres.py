@@ -933,3 +933,99 @@ def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(
     assert len(due) == 1
     assert due[0][0] >= boundary + reconciliation_db.DAY_END_RECALCULATION_DELAY
     assert ended == [("Complete", final)]
+
+
+def test_official_total_saved_while_the_last_day_is_calculated_is_not_missed(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The last day's first calculation reads no official total and is still
+    saving when the player's league history saves one, 30 below the day's
+    calculated end. The history waits for that calculation, then queues one
+    more, so the day ends Inconsistent at the official total."""
+    import time
+
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.db import (
+        ANALYTICS_RULE_VERSION,
+        DEFAULT_PARSER_VERSION,
+        DOMAIN_RULE_VERSION,
+        PROCESSING_VERSION,
+        Database,
+    )
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_dropped_profile(final), log=_log(*battles))
+        # Its evidence is saved; its calculation has not run yet.
+        monkeypatch.setattr(reconciliation_db, "recalculate_ranked_day", lambda *_, **__: False)
+        _process(connection_info, archive_server, jobs)
+        monkeypatch.undo()
+        history_job = store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=6),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final - 30, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )[1]
+        failures: list[BaseException] = []
+
+        def history() -> None:
+            try:
+                _process(connection_info, archive_server, [history_job])
+            except BaseException as error:  # noqa: BLE001
+                failures.append(error)
+
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as calculation, calculation.transaction():
+                player_id = calculation.execute(
+                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                ).fetchone()[0]
+                reconciliation_db.recalculate_ranked_day(
+                    database, calculation, player_id=player_id, day_start=last_day,
+                    parser_version=DEFAULT_PARSER_VERSION,
+                    processing_version=PROCESSING_VERSION,
+                    domain_rule_version=DOMAIN_RULE_VERSION,
+                    analytics_rule_version=ANALYTICS_RULE_VERSION,
+                )
+                waiting = threading.Thread(target=history)
+                waiting.start()
+                deadline = time.monotonic() + 30
+                with psycopg.connect(connection_info, autocommit=True) as observer:
+                    while not observer.execute(
+                        "SELECT count(*) FROM pg_locks"
+                        " WHERE locktype = 'advisory' AND NOT granted"
+                    ).fetchone()[0]:
+                        assert time.monotonic() < deadline, "history never waited"
+                        time.sleep(0.05)
+            waiting.join(timeout=60)
+        finally:
+            database.close()
+        after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        queued = _rows(
+            connection_info,
+            "SELECT count(*) FROM python_processing_jobs"
+            " WHERE deduplication_key LIKE 'reconcile:official-final:%'",
+        )[0][0]
+
+    assert failures == []
+    assert queued == 1
+    assert after[:2] == (last_day, "Inconsistent")

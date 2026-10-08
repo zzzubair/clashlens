@@ -168,17 +168,20 @@ class DayEnd:
         loss, the loss calculated, confirmed, or none on a day that used
         defense slots (a day using none can still be charged one), read at
         least ``RESET_READING_BATTLE_LAG`` after the day's last battle
-        landed, with continuous battle logs and a Reset that does not reset
-        trophies. On 7 October 2026 a single later reading could change with
+        landed, with continuous battle logs. Never at a Season's end, and at
+        a weekly Reset only above 5,000: the day's own calculation cannot
+        tell the game's raise to 5,000 from a total it ended on. On 7
+        October 2026 a single later reading could change with
         no battle between (#R988P2Y9 read 5,017 at 05:08:33, then 4,977 at
         05:22:14), and a single end reading could miss 176 trophies of
         attacks stamped half an hour before it (#8RRYVCYQU), so it needs
         both."""
         if (
             self.proof in {VERIFIED, BALANCED}
-            or self.end_reset
-            or not self.coverage_complete
             or self.end_reading is None
+            or self.boundary_kind == "season"
+            or self.boundary_kind == "weekly" and self.end_reading <= 5000
+            or not self.coverage_complete
             or self.later is None
             or self.later_at is None
             or self.last_landed is not None
