@@ -159,8 +159,9 @@ one thread, response threads also share claims: one database transaction
 leases up to `--claim-batch-size` jobs (8 by default), each with its own lease
 token and attempt exactly as if it were claimed alone, and whichever response
 thread frees up first takes the next. A batch is never larger than the
-threads of its kind not running a job, so each claim has a free thread to
-start it within its lease. Derived threads share their own batches
+threads of its kind not holding a claim, less one derived thread whose turn
+the maintenance timer may hold, so each claim has a free thread to start it
+within its lease. Derived threads share their own batches
 of daily results and redecodes the same way; a build is always claimed alone.
 One thread at a time claims each kind's next batch, so a process holds at most
 one unstarted batch of each kind, and each batch takes turns as a thread's
@@ -214,7 +215,8 @@ fails when any one is stuck, even before its first job. When
 any process exits the others are stopped and the container restarts them
 all. Their database connections are budgeted: processes times (pool size plus
 the two maintenance connections and the maintenance lock's one) may not
-exceed 40, so the collector's 32 and the website's still fit under
+exceed 38, so two processes have at most 16 pool connections each. With the
+collector's 32 and the API's 8 that leaves two for operators within 80 of
 PostgreSQL's 100.
 
 All threads still share one `--database-pool-size` pool; giving response and

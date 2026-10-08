@@ -16,6 +16,7 @@ from clashlens.worker import (
     MAX_CONCURRENCY,
     ObservationProcessor,
     ProcessResult,
+    check_connection_budget,
     lane_owner,
     process_concurrently,
     process_until_stopped,
@@ -671,13 +672,21 @@ def test_a_requested_stop_reaches_every_worker_process() -> None:
 class _BatchQueue:
     """Claims up to ``limit`` of the jobs waiting, and records what it is asked."""
 
-    def __init__(self, waiting: int) -> None:
+    def __init__(self, waiting: int, only: tuple[str, ...] | None = None) -> None:
         self.waiting = waiting
+        self.only = only
         self.limits: list[int] = []
         self.released: list[int] = []
         self.next_id = 0
 
-    def claim_jobs(self, *, limit: int, **_options) -> list[SimpleNamespace]:
+    def claim_job(self, **_options) -> None:
+        return None
+
+    def claim_jobs(
+        self, *, limit: int, work_types=None, **_options
+    ) -> list[SimpleNamespace]:
+        if self.only is not None and work_types != self.only:
+            return []
         self.limits.append(limit)
         count = min(limit, self.waiting)
         self.waiting -= count
@@ -740,3 +749,54 @@ def test_a_batched_claim_whose_renewal_fails_is_still_given_back() -> None:
         processor.process_once(owner="lane", lease_seconds=1, work_types=RESPONSE_WORK_TYPES)
     assert processor.release_batched_claims() == 1
     assert queue.released == [1]
+
+
+def test_a_derived_batch_leaves_out_the_lane_whose_turn_maintenance_holds() -> None:
+    queue = _BatchQueue(waiting=0, only=DERIVED_WITHOUT_BUILDS)
+    processor = ObservationProcessor(queue, archive=None, claim_batch=8)
+    started, finish, stop, holding = [], Event(), Event(), []
+
+    def long_job(claim, *, lease_seconds: int):
+        started.append(claim.job_id)
+        assert finish.wait(10)
+        return claim
+
+    def slow_maintenance(turns) -> None:
+        if not holding and turns.acquire(blocking=False):
+            holding.append(True)
+            queue.waiting = 8  # work arrives while maintenance holds a turn
+
+    processor._process_claim = long_job
+    worker = threading.Thread(target=process_until_stopped, args=(processor,), kwargs={
+        "concurrency": 5, "response_lanes": 1, "owner": "worker", "lease_seconds": 60,
+        "stop_requested": stop, "idle_seconds": 0.01, "claims_ready": lambda: True,
+        "maintain": slow_maintenance, "on_result": lambda _result: None})
+    worker.start()
+    try:
+        deadline = time.monotonic() + 5
+        while len(started) < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.3)
+        claimed, running = queue.next_id, len(started)
+    finally:
+        finish.set()
+        stop.set()
+        worker.join(10)
+    # Three of the four derived lanes can run while maintenance holds the
+    # fourth's turn, so a fourth claim would wait out its lease unstarted.
+    assert (claimed, running) == (3, 3)
+
+
+def test_two_worker_processes_get_at_most_16_connections_each() -> None:
+    check_connection_budget(2, 16)
+    check_connection_budget(1, 35)
+    with pytest.raises(ValueError, match="at most 16 each"):
+        check_connection_budget(2, 17)
+
+
+@pytest.mark.parametrize("processes", ["3", "4"])
+def test_a_third_or_fourth_worker_process_is_refused(processes, capsys) -> None:
+    with pytest.raises(SystemExit) as refused:
+        cli.build_parser().parse_args([*WORKER_ARGV, "--processes", processes])
+    assert refused.value.code == 2
+    assert "between 1 and 2" in capsys.readouterr().err

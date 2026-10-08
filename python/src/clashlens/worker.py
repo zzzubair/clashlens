@@ -240,16 +240,19 @@ SESSION_ENDED = (IdleInTransactionSessionTimeout, TransactionTimeout)
 # slow round never holds a connection a lane is waiting for.
 MAINTENANCE_POOL_SIZE = 2
 # Connections all worker processes together may open: each process's lane
-# pool, maintenance pool and maintenance permit. With the collector's 32, the
-# API's and operators', applications stay under 80 of PostgreSQL's 100.
-WORKER_CONNECTION_BUDGET = 40
+# pool, maintenance pool and maintenance permit, so two processes have at most
+# 16 lane connections each. With the collector's 32 and the API's 8 that is
+# 78, leaving two for operators within 80 of PostgreSQL's 100.
+WORKER_CONNECTION_BUDGET = 38
 
 
 def check_connection_budget(processes: int, pool_size: int) -> None:
-    if processes * (pool_size + MAINTENANCE_POOL_SIZE + 1) > WORKER_CONNECTION_BUDGET:
+    per_process = MAINTENANCE_POOL_SIZE + 1
+    if processes * (pool_size + per_process) > WORKER_CONNECTION_BUDGET:
         raise ValueError(
             f"worker processes would open more than {WORKER_CONNECTION_BUDGET}"
-            " database connections"
+            f" database connections: {processes} may have at most"
+            f" {WORKER_CONNECTION_BUDGET // processes - per_process} each"
         )
 
 
@@ -603,8 +606,9 @@ def process_until_stopped(
     derived_turns = Semaphore(max(1, concurrency - responses))
     batch_lanes = getattr(processor, "batch_lanes", None)
     if isinstance(batch_lanes, dict) and responses:
+        # Less the derived lane's turn the maintenance timer may hold.
         batch_lanes.update({RESPONSE_WORK_TYPES: responses,
-                            DERIVED_WITHOUT_BUILDS: concurrency - responses})
+                            DERIVED_WITHOUT_BUILDS: concurrency - responses - 1})
 
     def maintenance_timer() -> None:
         while not stop_requested.is_set():
@@ -739,23 +743,30 @@ class ObservationProcessor:
         work_types: tuple[str, ...] | None = None,
     ) -> ProcessResult | None:
         started_at = monotonic()
-        claim = self._claim_next(
-            owner=owner, lease_seconds=lease_seconds, work_types=work_types
-        )
-        self._record_stage("python_claim", started_at)
-        if claim is None:
-            return None
-        # The build lane is one of the derived lanes.
+        # A claim counts against its kind's lanes from the moment a lane holds
+        # it: a batched claim as it leaves its batch, any other before it is
+        # made. The build lane is one of the derived lanes.
         kind = DERIVED_WITHOUT_BUILDS if work_types == POPULATION_BUILD_WORK_TYPES else work_types
-        if kind not in self._running:
-            return self._process_claim(claim, lease_seconds=lease_seconds)
-        with self._plan_lock:
-            self._running[kind] += 1
+        batched = self.claim_batch > 1 and work_types in self._batches
+        counted = kind in self._running
+        if counted and not batched:
+            self._count_running(kind, 1)
+        claim = None
         try:
+            claim = self._claim_next(
+                owner=owner, lease_seconds=lease_seconds, work_types=work_types
+            )
+            self._record_stage("python_claim", started_at)
+            if claim is None:
+                return None
             return self._process_claim(claim, lease_seconds=lease_seconds)
         finally:
-            with self._plan_lock:
-                self._running[kind] -= 1
+            if counted and (claim is not None or not batched):
+                self._count_running(kind, -1)
+
+    def _count_running(self, kind: tuple[str, ...], change: int) -> None:
+        with self._plan_lock:
+            self._running[kind] += change
 
     def _claim_next(
         self,
@@ -784,6 +795,7 @@ class ObservationProcessor:
                             batch.popleft()
                             continue
                     batch.popleft()
+                    self._count_running(work_types, 1)
                     return claim
                 return None
         # The newest-first plan holds only responses, so derived lanes skip it.

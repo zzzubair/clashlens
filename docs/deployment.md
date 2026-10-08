@@ -1282,12 +1282,13 @@ policy and are not manually requeued.
 
 In `app.env`, `CLASHLENS_WORKER_PROCESSES` (1 or 2, default 1) sets how many
 worker processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
-12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default 8) how
-many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
+12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default about
+two thirds of them, 8 of 12) how many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
 (default 12) each process's connections. All processes share the container's
 memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
-worker refuses to start when the processes would open more than 40 database
-connections.
+worker refuses to start when the processes would open more than 38 database
+connections, so two processes may have at most 16 each; with the collector's
+32 and the API's 8 that leaves two of 80 for operators.
 
 The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
 is 2 processes of 16 threads, 12 for responses, and 16 connections each, 38
@@ -1303,8 +1304,7 @@ CLASHLENS_WORKER_DATABASE_POOL_SIZE=16
 
 then run `./ops up`. It restarts the worker, API and website, and leaves the
 collector and database running when their images and settings are unchanged.
-To undo it, remove those four lines, or set them to 1, 12, 8 and 12, and run
-`./ops up` again.
+To undo it, remove those four lines and run `./ops up` again.
 
 Memory is expected, not yet measured, to stay well inside the 4 GB limit. At
 09:32 UTC on 8 October 2026 one process used 325 MB, with a peak of 887 MB in
