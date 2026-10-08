@@ -640,7 +640,10 @@ invent a Day 1 for them.
 result they were calculated with until something recalculates them. After
 deploying any release that changes how a day or board comes out (it raises
 `DAY_RULES_REVISION` in `python/src/clashlens/domain_repair.py`), repair the
-Season once, outside 04:00–07:00 UTC:
+Season once, outside 04:00–07:00 UTC. A day's calculation accepts only days
+of the current and previous Season, so repair only one of those two: repairing
+an older Season would save each of its days again as Partial
+(`season_anchor_conflict`):
 
 ```sh
 podman exec clashlens-python-worker \
@@ -898,7 +901,12 @@ podman exec clashlens-collector \
 It reports how many it `scheduled` for the latest ended Season; a second run
 schedules 0 while the first run's requests are still waiting, and a fresh set
 once they finished. The collector sends them on the ordinary lane within the
-normal key budget, about 13,000 requests at October 2026 membership.
+normal key budget, about 13,000 requests at October 2026 membership. Each
+official Season-end total saved recalculates the player's kept last day of
+that Season at backfill priority. It corrects that day only for the current
+or previous Season; an older Season's kept last day is saved again as Partial
+(`season_anchor_conflict`), as a day's calculation accepts only days of those
+two Seasons.
 
 ### Website unreachable from outside
 
