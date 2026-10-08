@@ -96,6 +96,8 @@ WHERE player.id = first.player_id;
 
 -- A battle log's first sighting of an untracked player, kept on the player so
 -- pruning the sighting does not move them out of the battle-opponent count.
+-- It runs before the insert, so a repeat sighting the insert skips (a player
+-- first named while tracked, named again after leaving Legend I) still counts.
 CREATE FUNCTION clashlens_save_battle_opponent()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 AS $$
@@ -104,10 +106,10 @@ BEGIN
     SET battle_opponent_seen_at = NEW.discovered_at,
         battle_opponent_observation_id = NEW.observation_id
     WHERE id = NEW.player_id AND NOT active AND battle_opponent_seen_at IS NULL;
-    RETURN NULL;
+    RETURN NEW;
 END $$;
 CREATE TRIGGER known_player_discoveries_battle_opponent
-AFTER INSERT ON known_player_discoveries
+BEFORE INSERT ON known_player_discoveries
 FOR EACH ROW WHEN (NEW.source_kind = 'battle_opponent')
 EXECUTE FUNCTION clashlens_save_battle_opponent();
 
@@ -624,17 +626,21 @@ AS $$
                known.battle_opponent_seen_at IS NOT NULL AS opponent
         FROM known CROSS JOIN week WHERE NOT known.active
     ), first_checks AS (
-        SELECT work.player_id, min(work.created_at) AS first_at
+        -- From the first battle-opponent sighting when that came first, so
+        -- time waiting for queue space counts.
+        SELECT work.player_id,
+               LEAST(min(work.created_at), min(player.battle_opponent_seen_at)) AS first_at
         FROM collector_work AS work
         JOIN players AS player ON player.id = work.player_id AND player.active
         WHERE work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
         GROUP BY work.player_id
-        HAVING min(work.created_at) >= instant - interval '7 days'
+        HAVING LEAST(min(work.created_at), min(player.battle_opponent_seen_at))
+               >= instant - interval '7 days'
     ), first_logs AS (
         SELECT extract(epoch FROM player.first_battle_log_at - first_checks.first_at)::double precision
                    AS seconds
         FROM first_checks JOIN players AS player ON player.id = first_checks.player_id
-        -- Leaves out players whose first log came before that check or was
+        -- Leaves out players whose first log came before that start or was
         -- not recorded (before this migration).
         WHERE player.first_battle_pending OR player.first_battle_log_at >= first_checks.first_at
     ), checks AS (

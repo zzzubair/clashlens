@@ -116,10 +116,10 @@ Legend II takes about an hour and Legend III about three more.
 The `population-status` command, run like `load-promotion-candidates`,
 prints tracked players split into available (a current profile naming this
 Season), waiting to sign up and unavailable (profile not found); for players
-whose first discovery, lookup or refresh check was added in the last 7 days
-and who are now tracked, the
-median, 95th-percentile and longest time from that check to their first
-battle log (first logs before migration 0082 are not recorded); untracked
+first seen as an untracked battle opponent or first given a discovery, lookup
+or refresh check, whichever came first, in the last 7 days and now tracked,
+the median, 95th-percentile and longest time from then to their first battle
+log, so time waiting for queue space counts (first logs before migration 0082 are not recorded); untracked
 players, and this week's answers, waiting checks, due retries and players not
 yet checked for battle opponents (saved on the player when a battle log first
 names them untracked, so pruning sightings does not move them) and other

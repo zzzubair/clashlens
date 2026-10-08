@@ -7,10 +7,11 @@ prints one JSON object (migration 0082):
   naming this Season), ``waiting_to_sign_up`` (a Legend I profile not naming
   this Season, such as Season ID 0) and ``unavailable`` (the profile is no
   longer found), and how many still wait for their first battle log;
-* ``first_battle_log_delay``: players whose first check (discovery, lookup or
-  refresh) was added in the last 7 days and who are now tracked, how many have
-  a first battle log, and the median, 95th-percentile and longest seconds
-  from that check to the log;
+* ``first_battle_log_delay``: players first seen as an untracked battle
+  opponent or first given a check (discovery, lookup or refresh), whichever
+  came first, in the last 7 days and now tracked, how many have a first battle
+  log, and the median, 95th-percentile and longest seconds from then to the
+  log;
 * ``untracked``: known players not tracked, by eligibility;
 * ``untracked_this_week``: for untracked players a battle log named while
   untracked (saved on the player, so pruning sightings changes nothing) and

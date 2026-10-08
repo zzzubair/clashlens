@@ -536,11 +536,49 @@ def test_tracked_players_are_split_into_available_waiting_and_unavailable(
         }
 
 
+def _sighting(connection_info: str, archive_server, player: int, at: datetime) -> int:
+    """A battle log naming ``player`` as an opponent; returns the rows it added."""
+    observation_id, _job = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key=f"sighting-{player}-{at.isoformat()}",
+        endpoint="battle_log",
+        body=b"{}",
+        observed_at=at,
+        normalized_tag="#2PP",
+    )
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "INSERT INTO known_player_discoveries"
+            " (player_id, observation_id, source_row_index, source_kind, discovered_at)"
+            " VALUES (%s, %s, 0, 'battle_opponent', %s) ON CONFLICT DO NOTHING",
+            (player, observation_id, at),
+        ).rowcount
+
+
+def test_a_player_first_named_while_tracked_counts_as_an_opponent_once_untracked(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        (player,) = _players(connection_info, 1)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("UPDATE players SET active = true WHERE id = %s", (player,))
+        assert _sighting(connection_info, archive_server, player, datetime.now(UTC)) == 1
+        # A weekly drop out of Legend I ends tracking; a later log names them again.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("UPDATE players SET active = false WHERE id = %s", (player,))
+        assert _sighting(connection_info, archive_server, player, datetime.now(UTC)) == 0
+        assert _report(connection_info)["untracked_this_week"]["battle_opponents"]["total"] == 1
+
+
 def test_the_delay_from_a_first_check_to_the_first_battle_log_is_reported(
-    database_url: str,
+    database_url: str, archive_server
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         logged, waiting = _players(connection_info, 2)
+        # A battle log named one player before its check found queue space.
+        seen_at = datetime.now(UTC) - timedelta(seconds=60)
+        _sighting(connection_info, archive_server, logged, seen_at)
         _discover(connection_info, [logged, waiting])
         _admit(connection_info, datetime.now(UTC))
         with psycopg.connect(connection_info) as connection:
@@ -550,9 +588,6 @@ def test_the_delay_from_a_first_check_to_the_first_battle_log_is_reported(
                 " WHERE id = ANY(%s::bigint[])",
                 ([logged, waiting],),
             )
-            first_at = connection.execute(
-                "SELECT created_at FROM collector_work WHERE player_id = %s", (logged,)
-            ).fetchone()[0]
             # A public lookup added the first check for another player.
             looked_up = connection.execute(
                 """
@@ -572,7 +607,7 @@ def test_the_delay_from_a_first_check_to_the_first_battle_log_is_reported(
             ).fetchone()[0]
         collector = CollectorDatabase(_as(connection_info, "clashlens_collector"))
         try:
-            for player, tag, at in ((logged, "#Q1", first_at + timedelta(seconds=90)),
+            for player, tag, at in ((logged, "#Q1", seen_at + timedelta(seconds=150)),
                                     (looked_up, "#Q3", lookup_at + timedelta(seconds=30))):
                 collector.record_response(
                     _handoff(
@@ -588,7 +623,7 @@ def test_the_delay_from_a_first_check_to_the_first_battle_log_is_reported(
             collector.close()
         assert _report(connection_info)["first_battle_log_delay"] == pytest.approx({
             "players": 3, "with_first_log": 2,
-            "median_seconds": 60, "p95_seconds": 87, "max_seconds": 90,
+            "median_seconds": 90, "p95_seconds": 144, "max_seconds": 150,
         })
 
 
