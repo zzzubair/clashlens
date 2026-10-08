@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -86,17 +87,20 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)
             if claim.input_json.get("trigger") == "day_end":
-                # Its Reset reading usually finished the day already.
+                # Its Reset reading usually finished the day already. A
+                # mismatch runs again: a reading since may settle it.
                 latest = connection.execute(
                     """
-                    SELECT state FROM ranked_day_versions
+                    SELECT state = 'Live'
+                           OR failure_reasons ? 'trophy_equation_mismatch'
+                    FROM ranked_day_versions
                     WHERE player_id = %s AND ranked_day_start = %s
                       AND reconciliation_rule_version = %s
                     ORDER BY version DESC LIMIT 1
                     """,
                     (player_id, day_start, RECONCILIATION_RULE_VERSION),
                 ).fetchone()
-                if latest is None or _text_value(latest[0]) != "Live":
+                if latest is None or not latest[0]:
                     day_starts = set()
             for day_start in sorted(day_starts):
                 recalculate_ranked_day(
@@ -317,77 +321,91 @@ def recalculate_ranked_day(
     perspective_disagreement = any(
         contribution.disagreement for contribution in contributions
     )
-    result = reconcile_ranked_day(
-        ReconciliationInput(
-            ranked_day=ranked_day,
-            now=now,
-            start_baseline_id=(
-                int(start_baseline["id"])
-                if start_baseline is not None and start_baseline["id"] is not None
-                else None
-            ),
-            end_baseline_id=(
-                int(end_baseline["id"])
-                if end_baseline is not None
-                else None
-            ),
-            start_trophies=(
-                int(start_baseline["trophies"])
-                if start_baseline is not None
-                and start_baseline["trophies"] is not None
-                else None
-            ),
-            next_start_trophies=(
-                int(end_baseline["trophies"])
-                if end_baseline is not None
-                and end_baseline["trophies"] is not None
-                else None
-            ),
-            start_baseline_battle_log_observation_id=(
-                start_battle_log_observation_id
-            ),
-            end_baseline_battle_log_observation_id=(
-                end_battle_log_observation_id
-            ),
-            coverage_observations=coverage,
-            contributions=contributions,
-            previous_day=previous,
-            boundary_kind=boundary_kind,
-            season_anchor_valid=anchor_valid,
-            start_baseline_complete=(
-                bool(start_baseline["complete"])
-                if start_baseline is not None
-                else False
-            ),
-            end_baseline_complete=(
-                bool(end_baseline["complete"])
-                if end_baseline is not None
-                else False
-            ),
-            player_eligible=player_eligible,
-            not_enrolled=not contributions
-            and _known_not_enrolled(connection, player_id, ranked_day),
-            perspective_disagreement=perspective_disagreement,
-            malformed_evidence=malformed_evidence,
-            unclassified_evidence=unclassified_evidence,
-            start_baseline_evidence=(
-                start_baseline["evidence"]
-                if start_baseline is not None
-                else {}
-            ),
-            end_baseline_evidence=(
-                end_baseline["evidence"] if end_baseline is not None else {}
-            ),
-            parser_version=parser_version,
-            processing_version=processing_version,
-            domain_rule_version=domain_rule_version,
-            season_anchor_rule_version=SEASON_ANCHOR_RULE_VERSION,
-            trophy_allocation_rule_versions=trophy_rule_versions,
-            season_first_day=season_day is not None and season_day.day_number == 1,
-            zero_result_attack_slots=zero_result_attacks,
-            zero_result_defense_slots=zero_result_defenses,
-        )
+    data = ReconciliationInput(
+        ranked_day=ranked_day,
+        now=now,
+        start_baseline_id=(
+            int(start_baseline["id"])
+            if start_baseline is not None and start_baseline["id"] is not None
+            else None
+        ),
+        end_baseline_id=(
+            int(end_baseline["id"])
+            if end_baseline is not None
+            else None
+        ),
+        start_trophies=(
+            int(start_baseline["trophies"])
+            if start_baseline is not None
+            and start_baseline["trophies"] is not None
+            else None
+        ),
+        next_start_trophies=(
+            int(end_baseline["trophies"])
+            if end_baseline is not None
+            and end_baseline["trophies"] is not None
+            else None
+        ),
+        start_baseline_battle_log_observation_id=(
+            start_battle_log_observation_id
+        ),
+        end_baseline_battle_log_observation_id=(
+            end_battle_log_observation_id
+        ),
+        coverage_observations=coverage,
+        contributions=contributions,
+        previous_day=previous,
+        boundary_kind=boundary_kind,
+        season_anchor_valid=anchor_valid,
+        start_baseline_complete=(
+            bool(start_baseline["complete"])
+            if start_baseline is not None
+            else False
+        ),
+        end_baseline_complete=(
+            bool(end_baseline["complete"])
+            if end_baseline is not None
+            else False
+        ),
+        player_eligible=player_eligible,
+        not_enrolled=not contributions
+        and _known_not_enrolled(connection, player_id, ranked_day),
+        perspective_disagreement=perspective_disagreement,
+        malformed_evidence=malformed_evidence,
+        unclassified_evidence=unclassified_evidence,
+        start_baseline_evidence=(
+            start_baseline["evidence"]
+            if start_baseline is not None
+            else {}
+        ),
+        end_baseline_evidence=(
+            end_baseline["evidence"] if end_baseline is not None else {}
+        ),
+        parser_version=parser_version,
+        processing_version=processing_version,
+        domain_rule_version=domain_rule_version,
+        season_anchor_rule_version=SEASON_ANCHOR_RULE_VERSION,
+        trophy_allocation_rule_versions=trophy_rule_versions,
+        season_first_day=season_day is not None and season_day.day_number == 1,
+        zero_result_attack_slots=zero_result_attacks,
+        zero_result_defense_slots=zero_result_defenses,
     )
+    result = reconcile_ranked_day(data)
+    reading_at = (
+        end_baseline["evidence"]["profile"]["observed_at"]
+        if end_baseline is not None else None
+    )
+    if "trophy_equation_mismatch" in result.failure_reasons and reading_at:
+        # A later reading can settle an end Reset reading taken before the
+        # game finished crediting the day; only a mismatched day reads one.
+        later = ranked_day_inputs.load_later_reading(
+            database, connection, player_id, ranked_day.end,
+            datetime.fromisoformat(reading_at),
+        )
+        if later is not None:
+            result = reconcile_ranked_day(
+                replace(data, later_next_start_reading=later)
+            )
     result_data = {
         "state": result.state,
         "confidence": result.confidence,
@@ -1070,7 +1088,8 @@ def _enqueue_day_end_reconciliation(
     none and nothing else calculates the day again. On 2026-10-06 that left
     2,037 ended Day 1 results Live. Due DAY_END_RECALCULATION_DELAY after the
     Reset, once its readings have landed, the job runs only when no other
-    work waits, and does nothing once the day is finished.
+    work waits, and does nothing once the day is finished, unless it ended
+    in a trophy mismatch that a reading since the Reset may settle.
     """
     day_text = ranked_day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     connection.execute(

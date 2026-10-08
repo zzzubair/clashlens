@@ -334,7 +334,8 @@ def load_previous_day(
             input_hash,
             end_baseline_id,
             COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
-            COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0)
+            COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
+            COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0)
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -376,6 +377,7 @@ def load_previous_day(
             ),
             unsettled_automatic_loss=int(previous_row[10]),
             zero_result_defense_slots=int(previous_row[11]),
+            reset_reading_correction=int(previous_row[12]),
         )
         if previous_row is not None
         else None
@@ -631,6 +633,27 @@ def load_profile_trophies(
          "after": after, "until": until},
     ).fetchall()
     return tuple((at, None if trophies is None else int(trophies)) for at, trophies in rows)
+
+
+def load_later_reading(
+    database: Database, connection: Any, player_id: int, boundary_at: datetime,
+    reading_at: datetime,
+) -> tuple[datetime, int] | None:
+    """The last processed profile read after the Reset reading at
+    ``reading_at`` and before the player's first battle of the new day, by
+    either player's report, within a day; ``None`` without one."""
+    until = boundary_at + timedelta(days=1)
+    first_new_day = load_first_reports(
+        connection, player_id, reading_at, domain.battle_window(boundary_at)[0], until
+    )[1]
+    readings = [
+        (at, trophies)
+        for at, trophies in load_profile_trophies(
+            database, connection, player_id, reading_at, first_new_day or until
+        )
+        if trophies is not None
+    ]
+    return readings[-1] if readings else None
 
 
 def load_first_reports(
