@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0082.
+-- Clash Lens deployment migration 0083.
 -- The receipt of each Season repair (python/src/clashlens/domain_repair.py
 -- season_repair): one row per Season and rule revision the repair ran
 -- under, with the Season's saved days and published Daily boards as they
@@ -25,6 +25,6 @@ CREATE TABLE IF NOT EXISTS season_repairs (
 REVOKE ALL ON season_repairs FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE ON season_repairs TO clashlens_python_worker;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (82)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (83)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;
