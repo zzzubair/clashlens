@@ -444,13 +444,13 @@ def test_two_readings_minutes_apart_do_not_prove_a_days_end() -> None:
         last_landed=reset - 29 * MINUTE,
     )
     assert day_1.proven_end is None
-    assert _reset_total(4960, day_1, (False, 0, 0)) == (4960, False)
+    assert _reset_total(4960, day_1, (False, 0, 0), True) == (4960, False)
     partial = replace(
         day_1, state="Partial", final=None, start=None, end_reading=5000,
         next_start=5000, later=5000, later_at=reset + 21 * MINUTE,
     )
     assert partial.proven_end == (5000, 0)
-    assert _reset_total(4960, partial, (False, 0, 0)) == (5000, True)
+    assert _reset_total(4960, partial, (False, 0, 0), False) == (5000, True)
     # 14 minutes after the end Reset reading, or before 05:20, is too soon.
     assert replace(partial, later_at=reset + 15 * MINUTE).proven_end is None
     assert replace(partial, end_read_at=reset, later_at=reset + 19 * MINUTE).proven_end is None

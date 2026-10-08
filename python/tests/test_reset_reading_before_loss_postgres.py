@@ -1332,3 +1332,83 @@ def test_a_waiting_day_end_calculation_judges_the_check_again(
     assert withdrawn[0] == "unresolved"
     if path == "profile":
         assert "independent_root_missing" in withdrawn[2]
+
+
+def _day_c_entry(connection_info: str, archive_server, reading: int) -> tuple[int, bool]:
+    """Day C: eight defenses, then an attack stamped 04:34 that its 04:37
+    reading of ``reading`` does not hold yet; its battle logs are continuous
+    and its ending Reset profile failed. Return day C's board entry from
+    that reading."""
+    day_c = [(DAY_C + timedelta(hours=hour), False) for hour in range(2, 10)] + [
+        (DAY_D - timedelta(minutes=26), True)
+    ]
+    observation_id, job = store_observation(
+        connection_info, archive_server, occurrence_key="board-reading",
+        endpoint="profile", body=_profile(reading),
+        observed_at=DAY_D - timedelta(minutes=23), normalized_tag=TAG,
+    )
+    _process(connection_info, archive_server, [
+        *_reset_work(connection_info, archive_server, DAY_D, log=_log(*day_c)), job,
+    ])
+    with psycopg.connect(connection_info) as connection:
+        player_id, version_id = connection.execute(
+            "SELECT player_id, id FROM ranked_day_versions WHERE ranked_day_start = %s"
+            " ORDER BY version DESC LIMIT 1",
+            (DAY_C,),
+        ).fetchone()
+        read_at = connection.execute(
+            "SELECT response_completed_at FROM collector_observations WHERE id = %s",
+            (observation_id,),
+        ).fetchone()[0]
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            return reset_trophies(
+                connection, DAY_D,
+                {player_id: (version_id, observation_id, read_at, reading)},
+                reset_settlement.reset_proof_facts(database, connection, [version_id]),
+            )[player_id]
+        finally:
+            database.close()
+
+
+def test_a_reading_plus_its_battles_is_proven_only_from_a_proven_start(
+    database_url: str, archive_server
+) -> None:
+    """Day B, with no start, has an attack at 04:58 its Reset reading of
+    5,200 does not hold; a quiet reading at 06:00 shows it. Day B's end is
+    not proven, so day C's start reading of 5,200 is not either: its 04:37
+    reading, missing its own 04:34 attack, equals that start plus all its
+    battles only because both miss an attack, and the entry stays
+    uncertain. After a balanced day B, the same day C, read with every
+    battle, is proven."""
+    whole_c = WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _process(connection_info, archive_server, _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(5200),
+            log=_log((DAY_C - timedelta(minutes=2), True)),
+        ))
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="quiet-profile",
+            endpoint="profile", body=_profile(5200 + WIN),
+            observed_at=DAY_C + timedelta(hours=1), normalized_tag=TAG,
+        )[1]])
+        unproven = _day_c_entry(connection_info, archive_server, 5200 + whole_c)
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _process(connection_info, archive_server, [
+            *_reset_work(
+                connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+            ),
+            *_reset_work(
+                connection_info, archive_server, DAY_C, profile=_profile(end_b),
+                log=_log(*day_b),
+            ),
+        ])
+        proven = _day_c_entry(connection_info, archive_server, end_b + whole_c)
+
+    assert unproven == (5200 + whole_c, False)
+    assert proven == (end_b + whole_c, True)
+

@@ -25,7 +25,7 @@ from psycopg.types.json import Jsonb
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .db import Database, _text_value
-from .domain import RANKED_DAY_DURATION, season_is_current
+from .domain import RANKED_DAY_DURATION, SEASON_START_TROPHIES, season_is_current
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -711,10 +711,13 @@ def reset_trophies(
     its attack can end up to 4 minutes after the defender's report, and no
     battle amount the two players' logs disagree on. A reading proves no
     battle stamped before it, so that total is proven only when the day's
-    start reading plus all its battles comes to it too, and no later reading
-    before the next day's first battle shows otherwise. Without a start
-    reading it stays uncertain: the end Reset reading can miss the same
-    delayed credit as the reading it is checked against.
+    start plus all its battles comes to it too, the start is proven, and no
+    later reading before the next day's first battle shows otherwise. A
+    start is proven by the previous day's proven end (``DayEnd.proven_end``,
+    as that day saved it) or by 5,000 on a Season's Day 1; a start reading
+    alone can miss the same delayed credit as the reading it is checked
+    against, as can the end Reset reading. On the 7 October 2026 Day 3 board
+    this left 23 confirmed Partial entries uncertain, at unchanged values.
     Without the battles' proof the total is the reading alone; any total not
     proven is marked uncertain.
 
@@ -733,84 +736,101 @@ def reset_trophies(
 
     if not readings:
         return {}
-    battles = {
-        int(row[0]): (bool(row[1]), int(row[2]), int(row[3]))
-        for row in connection.execute(
-            """
-            SELECT reading.player_id,
-                   ranked.coverage_complete
-                   AND reading.observed_at
-                       >= ranked.ranked_day_start + interval '15 minutes'
-                   AND ranked.state <> 'Inconsistent'
-                   AND NOT ranked.failure_reasons ?| %s::text[]
-                   AND battles.every_battle_proven IS NOT FALSE,
-                   battles.after_reading, battles.whole_day
-            FROM unnest(
-                %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
-            ) AS reading (player_id, version_id, observation_id, observed_at)
-            JOIN ranked_day_versions AS ranked
-              ON ranked.id = reading.version_id
-             AND ranked.player_id = reading.player_id
-             AND ranked.ranked_day_end = %s
-            JOIN collector_observations AS observation
-              ON observation.id = reading.observation_id
+    rows = connection.execute(
+        """
+        SELECT reading.player_id,
+               ranked.coverage_complete
+               AND reading.observed_at
+                   >= ranked.ranked_day_start + interval '15 minutes'
+               AND ranked.state <> 'Inconsistent'
+               AND NOT ranked.failure_reasons ?| %s::text[]
+               AND battles.every_battle_proven IS NOT FALSE,
+               battles.after_reading, battles.whole_day,
+               (ranked.input_evidence -> 'previous_day' ->> 'version_id')::bigint,
+               ranked.season_day_number = 1
+        FROM unnest(
+            %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
+        ) AS reading (player_id, version_id, observation_id, observed_at)
+        JOIN ranked_day_versions AS ranked
+          ON ranked.id = reading.version_id
+         AND ranked.player_id = reading.player_id
+         AND ranked.ranked_day_end = %s
+        JOIN collector_observations AS observation
+          ON observation.id = reading.observation_id
+        CROSS JOIN LATERAL (
+            SELECT COALESCE(sum(battle.change) FILTER (
+                       WHERE battle.stamped_at > reading.observed_at
+                   ), 0),
+                   COALESCE(sum(battle.change), 0),
+                   bool_and(
+                       battle.stamped_at IS NOT NULL
+                       AND battle.stamped_at
+                           NOT BETWEEN observation.request_started_at
+                                       - CASE WHEN battle.lens = 'defense'
+                                              THEN interval '4 minutes'
+                                              ELSE interval '0' END
+                                   AND reading.observed_at
+                       AND battle.disputed IS DISTINCT FROM 'true'
+                   )
+            FROM jsonb_array_elements(ranked.input_evidence->'contributions')
+                AS contribution
             CROSS JOIN LATERAL (
-                SELECT COALESCE(sum(battle.change) FILTER (
-                           WHERE battle.stamped_at > reading.observed_at
-                       ), 0),
-                       COALESCE(sum(battle.change), 0),
-                       bool_and(
-                           battle.stamped_at IS NOT NULL
-                           AND battle.stamped_at
-                               NOT BETWEEN observation.request_started_at
-                                           - CASE WHEN battle.lens = 'defense'
-                                                  THEN interval '4 minutes'
-                                                  ELSE interval '0' END
-                                       AND reading.observed_at
-                           AND battle.disputed IS DISTINCT FROM 'true'
-                       )
-                FROM jsonb_array_elements(ranked.input_evidence->'contributions')
-                    AS contribution
-                CROSS JOIN LATERAL (
-                    SELECT CASE WHEN contribution.value->>'lens' = 'offense'
-                                THEN 1 ELSE -1 END
-                           * (contribution.value->>'amount_used')::integer,
-                           (contribution.value->>'battle_timestamp')::timestamptz,
-                           contribution.value->>'lens',
-                           contribution.value->>'disagreement'
-                ) AS battle (change, stamped_at, lens, disputed)
-                WHERE contribution.value->>'included' = 'true'
-            ) AS battles (after_reading, whole_day, every_battle_proven)
-            """,
-            (
-                sorted(DISPUTED_BATTLE_REASONS),
-                list(readings),
-                [reading[0] for reading in readings.values()],
-                [reading[1] for reading in readings.values()],
-                [reading[2] for reading in readings.values()],
-                boundary_at,
-            ),
-        ).fetchall()
-    }
+                SELECT CASE WHEN contribution.value->>'lens' = 'offense'
+                            THEN 1 ELSE -1 END
+                       * (contribution.value->>'amount_used')::integer,
+                       (contribution.value->>'battle_timestamp')::timestamptz,
+                       contribution.value->>'lens',
+                       contribution.value->>'disagreement'
+            ) AS battle (change, stamped_at, lens, disputed)
+            WHERE contribution.value->>'included' = 'true'
+        ) AS battles (after_reading, whole_day, every_battle_proven)
+        """,
+        (
+            sorted(DISPUTED_BATTLE_REASONS),
+            list(readings),
+            [reading[0] for reading in readings.values()],
+            [reading[1] for reading in readings.values()],
+            [reading[2] for reading in readings.values()],
+            boundary_at,
+        ),
+    ).fetchall()
+    battles = {int(row[0]): (bool(row[1]), int(row[2]), int(row[3])) for row in rows}
     ends = day_ends(
         connection,
         [reading[0] for player, reading in readings.items() if player in battles],
         facts,
     )
+    previous = day_ends(
+        connection, sorted({int(row[4]) for row in rows if row[4] is not None}), facts
+    )
+
+    def start_proven(row: Any, end: Any) -> bool:
+        prior = previous.get(int(row[4])) if row[4] is not None else None
+        proven = prior.proven_end if prior is not None else None
+        return end is not None and end.start is not None and (
+            bool(row[5]) and end.start == SEASON_START_TROPHIES
+            or proven is not None and proven[0] == end.start
+        )
+
+    starts = {
+        int(row[0]): start_proven(row, ends.get(readings[int(row[0])][0])) for row in rows
+    }
     return {
         player_id: _reset_total(
-            reading[3], ends.get(reading[0]), battles.get(player_id)
+            reading[3], ends.get(reading[0]), battles.get(player_id),
+            starts.get(player_id, False),
         )
         for player_id, reading in readings.items()
     }
 
 
 def _reset_total(
-    reading: int, end: Any, battles: tuple[bool, int, int] | None
+    reading: int, end: Any, battles: tuple[bool, int, int] | None, start_proven: bool
 ) -> tuple[int, bool]:
     """A player's trophies at the Reset before the automatic defense loss
     and whether they are proven, from their reading, their day's end
-    (``DayEnd``) and its battles as ``reset_trophies`` reads them."""
+    (``DayEnd``), its battles and whether its start is proven, as
+    ``reset_trophies`` reads them."""
     from .reset_settlement import CONTRADICTED
 
     if end is None or battles is None:
@@ -826,10 +846,8 @@ def _reset_total(
         return total, False
     if end.before_loss is not None:
         # A Complete day ending at a Reset that resets trophies.
-        return total, total == end.before_loss
-    if end.start is None:
-        return total, False
-    return total, (
+        return total, start_proven and total == end.before_loss
+    return total, start_proven and (
         (end.end_reset or end.agrees(total)) and end.start + whole_day == total
     )
 

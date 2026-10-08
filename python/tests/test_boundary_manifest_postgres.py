@@ -1033,7 +1033,9 @@ def _seed_days(
     end Reset reading, and starts where its reading less its counted battles
     stamped by then puts it, unless ``results`` gives its state, failure
     reasons, end, automatic loss and its state, start and end Reset readings,
-    the end reading's time and Reset kind instead."""
+    the end reading's time and Reset kind instead. A day with a start and no
+    given state, or given ``proven_start``, follows a Complete day ending on
+    that start, which proves it."""
     season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
     with psycopg.connect(connection_info) as connection:
         observations = {
@@ -1081,6 +1083,25 @@ def _seed_days(
                 " WHERE player_id = %s",
                 (observations[player_id], player_id),
             )
+            previous = result["start"] is not None and result.get(
+                "proven_start", "state" not in (results or {}).get(player_id, {}))
+            if previous:
+                connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (id, player_id, ranked_day_start,
+                        ranked_day_end, official_season_id, season_day_number,
+                        season_anchor_rule_version, reconciliation_rule_version, result_hash,
+                        version, state, confidence, input_hash, coverage_complete,
+                        failure_reasons, start_trophies, final_trophies_before_reset,
+                        automatic_defense_evidence_state, input_evidence
+                    ) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s, %s, %s, 1, 'anchor', 'rules',
+                        repeat('c', 64), 1, 'Complete', 'exact', repeat('d', 64), true, '[]',
+                        %s, %s, 'not_applicable', %s)
+                    """,
+                    (player_id + 1000, player_id, DAY_2_RESET - 2 * RANKED_DAY_DURATION,
+                     DAY_2_RESET - RANKED_DAY_DURATION, season, result["start"],
+                     result["start"], json.dumps({"next_start_trophies": result["start"]})),
+                )
             contributions = [
                 {
                     "battle_identity": str(player_id * 100 + index),
@@ -1121,6 +1142,8 @@ def _seed_days(
                     json.dumps(
                         {
                             "contributions": contributions,
+                            **({"previous_day": {"version_id": player_id + 1000}}
+                               if previous else {}),
                             "next_start_trophies": result["end"],
                             "boundary_kind": result["boundary_kind"],
                             "end_baseline_evidence": {"profile": {
@@ -1381,7 +1404,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
     stamped 04:34:08 for 29, and the board showed 4,902 as proven: a reading
     proves no battle stamped before it. Its Complete day ends at 4,931 from
     its Reset readings at both ends. Without that, a reading plus the
-    battles after it is proven only when the day's start reading plus all
+    battles after it is proven only when the day's proven start plus all
     its battles comes to it too. Without a start, an end Reset reading
     agreeing with it, with or without a known automatic loss, proves
     nothing: both readings can miss the same delayed credit. A Reset that
@@ -1423,8 +1446,8 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
             **complete, "final": 5185, "start": 5145, "boundary_kind": "season",
             "end": 5000,
         },
-        7: {**complete, "final": 5087, "boundary_kind": "season", "end": 5000},
-        8: {**complete, "final": 4980, "boundary_kind": "weekly", "end": 5000},
+        7: {**complete, "final": 5087, "boundary_kind": "season", "end": 5000, "proven_start": 1},
+        8: {**complete, "final": 4980, "boundary_kind": "weekly", "end": 5000, "proven_start": 1},
         9: {
             **complete, "final": 4980, "start": 4940, "boundary_kind": "weekly",
             "end": 5000,
