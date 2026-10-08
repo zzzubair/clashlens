@@ -1193,12 +1193,24 @@ def _load_reset_baseline(
     failure_reasons = row[11] if isinstance(row[11], list) else []
     # A Season's first Reset whose reading cannot give the start itself,
     # whatever the reason, starts the Season at 5,000 by the Season rule once
-    # the player has a Legend I profile for the new Season. The reading's
-    # trophies stay unused; the Reset is complete only once its battle log
-    # proves the day's battles from the Reset.
+    # the player has a Legend I profile for the new Season. So does any
+    # Reset read before the player signed up for the Season: a Legend I
+    # profile at 5,000 naming Season 0, as #YPG2LRYQ's at 05:00 on 6 October
+    # 2026 before it signed up at 05:19, when no profile read before it named
+    # the Season and no Legend battle of the Season came before it: the game
+    # also sends Season 0 to players already signed up. The
+    # reading's trophies stay unused; the Reset is complete only once its
+    # battle log proves the day's battles from the Reset.
+    before_sign_up = bool(
+        _text_value(row[25]) == "0"
+        and profile_eligible
+        and row[16] == SEASON_START_TROPHIES
+        and row[19] is not None
+        and not _season_rule_holds(connection, player_id, row[14], before=row[19])
+    )
     season_rule = bool(
         not reading_starts
-        and is_season_boundary(row[14])
+        and (is_season_boundary(row[14]) or before_sign_up)
         and _season_rule_holds(connection, player_id, row[14])
     )
     complete = complete or bool(
@@ -1277,10 +1289,14 @@ def _load_reset_baseline(
 
 
 def _season_rule_holds(
-    connection: Any, player_id: int, boundary_at: datetime
+    connection: Any, player_id: int, boundary_at: datetime,
+    *, before: datetime | None = None,
 ) -> bool:
     """Whether the player has an accepted Legend I profile naming the Season
-    that opens at ``boundary_at``."""
+    of the Legend day starting at ``boundary_at``. With ``before``, only a
+    profile read before it counts, or a Legend battle of that Season fought
+    before it."""
+    day = ranked_day_for(boundary_at)
     return bool(
         connection.execute(
             """
@@ -1289,13 +1305,26 @@ def _season_rule_holds(
                 FROM player_profile_versions AS profile
                 JOIN players AS player
                   ON player.normalized_tag = profile.normalized_tag
-                WHERE player.id = %s
-                  AND profile.current_league_season_id = %s
+                LEFT JOIN player_profile_effects AS effect
+                  ON effect.profile_version_id = profile.id
+                WHERE player.id = %(player)s
+                  AND profile.current_league_season_id = %(season)s
                   AND profile.eligibility_state = 'eligible'
                   AND profile.source_contract_state = 'accepted'
-            )
+                  AND (%(before)s::timestamptz IS NULL
+                       OR COALESCE(effect.observed_at, profile.observed_at)
+                          < %(before)s)
+            ) OR (%(before)s::timestamptz IS NOT NULL AND EXISTS (
+                SELECT 1 FROM battle_evidence AS evidence
+                JOIN legend_battles AS battle ON battle.id = evidence.battle_id
+                WHERE (battle.attacker_player_id = %(player)s
+                       OR battle.defender_player_id = %(player)s)
+                  AND battle.ranked_day_start >= %(season_start)s
+                  AND evidence.battle_timestamp < %(before)s
+            ))
             """,
-            (player_id, ranked_day_for(boundary_at).official_season_id),
+            {"player": player_id, "season": day.official_season_id,
+             "before": before, "season_start": day.season_start},
         ).fetchone()[0]
     )
 

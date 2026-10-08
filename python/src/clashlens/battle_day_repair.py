@@ -338,6 +338,10 @@ def add_republish_command(
     # trophy_equation_mismatch, or with no used defense slots and no
     # automatic loss in its Reset reading.
     republish_current_season.add_argument("--mismatch", choices=("preview", "queue"))
+    # With --sign-up, preview or queue the recalculation of each player's
+    # day whose start Reset reading came before they signed up; see
+    # first_battle_log.requeue_sign_up_days.
+    republish_current_season.add_argument("--sign-up", choices=("preview", "queue"))
     # With --boards, preview or queue rebuilds of the Season's Reset boards
     # still ranking a reading the board now leaves out or missing the battles
     # after their readings; see boundary.queue_board_rebuilds.
@@ -358,19 +362,20 @@ def run_republish_command(database_url: str, arguments: argparse.Namespace) -> i
     zero_result_slots = getattr(arguments, "zero_result_slots", None)
     overlap_gap = getattr(arguments, "overlap_gap", None)
     mismatch = getattr(arguments, "mismatch", None)
+    sign_up = getattr(arguments, "sign_up", None)
     boards = getattr(arguments, "boards", None)
     modes = [mode for mode in (arguments.campaign, first_logs, day_1, zero_result_slots,
-                               overlap_gap, mismatch, boards)
+                               overlap_gap, mismatch, sign_up, boards)
              if mode is not None]
     if len(modes) > 1:
         raise SystemExit(
             "--campaign, --first-logs, --day-1, --zero-result-slots, --overlap-gap,"
-            " --mismatch and --boards are separate runs"
+            " --mismatch, --sign-up and --boards are separate runs"
         )
     if (not modes) != (arguments.season is None):
         raise SystemExit(
             "--campaign, --first-logs, --day-1, --zero-result-slots, --overlap-gap,"
-            " --mismatch or --boards and --season go together"
+            " --mismatch, --sign-up or --boards and --season go together"
         )
     database = Database(database_url)
     try:
@@ -393,6 +398,11 @@ def run_republish_command(database_url: str, arguments: argparse.Namespace) -> i
                 database, arguments.season, queue=mismatch == "queue",
                 max_jobs=arguments.max_jobs,
                 condition=ranked_day_inputs.LATER_READING_DAY_SQL, trigger="mismatch",
+            )
+        elif sign_up is not None:
+            report = first_battle_log.requeue_sign_up_days(
+                database, arguments.season, queue=sign_up == "queue",
+                max_jobs=arguments.max_jobs,
             )
         elif day_1 is not None:
             report = first_battle_log.requeue_day_1(

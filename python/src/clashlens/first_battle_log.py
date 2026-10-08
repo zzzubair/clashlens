@@ -572,6 +572,127 @@ def requeue_zero_result_slots(
     }
 
 
+def requeue_sign_up_days(
+    database: Database, season_id: str, *, queue: bool, max_jobs: int
+) -> dict[str, Any]:
+    """Find, and with ``queue`` recalculate, each player's oldest ended day
+    of the Season whose start Reset reading was taken before they signed up
+    (a Legend I profile at 5,000 naming Season 0, no profile read before it
+    naming the Season nor Legend battle of the Season fought before it, a
+    later profile that does), from the day before it, and their later saved
+    days. Before October 2026 only a Season's first Reset started
+    at 5,000 by the Season rule: 48 ended sign-up days on 6 October 2026.
+    Each player and day is queued once, at backfill priority, as
+    ``requeue_day_1``."""
+    season_start = datetime.fromtimestamp(int(season_id), UTC)
+    if not domain.is_season_boundary(season_start):
+        raise ValueError(f"{season_id} is not a Season's start")
+
+    def key(player_id: int, day: datetime) -> str:
+        return (f"reconcile:sign-up:{player_id}:"
+                f"{day:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}")
+
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            rows = connection.execute(
+                """
+                WITH latest AS (
+                    SELECT DISTINCT ON (player_id, ranked_day_start)
+                           player_id, ranked_day_start, failure_reasons
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start > %(start)s
+                      AND ranked_day_start < %(end)s
+                      AND ranked_day_start + interval '1 day' <= clock_timestamp()
+                      AND reconciliation_rule_version = %(rule)s
+                    ORDER BY player_id, ranked_day_start, version DESC, id DESC
+                )
+                SELECT DISTINCT ON (day.player_id)
+                       day.player_id, day.ranked_day_start - interval '1 day'
+                FROM latest AS day
+                JOIN LATERAL (
+                    SELECT profile_observation_id FROM reset_baseline_evidence
+                    WHERE player_id = day.player_id
+                      AND boundary_at = day.ranked_day_start
+                    ORDER BY version DESC, id DESC LIMIT 1
+                ) AS reset ON true
+                JOIN player_profile_versions AS reading
+                  ON reading.id IN (
+                      SELECT profile_version_id FROM player_profile_effects
+                      WHERE observation_id = reset.profile_observation_id
+                      UNION
+                      SELECT id FROM player_profile_versions
+                      WHERE observation_id = reset.profile_observation_id)
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(
+                        (SELECT min(observed_at) FROM player_profile_effects
+                         WHERE observation_id = reset.profile_observation_id),
+                        reading.observed_at) AS observed_at
+                ) AS read
+                WHERE day.failure_reasons ? 'missing_start_baseline'
+                  AND reading.current_league_season_id = '0'
+                  AND reading.eligibility_state = 'eligible'
+                  AND reading.trophies = 5000
+                  AND EXISTS (
+                      SELECT 1 FROM player_profile_versions AS signed
+                      LEFT JOIN player_profile_effects AS effect
+                        ON effect.profile_version_id = signed.id
+                      WHERE signed.player_id = day.player_id
+                        AND signed.current_league_season_id = %(season)s
+                        AND signed.eligibility_state = 'eligible'
+                        AND signed.source_contract_state = 'accepted'
+                        AND COALESCE(effect.observed_at, signed.observed_at)
+                            > read.observed_at)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM player_profile_versions AS signed
+                      LEFT JOIN player_profile_effects AS effect
+                        ON effect.profile_version_id = signed.id
+                      WHERE signed.player_id = day.player_id
+                        AND signed.current_league_season_id = %(season)s
+                        AND signed.eligibility_state = 'eligible'
+                        AND signed.source_contract_state = 'accepted'
+                        AND COALESCE(effect.observed_at, signed.observed_at)
+                            < read.observed_at)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM battle_evidence AS evidence
+                      JOIN legend_battles AS battle
+                        ON battle.id = evidence.battle_id
+                      WHERE (battle.attacker_player_id = day.player_id
+                             OR battle.defender_player_id = day.player_id)
+                        AND battle.ranked_day_start >= %(start)s
+                        AND evidence.battle_timestamp < read.observed_at)
+                ORDER BY day.player_id, day.ranked_day_start
+                """,
+                {"start": season_start, "end": season_start + domain.SEASON_DURATION,
+                 "rule": RECONCILIATION_RULE_VERSION,
+                 "season": domain.ranked_day_for(season_start).official_season_id},
+            ).fetchall()
+            days = [(int(player_id), day) for player_id, day in rows]
+            queued = {
+                row[0] for row in connection.execute(
+                    "SELECT deduplication_key FROM python_processing_jobs_worker"
+                    " WHERE deduplication_key = ANY(%s)",
+                    ([key(*day) for day in days],),
+                ).fetchall()
+            }
+            waiting = [day for day in days if key(*day) not in queued]
+            job_ids = [
+                job_id
+                for player_id, day in (waiting[:max_jobs] if queue else [])
+                if (job_id := _queue(
+                    connection, player_id, day, None,
+                    key=key(player_id, day), trigger="sign_up",
+                    priority=PYTHON_BACKFILL_PRIORITY,
+                )) is not None
+            ]
+    return {
+        "season": season_id,
+        "players": len(days),
+        "already_queued": len(days) - len(waiting),
+        "queued": len(job_ids),
+        "left_to_queue": len(waiting) - len(job_ids),
+    }
+
+
 def requeue_overlap_gap(
     database: Database, season_id: str, *, queue: bool, max_jobs: int,
     condition: str = "failure_reasons ? 'battle_log_overlap_gap'",
