@@ -447,14 +447,15 @@ def battles_after_readings(
     ``boundary_at``, their reading's saved response and its time. The
     reading plus this change is their trophies at the Reset before the
     automatic defense loss. A battle stamped after the reading cannot be in
-    it, so none is counted twice. Proof is the day's continuous battle logs,
-    a reading taken on that day, a time on every battle the day counts, none
-    stamped between the reading's request and its response, no defense
-    stamped in the 4 minutes before that request, since its attack can end
-    up to 4 minutes after the defender's report, no battle amount the two
-    players' logs disagree on, and no reading at or before a Reset reading
-    taken before the previous day's automatic defense loss; a player without
-    it is left out, and the board keeps their reading and marks it uncertain.
+    it, so none is counted twice. Proof is the day's continuous battle logs
+    with no trophy mismatch, a reading taken at least 15 minutes into that
+    day, after the previous day's last reports and automatic defense loss, a
+    time on every battle the day counts, none stamped between the reading's
+    request and its response, no defense stamped in the 4 minutes before
+    that request, since its attack can end up to 4 minutes after the
+    defender's report, and no battle amount the two players' logs disagree
+    on; a player without it is left out, and the board keeps their reading
+    and marks it uncertain.
     """
     if not readings:
         return {}
@@ -472,11 +473,6 @@ def battles_after_readings(
              AND ranked.ranked_day_end = %s
             JOIN collector_observations AS observation
               ON observation.id = reading.observation_id
-            LEFT JOIN collector_observations AS reset_reading
-              ON reset_reading.id = (
-                  ranked.input_evidence
-                      ->'start_baseline_evidence'->>'profile_observation_id'
-              )::bigint
             CROSS JOIN LATERAL (
                 SELECT COALESCE(sum(
                            CASE WHEN battle.value->>'lens' = 'offense' THEN 1
@@ -503,12 +499,10 @@ def battles_after_readings(
                 WHERE battle.value->>'included' = 'true'
             ) AS late (trophy_change, every_battle_proven)
             WHERE ranked.coverage_complete
-              AND reading.observed_at >= ranked.ranked_day_start
+              AND reading.observed_at
+                  >= ranked.ranked_day_start + interval '15 minutes'
+              AND ranked.state <> 'Inconsistent'
               AND NOT ranked.failure_reasons ?| %s::text[]
-              AND NOT (
-                  ranked.formula_components ? 'start_unsettled_automatic_loss'
-                  AND reading.observed_at <= reset_reading.response_completed_at
-              )
               AND late.every_battle_proven IS NOT FALSE
             """,
             (

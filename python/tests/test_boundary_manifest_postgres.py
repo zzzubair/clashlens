@@ -1261,20 +1261,23 @@ def test_board_keeps_a_reading_its_later_battles_cannot_prove(
             database.close()
 
 
-def test_board_keeps_a_reading_that_may_hold_a_defense_or_predate_the_daily_loss(
+def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
     database_url: str,
 ) -> None:
     """A defender's report can come up to 4 minutes before the attack ends, so
     a reading requested at 04:54:59 may or may not hold a defense stamped
-    04:52. A reading no later than a Reset reading taken before the previous
-    day's automatic defense loss still holds that loss. Each keeps its
-    reading and is marked uncertain; an attack stamped 04:52, and a reading
-    taken after that Reset reading, still prove their battles."""
+    04:52. Within 15 minutes of the day's Reset, the previous day's last
+    reports and automatic defense loss can still land after a reading taken
+    at 05:02 or 05:06. A day whose trophies don't add up proves nothing.
+    Each keeps its reading and is marked uncertain; an attack stamped 04:52,
+    and a reading taken at 05:16, still prove their battles."""
     readings = [
         ("#DEFENDED", 5160, _october(7, 4, 55)),
         ("#ATTACKED", 5150, _october(7, 4, 55)),
-        ("#RESETREAD", 5200, _october(6, 5, 2)),
-        ("#LATERREAD", 5100, _october(7, 4, 40)),
+        ("#EARLY", 5200, _october(6, 5, 2)),
+        ("#REFRESHED", 5210, _october(6, 5, 6)),
+        ("#SETTLED", 5100, _october(6, 5, 16)),
+        ("#MISMATCH", 5120, _october(7, 4, 40)),
     ]
     days = {
         1: (True, [("defense", 32, _october(7, 4, 52), True)]),
@@ -1283,47 +1286,30 @@ def test_board_keeps_a_reading_that_may_hold_a_defense_or_predate_the_daily_loss
             ("offense", 40, _october(7, 4, 58), True),
         ]),
         3: (True, [("offense", 40, _october(6, 6), True)]),
-        4: (True, [("offense", 40, _october(7, 4, 50), True)]),
+        4: (True, [("offense", 40, _october(6, 6), True)]),
+        5: (True, [("offense", 40, _october(6, 6), True)]),
+        6: (True, [("offense", 40, _october(7, 4, 50), True)]),
     }
     with domain_database(database_url, include_coordinator=True) as connection_info:
         generation_id = _seed_board(connection_info, readings)
         _seed_days(connection_info, generation_id, days)
         with psycopg.connect(connection_info) as connection:
-            reset_readings = {
-                3: connection.execute(
-                    "SELECT observation_id FROM player_profile_versions"
-                    " WHERE player_id = 3"
-                ).fetchone()[0],
-                4: store_observation(
-                    connection_info, _ARCHIVE, occurrence_key="reset-4",
-                    endpoint="profile", body=b"reset 4",
-                    observed_at=_october(6, 5, 1), normalized_tag="#LATERREAD",
-                    existing_connection=connection, commit=False,
-                )[0],
-            }
             connection.execute("SET LOCAL session_replication_role = replica")
-            for player_id, observation_id in reset_readings.items():
-                connection.execute(
-                    """
-                    UPDATE ranked_day_versions
-                    SET formula_components = jsonb_build_object(
-                            'start_unsettled_automatic_loss', 30
-                        ),
-                        input_evidence = jsonb_set(
-                            input_evidence, '{start_baseline_evidence}',
-                            jsonb_build_object('profile_observation_id', %s::bigint)
-                        )
-                    WHERE id = %s
-                    """,
-                    (observation_id, player_id),
-                )
+            connection.execute(
+                "UPDATE ranked_day_versions"
+                " SET state = 'Inconsistent', confidence = 'partial',"
+                " failure_reasons = '[\"trophy_equation_mismatch\"]'"
+                " WHERE id = 6"
+            )
         database = Database(connection_info)
         try:
             assert _build_board(connection_info, database, generation_id) == [
-                ("#RESETREAD", 5200, "uncertain"),
+                ("#REFRESHED", 5210, "uncertain"),
+                ("#EARLY", 5200, "uncertain"),
                 ("#ATTACKED", 5190, "confirmed"),
                 ("#DEFENDED", 5160, "uncertain"),
-                ("#LATERREAD", 5140, "confirmed"),
+                ("#SETTLED", 5140, "confirmed"),
+                ("#MISMATCH", 5120, "uncertain"),
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
             assert boundary.queue_board_rebuilds(database, season, queue=False)[
