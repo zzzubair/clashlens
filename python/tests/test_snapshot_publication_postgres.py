@@ -11,7 +11,7 @@ from domain_test_support import domain_database, seed_attacks, store_observation
 from psycopg.types.json import Jsonb
 
 from clashlens import api_leaderboard, boundary, snapshots
-from clashlens.analytics import deterministic_tag_hash
+from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, deterministic_tag_hash
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
@@ -61,6 +61,7 @@ def _seed_snapshot_job(
     deduplication_key: str = "build_snapshot:test-as-of",
     ranked_day_version_id: int | None = None,
     end_trophies: int | None = None,
+    ordering_rule_version: str = SNAPSHOT_ORDERING_RULE_VERSION,
 ) -> int:
     """``end_trophies``: the seeded Complete day's start and end, with no
     battle between."""
@@ -119,14 +120,17 @@ def _seed_snapshot_job(
                 membership_rule_version, snapshot_rule_version, army_rule_version,
                 target_rule, target_at
             ) VALUES (
-                %s, 1, %s, 'legend-snapshot-order-v1',
+                %s, 1, %s, %s,
                 'legend-profile-freshness-v1', %s, %s, 'ready', 'pending',
                 'active-members-v1', 'legend-analytics-v1', 'army-analytics-v2',
                 'boundary-delay-v1', %s
             )
             RETURNING id
             """,
-            (boundary_at, sweep_id, len(known_players), population_hash, boundary_at),
+            (
+                boundary_at, sweep_id, ordering_rule_version, len(known_players),
+                population_hash, boundary_at,
+            ),
         ).fetchone()[0]
         connection.execute(
             """
@@ -594,6 +598,7 @@ def _publish_snapshot_population(
                 coverage=1.0,
                 quality=quality,
                 input_hash=f"{count:064x}",
+                ordering_rule_version=SNAPSHOT_ORDERING_RULE_VERSION,
                 publish=False,
             )
             connection.commit()
@@ -953,9 +958,11 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
             database.close()
 
 
+@pytest.mark.parametrize("frozen_before", [False, True])
 def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
     database_url: str,
     archive_server,
+    frozen_before: bool,
 ) -> None:
     boundary = datetime(2026, 8, 5, 5, tzinfo=UTC)
     season_start = ranked_day_for(boundary - timedelta(days=1)).season_start
@@ -987,8 +994,20 @@ def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
                 ],
             )
         snapshot_job_id = _seed_snapshot_job(
-            connection_info, player_id=ids[first], boundary_at=boundary, end_trophies=6123
+            connection_info, player_id=ids[first], boundary_at=boundary, end_trophies=6123,
+            ordering_rule_version=(
+                "tracked-player-order-v1" if frozen_before else SNAPSHOT_ORDERING_RULE_VERSION
+            ),
         )
+        if frozen_before:
+            # An input list frozen before the shared tie order holds no
+            # Season attacks.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("SET LOCAL session_replication_role = replica")
+                connection.execute(
+                    "UPDATE boundary_publication_manifest_rows"
+                    " SET input_identity = input_identity - 'season_attacks'"
+                )
         database, processor = _processor(connection_info, archive_server)
         try:
             _process_snapshot_and_analytics(
@@ -997,7 +1016,7 @@ def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
             with database.pool.connection() as connection:
                 order = connection.execute(
                     """
-                    SELECT p.normalized_tag, e.trophies
+                    SELECT p.normalized_tag, e.trophies, s.ordering_rule_version
                     FROM leaderboard_snapshot_entries AS e
                     JOIN leaderboard_snapshots AS s ON s.id = e.snapshot_id
                     JOIN players AS p ON p.id = e.player_id
@@ -1021,7 +1040,16 @@ def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
                 )
         finally:
             database.close()
+    if frozen_before:
+        # Labelled by the older rule, so the board rebuild check rebuilds it.
+        assert [(text(row[0]), row[1], text(row[2])) for row in order] == [
+            (first, 6123, "tracked-player-order-v1"),
+            (second, 6123, "tracked-player-order-v1"),
+        ]
+        assert frozen == {ids[first]: None, ids[second]: None}
+        return
     assert [(text(row[0]), row[1]) for row in order] == [(second, 6123), (first, 6123)]
+    assert {text(row[2]) for row in order} == {SNAPSHOT_ORDERING_RULE_VERSION}
     assert frozen[ids[second]] == {"attacks": 1, "destruction": 60}
     assert frozen[ids[first]] == {"attacks": 1, "destruction": 50}
 

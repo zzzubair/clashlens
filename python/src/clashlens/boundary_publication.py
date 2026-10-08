@@ -9,7 +9,11 @@ from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
 from . import battle, boundary, reset_baselines
-from .analytics import CLASSIFICATION_CONFIDENCE, CLASSIFICATION_VERSION
+from .analytics import (
+    CLASSIFICATION_CONFIDENCE,
+    CLASSIFICATION_VERSION,
+    SNAPSHOT_ORDERING_RULE_VERSION,
+)
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .db import (
@@ -346,6 +350,7 @@ def _maybe_emit_boundary_signal(
                 "UPDATE boundary_publication_corrections SET state = 'activation' WHERE id = %s",
                 (queued[0],),
             )
+            affected = [_text_value(value) for value in (queued[1] or [])]
             new = connection.execute(
                 """
                 INSERT INTO boundary_publication_generations (
@@ -362,7 +367,7 @@ def _maybe_emit_boundary_signal(
                     row[0],
                     int(source[5]),
                     source[0],
-                    source[3],
+                    SNAPSHOT_ORDERING_RULE_VERSION if "snapshot" in affected else source[3],
                     source[4],
                     source[1],
                     source[2],
@@ -438,7 +443,6 @@ def _maybe_emit_boundary_signal(
                 "UPDATE boundary_publication_generations SET membership_captured_at = clock_timestamp() WHERE id = %s",
                 (new_id,),
             )
-            affected = [_text_value(value) for value in (queued[1] or [])]
             if "snapshot" not in affected:
                 connection.execute(
                     """

@@ -71,7 +71,8 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     """
                     SELECT id, snapshot_state, expected_population_count,
                            expected_population_hash, snapshot_manifest_id,
-                           target_at, target_rule, snapshot_rule_version
+                           target_at, target_rule, snapshot_rule_version,
+                           ordering_rule_version
                     FROM boundary_publication_generations
                     WHERE boundary_at = %s AND generation = %s
                     FOR UPDATE
@@ -621,11 +622,20 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 }
                 for entry in entries
             ]
+            # A board keeps the ordering rule of the generation its inputs
+            # were frozen for. Inputs frozen before the shared tie order hold
+            # no Season attacks, so such a board keeps the older rule and the
+            # board rebuild check (boundary.queue_board_rebuilds) rebuilds it.
+            ordering_rule_version = (
+                _text_value(generation_row[8])
+                if generation_row is not None
+                else SNAPSHOT_ORDERING_RULE_VERSION
+            )
             if generation_row is not None:
                 hash_payload = {
                     "manifest_digest": manifest_digest_value,
                     "rule_versions": {
-                        "ordering_rule_version": SNAPSHOT_ORDERING_RULE_VERSION,
+                        "ordering_rule_version": ordering_rule_version,
                         "freshness_rule_version": FRESHNESS_RULE_VERSION,
                         "analytics_rule_version": _text_value(generation_row[7]),
                     },
@@ -638,7 +648,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     "source_ranked_day_version_id": ranked_day_version_id,
                     "source_ranked_day_version": int(ranked_day[3]),
                     "source_ranked_day_input_hash": _text_value(ranked_day[2]),
-                    "ordering_rule_version": SNAPSHOT_ORDERING_RULE_VERSION,
+                    "ordering_rule_version": ordering_rule_version,
                     "freshness_rule_version": FRESHNESS_RULE_VERSION,
                     "entries": hash_entries,
                     "quality": quality,
@@ -664,6 +674,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     coverage=coverage,
                     quality=quality,
                     input_hash=input_hash,
+                    ordering_rule_version=ordering_rule_version,
                     publish=False,
                 )
             )
@@ -678,6 +689,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 coverage=coverage,
                 quality=quality,
                 input_hash=input_hash,
+                ordering_rule_version=ordering_rule_version,
                 publish=True,
             )
             if generation_row is not None:
@@ -738,6 +750,7 @@ def _publish_snapshot_kind(
     coverage: float,
     quality: dict[str, int],
     input_hash: str,
+    ordering_rule_version: str,
     publish: bool,
 ) -> tuple[int, int]:
     """Assemble one immutable snapshot version.
@@ -821,7 +834,7 @@ def _publish_snapshot_kind(
                     boundary_at,
                     snapshot_version,
                     prior[0] if prior is not None else None,
-                    SNAPSHOT_ORDERING_RULE_VERSION,
+                    ordering_rule_version,
                     FRESHNESS_RULE_VERSION,
                     ranked_day_version_id,
                     coverage,
@@ -862,7 +875,7 @@ def _publish_snapshot_kind(
                     boundary_at,
                     snapshot_version,
                     prior[0] if prior is not None else None,
-                    SNAPSHOT_ORDERING_RULE_VERSION,
+                    ordering_rule_version,
                     FRESHNESS_RULE_VERSION,
                     ranked_day_version_id,
                     coverage,

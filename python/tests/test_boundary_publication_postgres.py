@@ -1016,9 +1016,12 @@ def test_enqueue_army_decode_only_inherits_snapshot_after_restart(
             database.close()
 
 
+@pytest.mark.parametrize("affected", [["army"], ["army", "snapshot"]])
 def test_boundary_correction_recovery_activates_pending_inputs(
-    database_url: str,
+    database_url: str, monkeypatch, affected: list[str]
 ) -> None:
+    # The board was ordered by an older rule; only a rebuilt one takes the current rule.
+    monkeypatch.setattr(boundary, "SNAPSHOT_ORDERING_RULE_VERSION", "tracked-player-order-v1")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = Database(connection_info)
         try:
@@ -1100,9 +1103,9 @@ def test_boundary_correction_recovery_activates_pending_inputs(
                     INSERT INTO boundary_publication_corrections (
                         boundary_at, source_generation_id, affected_artifacts,
                         pending_inputs, state
-                    ) VALUES (%s, %s, ARRAY['army'], '[]'::jsonb, 'pending_inputs')
+                    ) VALUES (%s, %s, %s, '[]'::jsonb, 'pending_inputs')
                     """,
-                    (BOUNDARY, generation),
+                    (BOUNDARY, generation, affected),
                 )
                 connection.commit()
             assert boundary_publication.reevaluate_boundary_publications(database, ) == 1
@@ -1121,6 +1124,12 @@ def test_boundary_correction_recovery_activates_pending_inputs(
                 assert generations == 2
                 assert correction[0] == "active"
                 assert correction[1] is not None
+                assert {text(row[0]) for row in connection.execute(
+                    "SELECT ordering_rule_version FROM boundary_publication_generations WHERE id = %s"
+                    " UNION SELECT rule_versions->>'ordering_rule_version'"
+                    " FROM boundary_publication_manifests WHERE generation_id = %s",
+                    (correction[1], correction[1]),
+                )} == {"tracked-player-order-v2" if "snapshot" in affected else "tracked-player-order-v1"}
                 assert (
                     connection.execute(
                         """
