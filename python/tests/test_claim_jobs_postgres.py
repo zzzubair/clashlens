@@ -482,6 +482,7 @@ def test_queue_health_reports_an_empty_active_queue(
                 "oldest_due_seconds": None,
                 "overdue": 0,
                 "scheduled_later": 0,
+                "kinds": {},
             }
         finally:
             database.close()
@@ -1082,7 +1083,12 @@ def test_reconcile_snapshot_and_analytics_jobs_with_current_versions_are_claimab
             assert first is not None and first.work_type == "reconcile_ranked_day"
             second = database.claim_job(owner="claim-snapshot")
             assert second is not None and second.work_type == "build_snapshot"
-            third = database.claim_job(owner="claim-analytics")
+            # One population build at a time: the next waits for this one.
+            assert database.claim_job(owner="claim-analytics") is None
+            assert database.release_claims([second]) == 1
+            third = database.claim_job(
+                owner="claim-analytics", work_types=("build_analytics",)
+            )
             assert third is not None and third.work_type == "build_analytics"
         finally:
             database.close()

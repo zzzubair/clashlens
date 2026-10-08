@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from argparse import Namespace
@@ -17,7 +18,12 @@ from threading import Event
 
 from clashlens import cli, worker_liveness
 from clashlens.spool import Spool
-from clashlens.worker import ObservationProcessor, ProcessResult, process_until_stopped
+from clashlens.worker import (
+    ObservationProcessor,
+    ProcessResult,
+    process_until_stopped,
+    run_processes,
+)
 
 
 class _SlowDatabase:
@@ -217,3 +223,37 @@ def test_one_lane_reports_progress_before_every_job_in_a_batch() -> None:
         owner="test-worker", max_jobs=3, progress=lambda: events.append("progress")
     )
     assert events == ["progress", "job"] * 3
+
+
+def test_one_stuck_worker_process_fails_the_health_check_while_another_works(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    root = tmp_path / "spool"
+    Spool(root, max_body_bytes=1024)
+    monkeypatch.setattr(cli, "Database", _SlowDatabase)
+    worker_liveness.ProgressMark(worker_liveness.progress_file(1))()
+    stuck = Path(worker_liveness.progress_file(2))
+    stuck.touch()
+    twenty_minutes_ago = time.time() - 20 * 60
+    os.utime(stuck, (twenty_minutes_ago, twenty_minutes_ago))
+    exit_code, payload = _ready(_arguments(tmp_path, spool_root=root), capsys)
+    assert exit_code == 1
+    assert payload["reason"] == "worker_stuck"
+
+
+def test_a_worker_process_stuck_before_its_first_job_still_fails_the_health_check(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    root = tmp_path / "spool"
+    Spool(root, max_body_bytes=1024)
+    monkeypatch.setattr(cli, "Database", _SlowDatabase)
+    # Neither process ever reaches a job, so neither touches its own file.
+    assert run_processes([[sys.executable, "-c", "pass"]] * 2, Event()) == 1
+    capsys.readouterr()
+    worker_liveness.ProgressMark(worker_liveness.progress_file(1))()
+    stuck = Path(worker_liveness.progress_file(2))
+    twenty_minutes_ago = time.time() - 20 * 60
+    os.utime(stuck, (twenty_minutes_ago, twenty_minutes_ago))
+    exit_code, payload = _ready(_arguments(tmp_path, spool_root=root), capsys)
+    assert exit_code == 1
+    assert payload["reason"] == "worker_stuck"

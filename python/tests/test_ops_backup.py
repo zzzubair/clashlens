@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,9 @@ import time
 from pathlib import Path
 
 import pytest
+
+from clashlens import cli
+from clashlens.worker import response_lane_count
 
 OPS = Path(__file__).resolve().parents[2] / "ops"
 # A full ops command makes over 100 calls to the Python Podman stand-in below, each starting
@@ -457,6 +461,23 @@ def test_pod_address_and_stop_limits_are_rendered(tmp_path, mode_config, mode):
     assert address == ipaddress.ip_address("10.89.14.2")
     assert address in subnet
     assert network["Network"]["NetworkName"] == "clashlens-private"
+
+
+@pytest.mark.parametrize(("response_lanes", "expected"), [(None, 5), ("6", 6)])
+def test_worker_response_threads_are_the_workers_share_unless_set(
+    tmp_path, mode_config, response_lanes, expected
+):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write("CLASHLENS_WORKER_CONCURRENCY=8\n")
+        if response_lanes is not None:
+            config.write(f"CLASHLENS_WORKER_RESPONSE_LANES={response_lanes}\n")
+    units = render_units(tmp_path, mode_config, "production") / "containers" / "systemd"
+    worker = configparser.ConfigParser(interpolation=None, strict=False)
+    worker.optionxform = str
+    worker.read(units / "clashlens-worker.container")
+    arguments = cli.build_parser().parse_args(shlex.split(worker["Container"]["Exec"]))
+    # Eight threads leave five for responses unless app.env says otherwise.
+    assert response_lane_count(arguments.concurrency, arguments.response_lanes) == expected
 
 
 @pytest.mark.parametrize("mode", ["production", "fixture"])

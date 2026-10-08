@@ -1261,10 +1261,10 @@ job. Asking for one particular job by number still takes that job.
 The board maintenance pass waits at most 50 milliseconds for a Reset's lock
 and otherwise tries again on its next pass.
 
-Production runs one worker process, whose queue maintenance runs between
-batches. If maintenance in another worker process reaches an expired job on
-its last allowed attempt before restoration succeeds, it still fails the job
-as `lease_expired_max_attempts`. See
+Production runs `CLASHLENS_WORKER_PROCESSES` worker processes, 1 unless set,
+each with its own queue maintenance. If maintenance in another worker process
+reaches an expired job on its last allowed attempt before restoration
+succeeds, it still fails the job as `lease_expired_max_attempts`. See
 [`ObservationProcessor._process_claim`](../python/src/clashlens/worker.py) and
 the recovery cases in
 [`test_claim_jobs_postgres.py`](../python/tests/test_claim_jobs_postgres.py).
@@ -1291,6 +1291,65 @@ the existing audited `deploy/replay-request --observation-id ID --reason REASON`
 path. League-history, global, and derived processing failures require
 investigation. Transport failures are evidence governed by the normal work
 policy and are not manually requeued.
+
+## Worker processes
+
+In `app.env`, `CLASHLENS_WORKER_PROCESSES` (1 or 2, default 1) sets how many
+worker processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
+12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default about
+two thirds of them, 8 of 12) how many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
+(default 12, at most 16) each process's connections. All processes share the container's
+memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
+worker refuses to start with more than 16 connections a process or 38 in
+all; with the collector's 32 and the API's 8 that leaves two of 80 for
+operators.
+
+The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
+is 2 processes of 16 threads, 12 for responses, and 16 connections each, 38
+database connections in all. Production keeps one worker process until both
+of these are true:
+
+- The owner has decided to run the second worker process.
+- A `./dev` trial of this setup has shown the combined resources and recovery:
+  both processes together under 3 GB of memory with one build running, swap
+  barely used, at most 38 worker database connections, and an interrupted
+  20,000-job backlog finished with every job done once.
+
+Only then, outside 04:00-07:00 UTC, turn it on by setting in `app.env`:
+
+```sh
+CLASHLENS_WORKER_PROCESSES=2
+CLASHLENS_WORKER_CONCURRENCY=16
+CLASHLENS_WORKER_RESPONSE_LANES=12
+CLASHLENS_WORKER_DATABASE_POOL_SIZE=16
+```
+
+then run `./ops up`. It restarts the worker, API and website, and leaves the
+collector and database running when their images and settings are unchanged.
+To undo it, remove those four lines and run `./ops up` again.
+
+Memory is expected, not yet measured, to stay well inside the 4 GB limit. At
+09:32 UTC on 8 October 2026 one process used 325 MB, with a peak of 887 MB in
+the 26 minutes since it started; earlier peaks were near 1 GB. A population
+build is the biggest use, and only one runs at a time across processes, so
+two processes are expected to peak at about 1.3 to 1.7 GB, adding roughly 0.3
+to 0.8 GB on the host, which then had 9.0 GB available.
+
+At the first Reset with two processes, check:
+
+- `./ops logs worker`: no `worker_process` lines, which mean a process exited
+  and the container restarted both. Each `worker_health` line belongs to one
+  process; the change in its `python_process_observation` and
+  `python_reconcile_ranked_day` stage counts between lines is its responses
+  and daily results per minute. Their `queue.kinds` show the overdue backlog
+  of each kind of work and how long the oldest has waited.
+- The board's first frozen publication time against 05:25 for the frozen
+  inputs and 05:30 for the published board.
+- `systemctl --user show clashlens-worker.service -p MemoryCurrent -p
+  MemoryPeak`, plus `free -m` showing at least 2 GB available and `vmstat 1 5`
+  showing little swapping.
+- At most 38 database connections for `clashlens_python_worker` in
+  `pg_stat_activity`.
 
 ## Support recovery
 

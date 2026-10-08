@@ -49,9 +49,9 @@ def claim_upload(
 ) -> UploadClaim | None:
     """Lease the next due upload.
 
-    ``release_expired`` first returns expired leases to pending. No index
-    covers leased rows, so that step reads the whole table; the collector runs
-    it once every half lease rather than on every claim.
+    ``release_expired`` first returns expired leases to pending. An index of
+    leased rows only (migration 0082) keeps that step small; the collector
+    still runs it once every half lease rather than on every claim.
     """
     if not owner or lease_seconds < 1:
         raise ValueError("upload owner and positive lease are required")

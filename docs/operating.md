@@ -81,6 +81,8 @@ Healthy looks like this:
   `oldest_due_seconds` is the age of the oldest overdue job, or `null` if none.
   `overdue` counts jobs past their due time; `scheduled_later` counts jobs
   not due yet, such as recalculations queued a day ahead, which are not a backlog.
+  `kinds` splits the overdue jobs into `responses`, `results` (daily results),
+  `builds` and `other`, each with its own `overdue` count and `oldest_due_seconds`.
   If the queue grows, repeat the check after a minute: counts and age should
   show work progressing. One snapshot or an empty queue does not prove collection.
 - `backup-status` succeeds and its timer has a next run matching the

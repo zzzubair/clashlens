@@ -11,7 +11,11 @@ from uuid import uuid4
 from psycopg_pool import ConnectionPool
 
 from .operating import database_pool_health
-from .past_reset_pacing import past_reset_build_hold
+from .past_reset_pacing import (
+    build_permit_busy,
+    past_reset_build_hold,
+    take_build_permit,
+)
 from .source_observation_contract import SOURCE_OBSERVATION_CONTRACTS
 
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
@@ -418,6 +422,8 @@ def _claim_select_statement(
     jobs_relation: str,
     *,
     job_id: int | None = None,
+    job_ids: Collection[int] | None = None,
+    limit: int = 1,
     planned: bool = False,
     supports_dependency: bool = True,
     denormalized_contract: bool = True,
@@ -426,7 +432,7 @@ def _claim_select_statement(
     past_reset_build_hold: str | None = None,
     reset_first: bool | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """The bounded claim SELECT and its named parameters.
+    """The bounded claim SELECT for up to ``limit`` jobs and its named parameters.
 
     The candidate CTE probes indexed oldest-first ordinary and dependency
     ranges per declared priority, matching catch-all probes outside those classes
@@ -437,11 +443,11 @@ def _claim_select_statement(
     supported jobs behind it, and locks the best still-available candidate
     with SKIP LOCKED. The candidate predicate is repeated at lock time so a
     row claimed by another lane between the probe and the lock is skipped,
-    never double claimed. A direct ``job_id`` claim replaces the probes with
-    a point lookup and still applies the same where and supported filters.
+    never double claimed. A direct ``job_ids`` claim replaces the probes with
+    point lookups and still applies the same where and supported filters.
     ``work_types`` limits every probe and the lock-time recheck to those work
     types, so a limited worker never claims, and never skips over, other work.
-    ``planned`` makes a ``job_id`` claim refuse, and an ordinary one run only, while
+    ``planned`` makes a ``job_ids`` claim refuse, and an ordinary one run only, while
     Reset-priority work it could take waits; ``reset_first`` puts that work first,
     False puts other due work but backfill before it, and None keeps waiting time.
     """
@@ -452,9 +458,12 @@ def _claim_select_statement(
         work_types=work_types,
         past_reset_build_hold=past_reset_build_hold,
     )
+    params["claim_limit"] = limit
     if job_id is not None:
-        params["job_id"] = job_id
-    gate = "AND NOT " if job_id is not None else "AND "
+        job_ids = [job_id]
+    if job_ids is not None:
+        params["job_ids"] = list(job_ids)
+    gate = "AND NOT " if job_ids is not None else "AND "
     reset_gate = gate + _reset_waiting(jobs_relation, supported_filter) if planned else ""
     first = {None: "", True: f"job.priority = {PYTHON_RESET_PRIORITY}, ", False: "job.priority"
              f" NOT IN ({PYTHON_RESET_PRIORITY}, {PYTHON_BACKFILL_PRIORITY}), "}[reset_first]
@@ -512,7 +521,7 @@ def _claim_select_statement(
         other_priorities("job.state = 'waiting_dependency'", supported_filter)
         if supports_dependency else ""
     )
-    if job_id is not None:
+    if job_ids is not None:
         probe = f"""
             SELECT job.id
             FROM {jobs_relation} AS job
@@ -520,12 +529,12 @@ def _claim_select_statement(
                 ON source_observation.id = COALESCE(
                     job.observation_id, job.replay_observation_id
                 )
-            WHERE job.id = %(job_id)s
+            WHERE job.id = ANY(%(job_ids)s::bigint[])
               AND {claimable}
               {reset_gate}
             ORDER BY ({score}) DESC, job.due_at, job.id
             FOR UPDATE OF job SKIP LOCKED
-            LIMIT 1
+            LIMIT %(claim_limit)s
         """
     else:
         # The lock-time recheck is wrapped in IS TRUE so PostgreSQL cannot
@@ -585,7 +594,7 @@ def _claim_select_statement(
               {reset_gate}
             ORDER BY ({score}) DESC, job.due_at, job.id
             FOR UPDATE OF job SKIP LOCKED
-            LIMIT 1
+            LIMIT %(claim_limit)s
         """
     return (
         f"""
@@ -610,6 +619,7 @@ def _claim_select_statement(
             ON source_observation.id = COALESCE(
                 job.observation_id, job.replay_observation_id
             )
+        ORDER BY ({score}) DESC, job.due_at, job.id
         """,
         params,
     )
@@ -702,42 +712,10 @@ class Database:
                 WHERE c.oid = to_regclass('python_processing_jobs_worker')
                 """
             ).fetchone()
-            missing_worker_view = worker_view is None or worker_view[0] not in {
-                "v",
-                b"v",
-            }
-            dependency_column = connection.execute(
-                """
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = current_schema()
-                      AND table_name = 'python_processing_jobs_worker'
-                      AND column_name = 'dependency_deferral_count'
-                )
-                """
-            ).fetchone()[0]
-            denormalized_contract = connection.execute(
-                """
-                SELECT count(*) = 3
-                FROM information_schema.columns
-                WHERE table_schema = current_schema()
-                  AND table_name = 'python_processing_jobs_worker'
-                  AND column_name IN ('endpoint', 'endpoint_version', 'schema_version')
-                """
-            ).fetchone()[0]
-            content_dedup = connection.execute(
-                """
-                SELECT count(*) = 2
-                FROM information_schema.columns
-                WHERE table_schema = current_schema()
-                  AND table_name = 'player_profile_versions'
-                  AND column_name IN ('parsed_payload_id', 'semantic_projection')
-                """
-            ).fetchone()[0]
             contract_version = connection.execute(
                 "SELECT COALESCE((SELECT version FROM clash_lens_contract WHERE singleton), 0)"
             ).fetchone()[0]
-        if missing_worker_view:
+        if worker_view is None or worker_view[0] not in {"v", b"v"}:
             self.pool.close()
             raise RuntimeError(
                 "required python_processing_jobs_worker view is unavailable"
@@ -752,21 +730,8 @@ class Database:
             )
         self._jobs_relation = "python_processing_jobs_worker"
         self._contract_version = int(contract_version)
-        self._supports_dependency_deferral = bool(dependency_column)
-        self._supports_denormalized_contract = bool(denormalized_contract)
-        self._supports_content_dedup = bool(content_dedup)
-        with self.pool.connection() as connection:
-            self._supports_compact_battles = connection.execute(
-                "SELECT to_regclass('battle_payload_rows') IS NOT NULL"
-            ).fetchone()[0]
-            self._supports_season_summaries = connection.execute(
-                "SELECT to_regclass('player_season_summaries') IS NOT NULL"
-            ).fetchone()[0]
-            self._supports_army_season_summaries = connection.execute(
-                "SELECT to_regclass('army_season_summaries') IS NOT NULL"
-            ).fetchone()[0]
+        self._ensure_dependency_support_probed()
         self._supports_coordinator_contract = self._contract_version >= 4
-        self._dependency_support_probed = True
 
     def assert_contract_version(self, expected_contract_version: int) -> None:
         if self._contract_version != expected_contract_version:
@@ -775,7 +740,7 @@ class Database:
             )
 
     def _ensure_dependency_support_probed(self) -> None:
-        """Probe dependency-deferral support once, lazily.
+        """Probe dependency-deferral and storage-shape support once.
 
         Subclasses that replace ``__init__`` (for example the worker-role test
         database) skip the eager probe; claim paths resolve it on first use so
@@ -916,10 +881,12 @@ class Database:
             ).fetchall()
         return [int(row[0]) for row in rows]
 
-    def queue_health(self) -> dict[str, bool | int | float | None]:
+    def queue_health(self) -> dict[str, Any]:
         # Overdue and scheduled-later work are counted apart: recalculations
         # queued a day ahead are not a backlog, and on 7 Oct 2026 21,887 of
-        # them read as one.
+        # them read as one. Overdue work is also counted by kind, so slow
+        # daily results never hide behind fast responses; only overdue rows
+        # are read for that, 53 ms on 8 Oct 2026.
         with self.pool.connection() as connection:
             row = connection.execute(
                 f"""
@@ -943,6 +910,20 @@ class Database:
                 FROM active
                 """
             ).fetchone()
+            kinds = connection.execute(
+                f"""
+                SELECT CASE WHEN work_type = ANY(%s::text[]) THEN 'responses'
+                            WHEN work_type = 'reconcile_ranked_day' THEN 'results'
+                            WHEN work_type = ANY(%s::text[]) THEN 'builds'
+                            ELSE 'other' END,
+                       count(*), extract(epoch FROM clock_timestamp() - min(due_at))
+                FROM {self._jobs_relation}
+                WHERE state IN ('pending', 'waiting_retry', 'waiting_dependency')
+                  AND due_at <= clock_timestamp()
+                GROUP BY 1
+                """,
+                (list(RESPONSE_WORK_TYPES), list(POPULATION_BUILD_WORK_TYPES)),
+            ).fetchall()
         assert row is not None
         return {
             "pending": int(row[0]),
@@ -954,6 +935,10 @@ class Database:
             "oldest_due_seconds": None if row[5] is None else max(0.0, float(row[5])),
             "overdue": int(row[6]),
             "scheduled_later": int(row[7]),
+            "kinds": {
+                str(kind): {"overdue": int(count), "oldest_due_seconds": max(0.0, float(age))}
+                for kind, count, age in kinds
+            },
         }
 
     def pool_health(self) -> dict[str, int]:
@@ -975,144 +960,197 @@ class Database:
         reset_first: bool | None = None,
     ) -> Claim | None:
         """Claim the best due job, or ``job_id``; a ``planned`` one yields to Reset work."""
+        claims = self.claim_jobs(
+            owner=owner, lease_seconds=lease_seconds, work_types=work_types,
+            job_ids=None if job_id is None else [job_id], planned=planned,
+            reset_first=reset_first,
+        )
+        return claims[0] if claims else None
+
+    def claim_jobs(
+        self,
+        *,
+        owner: str,
+        lease_seconds: int = 30,
+        limit: int = 1,
+        job_ids: Collection[int] | None = None,
+        work_types: Collection[str] | None = None,
+        planned: bool = False,
+        reset_first: bool | None = None,
+    ) -> list[Claim]:
+        """Claim up to ``limit`` of the best due jobs, or of ``job_ids``, at once.
+
+        One transaction leases them all, but each job gets its own token and
+        attempt, exactly as if it were claimed alone. No population build is
+        claimed while another runs or waits to start, in any worker process.
+        """
         if not owner:
             raise ValueError("lease owner is required")
-        if lease_seconds <= 0:
-            raise ValueError("lease duration must be positive")
-        with self._timed_connection() as connection:
-            with connection.transaction():
-                self._ensure_dependency_support_probed()
-                supports_coordinator = getattr(self, "_supports_coordinator_contract", False)
-                statement_options = {
-                    "supports_dependency": self._supports_dependency_deferral,
-                    "denormalized_contract": self._supports_denormalized_contract,
-                    "supports_coordinator": supports_coordinator,
-                    "work_types": work_types,
-                    "reset_first": reset_first,
-                    "past_reset_build_hold": (
-                        past_reset_build_hold(connection)
-                        if supports_coordinator
-                        else None
-                    ),
-                }
-                row = connection.execute(*_claim_select_statement(
-                    self._jobs_relation, job_id=job_id, planned=planned, **statement_options
-                )).fetchone()
-                if row is None and planned and job_id is not None:
-                    fallback = _claim_select_statement(
-                        self._jobs_relation, planned=True, **statement_options
-                    )
-                    row = connection.execute(*fallback).fetchone()
-                if row is None:
-                    return None
-                data = dict(row) if isinstance(row, dict) else dict(zip(_CLAIM_COLUMNS, row))
-                token = uuid4().hex
-                dependency_claim = (
-                    self._supports_dependency_deferral
-                    and _text_value(data["state"]) == "waiting_dependency"
-                )
-                attempt_number = int(
-                    connection.execute(
-                        "SELECT COALESCE(max(attempt_number), 0) + 1 FROM python_processing_attempts WHERE job_id = %s",
-                        (data["job_id"],),
-                    ).fetchone()[0]
-                )
-                # Stale marking keys on the attempts sequence, not the retry
-                # budget: dependency deferrals leave attempt_count untouched
-                # but their abandoned running rows must still be closed out.
-                if attempt_number > 1:
-                    connection.execute(
-                        """
-                        UPDATE python_processing_attempts
-                        SET state = 'stale', completed_at = clock_timestamp(),
-                            failure_category = COALESCE(failure_category, 'lease_expired')
-                        WHERE job_id = %s AND state = 'running'
-                        """,
-                        (data["job_id"],),
-                    )
-                leased = connection.execute(
-                    f"""
-                    UPDATE {self._jobs_relation}
-                    SET state = 'leased', lease_owner = %s, lease_token = %s,
-                        lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
-                        attempt_count = attempt_count + CASE WHEN %s THEN 0 ELSE 1 END,
-                        updated_at = clock_timestamp()
-                    WHERE id = %s
-                    RETURNING lease_expires_at
-                    """,
-                    (owner, token, lease_seconds, dependency_claim, data["job_id"]),
-                ).fetchone()
-                assert leased is not None
-                attempt = connection.execute(
-                    """
-                    INSERT INTO python_processing_attempts (
-                        job_id, attempt_number, lease_owner, lease_token,
-                        started_at, lease_expires_at, state
-                    ) VALUES (%s, %s, %s, %s, clock_timestamp(), %s, 'running')
-                    RETURNING id, started_at, lease_expires_at
-                    """,
-                    (data["job_id"], attempt_number, owner, token, leased[0]),
-                ).fetchone()
-                assert attempt is not None
-                return Claim(
-                    job_id=int(data["job_id"]),
-                    work_type=_text_value(data["work_type"]),
-                    deduplication_key=_text_value(data["deduplication_key"]),
-                    input_json=dict(data["input_json"]),
-                    observation_id=(
-                        int(data["observation_id"])
-                        if data["observation_id"] is not None
-                        else None
-                    ),
-                    attempt_id=int(attempt[0]),
-                    attempt_number=attempt_number,
-                    attempt_count=int(data["attempt_count"]),
-                    is_dependency_resume=dependency_claim,
-                    normalized_tag=(
-                        _text_value(data["normalized_tag"])
-                        if data["normalized_tag"] is not None
-                        else None
-                    ),
-                    endpoint=(
-                        _text_value(data["endpoint"])
-                        if data["endpoint"] is not None
-                        else None
-                    ),
-                    endpoint_version=(
-                        _text_value(data["endpoint_version"])
-                        if data["endpoint_version"] is not None
-                        else None
-                    ),
-                    schema_version=(
-                        _text_value(data["schema_version"])
-                        if data["schema_version"] is not None
-                        else None
-                    ),
-                    observed_at=data["response_observed_at"],
-                    http_status=(
-                        int(data["http_status"])
-                        if data["http_status"] is not None
-                        else None
-                    ),
-                    response_hash=(
-                        _text_value(data["response_hash"])
-                        if data["response_hash"] is not None
-                        else None
-                    ),
-                    archive_reference=(
-                        _text_value(data["archive_reference"])
-                        if data["archive_reference"] is not None
-                        else None
-                    ),
-                    lease_owner=owner,
-                    lease_token=token,
-                    lease_expires_at=leased[0],
-                    parser_version=_text_value(data["parser_version"]),
-                    processing_version=_text_value(data["processing_version"]),
-                    domain_rule_version=_text_value(data["domain_rule_version"]),
-                    analytics_rule_version=_text_value(data["analytics_rule_version"]),
-                    max_attempts=int(data["max_attempts"]),
-                )
+        if lease_seconds <= 0 or limit < 1:
+            raise ValueError("lease duration and claim limit must be positive")
+        with self._timed_connection() as connection, connection.transaction():
+            self._ensure_dependency_support_probed()
+            supports_coordinator = getattr(self, "_supports_coordinator_contract", False)
+            builds = set(work_types or SUPPORTED_WORK_TYPES) & set(POPULATION_BUILD_WORK_TYPES)
+            if builds and build_permit_busy(connection, self._jobs_relation, builds):
+                work_types = [kind for kind in work_types or SUPPORTED_WORK_TYPES
+                              if kind not in builds]
+                if not work_types:
+                    return []
+            options = {
+                "supports_dependency": self._supports_dependency_deferral,
+                "denormalized_contract": self._supports_denormalized_contract,
+                "supports_coordinator": supports_coordinator,
+                "work_types": work_types,
+                "reset_first": reset_first,
+                "limit": limit,
+                "past_reset_build_hold": (
+                    past_reset_build_hold(connection) if supports_coordinator else None
+                ),
+            }
+            rows = connection.execute(*_claim_select_statement(
+                self._jobs_relation, job_ids=job_ids, planned=planned, **options
+            )).fetchall()
+            if not rows and planned and job_ids is not None:
+                rows = connection.execute(*_claim_select_statement(
+                    self._jobs_relation, planned=True, **options
+                )).fetchall()
+            return self._lease_rows(connection, rows, owner, lease_seconds)
+
+    def _lease_rows(
+        self, connection: Any, rows: list[Any], owner: str, lease_seconds: int
+    ) -> list[Claim]:
+        if not rows:
+            return []
+        jobs = [dict(row) if isinstance(row, dict) else dict(zip(_CLAIM_COLUMNS, row))
+                for row in rows]
+        ids = [int(job["job_id"]) for job in jobs]
+        tokens = [uuid4().hex for _ in jobs]
+        # A dependency resumption reuses its ordinary attempt slot.
+        resumes = [self._supports_dependency_deferral
+                   and _text_value(job["state"]) == "waiting_dependency" for job in jobs]
+        previous = dict(connection.execute(
+            "SELECT job_id, max(attempt_number) FROM python_processing_attempts"
+            " WHERE job_id = ANY(%s::bigint[]) GROUP BY job_id", (ids,),
+        ).fetchall())
+        # Stale marking keys on the attempts sequence, not the retry budget:
+        # dependency deferrals leave attempt_count untouched but their
+        # abandoned running rows must still be closed out.
+        if previous:
+            connection.execute(
+                """
+                UPDATE python_processing_attempts
+                SET state = 'stale', completed_at = clock_timestamp(),
+                    failure_category = COALESCE(failure_category, 'lease_expired')
+                WHERE job_id = ANY(%s::bigint[]) AND state = 'running'
+                """,
+                (list(previous),),
+            )
+        expires = dict(connection.execute(
+            f"""
+            UPDATE {self._jobs_relation} AS job
+            SET state = 'leased', lease_owner = %s, lease_token = claim.token,
+                lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
+                attempt_count = job.attempt_count + CASE WHEN claim.resume THEN 0 ELSE 1 END,
+                updated_at = clock_timestamp()
+            FROM unnest(%s::bigint[], %s::text[], %s::boolean[]) AS claim (id, token, resume)
+            WHERE job.id = claim.id
+            RETURNING job.id, job.lease_expires_at
+            """,
+            (owner, lease_seconds, ids, tokens, resumes),
+        ).fetchall())
+        numbers = [int(previous.get(job_id) or 0) + 1 for job_id in ids]
+        attempts = dict(connection.execute(
+            """
+            INSERT INTO python_processing_attempts (
+                job_id, attempt_number, lease_owner, lease_token,
+                started_at, lease_expires_at, state
+            )
+            SELECT claim.id, claim.number, %s, claim.token, clock_timestamp(),
+                   claim.expires, 'running'
+            FROM unnest(%s::bigint[], %s::integer[], %s::text[], %s::timestamptz[])
+                AS claim (id, number, token, expires)
+            RETURNING job_id, id
+            """,
+            (owner, ids, numbers, tokens, [expires[job_id] for job_id in ids]),
+        ).fetchall())
+
+        def optional(job: dict[str, Any], name: str, kind: Any = _text_value) -> Any:
+            return None if job[name] is None else kind(job[name])
+
+        return [
+            Claim(
+                job_id=job_id,
+                work_type=_text_value(job["work_type"]),
+                deduplication_key=_text_value(job["deduplication_key"]),
+                input_json=dict(job["input_json"]),
+                observation_id=optional(job, "observation_id", int),
+                attempt_id=int(attempts[job_id]),
+                attempt_number=number,
+                attempt_count=int(job["attempt_count"]),
+                is_dependency_resume=resume,
+                normalized_tag=optional(job, "normalized_tag"),
+                endpoint=optional(job, "endpoint"),
+                endpoint_version=optional(job, "endpoint_version"),
+                schema_version=optional(job, "schema_version"),
+                observed_at=job["response_observed_at"],
+                http_status=optional(job, "http_status", int),
+                response_hash=optional(job, "response_hash"),
+                archive_reference=optional(job, "archive_reference"),
+                lease_owner=owner,
+                lease_token=token,
+                lease_expires_at=expires[job_id],
+                parser_version=_text_value(job["parser_version"]),
+                processing_version=_text_value(job["processing_version"]),
+                domain_rule_version=_text_value(job["domain_rule_version"]),
+                analytics_rule_version=_text_value(job["analytics_rule_version"]),
+                max_attempts=int(job["max_attempts"]),
+            )
+            for job, job_id, token, resume, number in zip(
+                jobs, ids, tokens, resumes, numbers, strict=True
+            )
+        ]
+
+    def release_claims(self, claims: Collection[Claim]) -> int:
+        """Give back claims whose work never started, as if never claimed.
+
+        Each job returns to the state its claim found it in, keeps its
+        attempt budget and is claimable at once; its attempt is marked stale.
+        The owner and token fence it, so a job another worker or queue
+        maintenance has taken since stays theirs.
+        """
+        if not claims:
+            return 0
+        with self._timed_connection() as connection, connection.transaction():
+            released = connection.execute(
+                f"""
+                UPDATE {self._jobs_relation} AS job
+                SET state = CASE WHEN claim.resume THEN 'waiting_dependency' ELSE 'pending' END,
+                    attempt_count = claim.attempt_count,
+                    lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
+                    updated_at = clock_timestamp()
+                FROM unnest(%s::bigint[], %s::text[], %s::text[], %s::integer[], %s::boolean[])
+                    AS claim (id, owner, token, attempt_count, resume)
+                WHERE job.id = claim.id AND job.state = 'leased'
+                  AND job.lease_owner = claim.owner AND job.lease_token = claim.token
+                RETURNING job.id
+                """,
+                tuple(map(list, zip(*(
+                    (claim.job_id, claim.lease_owner, claim.lease_token,
+                     claim.attempt_count, claim.is_dependency_resume) for claim in claims
+                ), strict=True))),
+            ).fetchall()
+            connection.execute(
+                """
+                UPDATE python_processing_attempts
+                SET state = 'stale', completed_at = clock_timestamp(),
+                    failure_category = 'claim_released'
+                WHERE id = ANY(%s::bigint[]) AND state = 'running'
+                """,
+                ([claim.attempt_id for claim in claims
+                  if (claim.job_id,) in released],),
+            )
+        return len(released)
 
     def refund_claim_attempt(self, claim: Claim) -> None:
         """Keep a conflicted failure write recoverable without releasing its lease.
@@ -1312,7 +1350,10 @@ class Database:
             )
             connection.commit()
 
-    def _lock_live_claim(self, connection: Any, claim: Claim) -> dict[str, Any]:
+    def _lock_live_claim(
+        self, connection: Any, claim: Claim, *, build: bool = False
+    ) -> dict[str, Any]:
+        """Lock a live claim's job row; a population ``build`` also takes the permit."""
         row = connection.execute(
             f"""
             SELECT id, attempt_count, max_attempts
@@ -1326,6 +1367,8 @@ class Database:
         ).fetchone()
         if row is None:
             raise LeaseLost("job lease is missing, stale, or owned by another worker")
+        if build:
+            take_build_permit(connection)
         return {"id": row[0], "attempt_count": row[1], "max_attempts": row[2]}
 
     def _finish_claim(
@@ -1444,43 +1487,6 @@ def enqueue_discovered_players(
         room -= connection.execute(
             "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])", (batch,)
         ).fetchone()[0]
-
-
-def _positive_int_input(values: dict[str, Any], name: str) -> int:
-    value = values.get(name)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return int(value)
-
-
-def _hash_input(value: Any, name: str) -> str:
-    value = _text_value(value)
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
-        raise ValueError(f"{name} must be a lowercase SHA-256 hash")
-    return value
-
-
-def _parse_utc(value: Any) -> datetime:
-    if not isinstance(value, str):
-        raise TypeError("analytics timestamps must be text")
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("analytics timestamps must include an offset")
-    return parsed.astimezone(UTC)
-
-
-def _snapshot_freshness(
-    *, included_count: int, fresh_count: int, stale_count: int
-) -> str:
-    if included_count == 0 or stale_count == 0:
-        return "fresh"
-    if fresh_count == 0:
-        return "stale"
-    return "mixed"
 
 
 def _text_value(value: Any) -> Any:

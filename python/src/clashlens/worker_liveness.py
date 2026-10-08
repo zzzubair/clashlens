@@ -8,11 +8,14 @@ every time round its loop, and the check fails only when no lane has done so
 for STUCK_SECONDS. That is longer than the worker's 15-minute database query
 limit, so a slow database slows the lanes without making them look stuck.
 Until the first touch the check still proves the worker's dependencies once.
+Each of several worker processes touches its own file, and the check fails
+when any one of them is stuck.
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import threading
 import time
@@ -28,10 +31,16 @@ MARK_INTERVAL_SECONDS = 5.0
 PROGRESS_FILE = "/tmp/clashlens-worker-progress"
 
 
+def progress_file(process_index: int = 0) -> str:
+    """The progress file of one worker process; 0 is a worker on its own."""
+    return f"{PROGRESS_FILE}-{process_index}" if process_index else PROGRESS_FILE
+
+
 class ProgressMark:
     """Touch the progress file, at most once every MARK_INTERVAL_SECONDS."""
 
-    def __init__(self) -> None:
+    def __init__(self, path: str | None = None) -> None:
+        self.path = path
         self._marked_at = float("-inf")
         self._lock = threading.Lock()
 
@@ -42,16 +51,20 @@ class ProgressMark:
                 return
             self._marked_at = now
         try:
-            Path(PROGRESS_FILE).touch()
+            Path(self.path or PROGRESS_FILE).touch()
         except OSError:
             pass  # A file that stops changing reads as stuck, which is right.
 
 
 def seconds_since_progress() -> float | None:
-    try:
-        return max(0.0, time.time() - os.stat(PROGRESS_FILE).st_mtime)
-    except FileNotFoundError:
-        return None
+    """Seconds since the stalest worker process last made progress."""
+    ages = []
+    for path in glob.glob(f"{PROGRESS_FILE}*"):
+        try:
+            ages.append(max(0.0, time.time() - os.stat(path).st_mtime))
+        except FileNotFoundError:
+            continue
+    return max(ages, default=None)
 
 
 def worker_readiness(

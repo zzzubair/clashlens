@@ -366,8 +366,8 @@ start_worker() {
   "$PODMAN_BIN" run --detach --pod "$POD" --name "$WORKER" \
     --env-file "$env_file" --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
     --volume "$SPOOL_VOLUME:/spool:z" \
-    "$IMAGE_PREFIX-python" worker --run-forever --max-jobs 48 \
-    --concurrency 24 --database-pool-size 24 --archive-insecure-test-only \
+    "$IMAGE_PREFIX-python" worker --run-forever --max-jobs 48 --processes 2 \
+    --concurrency 16 --response-lanes 12 --database-pool-size 16 --archive-insecure-test-only \
     --disable-player-discovery >/dev/null
 }
 
