@@ -457,6 +457,12 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 next_start_trophies = later[1]
                 observed_trophy_change = next_start_trophies - start_trophies
                 residual = 0
+            if (
+                zero_defense_loss
+                and automatic_state == "not_applicable"
+                and "dropped_from_legend_i" in data.end_baseline_evidence
+            ):
+                failures.append("automatic_defense_basis_unavailable")
             observed_boundary_adjustment = next_start_trophies - final_trophies
             if abs(residual) > TROPHY_RECONCILIATION_TOLERANCE:
                 failures.append("trophy_equation_mismatch")

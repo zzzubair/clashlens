@@ -276,6 +276,30 @@ def test_zero_defense_day_read_before_its_loss_takes_it_from_a_later_reading() -
     assert (next_day.state, next_day.start_trophies) == ("Complete", 4391)
 
 
+def test_dropped_zero_defense_day_stays_partial_until_a_reading_shows_its_loss() -> None:
+    # Dropped from Legend I at a weekly Reset read before the game charged
+    # the day's automatic loss; later profiles show Legend II, not the loss.
+    day = _input(
+        start_trophies=4900, next_start_trophies=4940,
+        contributions=(BattleContribution("attack-1", "offense", 40),),
+        previous_day=PreviousRankedDay(True, 8, 240, 0),
+        end_baseline_evidence={"dropped_from_legend_i": True},
+    )
+    unproven = reconcile_ranked_day(day)
+    # A Legend I reading after the Reset one showing the loss proves the end.
+    charged = reconcile_ranked_day(replace(
+        day, later_next_start_reading=(DAY.end + timedelta(minutes=8), 4700),
+    ))
+
+    assert unproven.state == "Partial"
+    assert unproven.failure_reasons == ("automatic_defense_basis_unavailable",)
+    assert reconcile_ranked_day(replace(day, end_baseline_evidence={})).state == (
+        "Complete"
+    )
+    assert (charged.state, charged.automatic_defense_loss) == ("Complete", 240)
+    assert charged.next_start_trophies == 4700
+
+
 def _battles(tag: str, lens: str, count: int, total: int) -> tuple[BattleContribution, ...]:
     amounts = [total // count] * (count - 1) + [total - total // count * (count - 1)]
     return tuple(
