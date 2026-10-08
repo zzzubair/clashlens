@@ -1147,7 +1147,8 @@ def _queue_boundary_army_correction(
         return
     current = connection.execute(
         """
-        SELECT snapshot_state, army_state, army_manifest_id, generation
+        SELECT snapshot_state, army_state, army_manifest_id, generation,
+               ordering_rule_version
         FROM boundary_publication_generations
         WHERE id = %s
         FOR UPDATE
@@ -1198,6 +1199,7 @@ def _queue_boundary_army_correction(
             player_ids=player_ids,
             generation=int(current[3]) + 1,
             supersedes_id=generation_id,
+            ordering_rule_version=_text_value(current[4]),
         )
         connection.execute(
             "UPDATE boundary_publication_generations SET affected_artifacts = %s WHERE id = %s",

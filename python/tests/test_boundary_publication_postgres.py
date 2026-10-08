@@ -577,8 +577,9 @@ def test_boundary_generation_coalesces_population_and_corrections(
 
 
 def test_decode_only_correction_inherits_snapshot_publication_identity(
-    database_url: str,
+    database_url: str, monkeypatch
 ) -> None:
+    monkeypatch.setattr(boundary, "SNAPSHOT_ORDERING_RULE_VERSION", "tracked-player-order-v1")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = Database(connection_info)
         try:
@@ -594,6 +595,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     ranked_day_version_id=ranked_id,
                     ranked_day_input_hash="a" * 64,
                 )
+                monkeypatch.undo()
                 generation = connection.execute(
                     """
                     SELECT id, snapshot_manifest_id, army_manifest_id
@@ -694,7 +696,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     """
                     SELECT snapshot_state, snapshot_id, snapshot_input_hash,
                            snapshot_manifest_id, snapshot_analytics_publication_id,
-                           affected_artifacts
+                           affected_artifacts, ordering_rule_version
                     FROM boundary_publication_generations
                     WHERE generation = 2
                     """
@@ -707,7 +709,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     generation[1],
                     snapshot_identity,
                 )
-                assert inherited[5] == ["army"]
+                assert tuple(inherited[5:]) == (["army"], "tracked-player-order-v1")
                 correction = connection.execute(
                     """
                     SELECT state, affected_artifacts
@@ -1020,7 +1022,6 @@ def test_enqueue_army_decode_only_inherits_snapshot_after_restart(
 def test_boundary_correction_recovery_activates_pending_inputs(
     database_url: str, monkeypatch, affected: list[str]
 ) -> None:
-    # The board was ordered by an older rule; only a rebuilt one takes the current rule.
     monkeypatch.setattr(boundary, "SNAPSHOT_ORDERING_RULE_VERSION", "tracked-player-order-v1")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = Database(connection_info)

@@ -201,6 +201,7 @@ def _create_boundary_generation(
     generation: int,
     supersedes_id: int | None,
     pending_inputs: list[dict[str, Any]] | None = None,
+    ordering_rule_version: str | None = None,
 ) -> tuple[int, int]:
     population_hash = _boundary_population_hash(player_ids)
     target_at = boundary_at + timedelta(
@@ -222,7 +223,7 @@ def _create_boundary_generation(
             boundary_at,
             generation,
             sweep_id,
-            SNAPSHOT_ORDERING_RULE_VERSION,
+            ordering_rule_version or SNAPSHOT_ORDERING_RULE_VERSION,
             FRESHNESS_RULE_VERSION,
             len(player_ids),
             population_hash,
