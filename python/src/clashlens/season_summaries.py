@@ -529,6 +529,27 @@ def acquire_player_season_lock(
     )
 
 
+def refresh_stored_seasons(
+    database: Any, connection: Any, player_id: int, season_ids: Any
+) -> None:
+    """Store again each of the player's saved summaries of ``season_ids``,
+    oldest first, from its days and their Reset proofs as they are now: after
+    the days are calculated again, or a Reset settlement check changes what
+    a day's end accepts."""
+    if not getattr(database, "_supports_season_summaries", False):
+        return
+    for season_id in sorted(set(season_ids)):
+        acquire_player_season_lock(connection, player_id, season_id)
+        if connection.execute(
+            """
+            SELECT 1 FROM player_season_summaries
+            WHERE player_id = %s AND official_season_id = %s
+            """,
+            (player_id, season_id),
+        ).fetchone():
+            materialize_player_season(connection, player_id=player_id, season_id=season_id)
+
+
 def materialize_player_season(
     connection: Any, player_id: int, season_id: str
 ) -> dict[str, Any]:

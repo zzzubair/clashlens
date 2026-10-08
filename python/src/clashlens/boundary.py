@@ -13,6 +13,7 @@ from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import DECODER_VERSION
 from .boundary_manifest import (
     _moved_decode_ids,
+    board_proof_facts,
     profiles_not_found,
     reset_trophies,
 )
@@ -1074,9 +1075,6 @@ def queue_board_rebuilds(
     nothing for it; one still queued is listed again and not queued twice.
     Resets of other Seasons are never read.
     """
-    # The shared Reset proof imports the board's publication code.
-    from .reset_settlement import reset_proof_facts
-
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not is_season_boundary(season_start):
         raise ValueError(f"{season_id} is not a Season's start")
@@ -1147,7 +1145,7 @@ def queue_board_rebuilds(
                         for row in rows
                         if row[2] is not None
                     },
-                    reset_proof_facts(database, connection, versions),
+                    board_proof_facts(database, connection, versions),
                 )
                 expected = {
                     int(row[0]): at_reset.get(int(row[0]), (int(row[4]), False))

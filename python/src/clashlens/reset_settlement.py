@@ -11,12 +11,11 @@ Separately, the game can apply the previous day's automatic defense loss
 minutes after the 05:00 UTC Reset, so the profile read at the Reset is only
 provisional. Each Reset starts as ``provisional``. Once its delayed
 settlement check has finished, the check is judged against seven
-conservative guards: it becomes ``settled``, with the accepted trophies and
-their proof, or ``unresolved`` with the reasons it could not be proved. New
-``settled`` verdicts are only admitted while
-``CLASHLENS_ENABLE_NEW_RESET_PROOFS`` is on; otherwise a passing check stays
-``provisional`` with its candidate proof kept for assessment. The Season
-summary accepts a day's end on a settled check (``season_summaries``).
+conservative guards: ``settled``, with the accepted trophies and their
+proof, or ``unresolved`` with its reasons. New ``settled`` verdicts need
+``CLASHLENS_ENABLE_NEW_RESET_PROOFS``; otherwise a passing check stays
+``provisional`` with its candidate proof. The Season summary accepts a day's
+end on a settled check (``season_summaries``).
 """
 
 from __future__ import annotations
@@ -61,6 +60,7 @@ from .reconciliation import (
     _zero_defense_loss,
     automatic_defense_loss,
 )
+from .season_summaries import refresh_stored_seasons
 
 PROOF_RULE_VERSION = "reset-settlement-observed-adjustment-v2"
 NEW_PROOFS_SWITCH = "CLASHLENS_ENABLE_NEW_RESET_PROOFS"
@@ -493,12 +493,9 @@ def queue_later_reading_recheck(
     its state, a day whose proven end a reader used is no longer the one it
     proves (``reconciliation_db.proven_end_moved``), whose recalculation
     judges again the checks it roots. The day's calculation lock makes the
-    two meet: a calculation either reads this evidence or has finished
-    before this reads its result. The day-end recheck reads evidence saved
-    before it; this covers evidence saved after, such as a response
-    recovered late. Queued once per day and cause, at backfill priority.
-    Whatever the day's state, the Reset's board is checked too
-    (``_queue_board_correction``)."""
+    two meet. This covers evidence saved after the day-end recheck, such as
+    a response recovered late, once per day and cause, at backfill priority.
+    The Reset's board is checked too (``_queue_board_correction``)."""
     ended = ranked_day_for(boundary_at - DAY)
     ranked_day_inputs.lock_ranked_day(connection, player_id, ended)
     _queue_board_correction(database, connection, player_id, boundary_at)
@@ -587,7 +584,7 @@ def _queue_board_correction(
     from the start: a board frozen meanwhile is the one compared, and one
     not frozen yet waits and reads this evidence."""
     from .boundary import lock_boundary_members, queue_board_correction
-    from .boundary_manifest import reset_trophies
+    from .boundary_manifest import board_proof_facts, reset_trophies
 
     lock_boundary_members(connection, boundary_at)
     newest = """
@@ -622,8 +619,7 @@ def _queue_board_correction(
     if reset_trophies(
         connection, boundary_at, reading, {version_id: entry[5]}
     ) == reset_trophies(
-        connection, boundary_at, reading,
-        reset_proof_facts(database, connection, [version_id]),
+        connection, boundary_at, reading, board_proof_facts(database, connection, [version_id])
     ):
         return
     queue_board_correction(connection, boundary_at, int(entry[0]), queue=True)
@@ -643,12 +639,12 @@ def later_reading_contradicts(
 
 def start_proven(data: ReconciliationInput) -> bool:
     """Whether the day's start is proven apart from its own Reset reading:
-    a Season's first day starts at 5,000, and a Complete day before ending
-    on that same reading proves it."""
+    a Season's first day starts at 5,000, and a day before ending on that
+    same reading proves it, Complete or with its end proven (``proven_end``)."""
     previous = data.previous_day
     return data.season_first_day or (
         previous is not None
-        and previous.complete
+        and (previous.complete or previous.proven_end is not None)
         and previous.end_baseline_id == data.start_baseline_id
     )
 
@@ -1297,7 +1293,7 @@ def refresh_boundary(
     inputs are re-read after any concurrent writer finished. A finalized
     Season keeps its verdict. Admitting a new ``settled`` verdict needs the
     switch; losing one never does. A change to a settled verdict re-judges
-    the next Reset, whose target it roots.
+    the next Reset, whose target it roots, and stores the Season summary again.
     """
     from .season_retirement import is_season_detail_retired
 
@@ -1342,8 +1338,10 @@ def refresh_boundary(
          PROOF_RULE_VERSION, fingerprint, Jsonb(candidate),
          Jsonb(list(verdict.reasons)), player_id, boundary_at),
     )
-    if SETTLED in (current[0], verdict.state) and depth < MAX_CASCADE:
-        refresh_boundary(database, connection, player_id, boundary_at + DAY, depth=depth + 1)
+    if SETTLED in (current[0], verdict.state):
+        refresh_stored_seasons(database, connection, player_id, [season_id])
+        if depth < MAX_CASCADE:
+            refresh_boundary(database, connection, player_id, boundary_at + DAY, depth=depth + 1)
 
 
 def _lock_reset(connection: Any, player_id: int, boundary_at: datetime) -> str:

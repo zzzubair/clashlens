@@ -44,7 +44,11 @@ from .reconciliation import (
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
-from .season_summaries import acquire_player_season_lock, materialize_player_season
+from .season_summaries import (
+    acquire_player_season_lock,
+    materialize_player_season,
+    refresh_stored_seasons,
+)
 
 # The 2026-10-05 and 2026-10-06 Resets saved every reading within 45 minutes.
 DAY_END_RECALCULATION_DELAY = timedelta(hours=2)
@@ -256,21 +260,10 @@ def finish_recalculation(
                 reset_settlement.refresh_boundary(
                     database, connection, player_id, day_start + timedelta(days=2)
                 )
-    if not getattr(database, "_supports_season_summaries", False):
-        return
-    for season_id in sorted({
+    refresh_stored_seasons(database, connection, player_id, {
         ranked_day_for(day_start + offset).official_season_id
         for day_start in days for offset in (timedelta(0), timedelta(days=1))
-    }):
-        acquire_player_season_lock(connection, player_id, season_id)
-        if connection.execute(
-            """
-            SELECT 1 FROM player_season_summaries
-            WHERE player_id = %s AND official_season_id = %s
-            """,
-            (player_id, season_id),
-        ).fetchone():
-            materialize_player_season(connection, player_id=player_id, season_id=season_id)
+    })
 
 
 def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> bool:

@@ -541,9 +541,7 @@ def _snapshot_rows(
     }
     # What each day's Reset proof reads besides the day, frozen so every
     # build of this board proves the same (``reset_trophies``).
-    from .reset_settlement import reset_proof_facts
-
-    proof_facts = reset_proof_facts(
+    proof_facts = board_proof_facts(
         database, connection,
         [int(row[1]) for row in members if row[1] is not None and int(row[0]) in profiles],
     )
@@ -679,6 +677,33 @@ def profiles_not_found(
     }
 
 
+def board_proof_facts(
+    database: Database, connection: Any, version_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """What each day's Reset proof reads besides the day
+    (``reset_settlement.reset_proof_facts``), with the same for the day
+    before it was calculated from under ``previous``, whose proven end proves
+    its start (``reset_trophies``): what a board freezes with its inputs."""
+    from .reset_settlement import reset_proof_facts
+
+    facts = reset_proof_facts(database, connection, version_ids)
+    previous = {
+        int(row[0]): int(row[1]) for row in connection.execute(
+            """
+            SELECT id, (input_evidence -> 'previous_day' ->> 'version_id')::bigint
+            FROM ranked_day_versions
+            WHERE id = ANY(%s) AND input_evidence -> 'previous_day' ? 'version_id'
+            """,
+            (list(version_ids),),
+        ).fetchall() if row[1] is not None
+    }
+    earlier = reset_proof_facts(database, connection, sorted(set(previous.values())))
+    for version_id, prior in previous.items():
+        if version_id in facts and prior in earlier:
+            facts[version_id]["previous"] = {"version_id": prior, **earlier[prior]}
+    return facts
+
+
 def reset_trophies(
     connection: Any,
     boundary_at: datetime,
@@ -714,7 +739,8 @@ def reset_trophies(
     start plus all its battles comes to it too, the start is proven, and no
     later reading before the next day's first battle shows otherwise. A
     start is proven by the previous day's proven end (``DayEnd.proven_end``,
-    as that day saved it) or by 5,000 on a Season's Day 1; a start reading
+    of the version the day was calculated from, read with the facts frozen
+    for it, ``board_proof_facts``) or by 5,000 on a Season's Day 1; a start reading
     alone can miss the same delayed credit as the reading it is checked
     against, as can the end Reset reading. On the 7 October 2026 Day 3 board
     this left 23 confirmed Partial entries uncertain, at unchanged values.
@@ -801,7 +827,10 @@ def reset_trophies(
         facts,
     )
     previous = day_ends(
-        connection, sorted({int(row[4]) for row in rows if row[4] is not None}), facts
+        connection, sorted({int(row[4]) for row in rows if row[4] is not None}), {
+            int(fact["previous"]["version_id"]): fact["previous"]
+            for fact in facts.values() if fact and fact.get("previous")
+        },
     )
 
     def start_proven(row: Any, end: Any) -> bool:

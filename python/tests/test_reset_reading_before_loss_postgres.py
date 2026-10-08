@@ -26,7 +26,7 @@ from test_reset_settlement_state_postgres import (
 )
 
 from clashlens import ranked_day_inputs, reconciliation_db, reset_settlement
-from clashlens.boundary_manifest import reset_trophies
+from clashlens.boundary_manifest import board_proof_facts, reset_trophies
 from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
 
@@ -713,7 +713,7 @@ def test_season_repair_settles_an_early_reset_reading_and_its_board_entry(
                 board = reset_trophies(
                     connection, DAY_C,
                     {player_id: (version_id, reading_id, reading_at, 4839)},
-                    reset_settlement.reset_proof_facts(database, connection, [version_id]),
+                    board_proof_facts(database, connection, [version_id]),
                 )
             finally:
                 database.close()
@@ -768,7 +768,7 @@ def _board_entry(connection_info: str, archive_server, day: datetime) -> tuple[i
             return reset_trophies(
                 connection, day + timedelta(days=1),
                 {player_id: (version_id, reading_id, reading_at, trophies)},
-                reset_settlement.reset_proof_facts(database, connection, [version_id]),
+                board_proof_facts(database, connection, [version_id]),
             )[player_id]
         finally:
             database.close()
@@ -1334,14 +1334,17 @@ def test_a_waiting_day_end_calculation_judges_the_check_again(
         assert "independent_root_missing" in withdrawn[2]
 
 
-def _day_c_entry(connection_info: str, archive_server, reading: int) -> tuple[int, bool]:
+def _day_c_entry(
+    connection_info: str, archive_server, reading: int, day_c: list | None = None
+) -> tuple[int, bool]:
     """Day C: eight defenses, then an attack stamped 04:34 that its 04:37
-    reading of ``reading`` does not hold yet; its battle logs are continuous
-    and its ending Reset profile failed. Return day C's board entry from
-    that reading."""
-    day_c = [(DAY_C + timedelta(hours=hour), False) for hour in range(2, 10)] + [
-        (DAY_D - timedelta(minutes=26), True)
-    ]
+    reading of ``reading`` does not hold yet, unless ``day_c`` gives the
+    battles its last log holds; its battle logs are continuous and its
+    ending Reset profile failed. Return day C's board entry from that
+    reading."""
+    day_c = day_c if day_c is not None else [
+        (DAY_C + timedelta(hours=hour), False) for hour in range(2, 10)
+    ] + [(DAY_D - timedelta(minutes=26), True)]
     observation_id, job = store_observation(
         connection_info, archive_server, occurrence_key="board-reading",
         endpoint="profile", body=_profile(reading),
@@ -1365,7 +1368,7 @@ def _day_c_entry(connection_info: str, archive_server, reading: int) -> tuple[in
             return reset_trophies(
                 connection, DAY_D,
                 {player_id: (version_id, observation_id, read_at, reading)},
-                reset_settlement.reset_proof_facts(database, connection, [version_id]),
+                board_proof_facts(database, connection, [version_id]),
             )[player_id]
         finally:
             database.close()
@@ -1411,4 +1414,60 @@ def test_a_reading_plus_its_battles_is_proven_only_from_a_proven_start(
 
     assert unproven == (5200 + whole_c, False)
     assert proven == (end_b + whole_c, True)
+
+
+def _proven_partial_day_b(connection_info: str, archive_server) -> list:
+    """Day B, with no start reading, takes eight defenses, its battle logs
+    reaching back before it; its Reset reading at 05:01 and a quiet one at
+    05:25 both show 4,988, which proves its end. Return its battles."""
+    day_b = [(DAY_B - timedelta(hours=1), False)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)
+    ]
+    _process(connection_info, archive_server, _reset_work(
+        connection_info, archive_server, DAY_C, profile=_profile(4988),
+        log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=1),
+    ))
+    _process(connection_info, archive_server, [store_observation(
+        connection_info, archive_server, occurrence_key="quiet-day-b",
+        endpoint="profile", body=_profile(4988),
+        observed_at=DAY_C + timedelta(minutes=25), normalized_tag=TAG,
+    )[1]])
+    return day_b
+
+
+def test_a_proven_partial_day_before_proves_the_boards_start(
+    database_url: str, archive_server
+) -> None:
+    """Day C starts from Partial day B's proven end of 4,988, has no battle
+    and no ending Reset reading, and reads 4,988 at 04:37: the board, which
+    freezes day B's proof with its own, confirms it."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        day_b = _proven_partial_day_b(connection_info, archive_server)
+        entry = _day_c_entry(connection_info, archive_server, 4988, day_b)
+        day_b_row = _latest_days(connection_info, (DAY_B,))[0]
+
+    assert day_b_row[0] == "Partial"
+    assert entry == (4988, True)
+
+
+def test_a_proven_partial_day_before_lets_a_late_attack_settle_the_day(
+    database_url: str, archive_server
+) -> None:
+    """Day C starts from Partial day B's proven end of 4,988, takes eight
+    defenses and an attack at 04:57 that its Reset reading at 05:00 does not
+    hold yet. Its start is proven, so that attack settles the day: day C is
+    Complete, not Inconsistent."""
+    day_c = [(DAY_C + timedelta(hours=hour), False) for hour in range(2, 10)] + [
+        (DAY_D - timedelta(minutes=3), True)
+    ]
+    end_c = 4988 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _proven_partial_day_b(connection_info, archive_server)
+        _process(connection_info, archive_server, _reset_work(
+            connection_info, archive_server, DAY_D, profile=_profile(end_c - WIN),
+            log=_log(*day_c),
+        ))
+        day_c_row = _latest_days(connection_info, (DAY_C,))[0]
+
+    assert (day_c_row[0], *day_c_row[2:5]) == ("Complete", 4988, end_c, end_c)
 
