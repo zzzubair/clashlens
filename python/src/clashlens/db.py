@@ -354,12 +354,16 @@ _CLAIM_CANDIDATE_LIMIT = 32
 
 # Priority classes that can appear in the Python queue. Backfill has its own
 # indexed class so its probe stays bounded without sharing live work's class.
-# The catch-all still claims other operator priorities.
+# The catch-all still claims other operator priorities. Its index also holds
+# Reset work, so each side of Reset priority is its own probe that the index
+# bounds by itself: NOT IN read 6,404 rows a claim at 05:50 on 8 Oct 2026.
 _PYTHON_CLAIM_PRIORITIES = (
     f"({PYTHON_BACKFILL_PRIORITY}), ({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})"
 )
-_PYTHON_CLAIM_PRIORITY_EXCLUSIONS = (
-    f"{PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY}, {PYTHON_RESET_PRIORITY}"
+_PYTHON_OTHER_CLAIM_PRIORITIES = (
+    (f"job.priority NOT IN ({PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY})"
+     f" AND job.priority < {PYTHON_RESET_PRIORITY}"),
+    f"job.priority > {PYTHON_RESET_PRIORITY}",
 )
 
 
@@ -393,12 +397,21 @@ def _claim_filters(
         AND {supported_filter})""", params
 
 
-def _reset_waiting(jobs_relation: str, claimable: str) -> str:
-    """Whether a Reset-priority job passes ``claimable``."""
-    return f"""EXISTS (SELECT FROM {jobs_relation} AS job
+def _reset_waiting(jobs_relation: str, supported_filter: str) -> str:
+    """Whether a claimable Reset-priority job passes ``supported_filter``.
+
+    One check per claim index: one across all states read every finished
+    Reset job first, 0.45 s a check at 05:47 on 8 Oct 2026.
+    """
+    due, tries = "job.due_at <= statement_timestamp()", "job.attempt_count < job.max_attempts"
+    return "(" + " OR ".join(f"""EXISTS (SELECT FROM {jobs_relation} AS job
         LEFT JOIN collector_observations AS source_observation
             ON source_observation.id = COALESCE(job.observation_id, job.replay_observation_id)
-        WHERE job.priority = {PYTHON_RESET_PRIORITY} AND {claimable})"""
+        WHERE job.priority = {PYTHON_RESET_PRIORITY} AND {state} AND {supported_filter})""" for state in (
+        f"job.state IN ('pending', 'waiting_retry') AND {due} AND {tries}",
+        f"job.state = 'waiting_dependency' AND {due}",
+        f"job.state = 'leased' AND job.lease_expires_at <= statement_timestamp() AND {tries}",
+    )) + ")"
 
 
 def _claim_select_statement(
@@ -411,7 +424,7 @@ def _claim_select_statement(
     supports_coordinator: bool = False,
     work_types: Collection[str] | None = None,
     past_reset_build_hold: str | None = None,
-    reset_first: bool = False,
+    reset_first: bool | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT and its named parameters.
 
@@ -429,7 +442,8 @@ def _claim_select_statement(
     ``work_types`` limits every probe and the lock-time recheck to those work
     types, so a limited worker never claims, and never skips over, other work.
     ``planned`` makes a ``job_id`` claim refuse, and an ordinary one run only, while
-    Reset-priority work it could take waits; ``reset_first`` puts that work first.
+    Reset-priority work it could take waits; ``reset_first`` puts that work first,
+    False puts other due work but backfill before it, and None keeps waiting time.
     """
     supported_filter, claimable, params = _claim_filters(
         supports_dependency=supports_dependency,
@@ -441,8 +455,9 @@ def _claim_select_statement(
     if job_id is not None:
         params["job_id"] = job_id
     gate = "AND NOT " if job_id is not None else "AND "
-    reset_gate = gate + _reset_waiting(jobs_relation, claimable) if planned else ""
-    first = f"job.priority = {PYTHON_RESET_PRIORITY}, " if reset_first else ""
+    reset_gate = gate + _reset_waiting(jobs_relation, supported_filter) if planned else ""
+    first = {None: "", True: f"job.priority = {PYTHON_RESET_PRIORITY}, ", False: "job.priority"
+             f" NOT IN ({PYTHON_RESET_PRIORITY}, {PYTHON_BACKFILL_PRIORITY}), "}[reset_first]
     score = f"""{first}CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
         THEN 0 ELSE 1 END,
         CASE WHEN job.priority = {PYTHON_RESET_PRIORITY} THEN job.priority
@@ -474,9 +489,9 @@ def _claim_select_statement(
                         LIMIT {_CLAIM_CANDIDATE_LIMIT}
                     )
         """
-    unknown_dependency_probe = ""
-    if supports_dependency:
-        unknown_dependency_probe = f"""
+
+    def other_priorities(state: str, job_filter: str) -> str:
+        return "".join(f"""
                 UNION ALL
                 (
                     SELECT job.id
@@ -485,14 +500,18 @@ def _claim_select_statement(
                         ON source_observation.id = COALESCE(
                             job.observation_id, job.replay_observation_id
                         )
-                    WHERE job.state = 'waiting_dependency'
-                      AND job.priority NOT IN ({_PYTHON_CLAIM_PRIORITY_EXCLUSIONS})
+                    WHERE {state}
+                      AND {priority}
                       AND job.due_at <= statement_timestamp()
-                      AND {supported_filter}
+                      AND {job_filter}
                     ORDER BY job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
-                )
-        """
+                )""" for priority in _PYTHON_OTHER_CLAIM_PRIORITIES)
+
+    unknown_dependency_probe = (
+        other_priorities("job.state = 'waiting_dependency'", supported_filter)
+        if supports_dependency else ""
+    )
     if job_id is not None:
         probe = f"""
             SELECT job.id
@@ -540,21 +559,7 @@ def _claim_select_statement(
                     ORDER BY eligible.due_at, eligible.created_at, eligible.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
                 ) AS claim_id
-                UNION ALL
-                (
-                    SELECT job.id
-                    FROM {jobs_relation} AS job
-                    LEFT JOIN collector_observations AS source_observation
-                        ON source_observation.id = COALESCE(
-                            job.observation_id, job.replay_observation_id
-                        )
-                    WHERE job.state IN ('pending', 'waiting_retry')
-                      AND job.priority NOT IN ({_PYTHON_CLAIM_PRIORITY_EXCLUSIONS})
-                      AND job.due_at <= statement_timestamp()
-                      AND {ordinary_job_filter}
-                    ORDER BY job.due_at, job.created_at, job.id
-                    LIMIT {_CLAIM_CANDIDATE_LIMIT}
-                )
+                {other_priorities("job.state IN ('pending', 'waiting_retry')", ordinary_job_filter)}
                 {unknown_dependency_probe}
                 UNION ALL
                 (
@@ -608,6 +613,17 @@ def _claim_select_statement(
         """,
         params,
     )
+
+
+# The claim SELECT's columns in order, for tuple rows.
+_CLAIM_COLUMNS = (
+    "job_id", "work_type", "deduplication_key", "input_json", "observation_id",
+    "parser_version", "processing_version", "domain_rule_version",
+    "analytics_rule_version", "attempt_count", "max_attempts", "state",
+    "dependency_deferral_count", "normalized_tag", "endpoint", "endpoint_version",
+    "schema_version", "response_observed_at", "http_status", "response_hash",
+    "archive_reference",
+)
 
 
 class LeaseLost(RuntimeError):
@@ -956,7 +972,7 @@ class Database:
         job_id: int | None = None,
         work_types: Collection[str] | None = None,
         planned: bool = False,
-        reset_first: bool = False,
+        reset_first: bool | None = None,
     ) -> Claim | None:
         """Claim the best due job, or ``job_id``; a ``planned`` one yields to Reset work."""
         if not owner:
@@ -989,33 +1005,7 @@ class Database:
                     row = connection.execute(*fallback).fetchone()
                 if row is None:
                     return None
-                data = (
-                    dict(row)
-                    if isinstance(row, dict)
-                    else {
-                        "job_id": row[0],
-                        "work_type": row[1],
-                        "deduplication_key": row[2],
-                        "input_json": row[3],
-                        "observation_id": row[4],
-                        "parser_version": row[5],
-                        "processing_version": row[6],
-                        "domain_rule_version": row[7],
-                        "analytics_rule_version": row[8],
-                        "attempt_count": row[9],
-                        "max_attempts": row[10],
-                        "state": row[11],
-                        "dependency_deferral_count": row[12],
-                        "normalized_tag": row[13],
-                        "endpoint": row[14],
-                        "endpoint_version": row[15],
-                        "schema_version": row[16],
-                        "response_observed_at": row[17],
-                        "http_status": row[18],
-                        "response_hash": row[19],
-                        "archive_reference": row[20],
-                    }
-                )
+                data = dict(row) if isinstance(row, dict) else dict(zip(_CLAIM_COLUMNS, row))
                 token = uuid4().hex
                 dependency_claim = (
                     self._supports_dependency_deferral

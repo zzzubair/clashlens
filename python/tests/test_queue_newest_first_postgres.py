@@ -464,7 +464,7 @@ RESET_STATES = {
 
 
 @pytest.mark.parametrize("state", list(RESET_STATES))
-def test_reset_response_due_after_the_plan_is_cached_is_processed_next(
+def test_reset_response_due_after_the_plan_is_cached_is_processed_on_its_turn(
     database_url: str,
     archive_server,
     state: str,
@@ -511,10 +511,14 @@ def test_reset_response_due_after_the_plan_is_cached_is_processed_next(
                         """,
                         (reset_job,),
                     )
+            # The lane's next turn takes live work first; the turn after takes
+            # the Reset response, though the plan was cached before it was due.
             second = processor.process_once(owner="lane")
+            third = processor.process_once(owner="lane")
         finally:
             database.close()
-        assert second is not None and second.job_id == reset_job
+        assert second is not None and second.job_id in live
+        assert third is not None and third.job_id == reset_job
 
 
 @pytest.mark.parametrize("endpoint", ["profile", "battle_log"])

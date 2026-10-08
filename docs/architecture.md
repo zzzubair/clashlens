@@ -148,10 +148,11 @@ confirmation. Players with no observation or confirmation time go first.
 Every fourth claim keeps the existing oldest-first order so daily results and
 other derived work keep moving; on a response-only thread, described below,
 that order covers responses only. If all planned claims are rejected, that call
-falls back to the existing order without refreshing the plan again. While a
-thread could take Reset-priority work, its planned claim takes that order, and
-every other job each thread claims is that Reset work; see
-[`deployment.md`](deployment.md).
+falls back to the existing order without refreshing the plan again. Every
+other job each thread claims takes Reset-priority work first, so on that turn
+its planned claim yields to Reset work it could take; on the other turn the
+planned claim goes ahead, so live pages keep moving during a Reset backlog;
+see [`deployment.md`](deployment.md).
 
 Worker threads share the newest-job plan, but each thread claims its own next
 job, including when the queue is idle. An empty plan is refreshed at most once

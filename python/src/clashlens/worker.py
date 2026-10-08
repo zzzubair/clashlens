@@ -79,8 +79,10 @@ NEWEST_PLAN_MAX_AGE_SECONDS = 30.0
 NEWEST_PLAN_EMPTY_RETRY_SECONDS = 1.0
 OLDEST_FIRST_CLAIM_EVERY = 4
 # Every other job each lane claims takes Reset-priority work first while any
-# waits, so live work that has waited 20 minutes, which wins the other claims,
-# cannot hold back the previous day's board, and neither can starve the other.
+# waits, and the rest take other due work first, so the previous day's board
+# and live pages each get at least half of every lane's claims while both
+# wait. On 8 Oct 2026 the rest went by waiting time, which Reset work wins for
+# 20 minutes, and live responses waited 21 minutes behind the Reset backlog.
 RESET_FIRST_CLAIM_EVERY = 2
 # A continuous worker with two or more lanes keeps about two thirds of them
 # (8 of 12) for responses. The rest run derived work: daily results, builds
@@ -565,7 +567,9 @@ class ObservationProcessor:
         limit = {} if work_types is None else {"work_types": work_types}
         with self._plan_lock:
             turn = self._lane_claims.get(owner, 0)
-        limit["reset_first"] = turn % RESET_FIRST_CLAIM_EVERY == 0
+        reset_turn = turn % RESET_FIRST_CLAIM_EVERY == 0
+        # The board's build and checks always go before a slower army build.
+        limit["reset_first"] = reset_turn or work_types == POPULATION_BUILD_WORK_TYPES
         planned = False
         if work_types is None or "process_observation" in work_types:
             with self._plan_lock:
@@ -581,11 +585,12 @@ class ObservationProcessor:
                         job_id = self._plan.popleft() if self._plan else None
                 if job_id is None:
                     break
+                # Only on a Reset turn does the newest live response yield.
                 claim = self.database.claim_job(
                     owner=owner,
                     lease_seconds=lease_seconds,
                     job_id=job_id,
-                    planned=True,
+                    planned=reset_turn,
                     **limit,
                 )
                 if claim is not None:
@@ -854,11 +859,13 @@ class ObservationProcessor:
                 return ProcessResult(claim.job_id, "lease_lost")
 
         try:
-            # Renew before the spool miss can enter a bounded remote fallback;
-            # the second renewal below fences the result before parsing.
-            renewal_started_at = monotonic()
-            self.database.renew_claim(claim, lease_seconds=lease_seconds)
-            self._record_stage("python_lease_renew", renewal_started_at)
+            # Renew before a remote read, which can retry for a bounded time; a
+            # local spool read has no fallback, so it skips this commit. The
+            # second renewal below fences the result before parsing.
+            if not uses_local_spool:
+                renewal_started_at = monotonic()
+                self.database.renew_claim(claim, lease_seconds=lease_seconds)
+                self._record_stage("python_lease_renew", renewal_started_at)
             archive_started_at = monotonic()
             try:
                 if uses_local_spool:
