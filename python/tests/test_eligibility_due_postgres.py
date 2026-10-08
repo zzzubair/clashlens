@@ -223,8 +223,18 @@ def test_a_profile_without_a_recognized_league_is_fetched_again_once_processed(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url) as connection_info:
+        # Last week's profile still waits for processing; it is not this week's fetch.
+        store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="unprocessed-last-week",
+            endpoint="profile",
+            body=json.dumps({**PROFILE, "tag": "#9QQ", "leagueTier": LEGEND_II}).encode(),
+            observed_at=datetime.now(UTC) - timedelta(days=8),
+            normalized_tag="#9QQ",
+        )
         observed_at = datetime.now(UTC) - timedelta(seconds=30)
-        observation_id, _job = store_observation(
+        observation_id, job = store_observation(
             connection_info,
             archive_server,
             occurrence_key="unrecognized-this-week",
@@ -260,7 +270,7 @@ def test_a_profile_without_a_recognized_league_is_fetched_again_once_processed(
         assert _due(connection_info, player) == (now + timedelta(minutes=5), 0)
         database, processor = _processor(connection_info, archive_server)
         try:
-            assert processor.process_once(owner="unrecognized") is not None
+            assert processor.process_job(job, owner="unrecognized") is not None
         finally:
             database.close()
         _admit(connection_info, now + timedelta(minutes=6))
@@ -274,6 +284,40 @@ def test_a_profile_without_a_recognized_league_is_fetched_again_once_processed(
                 " WHERE player_id = %s",
                 (player,),
             ).fetchone() == ("pending", None)
+
+
+def test_a_retry_after_the_attempt_count_was_cleared_takes_an_unused_key(
+    database_url: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        (player,) = _players(connection_info, 1)
+        with psycopg.connect(connection_info) as connection:
+            # This week's first check and two retries; a promotion answer then
+            # cleared the count and made the player due again.
+            connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
+                    status, profile_status, battle_log_status, league_history_status
+                ) SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag, now(),
+                         'discovery-profile:' || id || ':' || to_char(
+                             clashlens_eligibility_week(now()) AT TIME ZONE 'UTC',
+                             'YYYY-MM-DD"T"HH24:MI:SS"Z"') || suffix,
+                         'failed', 'pending', 'not_applicable', 'pending'
+                  FROM players CROSS JOIN unnest(ARRAY['', ':1', ':2']) AS suffix
+                  WHERE id = %s
+                """,
+                (player,),
+            )
+            connection.execute(
+                "UPDATE players SET eligibility_due_at = now(), eligibility_attempts = 1"
+                " WHERE id = %s",
+                (player,),
+            )
+        now = datetime.now(UTC)
+        _admit(connection_info, now)
+        assert _checks(connection_info, player)[-1] == ("3", "pending")
+        assert _due(connection_info, player) == (now + timedelta(minutes=10), 2)
 
 
 def test_one_check_for_a_player_named_by_several_sources(database_url: str) -> None:
@@ -509,24 +553,43 @@ def test_the_delay_from_a_first_check_to_the_first_battle_log_is_reported(
             first_at = connection.execute(
                 "SELECT created_at FROM collector_work WHERE player_id = %s", (logged,)
             ).fetchone()[0]
+            # A public lookup added the first check for another player.
+            looked_up = connection.execute(
+                """
+                INSERT INTO players (normalized_tag, active, eligibility_state)
+                VALUES ('#Q3', true, 'eligible') RETURNING id
+                """
+            ).fetchone()[0]
+            lookup_at = connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, due_at,
+                    coalescing_key, league_history_status)
+                VALUES ('initial_collection', 'interactive', 'player', %s, '#Q3', now(),
+                        'lookup', 'pending') RETURNING created_at
+                """,
+                (looked_up,),
+            ).fetchone()[0]
         collector = CollectorDatabase(_as(connection_info, "clashlens_collector"))
         try:
-            collector.record_response(
-                _handoff(
-                    occurrence_key="first-battle-log",
-                    response_hash=_hash("first-battle-log"),
-                    player_id=logged,
-                    tag="#Q1",
-                    endpoint="battle_log",
-                    completed_at=first_at + timedelta(seconds=90),
+            for player, tag, at in ((logged, "#Q1", first_at + timedelta(seconds=90)),
+                                    (looked_up, "#Q3", lookup_at + timedelta(seconds=30))):
+                collector.record_response(
+                    _handoff(
+                        occurrence_key=f"first-battle-log-{tag}",
+                        response_hash=_hash(f"first-battle-log-{tag}"),
+                        player_id=player,
+                        tag=tag,
+                        endpoint="battle_log",
+                        completed_at=at,
+                    )
                 )
-            )
         finally:
             collector.close()
-        assert _report(connection_info)["first_battle_log_delay"] == {
-            "players": 2, "with_first_log": 1,
-            "median_seconds": 90, "p95_seconds": 90, "max_seconds": 90,
-        }
+        assert _report(connection_info)["first_battle_log_delay"] == pytest.approx({
+            "players": 3, "with_first_log": 2,
+            "median_seconds": 60, "p95_seconds": 87, "max_seconds": 90,
+        })
 
 
 def test_the_lab_list_load_reports_what_it_read_left_out_and_kept(

@@ -37,11 +37,14 @@
 -- players.first_battle_log_at records when a player's first successful battle
 -- log arrived, for the discovery-to-first-log delay; it is set where
 -- first_battle_pending is cleared, and stays empty for players logged before
--- this migration.
+-- this migration. players.battle_opponent_seen_at and
+-- battle_opponent_observation_id record the first battle log naming a player
+-- while untracked (filled from saved sightings now), so the report's
+-- battle-opponent count survives pruning of those sightings.
 --
--- About 26,600 players today; the three timestamps and the count add 28 bytes
--- a row, and the index holds only due players. The check index below holds only
--- waiting discovery checks, at most about 500 rows.
+-- About 26,600 players today; the four timestamps, the observation ID and the
+-- count add 44 bytes a row, and the index holds only due players. The check
+-- index below holds only waiting discovery checks, at most about 500 rows.
 --
 -- clashlens_population_report and clashlens_repair_population back the
 -- collector-role population-status command: separate available, waiting to
@@ -62,6 +65,11 @@ ALTER TABLE players
     ADD COLUMN eligibility_answer_after timestamptz,
     ADD COLUMN eligibility_attempts integer NOT NULL DEFAULT 0,
     ADD COLUMN first_battle_log_at timestamptz,
+    ADD COLUMN battle_opponent_seen_at timestamptz,
+    ADD COLUMN battle_opponent_observation_id bigint,
+    ADD CONSTRAINT players_battle_opponent_seen CHECK (
+        (battle_opponent_seen_at IS NULL) = (battle_opponent_observation_id IS NULL)
+    ),
     ADD CONSTRAINT players_eligibility_due_state CHECK (
         eligibility_attempts >= 0
         AND (eligibility_due_at IS NOT NULL
@@ -75,6 +83,33 @@ CREATE INDEX collector_work_discovery_waiting
     WHERE kind = 'discovery_profile' AND NOT eligibility_recheck
       AND status IN ('pending', 'waiting_retry');
 GRANT UPDATE (first_battle_log_at) ON TABLE players TO clashlens_collector;
+
+UPDATE players AS player
+SET battle_opponent_seen_at = first.discovered_at,
+    battle_opponent_observation_id = first.observation_id
+FROM (
+    SELECT DISTINCT ON (player_id) player_id, discovered_at, observation_id
+    FROM known_player_discoveries WHERE source_kind = 'battle_opponent'
+    ORDER BY player_id, discovered_at, id
+) AS first
+WHERE player.id = first.player_id;
+
+-- A battle log's first sighting of an untracked player, kept on the player so
+-- pruning the sighting does not move them out of the battle-opponent count.
+CREATE FUNCTION clashlens_save_battle_opponent()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+BEGIN
+    UPDATE players
+    SET battle_opponent_seen_at = NEW.discovered_at,
+        battle_opponent_observation_id = NEW.observation_id
+    WHERE id = NEW.player_id AND NOT active AND battle_opponent_seen_at IS NULL;
+    RETURN NULL;
+END $$;
+CREATE TRIGGER known_player_discoveries_battle_opponent
+AFTER INSERT ON known_player_discoveries
+FOR EACH ROW WHEN (NEW.source_kind = 'battle_opponent')
+EXECUTE FUNCTION clashlens_save_battle_opponent();
 
 UPDATE players AS player SET eligibility_due_at = now()
 WHERE NOT player.active AND EXISTS (
@@ -144,9 +179,9 @@ AS $$
     LIMIT 1;
 $$;
 
--- A successful profile fetch within the window while a successful profile
--- response is still awaiting processing: either that fetch's own response or,
--- for an unchanged answer, the earlier one it kept.
+-- A successful profile fetch within the window whose answer still awaits
+-- processing: the latest successful profile response, which that fetch either
+-- saved or, for an unchanged answer, kept.
 CREATE FUNCTION clashlens_eligibility_processing_since(
     requested_player_id bigint, boundary_at timestamptz, instant timestamptz
 )
@@ -154,13 +189,17 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
 AS $$
     SELECT clashlens_eligibility_fetched_since(requested_player_id, boundary_at, instant)
        AND EXISTS (
-        SELECT 1 FROM collector_observations AS observation
-        JOIN python_processing_jobs AS job ON job.observation_id = observation.id
-        WHERE observation.player_id = requested_player_id
-          AND observation.endpoint = 'profile'
-          AND observation.http_status BETWEEN 200 AND 299
-          AND observation.response_completed_at <= instant
-          AND job.status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
+        SELECT 1 FROM (
+            SELECT observation.id FROM collector_observations AS observation
+            WHERE observation.player_id = requested_player_id
+              AND observation.endpoint = 'profile'
+              AND observation.http_status BETWEEN 200 AND 299
+              AND observation.response_completed_at <= instant
+            ORDER BY observation.response_completed_at DESC, observation.id DESC
+            LIMIT 1
+        ) AS latest
+        JOIN python_processing_jobs AS job ON job.observation_id = latest.id
+        WHERE job.status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
     );
 $$;
 
@@ -215,6 +254,8 @@ DECLARE
     candidate record;
     boundary_at timestamptz;
     work_key text;
+    suffix integer;
+    inserted integer;
     added integer := 0;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM players WHERE eligibility_due_at <= instant) THEN
@@ -260,13 +301,16 @@ BEGIN
             WHERE id = candidate.id;
         ELSIF room > 0 THEN
             work_key := 'discovery-profile:' || candidate.id || ':' || week_key;
-            IF EXISTS (
+            suffix := candidate.eligibility_attempts;
+            -- This week's check already ran; a retry keeps its own unused key.
+            WHILE EXISTS (
                 SELECT 1 FROM collector_work
                 WHERE kind = 'discovery_profile' AND coalescing_key = work_key
-            ) THEN
-                -- This week's check already ran; a retry keeps its own row.
-                work_key := work_key || ':' || (candidate.eligibility_attempts + 1);
-            END IF;
+            ) LOOP
+                suffix := suffix + 1;
+                work_key := 'discovery-profile:' || candidate.id || ':' || week_key
+                    || ':' || suffix;
+            END LOOP;
             INSERT INTO collector_work (
                 kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
                 profile_status, battle_log_status, league_history_status
@@ -275,13 +319,16 @@ BEGIN
                 candidate.normalized_tag, instant, work_key,
                 'pending', 'not_applicable', 'pending'
             ) ON CONFLICT DO NOTHING;
-            UPDATE players
-            SET eligibility_attempts = candidate.eligibility_attempts + 1,
-                eligibility_due_at = instant
-                    + clashlens_eligibility_retry_delay(candidate.eligibility_attempts + 1)
-            WHERE id = candidate.id;
-            room := room - 1;
-            added := added + 1;
+            GET DIAGNOSTICS inserted = ROW_COUNT;
+            IF inserted > 0 THEN
+                UPDATE players
+                SET eligibility_attempts = candidate.eligibility_attempts + 1,
+                    eligibility_due_at = instant
+                        + clashlens_eligibility_retry_delay(candidate.eligibility_attempts + 1)
+                WHERE id = candidate.id;
+                room := room - 1;
+                added := added + 1;
+            END IF;
         END IF;
     END LOOP;
     RETURN added;
@@ -551,6 +598,7 @@ AS $$
         SELECT player.id, player.active, player.eligibility_state,
                player.eligibility_due_at, player.eligibility_attempts,
                player.eligibility_answer_after, player.first_battle_pending,
+               player.battle_opponent_seen_at,
                state.last_not_found_at IS NOT NULL
                    AND (state.last_success_at IS NULL
                         OR state.last_not_found_at > state.last_success_at) AS gone,
@@ -573,23 +621,22 @@ AS $$
                      AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
                      AND work.status IN ('pending', 'waiting_retry')
                ) AS waiting,
-               EXISTS (
-                   SELECT 1 FROM known_player_discoveries AS discovery
-                   WHERE discovery.player_id = known.id
-                     AND discovery.source_kind = 'battle_opponent'
-               ) AS opponent
+               known.battle_opponent_seen_at IS NOT NULL AS opponent
         FROM known CROSS JOIN week WHERE NOT known.active
     ), first_checks AS (
         SELECT work.player_id, min(work.created_at) AS first_at
         FROM collector_work AS work
         JOIN players AS player ON player.id = work.player_id AND player.active
-        WHERE work.kind = 'discovery_profile'
+        WHERE work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
         GROUP BY work.player_id
         HAVING min(work.created_at) >= instant - interval '7 days'
     ), first_logs AS (
         SELECT extract(epoch FROM player.first_battle_log_at - first_checks.first_at)::double precision
                    AS seconds
         FROM first_checks JOIN players AS player ON player.id = first_checks.player_id
+        -- Leaves out players whose first log came before that check or was
+        -- not recorded (before this migration).
+        WHERE player.first_battle_pending OR player.first_battle_log_at >= first_checks.first_at
     ), checks AS (
         SELECT work.eligibility_recheck AS weekly,
                jsonb_build_object(
@@ -609,9 +656,11 @@ AS $$
         SELECT count(*) FILTER (WHERE league_tier_id = 105000035) AS legend_ii,
                count(*) FILTER (WHERE league_tier_id = 105000034) AS legend_iii,
                count(*) FILTER (WHERE league_tier_id = 105000035
-                                  AND checked_at >= week.start_at) AS legend_ii_checked,
+                                  AND checked_at >= week.start_at + interval '1 hour')
+                   AS legend_ii_checked,
                count(*) FILTER (WHERE league_tier_id = 105000034
-                                  AND checked_at >= week.start_at) AS legend_iii_checked
+                                  AND checked_at >= week.start_at + interval '1 hour')
+                   AS legend_iii_checked
         FROM promotion_candidates CROSS JOIN week
     ), unlisted AS (
         SELECT count(*) AS total
@@ -716,6 +765,7 @@ BEGIN
         'clashlens_eligibility_answered_since(bigint,timestamptz,timestamptz)',
         'clashlens_latest_recognized_tier(bigint)',
         'clashlens_eligibility_processing_since(bigint,timestamptz,timestamptz)',
+        'clashlens_save_battle_opponent()',
         'clashlens_eligibility_retry_delay(integer)',
         'clashlens_mark_eligibility_due(bigint[],timestamptz)',
         'clashlens_admit_due_eligibility(timestamptz)',
@@ -734,6 +784,7 @@ REVOKE ALL ON FUNCTION
     clashlens_eligibility_answered_since(bigint,timestamptz,timestamptz),
     clashlens_latest_recognized_tier(bigint),
     clashlens_eligibility_processing_since(bigint,timestamptz,timestamptz),
+    clashlens_save_battle_opponent(),
     clashlens_eligibility_retry_delay(integer),
     clashlens_mark_eligibility_due(bigint[],timestamptz),
     clashlens_admit_due_eligibility(timestamptz),

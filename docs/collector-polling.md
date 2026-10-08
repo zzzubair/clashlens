@@ -79,8 +79,10 @@ seen Legend II and III players.
 
 Each Monday, after the Reset sweep (05:00-05:10 UTC), settlement (from 05:20)
 and the late-battle check (from 05:30), from 06:00 the collector asks for the
-profile of every listed Legend II player not checked since the Reset, oldest
-check first, then every listed Legend III player the same way, at most
+profile of every listed Legend II player not checked since 06:00, oldest
+check first, then every listed Legend III player the same way (an answer saved
+between the Reset and 06:00, such as the weekly check's, can predate the game
+applying a promotion, so it does not count), at most
 `CLASHLENS_PROMOTION_RECHECK_PER_SECOND` (set in `app.env`) requests a second
 on the regular keys (20 by default; 0 turns it off), at most two at once. A
 Legend III player promoted to Legend II is refreshed to Legend II, so it is
@@ -114,15 +116,18 @@ Legend II takes about an hour and Legend III about three more.
 The `population-status` command, run like `load-promotion-candidates`,
 prints tracked players split into available (a current profile naming this
 Season), waiting to sign up and unavailable (profile not found); for players
-whose first check was added in the last 7 days and who are now tracked, the
+whose first discovery, lookup or refresh check was added in the last 7 days
+and who are now tracked, the
 median, 95th-percentile and longest time from that check to their first
 battle log (first logs before migration 0082 are not recorded); untracked
 players, and this week's answers, waiting checks, due retries and players not
-yet checked for battle opponents and other known players separately; this
+yet checked for battle opponents (saved on the player when a battle log first
+names them untracked, so pruning sightings does not move them) and other
+known players separately; this
 week's weekly and discovery checks by outcome, with how many of their players
 are now tracked; the due players; untracked players whose saved profile still
 shows no recognized league, which drops only as recognized profiles are
-saved; and the promotion list by tier, with how many were asked since the Reset and known
+saved; and the promotion list by tier, with how many were asked since 06:00 on Monday and known
 Legend II and III players missing from it. `--repair` first saves as due
 every untracked player that never had a recognized or not-found answer, and
 lists every untracked player whose latest recognized profile shows Legend II

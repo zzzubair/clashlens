@@ -4,7 +4,7 @@ Legend II's top finishers move into Legend I at the Monday 05:00 UTC Reset,
 and Legend III's into Legend II. After the Reset sweep (05:00-05:10),
 settlement (from 05:20) and the late-battle check (from 05:30), from 06:00 the
 collector asks for the profile of every listed Legend II player (migration
-0076) not checked since the Reset, then every listed Legend III player, at
+0076) not checked since 06:00, then every listed Legend III player, at
 most ``CLASHLENS_PROMOTION_RECHECK_PER_SECOND`` requests a second (20 by
 default, 0 turns it off) on the regular keys, at most two at once. Just before
 each request, after its pacing wait, it is sent only while that Reset's
@@ -22,7 +22,9 @@ II is asked with Legend II next Monday. A request that fails, or an answer that
 cannot be read or shows an uncertain tier, leaves the player due; it is asked
 again once the rest of its tier has been asked. Legend III players are asked
 only once no Legend II player is due, so a Legend II player left due is asked
-again before any Legend III player.
+again before any Legend III player. A lower-league answer saved between the
+Reset and 06:00, such as the weekly check's, may predate the game applying a
+promotion, so it does not stand in for that Monday's request.
 """
 
 from __future__ import annotations
@@ -94,7 +96,7 @@ def has_spare_time(database: CollectorDatabase, now: datetime) -> bool:
 
 
 def due_tags(database: CollectorDatabase, now: datetime, skip: list[str]) -> list[str]:
-    """The next listed players not checked since the Monday Reset, outside ``skip``.
+    """The next listed players not checked since 06:00 on Monday, outside ``skip``.
 
     Legend III players come only once no Legend II player is due; while only
     skipped Legend II players are due, nothing is returned.
@@ -109,7 +111,7 @@ def due_tags(database: CollectorDatabase, now: datetime, skip: list[str]) -> lis
                 ORDER BY normalized_tag = ANY(%s::text[]), checked_at, normalized_tag
                 LIMIT %s
                 """,
-                (skip, tier, week_start(now), skip, BATCH_SIZE),
+                (skip, tier, week_start(now) + START_DELAY, skip, BATCH_SIZE),
             ).fetchall()
             if due:
                 return [str(tag) for tag, skipped in due if not skipped]

@@ -28,8 +28,9 @@ from clashlens.collector_http import ApiKey, KeyPool
 PROFILE = json.loads(
     (Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json").read_bytes()
 )
-# Answers carry the real time, so the test uses the real current week.
-MONDAY = promotion_recheck.week_start(datetime.now(UTC))
+# Answers carry the real time, so the test uses the real current week, or the
+# one before while the real week's re-check has not started.
+MONDAY = promotion_recheck.week_start(datetime.now(UTC) - promotion_recheck.START_DELAY)
 LAST_WEEK = MONDAY - timedelta(days=6)
 
 
@@ -93,7 +94,7 @@ def _seed(connection_info: str) -> None:
                    ('#2QQ', 105000035, 4800, %(old)s), ('#CQQ', 105000035, 4700, %(old)s),
                    ('#0QQ', 105000035, 5200, %(new)s), ('#UQQ', 105000034, 4600, %(old)s)
             """,
-            {"old": LAST_WEEK, "new": MONDAY},
+            {"old": LAST_WEEK, "new": MONDAY + promotion_recheck.START_DELAY},
         )
 
 
@@ -169,7 +170,7 @@ def test_monday_recheck_queues_promoted_players_and_refreshes_the_list(
         now = MONDAY + timedelta(minutes=70)
         database = CollectorDatabase(connection_info)
         try:
-            # Legend II first; players checked since the Reset wait.
+            # Legend II first; players checked since 06:00 wait.
             assert promotion_recheck.due_tags(database, now, []) == [
                 "#2QQ", "#8QQ", "#9QQ", "#CQQ",
             ]
@@ -188,7 +189,7 @@ def test_monday_recheck_queues_promoted_players_and_refreshes_the_list(
             listed = connection.execute(
                 "SELECT normalized_tag, league_tier_id, trophies, checked_at > %s"
                 " FROM promotion_candidates ORDER BY normalized_tag",
-                (MONDAY,),
+                (MONDAY + promotion_recheck.START_DELAY,),
             ).fetchall()
             due = connection.execute(
                 "SELECT normalized_tag, active FROM players WHERE eligibility_due_at IS NOT NULL"
@@ -206,6 +207,24 @@ def test_monday_recheck_queues_promoted_players_and_refreshes_the_list(
 
         # Everyone due this week has been asked.
         assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=71)) is None
+
+
+def test_a_lower_league_answer_before_06_00_does_not_stand_in_for_the_recheck(
+    database_url: str, tmp_path: Path
+) -> None:
+    answers = {"#8QQ": (200, _profile("#8QQ", 105000036, "Legend I", 5000))}
+    with domain_database(database_url) as connection_info, _provider(answers) as origin:
+        _seed(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("DELETE FROM promotion_candidates WHERE normalized_tag <> '#8QQ'")
+            # The weekly check read Legend II before the game applied the promotion.
+            connection.execute(
+                "UPDATE promotion_candidates SET checked_at = %s",
+                (MONDAY + timedelta(minutes=10),),
+            )
+        assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=70)) == Counter(
+            asked=1, promoted=1, failed=0, queued=1
+        )
 
 
 def test_monday_recheck_waits_for_06_00_late_live_players_and_settlement(
@@ -358,7 +377,7 @@ def test_a_promoted_player_whose_check_failed_this_week_gets_another(
                        'not_applicable', 'pending'
                 FROM refused
                 """,
-                (MONDAY.strftime("%Y-%m-%dT%H:%M:%SZ"),),
+                (promotion_recheck.week_start(datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ"),),
             )
         now = MONDAY + timedelta(minutes=70)
         assert _check(origin, connection_info, tmp_path, now) == Counter(

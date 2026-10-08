@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import sleep
 from types import SimpleNamespace
@@ -130,7 +130,7 @@ def test_discovery_saves_each_new_player_as_due_once(database_url: str) -> None:
                     """
                 ).fetchall()
             ]
-            # An older unfinished weekly check already covers this player.
+            # An older unfinished weekly check does not stand in for the saved retry.
             connection.execute(
                 """
                 INSERT INTO collector_work (
@@ -166,8 +166,28 @@ def test_discovery_saves_each_new_player_as_due_once(database_url: str) -> None:
             discover([new_id, known_id, blocked_id])
             first = due()
             discover([new_id, known_id, blocked_id])
-            assert [row[0] for row in first] == [new_id]
+            assert [row[0] for row in first] == [new_id, blocked_id]
             assert due() == first
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("SET ROLE clashlens_collector")
+                now = datetime.now(UTC)
+                connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (now,))
+                connection.execute("RESET ROLE")
+                # The old check fails; the next try replaces it.
+                connection.execute(
+                    "UPDATE collector_work SET status = 'failed' WHERE player_id = %s",
+                    (blocked_id,),
+                )
+                connection.execute("SET ROLE clashlens_collector")
+                connection.execute(
+                    "SELECT clashlens_admit_discovery_profiles(%s)", (now + timedelta(minutes=6),)
+                )
+                connection.execute("RESET ROLE")
+                assert connection.execute(
+                    "SELECT status, eligibility_recheck FROM collector_work"
+                    " WHERE player_id = %s ORDER BY id",
+                    (blocked_id,),
+                ).fetchall() == [("failed", True), ("pending", False)]
         finally:
             database.close()
 
