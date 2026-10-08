@@ -15,7 +15,11 @@ from domain_test_support import domain_database, store_observation, text
 
 from clashlens import battle_day_repair, boundary
 from clashlens.army_decoder import DECODER_VERSION
-from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays, saved_proof_facts
+from clashlens.boundary_manifest import (
+    _moved_decode_ids,
+    _moved_side_arrays,
+    saved_proof_facts,
+)
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database, _text_value
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
