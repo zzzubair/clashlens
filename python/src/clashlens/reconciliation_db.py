@@ -33,7 +33,7 @@ from .domain import (
     RankedDay,
     ranked_day_for,
 )
-from .profile import normalize_player_tag
+from .profile import LEGEND_I_TIER_ID, normalize_player_tag
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
     ReconciliationInput,
@@ -283,6 +283,30 @@ def recalculate_ranked_day(
         boundary_kind = "season"
     elif ranked_day.end.weekday() == 0:
         boundary_kind = "weekly"
+    # A player dropped from Legend I at a Season's end, ranked below 10,000,
+    # has no Legend I reading at that Reset, so their last day had no end:
+    # all 1,993 such players on 5 October 2026. The game's official Season-end
+    # total in their league history, which includes the automatic defense
+    # loss, is that day's end instead; no reset to 5,000 follows it.
+    official_final = (
+        _official_final(connection, player_id, ranked_day.end)
+        if boundary_kind == "season"
+        and end_baseline is not None
+        and end_baseline["evidence"]["profile"]["eligibility_state"] == "ineligible"
+        else None
+    )
+    if official_final is not None:
+        assert end_baseline is not None
+        boundary_kind = None
+        end_baseline = {
+            **end_baseline,
+            "trophies": official_final,
+            "eligibility_state": None,
+            "complete": bool(end_baseline["evidence"]["battle_log_valid"]),
+            "evidence": {
+                **end_baseline["evidence"], "official_final_trophies": official_final,
+            },
+        }
 
     trophy_rule_versions = tuple(
         sorted(
@@ -648,6 +672,19 @@ def recalculate_ranked_day(
             ranked_day_input_hash=input_hash,
             reset_lock_wait=RESET_LOCK_WAIT,
         )
+
+
+def _official_final(connection: Any, player_id: int, season_end: datetime) -> int | None:
+    """The player's official Legend I total for the Season ending at
+    ``season_end``, whose league history labels it by that end."""
+    row = connection.execute(
+        """
+        SELECT league_trophies FROM player_league_history_entries
+        WHERE player_id = %s AND league_season_id = %s AND league_tier_id = %s
+        """,
+        (player_id, str(int(season_end.timestamp())), LEGEND_I_TIER_ID),
+    ).fetchone()
+    return None if row is None or row[0] is None else int(row[0])
 
 
 def _anchored_day(connection: Any, day_start: datetime) -> tuple[Any, RankedDay | None]:

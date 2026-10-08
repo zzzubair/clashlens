@@ -681,3 +681,58 @@ def test_season_rule_starts_day_1_at_5000_once_a_new_season_profile_exists(
     ended = days[boundary - timedelta(days=1)]
     assert (ended[0], ended[3]) == ("Complete" if log_ok else "Partial", 5000)
     assert days[boundary][2:] == (5000, None, "season_rule")
+
+
+def _dropped_profile(trophies: int) -> bytes:
+    """As #QUR98JV2U's first profile after the 5 October 2026 Season end:
+    Legend II, Season 0, still showing its final total."""
+    payload = json.loads(_profile(trophies))
+    payload["currentLeagueSeasonId"] = 0
+    payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+    return json.dumps(payload).encode()
+
+
+@pytest.mark.parametrize("official_gap,state", [(0, "Complete"), (-30, "Inconsistent")])
+def test_player_dropped_at_the_season_end_ends_at_the_official_total(
+    database_url: str, archive_server, official_gap: int, state: str
+) -> None:
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_dropped_profile(final), log=_log(*battles))
+        _process(connection_info, archive_server, jobs)
+        before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        # The official Season-end placement arrives hours later.
+        _, history_job = store_observation(
+            connection_info, archive_server, occurrence_key="league-history",
+            endpoint="league_history", normalized_tag=TAG,
+            observed_at=boundary + timedelta(hours=6),
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+            body=json.dumps({"items": [{
+                "leagueSeasonId": str(int(boundary.timestamp())),
+                "leagueTrophies": final + official_gap, "leagueTierId": 105000036,
+                "placement": 10568, "attackWins": 1, "attackLosses": 0,
+                "attackStars": 3, "defenseWins": 0, "defenseLosses": 8,
+                "defenseStars": 16, "maxBattles": 8,
+            }]}).encode(),
+        )
+        _process(connection_info, archive_server, [history_job])
+        after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+
+    assert before[:2] == (last_day, "Partial")
+    assert after[:2] == (last_day, state)
+    if state == "Complete":
+        assert after[2:5] == ("exact", 6000, final)

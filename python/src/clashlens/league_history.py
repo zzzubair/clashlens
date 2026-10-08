@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -277,6 +277,7 @@ def complete_league_history(
                         Jsonb(entry.source_json),
                     ),
                 )
+            _recalculate_season_ends(connection, player_id, history, observed_at)
             _record_processing_outcome(
                 database,
                 connection,
@@ -293,3 +294,46 @@ def complete_league_history(
                 state="complete",
                 outcome=history.outcome,
             )
+
+
+def _recalculate_season_ends(
+    connection: Any, player_id: int, history: ParsedLeagueHistory,
+    observed_at: datetime,
+) -> None:
+    """Queue, once, the last day of a Season that ended up to 3 days before
+    this response, still saved without an end, which the player's official
+    Legend I total can now give (see ``reconciliation_db._official_final``).
+    Older Seasons are left as saved."""
+    from . import first_battle_log
+    from .db import PYTHON_BACKFILL_PRIORITY
+    from .profile import LEGEND_I_TIER_ID
+    from .reconciliation import RECONCILIATION_RULE_VERSION
+
+    for entry in history.entries:
+        if entry.league_tier_id != LEGEND_I_TIER_ID or not str(
+            entry.league_season_id
+        ).isdigit():
+            continue
+        season_end = datetime.fromtimestamp(int(entry.league_season_id), UTC)
+        if not season_end <= observed_at <= season_end + timedelta(days=3):
+            continue
+        day_start = season_end - timedelta(days=1)
+        waiting = connection.execute(
+            """
+            SELECT failure_reasons ? 'missing_end_baseline'
+            FROM ranked_day_versions
+            WHERE player_id = %s AND ranked_day_start = %s
+              AND reconciliation_rule_version = %s
+            ORDER BY version DESC, id DESC LIMIT 1
+            """,
+            (player_id, day_start, RECONCILIATION_RULE_VERSION),
+        ).fetchone()
+        if waiting is None or not waiting[0]:
+            continue
+        first_battle_log._queue(
+            connection, int(player_id), day_start, None,
+            key=(f"reconcile:official-final:{player_id}:"
+                 f"{day_start:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}"),
+            trigger="official_final", later_days=False,
+            priority=PYTHON_BACKFILL_PRIORITY,
+        )
