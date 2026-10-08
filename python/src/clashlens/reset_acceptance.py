@@ -104,15 +104,16 @@ def _refresh_one(
         # of that item failed or a newer response replaced it. Unchanged
         # readings reuse a response saved before the Reset, whose finished job
         # may already be cleaned up. A response saved since the Reset, or no
-        # longer kept, whose job is gone was cleaned up before the check saw it
-        # finish: the time is then unknown and stays empty, never the
-        # collection time.
+        # longer kept, whose jobs are gone was cleaned up before the check saw
+        # it finish: the time is then unknown and stays empty, never the
+        # collection time. A response whose job failed counts once a replay
+        # job processed it, at the first time any of its jobs finished.
         pending, gone, processed_at = connection.execute(
             """
-            SELECT count(*) FILTER (WHERE job.state <> 'complete'),
-                   count(*) FILTER (WHERE job.id IS NULL
+            SELECT count(*) FILTER (WHERE processing.jobs > 0 AND NOT processing.done),
+                   count(*) FILTER (WHERE processing.jobs = 0
                                       AND COALESCE(observation.created_at >= %s, true)),
-                   max(job.completed_at)
+                   max(processing.completed_at)
             FROM collector_work AS work
             CROSS JOIN LATERAL unnest(
                 ARRAY[work.profile_observation_id, work.battle_log_observation_id,
@@ -120,8 +121,15 @@ def _refresh_one(
             ) AS reading (observation_id)
             LEFT JOIN collector_observations AS observation
               ON observation.id = reading.observation_id
-            LEFT JOIN python_processing_jobs_worker AS job
-              ON job.observation_id = reading.observation_id
+            CROSS JOIN LATERAL (
+                SELECT count(*) AS jobs,
+                       COALESCE(bool_or(job.state = 'complete'), false) AS done,
+                       min(job.completed_at) FILTER (WHERE job.state = 'complete')
+                           AS completed_at
+                FROM python_processing_jobs_worker AS job
+                WHERE COALESCE(job.observation_id, job.replay_observation_id)
+                      = reading.observation_id
+            ) AS processing
             WHERE work.sweep_id = %s AND work.kind = 'reset_baseline'
               AND reading.observation_id IS NOT NULL
             """,

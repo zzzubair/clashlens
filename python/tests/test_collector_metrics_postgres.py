@@ -510,3 +510,43 @@ def test_metrics_show_finished_work_reset_work_left_and_old_failures(
             assert "completed_job_reconcile_ranked_day_2m" not in metrics
         finally:
             database.close()
+
+
+def test_a_failed_job_whose_response_a_replay_processed_is_no_longer_outstanding(
+    database_url: str,
+) -> None:
+    # The failed job keeps its state; only the outstanding count drops.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = CollectorDatabase(connection_info)
+        try:
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("SET session_replication_role = replica")
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, observation_id,
+                        replay_observation_id, status
+                    ) VALUES
+                        ('process_observation', 'failed-9100', '{}', 9100, NULL, 'failed'),
+                        ('process_observation', 'failed-9101', '{}', 9101, NULL, 'failed')
+                    """
+                )
+            assert database.health_metrics()["failed_processing"] == 2
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("SET session_replication_role = replica")
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, replay_observation_id,
+                        status, completed_at
+                    ) VALUES ('replay_observation', 'replay-9100',
+                              '{"replay_request_id": 1}', 9100, 'complete', clock_timestamp())
+                    """
+                )
+                states = connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE observation_id = 9100"
+                ).fetchall()
+            assert states == [("failed",)]
+            assert database.health_metrics()["failed_processing"] == 1
+        finally:
+            database.close()

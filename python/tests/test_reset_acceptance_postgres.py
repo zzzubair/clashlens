@@ -324,6 +324,46 @@ def test_a_processed_time_whose_jobs_were_cleaned_up_stays_unknown(
             assert record["proof_processed_at"] is None
 
 
+def test_a_reset_response_processed_by_a_replay_counts_as_processed(
+    database_url: str,
+) -> None:
+    # The original job failed; the documented replay path processed the same
+    # response in a separate job.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            _seed_reset(owner, RESET)
+            owner.execute(
+                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s"
+                " WHERE observation_id IN (9001, 9003)",
+                (RESET + timedelta(minutes=15),),
+            )
+            owner.execute(
+                "UPDATE python_processing_jobs SET status = 'failed'"
+                " WHERE observation_id = 9002"
+            )
+
+        def refresh() -> dict:
+            with psycopg.connect(_as_worker(connection_info)) as connection:
+                record = reset_acceptance.refresh(
+                    connection, readable_boundary=None, readable_at=None
+                )
+            assert record is not None
+            return record
+
+        assert refresh()["proof_processed_at"] is None
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            owner.execute(
+                "INSERT INTO python_processing_jobs (work_type, deduplication_key,"
+                " input_json, replay_observation_id, status, completed_at) VALUES"
+                " ('replay_observation', 'replay-9002', '{\"replay_request_id\": 1}',"
+                " 9002, 'complete', %s)",
+                (RESET + timedelta(hours=2),),
+            )
+        assert refresh()["proof_processed_at"] == RESET + timedelta(hours=2)
+
+
 def test_a_replaced_reset_response_still_holds_back_the_processed_time(
     database_url: str,
 ) -> None:
