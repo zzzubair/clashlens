@@ -178,17 +178,22 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                     )
                 if replacement == "army-rebuilt":
                     connection.commit()
-                    assert boundary.queue_board_rebuilds(database, SEASON, queue=True)[
-                        "boards"
+                    # Queued behind the replacement, and once queued, kept.
+                    assert [
+                        boundary.queue_board_rebuilds(database, SEASON, queue=True)["boards"]
+                        for _ in range(2)
                     ] == [
-                        {
-                            "boundary_at": BOUNDARY.isoformat(),
-                            "generation": 2,
-                            "profile_not_found": 0,
-                            "late_battles": 0,
-                            "reordered": True,
-                            "correction": "queued",
-                        }
+                        [
+                            {
+                                "boundary_at": BOUNDARY.isoformat(),
+                                "generation": 2,
+                                "profile_not_found": 0,
+                                "late_battles": 0,
+                                "reordered": True,
+                                "correction": correction,
+                            }
+                        ]
+                        for correction in ("queued", "already_queued")
                     ]
                 if replacement == "army-then-board":
                     # A revised day result reaches the replacement before it

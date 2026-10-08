@@ -345,20 +345,6 @@ def _inherit_deferred_army_successor_snapshot(
         return False
     if target[0] is None or target[2] is not None:
         return False
-    if (
-        connection.execute(
-            """
-        SELECT 1
-        FROM boundary_publication_corrections
-        WHERE source_generation_id = %s
-          AND state IN ('queued', 'pending_inputs', 'active')
-        LIMIT 1
-        """,
-            (generation_id,),
-        ).fetchone()
-        is not None
-    ):
-        return False
     source = connection.execute(
         """
         SELECT snapshot_state, snapshot_id, snapshot_input_hash,
