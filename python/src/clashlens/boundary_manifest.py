@@ -310,8 +310,8 @@ def _reuse_plan(
     The base is the newest full manifest of this Reset and kind, so no
     manifest is ever more than one step from its rows. A row equal to the
     base's is the base's; a row equal to the newest manifest's names the
-    manifest storing that identity. A changed membership, or more than half
-    the rows differing from the base, freezes a new full manifest instead.
+    manifest storing that identity. A changed membership freezes a new full
+    manifest instead.
     """
     previous = connection.execute(
         """
@@ -360,8 +360,6 @@ def _reuse_plan(
         base_id if same else int(holder) if holder is not None else None
         for _, same, holder in plan
     ]
-    if 2 * sum(source != base_id for source in sources) > len(sources):
-        return None, []
     return base_id, sources
 
 

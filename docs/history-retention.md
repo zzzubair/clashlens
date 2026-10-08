@@ -285,9 +285,9 @@ as its base and stores only the players whose row differs from it; a differing
 row that an earlier manifest already stores keeps its plain columns and names
 that manifest for its identity. An army manifest also stores its Season input
 lists as the IDs removed from and added to the base's. A manifest is frozen in
-full again when the membership changes or more than half its rows differ from
-the base, so rebuilding any manifest reads at most its own rows and one full
-manifest. `boundary_publication_manifest_entries(id)` returns any manifest's
+full again only when there is no earlier manifest or the membership changes,
+however many rows differ, so rebuilding any manifest reads at most its own rows
+and one full manifest. `boundary_publication_manifest_entries(id)` returns any manifest's
 complete rows exactly as a full manifest stores them, and the digest still
 covers those rows. Database triggers refuse a base that is not a sealed full
 manifest of the same Reset and kind, and a reused identity not stored in full.
@@ -296,6 +296,11 @@ bytes stored and reused. Measured on a 13,000-player test board, a correction
 manifest stored 0.3-0.4 MB of rows instead of 12 MB. Replaying the same rule on
 production's 4-8 October manifests stores about 91% fewer row bytes. Manifests
 frozen before migration 0081 stay full and unchanged.
+
+How often the newest Reset's board is rebuilt is unchanged and is held as an
+owner decision: each late correction still freezes a new generation, and each
+one still copies the generation's member list and board entries in full; only
+the manifest rows are reused.
 
 ## What remains
 

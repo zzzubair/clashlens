@@ -191,26 +191,43 @@ def test_corrections_store_only_changed_rows_and_rebuild_the_full_manifest(
             database.close()
 
 
-@pytest.mark.parametrize("change", ["membership", "most_rows"])
-def test_a_changed_membership_or_most_rows_changing_freezes_a_full_manifest(
-    database_url: str, change: str
-) -> None:
+def test_a_changed_membership_freezes_a_full_manifest(database_url: str) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         first_id = seed_population(connection_info, PLAYERS)
         database = Database(connection_info)
         try:
             with database.pool.connection() as connection:
                 _freeze(database, connection, first_id, 1)
-                second_id = _correction(
-                    connection, first_id, 2, first_player=2 if change == "membership" else 1
-                )
-                if change == "most_rows":
-                    _fail_members(connection, second_id, "player_id %% 4 <> 0")
+                second_id = _correction(connection, first_id, 2, first_player=2)
                 second = _freeze(database, connection, second_id, 2)
             for kind in ("snapshot", "army"):
                 _, base_id, own, rows, rule_versions = second[kind]
                 assert base_id is None and len(own) == len(rows)
                 assert "season_input_changes" not in rule_versions
+        finally:
+            database.close()
+
+
+def test_most_rows_changing_still_builds_on_the_full_manifest(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        first_id = seed_population(connection_info, PLAYERS)
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                first = _freeze(database, connection, first_id, 1)
+                second_id = _correction(connection, first_id, 2)
+                _fail_members(connection, second_id, "player_id %% 4 <> 0")
+                second = _freeze(database, connection, second_id, 2)
+            for kind in ("snapshot", "army"):
+                full_id, _, _, base_rows, _ = first[kind]
+                _, base_id, own, rows, _ = second[kind]
+                changed = {
+                    row["player_id"]
+                    for row, base in zip(rows, base_rows, strict=True)
+                    if not _same(row, base)
+                }
+                assert base_id == full_id and 2 * len(changed) > len(rows)
+                assert own == dict.fromkeys(changed)
         finally:
             database.close()
 
