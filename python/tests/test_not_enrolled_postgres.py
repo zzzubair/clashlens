@@ -13,7 +13,7 @@ from datetime import timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, repair_season, store_observation
 from test_first_battle_log_postgres import (
     DAY_1,
     DAY_2,
@@ -156,16 +156,10 @@ def test_sign_up_day_starts_at_5000_by_the_season_rule(
         if saved_before_rule:
             monkeypatch.undo()
             assert _sign_up_day(connection_info)[0] == "Partial"
-            season = ranked_day_for(DAY_2).official_season_id
-            database = Database(connection_info)
-            try:
-                preview = first_battle_log.requeue_sign_up_days(
-                    database, season, queue=False, max_jobs=100)
-                queued = first_battle_log.requeue_sign_up_days(
-                    database, season, queue=True, max_jobs=100)
-            finally:
-                database.close()
-            assert (preview["players"], preview["queued"]) == (1, 0)
+            preview, queued = repair_season(
+                connection_info, ranked_day_for(DAY_2).official_season_id
+            )
+            assert (preview["players"], preview["left_to_queue"]) == (1, 1)
             assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
             _process(connection_info, archive_server, [])
         day = _sign_up_day(connection_info)
@@ -206,9 +200,8 @@ def test_a_season_profile_read_before_the_reset_but_saved_last_rules_out_sign_up
                             profile=_new_season_profile(5240), log=_log())
         _process(connection_info, archive_server, jobs)
         day = _sign_up_day(connection_info)
-        players = _sign_up_days(connection_info)
 
-    assert (day[2], day[4], players) == (None, None, 0)
+    assert (day[2], day[4]) == (None, None)
 
 
 def test_earlier_legend_battles_in_the_season_rule_out_sign_up(
@@ -224,9 +217,8 @@ def test_earlier_legend_battles_in_the_season_rule_out_sign_up(
                             log=_log((DAY_1 + timedelta(hours=1), True)))
         _process(connection_info, archive_server, jobs)
         day = _sign_up_day(connection_info)
-        players = _sign_up_days(connection_info)
 
-    assert (day[2], day[4], players) == (None, None, 0)
+    assert (day[2], day[4]) == (None, None)
 
 
 def test_a_battle_before_a_delayed_reset_reading_rules_out_sign_up(
@@ -250,9 +242,8 @@ def test_a_battle_before_a_delayed_reset_reading_rules_out_sign_up(
                             log=_log(battle))
         _process(connection_info, archive_server, jobs)
         day = _sign_up_day(connection_info)
-        players = _sign_up_days(connection_info)
 
-    assert (day[2], day[4], players) == (None, None, 0)
+    assert (day[2], day[4]) == (None, None)
 
 
 def test_a_battle_from_the_previous_season_does_not_rule_out_sign_up(

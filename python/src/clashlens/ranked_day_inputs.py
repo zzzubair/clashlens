@@ -721,6 +721,13 @@ LATER_READING_DAY_SQL = """(
 )"""
 
 
+def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> None:
+    """Serialize work deciding or saving one player's Legend day result."""
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
+    )
+
 def load_later_reading(
     database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
     reading_at: datetime,
