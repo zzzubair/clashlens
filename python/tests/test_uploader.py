@@ -643,7 +643,6 @@ def _one_claim(monkeypatch: pytest.MonkeyPatch, claim: UploadClaim) -> list[str]
             calls.append("claim") or (claims.pop() if claims else None)
         ),
         "renew_upload": lambda *_args, **_kwargs: calls.append("renew"),
-        "archived_copy": lambda *_args, **_kwargs: None,
         "complete_upload": lambda _database, _claim, *, archive_reference, **_kwargs: (
             calls.append(f"complete:{archive_reference}")
         ),
@@ -714,30 +713,43 @@ def test_a_lost_saved_copy_already_archived_completes_without_writing(
 
 
 @pytest.mark.parametrize(
-    ("archive_error", "unresolved_write", "outcome"),
+    ("archive_error", "attempt", "unresolved_write", "outcome"),
     [
+        # Attempt 62 comes after the 30 attempts following attempt 31's write.
         (
             ArchiveReadError("archive_missing", "no such object", retryable=True),
+            62,
             None,
             "fail:spool_missing:False",
+        ),
+        # A first attempt that finds no copy is tried again, so bytes saved
+        # again meanwhile are picked up.
+        (
+            ArchiveReadError("archive_missing", "no such object", retryable=True),
+            1,
+            None,
+            "fail:archive_missing:True",
         ),
         # The write of attempt 31 timed out and may still land.
         (
             ArchiveReadError("archive_missing", "no such object", retryable=True),
+            40,
             31,
             "fail:archive_missing:True",
         ),
         (
             ArchiveReadError("archive_unavailable", "provider error", retryable=True),
+            62,
             None,
             "fail:archive_unavailable:True",
         ),
     ],
-    ids=["never-archived", "write-may-yet-land", "archive-unavailable"],
+    ids=["never-archived", "first-miss", "write-may-yet-land", "archive-unavailable"],
 )
 def test_a_lost_saved_copy_fails_for_good_only_when_the_archive_lacks_it(
     monkeypatch: pytest.MonkeyPatch,
     archive_error: ArchiveReadError,
+    attempt: int,
     unresolved_write: int | None,
     outcome: str,
 ) -> None:
@@ -750,7 +762,7 @@ def test_a_lost_saved_copy_fails_for_good_only_when_the_archive_lacks_it(
         "uploader",
         "token",
         datetime.now(UTC),
-        1,
+        attempt,
         unresolved_write=unresolved_write,
     )
     calls = _one_claim(monkeypatch, claim)
@@ -829,53 +841,6 @@ def test_an_attempt_that_writes_nothing_keeps_counting_from_the_last_write(
             "write attempt 31 may yet land: archive_missing: no such object",
         )
     ]
-
-
-@pytest.mark.parametrize("generation", ["", "b" * 32])
-@pytest.mark.parametrize("change", ["saved_again", "archived_elsewhere", "recorded"])
-def test_a_copy_that_appears_during_the_archive_read_is_not_missing_proof(
-    monkeypatch: pytest.MonkeyPatch, generation: str, change: str
-) -> None:
-    # While this upload reads the archive, the collector saves the same bytes
-    # again, or the catalogue comes to record a copy of them.
-    digest = "a" * 64
-    location = f"s3://evidence/sha256/aa/{digest}" + (
-        f"/generation/{generation}" if generation else ""
-    )
-    reads: list[str] = []
-    spool = _Spool()
-    spool.verify = lambda _digest, _size: (  # type: ignore[attr-defined]
-        b"body" if change == "saved_again" and reads else None
-    )
-    claim = UploadClaim(
-        digest, "one", 4, "uploader", "token", datetime.now(UTC), 1, generation
-    )
-    calls = _one_claim(monkeypatch, claim)
-    copies = {
-        "saved_again": None,
-        "archived_elsewhere": SimpleNamespace(
-            reference=f"s3://evidence/sha256/aa/{digest}/generation/{'c' * 32}",
-            recorded=True,
-        ),
-        "recorded": SimpleNamespace(reference=location, recorded=True),
-    }
-    monkeypatch.setattr(
-        uploader_module.collector_uploads,
-        "archived_copy",
-        lambda *_args, **_kwargs: copies[change],
-    )
-
-    class Archive(_ReadyArchive):
-        @staticmethod
-        def read_verified(reference: str, _expected_hash: str) -> object:
-            reads.append(reference)
-            raise ArchiveReadError("archive_missing", "no such object", retryable=True)
-
-    uploader = _uploader(spool, _Store(spool), Archive())
-
-    assert asyncio.run(uploader.upload_once(owner="uploader")) is True
-    assert reads == [location]
-    assert calls[-1] == "fail:archive_missing:True"
 
 
 def test_upload_step_times_and_counts_show_on_the_collector_metrics(

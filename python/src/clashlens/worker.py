@@ -1340,7 +1340,7 @@ class ObservationProcessor:
             raise ArchiveReadError(
                 "spool_missing",
                 "new observation is missing from the local spool and the archive",
-                retryable=False,
+                retryable=True,
             )
         renew_lease()
         try:
@@ -1366,26 +1366,10 @@ class ObservationProcessor:
                     "archive marker does not match its configured hash",
                     retryable=True,
                 ) from error
-            try:
-                saved = self.archive.spool.verify(claim.response_hash) is not None
-            except (OSError, SpoolError):
-                saved = True
-            current = None if saved else collector_uploads.archived_copy(
-                self.database, claim.response_hash, bucket=bucket
-            )
-            if saved or (
-                current is not None
-                and (
-                    current.recorded
-                    or current.uploading
-                    or current.reference != copy.reference
-                )
-            ):
-                raise
             raise ArchiveReadError(
                 "spool_missing",
                 "new observation is missing from the local spool and was never archived",
-                retryable=False,
+                retryable=True,
             ) from error
 
     def _fail_rejected(self, claim: Claim, error: Error) -> ProcessResult:

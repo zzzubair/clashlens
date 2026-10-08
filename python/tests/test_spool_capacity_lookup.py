@@ -53,9 +53,10 @@ def test_repairs_may_pass_the_folder_limit_only_by_their_allowance(
     tmp_path: Path,
 ) -> None:
     # The collector holds the folder's last slot for a response it is still
-    # fetching. A worker repair cannot see that reservation, which lives in the
-    # collector's process, so both land: one past the limit, within the
-    # repairs' allowance of one per concurrent worker job.
+    # fetching. Worker repairs cannot see that reservation, which lives in the
+    # collector's process: across successive turns they fill the folder to its
+    # limit plus their allowance of one file per concurrent worker job, and the
+    # collector's reserved save then lands one file beyond that.
     root = tmp_path / "spool"
     limits = {"max_body_bytes": 64, "max_bytes": 1 << 20, "max_objects": 3}
     collector = Spool(root, **limits)
@@ -77,27 +78,33 @@ def test_repairs_may_pass_the_folder_limit_only_by_their_allowance(
     )
     archived = {
         _digest(body): body
-        for body in (f"archived {n}".encode() for n in range(MAX_CONCURRENCY + 1))
+        for body in (f"archived {n}".encode() for n in range(MAX_CONCURRENCY + 2))
     }
     digests = list(archived)
 
     def repair(digest: str) -> bytes:
         return worker.read_verified(f"s3://evidence/{digest}", digest).body
 
-    assert repair(digests[0]) == archived[digests[0]]
-    last.publish(b"fetched", _digest(b"fetched"))
-    assert collector.reconcile()["final_objects"] == limits["max_objects"] + 1
-    for digest in digests[1:MAX_CONCURRENCY]:
-        repair(digest)
+    repaired = 0
+    while True:
+        try:
+            assert repair(digests[repaired]) == archived[digests[repaired]]
+        except ArchiveReadError as error:
+            refused = error
+            break
+        repaired += 1
+    # Repairs stop once the files on disk reach the limit plus the allowance;
+    # the next is refused as a full spool to wait on, never as missing proof.
+    assert repaired == MAX_CONCURRENCY + 1
+    assert (refused.category, refused.retryable) == ("spool_io_failed", True)
     assert collector.reconcile()["final_objects"] == (
         limits["max_objects"] + MAX_CONCURRENCY
     )
-    # One more is refused as a full spool to wait on, never as missing proof.
-    with pytest.raises(ArchiveReadError) as refused:
-        repair(digests[MAX_CONCURRENCY])
-    assert (refused.value.category, refused.value.retryable) == (
-        "spool_io_failed",
-        True,
+    # The worst case: the limit, the repairs' allowance and the one collector
+    # save that was in flight.
+    last.publish(b"fetched", _digest(b"fetched"))
+    assert collector.reconcile()["final_objects"] == (
+        limits["max_objects"] + MAX_CONCURRENCY + 1
     )
     with pytest.raises(SpoolError, match="reservation denied"):
         collector.reserve()

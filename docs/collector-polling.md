@@ -680,19 +680,23 @@ spool is full; that processing is what lets cleanup free space. A failed disk
 read makes the job wait and retry without spending an attempt. A saved copy
 that is gone, after a lost disk or a database restored to before spool cleanup
 ran, is read back from the archive, checked against its hash and saved again.
-Only a response the archive never received fails, as `spool_missing`, and only
-once the archive's identity marker matches and, checked again after the archive
-read, the bytes are still not saved, no upload of them is under way and no
-archived copy is recorded; otherwise the job waits. The uploads process makes
-the same last check before it gives up on an upload.
+While an upload of the bytes is under way or its last write may yet land, a
+missing archived copy makes the job wait. Otherwise, once the archive's
+identity marker matches, a missing copy spends one of the job's ordinary
+attempts as `spool_missing`, and every attempt looks again for the saved bytes,
+an upload and an archived copy. Only when the job's last attempt still finds
+none does the response fail for good, as `spool_missing`.
 
-A copy saved back this way may pass the spool's folder limits by up to 32
-files and 32 largest bodies, one per concurrent worker job
-(`worker.MAX_CONCURRENCY`). The worker cannot see space the collector has
-reserved for a response it is still fetching, since that reservation lives in
-the collector's process, so both can land. Repairs happen only during recovery,
-and the overrun is bounded; a repair past it waits as a full spool, never as
-missing proof. The collector's own saves still stop at the limits.
+A copy saved back this way is admitted while the files on disk stay within the
+spool's folder limits plus 32 files and 32 largest bodies, one per concurrent
+worker job (`worker.MAX_CONCURRENCY`). Space the collector has reserved for a
+response it is still fetching is not on disk yet, and the worker cannot see that
+reservation in the collector's process. So the worst case is the limits plus
+those 32 files and bodies plus one file and one largest body for each collector
+save in flight, at most the collector's regular parallelism (up to 384).
+Repairs happen only during recovery; a repair past the allowance waits as a
+full spool, never as missing proof. The collector's own saves still stop at the
+limits.
 
 Archive uploads run in their own process. The collector starts it inside its
 container with the collector's own settings, and starts it again if it exits or
@@ -716,8 +720,9 @@ process checks the location this upload would write to; bytes already there,
 from an upload a restored database forgot, complete it without a second write.
 A location the archive catalogue marks retired is never read. After a write
 that may still land (one that failed in a way that may pass, or whose claim ran
-out), a missing copy there is checked again on each of the next 30 attempts,
-before the response counts as never archived. Attempts that write nothing name
+out), and after a first attempt that found no copy there, a missing copy is
+checked again on each of the next 30 attempts before the response counts as
+never archived. Attempts that write nothing name
 that write in their failure detail (`write attempt N may yet land: ...`), so
 failures before a write never shorten its wait. A spool read
 failure in the uploads process pauses collection, as one in the collector does.

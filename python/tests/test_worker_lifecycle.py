@@ -460,7 +460,8 @@ def test_missing_new_observation_without_an_archived_copy_fails_as_missing_proof
     def fail_claim(_database: object, _claim: object, *, category: str, detail: str, retryable: bool) -> str:
         assert category == "spool_missing"
         assert detail.startswith("spool_missing:")
-        assert retryable is False
+        # Spends an attempt; only the job's last one fails for good.
+        assert retryable is True
         return "failed"
 
     claim = SimpleNamespace(

@@ -270,7 +270,7 @@ class Uploader:
         and spool cleanup may already have removed the saved copy. The bytes
         are then at this upload's own location; reading them back checks their
         hash. Only bytes the archive does not hold are missing proof, and not
-        while the last attempt's write may yet land.
+        on a first attempt or while an earlier attempt's write may yet land.
         """
         reference = immutable_reference(
             self.archive.bucket, claim.response_hash, claim.generation or None
@@ -283,7 +283,7 @@ class Uploader:
             if (
                 error.category == "archive_missing"
                 and claim.unresolved_write is None
-                and await self._still_missing(claim, reference)
+                and claim.attempt_count > 1
             ):
                 raise ArchiveReadError(
                     "spool_missing",
@@ -293,29 +293,6 @@ class Uploader:
             raise
         self._count("archived_copy_found")
         return reference
-
-    async def _still_missing(
-        self, claim: collector_uploads.UploadClaim, reference: str
-    ) -> bool:
-        """Whether the bytes are still neither saved nor archived elsewhere."""
-        try:
-            body = await self._timed(
-                "spool_read", self.spool.verify, claim.response_hash, claim.byte_size
-            )
-        except (OSError, SpoolError):
-            return False
-        if body is not None:
-            return False
-        current = await self._database_call(
-            "lookup",
-            collector_uploads.archived_copy,
-            self.database,
-            claim.response_hash,
-            bucket=self.archive.bucket,
-        )
-        return current is None or (
-            not current.recorded and current.reference == reference
-        )
 
     async def _renew_lease(
         self,

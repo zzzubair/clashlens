@@ -332,7 +332,8 @@ def _lost_copy_reader(root, endpoint: str, **instance: str) -> SpoolFirstReader:
         # The database was restored to before the upload finished: it still
         # lists the upload as pending, though the bytes reached the archive.
         ("restored", "original", ("complete", None)),
-        # The bytes never reached the archive: real missing proof.
+        # The bytes never reached the archive: real missing proof, on the
+        # job's last attempt.
         ("restored", None, ("failed", "spool_missing")),
         # The first location was retired, and the bytes were uploaded again
         # under a new one this database knows.
@@ -445,6 +446,8 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
         assert spool.verify(digest) is None
         endpoint = "127.0.0.1:9" if history == "unreachable" else archive_server[0]
         reader = _lost_copy_reader(root, endpoint)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("UPDATE python_processing_jobs_worker SET max_attempts = 1")
         monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
 
         assert (
@@ -467,7 +470,8 @@ def test_a_lost_saved_copy_is_read_back_from_the_archive(
 @pytest.mark.parametrize(
     ("marker", "outcome"),
     [
-        ("matches", ("failed", "spool_missing")),
+        # Not the job's last attempt: the next one looks again.
+        ("matches", ("waiting_retry", "spool_missing")),
         # Another archive answers at the configured address: its missing
         # object says nothing about this one.
         ("differs", ("waiting_retry", "archive_marker_mismatch")),
@@ -633,8 +637,14 @@ def test_an_upload_finishing_during_the_lookup_still_counts_as_archived(
 
 
 @pytest.mark.parametrize("generation", ["", "b" * 32])
-@pytest.mark.parametrize("change", ["saved_again", "upload_started"])
-def test_a_copy_that_appears_during_the_archive_read_keeps_the_job_waiting(
+@pytest.mark.parametrize(
+    ("change", "outcome"),
+    [
+        ("saved_again", ("complete", None)),
+        ("upload_started", ("waiting_dependency", "archive_missing")),
+    ],
+)
+def test_a_copy_that_appears_after_a_missing_read_is_found_by_the_next_attempt(
     database_url: str,
     tmp_path,
     monkeypatch,
@@ -642,9 +652,10 @@ def test_a_copy_that_appears_during_the_archive_read_keeps_the_job_waiting(
     archive_server,
     generation: str,
     change: str,
+    outcome: tuple[str, str | None],
 ) -> None:
-    # While the worker reads the archive for a lost saved copy, the collector
-    # saves the same bytes again, or an upload of them starts.
+    # A missing copy spends one of the job's attempts. Before the next, the
+    # collector saves the same bytes again, or an upload of them starts.
     root = tmp_path / "spool"
     with domain_database(database_url, include_coordinator=True) as connection_info:
         _archive_instance(connection_info)
@@ -664,29 +675,39 @@ def test_a_copy_that_appears_during_the_archive_read_keeps_the_job_waiting(
         read = reader.archive.read_verified
         reads: list[str] = []
 
-        def read_while_it_changes(reference, expected_hash, **kwargs):
+        def recorded_read(reference, expected_hash, **kwargs):
             reads.append(reference)
-            if change == "saved_again":
-                spool.publish(body, digest)
-            else:
-                assert claim_upload(database, owner="uploader") is not None
             return read(reference, expected_hash, **kwargs)
 
-        monkeypatch.setattr(reader.archive, "read_verified", read_while_it_changes)
+        monkeypatch.setattr(reader.archive, "read_verified", recorded_read)
         monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
 
-        assert (
-            cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
-            == 0
-        )
-        capsys.readouterr()
+        def run_and_read() -> tuple[str, str | None]:
+            assert (
+                cli._run_worker(
+                    _worker_namespace(database_url=connection_info, max_jobs=1)
+                )
+                == 0
+            )
+            capsys.readouterr()
+            with psycopg.connect(connection_info) as connection:
+                return connection.execute(
+                    "SELECT state, failure_category FROM python_processing_jobs_worker"
+                ).fetchone()
+
+        assert run_and_read() == ("waiting_retry", "spool_missing")
+        if change == "saved_again":
+            spool.publish(body, digest)
+        else:
+            assert claim_upload(database, owner="uploader") is not None
         with psycopg.connect(connection_info) as connection:
-            job = connection.execute(
-                "SELECT state, failure_category FROM python_processing_jobs_worker"
-            ).fetchone()
+            connection.execute(
+                "UPDATE python_processing_jobs_worker SET due_at = clock_timestamp()"
+            )
+        job = run_and_read()
 
     location = f"s3://evidence/sha256/{digest[:2]}/{digest}" + (
         f"/generation/{generation}" if generation else ""
     )
-    assert reads == [location]
-    assert job == ("waiting_dependency", "archive_missing")
+    assert reads == [location] * (1 if change == "saved_again" else 2)
+    assert job == outcome
