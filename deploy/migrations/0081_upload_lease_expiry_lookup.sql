@@ -1,10 +1,10 @@
 -- Clash Lens deployment migration 0081.
--- The uploader returns uploads whose lease ran out to the queue every 30
--- seconds. With no index for leased rows, each pass read the whole upload
--- table: on production on 8 October 2026 that was 2.93 million rows and about
--- 1.1 GB, 405 ms on average and up to 6.2 s, while the uploader was falling
--- behind. This index holds only leased rows, at most one per upload in
--- flight, so a pass reads those and stops.
+-- Every 30 seconds the collector returns upload leases that ran out to the
+-- waiting list. With no index for leased uploads, each pass read the whole
+-- upload table to find the few dozen leased rows: 404 ms on average, and
+-- about 1.16 GB of database cache read in one pass on 8 October 2026. This
+-- index holds only leased uploads, so it stays as small as the uploads in
+-- flight, and each pass reads it instead.
 --
 -- The index is built without blocking writes, so this file runs outside a
 -- transaction: ./ops sends it to psql one statement at a time. A build that
