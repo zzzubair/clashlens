@@ -185,14 +185,14 @@ def test_bytes_survive_the_recovery_hold_and_reruns_are_safe(database_url, tmp_p
 
             assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 3
             assert _availability(connection) == ["retiring"] * 3 + ["verified"]
-            # A restore to any point in the last seven days, plus two days to
+            # A restore to any point in the last ten days, plus two days to
             # perform it, must still find the bytes.
-            _hold_elapsed(connection, "8 days 23 hours 59 minutes")
+            _hold_elapsed(connection, "11 days 23 hours 59 minutes")
             report = retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)
             assert report["deleted_objects"] == report["marked_objects"] == 0
             assert client.calls == [] and client.keys == set(keys)
 
-            _hold_elapsed(connection, "9 days 1 minute")
+            _hold_elapsed(connection, "12 days 1 minute")
             preview = retire_archive_objects(connection, spool, client, **OPTIONS)
             assert (preview["deleted_objects"], preview["deleted_bytes"]) == (3, 3000)
             assert client.calls == []
@@ -238,7 +238,7 @@ def test_cleanup_role_can_mark_and_delete_but_nothing_else(database_url, tmp_pat
         try:
             with psycopg.connect(role_dsn, autocommit=True) as cleanup:
                 assert retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)["marked_objects"] == 2
-                _hold_elapsed(owner, "9 days 1 minute")
+                _hold_elapsed(owner, "12 days 1 minute")
                 report = retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)
                 assert (report["deleted_objects"], report["failed_objects"]) == (2, 0)
                 assert _availability(owner) == ["expired", "expired"]
@@ -336,7 +336,7 @@ def test_retirement_fences_replay_and_keeps_active_work(
                     FROM archive_catalogue WHERE archive_reference = %s
                     """, (renewed, reference),
                 )
-                _hold_elapsed(connection, "10 days")
+                _hold_elapsed(connection, "13 days")
                 assert retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)["deleted_objects"] == 1
                 assert client.keys == {renewed.removeprefix("s3://evidence/")}
                 assert connection.execute("SELECT count(*) FROM player_profile_versions").fetchone()[0] == 1

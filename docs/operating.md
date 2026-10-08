@@ -88,7 +88,7 @@ Healthy looks like this:
 - `backup-status` succeeds and its timer has a next run matching the
   [backup schedule](deployment.md#postgresql-backups-and-recovery).
   A historical `failed_count` alone does not prove a current failure.
-  A warming-up seven-day window is not full recovery coverage.
+  A warming-up ten-day window is not full recovery coverage.
 - `clashlens-history-retention.timer` is active with a next run under a
   minute away. It deletes finished processing jobs 48 hours after they finish;
   see [finished-job cleanup failed](#finished-job-cleanup-failed).
@@ -333,7 +333,7 @@ to interpret `backup-status` errors. WAL is PostgreSQL's change log.
 
 **First checks:** `./ops backup-status`,
 `journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager`,
-`./ops logs backup --since '8 days ago' --no-pager`, and
+`./ops logs backup --since '2 days ago' --no-pager`, and
 `./ops logs postgres --since '1 hour ago' --no-pager`.
 
 **Fix or escalate:** repair the reported timer, storage, network or credential
