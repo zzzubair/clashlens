@@ -1214,9 +1214,9 @@ def test_board_keeps_a_reading_its_later_battles_cannot_prove(
     the two players' logs disagree on proves nothing; each such entry keeps
     its reading and is marked uncertain."""
     readings = [
-        ("#INFLIGHT", 5088, datetime(2026, 10, 7, 4, 54, 59, tzinfo=UTC)),
-        ("#DISPUTED", 5100, _october(7, 4, 40)),
-        ("#DISPUTEDDAY", 5090, _october(7, 4, 40)),
+        ("#PYLQ0", 5088, datetime(2026, 10, 7, 4, 54, 59, tzinfo=UTC)),  # inflight
+        ("#PYLQ2", 5100, _october(7, 4, 40)),  # disputed
+        ("#PYLQ8", 5090, _october(7, 4, 40)),  # disputedday
     ]
     days = {
         1: (True, [
@@ -1249,9 +1249,9 @@ def test_board_keeps_a_reading_its_later_battles_cannot_prove(
         database = Database(connection_info)
         try:
             assert _build_board(connection_info, database, generation_id) == [
-                ("#DISPUTED", 5100, "uncertain"),
-                ("#DISPUTEDDAY", 5090, "uncertain"),
-                ("#INFLIGHT", 5088, "uncertain"),
+                ("#PYLQ2", 5100, "uncertain"),  # disputed
+                ("#PYLQ8", 5090, "uncertain"),  # disputedday
+                ("#PYLQ0", 5088, "uncertain"),  # inflight
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
             assert boundary.queue_board_rebuilds(database, season, queue=False)[
@@ -1272,12 +1272,12 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
     Each keeps its reading and is marked uncertain; an attack stamped 04:52,
     and a reading taken at 05:16, still prove their battles."""
     readings = [
-        ("#DEFENDED", 5160, _october(7, 4, 55)),
-        ("#ATTACKED", 5150, _october(7, 4, 55)),
-        ("#EARLY", 5200, _october(6, 5, 2)),
-        ("#REFRESHED", 5210, _october(6, 5, 6)),
-        ("#SETTLED", 5100, _october(6, 5, 16)),
-        ("#MISMATCH", 5120, _october(7, 4, 40)),
+        ("#GRJC0", 5160, _october(7, 4, 55)),  # defended
+        ("#GRJC2", 5150, _october(7, 4, 55)),  # attacked
+        ("#GRJC8", 5200, _october(6, 5, 2)),  # early
+        ("#GRJC9", 5210, _october(6, 5, 6)),  # refreshed
+        ("#GRJCU", 5100, _october(6, 5, 16)),  # settled
+        ("#GRJCV", 5120, _october(7, 4, 40)),  # mismatch
     ]
     days = {
         1: (True, [("defense", 32, _october(7, 4, 52), True)]),
@@ -1304,12 +1304,12 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
         database = Database(connection_info)
         try:
             assert _build_board(connection_info, database, generation_id) == [
-                ("#REFRESHED", 5210, "uncertain"),
-                ("#EARLY", 5200, "uncertain"),
-                ("#ATTACKED", 5190, "confirmed"),
-                ("#DEFENDED", 5160, "uncertain"),
-                ("#SETTLED", 5140, "confirmed"),
-                ("#MISMATCH", 5120, "uncertain"),
+                ("#GRJC9", 5210, "uncertain"),  # refreshed
+                ("#GRJC8", 5200, "uncertain"),  # early
+                ("#GRJC2", 5190, "confirmed"),  # attacked
+                ("#GRJC0", 5160, "uncertain"),  # defended
+                ("#GRJCU", 5140, "confirmed"),  # settled
+                ("#GRJCV", 5120, "uncertain"),  # mismatch
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
             assert boundary.queue_board_rebuilds(database, season, queue=False)[
