@@ -1024,10 +1024,15 @@ def _seed_days(
     connection_info: str,
     generation_id: int,
     days: dict[int, tuple[bool, list[tuple[str, int, datetime, bool]]]],
+    results: dict[int, dict[str, Any]] | None = None,
 ) -> None:
     """Each member's Day 2: whether its battle logs are continuous, and its
     battles as (lens, trophies, report time, counted). Each reading gets the
-    saved response a board entry points to."""
+    saved response a board entry points to. A day is Partial, without its
+    end Reset reading, and starts where its reading less its counted battles
+    stamped by then puts it, unless ``results`` gives its state, failure
+    reasons, end, automatic loss and its state, start and end Reset readings
+    and Reset kind instead."""
     season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
     with psycopg.connect(connection_info) as connection:
         observations = {
@@ -1043,8 +1048,32 @@ def _seed_days(
                 (list(days),),
             ).fetchall()
         }
+        readings = {
+            player_id: (trophies, observed_at)
+            for player_id, trophies, observed_at in connection.execute(
+                "SELECT player_id, trophies, observed_at"
+                " FROM player_profile_versions WHERE player_id = ANY(%s)",
+                (list(days),),
+            ).fetchall()
+        }
         connection.execute("SET LOCAL session_replication_role = replica")
         for player_id, (coverage_complete, battles) in days.items():
+            reading, read_at = readings[player_id]
+            result = {
+                "state": "Partial",
+                "failure_reasons": ["missing_end_baseline"],
+                "final": None,
+                "automatic_loss": None,
+                "automatic_state": None,
+                "start": reading - sum(
+                    trophies if lens == "offense" else -trophies
+                    for lens, trophies, at, counted in battles
+                    if counted and at <= read_at
+                ),
+                "end": None,
+                "boundary_kind": None,
+                **(results or {}).get(player_id, {}),
+            }
             connection.execute(
                 "UPDATE player_profile_versions SET observation_id = %s"
                 " WHERE player_id = %s",
@@ -1068,15 +1097,32 @@ def _seed_days(
                     official_season_id, season_day_number,
                     season_anchor_rule_version, reconciliation_rule_version,
                     result_hash, version, state, confidence, input_hash,
-                    coverage_complete, input_evidence
+                    coverage_complete, failure_reasons, start_trophies,
+                    final_trophies_before_reset, automatic_defense_loss,
+                    automatic_defense_evidence_state, input_evidence
                 ) OVERRIDING SYSTEM VALUE
                 VALUES (%s, %s, %s, %s, %s, 2, 'anchor', 'rules', repeat('a', 64),
-                        1, 'Complete', 'exact', repeat('b', 64), %s, %s)
+                        1, %s, 'exact', repeat('b', 64), %s, %s, %s, %s, %s,
+                        %s, %s)
                 """,
                 (
                     player_id, player_id, DAY_2_RESET - RANKED_DAY_DURATION,
-                    DAY_2_RESET, season, coverage_complete,
-                    json.dumps({"contributions": contributions}),
+                    DAY_2_RESET, season, result["state"], coverage_complete,
+                    json.dumps(result["failure_reasons"]), result["start"],
+                    result["final"], result["automatic_loss"],
+                    result["automatic_state"]
+                    or (
+                        "not_applicable"
+                        if result["automatic_loss"] is None
+                        else "calculated"
+                    ),
+                    json.dumps(
+                        {
+                            "contributions": contributions,
+                            "next_start_trophies": result["end"],
+                            "boundary_kind": result["boundary_kind"],
+                        }
+                    ),
                 ),
             )
             connection.execute(
@@ -1317,5 +1363,93 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
             assert boundary.queue_board_rebuilds(database, season, queue=False)[
                 "boards"
             ] == []
+        finally:
+            database.close()
+
+
+def test_board_proves_a_reading_only_by_the_days_reset_readings(
+    database_url: str,
+) -> None:
+    """#2QCYU8C2G read 4,703 at 04:37:05 on 7 October 2026 without its attack
+    stamped 04:34:08 for 29, and the board showed 4,902 as proven: a reading
+    proves no battle stamped before it. Its Complete day ends at 4,931 from
+    its Reset readings at both ends. Without that, a reading plus the
+    battles after it is proven only when the day's start reading plus all
+    its battles, or without a start its end Reset reading, less any known
+    automatic loss, comes to it too; a Reset that resets trophies proves
+    nothing."""
+    readings = [
+        ("#2QCYU8C2G", 4703, datetime(2026, 10, 7, 4, 37, 5, tzinfo=UTC)),
+        ("#GURYYP99", 4923, _october(7, 4, 54)),  # no end reading
+        ("#PL0Q0UVLC", 5100, _october(7, 4, 40)),  # end reading agrees
+        ("#P0VPRVPJJ", 5090, _october(7, 4, 40)),  # less the known loss
+        ("#P2CC9URVR", 5080, _october(7, 4, 40)),  # less an unknown loss
+        ("#Y8V9YYP9C", 5151, _october(7, 4, 40)),  # Season reset, disagrees
+        ("#YPG0UY9LU", 5047, _october(7, 4, 40)),  # Season reset, agrees
+    ]
+    days = {
+        1: (True, [
+            ("defense", 209, _october(7, 3), True),
+            ("offense", 29, datetime(2026, 10, 7, 4, 34, 8, tzinfo=UTC), True),
+            ("offense", 199, _october(7, 4, 50), True),
+        ]),
+        2: (True, [
+            ("offense", 40, datetime(2026, 10, 7, 4, 52, 3, tzinfo=UTC), True),
+            ("offense", 69, _october(7, 4, 58), True),
+        ]),
+        **{player: (True, [("offense", 40, _october(7, 4, 50), True)])
+           for player in range(3, 8)},
+    }
+    no_start = {"failure_reasons": ["missing_start_baseline"], "start": None}
+    complete = {"state": "Complete", "failure_reasons": []}
+    results = {
+        1: {**complete, "final": 4931, "start": 4912, "end": 4931},
+        2: {"start": 4923},
+        3: {**no_start, "end": 5140},
+        4: {**no_start, "end": 5100, "automatic_loss": 30},
+        5: {**no_start, "end": 5090, "automatic_state": "unknown"},
+        6: {
+            **complete, "final": 5185, "start": 5145, "boundary_kind": "season",
+            "end": 5000,
+        },
+        7: {**complete, "final": 5087, "boundary_kind": "season", "end": 5000},
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(connection_info, generation_id, days, results)
+        database = Database(connection_info)
+        try:
+            assert _build_board(connection_info, database, generation_id) == [
+                ("#Y8V9YYP9C", 5191, "uncertain"),
+                ("#PL0Q0UVLC", 5140, "confirmed"),
+                ("#P0VPRVPJJ", 5130, "confirmed"),
+                ("#P2CC9URVR", 5120, "uncertain"),
+                ("#YPG0UY9LU", 5087, "confirmed"),
+                ("#GURYYP99", 4992, "uncertain"),
+                ("#2QCYU8C2G", 4931, "confirmed"),
+            ]
+            season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+            assert boundary.queue_board_rebuilds(database, season, queue=False)[
+                "boards"
+            ] == []
+            # A board built before this rule showed the reading plus the
+            # battles after it as proven.
+            with database.pool.connection() as connection:
+                connection.execute("SET LOCAL session_replication_role = replica")
+                connection.execute(
+                    "UPDATE leaderboard_snapshot_entries SET trophies = 4902"
+                    " WHERE player_id = 1"
+                )
+            assert boundary.queue_board_rebuilds(database, season, queue=False)[
+                "boards"
+            ] == [
+                {
+                    "boundary_at": DAY_2_RESET.isoformat(),
+                    "generation": 1,
+                    "profile_not_found": 0,
+                    "late_battles": 1,
+                    "correction": "not_queued",
+                }
+            ]
         finally:
             database.close()
