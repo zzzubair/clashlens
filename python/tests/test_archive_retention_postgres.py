@@ -82,22 +82,25 @@ def _hold_elapsed(connection, age: str) -> None:
     )
 
 
-def test_response_is_due_86_days_after_its_latest_sighting(database_url, tmp_path):
+def test_response_is_due_86_days_after_its_latest_sighting_day(database_url, tmp_path):
     from domain_test_support import domain_database
 
+    today = "date_trunc('day', clock_timestamp(), 'UTC')"
     with domain_database(database_url) as dsn, psycopg.connect(dsn, autocommit=True) as connection:
         _seed(connection, 1)
         spool = Spool(tmp_path / "spool", max_body_bytes=1 << 20)
         client = DeleteClient()
         try:
+            # Never less than 86 days after the sighting, and the whole of the
+            # sighting's UTC day is kept.
             for last_seen, marked in (
-                ("85 days", 0),
-                ("85 days 23 hours 59 minutes", 0),
-                ("86 days 1 second", 1),
+                ("clock_timestamp() - interval '85 days'", 0),
+                ("clock_timestamp() - interval '85 days 23 hours 59 minutes'", 0),
+                (f"{today} - interval '86 days'", 0),
+                (f"{today} - interval '86 days 1 second'", 1),
             ):
                 connection.execute(
-                    "UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after(clock_timestamp() - %s::interval)",
-                    (last_seen,),
+                    f"UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after({last_seen})"
                 )
                 report = retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)
                 assert report["marked_objects"] == marked, last_seen

@@ -760,11 +760,11 @@ picked until they land. Starting a Reset sweep also waits at most 3 seconds,
 then tries again on a later pass. Restart replay, the update that checks a Clasher who
 finished the Legend day less often, and marking work finished wait the same 3
 seconds: replay leaves the rest to the background, the Clasher keeps the normal
-check cadence, and finishing is retried. A shared body already sighted within the last 10 minutes
+check cadence, and finishing is retried. A shared body already sighted earlier the same UTC day
 keeps its earlier latest sighting time, which only orders spool cleanup and
-starts the archive retention clock, so its deletion can come up to 10 minutes
-early. A body already marked for deletion is never recorded this way; it is
-saved again. No response waits on the
+sets the archive retention deadline, the same for every sighting that day. A
+body already marked for deletion is never recorded this way; it is saved
+again. No response waits on the
 database while holding the shared lock: the lock covers only the spool write,
 so a later response is saved before it waits for an earlier one's database
 commit. Saved responses for the same lock

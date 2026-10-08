@@ -1145,15 +1145,15 @@ class ObservationProcessor:
             # Heartbeat from the reader: keeps the renewed lease window
             # ahead of the bounded remote retry wall time. Lease loss
             # raises and discards any partial fallback result.
-            self.database.renew_claim(claim, lease_seconds=lease_seconds)
+            self.database.renew_claim(claim, lease_seconds=lease_seconds, always=True)
 
         try:
             # Renew before a remote read, which can retry for a bounded time. A
-            # local spool read skips this commit unless the saved copy is gone.
-            # The second renewal below fences the result before parsing.
+            # local spool read skips this unless the saved copy is gone. The second
+            # checks the claim before parsing; it writes a new lease once half is used.
             if not uses_local_spool:
                 renewal_started_at = monotonic()
-                self.database.renew_claim(claim, lease_seconds=lease_seconds)
+                self.database.renew_claim(claim, lease_seconds=lease_seconds, always=True)
                 self._record_stage("python_lease_renew", renewal_started_at)
             archive_started_at = monotonic()
             try:
