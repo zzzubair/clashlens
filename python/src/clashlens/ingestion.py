@@ -6,7 +6,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import first_battle_log, job_outcomes, reset_baselines
+from . import first_battle_log, job_outcomes, league_history, reset_baselines
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
@@ -219,6 +219,12 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 )
             if created_profile:
                 first_battle_log.queue_day_1(connection, player[0], profile_version_id)
+            if profile.eligibility_state == "ineligible":
+                league_history.queue_season_end(
+                    connection, player[0],
+                    ranked_day_for(profile.observed_at).season_start,
+                    observation_id, profile.observed_at,
+                )
             if (
                 profile.eligibility_state == "eligible"
                 and profile.current_league_season_id == "0"

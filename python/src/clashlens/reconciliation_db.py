@@ -34,7 +34,7 @@ from .domain import (
     RankedDay,
     ranked_day_for,
 )
-from .profile import normalize_player_tag
+from .profile import LEGEND_I_TIER_ID, normalize_player_tag
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
     ReconciliationInput,
@@ -308,6 +308,30 @@ def recalculate_ranked_day(
         boundary_kind = "season"
     elif ranked_day.end.weekday() == 0:
         boundary_kind = "weekly"
+    # A player dropped from Legend I at a Season's end, ranked below 10,000,
+    # has no Legend I reading at that Reset, so their last day had no end:
+    # all 1,993 such players on 5 October 2026. The game's official Season-end
+    # total in their league history, which includes the automatic defense
+    # loss, is that day's end instead; no reset to 5,000 follows it.
+    official_final = (
+        _official_final(connection, player_id, ranked_day.end)
+        if boundary_kind == "season"
+        and end_baseline is not None
+        and _dropped_from_legend_i(connection, player_id, ranked_day.end)
+        else None
+    )
+    if official_final is not None:
+        assert end_baseline is not None
+        boundary_kind = None
+        end_baseline = {
+            **end_baseline,
+            "trophies": official_final,
+            "eligibility_state": None,
+            "complete": bool(end_baseline["evidence"]["battle_log_valid"]),
+            "evidence": {
+                **end_baseline["evidence"], "official_final_trophies": official_final,
+            },
+        }
 
     trophy_rule_versions = tuple(
         sorted(
@@ -695,6 +719,72 @@ def recalculate_ranked_day(
             result.final_trophies_before_reset,
             result_data["next_start_trophies"],
         )
+    )
+
+
+def _official_final(connection: Any, player_id: int, season_end: datetime) -> int | None:
+    """The player's official Legend I total for the Season ending at
+    ``season_end``, whose league history labels it by that end."""
+    row = connection.execute(
+        """
+        SELECT league_trophies FROM player_league_history_entries
+        WHERE player_id = %s AND league_season_id = %s AND league_tier_id = %s
+        """,
+        (player_id, str(int(season_end.timestamp())), LEGEND_I_TIER_ID),
+    ).fetchone()
+    return None if row is None or row[0] is None else int(row[0])
+
+
+def _dropped_from_legend_i(
+    connection: Any, player_id: int, season_end: datetime
+) -> bool:
+    """Whether a profile of the player read since ``season_end`` shows a
+    league below Legend I before any Legend I profile for the next Season.
+    Each reading counts at its own time; a saved profile can be read again."""
+    return bool(
+        connection.execute(
+            """
+            WITH version AS (
+                SELECT version.id, version.observed_at, version.eligibility_state,
+                       version.source_contract_state,
+                       version.current_league_season_id
+                FROM players AS player
+                JOIN player_profile_versions AS version
+                  ON version.normalized_tag = player.normalized_tag
+                WHERE player.id = %(player)s
+            ), reading AS (
+                SELECT version.*, seen.observed_at AS read_at
+                FROM version
+                JOIN player_profile_effects AS seen
+                  ON seen.profile_version_id = version.id
+                 AND seen.observed_at >= %(end)s
+                UNION ALL
+                SELECT version.*, version.observed_at
+                FROM version
+                WHERE version.observed_at >= %(end)s
+                  AND NOT EXISTS (
+                      SELECT 1 FROM player_profile_effects AS seen
+                      WHERE seen.profile_version_id = version.id
+                  )
+            )
+            SELECT EXISTS (
+                SELECT 1 FROM reading AS dropped
+                WHERE dropped.eligibility_state = 'ineligible'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reading AS kept
+                      WHERE kept.read_at < dropped.read_at
+                        AND kept.eligibility_state = 'eligible'
+                        AND kept.source_contract_state = 'accepted'
+                        AND kept.current_league_season_id = %(season)s
+                  )
+            )
+            """,
+            {
+                "player": player_id,
+                "end": season_end,
+                "season": ranked_day_for(season_end).official_season_id,
+            },
+        ).fetchone()[0]
     )
 
 

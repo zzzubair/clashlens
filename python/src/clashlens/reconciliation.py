@@ -416,6 +416,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 and residual == automatic_loss
                 and automatic_state == "calculated"
                 and not end_hidden_by_reset
+                and "official_final_trophies" not in data.end_baseline_evidence
                 and ended
                 and coverage_complete
                 and not failures

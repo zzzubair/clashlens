@@ -681,3 +681,105 @@ def test_season_rule_starts_day_1_at_5000_once_a_new_season_profile_exists(
     ended = days[boundary - timedelta(days=1)]
     assert (ended[0], ended[3]) == ("Complete" if log_ok else "Partial", 5000)
     assert days[boundary][2:] == (5000, None, "season_rule")
+
+
+def _dropped_profile(trophies: int) -> bytes:
+    """As #QUR98JV2U's first profile after the 5 October 2026 Season end:
+    Legend II, Season 0, still showing its final total."""
+    payload = json.loads(_profile(trophies))
+    payload["currentLeagueSeasonId"] = 0
+    payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+    return json.dumps(payload).encode()
+
+
+def _store_dropped_login(connection_info, archive_server, key, at, final) -> int:
+    return store_observation(
+        connection_info, archive_server, occurrence_key=key,
+        endpoint="profile", body=_dropped_profile(final),
+        observed_at=at, normalized_tag=TAG,
+    )[1]
+
+
+@pytest.mark.parametrize("reset_reading,login,official_gaps,state", [
+    ("dropped", None, (0,), "Complete"),
+    ("dropped", None, (-30,), "Inconsistent"),
+    # The Reset still reads Legend I and the old Season; Legend II comes
+    # later, before or after the official total.
+    ("old_season", "before_history", (0,), "Complete"),
+    ("old_season", "after_history", (0,), "Complete"),
+    # The same Legend II profile was already saved before the Season.
+    ("old_season", "seen_before_season", (0,), "Complete"),
+    # A row without a total changes nothing; the next one with it still counts.
+    ("dropped", None, (None, 0), "Complete"),
+    # A newer official total replaces the one the day already used.
+    ("dropped", None, (0, -30), "Inconsistent"),
+])
+def test_player_dropped_at_the_season_end_ends_at_the_official_total(
+    database_url: str, archive_server, reset_reading: str, login: str | None,
+    official_gaps: tuple[int | None, ...], state: str,
+) -> None:
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+
+    boundary = BOUNDARIES["season"]
+    last_day = boundary - timedelta(days=1)
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    final = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = []
+        if login == "seen_before_season":
+            jobs.append(_store_dropped_login(
+                connection_info, archive_server, "early-login",
+                boundary - timedelta(days=20), final,
+            ))
+        jobs += _reset_work(connection_info, archive_server, last_day,
+                            profile=_profile(6000), log=_battle_log(empty=True))
+        jobs += _reset_work(
+            connection_info, archive_server, boundary,
+            profile=(_dropped_profile(final) if reset_reading == "dropped"
+                     else _season_profile(final, OLD_SEASON)),
+            log=_log(*battles),
+        )
+        if login in {"before_history", "seen_before_season"}:
+            jobs.append(_store_dropped_login(
+                connection_info, archive_server, "dropped-login",
+                boundary + timedelta(hours=2), final,
+            ))
+        _process(connection_info, archive_server, jobs)
+        before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+        # The official Season-end placement arrives hours later.
+        for hours, gap in enumerate(official_gaps, start=6):
+            _, history_job = store_observation(
+                connection_info, archive_server,
+                occurrence_key=f"league-history-{hours}",
+                endpoint="league_history", normalized_tag=TAG,
+                observed_at=boundary + timedelta(hours=hours),
+                parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+                processing_version="clashlens-domain-processing-v1",
+                domain_rule_version="clashlens-domain-rules-v1",
+                body=json.dumps({"items": [{
+                    "leagueSeasonId": str(int(boundary.timestamp())),
+                    "leagueTrophies": None if gap is None else final + gap,
+                    "leagueTierId": 105000036, "placement": 10568,
+                    "attackWins": 1, "attackLosses": 0, "attackStars": 3,
+                    "defenseWins": 0, "defenseLosses": 8, "defenseStars": 16,
+                    "maxBattles": 8,
+                }]}).encode(),
+            )
+            _process(connection_info, archive_server, [history_job])
+        if login == "after_history":
+            assert {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[
+                last_day][1] == "Partial"
+            _process(connection_info, archive_server, [_store_dropped_login(
+                connection_info, archive_server, "dropped-login",
+                boundary + timedelta(hours=8), final,
+            )])
+        after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
+
+    assert before[:2] == (last_day, "Partial")
+    assert after[:2] == (last_day, state)
+    if state == "Complete":
+        assert after[2:5] == ("exact", 6000, final)
