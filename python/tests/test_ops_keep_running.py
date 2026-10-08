@@ -46,8 +46,8 @@ RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 RESTART_COLLECTOR=$RESTART
 UP_IN_PROGRESS=$FAILS
 keep_running_plan
-stop_units
 keep_running_check
+stop_units
 [[ "$FAILS" != true ]] || die "the stack did not become healthy; run ./ops logs"
 keep_running_record
 printf 'keep=%s collector=%s\n' "$KEEP_RUNNING" "${RELEASE[COLLECTOR_IMAGE]}"
@@ -58,7 +58,8 @@ UP = r"""
 source "$1" help >/dev/null
 for check in require_host load_release load_production_config validate_runtime_values \
   guard_generated_units guard_existing_resources guard_trusted_proxy_ip guard_network_subnet \
-  cleanup_stale_admin_state ensure_linger migrate_legacy_units guard_systemd_units; do
+  cleanup_stale_admin_state ensure_linger migrate_legacy_units guard_systemd_units \
+  write_environment prepare_secrets render_units; do
   eval "$check() { :; }"
 done
 MODE=production PREFIX=clashlens MAIN_PID=$$ POSTGRES_USER=clashlens POSTGRES_DB=clashlens

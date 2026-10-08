@@ -983,7 +983,7 @@ prepare_secrets() {
 
 wait_postgres() {
   local attempt
-  for attempt in $(seq 1 900); do
+  for attempt in $(seq 1 90); do
     if "$PODMAN_BIN" exec "$PREFIX-postgres" pg_isready -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
       [[ "$(psql_exec --tuples-only --no-align --command 'SHOW hba_file')" == /etc/clashlens/pg_hba.conf ]] || die "PostgreSQL is not using deploy/postgres/pg_hba.conf"
       return
@@ -1012,6 +1012,7 @@ apply_migrations() {
   local migration base prefix version exists
   exists=$(psql_exec --tuples-only --no-align --command "SELECT to_regclass('public.clash_lens_schema_migrations') IS NOT NULL")
   if [[ "$(trim "$exists")" != t ]]; then psql_exec < "$ROOT/deploy/migrations/0001_collector.sql"; fi
+  check_migrations
   for migration in "$ROOT"/deploy/migrations/*.sql; do
     [[ "${migration##*/}" == 0001_collector.sql ]] && continue
     base=${migration##*/}; prefix=${base%%_*}; version=$((10#$prefix))
@@ -1165,11 +1166,8 @@ up_stack() {
   ensure_linger
   migrate_legacy_units
   guard_systemd_units
-  check_migrations
   keep_running_plan
-  write_alert_intent stopped
-  UP_IN_PROGRESS=true
-  stop_units
+  migrate_running_database
   mkdir -p "$STATE_DIR"
   local mode_file
   mode_file=$(mktemp "$STATE_DIR/mode.XXXXXX")
@@ -1180,6 +1178,9 @@ up_stack() {
   prepare_secrets
   render_units
   keep_running_check
+  write_alert_intent stopped
+  UP_IN_PROGRESS=true
+  stop_units
   "$SYSTEMCTL_BIN" --user daemon-reload
   "$SYSTEMCTL_BIN" --user start clashlens-postgres.service
   wait_postgres
@@ -1442,7 +1443,7 @@ alert_check() {
   load_kv_file "$ENV_FILE" CONFIG
   python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" "$(alert_webhook_file)" \
     "$(setting CLASHLENS_HEALTH_PORT 8081)" "$(setting CLASHLENS_SPOOL_ROOT /srv/clashlens-data/spool)" \
-    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
+    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)" "$(setting CLASHLENS_WEBSITE_PORT 3000)"
 }
 
 command=${1:-}

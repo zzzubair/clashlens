@@ -1,12 +1,12 @@
 -- One record per Reset of how it went against the 05:30 board target, kept
 -- apart from the board itself: how many members were captured; when their
 -- Reset readings were collected and processed; when the first frozen board's
--- inputs froze, when it was saved as published and when it was first read
--- back through the request the website makes; that board's input states;
--- and the ended Legend day's results and boundary settlement at 06:00 and
--- just before the next Reset. The alert check fills it once a minute through
--- the worker's role (reset_acceptance.py). Under 1 KB a row, one row a day:
--- about 0.4 MB a year. Nothing deletes these rows.
+-- inputs froze, when it was saved as published and when the website's public
+-- Daily leaderboard page first showed it; that board's input states; and how
+-- many of the Reset's boundaries were settled when that board was first seen.
+-- The alert check fills it once a minute through the worker's role
+-- (reset_acceptance.py). Under 1 KB a row, one row a day: about 0.4 MB a year.
+-- Nothing deletes these rows.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS reset_acceptance_records (
@@ -24,8 +24,7 @@ CREATE TABLE IF NOT EXISTS reset_acceptance_records (
     published_at timestamptz,
     readable_at timestamptz,
     board_inputs jsonb CHECK (jsonb_typeof(board_inputs) = 'object'),
-    at_0600 jsonb CHECK (jsonb_typeof(at_0600) = 'object'),
-    at_next_reset jsonb CHECK (jsonb_typeof(at_next_reset) = 'object'),
+    settlement jsonb CHECK (jsonb_typeof(settlement) = 'object'),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );

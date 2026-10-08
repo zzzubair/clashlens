@@ -446,10 +446,26 @@ def test_metrics_show_finished_work_reset_work_left_and_old_failures(
                 )
             metrics = database.health_metrics()
             assert metrics["reset_work_remaining"] == 3
-            assert metrics["claimable_job_reconcile_ranked_day_age_seconds"] < 60
+            assert metrics["waiting_job_reconcile_ranked_day_age_seconds"] < 60
             assert metrics["completed_jobs_2m"] == 0
             assert "completed_job_reconcile_ranked_day_2m" not in metrics
             assert "oldest_failed_processing_age_seconds" not in metrics
+
+            # Claimed and retried, or waiting for the archive, the work still
+            # waits: its clock runs from when it was created, not its next try.
+            for state in ("waiting_retry", "waiting_dependency"):
+                with psycopg.connect(connection_info) as connection:
+                    connection.execute(
+                        """
+                        UPDATE python_processing_jobs
+                        SET status = %s, attempt_count = 1,
+                            created_at = clock_timestamp() - interval '10 minutes',
+                            due_at = clock_timestamp() + interval '5 minutes'
+                        """,
+                        (state,),
+                    )
+                metrics = database.health_metrics()
+                assert metrics["waiting_job_reconcile_ranked_day_age_seconds"] >= 600
 
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
@@ -465,7 +481,7 @@ def test_metrics_show_finished_work_reset_work_left_and_old_failures(
                 )
             metrics = database.health_metrics()
             assert metrics["reset_work_remaining"] == 0
-            assert "claimable_job_reconcile_ranked_day_age_seconds" not in metrics
+            assert "waiting_job_reconcile_ranked_day_age_seconds" not in metrics
             assert metrics["completed_jobs_2m"] == 1
             assert metrics["completed_job_reconcile_ranked_day_2m"] == 1
             assert metrics["failed_processing"] == 2

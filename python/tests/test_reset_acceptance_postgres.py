@@ -25,7 +25,8 @@ def _as_worker(connection_info: str) -> str:
 
 
 def _seed_reset(connection: psycopg.Connection, reset: datetime) -> list[int]:
-    """Three members: two collected, one failed, one reading still processing."""
+    """Three members: two collected and one failed after saving its profile;
+    two readings still processing, one of them the failed member's."""
     players = [
         row[0]
         for row in connection.execute(
@@ -43,7 +44,7 @@ def _seed_reset(connection: psycopg.Connection, reset: datetime) -> list[int]:
     for player, status, finished, observation in (
         (players[0], "complete", timedelta(minutes=5), 9001),
         (players[1], "complete", timedelta(minutes=9), 9002),
-        (players[2], "failed", timedelta(minutes=8), None),
+        (players[2], "failed", timedelta(minutes=8), 9003),
     ):
         connection.execute(
             """
@@ -65,7 +66,8 @@ def _seed_reset(connection: psycopg.Connection, reset: datetime) -> list[int]:
         INSERT INTO python_processing_jobs (
             work_type, deduplication_key, input_json, observation_id, status
         ) VALUES ('process_observation', 'reading-9001', '{}', 9001, 'complete'),
-                 ('process_observation', 'reading-9002', '{}', 9002, 'pending')
+                 ('process_observation', 'reading-9002', '{}', 9002, 'pending'),
+                 ('process_observation', 'reading-9003', '{}', 9003, 'pending')
         """
     )
     for player, state in ((players[0], "Complete"), (players[1], "Partial")):
@@ -146,7 +148,7 @@ def _publish(connection, reset: datetime, players: list[int]) -> None:
         )
 
 
-def test_the_reset_record_keeps_each_stage_time_and_the_day_results(
+def test_the_reset_record_keeps_each_stage_time_and_the_board_counts(
     database_url: str,
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -154,18 +156,28 @@ def test_the_reset_record_keeps_each_stage_time_and_the_day_results(
             owner.execute("SET session_replication_role = replica")
             players = _seed_reset(owner, RESET)
 
-        def refresh(minutes: float, readable: datetime | None = None) -> dict:
+        def refresh(read_minutes: float | None = None) -> dict:
+            read = None if read_minutes is None else RESET + timedelta(minutes=read_minutes)
             with psycopg.connect(_as_worker(connection_info)) as connection:
                 record = reset_acceptance.refresh(
                     connection,
-                    readable_boundary=readable,
-                    now=RESET + timedelta(minutes=minutes),
+                    readable_boundary=None if read is None else RESET,
+                    readable_at=read,
                 )
             assert record is not None
             return record
 
-        # 05:12: collection over, one reading not yet processed, no board.
-        record = refresh(12)
+        def finish(observation: int, minutes: int) -> None:
+            with psycopg.connect(connection_info, autocommit=True) as owner:
+                owner.execute("SET session_replication_role = replica")
+                owner.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete',"
+                    " completed_at = %s WHERE observation_id = %s",
+                    (RESET + timedelta(minutes=minutes), observation),
+                )
+
+        # 05:12: collection over, two readings not yet processed, no board.
+        record = refresh()
         assert (record["captured_count"], record["collected_count"]) == (3, 2)
         assert record["not_collected_count"] == 1
         assert record["membership_captured_at"] == RESET + timedelta(seconds=1)
@@ -173,41 +185,43 @@ def test_the_reset_record_keeps_each_stage_time_and_the_day_results(
         assert record["proof_processed_at"] is None
         assert record["inputs_frozen_at"] is record["readable_at"] is None
 
+        # The failed member's saved profile still holds the proof back.
+        finish(9002, 15)
+        assert refresh()["proof_processed_at"] is None
+        # So does a Season-boundary league history a member saved.
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             owner.execute(
-                "UPDATE python_processing_jobs SET status = 'complete',"
-                " completed_at = %s WHERE observation_id = 9002",
-                (RESET + timedelta(minutes=15),),
+                "UPDATE collector_work SET league_history_observation_id = 9004"
+                " WHERE player_id = %s",
+                (players[0],),
             )
-            _publish(owner, RESET, players)
-        # 05:31: the alert check first reads the board back.
-        record = refresh(31, readable=RESET)
-        assert record["proof_processed_at"] == RESET + timedelta(minutes=15)
-        assert record["inputs_frozen_at"] == RESET + timedelta(minutes=20)
-        assert record["published_at"] == RESET + timedelta(minutes=24)
-        assert record["readable_at"] == RESET + timedelta(minutes=31)
-        assert record["board_inputs"] == {"Complete": 1, "Partial": 1, "Unavailable": 1}
-        assert record["at_0600"] is None
-        # Times are kept as first seen.
-        assert refresh(40, readable=RESET)["readable_at"] == RESET + timedelta(minutes=31)
-
-        record = refresh(61)
-        assert record["at_0600"]["day_results"] == {
-            "Complete": 1,
-            "Partial": 1,
-            "Missing": 1,
-        }
-        assert record["at_0600"]["settlement"] == {"provisional": 1, "unresolved": 1}
-        assert record["at_next_reset"] is None
-
-        # A later repair is counted just before the next Reset, not at 06:00.
+            owner.execute(
+                "INSERT INTO python_processing_jobs (work_type, deduplication_key,"
+                " input_json, observation_id, status) VALUES ('process_observation',"
+                " 'reading-9004', '{}', 9004, 'pending')"
+            )
+        finish(9003, 16)
+        assert refresh()["proof_processed_at"] is None
+        finish(9004, 17)
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
-            _day(owner, players[1], RESET, "Complete", version=2)
-        record = refresh(23 * 60 + 51)
-        assert record["at_0600"]["day_results"]["Partial"] == 1
-        assert record["at_next_reset"]["day_results"] == {"Complete": 2, "Missing": 1}
+            _publish(owner, RESET, players)
+        # The website first showed the board at 05:29; the check saved it later.
+        record = refresh(29)
+        assert record["proof_processed_at"] == RESET + timedelta(minutes=17)
+        assert record["inputs_frozen_at"] == RESET + timedelta(minutes=20)
+        assert record["published_at"] == RESET + timedelta(minutes=24)
+        assert record["readable_at"] == RESET + timedelta(minutes=29)
+        assert record["board_inputs"] == {"Complete": 1, "Partial": 1, "Unavailable": 1}
+        assert record["settlement"] == {"provisional": 1, "unresolved": 1}
+        # Each value is kept as first seen.
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            owner.execute("UPDATE reset_boundary_settlements SET state = 'unresolved'")
+        record = refresh(40)
+        assert record["readable_at"] == RESET + timedelta(minutes=29)
+        assert record["settlement"] == {"provisional": 1, "unresolved": 1}
 
 
 def test_the_alert_probe_prints_the_latest_resets_progress(
@@ -219,20 +233,21 @@ def test_the_alert_probe_prints_the_latest_resets_progress(
         url_file = tmp_path / "database-url"
         url_file.write_text(_as_worker(connection_info))
         monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
-        alerts.reset_probe("0")
+        alerts.reset_probe("0", "0")
         assert capsys.readouterr().out.split() == ["0"] * 5
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             _seed_reset(owner, reset)
-        alerts.reset_probe(str(int(reset.timestamp())))
+        shown = int(reset.timestamp())
+        alerts.reset_probe(str(shown), str(shown + 1500))
         boundary, captured, ended, frozen, readable = map(
             int, capsys.readouterr().out.split()
         )
-        assert (boundary, captured, ended, frozen) == (int(reset.timestamp()), 3, 3, 0)
-        assert readable >= boundary
+        assert (boundary, captured, ended, frozen) == (shown, 3, 3, 0)
+        assert readable == shown + 1500
 
 
-def test_the_board_check_reads_the_board_as_the_website_does(
+def test_the_board_check_resolves_the_board_the_website_showed(
     runtime, database_url: str, tmp_path, monkeypatch, capsys
 ) -> None:
     from fastapi.testclient import TestClient
@@ -260,14 +275,17 @@ def test_the_board_check_reads_the_board_as_the_website_does(
 
         monkeypatch.setattr(alerts, "request", request)
         try:
-            # No frozen board yet.
-            alerts.publication_probe()
+            # The website showed no board yet.
+            alerts.publication_probe([])
             assert capsys.readouterr().out.split()[1] == "0"
             with psycopg.connect(connection_info, autocommit=True) as owner:
                 owner.execute("SET session_replication_role = replica")
                 players = _seed_reset(owner, RESET)
                 _publish(owner, RESET, players)
-            alerts.publication_probe()
+            # The Season and day the website's page sent its visitor on to.
+            board = alerts.signed_read("http://127.0.0.1:8000", "/v1/leaderboards/frozen?limit=1")
+            daily = [board["official_season_id"], str(board["season_day_number"])]
+            alerts.publication_probe(daily)
             assert int(capsys.readouterr().out.split()[1]) == int(RESET.timestamp())
         finally:
             client.close()

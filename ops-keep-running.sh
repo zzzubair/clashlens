@@ -105,7 +105,8 @@ keep_running_parts() {
   KEEP_PARTS[POSTGRES_SECRETS]=$(secret_digest "$QUADLET_DIR/clashlens-postgres.container") || return 1
 }
 
-# After the new files are written: restart them all if anything they read changed.
+# After the new files are written, before anything stops: restart them all if
+# anything they read changed.
 keep_running_check() {
   local index value changed=() reason=
   if ! keep_running_parts; then
@@ -127,7 +128,6 @@ keep_running_check() {
   rm -f -- "$KEEP_RECORD"
   printf 'Restarting the collector with the database, pod and network: %s.\n' "$reason"
   KEEP_RUNNING=false
-  stop_units
 }
 
 keep_running_record() {
@@ -155,24 +155,33 @@ alert_webhook_file() {
   setting CLASHLENS_DISCORD_ALERT_WEBHOOK_FILE "$(setting CLASHLENS_API_KEY_HOST_DIR /srv/clashlens-secrets)/clashlens-discord-alert-webhook"
 }
 
-# Before anything stops: the release must ship every migration the database
-# has applied, or its code would run on tables it does not know. A rollback is
-# a new release that keeps them; ./ops never reverses a migration.
+# The release must ship every migration the database has applied, or its code
+# would run on tables it does not know. A rollback is a new release that keeps
+# them; ./ops never reverses a migration.
 check_migrations() {
   local applied known missing migration
-  [[ "$(container_state "$(container_name "$PREFIX" postgres)")" == healthy ]] || return 0
   applied=$(psql_exec --tuples-only --no-align --command 'SELECT version FROM clash_lens_schema_migrations') || \
-    die "could not read the database's migrations; nothing was stopped"
+    die "could not read the database's migrations"
   known=$(for migration in "$ROOT"/deploy/migrations/*.sql; do migration=${migration##*/}; printf '%d\n' "$((10#${migration%%_*}))"; done)
   missing=$(comm -23 <(sort <<< "$applied") <(sort <<< "$known") | sort -n | paste -sd, -)
-  [[ -z "$missing" ]] || die "the database has migrations $missing that this release lacks; nothing was stopped"
+  [[ -z "$missing" ]] || die "the database has migrations $missing that this release lacks"
 }
 
-# A failed up has stopped the stack and the alert timer with it, so it sends
-# this alert itself; the next ./ops up that succeeds clears it.
+# Before anything stops: check the migrations and apply the pending ones to the
+# running database, so a release that lacks one, or a migration that fails,
+# leaves the old release running. A database that is not running yet gets the
+# same after it starts.
+migrate_running_database() {
+  [[ "$(container_state "$(container_name "$PREFIX" postgres)")" == healthy ]] || return 0
+  apply_migrations
+}
+
+# A failed up has stopped the stack and the alert schedule with it; restarting
+# the schedule lets the alert check report the failed deploy and retry its
+# delivery every minute. The next ./ops up that succeeds clears it.
 deploy_failed_alert() {
   write_alert_intent failed || return 0
   [[ "$MODE" == production ]] || return 0
-  python3 "$ROOT/python/src/clashlens/alerts.py" --deploy-failed "$STATE_DIR" "$(alert_webhook_file)" || \
-    printf 'ops: the failed-deploy alert was not delivered; ./ops alert-check retries it\n' >&2
+  "$SYSTEMCTL_BIN" --user start clashlens-alert.timer || \
+    printf 'ops: the alert schedule did not restart; run ./ops alert-check until ./ops up succeeds\n' >&2
 }

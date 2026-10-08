@@ -6,7 +6,6 @@ published at 06:26 and raw responses waited up to 76.5 minutes to reach the
 archive, while the old alerts could not fire before about 06:05."""
 
 import os
-import sys
 from datetime import UTC, datetime
 
 import pytest
@@ -106,8 +105,8 @@ def test_reset_work_projected_past_0525_warns_at_0515(rt, left, warned) -> None:
 
 
 def test_a_board_not_readable_at_0530_alerts_then_recovers(rt) -> None:
-    # The board check reads the board as the website does, so a board saved
-    # as published but not readable still alerts.
+    # The board check reads the board through the website's public page, so a
+    # board saved as published but not shown there still alerts.
     reset = at(rt, 5, 29)
     rt.served = reset - 86400
     rt.reset = f"{reset} 13251 13251 {reset + 1500} 0"
@@ -124,6 +123,49 @@ def test_a_board_not_readable_at_0530_alerts_then_recovers(rt) -> None:
     at(rt, 6, 41)
     assert rt.run() == 0
     assert "recovered at 2026-10-08T06:26:00+00:00" in posts(rt, "not readable")[-1]
+
+
+@pytest.mark.parametrize(
+    "website",
+    [
+        503,  # The website, or the API behind it, could not answer.
+        200,  # The page rendered without a board: the website rejected it.
+    ],
+)
+def test_a_board_the_website_cannot_show_by_0530_alerts(rt, website) -> None:
+    reset = at(rt, 5, 30)
+    rt.reset = f"{reset} 13251 13251 {reset + 1500} 0"
+    rt.website_status = website
+    assert rt.run() == 1
+    late = posts(rt, "not readable by 05:30")
+    assert len(late) == 1
+    assert "board was not readable at 05:30; the website check could not read it" in late[0]
+    # The page shows the board again.
+    rt.website_status = 302
+    at(rt, 5, 40)
+    assert rt.run() == 0
+    at(rt, 5, 55)
+    assert rt.run() == 0
+    assert "recovered at 2026-10-08T05:40:00+00:00" in posts(rt, "not readable")[-1]
+
+
+def test_a_failed_website_read_after_the_board_was_readable_stays_quiet(rt) -> None:
+    reset = at(rt, 14)
+    rt.reset = f"{reset} 13251 13251 {reset + 1200} {reset + 1500}"
+    rt.website_status = 503
+    assert rt.run() == 1
+    assert not posts(rt, "not readable")
+
+
+def test_the_record_keeps_when_the_website_showed_the_board(rt) -> None:
+    reset = at(rt, 5, 27)
+    assert rt.run() == 0
+    # The Reset probe gets the board the website showed and when it read it,
+    # not when the probe itself runs after the slower checks.
+    probe = next(args for args in rt.calls if "--reset" in args)
+    assert probe[-2:] == [str(reset), str(int(rt.now))]
+    publication = next(args for args in rt.calls if "--publication" in args)
+    assert publication[-2:] == ["2026-10", "7"]
 
 
 def test_unreadable_reset_progress_warns_after_ten_minutes(rt) -> None:
@@ -179,21 +221,23 @@ def test_failed_work_alerts_until_resolved_however_old(rt) -> None:
     assert "recovered" in rt.posts[-1]["content"]
 
 
-@pytest.mark.parametrize("work", ["process_observation", "reconcile_ranked_day"])
+@pytest.mark.parametrize(
+    "work", ["process_observation", "reconcile_ranked_day", "build_snapshot"]
+)
 def test_waiting_work_none_of_which_finishes_in_two_minutes_warns(rt, work) -> None:
     rt.metrics[f"{PREFIX}completed_jobs_2m"] = 40
     rt.metrics[f"{PREFIX}completed_job_{work}_2m"] = 40
-    rt.metrics[f"{PREFIX}claimable_job_{work}_age_seconds"] = 600
+    rt.metrics[f"{PREFIX}waiting_job_{work}_age_seconds"] = 600
     assert rt.run() == 0
     assert not rt.posts  # Old work, but some of it still finishes.
     del rt.metrics[f"{PREFIX}completed_job_{work}_2m"]
-    rt.metrics[f"{PREFIX}claimable_job_{work}_age_seconds"] = 119
+    rt.metrics[f"{PREFIX}waiting_job_{work}_age_seconds"] = 119
     assert rt.run() == 0
     assert not rt.posts
-    # Two minutes free to claim and none finished, however busy the threads.
-    rt.metrics[f"{PREFIX}claimable_job_{work}_age_seconds"] = 120
+    # Two minutes waiting and none finished, however busy the threads.
+    rt.metrics[f"{PREFIX}waiting_job_{work}_age_seconds"] = 120
     assert rt.run() == 0
-    name = alerts.WORK_NAMES[work]
+    name = alerts.WORK_NAMES.get(work, work)
     assert f"{name} have waited 2 minutes and none finished" in (
         posts(rt, "Early warning")[0]
     )
@@ -228,17 +272,21 @@ def test_a_reset_window_player_over_twenty_minutes_still_alerts(rt) -> None:
     assert len(posts(rt, "Live Leaderboard")) == 1
 
 
-def test_a_failed_deploy_alerts_until_the_next_up_succeeds(rt, monkeypatch) -> None:
-    # ./ops up has stopped the alert timer by then, so it sends this itself.
+def test_a_failed_deploy_alerts_until_the_next_up_succeeds(rt) -> None:
+    # ./ops up restarts the alert schedule after it fails.
     rt.state_dir.mkdir()
     intent = rt.state_dir / "alert-intent"
     intent.write_text("failed\n")
     os.utime(intent, (rt.now, rt.now))
-    command = ["alerts", "--deploy-failed", str(rt.state_dir), rt.config["webhook_file"]]
-    monkeypatch.setattr(sys, "argv", command)
-    assert alerts.main() == 0
+    rt.post_status = 500
+    assert rt.run() == 1
+    assert not rt.posts
+    # Discord failed once; the next scheduled check delivers it.
+    rt.post_status = 204
+    rt.now += 60
+    assert rt.run() == 0
     assert len(posts(rt, "A deploy failed and left Clash Lens stopped")) == 1
-    # A manual check while the stack is still down keeps it open.
+    # Later checks while the stack is still down keep it open.
     rt.now += 60
     assert rt.run() == 0
     assert len(rt.posts) == 1

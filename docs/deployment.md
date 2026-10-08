@@ -80,14 +80,21 @@ migration, and unit input; `up` refuses to mix those images with changed init
 files. A new build is only staged: operator and recovery commands keep using
 the last successfully started release until `up` promotes the new one.
 
-Before it stops anything, `up` checks the release's images, settings and
-secret files, and that the release includes every migration the running
-database has already applied; otherwise it refuses with `the database has
-migrations N that this release lacks; nothing was stopped`. A release without
-them would run code on tables it does not know. If `up` fails after it has
-stopped services, it leaves them stopped, records the deploy as failed and
-sends the private alert `A deploy failed and left Clash Lens stopped` itself,
-because the alert timer is stopped too; the next `up` that succeeds clears it.
+Before it stops anything, `up` checks the release's images, writes its
+settings, secrets and unit files, checks that the release includes every
+migration the running database has already applied (otherwise it refuses with
+`the database has migrations N that this release lacks`), and applies the
+release's pending migrations to the running database. A release without an
+applied migration would run code on tables it does not know, and a migration
+that fails leaves the old release running. Pending migrations therefore run
+while the old release still serves, for the minute or so until it stops, so
+each must keep that release working: add tables and columns rather than drop
+or rename them. A database that is not running yet gets the same check and
+migrations after it starts. If `up` fails after it has stopped services, it
+leaves them stopped, records the deploy as failed and starts the alert
+schedule again, so the alert check sends `A deploy failed and left Clash Lens
+stopped` within a minute and retries delivery every minute; the next `up` that
+succeeds clears it.
 Each successful `up` keeps the release it replaced in `previous-release.env`
 in the state directory, with that release's images and source revision.
 
@@ -642,11 +649,18 @@ so 2 GB is the usual size, not a ceiling: on rogue 845 MB took 90 seconds plus
 14 seconds to save, so 2 GB takes about four minutes. From 30 Sep to 8 Oct
 2026 the most written between two of its 3,008 checkpoints was 1.1 GB, so a
 crash just before a checkpoint finishes replays up to about 2.2 GB. A stopped
-replay only starts again from the beginning, so the health check ignores
-failures and the unit waits for a healthy check for 15 minutes
-(`HealthStartPeriod` and `TimeoutStartSec`), enough for about 8 GB, and
-`./ops up` waits as long. The alert check warns once the database has been
-starting for five minutes; `./ops logs postgres` shows the replay's progress.
+replay only starts again from the beginning, so no fixed time limit stops one:
+the unit waits for the database as long as it takes (`TimeoutStartSec=infinity`),
+and the regular health check, which kills the container after twelve failures
+in a row, starts only once a startup check (`HealthStartupCmd`) finds the
+database ready. Every 10 seconds until then, the startup check reads which
+16 MB change-log file the replay is on, from its process name, and stops the
+database (an immediate shutdown, which systemd restarts) only when that file
+has not changed for 10 minutes; at the measured speed a file takes about two
+seconds. If it cannot see a replay at all, it waits rather than stop one.
+`./ops up` waits with the unit. The alert check warns once the database has
+been starting for five minutes; `./ops logs postgres` shows the replay's
+progress.
 
 The collector remembers, in memory, the used fields it last committed for each
 player and endpoint. An ordinary response that matches them is recorded in the
@@ -892,7 +906,8 @@ healthy collector or API, so failed processes cannot prevent the check starting.
 Fixture mode does not install or start Discord alerts. `./ops down` records an
 intentional stop and stops the timer; manual checks also stay quiet until a
 successful `./ops up`. Checks also stay quiet while `up` starts the stack,
-unless it fails after stopping services: then they report the failed deploy.
+unless it fails after stopping services: then it starts the timer again and
+the checks report the failed deploy.
 Time deliberately stopped does not count as a fetch gap.
 
 ### Alert conditions
@@ -1049,23 +1064,31 @@ use the [operating notes](operating.md#respond-to-alerts).
     rows (up to 1,000) in the minute before its sample. Normal Reset hours
     save 420–2,700 a minute;
   - a raw response waiting **5 minutes** to be uploaded to the archive;
-  - saved API responses or daily result calculations free to claim for
-    **2 minutes** while none of that kind finished in the last 2 minutes,
-    from the collector's `claimable_job_<work_type>_age_seconds` and
-    `completed_job_<work_type>_2m`. This holds however busy the worker's
-    threads look: threads that keep claiming and failing, or keep finding
-    nothing they may claim, finish nothing. A job that is running, or waits
-    for another, is not free to claim.
+  - work of any kind (saved API responses, daily result calculations, board
+    and army builds and the rest) waiting for **2 minutes** while none of
+    that kind finished in the last 2 minutes, from the collector's
+    `waiting_job_<work_type>_age_seconds` and `completed_job_<work_type>_2m`.
+    This holds however busy the worker's threads look: threads that keep
+    claiming and failing, or keep finding nothing they may claim, finish
+    nothing. A job waiting to be retried or for the archive to come back
+    counts from when it was saved, not from its next try, so claims and
+    retries never restart its wait; a job that is running does not count,
+    nor a past Reset's build the worker holds back between 04:30 and 07:00.
 
   For either warning, a container that cannot be inspected, missing
   measurements, or a sampled minute that starts before 05:00 leave it
   unknown, so an open warning stays open. On 7 Oct 2026 Podman killed the
   collector 13 times and the worker 4 times in 34 minutes with no alert.
 - **The latest Reset's frozen leaderboard not readable at 05:30 UTC**, on
-  every day including Mondays and Season ends. The check enters the private
-  API container and reads the newest frozen leaderboard through the API with
-  the website's own signed request, so a board saved as published but not yet
-  readable does not count. It also alerts when an earlier Reset has not
+  every day including Mondays and Season ends. The check opens the website's
+  public Daily leaderboard page on its local port. The page sends a visitor
+  on to the board's own address, by Season and day, only once the website has
+  read the newest frozen board from the API and accepted it; the check
+  follows that address, then enters the private API container to find which
+  Reset that board belongs to. So a board saved as published but not shown
+  by the website does not count, and neither does a page or check that
+  cannot be read at 05:30. Once that Reset's record shows the board was
+  readable, a later failed read does not reopen this alert. It also alerts when an earlier Reset has not
   published both its frozen leaderboard and its army results an hour after
   the internal target, five minutes after Reset or ten on Mondays, or has no
   publication record at all 70 minutes after it. It recovers only when the
@@ -1086,15 +1109,18 @@ use the [operating notes](operating.md#respond-to-alerts).
   The check enters the private worker container, whose database role writes
   each Reset's record (below), and prints only the Reset, its member count,
   how many members' Reset collection ended, and when the inputs froze and the
-  board was first readable.
+  website first showed the board.
 
   Each Reset's record is one row of `reset_acceptance_records`: members
-  captured; when their Reset readings were all collected and all processed;
-  when the first frozen board's inputs froze, when it was saved as published
-  and when the alert check first read it back; that board's input states; and
-  the ended Legend day's result states and boundary settlement at 06:00 and
-  just before the next Reset. Each time is kept as first seen, to the minute
-  for the read-back. One row a day, under 1 KB: about 0.4 MB a year.
+  captured; when their Reset readings were all collected and all processed,
+  counting every response a Reset item saved even if a later request of that
+  item failed; when the first frozen board's inputs froze, when it was saved
+  as published and when the website's public page first showed it, to the
+  second of that read; that board's input states (Complete, Partial,
+  Inconsistent and the rest); and how many of the Reset's boundaries were
+  settled, provisional or unresolved when the check first saw that board.
+  Each value is kept as first seen. One row a day, under 1 KB: about 0.4 MB a
+  year.
 - **More than 10 untracked recent Legend I battlers**: players in a saved
   Legend I battle of the current or previous Legend day who are not tracked
   although their first such battle was saved over an hour ago. Players with a
@@ -1130,8 +1156,9 @@ alerts, and each recovers only when its own measurement does.
   reaches Discord; it cannot report a dead timer, a crashed checker or a
   broken webhook.
 - **A deploy that failed and left Clash Lens stopped**: `./ops up` failed
-  after it had stopped services, so it stopped them all, including the alert
-  timer, and sent this alert itself. Until 8 Oct 2026 a failed `up` left
+  after it had stopped services, so it stopped them all, then started the
+  alert timer again so this alert is sent and its delivery retried every
+  minute. Until 8 Oct 2026 a failed `up` left
   everything stopped with alerts switched off. It stays open, with the other
   alerts a stopped stack raises when `./ops alert-check` runs, until an
   `./ops up` succeeds, and recovers 15 minutes after that.
@@ -1153,7 +1180,8 @@ folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
 replaced with mode 600 and contains one record per condition with at most one
 pending transition, one first-clear time and one last alert delivery time
 each, plus when backup check timeouts or errors and Live Leaderboard staleness
-began, when each of at most six currently unreadable checks first failed, and
+began, when each of at most seven currently unreadable check parts (the Reset
+publication check has two: the website page and the private API) first failed, and
 at most ten minutes of Reset work left, one sample a minute.
 It keeps no growing event history, keys, URLs, player lists or account data.
 

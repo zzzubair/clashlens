@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from .past_reset_pacing import past_reset_build_hold
+
 
 def health_metrics(connection: Any) -> dict[str, int | float]:
     row = connection.execute(
@@ -16,13 +18,22 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                                   THEN greatest(COALESCE(observation.created_at, job.created_at), job.due_at)
                                   ELSE COALESCE(observation.created_at, job.created_at) END)
                          FILTER (WHERE job.status <> 'pending' OR job.due_at <= clock_timestamp()))) AS age,
-                   -- Due and free to claim, so not one that is running or waits on another.
+                   -- Due work not running now, however often it was claimed or retried:
+                   -- the wait counts from when it was saved, or became due if never tried.
+                   -- Builds the worker holds back for a past Reset (past_reset_pacing)
+                   -- are not waiting.
                    greatest(0, extract(epoch FROM clock_timestamp()
-                       - min(greatest(COALESCE(observation.created_at, job.created_at), job.due_at))
-                         FILTER (WHERE (job.status IN ('pending', 'waiting_retry')
-                                        AND job.due_at <= clock_timestamp())
-                                    OR (job.status = 'leased'
-                                        AND job.lease_expires_at < clock_timestamp())))) AS claimable_age
+                       - min(CASE WHEN job.status = 'pending'
+                                  THEN greatest(COALESCE(observation.created_at, job.created_at), job.due_at)
+                                  ELSE COALESCE(observation.created_at, job.created_at) END)
+                         FILTER (WHERE ((job.status = 'pending' AND job.due_at <= clock_timestamp())
+                                        OR job.status IN ('waiting_retry', 'waiting_dependency')
+                                        OR (job.status = 'leased'
+                                            AND job.lease_expires_at < clock_timestamp()))
+                                   AND NOT COALESCE(
+                                       job.work_type IN ('build_snapshot', 'build_army_analytics')
+                                       AND job.input_json->>'boundary_at' < %(hold)s::text,
+                                       false)))) AS waiting_age
             FROM python_processing_jobs AS job
             LEFT JOIN collector_observations AS observation
               ON observation.id = job.observation_id
@@ -96,12 +107,13 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                (SELECT CASE WHEN oldest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - oldest_at)) END FROM failed_uploads),
                (SELECT COALESCE(sum(completed_count), 0) FROM completed),
                (SELECT json_object_agg(work_type, age) FROM processing),
-               (SELECT json_object_agg(work_type, claimable_age) FROM processing),
+               (SELECT json_object_agg(work_type, waiting_age) FROM processing),
                (SELECT json_object_agg(work_type, completed_count) FROM completed)
-        FROM checks"""
+        FROM checks""",
+        {"hold": past_reset_build_hold(connection)},
     ).fetchone()
     assert row is not None
-    *row, ages, claimable, completed = row
+    *row, ages, waiting, completed = row
     names = (
         "active_players",
         "due_queue_depth",
@@ -135,8 +147,8 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
             metrics[name] = float(value) if name.endswith("_seconds") else int(value)
     for work_type, age in (ages or {}).items():
         metrics[f"oldest_job_{work_type}_age_seconds"] = float(age)
-    for work_type, age in (claimable or {}).items():
-        metrics[f"claimable_job_{work_type}_age_seconds"] = float(age)
+    for work_type, age in (waiting or {}).items():
+        metrics[f"waiting_job_{work_type}_age_seconds"] = float(age)
     for work_type, count in (completed or {}).items():
         metrics[f"completed_job_{work_type}_2m"] = int(count)
     return metrics

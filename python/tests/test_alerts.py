@@ -59,6 +59,8 @@ def runtime(tmp_path, monkeypatch):
         volume_failed=False,
         read_requests=[],
         probe_status=200,
+        website_status=302,
+        calls=[],
     )
     key = b"a" * 32
     secret = tmp_path / "hmac"
@@ -92,6 +94,11 @@ def runtime(tmp_path, monkeypatch):
                 body, status = b'{"ready":true}', 200
             elif self.path == "/healthz":
                 body, status = b'{"status":"ok"}', rt.site_status
+            elif self.path.startswith("/leaderboards/tracked?view=daily&page=1"):
+                # The public page sends a visitor on to the board it accepted.
+                body, status = b"", rt.website_status
+            elif self.path.startswith("/leaderboards/tracked?"):
+                body, status = b"<html></html>", 200
             else:
                 proof = verify_proof(
                     headers=[
@@ -107,6 +114,10 @@ def runtime(tmp_path, monkeypatch):
                 rt.read_requests.append((self.path, proof))
                 body, status = b'{"users":[],"results":[]}', rt.probe_status
             self.send_response(status)
+            if status == 302:
+                self.send_header(
+                    "Location", "/leaderboards/tracked?view=daily&season=2026-10&day=7&page=1"
+                )
             self.end_headers()
             self.wfile.write(body)
 
@@ -153,6 +164,7 @@ def runtime(tmp_path, monkeypatch):
     )
 
     def command(args, timeout=15):
+        rt.calls.append(args)
         if "volume" in args:
             code, output = int(rt.volume_failed), str(tmp_path)
         elif "backup-status" in args:
@@ -193,6 +205,7 @@ def runtime(tmp_path, monkeypatch):
         "spool_root": str(tmp_path),
         "max_bytes": 100,
         "max_objects": 100,
+        "website_port": server.server_port,
     }
     rt.state_dir = tmp_path / "state"
     rt.run = lambda: alerts.run(rt.config, rt.state_dir, ROOT)
@@ -345,6 +358,7 @@ def test_missing_or_public_webhook_fails_loudly(runtime, monkeypatch, capsys, mo
             rt.config["spool_root"],
             "100",
             "100",
+            str(rt.config["website_port"]),
         ],
     )
     assert alerts.main() == 1
@@ -786,7 +800,7 @@ def test_publication_probe_counts_resets_missing_their_publication(
                          boundary + timedelta(minutes=5)),
                     )
             capsys.readouterr()
-            alerts.publication_probe()
+            alerts.publication_probe(["2026-10", "7"])
             count, served = map(int, capsys.readouterr().out.split())
             assert served == int(latest.timestamp())
             return count

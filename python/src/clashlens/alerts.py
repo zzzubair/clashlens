@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -140,6 +141,7 @@ UNREADABLE = {
     "Restart history unavailable; run ./ops logs",
     "Live Leaderboard freshness unavailable; run ./ops logs api",
     "Reset publication status unavailable; run ./ops logs api",
+    "Reset publication status unavailable; run ./ops logs website",
     "Reset progress unavailable; run ./ops logs worker",
     "Untracked Legend I battler count unavailable; run ./ops logs worker",
 }
@@ -167,10 +169,10 @@ WARNING_RESET_SAVED_PER_MINUTE = 100
 # response not yet in the archive is lost with the server's disk.
 WARNING_UPLOAD_WAIT = 300
 UPLOAD_WAIT = 900
-# Saved responses and daily results that are free to claim but of which none
-# finished for this long are stalled, however busy the worker threads look.
+# Work of any kind waiting this long, however often it was claimed and retried,
+# while none of its kind finished meanwhile is stalled, however busy the worker
+# threads look.
 NO_PROGRESS = 120
-REQUIRED_WORK = ("process_observation", "reconcile_ranked_day")
 # PostgreSQL replays its change log after a crash; the health check waits.
 WARNING_DATABASE_STARTING = 300
 # Minutes after the Reset: collection done, projected inputs, inputs frozen,
@@ -302,25 +304,25 @@ def leaderboard_freshness_probe(now: datetime | None = None) -> None:
     print(sources["stale_count"], board["total_entries"], max(0, int(age)))
 
 
-def publication_probe(origin: str = "http://127.0.0.1:8000") -> None:
+def publication_probe(daily: list[str], origin: str = "http://127.0.0.1:8000") -> None:
     """Run inside the API container; prints how many Resets are unpublished,
-    then the Reset of the frozen leaderboard the website would read now.
+    then the Reset of the Daily leaderboard the website showed, or 0.
 
     A Reset counts when no generation of it has published both its frozen
     leaderboard and its army results an hour after its target time, or when
     a Reset since the first one has no generation at all 70 minutes after it.
-    The board is read through the API as the website reads it, so a board
-    saved but not yet readable, such as one not yet committed, does not count.
+    ``daily`` is the Season and day of the board the website's public page
+    showed, or empty when it showed none; that board's Reset is read with the
+    website's own signed request.
     """
     from clashlens.api_db import ApiDatabase
 
-    try:
-        board = signed_read(origin, "/v1/leaderboards/frozen?limit=1")
+    served = 0
+    if daily:
+        season, day = daily
+        selector = {"official_season_id": season, "season_day_number": day, "limit": 1}
+        board = signed_read(origin, "/v1/leaderboards/frozen?" + urllib.parse.urlencode(selector))
         served = int(datetime.fromisoformat(board["boundary_at"]).timestamp())
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        served = 0  # No frozen board yet.
 
     url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
     database = ApiDatabase(url, max_size=1)
@@ -351,12 +353,13 @@ def publication_probe(origin: str = "http://127.0.0.1:8000") -> None:
         database.close()
 
 
-def reset_probe(served: str) -> None:
+def reset_probe(served: str, read_at: str) -> None:
     """Run inside the worker container; updates the latest Reset's record.
 
     Prints that Reset, its captured members, those whose Reset collection
     ended, and when its board's inputs froze and it was first readable, or 0.
-    ``served`` is the Reset of the frozen board the API serves, or 0.
+    ``served`` is the Reset of the board the website's public page showed at
+    ``read_at``, both 0 when it showed none or could not be read.
     """
     import psycopg
 
@@ -366,7 +369,9 @@ def reset_probe(served: str) -> None:
     readable = datetime.fromtimestamp(int(served), UTC) if int(served) else None
     with psycopg.connect(url) as connection:
         record = reset_acceptance.refresh(
-            connection, readable_boundary=readable, now=datetime.now(UTC)
+            connection,
+            readable_boundary=readable,
+            readable_at=datetime.fromtimestamp(int(read_at), UTC) if readable else None,
         )
     if record is None:
         print(0, 0, 0, 0, 0)
@@ -379,6 +384,37 @@ def reset_probe(served: str) -> None:
         epoch(record["inputs_frozen_at"]),
         epoch(record["readable_at"]),
     )
+
+
+def website_daily_board(port: int) -> list[str]:
+    """The Season and day of the Daily leaderboard the website's public page
+    shows, or an empty list when it shows none yet.
+
+    The page sends a visitor on to the board's own address only once the
+    website has read the newest frozen board from the API and accepted it, so
+    a board the website cannot reach or rejects does not count.
+    """
+    origin = f"http://127.0.0.1:{port}"
+    try:
+        request(origin + "/leaderboards/tracked?view=daily&page=1")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return []
+        if error.code not in (301, 302, 303, 307, 308):
+            raise
+        target = urllib.parse.urljoin(origin + "/", error.headers.get("Location", ""))
+    else:
+        raise CheckError("Daily leaderboard page showed no board")
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(target).query)
+    daily = [query.get("season", [""])[0], query.get("day", [""])[0]]
+    if (
+        not target.startswith(origin + "/leaderboards/tracked?")
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", daily[0])
+        or not re.fullmatch(r"[1-9][0-9]?", daily[1])
+    ):
+        raise CheckError("Daily leaderboard page sent an invalid board address")
+    request(target)  # The board's own page also renders.
+    return daily
 
 
 def completeness_probe() -> None:
@@ -789,14 +825,27 @@ def observe(
     else:
         state.pop("leaderboard_stale_since", None)
         findings["leaderboard"] = False
-    publication = run_probe("api", ["--publication"], 2, "Reset publication status")
-    served = 0 if publication is None else publication[1]
+    # The board counts as readable only once the website's public Daily
+    # leaderboard page shows it.
+    try:
+        daily = website_daily_board(int(config["website_port"]))
+        read_at = int(time.time())
+    except (OSError, ValueError, CheckError, http.client.HTTPException):
+        errors.append("Reset publication status unavailable; run ./ops logs website")
+        daily = read_at = None
+    publication = run_probe(
+        "api", ["--publication", *(daily or [])], 2, "Reset publication status"
+    )
+    served = None if publication is None or daily is None else publication[1]
     # The worker's database role writes the Reset's record and reads battles;
     # the API's does neither.
-    record = run_probe("worker", ["--reset", str(served)], 5, "Reset progress")
-    findings["reset"], late = reset_stages(
-        record, None if publication is None else served, metrics, state, now
+    record = run_probe(
+        "worker",
+        ["--reset", str(served or 0), str(read_at if served else 0)],
+        5,
+        "Reset progress",
     )
+    findings["reset"], late = reset_stages(record, served, metrics, state, now)
     if publication is not None:
         findings["publication"] = publication[0] > 0 or late
     elif late:
@@ -838,7 +887,7 @@ def health_warning(podman: str, state: dict) -> bool | None:
         elif streak >= WARNING_HEALTH_STREAK:
             reasons.append(f"{container} failed its last {streak} health checks")
     # A database still starting is replaying its change log after a crash; its
-    # service stops it if it takes longer than deploy/quadlet allows.
+    # startup check stops it only once the replay stops advancing.
     try:
         result = command(
             [
@@ -877,8 +926,9 @@ def reset_stages(
 
     Returns the warning and whether the board missed 05:30. ``record`` is the
     Reset probe's output: the Reset, its captured members, those whose Reset
-    collection ended, and when the board's inputs froze (0 if not yet).
-    ``served`` is the Reset of the frozen board the API serves, None if unknown.
+    collection ended, and when the board's inputs froze and it was first
+    readable (0 if not yet). ``served`` is the Reset of the board the website
+    shows now, None if it could not be read.
     """
     start = datetime.fromtimestamp(now, UTC).replace(
         hour=5, minute=0, second=0, microsecond=0
@@ -892,12 +942,14 @@ def reset_stages(
     if remaining is not None:
         samples.append([now, remaining])
     state["reset_work"] = samples
-    if served == boundary:
+    if served == boundary or (record is not None and record[0] == boundary and record[4]):
         return False, False
-    late = served is not None and minutes >= RESET_READABLE
+    # A board that could not be read by 05:30 missed it too.
+    late = minutes >= RESET_READABLE
     if late:
         state.setdefault("details", {})["publication"] = (
             f"Now: the {start:%Y-%m-%d} 05:00 UTC board was not readable at 05:30"
+            + ("; the website check could not read it" if served is None else "")
         )
     if minutes < RESET_COLLECTED:
         return False, late
@@ -953,15 +1005,15 @@ def early_warning(metrics: dict, state: dict, clock: str) -> bool | None:
             f"a raw response has waited {int(upload // 60)} minutes to be uploaded"
         )
     # Busy or idle threads do not count: only finished work of the kind waiting.
-    for work in REQUIRED_WORK:
-        waiting = metrics.get(f"{prefix}claimable_job_{work}_age_seconds", 0)
-        if waiting < NO_PROGRESS:
+    for name, waiting in sorted(metrics.items()):
+        work = re.fullmatch(f"{prefix}waiting_job_(.+)_age_seconds", name)
+        if work is None or waiting < NO_PROGRESS:
             continue
         if f"{prefix}completed_jobs_2m" not in metrics:
             unknown = True
-        elif not metrics.get(f"{prefix}completed_job_{work}_2m"):
+        elif not metrics.get(f"{prefix}completed_job_{work[1]}_2m"):
             reasons.append(
-                f"{WORK_NAMES[work]} have waited {int(waiting // 60)} minutes"
+                f"{WORK_NAMES.get(work[1], work[1])} have waited {int(waiting // 60)} minutes"
                 " and none finished in the last 2 minutes"
             )
     # Responses saved in the collector's sampled minute, once it is all in 05:00-06:00.
@@ -1044,19 +1096,12 @@ def main() -> int:
         if sys.argv[1:] == ["--leaderboard"]:
             leaderboard_freshness_probe()
             return 0
-        if sys.argv[1:] == ["--publication"]:
-            publication_probe()
+        if sys.argv[1:2] == ["--publication"] and len(sys.argv) in (2, 4):
+            publication_probe(sys.argv[2:])
             return 0
-        if sys.argv[1:2] == ["--reset"] and len(sys.argv) == 3:
-            reset_probe(sys.argv[2])
+        if sys.argv[1:2] == ["--reset"] and len(sys.argv) == 4:
+            reset_probe(*sys.argv[2:])
             return 0
-        if sys.argv[1:2] == ["--deploy-failed"] and len(sys.argv) == 4:
-            return run(
-                {"webhook_file": sys.argv[3]},
-                Path(sys.argv[2]),
-                None,
-                lambda *_arguments: ({}, []),
-            )
         if sys.argv[1:] == ["--completeness"]:
             completeness_probe()
             return 0
@@ -1068,11 +1113,12 @@ def main() -> int:
                 None,
                 observe_site,
             )
-        state_dir, root, webhook, health, spool, max_bytes, max_objects = sys.argv[1:]
+        state_dir, root, webhook, health, spool, max_bytes, max_objects, website = sys.argv[1:]
         return run(
             {
                 "webhook_file": webhook,
                 "health_port": health,
+                "website_port": website,
                 "spool_root": spool,
                 "max_bytes": max_bytes,
                 "max_objects": max_objects,

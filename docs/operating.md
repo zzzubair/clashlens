@@ -762,14 +762,16 @@ recovers 15 minutes after the last one is retried or replayed.
 
 ### Reset publication missing
 
-This alert fires when the latest Reset's frozen leaderboard is not readable
-by 05:30 UTC, and when an earlier Reset is still unpublished. The **Reset
+This alert fires when the website's public Daily leaderboard page does not
+show the latest Reset's frozen leaderboard by 05:30 UTC, including when that
+page cannot be read then, and when an earlier Reset is still unpublished. The **Reset
 behind its 05:30 target** early warning comes first and names the stage:
 collection not ended at 05:10, Reset work projected past 05:25 at 05:15, or
 inputs not frozen at 05:25.
 
 **First checks:** `./ops queue-status` for Reset work left, `./ops logs worker
---since '2 hours ago' --no-pager`, then:
+--since '2 hours ago' --no-pager`, `./ops logs website` if the alert says the
+website check could not read the board, then:
 
 ```sh
 podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
@@ -780,7 +782,8 @@ podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
 
 The second shows, for the latest Resets, when collection ended, when the Reset
 readings were processed, when the board's inputs froze, when it was saved as
-published and when it was first readable.
+published and when the website first showed it, with the board's input states
+and how many of the Reset's boundaries were settled.
 
 **Fix or escalate:** escalate; repairing a publication needs an approved change.
 
@@ -790,7 +793,8 @@ one has published its frozen leaderboard and army results.
 ### Deploy failed
 
 **First checks:** `./ops status`, then `./ops logs` for the step that failed.
-`./ops up` printed it when it stopped.
+`./ops up` printed it when it stopped. The alert schedule keeps running while
+the stack is stopped, so the other alerts a stopped stack raises follow.
 
 **Fix or escalate:** fix the cause and run `./ops up` again, or escalate. To go
 back to the earlier code, follow the
