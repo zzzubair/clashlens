@@ -104,7 +104,7 @@ positive_bigint_pattern='^[1-9][0-9]{0,17}$'
 [[ ${#reason} -ge 8 && ${#reason} -le 500 ]] || status_denied
 [[ "$reason" =~ ^[[:print:]]+$ ]] || status_denied
 case "$replay_parser_version" in
-    supercell-source-parser-v1|supercell-source-parser-v2|supercell-profile-parser-v3) ;;
+    supercell-source-parser-v1|supercell-source-parser-v2|supercell-profile-parser-v3|supercell-battle-parser-v3) ;;
     *) status_denied ;;
 esac
 
@@ -125,7 +125,7 @@ if ! replay_row=$(
         --set=observation_id="$observation_id" \
         --set=operator_identity="$operator_identity" \
         --set=reason="$reason" \
-        --command "SELECT request_id, job_id, request_status
+        <<<"SELECT request_id, job_id, request_status
 FROM clashlens_request_python_replay_v2(
     :'observation_id'::bigint,
     :'operator_identity',
@@ -141,7 +141,7 @@ FROM clashlens_request_python_replay_v2(
 fi
 [[ -n "$replay_row" ]] || status_unavailable
 
-read -r replay_request_id replay_job_id replay_request_status <<<"$replay_row"
+IFS='|' read -r replay_request_id replay_job_id replay_request_status <<<"$replay_row"
 case "$replay_request_status" in
     enqueued)
         printf 'replay_request_status=enqueued request_id=%s job_id=%s\n' \

@@ -790,8 +790,15 @@ jobs remain, batches report `deleted_python_processing_jobs` above zero.
 and uploads with their failure category.
 
 **Fix or escalate:** retry a failed upload with `--upload-hash` and `--apply`
-once its cause is fixed. Failed processing jobs have no retry command; see
-[failed work](deployment.md#failed-work) and escalate.
+once its cause is fixed. Failed processing jobs have no retry command: replay a
+failed profile or battle-log job with `deploy/replay-request`, naming the
+failed job's own parser, such as `--parser-version supercell-battle-parser-v3`
+([failed work](deployment.md#failed-work)). If its saved response truly cannot
+be processed, accept the job with the owner's agreement:
+`./ops failed-items --accept-job-id ID --reason 'why it cannot be processed'`
+previews, and the same with `--apply` records it. The job, its attempts and its
+saved response stay; the record keeps who accepted it, when and why, and
+`./ops failed-items` shows it as `accepted`. Otherwise escalate.
 
 **Recovered:** 24 hours and 15 minutes after the newest permanent failure. The
 alert means a new permanent failure in the last 24 hours; its recovery means no new one for
@@ -800,7 +807,7 @@ clears the alert early; a repeat failure raises a fresh alert.
 
 The separate **failed work waiting for a person** alert stays open while any
 failed job or upload is left, however old, and says how many there are. It
-recovers 15 minutes after the last one is retried or replayed, or, for a daily
+recovers 15 minutes after the last one is retried, replayed or accepted, or, for a daily
 result calculation, after its replacement from the current-Season republish
 finishes. The failed job itself stays failed as a record. A replacement that
 found the same result can count as failed again after the 48-hour finished-job

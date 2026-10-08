@@ -15,6 +15,7 @@ from clashlens.collector_db import (
     ResponseHandoff,
     TransportFailure,
 )
+from clashlens.collector_metrics import health_metrics
 from clashlens.operator_recovery import inspect_failed_items, retry_failed_item
 
 
@@ -419,3 +420,98 @@ def test_retry_refuses_a_busy_row_within_its_lock_timeout(database_url: str) -> 
 
             assert monotonic() - started < 3
             assert report["reason"] == "retry_lock_timeout"
+
+
+def test_an_accepted_failed_job_keeps_its_evidence_and_a_new_failure_still_counts(
+    database_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("INSERT INTO players (normalized_tag) VALUES ('#2PP')")
+        job_id, _transport_id = _seed_processing_and_transport_failures(connection_info)
+
+        def outstanding() -> dict[str, int | float]:
+            # Read as the collector does in production.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("SET ROLE clashlens_collector")
+                return health_metrics(connection)
+
+        def job_state() -> tuple[object, ...]:
+            with psycopg.connect(connection_info) as connection:
+                return connection.execute(
+                    """
+                    SELECT status, attempt_count, outcome, failure_category,
+                           failure_detail, observation_id IS NOT NULL
+                    FROM python_processing_jobs WHERE id = %s
+                    """,
+                    (job_id,),
+                ).fetchone()
+
+        before = job_state()
+        assert outstanding()["failed_processing"] == 1
+        command = [
+            "failed-items",
+            "--database-url",
+            connection_info,
+            "--accept-job-id",
+            str(job_id),
+            "--operator",
+            "ops:zubair",
+        ]
+        # A reason is required.
+        assert main(command) == 1
+        capsys.readouterr()
+        reason = ["--reason", "profile does not match profile-schema-v1"]
+
+        assert main([*command, *reason]) == 0
+        assert _payload(capsys)["outcome"] == "preview"
+        assert outstanding()["failed_processing"] == 1
+
+        assert main([*command, *reason, "--apply"]) == 0
+        assert _payload(capsys)["outcome"] == "accepted"
+        assert outstanding()["failed_processing"] == 0
+        # The job and its evidence stay exactly as they were.
+        assert job_state() == before
+        with psycopg.connect(connection_info) as connection:
+            record = connection.execute(
+                """
+                SELECT operator_identity, reason, accepted_at <= clock_timestamp()
+                FROM python_failed_job_acceptances WHERE job_id = %s
+                """,
+                (job_id,),
+            ).fetchone()
+            listed = inspect_failed_items(connection, limit=10)["items"]
+        assert record == (
+            "ops:zubair",
+            "profile does not match profile-schema-v1",
+            True,
+        )
+        jobs = [item for item in listed if item["item_type"] == "processing_job"]
+        assert [(item["processing_job_id"], item["recovery"]) for item in jobs] == [
+            (job_id, "accepted")
+        ]
+        assert jobs[0]["accepted"]["operator"] == "ops:zubair"
+
+        # Accepting twice keeps the first record.
+        assert main([*command, "--reason", "a different reason", "--apply"]) == 1
+        assert _payload(capsys)["reason"] == "processing_job_already_accepted"
+
+        # A new failure after the old one was accepted still raises the alarm.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, status, updated_at
+                )
+                SELECT 'reconcile_ranked_day', 'new-failure',
+                       jsonb_build_object('player_id', id,
+                           'ranked_day_start', '2026-10-08T05:00:00Z'),
+                       'failed', clock_timestamp()
+                FROM players WHERE normalized_tag = '#2PP'
+                """
+            )
+        metrics = outstanding()
+        assert metrics["failed_processing"] == 1
+        assert metrics["newest_failed_processing_age_seconds"] < 600

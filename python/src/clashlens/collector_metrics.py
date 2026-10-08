@@ -42,9 +42,13 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
             -- A failed daily result no longer counts once its replacement from
             -- the current-Season republish finished, or, after that job is
             -- cleaned up, once the day has a result saved since the failure.
+            -- A job an operator accepted as beyond repair no longer counts.
             SELECT count(*) AS failed_count, max(updated_at) AS newest_at, min(updated_at) AS oldest_at
             FROM python_processing_jobs AS failed
             WHERE status = 'failed'
+              AND NOT EXISTS (
+                  SELECT FROM python_failed_job_acceptances AS accepted
+                  WHERE accepted.job_id = failed.id)
               AND NOT EXISTS (
                   SELECT FROM observation_processing_outcomes AS repaired
                   WHERE repaired.observation_id

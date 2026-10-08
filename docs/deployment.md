@@ -1172,6 +1172,8 @@ Listing and previewing are the default; a retry needs both one exact item and
 ./ops failed-items --work-id 123 --apply
 ./ops failed-items --upload-hash SHA256
 ./ops failed-items --upload-hash SHA256 --apply
+./ops failed-items --accept-job-id 123 --reason 'profile shape cannot be parsed'
+./ops failed-items --accept-job-id 123 --reason 'profile shape cannot be parsed' --apply
 ```
 
 This command starts an ephemeral copy of the pinned Python image with an
@@ -1182,9 +1184,15 @@ configuration failures. Archive checksum or catalogue contradictions return
 `archive_integrity_repair_required` and are never requeued automatically.
 Failed profile and battle-log observation processing is replayed only through
 the existing audited `deploy/replay-request --observation-id ID --reason REASON`
-path. League-history, global, and derived processing failures require
-investigation. Transport failures are evidence governed by the normal work
-policy and are not manually requeued.
+path, with `--parser-version` set to the failed job's parser
+(`supercell-battle-parser-v3` is accepted for battle logs only).
+League-history, global, and derived processing failures require
+investigation. A failed processing job that cannot be repaired can be
+accepted with `--accept-job-id` and a `--reason` of 8 to 500 characters: it
+keeps its failed state and evidence, the acceptance records `ops:` and the host
+account, the time and the reason, and the failed-work alerts stop counting it.
+A job can be accepted once; nothing undoes an acceptance. Transport failures
+are evidence governed by the normal work policy and are not manually requeued.
 
 ## Worker processes
 

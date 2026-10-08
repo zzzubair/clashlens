@@ -37,7 +37,7 @@ Usage: ./ops build [--fixture]
        ./ops backup-prune [--apply]
        ./ops archive-prune [--apply]
        ./ops history-prune
-       ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256] [--apply]
+       ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256|--accept-job-id N --reason TEXT] [--apply]
        ./ops support-recovery-exec <arguments>
 
 build creates a pinned release. up installs and starts that release; it never
@@ -1287,7 +1287,7 @@ failed_items() {
   require_host
   prepare_managed_runtime worker
   if [[ "$MODE" == fixture ]]; then load_fixture_config; else load_production_config; fi
-  run_with_admin_database "${RELEASE[PYTHON_IMAGE]}" failed-items --database-url-file /run/secrets/database-url "$@"
+  run_with_admin_database "${RELEASE[PYTHON_IMAGE]}" failed-items --database-url-file /run/secrets/database-url "$@" --operator "ops:${SUDO_USER:-$(id -un)}"
 }
 
 backup_enabled() {

@@ -1,7 +1,8 @@
-"""Bounded operator visibility and explicit retry for collector failures."""
+"""Bounded operator visibility, explicit retry and acceptance of failures."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from psycopg.errors import LockNotAvailable, QueryCanceled, UniqueViolation
@@ -19,6 +20,48 @@ _RESTART_AFTER_REPAIR_FAILURES = {
     "archive_reference_mismatch",
     "archive_unsupported",
 }
+
+_PROCESSING_JOB = """
+    SELECT job.id, job.work_type, job.endpoint, job.status, job.observation_id,
+           job.replay_observation_id, job.attempt_count, job.max_attempts,
+           job.outcome, job.failure_category, job.due_at, job.updated_at,
+           accepted.operator_identity, accepted.reason, accepted.accepted_at
+    FROM python_processing_jobs AS job
+    LEFT JOIN python_failed_job_acceptances AS accepted ON accepted.job_id = job.id
+"""
+_OPERATOR = re.compile(r"[A-Za-z0-9._:@-]{1,128}")
+
+
+def failed_items_command(arguments: Any, database_url: str) -> dict[str, Any]:
+    """Run `failed-items`: list, or preview/apply one retry or acceptance."""
+    import psycopg
+
+    selected = (arguments.work_id, arguments.upload_hash, arguments.accept_job_id)
+    if arguments.apply and selected == (None, None, None):
+        raise ValueError("--apply requires --work-id, --upload-hash or --accept-job-id")
+    if arguments.upload_hash is not None and not re.fullmatch(
+        r"[0-9a-f]{64}", arguments.upload_hash
+    ):
+        raise ValueError("upload hash must be a lowercase SHA-256 digest")
+    if (arguments.reason is None) != (arguments.accept_job_id is None):
+        raise ValueError("--accept-job-id and --reason go together")
+    with psycopg.connect(database_url) as connection:
+        if arguments.accept_job_id is not None:
+            return accept_failed_job(
+                connection,
+                job_id=arguments.accept_job_id,
+                operator=arguments.operator or "",
+                reason=arguments.reason,
+                apply=arguments.apply,
+            )
+        if selected == (None, None, None):
+            return inspect_failed_items(connection, limit=arguments.limit)
+        return retry_failed_item(
+            connection,
+            work_id=arguments.work_id,
+            upload_hash=arguments.upload_hash,
+            apply=arguments.apply,
+        )
 
 
 def inspect_failed_items(connection: Any, *, limit: int) -> dict[str, Any]:
@@ -54,13 +97,10 @@ def inspect_failed_items(connection: Any, *, limit: int) -> dict[str, Any]:
             (limit + 1,),
         ).fetchall()
         processing_rows = connection.execute(
-            """
-            SELECT id, work_type, endpoint, status, observation_id,
-                   replay_observation_id, attempt_count, max_attempts,
-                   outcome, failure_category, due_at, updated_at
-            FROM python_processing_jobs
-            WHERE status = 'failed'
-            ORDER BY updated_at DESC, id DESC
+            f"""
+            {_PROCESSING_JOB}
+            WHERE job.status = 'failed'
+            ORDER BY job.updated_at DESC, job.id DESC
             LIMIT %s
             """,
             (limit + 1,),
@@ -124,6 +164,57 @@ def retry_failed_item(
         return _refused("retry_lock_timeout")
     except QueryCanceled:
         return _refused("retry_statement_timeout")
+
+
+def accept_failed_job(
+    connection: Any, *, job_id: int, operator: str, reason: str, apply: bool = False
+) -> dict[str, Any]:
+    """Preview or record that one failed processing job is beyond repair.
+
+    The job keeps its failed state, attempts and saved response; only the
+    failed-work count stops counting it.
+    """
+    if not _OPERATOR.fullmatch(operator):
+        raise ValueError("operator must be 1-128 letters, digits or ._:@-")
+    if not 8 <= len(reason) <= 500 or not reason.isprintable():
+        raise ValueError("reason must be 8-500 printable characters on one line")
+    try:
+        with connection.transaction():
+            connection.execute("SET LOCAL lock_timeout = '1s'")
+            connection.execute("SET LOCAL statement_timeout = '30s'")
+            row = connection.execute(
+                f"{_PROCESSING_JOB} WHERE job.id = %s FOR UPDATE OF job", (job_id,)
+            ).fetchone()
+            if row is None:
+                return _refused("processing_job_not_found")
+            item = _processing_item(row)
+            if _text(row[3]) != "failed":
+                return _refused(f"processing_job_is_{_text(row[3])}", item)
+            if row[12] is not None:
+                return _refused("processing_job_already_accepted", item)
+            report = {
+                "applied": apply,
+                "outcome": "accepted" if apply else "preview",
+                "accepted_count": int(apply),
+                "refused_count": 0,
+                "item": item,
+            }
+            if apply:
+                connection.execute(
+                    """
+                    INSERT INTO python_failed_job_acceptances (
+                        job_id, operator_identity, reason
+                    ) VALUES (%s, %s, %s)
+                    """,
+                    (job_id, operator, reason),
+                )
+            return report
+    except UniqueViolation:
+        return _refused("processing_job_already_accepted")
+    except LockNotAvailable:
+        return _refused("accept_lock_timeout")
+    except QueryCanceled:
+        return _refused("accept_statement_timeout")
 
 
 def _retry_work(connection: Any, *, work_id: int, apply: bool) -> dict[str, Any]:
@@ -279,7 +370,14 @@ def _processing_item(row: Any) -> dict[str, Any]:
         "updated_at": row[11],
         "recovery": "investigate_only",
     }
-    if _text(row[1]) in {"process_observation", "replay_observation"} and _text(
+    if row[12] is not None:
+        item["recovery"] = "accepted"
+        item["accepted"] = {
+            "operator": _text(row[12]),
+            "reason": _text(row[13]),
+            "accepted_at": row[14],
+        }
+    elif _text(row[1]) in {"process_observation", "replay_observation"} and _text(
         row[2]
     ) in {"profile", "battle_log"}:
         item["recovery"] = "deploy/replay-request"

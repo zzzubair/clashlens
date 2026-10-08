@@ -6,15 +6,26 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import psycopg
-from domain_test_support import domain_database
+import pytest
+from domain_test_support import domain_database, store_observation, text
+from test_domain_processing_postgres import (
+    _live_battle_row,
+    _processor,
+    _seed_battle_anchor,
+)
 
-from clashlens.collector_db import CollectorDatabase, ResponseHandoff
+from clashlens.collector_db import (
+    BATTLE_PARSER_VERSION,
+    CollectorDatabase,
+    ResponseHandoff,
+)
 from clashlens.collector_uploads import claim_upload, complete_upload, fail_upload
 from clashlens.db import (
     ARMY_ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
 )
+from clashlens.domain import ranked_day_for
 from clashlens.operator_recovery import retry_failed_item
 
 
@@ -638,4 +649,92 @@ def test_a_failed_daily_result_repaired_by_its_replacement_stops_counting(
             assert states == [("failed",)]
             assert database.health_metrics()["failed_processing"] == 0
         finally:
+            database.close()
+
+
+def test_a_failed_battle_log_job_replays_under_its_own_parser(
+    database_url: str, archive_server
+) -> None:
+    # Seven battle logs saved under battle parser v3 failed on 3 Oct 2026. The
+    # replay must use v3's trophy rules, and the failed job stops counting once
+    # the replay processes the same saved response.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        _seed_battle_anchor(connection_info, ranked_day_for(now).start)
+        row = _live_battle_row(
+            attack=True,
+            battle_timestamp=now - timedelta(minutes=5),
+            opponent_tag="#9PP",
+            opponent_name="Defender",
+        )
+        observation_id, failed_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="failed-v3-log",
+            endpoint="battle_log",
+            body=json.dumps({"items": [row]}).encode(),
+            observed_at=now,
+            normalized_tag="#8PP",
+            parser_version=BATTLE_PARSER_VERSION,
+        )
+        profile_observation, _profile_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="v3-profile",
+            endpoint="profile",
+            body=b"{}",
+            observed_at=now,
+            normalized_tag="#8PP",
+        )
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET status = 'failed', attempt_count = max_attempts,
+                    outcome = 'lease_expired_max_attempts',
+                    completed_at = clock_timestamp(), updated_at = clock_timestamp()
+                WHERE id = %s
+                """,
+                (failed_job,),
+            )
+        database = CollectorDatabase(connection_info)
+        worker_database, processor = _processor(connection_info, archive_server)
+        try:
+            assert database.health_metrics()["failed_processing"] == 1
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("SET SESSION AUTHORIZATION clashlens_replay_request")
+                request = """
+                    SELECT request_id, job_id, request_status
+                    FROM clashlens_request_python_replay_v2(
+                        %s, 'ci:operator', 'replay a failed v3 battle log', %s,
+                        'clashlens-domain-processing-v1', 'clashlens-domain-rules-v1',
+                        'legend-analytics-v1')
+                """
+                # Battle parser v3 reads battle logs only.
+                with pytest.raises(psycopg.errors.InvalidParameterValue):
+                    connection.execute(request, (profile_observation, BATTLE_PARSER_VERSION))
+                replay = connection.execute(
+                    request, (observation_id, BATTLE_PARSER_VERSION)
+                ).fetchone()
+            assert text(replay[2]) == "enqueued"
+            result = processor.process_job(int(replay[1]), owner="replay-v3")
+            assert result is not None and result.outcome == "processed"
+            with psycopg.connect(connection_info) as connection:
+                parsers = connection.execute(
+                    """
+                    SELECT DISTINCT parser_version FROM observation_processing_outcomes
+                    WHERE observation_id = %s
+                    """,
+                    (observation_id,),
+                ).fetchall()
+                status = connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s",
+                    (failed_job,),
+                ).fetchone()
+            assert [text(value) for (value,) in parsers] == [BATTLE_PARSER_VERSION]
+            assert text(status[0]) == "failed"
+            assert database.health_metrics()["failed_processing"] == 0
+        finally:
+            worker_database.close()
             database.close()
