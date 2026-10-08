@@ -630,3 +630,63 @@ def test_an_upload_finishing_during_the_lookup_still_counts_as_archived(
 
     assert copy is not None
     assert (copy.reference, copy.recorded) == (reference, True)
+
+
+@pytest.mark.parametrize("generation", ["", "b" * 32])
+@pytest.mark.parametrize("change", ["saved_again", "upload_started"])
+def test_a_copy_that_appears_during_the_archive_read_keeps_the_job_waiting(
+    database_url: str,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    archive_server,
+    generation: str,
+    change: str,
+) -> None:
+    # While the worker reads the archive for a lost saved copy, the collector
+    # saves the same bytes again, or an upload of them starts.
+    root = tmp_path / "spool"
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(root, max_body_bytes=64 << 10)
+        digest = _save(connection_info, database, spool, TAGS[0])
+        body = spool.verify(digest)
+        if generation:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_response_uploads SET upload_generation = %s",
+                    (generation,),
+                )
+        spool.delete_if_unreferenced(digest)
+        archive_server[3].objects.clear()
+        reader = _lost_copy_reader(root, archive_server[0])
+        read = reader.archive.read_verified
+        reads: list[str] = []
+
+        def read_while_it_changes(reference, expected_hash, **kwargs):
+            reads.append(reference)
+            if change == "saved_again":
+                spool.publish(body, digest)
+            else:
+                assert claim_upload(database, owner="uploader") is not None
+            return read(reference, expected_hash, **kwargs)
+
+        monkeypatch.setattr(reader.archive, "read_verified", read_while_it_changes)
+        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+
+        assert (
+            cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
+            == 0
+        )
+        capsys.readouterr()
+        with psycopg.connect(connection_info) as connection:
+            job = connection.execute(
+                "SELECT state, failure_category FROM python_processing_jobs_worker"
+            ).fetchone()
+
+    location = f"s3://evidence/sha256/{digest[:2]}/{digest}" + (
+        f"/generation/{generation}" if generation else ""
+    )
+    assert reads == [location]
+    assert job == ("waiting_dependency", "archive_missing")

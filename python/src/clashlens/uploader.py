@@ -280,7 +280,11 @@ class Uploader:
                 "archive_read", self.archive.read_verified, reference, claim.response_hash
             )
         except ArchiveReadError as error:
-            if error.category == "archive_missing" and claim.unresolved_write is None:
+            if (
+                error.category == "archive_missing"
+                and claim.unresolved_write is None
+                and await self._still_missing(claim, reference)
+            ):
                 raise ArchiveReadError(
                     "spool_missing",
                     "pending upload has no local raw response and no archived copy",
@@ -289,6 +293,29 @@ class Uploader:
             raise
         self._count("archived_copy_found")
         return reference
+
+    async def _still_missing(
+        self, claim: collector_uploads.UploadClaim, reference: str
+    ) -> bool:
+        """Whether the bytes are still neither saved nor archived elsewhere."""
+        try:
+            body = await self._timed(
+                "spool_read", self.spool.verify, claim.response_hash, claim.byte_size
+            )
+        except (OSError, SpoolError):
+            return False
+        if body is not None:
+            return False
+        current = await self._database_call(
+            "lookup",
+            collector_uploads.archived_copy,
+            self.database,
+            claim.response_hash,
+            bucket=self.archive.bucket,
+        )
+        return current is None or (
+            not current.recorded and current.reference == reference
+        )
 
     async def _renew_lease(
         self,

@@ -681,7 +681,18 @@ read makes the job wait and retry without spending an attempt. A saved copy
 that is gone, after a lost disk or a database restored to before spool cleanup
 ran, is read back from the archive, checked against its hash and saved again.
 Only a response the archive never received fails, as `spool_missing`, and only
-once the archive's identity marker matches; otherwise the job waits.
+once the archive's identity marker matches and, checked again after the archive
+read, the bytes are still not saved, no upload of them is under way and no
+archived copy is recorded; otherwise the job waits. The uploads process makes
+the same last check before it gives up on an upload.
+
+A copy saved back this way may pass the spool's folder limits by up to 32
+files and 32 largest bodies, one per concurrent worker job
+(`worker.MAX_CONCURRENCY`). The worker cannot see space the collector has
+reserved for a response it is still fetching, since that reservation lives in
+the collector's process, so both can land. Repairs happen only during recovery,
+and the overrun is bounded; a repair past it waits as a full spool, never as
+missing proof. The collector's own saves still stop at the limits.
 
 Archive uploads run in their own process. The collector starts it inside its
 container with the collector's own settings, and starts it again if it exits or

@@ -19,6 +19,13 @@ class SpoolError(RuntimeError):
     """A spool admission, integrity, or safety failure."""
 
 
+# A lost-copy repair may pass the folder limits by this many objects and as
+# many largest bodies: one per concurrent worker job (worker.MAX_CONCURRENCY).
+# Repairs cannot see reservations held in the collector's process, and are
+# rare, so a bounded overrun stands in for sharing them.
+REPAIR_ALLOWANCE = 32
+
+
 def _fsync_dir(fd: int) -> None:
     os.fsync(fd)
 
@@ -490,7 +497,8 @@ class Spool:
         ):
             raise SpoolError("degraded_capacity: spool free-inode floor reached")
 
-    def _check_reservation_locked(self, limit: int) -> None:
+    def _check_reservation_locked(self, limit: int, *, repair: bool = False) -> None:
+        extra = REPAIR_ALLOWANCE if repair else 0
         counts = self._cached_counts_locked()
         bytes_used = (
             counts["final_bytes"] + counts["temporary_bytes"] + counts["reserved_bytes"]
@@ -500,7 +508,10 @@ class Spool:
             + counts["temporary_objects"]
             + counts["reserved_objects"]
         )
-        if bytes_used + limit > self.max_bytes or objects_used + 1 > self.max_objects:
+        if (
+            bytes_used + limit > self.max_bytes + extra * self.max_body_bytes
+            or objects_used + 1 > self.max_objects + extra
+        ):
             raise SpoolError("degraded_capacity: spool reservation denied")
         self._capacity_facts_locked(
             limit,
@@ -508,7 +519,9 @@ class Spool:
             reserved_objects=counts["reserved_objects"],
         )
 
-    def _activate_reservation(self, reservation: SpoolReservation) -> None:
+    def _activate_reservation(
+        self, reservation: SpoolReservation, *, repair: bool = False
+    ) -> None:
         if reservation.spool is not self:
             raise SpoolError("reservation belongs to another spool")
         if reservation.limit <= 0 or reservation.limit > self.max_body_bytes:
@@ -516,7 +529,7 @@ class Spool:
         with self._capacity_lock():
             if reservation._active:
                 return
-            self._check_reservation_locked(reservation.limit)
+            self._check_reservation_locked(reservation.limit, repair=repair)
             reservation._active = True
             self._reservations[id(reservation)] = reservation
 
@@ -809,7 +822,8 @@ class Spool:
             # last counted, so a publication of its own counts them again.
             with self._capacity_lock():
                 self._scan_locked()
-                owned = self.reservation()
+                owned = SpoolReservation(self, self.max_body_bytes)
+                self._activate_reservation(owned, repair=True)
             with owned:
                 self._publish_reserved(body, digest, owned)
             return
