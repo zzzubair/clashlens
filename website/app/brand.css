@@ -318,7 +318,6 @@
   background: var(--cl-panel);
   font-size: 0.78rem;
   font-weight: 900;
-  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 :root :is(.leaderboard-table, .data-table) tbody tr:hover {
@@ -351,6 +350,10 @@
 }
 :root .home-page .search-controls input {
   border-radius: var(--cl-card-radius);
+}
+/* A black outline vanishes on the dark fill, so the search box keeps its input border. */
+:root[data-theme="dark"] .home-page .search-controls {
+  border-color: var(--cl-input-border);
 }
 
 /* Narrow phones: let short buttons wrap instead of spilling out of their card. */
