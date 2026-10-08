@@ -297,13 +297,15 @@ up_stack
 @pytest.mark.parametrize(
     ("pids", "setting", "keys", "accepted"),
     [
-        # Six keys at 25 a second: 300 save and 42 request threads, plus 64.
+        # Six keys at 25 a second: 300 save, 42 request and 48 upload
+        # threads, plus 64.
         ("512", None, 6, True),
         ("400", None, 6, False),
-        ("400", "256", 6, True),
-        # Nine keys at 28 a second: 384 save and 60 request threads, plus 64.
-        ("512", None, 9, True),
-        ("507", None, 9, False),
+        ("410", "256", 6, True),
+        # Nine keys at 28 a second: 384 save, 60 request and 48 upload
+        # threads, plus 64.
+        ("556", None, 9, True),
+        ("555", None, 9, False),
     ],
 )
 def test_ops_refuses_collector_threads_beyond_its_process_limit(

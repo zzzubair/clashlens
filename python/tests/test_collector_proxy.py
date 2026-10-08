@@ -14,6 +14,7 @@ from time import monotonic
 import certifi
 import pytest
 
+from clashlens import cli
 from clashlens.cli import build_parser
 from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
 from clashlens.verification import (
@@ -356,3 +357,51 @@ write_environment
     expected = "http://100.64.0.1:3128" if mode == "production" else ""
     assert collector.get("CLASHLENS_OFFICIAL_API_PROXY_URL", "") == expected
     assert api.get("CLASHLENS_OFFICIAL_PROXY_URL", "") == expected
+
+
+@pytest.mark.parametrize("failure", ["down", "denied"])
+def test_a_relay_that_is_down_or_refuses_counts_as_a_relay_failure(relay, failure):
+    # Timeouts alone could not tell a full or unreachable relay from a slow API.
+    proxy_url = relay["proxy"]
+    if failure == "down":
+        with socket.socket() as unused:
+            unused.bind(("127.0.0.1", 0))
+            proxy_url = f"http://127.0.0.1:{unused.getsockname()[1]}"
+    relay["reject"] = failure == "denied"
+    client = OfficialApiClient(relay["origin"], proxy_url=proxy_url)
+
+    async def fetch() -> str:
+        with pytest.raises(ProviderFailure) as caught:
+            await client.fetch_player(key_pool(), "#2PP", "profile")
+        return caught.value.category
+
+    try:
+        assert asyncio.run(fetch()) == "proxy_failure"
+    finally:
+        client._http.clear()
+        client._executor.shutdown()
+
+
+@pytest.mark.parametrize(("concurrency", "refused"), [(7, True), (6, False)])
+def test_collector_refuses_keys_that_could_overfill_the_relay(
+    monkeypatch, concurrency, refused
+):
+    # Nine regular keys and the interactive one at seven requests each could
+    # hold 70 relay connections; the collector's share of the relay's 96 is 64.
+    monkeypatch.delenv("CLASHLENS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("CLASHLENS_DATABASE_URL_FILE", raising=False)
+    keys = ",".join(f"normal-{index}=key-{index}" for index in range(1, 10))
+    arguments = build_parser().parse_args(
+        [
+            "collector",
+            "--official-proxy-url=http://127.0.0.1:9",
+            f"--regular-api-keys={keys}",
+            "--interactive-api-keys=interactive-1=key-0",
+            f"--concurrency-per-key={concurrency}",
+        ]
+    )
+
+    # Allowed settings go on to need a database, which this test has none of.
+    message = "relay connections" if refused else "database URL is required"
+    with pytest.raises(ValueError, match=message):
+        cli._run_collector(arguments)

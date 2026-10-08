@@ -39,7 +39,13 @@ from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
 from .collector import Collector
 from .collector_db import CollectorDatabase
-from .collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
+from .collector_http import (
+    RELAY_COLLECTOR_CONNECTIONS,
+    ApiKey,
+    KeyPool,
+    OfficialApiClient,
+    ProviderFailure,
+)
 from .db import CONTRACT_VERSION, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
 from .operating import (
@@ -48,6 +54,7 @@ from .operating import (
     write_private_snapshot,
 )
 from .profile import normalize_player_tag
+from .uploader import UploaderProcess
 from .verification import (
     OfficialVerificationClient,
     VerificationOutcome,
@@ -714,6 +721,11 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         raise ValueError("collector requires 4 to 9 regular keys and one interactive key")
     if not regular_keys or len(interactive_keys) != 1:
         raise ValueError("collector requires regular keys and one interactive key")
+    if arguments.official_proxy_url and (
+        (len(regular_keys) + 1) * arguments.concurrency_per_key
+        > RELAY_COLLECTOR_CONNECTIONS
+    ):
+        raise ValueError("collector keys would open more relay connections than its share")
     host, separator, port_text = arguments.health_listen.rpartition(":")
     if separator != ":" or not host:
         raise ValueError("collector health listen must be host:port")
@@ -749,10 +761,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
             await asyncio.sleep(0.01)
 
     archive_reader = _archive(
-        arguments,
-        pool_size=32,
-        database=database,
-        validate_archive_instance=False,
+        arguments, database=database, validate_archive_instance=False
     )
     if not isinstance(archive_reader, SpoolFirstReader):
         raise TypeError("collector requires a local spool root")
@@ -790,12 +799,13 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         interactive_fingerprint=interactive_fingerprint,
         weekly_eligibility_enabled=arguments.enable_weekly_eligibility,
         regular_parallelism=parallelism,
+        uploads=UploaderProcess(arguments),
     )
 
     async def serve() -> None:
         stop_requested = asyncio.Event()
         loop = asyncio.get_running_loop()
-        # A save thread per regular check, up to the cap; intent and uploads share them.
+        # A save thread per regular check, up to the cap; intent work shares them.
         loop.set_default_executor(ThreadPoolExecutor(
             max_workers=save_threads, thread_name_prefix="collector-io"
         ))

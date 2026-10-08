@@ -372,10 +372,8 @@ class S3ArchiveReader:
                 "archive body does not match its supplied hash",
                 retryable=False,
             )
-        object_key = f"sha256/{expected_hash[:2]}/{expected_hash}"
-        if generation is not None:
-            object_key += f"/generation/{generation}"
-        reference = f"s3://{self.bucket}/{object_key}"
+        reference = immutable_reference(self.bucket, expected_hash, generation)
+        object_key = reference.removeprefix(f"s3://{self.bucket}/")
         try:
             self._execute_immutable_put(object_key, body, expected_hash)
             return reference
@@ -650,6 +648,16 @@ class SpoolFirstReader:
             return remote
         except (OSError, SpoolError) as error:
             raise ArchiveReadError("spool_io_failed", "local evidence repair failed", retryable=True) from error
+
+
+def immutable_reference(
+    bucket: str, response_hash: str, generation: str | None = None
+) -> str:
+    """Where ``write_immutable`` puts these bytes."""
+    key = f"sha256/{response_hash[:2]}/{response_hash}"
+    if generation is not None:
+        key += f"/generation/{generation}"
+    return f"s3://{bucket}/{key}"
 
 
 def _parse_reference(reference: str) -> tuple[str, str]:

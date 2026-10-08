@@ -17,7 +17,7 @@ from test_worker_lifecycle import _worker_namespace
 
 from clashlens import cli
 from clashlens import spool as spool_module
-from clashlens.archive import SpoolFirstReader
+from clashlens.archive import S3ArchiveReader, SpoolFirstReader
 from clashlens.collector import _CLEANUP_LOOKUP_SIZE, Collector
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 from clashlens.collector_uploads import claim_upload, complete_upload
@@ -296,3 +296,115 @@ def test_cleanup_lookup_reads_kept_uploads_from_the_index_in_order(
         "collector_response_uploads_cleanup_order"
     ]
     assert all(node["Node Type"] != "Sort" for node in nodes(plans[0]))
+
+
+def _lost_copy_reader(root, endpoint: str) -> SpoolFirstReader:
+    return SpoolFirstReader(
+        S3ArchiveReader(
+            endpoint=endpoint,
+            bucket="evidence",
+            access_key="test",
+            secret_key="test",
+            secure=False,
+            allow_insecure_test_origin=True,
+            max_retries=0,
+        ),
+        spool_root=str(root),
+        max_body_bytes=64 << 10,
+        validate_database=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("history", "archived_at", "outcome"),
+    [
+        # The upload finished and was recorded before the saved copy was lost.
+        ("recorded", "original", ("complete", None)),
+        # The database was restored to before the upload finished: it still
+        # lists the upload as pending, though the bytes reached the archive.
+        ("restored", "original", ("complete", None)),
+        # The bytes never reached the archive: real missing proof.
+        ("restored", None, ("failed", "spool_missing")),
+        # The first location was retired, and the bytes were uploaded again
+        # under a new one this database knows.
+        ("retired", "generation", ("complete", None)),
+        # A retired location is never read back, even if it still exists.
+        ("retired", "original", ("failed", "spool_missing")),
+        # An upload still in flight may yet deliver the bytes. Like an archive
+        # outage, this waits without spending an attempt; once that upload
+        # fails for the same missing copy, the next try fails as missing proof.
+        ("uploading", None, ("waiting_dependency", "archive_missing")),
+        # The archive cannot be reached: try again later.
+        ("unreachable", "original", ("waiting_dependency", "archive_unavailable")),
+    ],
+)
+def test_a_lost_saved_copy_is_read_back_from_the_archive(
+    database_url: str,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    archive_server,
+    history: str,
+    archived_at: str | None,
+    outcome: tuple[str, str | None],
+) -> None:
+    root = tmp_path / "spool"
+    generation = "b" * 32
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(root, max_body_bytes=64 << 10)
+        digest = _save(connection_info, database, spool, TAGS[0])
+        body = spool.verify(digest)
+        original = f"sha256/{digest[:2]}/{digest}"
+        if history == "recorded":
+            claim = claim_upload(database, owner="uploader")
+            assert claim is not None
+            complete_upload(
+                database,
+                claim,
+                archive_reference=f"s3://evidence/{original}",
+                archive_instance_id="fixture-instance",
+            )
+        if history == "uploading":
+            assert claim_upload(database, owner="uploader") is not None
+        if history == "retired":
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "INSERT INTO archive_catalogue (response_hash, archive_reference,"
+                    " byte_size, archive_instance_id, availability)"
+                    " VALUES (%s, %s, %s, 'fixture-instance', 'expired')",
+                    (digest, f"s3://evidence/{original}", len(body)),
+                )
+                connection.execute(
+                    "UPDATE collector_response_uploads SET upload_generation = %s"
+                    " WHERE response_hash = %s",
+                    (generation, digest),
+                )
+        objects = archive_server[3].objects
+        objects.clear()
+        if archived_at == "original":
+            objects[original] = body
+        elif archived_at == "generation":
+            objects[f"{original}/generation/{generation}"] = body
+        spool.delete_if_unreferenced(digest)
+        assert spool.verify(digest) is None
+        endpoint = "127.0.0.1:9" if history == "unreachable" else archive_server[0]
+        reader = _lost_copy_reader(root, endpoint)
+        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+
+        assert (
+            cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
+            == 0
+        )
+        capsys.readouterr()
+        with psycopg.connect(connection_info) as connection:
+            job = connection.execute(
+                "SELECT state, failure_category FROM python_processing_jobs_worker"
+            ).fetchone()
+
+        assert job == outcome
+        # Bytes read back are saved locally again; nothing else is.
+        assert (spool.verify(digest) == body) is (outcome[0] == "complete")
+        if history == "retired" and archived_at == "original":
+            assert archive_server[3].get_count == 0

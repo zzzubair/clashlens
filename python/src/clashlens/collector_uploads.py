@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+from .archive import immutable_reference
+
 
 @dataclass(frozen=True, slots=True)
 class UploadClaim:
@@ -26,6 +28,16 @@ class UploadLeaseLost(RuntimeError):
     """The upload claim is stale, expired, or owned by another uploader."""
 
 
+@dataclass(frozen=True, slots=True)
+class ArchivedCopy:
+    reference: str
+    # True when the catalogue records a verified copy there. False for the
+    # upload's own location, which only bytes found there confirm.
+    recorded: bool
+    # An upload of these bytes holds a lease right now.
+    uploading: bool
+
+
 # collector_response_uploads_claim_order matches this filter and order, so
 # claims can stop at the first due row they can lock without sorting the backlog.
 NEXT_DUE_UPLOAD_SQL = """
@@ -39,20 +51,43 @@ NEXT_DUE_UPLOAD_SQL = """
 """
 
 
+# collector_response_uploads_lease_expiry (migration 0081) holds only leased
+# rows, so this reads those, not the whole table.
+RELEASE_EXPIRED_UPLOADS_SQL = """
+    UPDATE collector_response_uploads
+    SET state = 'pending', lease_owner = NULL, lease_token = NULL,
+        lease_expires_at = NULL, updated_at = clock_timestamp()
+    WHERE response_hash IN (
+        SELECT response_hash
+        FROM collector_response_uploads
+        WHERE state = 'leased'
+          AND lease_expires_at <= COALESCE(%s::timestamptz, clock_timestamp())
+        ORDER BY lease_expires_at
+        LIMIT %s
+        FOR UPDATE SKIP LOCKED
+    )
+"""
+
+
+def release_expired_uploads(
+    database: Any, *, limit: int = 1000, now: datetime | None = None
+) -> int:
+    """Return up to ``limit`` uploads whose lease ran out to pending."""
+    if limit < 1:
+        raise ValueError("release limit must be positive")
+    with database.pool.connection() as connection:
+        released = connection.execute(RELEASE_EXPIRED_UPLOADS_SQL, (now, limit))
+    return released.rowcount
+
+
 def claim_upload(
     database: Any,
     *,
     owner: str,
     lease_seconds: int = 60,
     now: datetime | None = None,
-    release_expired: bool = True,
 ) -> UploadClaim | None:
-    """Lease the next due upload.
-
-    ``release_expired`` first returns expired leases to pending. An index of
-    leased rows only (migration 0082) keeps that step small; the collector
-    still runs it once every half lease rather than on every claim.
-    """
+    """Lease the next due upload."""
     if not owner or lease_seconds < 1:
         raise ValueError("upload owner and positive lease are required")
     token = str(uuid4())
@@ -62,16 +97,6 @@ def claim_upload(
                 now or connection.execute("SELECT clock_timestamp()").fetchone()[0]
             )
             expires = claim_time + timedelta(seconds=lease_seconds)
-            if release_expired:
-                connection.execute(
-                    """
-                    UPDATE collector_response_uploads
-                    SET state = 'pending', lease_owner = NULL, lease_token = NULL,
-                        lease_expires_at = NULL, updated_at = clock_timestamp()
-                    WHERE state = 'leased' AND lease_expires_at <= %s
-                    """,
-                    (claim_time,),
-                )
             row = connection.execute(NEXT_DUE_UPLOAD_SQL, (claim_time,)).fetchone()
             if row is None:
                 return None
@@ -391,3 +416,48 @@ def fail_upload(
             )
             if failed.rowcount != 1:
                 raise UploadLeaseLost("upload lease lost")
+
+
+def archived_copy(
+    database: Any, response_hash: str, *, bucket: str
+) -> ArchivedCopy | None:
+    """Where the archive holds, or would hold, bytes whose saved copy is gone.
+
+    A recorded verified copy comes first. Without one, a database restored to
+    before an upload finished may not know an upload that did happen; its bytes
+    are then at that upload's own location, unless the catalogue marks that
+    location retired. Bytes uploaded again after a retirement went to a new
+    location this database may never have recorded, so none is guessed. None
+    means the archive cannot hold a copy.
+    """
+    with database.pool.connection() as connection:
+        verified, generation, state = connection.execute(
+            """
+            SELECT verified.archive_reference, upload.upload_generation,
+                   upload.state
+            FROM (SELECT 1) AS one
+            LEFT JOIN LATERAL (
+                SELECT archive_reference
+                FROM archive_catalogue
+                WHERE response_hash = %(hash)s AND availability = 'verified'
+                ORDER BY first_verified_at DESC
+                LIMIT 1
+            ) AS verified ON true
+            LEFT JOIN collector_response_uploads AS upload
+              ON upload.response_hash = %(hash)s
+            """,
+            {"hash": response_hash},
+        ).fetchone()
+        if verified is not None:
+            return ArchivedCopy(str(verified), True, state == "leased")
+        if state is None:
+            return None
+        reference = immutable_reference(bucket, response_hash, generation or None)
+        # Any catalogue row here is not verified, so this location is retired.
+        retired = connection.execute(
+            "SELECT 1 FROM archive_catalogue WHERE archive_reference = %s",
+            (reference,),
+        ).fetchone()
+    if retired is not None:
+        return None
+    return ArchivedCopy(reference, False, state == "leased")

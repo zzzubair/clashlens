@@ -19,8 +19,8 @@ implementation gaps and launch issues.
 The single Python asyncio collector owns official API transport: scheduling,
 key-rate limiting, retries, and request/response handling. It hashes and writes
 each retained response to the bounded local spool, records the observation
-metadata and durable processing handoff, and uploads the raw body to the immutable
-archive. The [collection and storage rules](collector-polling.md#spool-archive-and-rate-enforcement)
+metadata and durable processing handoff, and starts the separate uploads process
+that copies the raw body to the immutable archive. The [collection and storage rules](collector-polling.md#spool-archive-and-rate-enforcement)
 determine which responses are retained. The collector must not interpret battle
 meaning, reconcile ranked days, infer shields or automatic defenses, decode
 armies, or calculate product analytics; the Python worker owns that interpretation.
@@ -121,7 +121,8 @@ so an outstanding deletion cannot remove the new copy. The collector and Python
 workers share a bounded UID/GID-10001 spool at `sha256/<prefix>/<hash>`. A shared
 file lock and publication/cleanup barrier protect its files. Durable sidecars
 bridge the file-to-database handoff across crashes. Workers verify local size and
-SHA-256 before processing; archive upload runs independently in the background.
+SHA-256 before processing; archive upload runs in its own process beside the
+collector.
 A referenced spool body becomes deletable only after processing and upload
 succeed. Observation metadata is
 append-only and records request scope, timing, status, response hash, archive

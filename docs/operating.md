@@ -398,15 +398,54 @@ player's correction for a Reset has succeeded, `retrying` after a
 of those it tries again 10 minutes later.
 
 A waiting upload with `oldest_pending_upload_age_seconds` over 15 minutes
-points at the archive or the collector's upload work: look for upload errors in
-`./ops logs collector`. Until it is archived, a raw response exists only on the
-server's disk.
+points at the archive or the uploads process: see
+[uploads waiting](#uploads-waiting). Until it is archived, a raw response
+exists only on the server's disk.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
 
 **Recovered:** the measurements satisfy the linked alert conditions and each
 condition's Discord recovery message arrives.
+
+### Uploads waiting
+
+Archive uploads run in their own process inside the collector container; see
+[spool and archive](collector-polling.md#spool-archive-and-rate-enforcement).
+
+**First checks:** read the collector's uploads lines, twice a few minutes apart:
+
+```sh
+curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8081/metrics \
+  | grep -E '^clashlens_(uploader_|collector_(oldest_pending_upload_age_seconds|pending_uploads|archive_health))'
+./ops logs collector --since '15 minutes ago' --no-pager | grep -E 'uploader_(health|restart)'
+```
+
+`clashlens_uploader_running` is 1 while the process runs, and
+`clashlens_uploader_restarts_total` counts restarts since the collector started;
+each restart logs an `uploader_restart` line with the exit code.
+`clashlens_uploader_report_age_seconds` stays under about 10 seconds while it
+reports. `clashlens_uploader_uploads_total` counts finished uploads by outcome:
+`uploaded`, `upload_lease_lost`, a failure category such as
+`archive_unavailable`, or `archived_copy_found` when a lost saved copy was
+already in the archive. For each step, `clashlens_uploader_step_seconds_sum`
+divided by `clashlens_uploader_step_seconds_count`, using growth between the
+two reads, is its average time: `database_wait` waiting for one of the four
+database connections, `claim`, `spool_read`, `archive_write`, `complete`,
+`renew`, `release`, and `total` from claim to completion.
+`clashlens_uploader_step_p95_upper_ms` bounds the slowest 5%. The
+`uploader_health` log line repeats all of these each minute. Counts reset
+when the process restarts.
+
+A long `database_wait` or `claim` points at the database, a long
+`archive_write` at the archive or the home connection, and a high
+`clashlens_collector_api_requests_in_flight` beside it at shared bandwidth.
+
+**Fix or escalate:** repair the reported cause through an approved change.
+Never delete saved responses or upload rows to shrink the wait.
+
+**Recovered:** `oldest_pending_upload_age_seconds` is back under two minutes and
+the uploads alert's Discord recovery message arrives.
 
 ### Armies page empty
 

@@ -282,10 +282,12 @@ and at most 384: 384 with nine keys at 28 a second, which would otherwise be
 504. `CLASHLENS_REGULAR_PARALLELISM` in `app.env` (or `--regular-parallelism`,
 1 to 384) overrides it. The collector has a save thread for each slot, and
 request threads (6 per key including the interactive key, so 60 with nine
-regular keys) share what the save threads leave of 448, so the two together
-keep 64 of the container's 512 processes and threads for database, archive and
-other threads. Before stopping anything, `./ops up` refuses settings
-whose save and request threads plus those 64 exceed `CLASHLENS_COLLECTOR_PIDS`.
+regular keys) share what the save threads leave of 448. The
+[uploads process](#spool-archive-and-rate-enforcement) in the same container
+counts as 48 more, and 64 of the container's 576 processes and threads stay
+spare for database and other threads. Before stopping anything, `./ops up`
+refuses settings whose save, request and upload threads plus those 64 exceed
+`CLASHLENS_COLLECTOR_PIDS`.
 Its database connections stay at 32 whatever the slot
 count, so more slots cannot use more of PostgreSQL's 100 connections
 (production used 52 on 2026-10-03).
@@ -675,16 +677,34 @@ publishes the hash-named file. Collection pauses when the spool cannot reserve
 capacity and resumes when cleanup frees it. The worker's readiness only needs
 the spool to be readable, so it keeps processing saved responses while the
 spool is full; that processing is what lets cleanup free space. A failed disk
-read makes the job wait and retry without spending an attempt.
+read makes the job wait and retry without spending an attempt. A saved copy
+that is gone, after a lost disk or a database restored to before spool cleanup
+ran, is read back from the archive, checked against its hash and saved again.
+Only a response the archive never received fails, as `spool_missing`.
 
-The background uploader creates immutable archive objects with up to 32 uploads
-at once. Those uploads share a limit of four database calls at once for claiming,
-archive configuration checks, renewing upload ownership, and recording completion
-or failure. The limit reduces competition with player collection for database
-connections. Archive writes run outside it.
-See [migration 0042](../deploy/migrations/0042_upload_claim_order.sql) for the
-ordered upload lookup and earlier automatic cleanup of obsolete database row
-versions.
+Archive uploads run in their own process. The collector starts it inside its
+container with the collector's own settings, and starts it again if it exits or
+sends no report for two minutes; the collector itself keeps running. Uploads
+used to run inside the collector, on its threads and database connections.
+After the 8 October 2026 Reset they fell from about 1,300 a minute to 145–300 a
+minute for two hours while the worker loaded the database, and raw responses
+waited up to 76.5 minutes for an archive copy.
+
+The uploads process makes up to 32 uploads at once, with its own threads and
+four database connections. An upload makes two database calls: claiming it and
+recording it done or failed. Its 60-second claim is renewed every 20 seconds in
+the background, and before a step only when less than 40 seconds are left.
+Every 30 seconds, claims that ran out return to the queue in batches of up to
+1,000, found through an index of claimed rows
+([migration 0081](../deploy/migrations/0081_upload_lease_expiry_lookup.sql)).
+Without it each pass read the whole upload table: 1.1 GB, 405 ms on average and
+up to 6.2 s, on 8 October. See [migration 0042](../deploy/migrations/0042_upload_claim_order.sql)
+for the ordered upload lookup. When a pending upload's saved copy is gone, the
+process checks the location this upload would write to; bytes already there,
+from an upload a restored database forgot, complete it without a second write.
+A location the archive catalogue marks retired is never read. A spool read
+failure in the uploads process pauses collection, as one in the collector does.
+[Upload waits](operating.md#uploads-waiting) shows how to read its step times.
 
 A local spool file is deletable only after its processing and upload both
 succeed. Identical bytes share one spool/archive object. The fields listed in
@@ -769,7 +789,10 @@ belong in
 The [deployment runbook](deployment.md#raw-response-cleanup) owns cleanup
 credentials, scheduling and enablement.
 
-Collection allows six concurrent requests per key. Request-start limits and
+Collection allows six concurrent requests per key. Through the
+[Paris relay](deployment.md#paris-fixed-address-relay) the collector refuses
+to start with settings that could hold more than 64 connections at once:
+(regular keys + 1) × requests per key. Request-start limits and
 shared permission rules belong in [Clash API keys](operating.md#clash-api-keys).
 The interactive key is never borrowed for regular work.
 

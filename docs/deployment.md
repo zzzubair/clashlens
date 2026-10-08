@@ -249,11 +249,31 @@ The private relay address is **100.122.10.22**, named
 The server runs Ubuntu 24.04, Docker and Tailscale. The relay code is in
 `/opt/clashlens/egress-proxy`; generated configuration is in
 `/root/.local/share/clashlens-egress-proxy`. `deploy/egress-proxy/deploy.sh`
-runs Tinyproxy without root privileges, with a read-only filesystem, a 64 MiB
-memory limit, at most 50 connections, and warning logs capped at three 10 MB
-files. It holds no API keys or response archive. With six regular keys and one
-interactive key, the collector's default connection limit is 42, leaving eight
-of the proxy's 50 connections for separate token-verification traffic.
+runs Tinyproxy without root privileges, with a read-only filesystem, a 128 MiB
+memory limit, 128 processes and threads, at most 96 connections, and warning
+logs capped at three 10 MB files. It holds no API keys or response archive.
+On 8 October 2026 it held 48 connections against a limit of 50 then, so a
+slower API could have run it out.
+
+The 96 connections are shared out:
+
+| Caller | At most | Why |
+| --- | ---: | --- |
+| Collector | 64 | Six per key: up to nine regular keys and the interactive key. It refuses to start with settings above 64. Eight regular keys use 54. |
+| Player verification in the API | 20 | Its calls run on the API's worker threads: 20 on rogue's 16 processor threads. |
+| Operator commands (`probe`, `recover-discord`) | 1 each | Run by hand, one request at a time. |
+
+That leaves at least 10 spare while a connection closes and another opens.
+Tinyproxy runs a thread per connection, hence 128 processes and threads.
+A changed limit takes effect only when `deploy.sh up` is run again on the relay
+(below).
+
+The collector's `/metrics` shows its side. `clashlens_collector_api_connection_limit`
+is the most connections it keeps open, so the most relay tunnels it holds, and
+`clashlens_collector_api_requests_in_flight` how many of them a request is using.
+In `clashlens_collector_requests_total`, `outcome="proxy_failure"` counts
+requests the relay refused or could not be reached for, and `outcome="timeout"`
+requests that ran out of time, including ones queued at a full relay.
 
 The filter allows only `CONNECT api.clashofclans.com:443`, an encrypted tunnel
 whose API certificate the caller still checks. Ordinary HTTP requests, other
@@ -880,7 +900,7 @@ without printing configuration files.
 Podman checks each container every 30 seconds and kills it after six failed
 checks in a row, about three minutes. The collector's check is `/livez` on
 port 8081. It fails only when the collector needs a restart: one of its three
-main loops (player checks, queued requests, uploads and cleanup) has not come
+main loops (player checks, queued requests, spool cleanup) has not come
 round for 20 minutes, its spool or a saved-response handoff failed, or every
 regular or interactive key is quarantined. It never waits on the database, a
 spool lock or a thread. A database call made by the loop itself, or by work it
@@ -892,7 +912,9 @@ almost all the time, so a stuck Reset or upload loop could pass for ever. Every
 collector statement also stops after 60 seconds (5 minutes for the Reset
 sweep's), five times the slowest seen from 1 to 8 Oct 2026, so no database wait
 lasts indefinitely; a stopped statement is retried, then its loop stops and the
-collector restarts. The port opens
+collector restarts. The collector restarts its uploads process by itself when
+that exits or stops reporting, so a stuck upload never restarts collection; a
+spool read failure there still fails `/livez` as `spool_io_failure`. The port opens
 before startup recovery, which answers `starting`, and failures in the first
 five minutes are ignored; the five-minute start limit still applies. `/readyz`
 still reports the database, spool capacity and keys for a person to read.

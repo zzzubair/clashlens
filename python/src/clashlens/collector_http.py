@@ -586,6 +586,12 @@ class FetchedResponse:
     headers: dict[str, str]
 
 
+# The Paris relay serves 96 connections at once (deploy/egress-proxy). The
+# collector may hold up to 64: six per key, nine regular keys and the
+# interactive one. The rest is for player verification and operator commands.
+RELAY_COLLECTOR_CONNECTIONS = 64
+
+
 class OfficialApiClient:
     def __init__(
         self,
@@ -649,6 +655,7 @@ class OfficialApiClient:
             max_workers=max_connections, thread_name_prefix="official-api"
         )
         self._executor_slots = asyncio.Semaphore(max_connections)
+        self.max_connections = max_connections
         self.provider_outage = ProviderOutage()
         pool_options = {
             "maxsize": max_connections,
@@ -667,6 +674,17 @@ class OfficialApiClient:
             if proxy_url
             else _DeadlinePoolManager(**pool_options)
         )
+
+    def metric_lines(self) -> list[str]:
+        """Requests in flight, and the most connections this client keeps open.
+
+        Through the relay each open connection holds one of its tunnels.
+        """
+        in_flight = self.max_connections - self._executor_slots._value
+        return [
+            f"clashlens_collector_api_requests_in_flight {in_flight}",
+            f"clashlens_collector_api_connection_limit {self.max_connections}",
+        ]
 
     async def fetch_player(
         self,
@@ -828,6 +846,9 @@ class OfficialApiClient:
         except (OSError, urllib3.exceptions.HTTPError) as error:
             if isinstance(error, urllib3.exceptions.TimeoutError):
                 category = "timeout"
+            elif isinstance(error, urllib3.exceptions.ProxyError):
+                # The relay refused the connection or could not be reached.
+                category = "proxy_failure"
             elif isinstance(error, urllib3.exceptions.ProtocolError):
                 category = "truncated_response"
             elif isinstance(error, OSError):

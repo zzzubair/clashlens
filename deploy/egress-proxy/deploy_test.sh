@@ -48,6 +48,10 @@ run_line=$(grep '^run ' "$DOCKER_LOG")
   printf 'proxy restart policy is missing\n' >&2
   exit 1
 }
+[[ "$run_line" == *'--pids-limit 128'* && "$run_line" == *'--memory 128m'* ]] || {
+  printf 'proxy has too few process slots or too little memory for 96 connections\n' >&2
+  exit 1
+}
 
 grep -q '^Allow 100.64.0.2$' "$WORK_DIR/tinyproxy.conf" || {
   printf 'proxy client restriction is missing\n' >&2
@@ -65,6 +69,10 @@ if grep -Eq '^(Listen 0\.0\.0\.0|Port 8888)$' "$WORK_DIR/tinyproxy.conf"; then
   printf 'proxy configuration still binds the bridge defaults\n' >&2
   exit 1
 fi
+grep -q '^MaxClients 96$' "$WORK_DIR/tinyproxy.conf" || {
+  printf 'proxy does not allow the 96 connections its callers are budgeted\n' >&2
+  exit 1
+}
 grep -q '^ConnectPort 443$' "$WORK_DIR/tinyproxy.conf" || {
   printf 'proxy CONNECT port restriction is missing\n' >&2
   exit 1

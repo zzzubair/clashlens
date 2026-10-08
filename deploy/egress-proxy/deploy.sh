@@ -36,6 +36,9 @@ write_config() {
   umask 077
   mkdir -p "$PROXY_STATE_DIR"
   chmod 0755 "$PROXY_STATE_DIR"
+  # Tinyproxy runs a thread per connection. Callers' total stays under 96:
+  # the collector holds at most 64 (python/src/clashlens/collector_http.py)
+  # and player verification at most 20; see docs/deployment.md.
   cat >"$PROXY_STATE_DIR/tinyproxy.conf" <<EOF
 User tinyproxy
 Group tinyproxy
@@ -45,7 +48,7 @@ Timeout 60
 LogFile "/dev/stderr"
 LogLevel Warning
 PidFile "/tmp/tinyproxy.pid"
-MaxClients 50
+MaxClients 96
 Allow $PROXY_CLIENT_IP
 ConnectPort 443
 Filter "/etc/tinyproxy/filter"
@@ -74,8 +77,8 @@ up() {
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=4m \
     --cap-drop all \
     --security-opt no-new-privileges \
-    --pids-limit 100 \
-    --memory 64m \
+    --pids-limit 128 \
+    --memory 128m \
     --log-driver local \
     --log-opt max-size=10m \
     --log-opt max-file=3 \
