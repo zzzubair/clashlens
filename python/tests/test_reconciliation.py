@@ -353,6 +353,59 @@ def test_later_reading_settles_a_reset_reading_missing_the_days_credit() -> None
         assert second.formula_components["start_reading_correction"] == later - reading
 
 
+def test_battles_landing_after_the_reset_reading_settle_the_day() -> None:
+    # 7 October 2026 Reset readings taken before the ended day's last battle
+    # reached the profile, with no later reading before the next battle.
+    reading_at = DAY.end + timedelta(seconds=31)
+
+    def day(late: BattleContribution, start: int, reading: int, *others):
+        return reconcile_ranked_day(
+            _input(
+                start_trophies=start,
+                next_start_trophies=reading,
+                end_baseline_evidence={"profile": {"observed_at": reading_at.isoformat()}},
+                contributions=(*others, late),
+            )
+        )
+
+    defenses = tuple(
+        BattleContribution(f"defense-{index}", "defense", 10,
+                           battle_timestamp=DAY.start + timedelta(hours=index + 1))
+        for index in range(7)
+    )
+    # #2GL8CJL: read 4,839 at 05:00:31; its attack reported at 05:02:15 adds 40.
+    attack = BattleContribution(
+        "attack-late", "offense", 40, battle_timestamp=DAY.end + timedelta(seconds=135)
+    )
+    noon_attack = BattleContribution(
+        "attack-noon", "offense", 70, battle_timestamp=DAY.start + timedelta(hours=7)
+    )
+    defense_8 = BattleContribution(
+        "defense-7", "defense", 10, battle_timestamp=DAY.start + timedelta(hours=9)
+    )
+    late_attack = day(attack, 4849, 4839, noon_attack, *defenses, defense_8)
+    # #82RV9CV8C: read 5,113 at 05:01:00; its 155-second defense from 04:57:32
+    # cost 32 and had not reached the profile.
+    defense = BattleContribution(
+        "defense-late", "defense", 32, battle_timestamp=DAY.end - timedelta(seconds=148),
+        battle_seconds=155,
+    )
+    late_defense = day(defense, 5183, 5113, *defenses)
+    # A battle that landed 15 minutes before the reading was in it.
+    early = replace(attack, battle_timestamp=DAY.end - timedelta(minutes=15))
+    too_early = day(early, 4849, 4839, noon_attack, *defenses, defense_8)
+
+    assert (late_attack.state, late_attack.confidence) == ("Complete", "inferred")
+    assert late_attack.next_start_trophies == 4879
+    assert late_attack.formula_components["next_start_reading_correction"] == 40
+    assert late_attack.formula_components["next_start_battles_after_reading"] == [
+        "attack-late"
+    ]
+    assert (late_defense.state, late_defense.next_start_trophies) == ("Complete", 5081)
+    assert late_defense.formula_components["next_start_reading_correction"] == -32
+    assert too_early.state == "Inconsistent"
+
+
 def test_coverage_gap_or_missing_overlap_makes_ended_day_partial() -> None:
     no_overlap = list(_coverage())
     no_overlap[1] = CoverageObservation(

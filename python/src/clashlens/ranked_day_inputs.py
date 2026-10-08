@@ -258,7 +258,8 @@ def load_contributions(
                 WHEN 'supercell-source-parser-v1'
                     THEN source_row.source_json -> 'opponent' ->> 'name'
                 ELSE source_row.source_json ->> 'opponentName'
-            END
+            END,
+            source_row.source_json ->> 'battleTime'
         FROM legend_battles AS b
         JOIN battle_perspectives AS p ON p.battle_id = b.id
         JOIN battle_evidence AS e ON e.id = p.evidence_id
@@ -310,6 +311,9 @@ def load_contributions(
             ),
             opponent_name=(
                 _text_value(row[17]) if row[17] is not None else None
+            ),
+            battle_seconds=(
+                int(row[18]) if row[18] is not None and str(row[18]).isdigit() else None
             ),
         )
         for row in contribution_rows

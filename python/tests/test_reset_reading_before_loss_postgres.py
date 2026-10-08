@@ -436,3 +436,35 @@ def test_unreadable_new_day_battle_before_the_later_reading_charges_nothing(
     assert day_b_row[0] == "Complete"
     assert day_b_row[4:6] == (start_b, None)
     assert "unsettled_automatic_loss" not in day_b_row[7]
+
+
+def test_reset_reading_before_the_last_attack_landed_settles_both_days(
+    database_url: str, archive_server
+) -> None:
+    # As #2GL8CJL on 7 October 2026: the Reset profile is read at 05:00, and
+    # the ended day's attack reported at 05:02 only reaches it afterwards.
+    day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
+    day_b.append((DAY_C + timedelta(minutes=2), True))
+    day_c = [(DAY_C + timedelta(hours=1), True)]
+    start_b = 6000
+    end_b = start_b + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(start_b), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=_profile(end_b - WIN), log=_log(*day_b),
+            log_at=DAY_C + timedelta(minutes=3),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D,
+            profile=_profile(end_b + WIN), log=_log(*day_c),
+        )
+        _process(connection_info, archive_server, jobs)
+        day_b_row, day_c_row = _latest_days(connection_info)
+
+    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[7]["next_start_reading_correction"] == WIN
+    assert len(day_b_row[7]["next_start_battles_after_reading"]) == 1
+    assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
