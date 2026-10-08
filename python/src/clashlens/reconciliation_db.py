@@ -90,7 +90,10 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 day_starts.update(row[0] for row in saved_days)
             if claim.input_json.get("trigger") == "day_end":
                 # Its Reset reading usually finished the day already. A day a
-                # reading since may settle or disprove runs again.
+                # reading may settle or disprove, or whose proven end moved, runs.
+                ranked_day_inputs.lock_ranked_day(
+                    connection, player_id, ranked_day_for(day_start)
+                )
                 latest = connection.execute(
                     f"""
                     SELECT state = 'Live'
@@ -102,7 +105,9 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     """,
                     (player_id, day_start, RECONCILIATION_RULE_VERSION),
                 ).fetchone()
-                if latest is None or not latest[0]:
+                if (latest is None or not latest[0]) and not proven_end_moved(
+                    database, connection, player_id, day_start
+                ):
                     day_starts = set()
             pending = sorted(day_starts)
             if pending:
@@ -1390,7 +1395,8 @@ def _enqueue_day_end_reconciliation(
     Reset, once its readings have landed, the job runs only when no other
     work waits, and does nothing once the day is finished, unless a reading
     since the Reset may settle or disprove it
-    (``ranked_day_inputs.LATER_READING_DAY_SQL``).
+    (``ranked_day_inputs.LATER_READING_DAY_SQL``) or its proven end moved
+    (``proven_end_moved``), as evidence saved while it waits leaves to it.
     """
     day_text = ranked_day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     connection.execute(

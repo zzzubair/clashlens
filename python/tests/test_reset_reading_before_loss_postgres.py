@@ -1211,19 +1211,20 @@ def test_a_day_proven_by_two_readings_starts_the_next_day_after_its_loss(
 
 def _check_on_the_day_before(
     connection_info: str, archive_server, readings: list[tuple[int, int]],
-    recovered: tuple[int, int],
+    recovered: tuple[str, bytes, int], *, day_end_waiting: bool = False,
 ) -> tuple[tuple, tuple, int]:
     """The settlement check of ``test_reset_settlement_proof_postgres``, with
     no settled Reset before it: the day before its ended day is Partial,
     with no start reading, 8 defenses and a Reset reading of 5,000 at 05:01.
     Profiles (minutes after that Reset, trophies) ``readings`` are saved
-    before the check, ``recovered`` after it. Return the check's verdict
-    before and after ``recovered``, and its target."""
+    before the check, the ``recovered`` (endpoint, body, minutes after that
+    Reset) after it, while the day before's day-end calculation waits when
+    ``day_end_waiting``. Return the check's verdict before and after
+    ``recovered``, and its target."""
     from test_reset_settlement_proof_postgres import (
         ORDERS,
         RESET,
         START,
-        _battles,
         _save,
         _scenario,
         _verdict,
@@ -1231,30 +1232,46 @@ def _check_on_the_day_before(
     from test_reset_settlement_proof_postgres import _process as _drain
 
     ended = RESET - timedelta(days=1)
-    stamp = ended.strftime("%Y%m%dT%H%M%S.000Z")
-    log = {"items": [
-        row for row in json.loads(_battles(RESET)[0])["items"]
-        if row["battleTimestamp"] < stamp
-    ]}
     _drain(connection_info, archive_server, _reset_work(
         connection_info, archive_server, ended, profile=_profile(START),
-        log=json.dumps(log).encode(), profile_at=ended + timedelta(minutes=1),
+        log=_log_before(ended), profile_at=ended + timedelta(minutes=1),
     ))
-
-    def profiles(saved: list[tuple[int, int]]) -> None:
-        _drain(connection_info, archive_server, [
-            _save(connection_info, archive_server, "profile", _profile(trophies),
-                  ended + timedelta(minutes=minutes))[1]
-            for minutes, trophies in saved
-        ])
-
-    profiles(readings)
+    _drain(connection_info, archive_server, [
+        _save(connection_info, archive_server, "profile", _profile(trophies),
+              ended + timedelta(minutes=minutes))[1]
+        for minutes, trophies in readings
+    ])
     scenario = _scenario(connection_info, archive_server, with_root=False)
     _drain(connection_info, archive_server,
            [scenario[job] for job in ORDERS["named_check_last"]])
     before = _verdict(connection_info)[:3]
-    profiles([recovered])
+    if day_end_waiting:
+        with psycopg.connect(connection_info) as connection:
+            reconciliation_db._enqueue_day_end_reconciliation(
+                connection, scenario["player"], ranked_day_for(ended - timedelta(days=1))
+            )
+            assert connection.execute(
+                "SELECT count(*) FROM python_processing_jobs_worker"
+                " WHERE deduplication_key LIKE 'reconcile:day-end:%'"
+                " AND state = 'pending'"
+            ).fetchone()[0] == 1
+    endpoint, body, minutes = recovered
+    _drain(connection_info, archive_server, [
+        _save(connection_info, archive_server, endpoint, body,
+              ended + timedelta(minutes=minutes))[1]
+    ])
     return before, _verdict(connection_info)[:3], scenario["target"]
+
+
+def _log_before(at: datetime, *extra: dict) -> bytes:
+    """The check's battle log as read before ``at``, with ``extra`` rows."""
+    from test_reset_settlement_proof_postgres import RESET, _battles
+
+    stamp = at.strftime("%Y%m%dT%H%M%S.000Z")
+    return json.dumps({"items": [*extra, *(
+        row for row in json.loads(_battles(RESET)[0])["items"]
+        if row["battleTimestamp"] < stamp
+    )]}).encode()
 
 
 def test_a_recovered_reading_of_the_day_before_judges_the_check_again(
@@ -1270,11 +1287,12 @@ def test_a_recovered_reading_of_the_day_before_judges_the_check_again(
     monkeypatch.setenv(SWITCH, "true")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         missing, proven, target = _check_on_the_day_before(
-            connection_info, archive_server, [], (25, START)
+            connection_info, archive_server, [], ("profile", _profile(START), 25)
         )
     with domain_database(database_url, include_coordinator=True) as connection_info:
         settled, withdrawn, _ = _check_on_the_day_before(
-            connection_info, archive_server, [(25, START)], (30, START + 40)
+            connection_info, archive_server, [(25, START)],
+            ("profile", _profile(START + 40), 30),
         )
 
     assert missing[0] == "unresolved" and "independent_root_missing" in missing[2]
@@ -1282,3 +1300,35 @@ def test_a_recovered_reading_of_the_day_before_judges_the_check_again(
     assert settled == ("settled", target, [])
     assert withdrawn[0] == "unresolved" and "independent_root_missing" in withdrawn[2]
 
+
+@pytest.mark.parametrize("path", ["profile", "battle_log"])
+def test_a_waiting_day_end_calculation_judges_the_check_again(
+    database_url: str, archive_server, monkeypatch, path: str
+) -> None:
+    """The check settled on the Partial day before's two readings, 5,000 at
+    05:01 and 05:25. While that day's day-end calculation waits, a recovered
+    response takes the proof away: a reading of 5,040 at 05:30, or a battle
+    log holding an attack at 05:20, before the 05:25 reading, which the
+    check's own log lacked. The waiting calculation runs and judges the
+    check again, which no longer settles: the reading leaves it no root."""
+    from test_reset_settlement_proof_postgres import RESET, START, SWITCH, _row
+
+    monkeypatch.setenv(SWITCH, "true")
+    ended = RESET - timedelta(days=1)
+    recovered = ("profile", _profile(START + 40), 30) if path == "profile" else (
+        "battle_log",
+        _log_before(ended + timedelta(minutes=21), _row(
+            True, ended + timedelta(minutes=20), 3, 100, "#QYYYY",
+        )),
+        21,
+    )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        settled, withdrawn, target = _check_on_the_day_before(
+            connection_info, archive_server, [(25, START)], recovered,
+            day_end_waiting=True,
+        )
+
+    assert settled == ("settled", target, [])
+    assert withdrawn[0] == "unresolved"
+    if path == "profile":
+        assert "independent_root_missing" in withdrawn[2]
