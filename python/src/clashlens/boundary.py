@@ -1147,14 +1147,23 @@ def queue_board_rebuilds(
         for (boundary_at,) in resets:
             with connection.transaction():
                 lock_boundary_publication(connection, boundary_at)
+                # An army-only replacement not yet holding its board ranks
+                # the board it inherits.
                 current = connection.execute(
                     """
-                    SELECT id, generation, snapshot_manifest_id, snapshot_id
-                    FROM boundary_publication_generations
-                    WHERE boundary_at = %s
-                      AND snapshot_state <> 'superseded'
-                      AND army_state <> 'superseded'
-                    ORDER BY generation DESC
+                    SELECT generation.id, generation.generation,
+                           COALESCE(generation.snapshot_manifest_id,
+                                    source.snapshot_manifest_id),
+                           COALESCE(generation.snapshot_id, source.snapshot_id)
+                    FROM boundary_publication_generations AS generation
+                    LEFT JOIN boundary_publication_generations AS source
+                      ON source.id = generation.source_generation_id
+                     AND generation.snapshot_state = 'pending'
+                     AND generation.affected_artifacts = ARRAY['army']::text[]
+                    WHERE generation.boundary_at = %s
+                      AND generation.snapshot_state <> 'superseded'
+                      AND generation.army_state <> 'superseded'
+                    ORDER BY generation.generation DESC
                     LIMIT 1
                     """,
                     (boundary_at,),
