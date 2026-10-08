@@ -660,9 +660,11 @@ most `--max-jobs` (default 100) jobs at backfill priority, and says which in
 `phase`: `inputs`, repairs of the evidence days are built from (the
 Season's battles moved day, one job per player, and its Reset pairs left
 partial, at most `--max-jobs` pairs each queuing at most one job; no other
-Season's days change), until every such repair of the Season has finished
-and none has failed (`unfinished`, `failed` and `failed_blockers` count
-them while it is at `inputs`); `days`, one job
+Season's days change), until every such repair reaching a day of the
+Season, including one that started on the previous Season's last day, has
+finished and none has failed (`unfinished`, `failed` and `failed_blockers`
+count them while it is at `inputs`; a failed one is not retried
+automatically, so investigate it and retry it by hand); `days`, one job
 per player recalculating every saved day of the Season, oldest first, so each
 day starts where the day before now ends; once every such job has finished,
 `boards`, one rebuild of each Reset board whose entries the rules now change,

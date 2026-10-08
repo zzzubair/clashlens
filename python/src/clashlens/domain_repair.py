@@ -345,8 +345,18 @@ def _repair_inputs(
                   OR job.deduplication_key LIKE 'reconcile:reset-baseline:%%'
                   OR job.deduplication_key LIKE 'reconcile:reset-recovery:%%'
               )
-              AND (job.input_json ->> 'ranked_day_start')::timestamptz >= %s
-              AND (job.input_json ->> 'ranked_day_start')::timestamptz < %s
+              -- Any job reaching a day of the Season, such as one from the
+              -- previous Season's last day through this one's first, or a
+              -- failed one holding back the Season's moved battles.
+              AND (
+                  job.id = ANY(%s)
+                  OR job.input_json ->> 'recalculate_season' = %s
+                  OR (job.input_json ->> 'ranked_day_start')::timestamptz < %s
+                  AND coalesce(
+                      job.input_json ->> 'last_ranked_day_start',
+                      job.input_json ->> 'ranked_day_start'
+                  )::timestamptz >= %s
+              )
               -- A failed Reset repair queued again counts as its retry.
               AND NOT EXISTS (
                   SELECT 1 FROM python_processing_jobs_worker AS retry
@@ -355,7 +365,11 @@ def _repair_inputs(
               )
             ORDER BY job.id
             """,
-            ([*_UNFINISHED_JOB_STATES, "failed"], start, start + SEASON_DURATION),
+            (
+                [*_UNFINISHED_JOB_STATES, "failed"],
+                [blocker["job_id"] for blocker in moved["failed_blockers"]],
+                season_id, start + SEASON_DURATION, start,
+            ),
         ).fetchall()
     return {"queued": queued, **_job_states(rows, max_jobs)}
 

@@ -15,7 +15,6 @@ from .db import (
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
     PYTHON_BACKFILL_PRIORITY,
-    PYTHON_LIVE_PRIORITY,
     Claim,
     Database,
     _text_value,
@@ -97,7 +96,8 @@ def repair_current_season_reset_baselines(
     complete pairs that failed and left an ended day Live are queued again
     (counted as checked); ``failed_blockers`` lists those it cannot retry.
     With ``season_id``, as a Season repair, every job runs at backfill
-    priority and a pair queues at most one, of that Season's days only.
+    priority and a pair queues at most one, of that Season's days only;
+    failed repairs are left for an operator to retry.
     """
 
     only_no_opponent = ranked_day_inputs.only_no_opponent_gaps_sql(
@@ -222,10 +222,13 @@ def repair_current_season_reset_baselines(
                 )
             job_ids.extend(pair_job_ids)
             failure_reasons.update(reasons)
-        with connection.transaction():
-            recovered, failed_blockers = _recover_failed_reset_repairs(
-                connection, limit=max_works - len(candidates), season_id=season_id
-            )
+        recovered: list[int] = []
+        failed_blockers: list[dict[str, Any]] = []
+        if season_id is None:
+            with connection.transaction():
+                recovered, failed_blockers = _recover_failed_reset_repairs(
+                    connection, limit=max_works - len(candidates)
+                )
     return {
         "job_ids": job_ids + recovered,
         "evaluated_count": len(candidates) + len(recovered),
@@ -272,7 +275,7 @@ TRANSIENT_REPAIR_FAILURES = ("lease_expired_max_attempts", "database_deadlock")
 
 
 def _recover_failed_reset_repairs(
-    connection: Any, *, limit: int, season_id: str | None
+    connection: Any, *, limit: int
 ) -> tuple[list[int], list[dict[str, Any]]]:
     """Re-queue Reset repairs that failed while a day they rebuild stays Live.
 
@@ -292,8 +295,14 @@ def _recover_failed_reset_repairs(
         "SELECT pg_advisory_xact_lock(hashtextextended('reset-recovery', 0))"
     )
     rows = connection.execute(
-        f"""
-        WITH current_anchor AS ({_REPAIR_SEASON_SQL}), failed AS (
+        """
+        WITH current_anchor AS (
+            SELECT current_start
+            FROM legend_season_anchors
+            WHERE state = 'confirmed' AND anchor_rule_version = %s
+            ORDER BY current_start DESC
+            LIMIT 1
+        ), failed AS (
             SELECT job.id, job.deduplication_key, job.failure_category,
                    job.input_json,
                    (job.input_json ->> 'player_id')::bigint AS player_id
@@ -403,10 +412,7 @@ def _recover_failed_reset_repairs(
         WHERE position <= %s
         ORDER BY id
         """,
-        (
-            season_id, season_id, SEASON_ANCHOR_RULE_VERSION,
-            list(TRANSIENT_REPAIR_FAILURES), limit,
-        ),
+        (SEASON_ANCHOR_RULE_VERSION, list(TRANSIENT_REPAIR_FAILURES), limit),
     ).fetchall()
     job_ids: list[int] = []
     blockers: list[dict[str, Any]] = []
@@ -433,10 +439,10 @@ def _recover_failed_reset_repairs(
             INSERT INTO python_processing_jobs_worker (
                 observation_id, work_type, deduplication_key, input_json,
                 state, due_at, parser_version, processing_version,
-                domain_rule_version, analytics_rule_version, priority
+                domain_rule_version, analytics_rule_version
             ) VALUES (
                 NULL, 'reconcile_ranked_day', %s, %s, 'pending',
-                clock_timestamp(), %s, %s, %s, %s, %s
+                clock_timestamp(), %s, %s, %s, %s
             )
             ON CONFLICT (deduplication_key) DO NOTHING
             RETURNING id
@@ -448,7 +454,6 @@ def _recover_failed_reset_repairs(
                 PROCESSING_VERSION,
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
-                PYTHON_BACKFILL_PRIORITY if season_id else PYTHON_LIVE_PRIORITY,
             ),
         ).fetchone()
         if row is not None:
