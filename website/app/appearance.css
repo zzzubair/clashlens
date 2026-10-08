@@ -123,6 +123,12 @@ summary {
 .site-brand {
   min-height: 2.75rem;
 }
+/* The wordmark keeps its own outline, so it needs no colour change between themes. */
+.site-brand-logo {
+  display: block;
+  width: auto;
+  height: 3rem;
+}
 .search-result {
   position: relative;
 }
@@ -156,8 +162,8 @@ summary {
   .site-header {
     gap: 0.25rem;
   }
-  .site-brand {
-    font-size: 1.05rem;
+  .site-brand-logo {
+    height: 2.75rem;
   }
   .site-nav {
     gap: 0.25rem;
