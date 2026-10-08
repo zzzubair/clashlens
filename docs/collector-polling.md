@@ -25,15 +25,23 @@ rejects duplicate lines and refuses a later new import; it remains unchanged.
 Automatic discovery requirements remain in [#125](https://github.com/zzzubair/clashlens/issues/125).
 Production discovery is on: `CLASHLENS_PLAYER_DISCOVERY_ENABLED` defaults to
 `true` in `ops`, and `false` turns it off. Each battle-log opponent or Top-200
-player who is not tracked and has not had this week's check gets one check:
-one profile request and one league-history request. Unlike the scheduled weekly
-check, it does not reuse saved league history. At most 500 such checks wait at
-once. One job at a time adds checks, so jobs adding checks together never pass
-that limit or skip each other's players. A job waits up to one second for
-another job adding checks, or for a player another job is updating; after that
-the whole log or ranking is processed again later. A player skipped while the
-queue is full gets no saved retry; they are tried again only when a later
-changed battle log or ranking names them. Legend I gains about 2,000 players a
+player who is not tracked and has not had this week's check is saved as due a
+check (`players.eligibility_due_at`, migration 0082): one profile request and
+one league-history request. Unlike the scheduled weekly check, it does not
+reuse saved league history. List imports and the Monday promotion re-check
+save players the same way, so a player named by several sources is due once.
+On each pass the collector turns due players into checks, oldest due first,
+while fewer than 500 wait; one pass at a time adds checks, so passes together
+never pass that limit. A job waits up to one second for a player another job
+is updating; after that the whole log or ranking is processed again later.
+A player stays due until tracked or until this week brings a recognized
+profile or a not-found answer, so a full queue only delays them. Each check
+moves the player's next try 5 minutes later, doubling with each check to at
+most 6 hours: when a check fails, the player is checked again then without
+anything naming them again. A due player whose check is still waiting, or
+whose profile fetched this week is still being processed or shows no
+recognized league, waits for the next try instead of getting another check.
+Legend I gains about 2,000 players a
 week, so this costs about 570 requests a day, plus about 4,000 once for the
 roughly 2,000 Legend I players not yet tracked. Each player found eligible is
 then tracked like any other, so revisits slow in proportion to the added
@@ -59,17 +67,21 @@ podman exec -i clashlens-collector python -m clashlens.cli \
 It prints how many lines it read and how many rows it added or updated. Tracked
 players and players whose saved profile was checked later than the line are
 left out, a tag already listed keeps its newer check, and one invalid line
-refuses the whole file. About 130 bytes a row with its indexes: the lab's
+refuses the whole file. It also prints how many lines it read, duplicate tags,
+players by tier, players left out as tracked or with a newer saved profile,
+rows kept because the list already had a newer check, and the list's Legend II
+and Legend III totals afterwards. About 130 bytes a row with its indexes: the lab's
 October 2026 list of 250,680 players is about 33 MB, growing only with newly
 seen Legend II and III players.
 
 Each Monday, after the Reset sweep (05:00-05:10 UTC), settlement (from 05:20)
 and the late-battle check (from 05:30), from 06:00 the collector asks for the
 profile of every listed Legend II player not checked since the Reset, oldest
-check first, at most
+check first, then every listed Legend III player the same way, at most
 `CLASHLENS_PROMOTION_RECHECK_PER_SECOND` (set in `app.env`) requests a second
-on the regular keys (20 by default; 0 turns it off), at most two at once. Legend III rows stay on
-the list but are not asked. Just before each request, after its pacing wait,
+on the regular keys (20 by default; 0 turns it off), at most two at once. A
+Legend III player promoted to Legend II is refreshed to Legend II, so it is
+asked with Legend II the next Monday. Just before each request, after its pacing wait,
 it is sent only while that Reset's collection and settlement checks have
 finished, no tracked player is more than two minutes late (read at most once a
 second), and one key's worth of regular request slots is idle; otherwise the
@@ -77,20 +89,38 @@ player stays due and the re-check resumes when collection catches up. A
 request admitted just before a key wait or an API outage can still start
 late, so at most two promotion requests ever start together. These answers
 are not saved, so a player who stayed put costs one request and no storage. A
-profile showing Legend I queues the ordinary discovery check above, which
-saves the profile, starts tracking and backfills from the first battle log.
-The row is marked checked only once the player is tracked or has waiting work
-that still has to fetch the profile. A new check is added only while fewer
-than 500 discovery checks wait; once that limit is reached by checks actually
-added, the remaining promoted players stay due and are asked again later. Any other answer
+profile showing Legend I saves the player as due the ordinary discovery check
+above, which saves the profile, starts tracking and backfills from the first
+battle log. Only a saved answer newer than the re-check's counts, so an
+earlier lower-league answer this week, such as one read in the minutes before
+the game applied the promotion, neither settles the player nor stands in for
+the check. The row is marked checked once the player is tracked or saved as
+due; a player another job holds is asked again later. Any other answer
 refreshes or removes the list row. A failed request, or an answer that cannot
 be read or shows an uncertain tier, leaves the player due; it is asked again
 once the rest of the list has been asked, at most once a minute. Each stretch
 of work ends with one `promotion_recheck` line in the collector log counting
 asked, promoted, listed, removed, failed and queued players. At the lab's
 October 2026 list this is about 59,000 Legend II requests each Monday, plus
-two requests for each promoted player. Two in flight at about 120 ms each
-gives roughly 16 requests a second, so the list takes about an hour.
+two requests for each promoted player, then about 192,000 Legend III requests.
+Two in flight at about 120 ms each gives roughly 16 requests a second, so
+Legend II takes about an hour and Legend III about three more.
+
+The `population-status` command, run like `load-promotion-candidates`,
+prints tracked players split into available (a current profile naming this
+Season), waiting to sign up and unavailable (profile not found); untracked
+players and this week's answers, waiting checks, due retries and players not
+yet checked; this week's weekly and discovery checks by outcome, with how
+many of their players are now tracked; the due players; and the
+promotion list by tier, with how many were asked since the Reset and known
+Legend II and III players missing from it. `--repair` first saves as due
+every untracked player that never had a recognized or not-found answer, and
+lists every untracked player whose latest recognized profile shows Legend II
+or III; it fetches nothing itself and deletes nothing. On 8 October 2026 that
+was 2,697 players (504 whose checks failed on 1-4 October and were never
+answered, one never queued, and 2,192 whose saved profile predates recognizing
+Legend II and III and lower leagues), about 5,400 requests, and about 9,500
+known Legend II and III players missing from the list.
 
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to
@@ -103,12 +133,12 @@ finished checks have not been verified by the manual-import test.
 
 ## Weekly eligibility switch
 
-`CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=false` is the default in `app.env` and the
-collector. `ops` passes this setting into the collector. The equivalent direct
-collector option is `--enable-weekly-eligibility`. Keep it off for the October 5
-manual recheck; enable it afterward for the October 12 automatic pass. Enabling
+`ops` passes `CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=true` to the collector, for
+the agreed automatic pass from the October 12 Reset, unless `app.env` sets it
+to `false`. The collector on its own, without `ops`, keeps it off; the
+equivalent direct collector option is `--enable-weekly-eligibility`. Enabling
 it also catches up unfinished work for the current week. Applying code or this
-document does not authorize enabling it or deploying.
+document does not authorize deploying.
 
 Migration `0037_weekly_eligibility.sql` makes the shared
 `clashlens_enqueue_discovery_profiles` function reuse the current week's check
@@ -125,7 +155,9 @@ same work row back after five seconds, refetching only endpoints without a
 successful or not-found answer, up to three more runs while the API answers and
 without limit during a provider-outage pause, within 23 hours 55 minutes of
 queueing. A rejected key (401 or 403) fails the work at once. A failed or
-unrecognized response never becomes proof of eligibility.
+unrecognized response never becomes proof of eligibility. Each such check,
+weekly ones included, leaves the player due, so once it fails the ordinary
+discovery checks above try again.
 
 Successful profile fetches completed since Monday's 05:00 UTC Reset prevent
 another routine profile request, even while processing is pending or after a

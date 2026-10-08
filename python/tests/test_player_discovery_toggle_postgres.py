@@ -12,7 +12,7 @@ from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_domain_processing_postgres import _processor
 
-from clashlens.db import DISCOVERY_QUEUE_CAP, Database, enqueue_discovered_players
+from clashlens.db import Database, enqueue_discovered_players
 
 BATTLE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKINGS = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
@@ -50,14 +50,24 @@ def test_player_discovery_enabled_by_default_enqueues_outside_profiles(
             assert processor.process_once(owner="toggle-battle") is not None
             assert processor.process_once(owner="toggle-ranking") is not None
             with database.pool.connection() as connection:
-                jobs = connection.execute(
-                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
+                due = connection.execute(
+                    "SELECT count(*) FROM players WHERE eligibility_due_at IS NOT NULL"
                 ).fetchone()[0]
                 entries = connection.execute(
                     "SELECT count(DISTINCT player_id) FROM official_top200_entries"
                 ).fetchone()[0]
-            assert jobs == 201
+            assert due == 201
             assert entries == 200
+            # The collector turns due players into checks.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("SET ROLE clashlens_collector")
+                for _ in range(2):  # at most 200 due players a pass
+                    connection.execute(
+                        "SELECT clashlens_admit_discovery_profiles(clock_timestamp())"
+                    )
+                assert connection.execute(
+                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
+                ).fetchone()[0] == 201
         finally:
             database.close()
 
@@ -79,7 +89,8 @@ def test_player_discovery_disabled_retains_evidence_without_enqueue(
             assert processor.process_once(owner="toggle-ranking") is not None
             with database.pool.connection() as connection:
                 jobs = connection.execute(
-                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
+                    "SELECT (SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile')"
+                    " + (SELECT count(*) FROM players WHERE eligibility_due_at IS NOT NULL)"
                 ).fetchone()[0]
                 discoveries = connection.execute(
                     "SELECT count(*) FROM known_player_discoveries"
@@ -106,22 +117,20 @@ def test_player_discovery_disabled_retains_evidence_without_enqueue(
             database.close()
 
 
-def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
-    database_url: str,
-) -> None:
+def test_discovery_saves_each_new_player_as_due_once(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
-            new_id, known_id, blocked_id, *others = [
+            new_id, known_id, blocked_id = [
                 row[0]
                 for row in connection.execute(
                     """
                     INSERT INTO players (normalized_tag, active, eligibility_state)
                     SELECT '#Q' || n, n = 1, CASE n WHEN 1 THEN 'eligible' ELSE 'unknown' END
-                    FROM generate_series(0, 503) AS n ORDER BY n RETURNING id
+                    FROM generate_series(0, 2) AS n ORDER BY n RETURNING id
                     """
                 ).fetchall()
             ]
-            # An older unfinished weekly check makes the database refuse this player.
+            # An older unfinished weekly check already covers this player.
             connection.execute(
                 """
                 INSERT INTO collector_work (
@@ -146,106 +155,19 @@ def test_discovery_queues_each_new_player_once_and_stops_at_the_cap(
             with database.pool.connection() as connection, connection.transaction():
                 enqueue_discovered_players(connection, database, claim, player_ids)
 
-        def queued() -> list[int]:
+        def due() -> list[tuple[int, datetime]]:
             with database.pool.connection() as connection:
-                return [
-                    row[0]
-                    for row in connection.execute(
-                        "SELECT player_id FROM collector_work"
-                        " WHERE kind = 'discovery_profile' AND NOT eligibility_recheck"
-                        " ORDER BY player_id"
-                    )
-                ]
-
-        try:
-            discover([new_id, known_id])
-            discover([new_id, known_id])
-            assert queued() == [new_id]
-
-            # 501 more unknown players fill the queue to its cap of 500.
-            discover(others[:250])
-            discover(others[250:])
-            assert len(queued()) == DISCOVERY_QUEUE_CAP
-
-            # Once a waiting check finishes, exactly one more fits.
-            with psycopg.connect(connection_info) as connection:
-                connection.execute(
-                    "UPDATE collector_work SET status = 'cancelled' WHERE player_id = %s",
-                    (new_id,),
-                )
-            discover(others)
-            assert len(queued()) == DISCOVERY_QUEUE_CAP + 1
-            (left_out,) = set(others) - set(queued())
-
-            # A refused player does not use up the last free place.
-            with psycopg.connect(connection_info) as connection:
-                connection.execute(
-                    "UPDATE collector_work SET status = 'cancelled' WHERE player_id = %s",
-                    (others[0],),
-                )
-            discover([blocked_id, left_out])
-            assert left_out in queued()
-            assert blocked_id not in queued()
-        finally:
-            database.close()
-
-
-def test_discovery_checks_added_at_the_same_moment_wait_their_turn_within_the_cap(
-    database_url: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with domain_database(database_url) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            first_id, second_id, third_id, fourth_id = [
-                row[0]
-                for row in connection.execute(
-                    "INSERT INTO players (normalized_tag, active, eligibility_state)"
-                    " SELECT '#Q' || n, false, 'unknown' FROM generate_series(1, 4) AS n"
-                    " ORDER BY n RETURNING id"
+                return connection.execute(
+                    "SELECT id, eligibility_due_at FROM players"
+                    " WHERE eligibility_due_at IS NOT NULL ORDER BY id"
                 ).fetchall()
-            ]
-        options = conninfo_to_dict(connection_info).get("options", "")
-        database = Database(
-            make_conninfo(connection_info, options=f"{options} -c role=clashlens_python_worker")
-        )
-        claim = SimpleNamespace(work_type="process_observation")
-
-        def discover(player_id: int) -> None:
-            with database.pool.connection() as connection, connection.transaction():
-                enqueue_discovered_players(connection, database, claim, [player_id])
-
-        def queued() -> list[int]:
-            with database.pool.connection() as connection:
-                return sorted(
-                    row[0]
-                    for row in connection.execute(
-                        "SELECT player_id FROM collector_work WHERE kind = 'discovery_profile'"
-                    )
-                )
-
-        def discover_while_another_job_adds(open_id: int, waiting_id: int) -> None:
-            with ThreadPoolExecutor(1) as executor:
-                with database.pool.connection() as first, first.transaction():
-                    # The first battle log's transaction is still open.
-                    enqueue_discovered_players(first, database, claim, [open_id])
-                    waiting = executor.submit(discover, waiting_id)
-                    sleep(0.2)
-                    assert not waiting.done()
-                waiting.result(timeout=5)
 
         try:
-            discover_while_another_job_adds(first_id, second_id)
-            assert queued() == sorted([first_id, second_id])
-
-            # The second job counts the first one's check, so the cap holds.
-            monkeypatch.setattr("clashlens.db.DISCOVERY_QUEUE_CAP", 3)
-            discover_while_another_job_adds(third_id, fourth_id)
-            assert queued() == sorted([first_id, second_id, third_id])
-
-            # A job kept waiting over a second rolls back to be retried.
-            with database.pool.connection() as first, first.transaction():
-                enqueue_discovered_players(first, database, claim, [fourth_id])
-                with pytest.raises(psycopg.errors.LockNotAvailable):
-                    discover(fourth_id)
+            discover([new_id, known_id, blocked_id])
+            first = due()
+            discover([new_id, known_id, blocked_id])
+            assert [row[0] for row in first] == [new_id]
+            assert due() == first
         finally:
             database.close()
 
@@ -274,13 +196,13 @@ def test_discovery_of_a_player_another_job_holds_retries_instead_of_skipping(
             with database.pool.connection() as retry, retry.transaction():
                 enqueue_discovered_players(retry, database, claim, [player_id])
             with database.pool.connection() as connection:
-                queued = [
+                due = [
                     row[0]
                     for row in connection.execute(
-                        "SELECT player_id FROM collector_work WHERE kind = 'discovery_profile'"
+                        "SELECT id FROM players WHERE eligibility_due_at IS NOT NULL"
                     )
                 ]
-            assert queued == [player_id]
+            assert due == [player_id]
         finally:
             database.close()
 
@@ -326,7 +248,9 @@ def test_two_jobs_that_both_saved_a_new_player_queue_one_check(
                     )
                     sleep(0.2)
                 queuing.result(timeout=5)
-            with database.pool.connection() as connection:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("SET ROLE clashlens_collector")
+                connection.execute("SELECT clashlens_admit_discovery_profiles(clock_timestamp())")
                 queued = [
                     row[0]
                     for row in connection.execute(

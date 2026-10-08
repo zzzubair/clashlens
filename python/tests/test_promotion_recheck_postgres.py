@@ -1,4 +1,4 @@
-"""The Monday re-check of the promotion list finds and queues promoted players."""
+"""The Monday re-check of the promotion list finds promoted players and saves them as due."""
 
 from __future__ import annotations
 
@@ -127,6 +127,26 @@ def _check(
         database.close()
 
 
+def _admit(connection_info: str) -> None:
+    """One collector admission pass, which turns due players into discovery checks."""
+    with psycopg.connect(connection_info) as connection:
+        connection.execute("SET ROLE clashlens_collector")
+        connection.execute("SELECT clashlens_admit_discovery_profiles(clock_timestamp())")
+
+
+def _pending(connection_info: str) -> list[tuple[str, bool, str]]:
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            """
+            SELECT player.normalized_tag, work.coalescing_key LIKE '%%Z', work.profile_status
+            FROM collector_work AS work JOIN players AS player ON player.id = work.player_id
+            WHERE work.kind = 'discovery_profile' AND work.status = 'pending'
+              AND work.coalescing_key LIKE 'discovery-profile:%%'
+            ORDER BY player.normalized_tag
+            """
+        ).fetchall()
+
+
 def _checked_at(connection_info: str, tag: str) -> datetime:
     with psycopg.connect(connection_info) as connection:
         return connection.execute(
@@ -141,36 +161,43 @@ def test_monday_recheck_queues_promoted_players_and_refreshes_the_list(
         "#8QQ": (200, _profile("#8QQ", 105000036, "Legend I", 5000)),
         "#9QQ": (200, _profile("#9QQ", 105000035, "Legend II", 5100)),
         "#CQQ": (200, _profile("#CQQ", 105000033, "Electro League 33", 4400)),
+        "#UQQ": (200, _profile("#UQQ", 105000034, "Legend III", 4650)),
         # #2QQ answers not found.
     }
     with domain_database(database_url) as connection_info, _provider(answers) as origin:
         _seed(connection_info)
-        assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=70)) == Counter(
-            asked=4, promoted=1, listed=1, removed=2, failed=0, queued=1
+        now = MONDAY + timedelta(minutes=70)
+        database = CollectorDatabase(connection_info)
+        try:
+            # Legend II first, then Legend III; players checked since the Reset wait.
+            assert promotion_recheck.due_tags(database, now, []) == [
+                "#2QQ", "#8QQ", "#9QQ", "#CQQ", "#UQQ",
+            ]
+        finally:
+            database.close()
+        assert _check(origin, connection_info, tmp_path, now) == Counter(
+            asked=5, promoted=1, listed=2, removed=2, failed=0, queued=1
         )
-        # Legend III and players already checked since the Reset are not asked.
-        assert sorted(_Provider.asked) == ["#2QQ", "#8QQ", "#9QQ", "#CQQ"]
+        assert sorted(_Provider.asked) == ["#2QQ", "#8QQ", "#9QQ", "#CQQ", "#UQQ"]
         with psycopg.connect(connection_info) as connection:
             listed = connection.execute(
                 "SELECT normalized_tag, league_tier_id, trophies, checked_at > %s"
                 " FROM promotion_candidates ORDER BY normalized_tag",
                 (MONDAY,),
             ).fetchall()
-            queued = connection.execute(
-                """
-                SELECT player.normalized_tag, player.active, work.league_history_status
-                FROM collector_work AS work JOIN players AS player ON player.id = work.player_id
-                WHERE work.kind = 'discovery_profile' AND work.status = 'pending'
-                """
+            due = connection.execute(
+                "SELECT normalized_tag, active FROM players WHERE eligibility_due_at IS NOT NULL"
             ).fetchall()
         assert listed == [
             ("#0QQ", 105000035, 5200, False),
             ("#8QQ", 105000035, 5000, True),
             ("#9QQ", 105000035, 5100, True),
-            ("#UQQ", 105000034, 4600, False),
+            ("#UQQ", 105000034, 4650, True),
         ]
         # The saved discovery check, not this answer, starts tracking the player.
-        assert queued == [("#8QQ", False, "pending")]
+        assert due == [("#8QQ", False)]
+        _admit(connection_info)
+        assert _pending(connection_info) == [("#8QQ", True, "pending")]
 
         # Everyone due this week has been asked.
         assert _check(origin, connection_info, tmp_path, MONDAY + timedelta(minutes=71)) is None
@@ -210,7 +237,7 @@ def test_monday_recheck_waits_for_06_00_late_live_players_and_settlement(
         assert _Provider.asked == []
         with psycopg.connect(connection_info) as connection:
             connection.execute("UPDATE collector_work SET status = 'cancelled'")
-        assert _check(origin, connection_info, tmp_path, now)["asked"] == 4
+        assert _check(origin, connection_info, tmp_path, now)["asked"] == 5
 
 
 def test_requests_go_out_paced_and_only_while_a_key_is_idle(
@@ -220,9 +247,9 @@ def test_requests_go_out_paced_and_only_while_a_key_is_idle(
         _seed(connection_info)
         now = MONDAY + timedelta(minutes=70)
         # After an idle stretch, requests still reach the API a twentieth of a second apart.
-        assert _check(origin, connection_info, tmp_path, now, rate=20.0)["asked"] == 4
+        assert _check(origin, connection_info, tmp_path, now, rate=20.0)["asked"] == 5
         gaps = [b - a for a, b in itertools.pairwise(_Provider.started)]
-        assert len(gaps) == 3 and min(gaps) >= 0.04
+        assert len(gaps) == 4 and min(gaps) >= 0.04
 
         with psycopg.connect(connection_info) as connection:
             connection.execute(
@@ -260,7 +287,7 @@ def test_requests_go_out_paced_and_only_while_a_key_is_idle(
             database.close()
 
 
-def test_a_promoted_player_waits_while_the_discovery_queue_is_full(
+def test_a_promoted_player_stays_due_while_the_discovery_queue_is_full(
     database_url: str, tmp_path: Path
 ) -> None:
     answers = {"#8QQ": (200, _profile("#8QQ", 105000036, "Legend I", 5000))}
@@ -285,17 +312,19 @@ def test_a_promoted_player_waits_while_the_discovery_queue_is_full(
                 """
             )
         now = MONDAY + timedelta(minutes=70)
-        assert _check(origin, connection_info, tmp_path, now)["queued"] == 0
-        with psycopg.connect(connection_info) as connection:
-            assert connection.execute(
-                "SELECT checked_at FROM promotion_candidates WHERE normalized_tag = '#8QQ'"
-            ).fetchone()[0] == LAST_WEEK
-            connection.execute("UPDATE collector_work SET status = 'cancelled'")
-        # Once there is room, the next batch asks again and queues the player.
+        # The answer is saved as due at once, so the list row is checked.
         assert _check(origin, connection_info, tmp_path, now)["queued"] == 1
+        assert _checked_at(connection_info, "#8QQ") > MONDAY
+        _admit(connection_info)
+        assert _pending(connection_info) == []
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("UPDATE collector_work SET status = 'cancelled'")
+        # Once there is room, the next collector pass adds its check.
+        _admit(connection_info)
+        assert _pending(connection_info) == [("#8QQ", True, "pending")]
 
 
-def test_a_refused_promoted_player_does_not_use_the_last_queue_place(
+def test_a_promoted_player_whose_check_failed_this_week_gets_another(
     database_url: str, tmp_path: Path
 ) -> None:
     answers = {
@@ -308,23 +337,7 @@ def test_a_refused_promoted_player_does_not_use_the_last_queue_place(
             connection.execute(
                 "DELETE FROM promotion_candidates WHERE normalized_tag NOT IN ('#8QQ', '#9QQ')"
             )
-            connection.execute(
-                """
-                WITH waiting AS (
-                    INSERT INTO players (normalized_tag, active, eligibility_state)
-                    SELECT '#Q' || n, false, 'unknown' FROM generate_series(1, 499) AS n
-                    RETURNING id, normalized_tag
-                )
-                INSERT INTO collector_work (
-                    kind, lane, scope, player_id, normalized_tag, due_at, coalescing_key,
-                    profile_status, battle_log_status, league_history_status
-                )
-                SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag,
-                       now(), 'full:' || id, 'pending', 'not_applicable', 'pending'
-                FROM waiting
-                """
-            )
-            # #8QQ's discovery check already failed this week, so it cannot get another.
+            # #8QQ's discovery check already failed this week.
             connection.execute(
                 """
                 WITH refused AS (
@@ -344,10 +357,13 @@ def test_a_refused_promoted_player_does_not_use_the_last_queue_place(
             )
         now = MONDAY + timedelta(minutes=70)
         assert _check(origin, connection_info, tmp_path, now) == Counter(
-            asked=2, promoted=2, failed=0, queued=1
+            asked=2, promoted=2, failed=0, queued=2
         )
-        assert _checked_at(connection_info, "#8QQ") == LAST_WEEK
+        assert _checked_at(connection_info, "#8QQ") > MONDAY
         assert _checked_at(connection_info, "#9QQ") > MONDAY
+        _admit(connection_info)
+        # The failed check keeps its row; the new one has a key of its own.
+        assert _pending(connection_info) == [("#8QQ", False, "pending"), ("#9QQ", True, "pending")]
 
 
 def test_a_promoted_player_another_job_holds_stays_due(
@@ -374,7 +390,7 @@ def test_a_promoted_player_another_job_holds_stays_due(
         assert _checked_at(connection_info, "#8QQ") > MONDAY
 
 
-def test_a_promoted_player_whose_waiting_work_has_its_profile_stays_due(
+def test_a_promoted_player_whose_waiting_work_has_its_profile_gets_a_fresh_check(
     database_url: str, archive_server, tmp_path: Path
 ) -> None:
     legend_i = _profile("#8QQ", 105000036, "Legend I", 5000)
@@ -388,7 +404,7 @@ def test_a_promoted_player_whose_waiting_work_has_its_profile_stays_due(
             occurrence_key="promotion-held-profile",
             endpoint="profile",
             body=legend_i,
-            observed_at=datetime.now(UTC),
+            observed_at=datetime.now(UTC) - timedelta(seconds=5),
             normalized_tag="#8QQ",
         )
         with psycopg.connect(connection_info) as connection:
@@ -408,16 +424,18 @@ def test_a_promoted_player_whose_waiting_work_has_its_profile_stays_due(
                 (observation_id,),
             )
         assert _check(origin, connection_info, tmp_path, now) == Counter(
-            asked=1, promoted=1, failed=0, queued=0
+            asked=1, promoted=1, failed=0, queued=1
         )
-        assert _checked_at(connection_info, "#8QQ") == LAST_WEEK
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "UPDATE collector_work SET profile_status = 'pending', profile_observation_id = NULL"
-            )
-        # Work that still has to fetch the profile hands the player on.
-        assert _check(origin, connection_info, tmp_path, now)["queued"] == 1
         assert _checked_at(connection_info, "#8QQ") > MONDAY
+        # The waiting check is left to finish first.
+        _admit(connection_info)
+        assert _pending(connection_info) == []
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("UPDATE collector_work SET status = 'complete', completed_at = now()")
+            connection.execute("UPDATE players SET eligibility_due_at = now()")
+        # Its profile is older than the re-check's answer, so a fresh one is fetched.
+        _admit(connection_info)
+        assert _pending(connection_info) == [("#8QQ", True, "pending")]
 
 
 def test_an_unreadable_or_uncertain_answer_stays_due_for_a_retry(

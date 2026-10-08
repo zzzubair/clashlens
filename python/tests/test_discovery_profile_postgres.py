@@ -11,12 +11,11 @@ import pytest
 from domain_test_support import domain_database, store_observation, text
 from test_domain_processing_postgres import _processor
 
-from clashlens.db import DISCOVERY_QUEUE_CAP
-
 BATTLE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKINGS = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
 PROFILE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 OBSERVED_AT = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
+DUE = "SELECT count(*) FROM players WHERE eligibility_due_at IS NOT NULL"
 
 
 def test_live_discovery_sources_enqueue_once_and_replay_does_not(
@@ -46,9 +45,7 @@ def test_live_discovery_sources_enqueue_once_and_replay_does_not(
             assert processor.process_once(owner="discovery-battle") is not None
             assert processor.process_once(owner="discovery-ranking") is not None
             with database.pool.connection() as connection:
-                before = connection.execute(
-                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
-                ).fetchone()[0]
+                before = connection.execute(DUE).fetchone()[0]
                 ranking_discoveries = connection.execute(
                     """SELECT count(*), count(DISTINCT player_id),
                               min(source_row_index), max(source_row_index)
@@ -84,9 +81,7 @@ def test_live_discovery_sources_enqueue_once_and_replay_does_not(
                 connection.commit()
             assert processor.process_once(owner="discovery-replay") is not None
             with database.pool.connection() as connection:
-                after = connection.execute(
-                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
-                ).fetchone()[0]
+                after = connection.execute(DUE).fetchone()[0]
             assert after == before
         finally:
             database.close()
@@ -127,7 +122,7 @@ def test_partial_ranking_rank_values_do_not_corrupt_source_row_provenance(
             database.close()
 
 
-def test_contract_changed_rankings_keep_all_501_discoveries_and_queue_up_to_the_cap(
+def test_contract_changed_rankings_keep_all_501_discoveries_and_check_up_to_500_at_once(
     database_url: str, archive_server
 ) -> None:
     tags = ["#" + "".join(value) for value in product("0289PYLQGRJCUV", repeat=3)][:501]
@@ -161,12 +156,16 @@ def test_contract_changed_rankings_keep_all_501_discoveries_and_queue_up_to_the_
                     ).fetchone()[0]
                     == 501
                 )
-                assert (
-                        connection.execute(
-                            "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
-                        ).fetchone()[0]
-                    == DISCOVERY_QUEUE_CAP
-                )
+                assert connection.execute(DUE).fetchone()[0] == 501
+                connection.execute("SET ROLE clashlens_collector")
+                for _ in range(3):  # at most 200 due players a pass
+                    connection.execute(
+                        "SELECT clashlens_admit_discovery_profiles(clock_timestamp())"
+                    )
+                connection.execute("RESET ROLE")
+                assert connection.execute(
+                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
+                ).fetchone()[0] == 500
                 assert text(
                     connection.execute(
                         "SELECT outcome FROM official_top200_attempts"
@@ -449,7 +448,8 @@ def test_enqueue_failure_rolls_back_discovery_provenance(
         )
         with psycopg.connect(connection_info) as connection:
             connection.execute(
-                """CREATE OR REPLACE FUNCTION clashlens_enqueue_discovery_profiles(requested_player_ids bigint[])
+                """CREATE OR REPLACE FUNCTION clashlens_mark_eligibility_due(
+                       requested_player_ids bigint[], instant timestamptz)
                    RETURNS integer LANGUAGE plpgsql AS $$ BEGIN
                      RAISE EXCEPTION 'forced enqueue failure';
                    END $$"""

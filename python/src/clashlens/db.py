@@ -46,10 +46,6 @@ WORKER_STATEMENT_TIMEOUT_SECONDS = 900
 # Otherwise it keeps its own rows, and any earlier Resets it already took,
 # locked for as long as a slow publication holds that Reset.
 RESET_LOCK_WAIT = "250ms"
-# At most this many profile checks for newly discovered players wait at once.
-# Legend I gains about 2,000 players a week; a full queue drains in under a
-# minute at the measured 21 discovery checks per second.
-DISCOVERY_QUEUE_CAP = 500
 
 # Work types this worker image may claim. Unsupported work types (for example
 # build_export) and unknown or future contracts stay pending and unclaimed so a
@@ -1392,13 +1388,14 @@ def lock_wait(connection: Any, wait: str | None) -> Iterator[None]:
 def enqueue_discovered_players(
     connection: Any, database: Database, claim: Claim, player_ids: Iterable[int]
 ) -> None:
-    """Queue one profile check per new player named by a battle log or ranking.
+    """Save each new player named by a battle log or ranking as due a profile check.
 
     Players already tracked or already given this week's check are skipped
-    before anything else. The remaining ones are queued only while fewer than
-    DISCOVERY_QUEUE_CAP such checks wait; a full queue skips them with no saved
-    retry. Waiting over a second for another job adding checks, or updating a
-    player, raises LockNotAvailable, so the whole job rolls back and reruns.
+    before anything else. The rest are saved as due (migration 0082); the
+    collector turns due players into checks while fewer than 500 wait, so a
+    full queue delays a player instead of dropping it. Waiting over a second
+    for a player another job is updating raises LockNotAvailable, so the
+    whole job rolls back and reruns.
     """
     if not database.player_discovery_enabled or claim.work_type != "process_observation":
         return
@@ -1410,6 +1407,7 @@ def enqueue_discovered_players(
             SELECT player.id FROM players AS player
             WHERE player.id = ANY(%s::bigint[])
               AND (NOT player.active OR player.eligibility_state <> 'eligible')
+              AND player.eligibility_due_at IS NULL
               AND NOT EXISTS (
                   SELECT 1 FROM collector_work AS work
                   WHERE work.kind = 'discovery_profile'
@@ -1422,28 +1420,12 @@ def enqueue_discovered_players(
             (sorted(set(player_ids)),),
         )
     ]
-    if not candidates:
-        return
-    with lock_wait(connection, "1s"):
-        connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('discovery-queue', 0))")
-    waiting = connection.execute(
-        """
-        SELECT count(*) FROM collector_work
-        WHERE lane = 'ordinary' AND status IN ('pending', 'waiting_retry')
-          AND kind = 'discovery_profile' AND NOT eligibility_recheck
-        """
-    ).fetchone()[0]
-    room = DISCOVERY_QUEUE_CAP - int(waiting)
-    while room > 0 and candidates:
-        batch, candidates = candidates[:room], candidates[room:]
+    if candidates:
         with lock_wait(connection, "1s"):
             connection.execute(
-                "SELECT 1 FROM players WHERE id = ANY(%s::bigint[]) ORDER BY id FOR NO KEY UPDATE",
-                (batch,),
+                "SELECT clashlens_mark_eligibility_due(%s::bigint[], clock_timestamp())",
+                (candidates,),
             )
-        room -= connection.execute(
-            "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])", (batch,)
-        ).fetchone()[0]
 
 
 def _positive_int_input(values: dict[str, Any], name: str) -> int:

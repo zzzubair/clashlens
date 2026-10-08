@@ -586,7 +586,7 @@ def test_discovery_scheduling_and_replay_survive_cleanup(
                     (fresh_observation,),
                 ).fetchone()[0] == 1
                 assert connection.execute(
-                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
+                    "SELECT count(*) FROM players WHERE eligibility_due_at IS NOT NULL"
                 ).fetchone()[0] > 0
         finally:
             database.close()
