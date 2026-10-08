@@ -1319,7 +1319,7 @@ def _season_rule_holds(
                 JOIN legend_battles AS battle ON battle.id = evidence.battle_id
                 WHERE (battle.attacker_player_id = %(player)s
                        OR battle.defender_player_id = %(player)s)
-                  AND evidence.battle_timestamp >= %(season_start)s
+                  AND battle.ranked_day_start >= %(season_start)s
                   AND evidence.battle_timestamp < %(before)s
             ))
             """,

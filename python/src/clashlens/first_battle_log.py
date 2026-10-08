@@ -658,7 +658,7 @@ def requeue_sign_up_days(
                         ON battle.id = evidence.battle_id
                       WHERE (battle.attacker_player_id = day.player_id
                              OR battle.defender_player_id = day.player_id)
-                        AND evidence.battle_timestamp >= %(start)s
+                        AND battle.ranked_day_start >= %(start)s
                         AND evidence.battle_timestamp < read.observed_at)
                 ORDER BY day.player_id, day.ranked_day_start
                 """,
