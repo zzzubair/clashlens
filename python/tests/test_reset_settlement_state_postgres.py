@@ -862,3 +862,62 @@ def test_player_dropped_at_a_weekly_reset_ends_at_the_reset_reading(
     )
     assert ("player_not_eligible" not in days[boundary][2]) == monday_eligible
     assert tracked == [(False, 105000035) if drop_at else (True, None)]
+
+
+def test_weekly_drop_seen_before_the_last_day_is_saved_still_ends_it(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    from test_first_battle_log_postgres import LOSS, WIN, _log
+
+    boundary = BOUNDARIES["monday"]
+    last_day = boundary - timedelta(days=1)
+    final = 4900 + WIN - 8 * LOSS
+    battles = [(last_day + timedelta(hours=1), True)] + [
+        (last_day + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, last_day,
+                           profile=_profile(4900), log=_battle_log(empty=True))
+        jobs += _reset_work(connection_info, archive_server, boundary,
+                            profile=_profile(final), log=_log(*battles))
+        jobs.append(_store_dropped_login(
+            connection_info, archive_server, "dropped-login",
+            boundary + timedelta(minutes=13), final,
+        ))
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            # The Legend II profile is processed before any calculation saves
+            # the last day, and that calculation began before it, so reads no
+            # drop.
+            for job_id in jobs:
+                assert processor.process_job(job_id, owner=f"job-{job_id}") is not None
+            with monkeypatch.context() as patch:
+                patch.setattr(reconciliation_db, "_dropped_after_reading",
+                              lambda *args: False)
+                for (job_id,) in _rows(connection_info, """
+                        SELECT id FROM python_processing_jobs
+                        WHERE status = 'pending' AND work_type = 'reconcile_ranked_day'
+                          AND input_json->>'trigger' IS DISTINCT FROM 'weekly_drop'
+                        ORDER BY id"""):
+                    processor.process_job(int(job_id), owner="stale")
+        finally:
+            database.close()
+        stale = _rows(connection_info, f"""
+            SELECT DISTINCT ON (ranked_day_start) state FROM ranked_day_versions
+            WHERE ranked_day_start = '{last_day.isoformat()}'
+            ORDER BY ranked_day_start, version DESC""")
+        due = _rows(connection_info, """
+            SELECT due_at FROM python_processing_jobs
+            WHERE input_json->>'trigger' = 'weekly_drop'""")
+        _process(connection_info, archive_server, [])
+        ended = _rows(connection_info, f"""
+            SELECT DISTINCT ON (ranked_day_start) state, next_start_trophies
+            FROM ranked_day_versions
+            WHERE ranked_day_start = '{last_day.isoformat()}'
+            ORDER BY ranked_day_start, version DESC""")
+
+    assert stale == [("Inconsistent",)]
+    # Due once the Reset's own calculations have long saved.
+    assert len(due) == 1
+    assert due[0][0] >= boundary + reconciliation_db.DAY_END_RECALCULATION_DELAY
+    assert ended == [("Complete", final)]
