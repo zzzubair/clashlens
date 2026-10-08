@@ -33,7 +33,7 @@ DAY_A, DAY_B, DAY_C = BOUNDARIES["monday"], DAY_START, BOUNDARIES["ordinary"]
 DAY_D = DAY_C + timedelta(days=1)
 
 
-def _latest_days(connection_info: str) -> list[tuple]:
+def _latest_days(connection_info: str, days: tuple = (DAY_B, DAY_C)) -> list[tuple]:
     with psycopg.connect(connection_info) as connection:
         return connection.execute(
             """
@@ -43,10 +43,10 @@ def _latest_days(connection_info: str) -> list[tuple]:
                    automatic_defense_evidence_state, formula_components,
                    failure_reasons
             FROM ranked_day_versions
-            WHERE ranked_day_start IN (%s, %s)
+            WHERE ranked_day_start = ANY(%s)
             ORDER BY ranked_day_start, version DESC
             """,
-            (DAY_B, DAY_C),
+            (list(days),),
         ).fetchall()
 
 
@@ -104,11 +104,14 @@ def test_reading_before_the_loss_completes_the_day_and_settles_the_next_start(
 
 
 def _early_reading_days(
-    connection_info: str, archive_server, later_profile: bytes
+    connection_info: str, archive_server, later_profile: bytes,
+    *, processed_first: tuple[tuple[str, bytes, timedelta], ...] = (),
 ) -> tuple[int, int]:
     """As #P20G0CUJY on 6 October 2026: the Reset reading ending day B leaves
-    out its attack gain, and ``later_profile`` is read before any new-day
-    battle. Return day B's start and calculated end."""
+    out its attack gain, and ``later_profile`` is read 10 minutes after that
+    Reset, before any new-day battle; ``processed_first`` responses, (endpoint,
+    body, read after that Reset), are processed before it. Return day B's
+    start and calculated end."""
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
@@ -130,12 +133,20 @@ def _early_reading_days(
     assert [row[0] for row in _latest_days(connection_info)] == [
         "Inconsistent", "Inconsistent",
     ]
-    _, profile_job = store_observation(
+    jobs = [
+        store_observation(
+            connection_info, archive_server, occurrence_key=f"first-{index}",
+            endpoint=endpoint, body=body, observed_at=DAY_C + after,
+            normalized_tag=TAG,
+        )[1]
+        for index, (endpoint, body, after) in enumerate(processed_first)
+    ]
+    jobs.append(store_observation(
         connection_info, archive_server, occurrence_key="later-profile",
         endpoint="profile", body=later_profile,
         observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
-    )
-    _process(connection_info, archive_server, [profile_job])
+    )[1])
+    _process(connection_info, archive_server, jobs)
     return start_b, end_b
 
 
@@ -172,6 +183,75 @@ def test_later_reading_settles_a_reset_reading_missing_an_attack(
     assert day_b_row[8] == []
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
     assert day_c_row[7]["start_reading_correction"] == WIN
+
+
+def test_reading_soon_after_the_reset_is_kept_when_a_newer_one_came_first(
+    database_url: str, archive_server
+) -> None:
+    # A new-day defense at 05:15 and a 05:29 profile after it are processed
+    # before the 05:10 profile, the only reading that can settle day B.
+    end_b = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        start_b, _ = _early_reading_days(
+            connection_info, archive_server, _profile(end_b),
+            processed_first=(
+                ("battle_log", _log((DAY_C + timedelta(minutes=15), False)),
+                 timedelta(minutes=20)),
+                ("profile", _profile(end_b - LOSS), timedelta(minutes=29)),
+            ),
+        )
+        _day_end_recheck(connection_info, archive_server)
+        day_b_row, _ = _latest_days(connection_info)
+
+    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[7]["next_start_reading_correction"] == WIN
+
+
+def test_recheck_refreshes_saved_days_until_one_stays_the_same(
+    database_url: str, archive_server
+) -> None:
+    # Day B's Reset reading misses its attack gain. Day C, 8 defenses, then
+    # starts too low and is Inconsistent though its own end reading is right;
+    # day D, 1 defense, has no automatic loss without a complete day C.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    day_c = [(DAY_C + timedelta(hours=hour), False) for hour in range(1, 9)]
+    day_d = [(DAY_D + timedelta(hours=1), False)]
+    end_b = 6000 + WIN - 8 * LOSS
+    end_c = end_b - 8 * LOSS
+    end_d = end_c - LOSS - 7 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        for boundary, trophies, battles in (
+            (DAY_C, end_b - WIN, day_b),
+            (DAY_D, end_c, day_c),
+            (DAY_D + timedelta(days=1), end_d, day_d),
+        ):
+            jobs += _reset_work(
+                connection_info, archive_server, boundary,
+                profile=_profile(trophies), log=_log(*battles),
+            )
+        _process(connection_info, archive_server, jobs)
+        before = [row[0] for row in _latest_days(connection_info, (DAY_C, DAY_D))]
+        _, profile_job = store_observation(
+            connection_info, archive_server, occurrence_key="later-profile",
+            endpoint="profile", body=_profile(end_b),
+            observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
+        )
+        _process(connection_info, archive_server, [profile_job])
+        _day_end_recheck(connection_info, archive_server)
+        day_c_row, day_d_row = _latest_days(connection_info, (DAY_C, DAY_D))
+
+    assert before == ["Inconsistent", "Partial"]
+    # Day C's next start stays the same but it is now complete, so day D can
+    # take its automatic loss.
+    assert day_c_row[:5] == ("Complete", "exact", end_b, end_c, end_c)
+    assert day_d_row[:7] == (
+        "Complete", "exact", end_c, end_d, end_d, 7 * LOSS, "confirmed",
+    )
 
 
 def test_mismatch_batch_settles_days_saved_before_the_later_reading_rule(

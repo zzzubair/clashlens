@@ -107,8 +107,8 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             while pending:
                 day_start = pending.pop(0)
                 following = day_start + timedelta(days=1)
-                # A changed next start changes the following saved day's
-                # start too.
+                # A changed ended result changes the following saved day of
+                # its Season too, until a day's result stays the same.
                 if recalculate_ranked_day(
                     database,
                     connection,
@@ -118,7 +118,10 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     processing_version=claim.processing_version,
                     domain_rule_version=claim.domain_rule_version,
                     analytics_rule_version=claim.analytics_rule_version,
-                ) and following not in day_starts and connection.execute(
+                ) and following not in day_starts and (
+                    ranked_day_for(following).official_season_id
+                    == ranked_day_for(day_start).official_season_id
+                ) and connection.execute(
                     """
                     SELECT 1 FROM ranked_day_versions
                     WHERE player_id = %s AND ranked_day_start = %s
@@ -186,7 +189,8 @@ def recalculate_ranked_day(
     analytics_rule_version: str,
 ) -> bool:
     """Recalculate and publish one player-day in the caller's transaction;
-    whether that changed its saved next start."""
+    whether that changed the state, end or next start of its saved ended
+    result."""
     ranked_day = ranked_day_for(day_start)
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
@@ -498,7 +502,8 @@ def recalculate_ranked_day(
     contribution_evidence = input_evidence.get("contributions", [])
     previous_version = connection.execute(
         """
-        SELECT id, version, result_hash, replaces_version_id, next_start_trophies
+        SELECT id, version, result_hash, replaces_version_id, state,
+               final_trophies_before_reset, next_start_trophies
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -685,8 +690,12 @@ def recalculate_ranked_day(
         )
     return (
         previous_version is not None
-        and previous_version[4] is not None
-        and previous_version[4] != result_data["next_start_trophies"]
+        and _text_value(previous_version[4]) != "Live"
+        and (_text_value(previous_version[4]), *previous_version[5:7]) != (
+            result.state,
+            result.final_trophies_before_reset,
+            result_data["next_start_trophies"],
+        )
     )
 
 
