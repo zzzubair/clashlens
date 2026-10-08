@@ -9,6 +9,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event, Lock, Semaphore
 from time import monotonic, thread_time
 from typing import Any
@@ -71,12 +72,13 @@ from .rankings import (
 )
 from .source_observation_contract import validate_source_observation_contract
 from .spool import SpoolError
+from .worker_liveness import progress_file
 
 MAX_CONCURRENCY = 32
 # Each worker process runs its own Python interpreter, which runs one thread
 # at a time: on 8 Oct 2026 one process used about one core and processed 894
 # responses a minute however many lanes it had.
-MAX_PROCESSES = 4
+MAX_PROCESSES = 2
 DATABASE_CONFLICT_RETRIES = 3
 # Keep current leaderboard evidence moving during a backlog while reserving
 # claims for daily results and other derived work. See docs/architecture.md
@@ -467,6 +469,10 @@ def run_processes(commands: list[list[str]], stop_requested: Event) -> int:
     only for a requested stop that every process finished cleanly, so the
     container restarts them all when one fails.
     """
+    # Each process's health-check file exists from the start, so one stuck
+    # before its first job still ages into a failed health check.
+    for index in range(1, len(commands) + 1):
+        Path(progress_file(index)).touch()
     processes: list[subprocess.Popen[bytes]] = []
     try:
         for command in commands:
@@ -585,7 +591,8 @@ def process_until_stopped(
     for responses so long derived work can never hold them all. Each derived
     lane takes a turn from a shared semaphore, one per derived lane, before it
     claims, and ``maintain`` receives the same semaphore for its heavy work.
-    Batched claims no lane started are given back once every lane stops.
+    A batch of claims is never larger than the lanes of its kind not running
+    a job, and claims no lane started are given back once every lane stops.
 
     Each lane calls ``progress`` every time round its loop, never the timer,
     so the health check sees a stuck worker even while maintenance ticks.
@@ -594,6 +601,10 @@ def process_until_stopped(
     report_lock = threading.Lock()
     responses = response_lane_count(concurrency, response_lanes)
     derived_turns = Semaphore(max(1, concurrency - responses))
+    batch_lanes = getattr(processor, "batch_lanes", None)
+    if isinstance(batch_lanes, dict) and responses:
+        batch_lanes.update({RESPONSE_WORK_TYPES: responses,
+                            DERIVED_WITHOUT_BUILDS: concurrency - responses})
 
     def maintenance_timer() -> None:
         while not stop_requested.is_set():
@@ -700,8 +711,9 @@ class ObservationProcessor:
         self._claim_count = 0
         self._lane_claims: dict[str, int] = {}
         # Response lanes, and derived lanes outside builds, share one batch of
-        # claims per kind: one transaction leases up to ``claim_batch`` jobs
-        # and whichever lane frees up first takes the next. A build is never
+        # claims per kind: one transaction leases up to ``claim_batch`` jobs,
+        # no more than that kind's ``batch_lanes`` not running a job, and
+        # whichever lane frees up first takes the next. A build is never
         # batched. Each claim waits with the time it was claimed.
         self.claim_batch = claim_batch
         self._batches: dict[tuple[str, ...], deque[tuple[float, Claim]]] = {
@@ -709,6 +721,8 @@ class ObservationProcessor:
         }
         self._batch_locks = {kind: Lock() for kind in self._batches}
         self._batch_turns = dict.fromkeys(self._batches, 0)
+        self.batch_lanes = dict.fromkeys(self._batches, 1)
+        self._running = dict.fromkeys(self._batches, 0)
         # Process n of N plans only jobs whose number leaves n - 1 divided by
         # N, so processes never race for the same newest jobs.
         self.plan_share = (1, 1)
@@ -731,7 +745,17 @@ class ObservationProcessor:
         self._record_stage("python_claim", started_at)
         if claim is None:
             return None
-        return self._process_claim(claim, lease_seconds=lease_seconds)
+        # The build lane is one of the derived lanes.
+        kind = DERIVED_WITHOUT_BUILDS if work_types == POPULATION_BUILD_WORK_TYPES else work_types
+        if kind not in self._running:
+            return self._process_claim(claim, lease_seconds=lease_seconds)
+        with self._plan_lock:
+            self._running[kind] += 1
+        try:
+            return self._process_claim(claim, lease_seconds=lease_seconds)
+        finally:
+            with self._plan_lock:
+                self._running[kind] -= 1
 
     def _claim_next(
         self,
@@ -749,15 +773,17 @@ class ObservationProcessor:
                     batch.extend((claimed_at, claim) for claim in
                                  self._claim_batch(owner, lease_seconds, work_types))
                 while batch:
-                    claimed_at, claim = batch.popleft()
-                    if monotonic() - claimed_at < lease_seconds / 2:
-                        return claim
-                    # Slow jobs ahead of it, such as army redecodes, used half
-                    # its lease: renew it before it starts, unless it is lost.
-                    try:
-                        self.database.renew_claim(claim, lease_seconds=lease_seconds)
-                    except LeaseLost:
-                        continue
+                    claimed_at, claim = batch[0]
+                    if monotonic() - claimed_at >= lease_seconds / 2:
+                        # Slow jobs ahead of it, such as army redecodes, used
+                        # half its lease: renew it before it starts, unless it
+                        # is lost. It stays in the batch until renewed.
+                        try:
+                            self.database.renew_claim(claim, lease_seconds=lease_seconds)
+                        except LeaseLost:
+                            batch.popleft()
+                            continue
+                    batch.popleft()
                     return claim
                 return None
         # The newest-first plan holds only responses, so derived lanes skip it.
@@ -813,7 +839,10 @@ class ObservationProcessor:
         turn = self._batch_turns[work_types]
         self._batch_turns[work_types] = turn + 1
         reset_turn = turn % RESET_FIRST_CLAIM_EVERY == 0
-        limit = {"owner": owner, "lease_seconds": lease_seconds, "limit": self.claim_batch,
+        with self._plan_lock:
+            free_lanes = self.batch_lanes[work_types] - self._running[work_types]
+        size = max(1, min(self.claim_batch, free_lanes))
+        limit = {"owner": owner, "lease_seconds": lease_seconds, "limit": size,
                  "work_types": work_types, "reset_first": reset_turn}
         claims: list[Claim] = []
         if work_types == RESPONSE_WORK_TYPES and turn % OLDEST_FIRST_CLAIM_EVERY != 0:
@@ -821,7 +850,7 @@ class ObservationProcessor:
             if planned is not None:
                 with self._plan_lock:
                     job_ids = [planned, *(self._plan.popleft() for _ in range(
-                        min(self.claim_batch - 1, len(self._plan))))]
+                        min(size - 1, len(self._plan))))]
                 # Only on a Reset turn do the newest live responses yield.
                 claims = self.database.claim_jobs(
                     job_ids=job_ids, planned=reset_turn, **limit

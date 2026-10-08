@@ -158,7 +158,9 @@ Worker threads share the newest-job plan. With `--run-forever` and more than
 one thread, response threads also share claims: one database transaction
 leases up to `--claim-batch-size` jobs (8 by default), each with its own lease
 token and attempt exactly as if it were claimed alone, and whichever response
-thread frees up first takes the next. Derived threads share their own batches
+thread frees up first takes the next. A batch is never larger than the
+threads of its kind not running a job, so each claim has a free thread to
+start it within its lease. Derived threads share their own batches
 of daily results and redecodes the same way; a build is always claimed alone.
 One thread at a time claims each kind's next batch, so a process holds at most
 one unstarted batch of each kind, and each batch takes turns as a thread's
@@ -202,12 +204,13 @@ maintenance does not wait for a turn and runs in every process. This worker
 checks Reset publications on its timer's first tick rather than before its
 threads start.
 
-`--processes` starts that many copies of the worker, 1 to 4, in the same
+`--processes` starts one or two copies of the worker in the same
 container. Python runs one thread at a time in each process, so on 8 Oct 2026
 one process handled about 894 responses a minute however many threads it
 had; each extra process adds its own interpreter, threads and database pools.
 Each claims under its own owner, `<owner>.process-<n>`, and touches its own
-health-check progress file, so the check fails when any one is stuck. When
+health-check progress file, created as the processes start, so the check
+fails when any one is stuck, even before its first job. When
 any process exits the others are stopped and the container restarts them
 all. Their database connections are budgeted: processes times (pool size plus
 the two maintenance connections and the maintenance lock's one) may not

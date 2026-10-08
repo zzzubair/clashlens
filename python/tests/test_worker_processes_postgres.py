@@ -306,6 +306,7 @@ def test_a_batched_claim_that_waited_half_its_lease_is_renewed_before_it_starts(
         database = Database(connection_info)
         try:
             processor = ObservationProcessor(database, archive=None, claim_batch=3)
+            processor.batch_lanes[RESPONSE_WORK_TYPES] = 3
             first = processor._claim_next(
                 owner="slow", lease_seconds=2, work_types=RESPONSE_WORK_TYPES
             )

@@ -10,8 +10,9 @@ import pytest
 from psycopg_pool import PoolTimeout
 
 from clashlens import cli, reconciliation_db
-from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
+from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION, RESPONSE_WORK_TYPES
 from clashlens.worker import (
+    DERIVED_WITHOUT_BUILDS,
     MAX_CONCURRENCY,
     ObservationProcessor,
     ProcessResult,
@@ -665,3 +666,77 @@ def test_a_requested_stop_reaches_every_worker_process() -> None:
     started = time.monotonic()
     assert run_processes([[sys.executable, "-c", graceful]] * 2, stop) == 0
     assert time.monotonic() - started < 10
+
+
+class _BatchQueue:
+    """Claims up to ``limit`` of the jobs waiting, and records what it is asked."""
+
+    def __init__(self, waiting: int) -> None:
+        self.waiting = waiting
+        self.limits: list[int] = []
+        self.released: list[int] = []
+        self.next_id = 0
+
+    def claim_jobs(self, *, limit: int, **_options) -> list[SimpleNamespace]:
+        self.limits.append(limit)
+        count = min(limit, self.waiting)
+        self.waiting -= count
+        self.next_id += count
+        return [SimpleNamespace(job_id=job_id)
+                for job_id in range(self.next_id - count, self.next_id)]
+
+    def renew_claim(self, _claim, *, lease_seconds: int) -> None:
+        raise PoolTimeout("no connection to renew with")
+
+    def release_claims(self, claims) -> int:
+        self.released += [claim.job_id for claim in claims]
+        return len(claims)
+
+
+def test_a_batch_claims_no_more_jobs_than_lanes_free_to_start_them() -> None:
+    queue = _BatchQueue(waiting=3)
+    processor = ObservationProcessor(queue, archive=None, claim_batch=8)
+    processor.batch_lanes[DERIVED_WITHOUT_BUILDS] = 4
+    started, finish = [], Event()
+
+    def long_job(claim, *, lease_seconds: int):
+        started.append(claim.job_id)
+        assert finish.wait(10)
+        return claim
+
+    processor._process_claim = long_job
+    lanes = []
+    try:
+        for lane in range(4):
+            if lane == 3:
+                queue.waiting = 8  # more work arrives while three lanes are busy
+            lanes.append(threading.Thread(target=processor.process_once, kwargs={
+                "owner": f"lane-{lane}", "lease_seconds": 60,
+                "work_types": DERIVED_WITHOUT_BUILDS}))
+            lanes[-1].start()
+            deadline = time.monotonic() + 5
+            while len(started) <= lane and time.monotonic() < deadline:
+                time.sleep(0.01)
+    finally:
+        finish.set()
+        for thread in lanes:
+            thread.join(10)
+    # Four free lanes took three jobs; then the one free lane took one, so no
+    # claim waited behind jobs longer than its lease.
+    assert queue.limits == [4, 1]
+    assert sorted(started) == [0, 1, 2, 3]
+    assert processor.release_batched_claims() == 0
+
+
+def test_a_batched_claim_whose_renewal_fails_is_still_given_back() -> None:
+    queue = _BatchQueue(waiting=2)
+    processor = ObservationProcessor(queue, archive=None, claim_batch=2)
+    processor.batch_lanes[RESPONSE_WORK_TYPES] = 2
+    processor._process_claim = lambda claim, *, lease_seconds: claim
+    first = processor.process_once(owner="lane", lease_seconds=1, work_types=RESPONSE_WORK_TYPES)
+    assert first is not None and first.job_id == 0
+    time.sleep(0.6)  # the waiting claim used more than half its lease
+    with pytest.raises(PoolTimeout):
+        processor.process_once(owner="lane", lease_seconds=1, work_types=RESPONSE_WORK_TYPES)
+    assert processor.release_batched_claims() == 1
+    assert queue.released == [1]

@@ -1280,8 +1280,8 @@ policy and are not manually requeued.
 
 ## Worker processes
 
-In `app.env`, `CLASHLENS_WORKER_PROCESSES` (default 1) sets how many worker
-processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
+In `app.env`, `CLASHLENS_WORKER_PROCESSES` (1 or 2, default 1) sets how many
+worker processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
 12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default 8) how
 many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
 (default 12) each process's connections. All processes share the container's

@@ -100,14 +100,21 @@ def take_build_permit(connection: Any) -> None:
 def build_permit_busy(
     connection: Any, jobs_relation: str, build_work_types: Collection[str]
 ) -> bool:
-    """Whether a build runs or waits to start; else this claim holds the permit."""
+    """Whether a build runs or waits to start; else this claim holds the permit.
+
+    The lease check is its own statement, so it reads every build claim
+    committed before this one took the permit.
+    """
+    if not connection.execute(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))", (BUILD_PERMIT_KEY,)
+    ).fetchone()[0]:
+        return True
     return connection.execute(
         f"""
-        SELECT NOT pg_try_advisory_xact_lock(hashtextextended(%s, 0))
-            OR EXISTS (
-                SELECT FROM {jobs_relation}
-                WHERE state = 'leased' AND lease_expires_at > clock_timestamp()
-                  AND work_type = ANY(%s::text[]))
+        SELECT EXISTS (
+            SELECT FROM {jobs_relation}
+            WHERE state = 'leased' AND lease_expires_at > clock_timestamp()
+              AND work_type = ANY(%s::text[]))
         """,
-        (BUILD_PERMIT_KEY, sorted(build_work_types)),
+        (sorted(build_work_types),),
     ).fetchone()[0]
