@@ -319,14 +319,13 @@ def _recalculate_season_ends(
 
 def queue_season_end(
     connection: Any, player_id: int, season_end: datetime,
-    observation_id: int, observed_at: datetime,
-    official_total: int | None = None,
+    observation_id: int, observed_at: datetime, official_total: int,
 ) -> None:
     """Queue, once per response, the last day of the Season ending at
     ``season_end`` when the response, read up to 3 days after it, can give
-    that day's end: the day is still saved without an end, or with another
-    official total than ``official_total``, and its official Legend I total
-    is saved. Older Seasons are left as saved."""
+    that day's end: the day is still saved without ``official_total`` as
+    its end, and its official Legend I total is saved. Older Seasons are
+    left as saved."""
     from . import first_battle_log
     from .db import PYTHON_BACKFILL_PRIORITY
     from .profile import LEGEND_I_TIER_ID
@@ -334,18 +333,11 @@ def queue_season_end(
 
     if observed_at > season_end + timedelta(days=3):
         return
-    # Profile processing holds this lock too, so whichever of a dropped
-    # profile and the official total commits second sees the other and
-    # queues the day: a calculation queued first could run without it.
-    connection.execute(
-        "SELECT 1 FROM players WHERE id = %s FOR NO KEY UPDATE", (player_id,)
-    )
     day_start = season_end - timedelta(days=1)
     stale = connection.execute(
         """
-        SELECT failure_reasons ? 'missing_end_baseline'
-               OR (input_evidence -> 'end_baseline_evidence'
-                   ->> 'official_final_trophies')::integer <> %s
+        SELECT (input_evidence -> 'end_baseline_evidence'
+                ->> 'official_final_trophies')::integer IS DISTINCT FROM %s
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s

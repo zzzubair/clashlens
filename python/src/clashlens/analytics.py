@@ -4,7 +4,9 @@ import hashlib
 
 from .profile import normalize_player_tag
 
-SNAPSHOT_ORDERING_RULE_VERSION = "tracked-player-order-v1"
+# v2 ranks each player by the Reset proof their day shares with the Season
+# summary (reset_settlement.DayEnd); v1 by their last reading alone.
+SNAPSHOT_ORDERING_RULE_VERSION = "tracked-player-order-v2"
 FRESHNESS_RULE_VERSION = "profile-freshness-10m-v1"
 PROFILE_FRESHNESS_SECONDS = 600
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"

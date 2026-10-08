@@ -9,7 +9,11 @@ from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
 from . import battle, boundary, reset_baselines
-from .analytics import CLASSIFICATION_CONFIDENCE, CLASSIFICATION_VERSION
+from .analytics import (
+    CLASSIFICATION_CONFIDENCE,
+    CLASSIFICATION_VERSION,
+    SNAPSHOT_ORDERING_RULE_VERSION,
+)
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .db import (
@@ -329,7 +333,8 @@ def _maybe_emit_boundary_signal(
                     row[0],
                     int(source[5]),
                     source[0],
-                    source[3],
+                    # A correction is built by the board rule running now.
+                    SNAPSHOT_ORDERING_RULE_VERSION,
                     source[4],
                     source[1],
                     source[2],

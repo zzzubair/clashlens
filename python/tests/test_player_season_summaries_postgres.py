@@ -255,6 +255,45 @@ def test_eod_change_uses_previous_day_and_day_one_5000(database_url: str) -> Non
             database.close()
 
 
+def test_only_an_official_total_accepts_a_seasons_last_eod(database_url: str) -> None:
+    """A Season-opening Reset puts every player on 5,000 whatever they ended
+    on, so its settled check never accepts the ended Season's last EOD, even
+    when it lands on it; the game's official Season-end total does."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection, "#2PP")
+                # Day 17 here ends at the real Season-opening Reset of 18 May.
+                _days(connection, player_id, {16: (5100, 5150), 17: (5150, 5180)})
+                _settle(connection, player_id, 16, 5150)
+                _settle(connection, player_id, 17, 5180)
+                connection.commit()
+
+                def states() -> dict[int, str]:
+                    return {
+                        day: state
+                        for day, (_, _, state, _) in _movement(connection, player_id).items()
+                    }
+
+                assert states() == {16: "accepted", 17: "provisional"}
+                connection.execute("SET session_replication_role = replica")
+                connection.execute(
+                    """
+                    UPDATE ranked_day_versions
+                    SET input_evidence = '{"end_baseline_evidence":
+                                           {"official_final_trophies": 5180}}'
+                    WHERE player_id = %s AND season_day_number = 17
+                    """,
+                    (player_id,),
+                )
+                connection.execute("SET session_replication_role = origin")
+                connection.commit()
+                assert states() == {16: "accepted", 17: "accepted"}
+        finally:
+            database.close()
+
+
 def test_saved_summary_hides_eod_and_net_for_days_missing_battles(
     database_url: str,
 ) -> None:

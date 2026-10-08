@@ -590,74 +590,51 @@ player first tracked later with no Legend battles on Day 1 gets no Day 1:
 they may not have joined the Season until later, and Clash Lens must not
 invent a Day 1 for them.
 
-**Day 1's automatic defense loss:** Day 1 now averages its own defenses only,
-leaving out the previous Season's last day, and charges a player with at
-least as many attacks as defenses for `attacks - defenses` missing defenses;
-a Reset reading taken before the loss is read less it
-([automatic defense adjustment](domain.md#automatic-defense-adjustment)). A
-Day 1 saved before that keeps its old result until recalculated.
-`--day-1 preview --season <Season ID>` counts, without writing anything, the
-players whose saved Day 1 has 1 to 7 defenses; `--day-1 queue --season
-<Season ID>` queues up to `--max-jobs` of them, each recalculating Day 1 and
-every later saved day of the Season, at backfill priority: a worker thread
-runs them only when no higher-priority work that thread can claim is due, so a
-thread that does not process saved responses can still run them while
-responses wait. Run it again until `left_to_queue` is 0;
-each player is queued once, and players queued by the earlier run that only
-averaged Day 1's own defenses are queued once more. On 2026-10-06 the October
-2026 Season (`1791176400`) had about 3,100 such players.
+**Season repair after a rule change:** saved days and Daily boards keep the
+result they were calculated with until something recalculates them. After
+deploying any release that changes how a day or board comes out (it raises
+`DAY_RULES_REVISION` in `python/src/clashlens/domain_repair.py`), repair the
+Season once, outside 04:00–07:00 UTC:
 
-**"No opponent, no battle" rows in the automatic defense loss:** the game
-counts each such row as a used attack or defense slot when it charges the
-automatic defense loss
-([automatic defense adjustment](domain.md#automatic-defense-adjustment)). A
-day saved before that keeps its old result, and so does the day after, which
-pools it. `--zero-result-slots preview --season <Season ID>` counts, without
-writing anything, the players with an ended saved day of that Season whose
-battle logs hold such a row; `--zero-result-slots queue --season <Season ID>`
-queues up to `--max-jobs` of them, each recalculating the player's oldest
-such day and every later saved day of the Season, at backfill priority. Run
-it again until `left_to_queue` is 0; each player and day is queued once. It
-reads the Season's saved battle rows, those above the lowest row a battle of
-two days before the Season used, so run it outside 04:00–07:00 UTC.
+```sh
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair preview --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair queue --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair receipt --season 1791176400
+```
 
-**Mid-Season sign-up days:** a Reset read before the player signed up for
-the Season (a Legend I profile at 5,000 naming Season 0) now starts that day
-at 5,000 by the Season rule. Days calculated before that have no start; on
-2026-10-08 the October 2026 Season had 48 such ended days on 6 October.
-`--sign-up preview|queue --season <Season ID>` counts or queues, at backfill
-priority, each such player's day before the sign-up day and every later
-saved day; run it outside 04:00–07:00 UTC until `left_to_queue` is 0.
-
-**Full logs that share only other battles:** two full 50-row battle logs
-overlap when they share any saved row, not only a Legend battle. Days
-calculated before that report `battle_log_overlap_gap` falsely; on
-2026-10-07 the October 2026 Season had 911 such ended days on 5 and 6
-October, 25 of them otherwise ready to finish.
-`--overlap-gap preview --season <Season ID>` counts, without writing
-anything, the players whose latest result for an ended day of that Season
-reports the gap; `--overlap-gap queue --season <Season ID>` queues up to
-`--max-jobs` of them, each recalculating the player's oldest such day and
-every later saved day of the Season, at backfill priority. Run it again until
-`left_to_queue` is 0. A day still reporting the gap after its recalculation
-has a real one. Each day is queued once within about 48 hours of its request
-finishing, while finished-job cleanup keeps the request; a later run queues
-those days again, which only recalculates them at backfill priority. A
-recalculation that failed is kept and not queued again: `failed` counts them
-and `failed_blockers` lists at most `--max-jobs` (job, player, day, failure
-reason) for investigating.
-
-**Days ending in a trophy mismatch:** a day with no defenses can now take the
-automatic loss its next Reset reading, or a later one, shows, and a later
-reading, or the ended day's last battles, can settle a Reset reading taken
-before the game finished crediting the day. Days calculated before that report
-`trophy_equation_mismatch`, or show a day with no defenses uncharged; on
-2026-10-08 the October 2026 Season had 123 mismatched ended days on 5 and 6
-October, about 27 of them fixable by a later reading or the zero-defense charge
-and 23 by the last battles.
-`--mismatch preview|queue --season <Season ID>` works as `--overlap-gap` does
-for both kinds of day, at backfill priority; run it outside 04:00–07:00 UTC. A
-day still reporting the mismatch afterwards has a real one.
+`preview` writes nothing: each ended day's latest saved results by state and
+by reason (`days`), each Reset's published Daily board with its rule and how
+many entries are proven (`boards`), the boards the board rules would now
+change, and how many players have saved days (`players`). The first `queue`
+saves those counts as the repair's receipt, then each run does one step, at
+most `--max-jobs` (default 100), at backfill priority, and says which in
+`phase`: `inputs`, repairs of the evidence days are built from (battles
+moved day and Reset pairs left partial; current Season only); `days`, one job
+per player recalculating every saved day of the Season, oldest first, so each
+day starts where the day before now ends; once every such job has finished,
+`boards`, one rebuild of each Reset board whose entries the rules now change,
+until every board correction of the Season has finished
+(`boards_rebuilding`); then `summaries`, storing each saved Season summary
+again from its days, since a summary's final rank reads the Season's last
+board. Run `queue` again until `phase` is `done`; `left_to_queue` and
+`unfinished` count the day jobs still to queue and still to run. A day that
+comes out the same saves nothing new. A recalculation that failed is kept and
+not queued again: `failed` counts them and `failed_blockers` lists at most
+`--max-jobs` (job, player, failure reason). `receipt` writes nothing and
+shows the saved before beside the same counts now, and checks that every
+published view agrees with the days: `boards_disagreeing` lists boards whose
+entries the rules would still change, and `summaries_disagreeing` counts
+saved summaries that differ from their days, as the Season's closure checks
+them, which reads every summary of a finished Season. Rebuilt boards record
+the board rule that built them (`rule`). A board rebuild is finished once its
+Reset's newest generation shows `snapshot_state` and `army_state` as
+`published` (see [Reset publication missing](#reset-publication-missing)).
+The receipt is kept per Season and rule revision, so the same revision is
+repaired once; changing an owner switch in `python/src/clashlens/domain.py`
+changes the revision too.
 
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)
@@ -669,13 +646,9 @@ frozen before those rules still rank such players and miss those battles: on
 2026-10-07 the October 2026 Season's Day 1 board ranked 24 missing players
 and Day 2 34, with two of them first and second on Day 2 above ZOOS Yatta,
 and Day 2 missed late battles for 290 players. On 2026-10-08 the Day 3 board
-showed 3 players as proven but 29, 40 and 70 trophies low. The Complete-day
-rule must not be deployed, or used to repair boards, on its own: it ships
-together with the next change, which adds one shared proof per Reset, used by
-both days it bounds, the Daily board and the Season summary, and a versioned
-Season repair with before/after receipts. Until then the rule can mark a board
-entry proven while the Season summary still shows the same day's ending as
-provisional. Once both are deployed, run:
+showed 3 players as proven but 29, 40 and 70 trophies low. The Season repair
+rebuilds them with the rest of the Season (see **Season repair after a rule
+change** above); to rebuild only boards, run:
 
 ```sh
 podman exec clashlens-python-worker \

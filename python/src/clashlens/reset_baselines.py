@@ -1058,6 +1058,9 @@ def _load_reset_endpoint_evidence(
                 first_event = ranked_day_inputs.load_first_reports(
                     connection, player_id, window_start, window_start, window_end
                 )[1]
+                # A reading after the first battle of the new day is
+                # rejected; the owner's rule for it (domain.LATE_RESET_READING)
+                # applies here and in _load_reset_baseline.
                 if first_event is not None and row[4] >= first_event:
                     reasons.append("profile_after_first_event")
                     hard_failure = True

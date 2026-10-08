@@ -204,6 +204,26 @@ def domain_database(
             admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
 
 
+def repair_season(
+    connection_info: str, season: str, *, max_jobs: int = 100
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The Season repair's preview, then its queue run past the evidence
+    repairs it does first: (preview, the first report queueing days)."""
+    from clashlens.db import Database
+    from clashlens.domain_repair import season_repair
+
+    database = Database(connection_info)
+    try:
+        preview = season_repair(database, season, "preview", max_jobs=max_jobs)
+        for _ in range(10):
+            queued = season_repair(database, season, "queue", max_jobs=max_jobs)
+            if queued.get("phase") != "inputs":
+                return preview, queued
+        raise AssertionError("the evidence repairs did not finish")
+    finally:
+        database.close()
+
+
 @contextmanager
 def _connection_scope(connection_info: str, existing: Any | None):
     if existing is not None:

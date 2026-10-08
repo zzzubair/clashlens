@@ -804,8 +804,8 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
                 ).fetchall()
             assert len(snapshots) == 2
             assert [text(row[5]) for row in snapshots] == [
-                "tracked-player-order-v1",
-                "tracked-player-order-v1",
+                "tracked-player-order-v2",
+                "tracked-player-order-v2",
             ]
             for row in snapshots:
                 assert text(row[6]) == "profile-freshness-10m-v1"

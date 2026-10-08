@@ -10,7 +10,7 @@ from .api_db import (
     _season_reset_waiting_sql,
     _text,
 )
-from .domain import ranked_day_for, season_opening_reset
+from .domain import TIE_ORDER, ranked_day_for, season_opening_reset
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
@@ -19,7 +19,8 @@ _FOCUS_NEIGHBORS = 5
 
 # Shared membership and confirmation rule for the page and operator measurements.
 # A profile still naming an earlier Season than the calendar shows trophies from
-# before that player's Season reset, so it waits off the board until it updates.
+# before that player's Season reset, so it waits off the board until it updates;
+# so does one not yet signed up, naming Season 0 (domain.UNSIGNED_UP_PLAYERS).
 # On a Season's first Legend day, trophies other than 5,000 that still equal
 # the player's frozen pre-Reset final trophies, or that the day's recorded
 # battles cannot explain, wait the same way.
@@ -60,7 +61,15 @@ _LIVE_PLAYERS_SQL = f"""
 SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
 """
 
-_LIVE_ORDER_SQL = "trophies DESC, md5(normalized_tag), normalized_tag"
+# Equal trophies by the owner's tie rule (domain.TIE_ORDER): MD5 of the tag,
+# or SHA-256 of it, the Daily board's order (analytics.deterministic_tag_hash).
+TAG_HASH_ORDER_SQL = "encode(sha256(convert_to(normalized_tag, 'UTF8')), 'hex') COLLATE \"C\""
+_LIVE_ORDER_VERSION, _LIVE_TIE_SQL = (
+    ("tracked-trophies-md5-v1", "md5(normalized_tag)")
+    if TIE_ORDER == "per_board"
+    else ("tracked-trophies-sha256-v1", TAG_HASH_ORDER_SQL)
+)
+_LIVE_ORDER_SQL = f"trophies DESC, {_LIVE_TIE_SQL}, normalized_tag"
 _LIVE_RANKED_SQL = f"""
 SELECT *, row_number() OVER (ORDER BY {_LIVE_ORDER_SQL}) AS position
 FROM ({_LIVE_PLAYERS_SQL}) AS live
@@ -271,7 +280,7 @@ def get_live_leaderboard(
         page = offset // limit + 1
         return {
             "kind": "live",
-            "ordering_rule_version": "tracked-trophies-md5-v1",
+            "ordering_rule_version": _LIVE_ORDER_VERSION,
             "generated_at": now.astimezone(UTC).isoformat(),
             "tracked_population": tracked_population,
             "total_entries": total_entries,
@@ -302,7 +311,7 @@ def get_live_leaderboard(
                 "freshness": "stale" if stale_count else "fresh",
                 "confidence": "partial",
                 "coverage": "partial",
-                "version": "tracked-trophies-md5-v1",
+                "version": _LIVE_ORDER_VERSION,
             },
             "source_observations": {
                 "oldest_observed_at": (

@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import pytest
 import test_reset_settlement_proof_postgres as proof
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, repair_season, store_observation, text
 from test_reconciliation_postgres import (
     BATTLE_FIXTURE,
     DAY_END,
@@ -15,7 +15,7 @@ from test_reconciliation_postgres import (
     _seed_reset_collection_identity,
 )
 
-from clashlens import battle, first_battle_log, ranked_day_inputs, reset_baselines
+from clashlens import battle, ranked_day_inputs, reset_baselines
 from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
 
@@ -187,20 +187,19 @@ def test_no_opponent_rows_of_the_day_count_once_as_used_slots(
             assert next_day is not None and next_day.zero_result_defense_slots == 1
 
             season = ranked_day_for(DAY_START).official_season_id
-            requeue = first_battle_log.requeue_zero_result_slots
-            preview = requeue(database, season, queue=False, max_jobs=10)
-            queued = requeue(database, season, queue=True, max_jobs=10)
-            again = requeue(database, season, queue=True, max_jobs=10)
+            preview, queued = repair_season(connection_info, season, max_jobs=10)
+            again = repair_season(connection_info, season, max_jobs=10)[1]
             with database.pool.connection() as connection:
                 job = connection.execute(
                     "SELECT input_json, priority FROM python_processing_jobs_worker"
-                    " WHERE input_json ->> 'trigger' = 'zero_result_slots'"
+                    " WHERE input_json ->> 'trigger' = 'season_repair'"
                 ).fetchall()
-            assert (preview["players"], preview["queued"]) == (1, 0)
+            assert (preview["players"], preview["left_to_queue"]) == (1, 1)
             assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
-            assert (again["already_queued"], again["queued"]) == (1, 0)
+            assert (again["queued"], again["unfinished"]) == (0, 1)
             assert len(job) == 1 and job[0][1] == PYTHON_BACKFILL_PRIORITY
-            # Yesterday's row makes the saved day before the oldest to recalculate.
+            # The player's first saved day of the Season, yesterday's, and
+            # every later one are recalculated.
             assert job[0][0]["ranked_day_start"] == "2026-08-03T05:00:00Z"
             assert job[0][0]["recalculate_season"] == season
         finally:

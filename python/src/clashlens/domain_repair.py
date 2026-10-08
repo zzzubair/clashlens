@@ -1,6 +1,33 @@
-"""One saved repair campaign for a Season's past results.
+"""Repairs of a Season's past results.
 
-Four fixes change results already published for a Season: the 2-star/55%
+The Season repair (``season_repair``) brings every saved day and Daily board
+of a Season to the rules the running code calculates them by, named by
+``rule_revision``. Raise ``DAY_RULES_REVISION`` in any release that changes
+how a saved day or board comes out, then run it once:
+
+- ``preview`` writes nothing: the Season's saved days by state and reason,
+  its published boards, and how many players are left to recalculate.
+- ``queue`` saves that as the repair's receipt the first time, then repairs
+  in order, at most ``max_jobs`` per run, at backfill priority: first the
+  saved evidence days are built from (``battle_day_repair.enqueue_rebuilds``
+  and ``reset_baselines.repair_current_season_reset_baselines``, current
+  Season only); then each player's saved days of the Season, oldest first
+  in one job, each later day starting where the day before now ends; then,
+  once every such job has finished, every Reset board of the Season whose
+  entries the rules now change (``boundary.queue_board_rebuilds``); then,
+  once every board correction of the Season has finished, every saved
+  Season summary stored again from its days. Run it again until it reports
+  ``phase`` ``done``.
+- ``receipt`` writes nothing: the receipt's before beside the same counts
+  now, the jobs that failed, and whether every published view agrees with
+  the days: boards the rules would still change, and saved summaries that
+  differ from a fresh projection.
+
+Recalculating a day that comes out the same saves nothing new. Changing an
+owner switch in ``domain`` changes the revision too.
+
+A dormant campaign design follows. Four fixes change results already
+published for a Season: the 2-star/55%
 payout (17, not 18, under trophy rule v2), the five-minute battle day move,
 unit catalogue v2 decodes and accepted Reset settlements. Each fix repairing
 alone would republish every Reset several times from half-fixed inputs, so a
@@ -45,9 +72,10 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from . import domain
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
-from .db import Database, _text_value
+from .db import PYTHON_BACKFILL_PRIORITY, Database, _text_value
 from .domain import (
     BATTLE_DAY_GRACE,
     HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
@@ -58,6 +86,340 @@ from .domain import (
 )
 from .reconciliation import RECONCILIATION_RULE_VERSION
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
+
+# The rules saved days and Daily boards come out by; see season_repair.
+DAY_RULES_REVISION = "2026-10-08-shared-reset-proof"
+REPAIR_ACTIONS = ("preview", "queue", "receipt")
+_UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")
+
+
+def rule_revision() -> str:
+    """``DAY_RULES_REVISION`` and every owner switch it runs with."""
+    switches = json.dumps([
+        domain.LATE_RESET_READING, domain.PREVIOUS_DAY_DEFENSES,
+        domain.DAILY_BOARD_VALUE, domain.TIE_ORDER, domain.UNSIGNED_UP_PLAYERS,
+        domain.MAX_INFERRED_SHIELD_DAYS,
+    ])
+    return f"{DAY_RULES_REVISION}:{hashlib.sha256(switches.encode()).hexdigest()[:8]}"
+
+
+def season_repair(
+    database: Database, season_id: str, action: str, *, max_jobs: int
+) -> dict[str, Any]:
+    """Run one Season repair action; see the module notes."""
+    from . import boundary
+
+    start = datetime.fromtimestamp(int(season_id), UTC)
+    if not domain.is_season_boundary(start):
+        raise ValueError(f"{season_id} is not a Season's start")
+    revision = rule_revision()
+    with database.pool.connection() as connection, connection.transaction():
+        if connection.execute(
+            "SELECT 1 FROM season_detail_retirements WHERE official_season_id = %s",
+            (season_id,),
+        ).fetchone():
+            # Its days can no longer be recalculated.
+            return {"season": season_id, "refused": f"season {season_id} is finalized"}
+        receipt = connection.execute(
+            """
+            SELECT before_days, before_boards, queued_through_player_id,
+                   boards_queued_at, summaries_through_player_id
+            FROM season_repairs
+            WHERE official_season_id = %s AND rule_revision = %s
+            """,
+            (season_id, revision),
+        ).fetchone()
+        players = [
+            int(row[0]) for row in connection.execute(
+                """
+                SELECT DISTINCT player_id FROM ranked_day_versions
+                WHERE ranked_day_start >= %s AND ranked_day_start < %s
+                ORDER BY player_id
+                """,
+                (start, start + SEASON_DURATION),
+            ).fetchall()
+        ]
+        through = int(receipt[2]) if receipt is not None else 0
+        report = {
+            "season": season_id, "rule_revision": revision,
+            "players": len(players),
+            "left_to_queue": sum(player > through for player in players),
+            **_repair_jobs(connection, revision, [p for p in players if p <= through],
+                           max_jobs),
+        }
+        if action == "receipt":
+            if receipt is None:
+                return {**report, "refused": "no repair queued for this revision"}
+            return {
+                **report,
+                "boards_queued_at": receipt[3].isoformat() if receipt[3] else None,
+                "days": {"before": receipt[0], "now": _day_counts(connection, start)},
+                "boards": {"before": receipt[1], "now": _board_counts(connection, start)},
+                # Checks that every published view now agrees with the days.
+                "boards_disagreeing": [
+                    board for board in boundary.queue_board_rebuilds(
+                        database, season_id, queue=False
+                    )["boards"]
+                ],
+                "summaries_disagreeing": _stale_summaries(connection, season_id),
+            }
+        if action == "preview":
+            return {
+                **report,
+                "days": _day_counts(connection, start),
+                "boards": _board_counts(connection, start),
+                "boards_to_rebuild": boundary.queue_board_rebuilds(
+                    database, season_id, queue=False
+                )["boards"],
+            }
+        if receipt is None:
+            connection.execute(
+                """
+                INSERT INTO season_repairs (
+                    official_season_id, rule_revision, before_days, before_boards
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                (season_id, revision, Jsonb(_day_counts(connection, start)),
+                 Jsonb(_board_counts(connection, start))),
+            )
+        current = connection.execute(
+            """
+            SELECT current_league_season_id = %s FROM legend_season_anchors
+            WHERE state = 'confirmed' AND anchor_rule_version = %s
+            ORDER BY current_start DESC LIMIT 1
+            """,
+            (season_id, SEASON_ANCHOR_RULE_VERSION),
+        ).fetchone()
+    inputs = _repair_inputs(database, max_jobs) if current and current[0] else 0
+    if inputs:
+        return {**report, "phase": "inputs", "queued": inputs}
+    if report["left_to_queue"]:
+        batch = [player for player in players if player > through][:max_jobs]
+        _queue_days(database, season_id, revision, start, batch)
+        return {**report, "phase": "days", "queued": len(batch),
+                "left_to_queue": report["left_to_queue"] - len(batch)}
+    if report["unfinished"]:
+        return {**report, "phase": "days", "queued": 0}
+    boards = boundary.queue_board_rebuilds(database, season_id, queue=True)["boards"]
+    with database.pool.connection() as connection, connection.transaction():
+        connection.execute(
+            """
+            UPDATE season_repairs SET boards_queued_at = clock_timestamp()
+            WHERE official_season_id = %s AND rule_revision = %s
+              AND boards_queued_at IS NULL
+            """,
+            (season_id, revision),
+        )
+        # A summary's final rank reads the Season's last board, so summaries
+        # wait for every board correction to finish.
+        rebuilding = connection.execute(
+            """
+            SELECT count(*) FROM boundary_publication_corrections
+            WHERE boundary_at > %s AND boundary_at <= %s
+              AND state NOT IN ('finalized', 'terminal')
+            """,
+            (start, start + SEASON_DURATION),
+        ).fetchone()[0]
+    if boards or rebuilding:
+        return {**report, "phase": "boards", "boards": boards,
+                "boards_rebuilding": int(rebuilding)}
+    summaries = _refresh_summaries(
+        database, season_id, revision,
+        int(receipt[4]) if receipt is not None else 0, max_jobs,
+    )
+    return {**report, "phase": "summaries" if summaries else "done",
+            "summaries_refreshed": summaries}
+
+
+def _refresh_summaries(
+    database: Database, season_id: str, revision: str, through: int, limit: int
+) -> int:
+    """Store again up to ``limit`` of the Season's saved summaries, each from
+    its days as they are now, in its own transaction; how many it stored. A
+    Season still in progress has none."""
+    from .season_summaries import materialize_player_season
+
+    with database.pool.connection() as connection:
+        players = [
+            int(row[0]) for row in connection.execute(
+                """
+                SELECT player_id FROM player_season_summaries
+                WHERE official_season_id = %s AND player_id > %s
+                ORDER BY player_id LIMIT %s
+                """,
+                (season_id, through, limit),
+            ).fetchall()
+        ]
+        for player in players:
+            with connection.transaction():
+                materialize_player_season(connection, player, season_id)
+        if players:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    UPDATE season_repairs SET summaries_through_player_id = %s
+                    WHERE official_season_id = %s AND rule_revision = %s
+                    """,
+                    (players[-1], season_id, revision),
+                )
+    return len(players)
+
+
+def _stale_summaries(connection: Any, season_id: str) -> dict[str, Any]:
+    """The Season's saved summaries that differ from their days now, as the
+    Season's closure checks them."""
+    from .season_summaries import _digest, _project
+
+    stale = []
+    rows = connection.execute(
+        """
+        SELECT player_id, content_digest FROM player_season_summaries
+        WHERE official_season_id = %s ORDER BY player_id
+        """,
+        (season_id,),
+    ).fetchall()
+    for player_id, digest in rows:
+        projected = _project(int(player_id), season_id, connection)
+        if projected is None or _digest(projected) != _text_value(digest):
+            stale.append(int(player_id))
+    return {"stored": len(rows), "stale": len(stale), "stale_players": stale[:50]}
+
+
+def _repair_jobs(
+    connection: Any, revision: str, players: list[int], limit: int
+) -> dict[str, Any]:
+    """How many of the players' day jobs are unfinished, and the failed ones."""
+    keys = {_repair_key(revision, player): player for player in players}
+    rows = connection.execute(
+        """
+        SELECT deduplication_key, id, state, failure_category
+        FROM python_processing_jobs_worker
+        WHERE deduplication_key = ANY(%s)
+        ORDER BY id
+        """,
+        (list(keys),),
+    ).fetchall()
+    failed = [row for row in rows if _text_value(row[2]) == "failed"]
+    return {
+        "unfinished": sum(_text_value(row[2]) in _UNFINISHED_JOB_STATES for row in rows),
+        "failed": len(failed),
+        "failed_blockers": [
+            {"job_id": int(row[1]), "player_id": keys[_text_value(row[0])],
+             "failure_category": _text_value(row[3]) if row[3] else None}
+            for row in failed[:limit]
+        ],
+    }
+
+
+def _repair_inputs(database: Database, max_jobs: int) -> int:
+    """Queue repairs of the current Season's saved evidence first: battles
+    moved day, then Reset pairs left partial. How many it queued."""
+    from . import battle_day_repair, reset_baselines
+
+    moved = battle_day_repair.enqueue_rebuilds(database, max_jobs=max_jobs)
+    if moved["job_ids"]:
+        return len(moved["job_ids"])
+    pairs = reset_baselines.repair_current_season_reset_baselines(
+        database, max_works=max_jobs
+    )
+    return max(len(pairs["job_ids"]), pairs["evaluated_count"])
+
+
+def _queue_days(
+    database: Database, season_id: str, revision: str, start: datetime,
+    players: list[int],
+) -> None:
+    """Queue one job per player recalculating their saved days of the Season
+    from the first, oldest first, and note the last player queued."""
+    from . import first_battle_log
+
+    with database.pool.connection() as connection, connection.transaction():
+        for player, first_day in connection.execute(
+            """
+            SELECT player_id, min(ranked_day_start) FROM ranked_day_versions
+            WHERE player_id = ANY(%s)
+              AND ranked_day_start >= %s AND ranked_day_start < %s
+            GROUP BY player_id ORDER BY player_id
+            """,
+            (players, start, start + SEASON_DURATION),
+        ).fetchall():
+            first_battle_log._queue(
+                connection, int(player), first_day, None,
+                key=_repair_key(revision, int(player)), trigger="season_repair",
+                priority=PYTHON_BACKFILL_PRIORITY,
+            )
+        connection.execute(
+            """
+            UPDATE season_repairs SET queued_through_player_id = %s
+            WHERE official_season_id = %s AND rule_revision = %s
+            """,
+            (players[-1], season_id, revision),
+        )
+
+
+def _repair_key(revision: str, player_id: int) -> str:
+    return f"reconcile:season-repair:{revision}:{player_id}"
+
+
+def _day_counts(connection: Any, start: datetime) -> dict[str, Any]:
+    """Each ended day of the Season: its players' latest saved results by
+    state, and by each reason they give."""
+    days: dict[str, Any] = {}
+    for day, state, reasons, count in connection.execute(
+        """
+        WITH latest AS (
+            SELECT DISTINCT ON (player_id, ranked_day_start)
+                   ranked_day_start, state, failure_reasons
+            FROM ranked_day_versions
+            WHERE ranked_day_start >= %s AND ranked_day_start < %s
+              AND ranked_day_start + interval '1 day' <= clock_timestamp()
+            ORDER BY player_id, ranked_day_start, version DESC, id DESC
+        )
+        SELECT ranked_day_start, state, failure_reasons, count(*)
+        FROM latest GROUP BY 1, 2, 3
+        """,
+        (start, start + SEASON_DURATION),
+    ).fetchall():
+        entry = days.setdefault(
+            day.astimezone(UTC).isoformat(), {"states": {}, "reasons": {}}
+        )
+        entry["states"][_text_value(state)] = entry["states"].get(_text_value(state), 0) + count
+        for reason in reasons:
+            entry["reasons"][reason] = entry["reasons"].get(reason, 0) + count
+    return dict(sorted(days.items()))
+
+
+def _board_counts(connection: Any, start: datetime) -> dict[str, Any]:
+    """Each Reset of the Season: its published Daily board's version and how
+    many of its entries are proven or uncertain, with the board rule that
+    built it."""
+    return {
+        boundary_at.astimezone(UTC).isoformat(): {
+            "snapshot_id": int(snapshot_id), "version": int(version),
+            "rule": _text_value(rule), "confirmed": int(confirmed),
+            "uncertain": int(uncertain),
+        }
+        for boundary_at, snapshot_id, version, rule, confirmed, uncertain
+        in connection.execute(
+            """
+            SELECT DISTINCT ON (snapshot.boundary_at)
+                   snapshot.boundary_at, snapshot.id, snapshot.version,
+                   snapshot.ordering_rule_version,
+                   (SELECT count(*) FILTER (WHERE entry.confidence = 'confirmed')
+                    FROM leaderboard_snapshot_entries AS entry
+                    WHERE entry.snapshot_id = snapshot.id),
+                   (SELECT count(*) FILTER (WHERE entry.confidence <> 'confirmed')
+                    FROM leaderboard_snapshot_entries AS entry
+                    WHERE entry.snapshot_id = snapshot.id)
+            FROM leaderboard_snapshots AS snapshot
+            WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+              AND snapshot.boundary_at > %s AND snapshot.boundary_at <= %s
+            ORDER BY snapshot.boundary_at, snapshot.version DESC, snapshot.id DESC
+            """,
+            (start, start + SEASON_DURATION),
+        ).fetchall()
+    }
+
 
 ACTIONS = ("preview", "register", "activate")
 # Each later repair change adds its stage; activation refuses until all exist.

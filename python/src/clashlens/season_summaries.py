@@ -12,10 +12,13 @@ battle IDs or battle evidence are stored.
 Each day also keeps ``eod_change``, how far the EOD moved from the
 previous day's EOD (day 1 starts from the Season's 5,000), separately from
 the battle-result ``net_change``. A missing or non-adjacent previous day
-leaves it unknown, never zero. ``eod_state`` says whether the EOD is
-accepted (a Complete day whose Reset reading has a settled boundary) or
-still provisional, and ``eod_change_state`` whether both ends of the
-movement are accepted.
+leaves it unknown, never zero. ``eod_state`` says whether a Complete day's
+EOD is accepted or still provisional, and ``eod_change_state`` whether both
+ends of the movement are accepted. An EOD is accepted only when something
+besides its own calculation proves it: the game's official Season-end
+total, or a settled Reset check landing on the next day's start. A
+Season-opening Reset's check proves only the new Season's 5,000, never the
+old Season's last EOD.
 """
 
 from __future__ import annotations
@@ -223,16 +226,15 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
                 "defense_loss": _int_or_none(version_row[6]),
                 "next_start_trophies": _int_or_none(version_row[7]),
             }
-    # A Reset's trophies are accepted only once its boundary is settled.
-    settled = {
-        row[0]: _int_or_none(row[1])
-        for row in connection.execute(
-            """
-            SELECT boundary_at, selected_trophies FROM reset_boundary_settlements
-            WHERE player_id = %s AND boundary_at = ANY(%s) AND state = 'settled'
-            """,
-            (player_id, [day["ranked_day_end"] for day in days if day["ranked_day_end"] is not None]),
-        ).fetchall()
+    # The Reset proof the Daily board reads too; only a verified end is
+    # accepted (see reset_settlement.DayEnd).
+    from .reset_settlement import VERIFIED, day_ends
+
+    proofs = {
+        version_id: end.proof
+        for version_id, end in day_ends(
+            connection, sorted(ranked_by_id), later_readings=False
+        ).items()
     }
 
     entries: list[dict[str, Any]] = []
@@ -311,8 +313,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
         eod_accepted = (
             end_trophies is not None
             and _text(day["state"]) == "Complete"
-            and day["ranked_day_end"] in settled
-            and settled[day["ranked_day_end"]] == ranked["next_start_trophies"]  # type: ignore[index]
+            and proofs.get(int(day["ranked_day_version_id"])) == VERIFIED
         )
         entries.append(
             {

@@ -792,3 +792,96 @@ def test_settlement_lookup_skips_its_reads_only_while_none_are_saved(
                 )
             assert lookup(named_log, every=True) == ours
             assert lookup(named_profile) == ours
+
+
+def test_a_later_reading_against_a_complete_day_keeps_its_board_entry_uncertain(
+    database_url: str,
+) -> None:
+    """A Complete day can balance on two Reset readings that both miss the
+    same delayed credit: a start reading of 5,200 that misses the day
+    before's last attack, a day netting nothing, and an end reading of
+    5,200 that misses its 04:50 attack. A profile read at 05:10, after the
+    end reading and before any battle of the next day, showing 5,240
+    disproves it, so the board shows the last reading plus later battles,
+    uncertain. One showing the day's end, or none, leaves it proven."""
+    from test_boundary_manifest_postgres import (
+        _ARCHIVE,
+        DAY_2_RESET,
+        _build_board,
+        _october,
+        _seed_board,
+        _seed_days,
+    )
+
+    from clashlens.db import Database
+    from clashlens.domain import RANKED_DAY_DURATION
+
+    readings = [
+        ("#2QCYU8C2G", 5240, _october(7, 4, 55)),  # later reading disagrees
+        ("#GURYYP99", 5240, _october(7, 4, 55)),  # later reading agrees
+        ("#8R8URPPLR", 5240, _october(7, 4, 55)),  # no later reading
+    ]
+    battles = [
+        ("defense", 40, _october(7, 3), True),
+        ("offense", 40, _october(7, 4, 50), True),
+    ]
+    complete = {
+        "state": "Complete", "failure_reasons": [], "final": 5200, "start": 5200,
+        "end": 5200, "end_read_at": _october(7, 5, 2),
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(
+            connection_info, generation_id, {player: (True, battles) for player in (1, 2, 3)},
+            {player: complete for player in (1, 2, 3)},
+        )
+        season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+        later_at = _october(7, 5, 10)
+        for player, trophies in ((1, 5240), (2, 5200)):
+            tag = readings[player - 1][0]
+            observation_id = store_observation(
+                connection_info, _ARCHIVE, occurrence_key=f"later-{player}",
+                endpoint="profile", body=f"later {player}".encode(),
+                observed_at=later_at, normalized_tag=tag,
+            )[0]
+            with psycopg.connect(connection_info) as connection:
+                connection.execute("SET LOCAL session_replication_role = replica")
+                connection.execute(
+                    """
+                    WITH later AS (
+                        INSERT INTO player_profile_versions (
+                            player_id, observation_id, normalized_tag,
+                            endpoint_version, schema_version, parser_version,
+                            observed_at, source_http_status, name, trophies,
+                            league_tier_id, league_tier_name, eligibility_state,
+                            profile_json, source_contract_state,
+                            current_league_season_id
+                        ) VALUES (%(player)s, %(observation)s, %(tag)s, 'v1', 'v1',
+                                  'parser', %(at)s, 200, %(tag)s, %(trophies)s,
+                                  105000034, 'Legend League', 'eligible', '{}',
+                                  'accepted', %(season)s)
+                        RETURNING id
+                    )
+                    INSERT INTO player_profile_effects (
+                        profile_version_id, observation_id, effect_kind,
+                        observed_at, source_http_status, endpoint_version,
+                        schema_version, parser_version
+                    )
+                    SELECT id, %(observation)s, 'current_profile', %(at)s, 200,
+                           'v1', 'v1', 'parser'
+                    FROM later
+                    """,
+                    {"player": player, "observation": observation_id, "tag": tag,
+                     "at": later_at, "trophies": trophies, "season": season},
+                )
+        database = Database(connection_info)
+        try:
+            board = _build_board(connection_info, database, generation_id)
+        finally:
+            database.close()
+
+    assert sorted(board) == [
+        ("#2QCYU8C2G", 5240, "uncertain"),
+        ("#8R8URPPLR", 5200, "confirmed"),
+        ("#GURYYP99", 5200, "confirmed"),
+    ]

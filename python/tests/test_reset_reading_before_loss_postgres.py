@@ -14,7 +14,7 @@ import json
 from datetime import timedelta
 
 import psycopg
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, repair_season, store_observation
 from test_first_battle_log_postgres import LOSS, WIN, _log, _queued_priorities
 from test_reconciliation_postgres import DAY_START, _profile
 from test_reset_settlement_state_postgres import (
@@ -24,8 +24,8 @@ from test_reset_settlement_state_postgres import (
     _reset_work,
 )
 
-from clashlens import first_battle_log, ranked_day_inputs, reconciliation_db
-from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
+from clashlens import ranked_day_inputs, reconciliation_db
+from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
 
 # Three ordinary days: Monday 3 August to Thursday 6 August 2026.
@@ -307,7 +307,7 @@ def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
     assert day_c_row[7]["start_reading_correction"] == WIN
 
 
-def test_mismatch_batch_settles_days_saved_before_the_later_reading_rule(
+def test_season_repair_settles_days_saved_before_the_later_reading_rule(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -315,23 +315,12 @@ def test_mismatch_batch_settles_days_saved_before_the_later_reading_rule(
             connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
         )
         season = ranked_day_for(DAY_B).official_season_id
-        database = Database(connection_info)
-        try:
-            preview = first_battle_log.requeue_overlap_gap(
-                database, season, queue=False, max_jobs=100,
-                condition=ranked_day_inputs.LATER_READING_DAY_SQL, trigger="mismatch",
-            )
-            queued = first_battle_log.requeue_overlap_gap(
-                database, season, queue=True, max_jobs=100,
-                condition=ranked_day_inputs.LATER_READING_DAY_SQL, trigger="mismatch",
-            )
-        finally:
-            database.close()
-        priorities = _queued_priorities(connection_info, "reconcile:mismatch:")
+        preview, queued = repair_season(connection_info, season)
+        priorities = _queued_priorities(connection_info, "reconcile:season-repair:")
         _process(connection_info, archive_server, [])
         day_b_row, day_c_row = _latest_days(connection_info)
 
-    assert (preview["players"], preview["queued"], preview["left_to_queue"]) == (1, 0, 1)
+    assert (preview["players"], preview["left_to_queue"]) == (1, 1)
     assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)

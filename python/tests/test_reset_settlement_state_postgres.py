@@ -703,6 +703,10 @@ def _store_dropped_login(connection_info, archive_server, key, at, final) -> int
 @pytest.mark.parametrize("reset_reading,login,official_gaps,state", [
     ("dropped", None, (0,), "Complete"),
     ("dropped", None, (-30,), "Inconsistent"),
+    # Kept in Legend I: the Reset reads 5,000, which proves no end; the
+    # official total does, and one 30 off the calculation disproves it.
+    ("survivor", None, (0,), "Complete"),
+    ("survivor", None, (-30,), "Inconsistent"),
     # The Reset still reads Legend I and the old Season; Legend II comes
     # later, before or after the official total.
     ("old_season", "before_history", (0,), "Complete"),
@@ -717,7 +721,7 @@ def _store_dropped_login(connection_info, archive_server, key, at, final) -> int
     # the game applied what the official total counts, cannot overrule it.
     ("old_season", "later_reading", (-30,), "Inconsistent"),
 ])
-def test_player_dropped_at_the_season_end_ends_at_the_official_total(
+def test_last_season_day_ends_at_the_official_total(
     database_url: str, archive_server, reset_reading: str, login: str | None,
     official_gaps: tuple[int | None, ...], state: str,
 ) -> None:
@@ -743,6 +747,8 @@ def test_player_dropped_at_the_season_end_ends_at_the_official_total(
         jobs += _reset_work(
             connection_info, archive_server, boundary,
             profile=(_dropped_profile(final) if reset_reading == "dropped"
+                     else _season_profile(5000, NEW_SEASON)
+                     if reset_reading == "survivor"
                      else _season_profile(final, OLD_SEASON)),
             log=_log(*battles),
         )
@@ -780,15 +786,21 @@ def test_player_dropped_at_the_season_end_ends_at_the_official_total(
             )
             _process(connection_info, archive_server, [history_job])
         if login == "after_history":
+            # The official total alone ends the day; a later profile showing
+            # the drop changes nothing.
             assert {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[
-                last_day][1] == "Partial"
+                last_day][1] == state
             _process(connection_info, archive_server, [_store_dropped_login(
                 connection_info, archive_server, "dropped-login",
                 boundary + timedelta(hours=8), final,
             )])
         after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
 
-    assert before[:2] == (last_day, "Partial")
+    # Before the official total, only a survivor's day has an end: the
+    # Season reset's, which proves nothing.
+    assert before[:2] == (
+        last_day, "Complete" if reset_reading == "survivor" else "Partial"
+    )
     assert after[:2] == (last_day, state)
     if state == "Complete":
         assert after[2:5] == ("exact", 6000, final)

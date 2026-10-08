@@ -31,7 +31,6 @@ from . import (
     boundary,
     domain_repair,
     first_battle_log,
-    ranked_day_inputs,
     reset_baselines,
 )
 from .db import (
@@ -315,36 +314,21 @@ def add_republish_command(
         type=bounded_int("republication batch size", 1, 1000),
         default=100,
     )
+    # With --repair, run one action of the Season repair, recalculating every
+    # saved day and board of the Season under the current rules with a
+    # before and after receipt; see domain_repair.season_repair.
+    republish_current_season.add_argument(
+        "--repair", choices=domain_repair.REPAIR_ACTIONS
+    )
     # With --campaign, run one action of a Season's repair campaign instead
     # of queueing a batch; see domain_repair.
     republish_current_season.add_argument("--campaign", choices=domain_repair.ACTIONS)
     # With --first-logs, preview or queue the days that players first tracked
     # during the Season can now fill; see first_battle_log.backfill.
     republish_current_season.add_argument("--first-logs", choices=("preview", "queue"))
-    # With --day-1, preview or queue the recalculation of each player's Day 1
-    # with 1 to 7 defenses; see first_battle_log.requeue_day_1.
-    republish_current_season.add_argument("--day-1", choices=("preview", "queue"))
-    # With --zero-result-slots, preview or queue the recalculation of each
-    # player's days holding "no opponent, no battle" rows; see
-    # first_battle_log.requeue_zero_result_slots.
-    republish_current_season.add_argument(
-        "--zero-result-slots", choices=("preview", "queue")
-    )
-    # With --overlap-gap, preview or queue the recalculation of each player's
-    # oldest ended day reporting battle_log_overlap_gap; see
-    # first_battle_log.requeue_overlap_gap.
-    republish_current_season.add_argument("--overlap-gap", choices=("preview", "queue"))
-    # With --mismatch, the same for each player's oldest ended day reporting
-    # trophy_equation_mismatch, or with no used defense slots and no
-    # automatic loss in its Reset reading.
-    republish_current_season.add_argument("--mismatch", choices=("preview", "queue"))
-    # With --sign-up, preview or queue the recalculation of each player's
-    # day whose start Reset reading came before they signed up; see
-    # first_battle_log.requeue_sign_up_days.
-    republish_current_season.add_argument("--sign-up", choices=("preview", "queue"))
     # With --boards, preview or queue rebuilds of the Season's Reset boards
-    # still ranking a reading the board now leaves out or missing the battles
-    # after their readings; see boundary.queue_board_rebuilds.
+    # still ranking a reading the board now leaves out or whose entries the
+    # board rule now changes; see boundary.queue_board_rebuilds.
     republish_current_season.add_argument("--boards", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
@@ -357,57 +341,28 @@ def _season_id(value: str) -> str:
 
 def run_republish_command(database_url: str, arguments: argparse.Namespace) -> int:
     """Queue one batch, or run one campaign action, and print its report."""
+    repair = getattr(arguments, "repair", None)
     first_logs = getattr(arguments, "first_logs", None)
-    day_1 = getattr(arguments, "day_1", None)
-    zero_result_slots = getattr(arguments, "zero_result_slots", None)
-    overlap_gap = getattr(arguments, "overlap_gap", None)
-    mismatch = getattr(arguments, "mismatch", None)
-    sign_up = getattr(arguments, "sign_up", None)
     boards = getattr(arguments, "boards", None)
-    modes = [mode for mode in (arguments.campaign, first_logs, day_1, zero_result_slots,
-                               overlap_gap, mismatch, sign_up, boards)
+    modes = [mode for mode in (repair, arguments.campaign, first_logs, boards)
              if mode is not None]
     if len(modes) > 1:
         raise SystemExit(
-            "--campaign, --first-logs, --day-1, --zero-result-slots, --overlap-gap,"
-            " --mismatch, --sign-up and --boards are separate runs"
+            "--repair, --campaign, --first-logs and --boards are separate runs"
         )
     if (not modes) != (arguments.season is None):
         raise SystemExit(
-            "--campaign, --first-logs, --day-1, --zero-result-slots, --overlap-gap,"
-            " --mismatch, --sign-up or --boards and --season go together"
+            "--repair, --campaign, --first-logs or --boards and --season go together"
         )
     database = Database(database_url)
     try:
-        if boards is not None:
+        if repair is not None:
+            report = domain_repair.season_repair(
+                database, arguments.season, repair, max_jobs=arguments.max_jobs
+            )
+        elif boards is not None:
             report = boundary.queue_board_rebuilds(
                 database, arguments.season, queue=boards == "queue"
-            )
-        elif zero_result_slots is not None:
-            report = first_battle_log.requeue_zero_result_slots(
-                database, arguments.season, queue=zero_result_slots == "queue",
-                max_jobs=arguments.max_jobs,
-            )
-        elif overlap_gap is not None:
-            report = first_battle_log.requeue_overlap_gap(
-                database, arguments.season, queue=overlap_gap == "queue",
-                max_jobs=arguments.max_jobs,
-            )
-        elif mismatch is not None:
-            report = first_battle_log.requeue_overlap_gap(
-                database, arguments.season, queue=mismatch == "queue",
-                max_jobs=arguments.max_jobs,
-                condition=ranked_day_inputs.LATER_READING_DAY_SQL, trigger="mismatch",
-            )
-        elif sign_up is not None:
-            report = first_battle_log.requeue_sign_up_days(
-                database, arguments.season, queue=sign_up == "queue",
-                max_jobs=arguments.max_jobs,
-            )
-        elif day_1 is not None:
-            report = first_battle_log.requeue_day_1(
-                database, arguments.season, queue=day_1 == "queue",
-                max_jobs=arguments.max_jobs,
             )
         elif first_logs is not None:
             report = first_battle_log.backfill(

@@ -203,8 +203,10 @@ Each daily entry keeps `eod_change` beside the battle-result `net_change`:
 the day's EOD minus the previous day's EOD, with Day 1 measured from 5,000.
 A missing, non-adjacent or unknown previous EOD leaves it unknown. Its
 `eod_state` and `eod_change_state` are `accepted` only when the EOD comes from
-a Complete day whose Reset reading has a settled boundary (both ends, for the
-change), otherwise `provisional`. This is summary format
+a Complete day proven by more than its own calculation (both ends, for the
+change): a settled boundary at its Reset, never a Season-opening one, which
+sets every player to 5,000, or, for a Season's last day, the game's official
+Season-end total; otherwise `provisional`. This is summary format
 `player-season-summary-v2`. An older summary stays listed and readable with
 those three fields unknown; the command below rebuilds it from retained detail
 where the Season's detail has not been retired. Season closure already refuses

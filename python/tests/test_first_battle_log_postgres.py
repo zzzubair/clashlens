@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, repair_season, store_observation
 from test_reconciliation_postgres import BATTLE_FIXTURE, _profile
 from test_reset_settlement_state_postgres import (
     BOUNDARIES,
@@ -25,7 +25,7 @@ from test_reset_settlement_state_postgres import (
     _season_profile,
 )
 
-from clashlens import first_battle_log, reconciliation_db
+from clashlens import domain_repair, first_battle_log, reconciliation_db
 from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import allocate_trophies
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
@@ -367,34 +367,20 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
         unchanged = _day_1(connection_info)
         monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
 
-        database = Database(connection_info)
-        try:
-            preview = first_battle_log.requeue_day_1(
-                database, str(NEW_SEASON), queue=False, max_jobs=100
-            )
-            queued = first_battle_log.requeue_day_1(
-                database, str(NEW_SEASON), queue=True, max_jobs=100
-            )
-            again = first_battle_log.requeue_day_1(
-                database, str(NEW_SEASON), queue=True, max_jobs=100
-            )
-        finally:
-            database.close()
+        preview, queued = repair_season(connection_info, str(NEW_SEASON))
+        again = repair_season(connection_info, str(NEW_SEASON))[1]
         # The batch yields to any higher-priority work its thread can claim.
-        priorities = _queued_priorities(
-            connection_info, "reconcile:season-day-1-unsettled-loss:"
-        )
+        priorities = _queued_priorities(connection_info, "reconcile:season-repair:")
         _process(connection_info, archive_server, [])
         after = _day_1(connection_info)
 
     assert before[0] == "Partial" and before[3] is None
     assert (unchanged[0], unchanged[3]) == ("Partial", None)
     assert "automatic_defense_basis_unavailable" in before[5]
-    # Only the player with 1 to 7 defenses is listed.
-    assert preview == {"season": str(NEW_SEASON), "players": 1,
-                       "already_queued": 0, "queued": 0, "left_to_queue": 1}
-    assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
-    assert (again["queued"], again["already_queued"]) == (0, 1)
+    # Each player with a saved day of the Season is recalculated once.
+    assert (preview["players"], preview["left_to_queue"]) == (2, 2)
+    assert (queued["phase"], queued["queued"], queued["left_to_queue"]) == ("days", 2, 0)
+    assert (again["phase"], again["queued"], again["unfinished"]) == ("days", 0, 2)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "inferred", 5000, ending)
 
@@ -431,50 +417,43 @@ def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
         before = _day_1(connection_info)
         monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
 
+        preview, queued = repair_season(connection_info, str(NEW_SEASON))
+        with psycopg.connect(connection_info) as connection:
+            job_id, player_id = connection.execute(
+                "UPDATE python_processing_jobs SET status = 'failed',"
+                " failure_category = 'invalid_work_input'"
+                " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+                " RETURNING id, (input_json ->> 'player_id')::bigint"
+            ).fetchone()
         database = Database(connection_info)
         try:
-            preview = first_battle_log.requeue_overlap_gap(
-                database, str(NEW_SEASON), queue=False, max_jobs=100
+            failed = domain_repair.season_repair(
+                database, str(NEW_SEASON), "receipt", max_jobs=100
             )
-            queued = first_battle_log.requeue_overlap_gap(
-                database, str(NEW_SEASON), queue=True, max_jobs=100
-            )
-            again = first_battle_log.requeue_overlap_gap(
-                database, str(NEW_SEASON), queue=True, max_jobs=100
-            )
-            with psycopg.connect(connection_info) as connection:
-                job_id, player_id = connection.execute(
-                    "UPDATE python_processing_jobs SET status = 'failed',"
-                    " failure_category = 'invalid_work_input'"
-                    " WHERE deduplication_key LIKE 'reconcile:overlap-gap:%'"
-                    " RETURNING id, (input_json ->> 'player_id')::bigint"
-                ).fetchone()
-            failed = first_battle_log.requeue_overlap_gap(
-                database, str(NEW_SEASON), queue=True, max_jobs=100
-            )
-            with psycopg.connect(connection_info) as connection:
-                connection.execute(
-                    "UPDATE python_processing_jobs SET status = 'pending',"
-                    " failure_category = NULL WHERE id = %s", (job_id,),
-                )
         finally:
             database.close()
-        priorities = _queued_priorities(connection_info, "reconcile:overlap-gap:")
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE python_processing_jobs SET status = 'pending',"
+                " failure_category = NULL WHERE id = %s", (job_id,),
+            )
+        priorities = _queued_priorities(connection_info, "reconcile:season-repair:")
         _process(connection_info, archive_server, [])
         after = _day_1(connection_info)
 
     assert (before[0], before[3]) == ("Partial", None)
     assert "battle_log_overlap_gap" in before[5]
-    assert preview == {"season": str(NEW_SEASON), "players": 1,
-                       "already_queued": 0, "queued": 0, "left_to_queue": 1,
-                       "failed": 0, "failed_blockers": []}
+    assert (preview["players"], preview["left_to_queue"], preview["failed"]) == (1, 1, 0)
     assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
-    assert (again["queued"], again["already_queued"], again["failed"]) == (0, 1, 0)
-    assert (failed["queued"], failed["left_to_queue"], failed["failed"]) == (0, 0, 1)
+    # A failed recalculation is kept and listed, not queued again.
+    assert (failed["left_to_queue"], failed["unfinished"], failed["failed"]) == (0, 0, 1)
     assert failed["failed_blockers"] == [{
         "job_id": job_id, "player_id": player_id,
-        "ranked_day_start": f"{DAY_1:%Y-%m-%dT%H:%M:%SZ}",
         "failure_category": "invalid_work_input",
     }]
+    # The receipt keeps the day as it was before the repair.
+    day_1 = DAY_1.isoformat()
+    assert failed["days"]["before"][day_1]["states"] == {"Partial": 1}
+    assert "battle_log_overlap_gap" in failed["days"]["before"][day_1]["reasons"]
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "inferred", 5000, ending)

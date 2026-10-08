@@ -1249,7 +1249,7 @@ wait behind older live work. On 2026-10-07 the collector's outage delayed about 
 Reset readings by 35 minutes; while they also earned the waiting bonus, no live
 reading was processed until they were all done, 40 minutes later, and live
 pages fell up to 59 minutes behind. Operator batches
-(`republish-current-season --first-logs`, `--day-1`, `--overlap-gap`, `--mismatch` and `--sign-up`)
+(`republish-current-season --first-logs` and `--repair`)
 are queued at backfill priority, 25, which a worker thread only runs when no
 higher-priority work that thread can claim is due; a thread that does not process saved
 responses can run one while responses still wait. On a thread's Reset-first

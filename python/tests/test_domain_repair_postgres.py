@@ -611,3 +611,93 @@ def test_campaign_migration_is_repeatable_and_creates_no_campaign(database_url: 
                 " (SELECT count(*) FROM python_processing_jobs)"
             ).fetchone() == (0, 0, 0)
         assert domain_repair.preview(worker, SEASON, now=NOW)["items"] == {}
+
+
+def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
+    database_url: str,
+) -> None:
+    """The first queue saves the Season as it was; each player's days are
+    queued once; only once they have all run are the boards the rules now
+    change rebuilt; the receipt shows before beside now."""
+    from domain_test_support import repair_season
+    from test_boundary_manifest_postgres import (
+        DAY_2_RESET,
+        _build_board,
+        _october,
+        _seed_board,
+        _seed_days,
+    )
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(
+            connection_info, [("#2QCYU8C2G", 4703, _october(7, 4, 37))]
+        )
+        _seed_days(
+            connection_info, generation_id,
+            {1: (True, [("offense", 228, _october(7, 4, 30), True)])},
+            {1: {"state": "Complete", "failure_reasons": [], "final": 4931,
+                 "start": 4703, "end": 4931}},
+        )
+        database = Database(connection_info)
+        try:
+            assert _build_board(connection_info, database, generation_id) == [
+                ("#2QCYU8C2G", 4931, "confirmed")
+            ]
+            with database.pool.connection() as connection:
+                # As a board built and published before the board rule.
+                connection.execute("SET LOCAL session_replication_role = replica")
+                connection.execute("UPDATE leaderboard_snapshot_entries SET trophies = 4902")
+                connection.execute(
+                    "UPDATE leaderboard_snapshots"
+                    " SET state = 'published', published_at = clock_timestamp()"
+                    " WHERE snapshot_kind = 'frozen'"
+                )
+            preview, queued = repair_season(connection_info, NEXT_SEASON)
+            waiting = domain_repair.season_repair(
+                database, NEXT_SEASON, "queue", max_jobs=100
+            )
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete'"
+                    " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+                )
+            boards = domain_repair.season_repair(
+                database, NEXT_SEASON, "queue", max_jobs=100
+            )
+            receipt = domain_repair.season_repair(
+                database, NEXT_SEASON, "receipt", max_jobs=100
+            )
+            with database.pool.connection() as connection:
+                # As once the worker has rebuilt the board.
+                connection.execute("SET LOCAL session_replication_role = replica")
+                connection.execute(
+                    "UPDATE boundary_publication_corrections SET state = 'finalized'"
+                )
+                connection.execute("UPDATE leaderboard_snapshot_entries SET trophies = 4931")
+            done = domain_repair.season_repair(
+                database, NEXT_SEASON, "queue", max_jobs=100
+            )
+        finally:
+            database.close()
+
+    day, reset = (DAY_2_RESET - DAY).isoformat(), DAY_2_RESET.isoformat()
+    assert (preview["players"], preview["left_to_queue"]) == (1, 1)
+    assert [board["late_battles"] for board in preview["boards_to_rebuild"]] == [1]
+    assert (queued["phase"], queued["queued"], queued["left_to_queue"]) == ("days", 1, 0)
+    # Boards wait for every player's days.
+    assert (waiting["phase"], waiting["unfinished"]) == ("days", 1)
+    assert (boards["phase"], boards["boards_rebuilding"]) == ("boards", 1)
+    assert [board["correction"] for board in boards["boards"]] == ["queued"]
+    assert receipt["boards_queued_at"] is not None
+    assert receipt["days"]["before"] == {day: {"states": {"Complete": 1}, "reasons": {}}}
+    assert receipt["days"]["now"] == receipt["days"]["before"]
+    before = receipt["boards"]["before"][reset]
+    assert (before["confirmed"], before["rule"]) == (1, "tracked-player-order-v2")
+    # Until it is rebuilt, the board still disagrees with its days.
+    assert [board["late_battles"] for board in receipt["boards_disagreeing"]] == [1]
+    assert receipt["summaries_disagreeing"] == {
+        "stored": 0, "stale": 0, "stale_players": [],
+    }
+    assert receipt["rule_revision"] == domain_repair.rule_revision()
+    # A Season in progress has no summaries to store again.
+    assert (done["phase"], done["summaries_refreshed"]) == ("done", 0)

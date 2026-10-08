@@ -308,19 +308,17 @@ def recalculate_ranked_day(
         boundary_kind = "season"
     elif ranked_day.end.weekday() == 0:
         boundary_kind = "weekly"
-    # A player dropped from Legend I at a Season's end, ranked below 10,000,
-    # has no Legend I reading at that Reset, so their last day had no end:
-    # all 1,993 such players on 5 October 2026. The game's official Season-end
-    # total in their league history, which includes the automatic defense
-    # loss, is that day's end instead; no reset to 5,000 follows it.
+    # A Season-ending Reset reading proves no Season's end: it shows a
+    # survivor reset to 5,000, and a player dropped from Legend I, ranked
+    # below 10,000, has no Legend I reading at all (1,993 players on 5 October
+    # 2026). The game's official Season-end total in the player's league
+    # history, which includes the automatic defense loss, is the last day's
+    # end instead, so a day that ends anywhere else is Inconsistent: 778 of
+    # 9,593 such Complete days on 5 October 2026 did. No reset to 5,000
+    # follows it; the next Season starts by the Season rule.
     official_final = (
         _official_final(connection, player_id, ranked_day.end)
-        if boundary_kind == "season"
-        and end_baseline is not None
-        and _dropped_from_legend_i(
-            connection, player_id, ranked_day.end,
-            kept_season=ranked_day_for(ranked_day.end).official_season_id,
-        )
+        if boundary_kind == "season" and end_baseline is not None
         else None
     )
     if official_final is not None:
@@ -786,21 +784,16 @@ def _dropped_after_reading(
 
 
 def _dropped_from_legend_i(
-    connection: Any, player_id: int, since: datetime,
-    until: datetime | None = None, kept_season: str | None = None,
+    connection: Any, player_id: int, since: datetime, until: datetime
 ) -> bool:
-    """Whether a profile of the player read from ``since``, and before
-    ``until`` when given, shows a league below Legend I before any Legend I
-    profile naming ``kept_season``, such as the next Season after a Season's
-    end. Each reading counts at its own time; a saved profile can be read
-    again."""
+    """Whether a profile of the player read from ``since`` and before
+    ``until`` shows a league below Legend I. Each reading counts at its own
+    time; a saved profile can be read again."""
     return bool(
         connection.execute(
             """
             WITH version AS (
-                SELECT version.id, version.observed_at, version.eligibility_state,
-                       version.source_contract_state,
-                       version.current_league_season_id
+                SELECT version.id, version.observed_at, version.eligibility_state
                 FROM players AS player
                 JOIN player_profile_versions AS version
                   ON version.normalized_tag = player.normalized_tag
@@ -823,23 +816,10 @@ def _dropped_from_legend_i(
             SELECT EXISTS (
                 SELECT 1 FROM reading AS dropped
                 WHERE dropped.eligibility_state = 'ineligible'
-                  AND (%(until)s::timestamptz IS NULL
-                       OR dropped.read_at < %(until)s)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM reading AS kept
-                      WHERE kept.read_at < dropped.read_at
-                        AND kept.eligibility_state = 'eligible'
-                        AND kept.source_contract_state = 'accepted'
-                        AND kept.current_league_season_id = %(season)s
-                  )
+                  AND dropped.read_at < %(until)s
             )
             """,
-            {
-                "player": player_id,
-                "since": since,
-                "until": until,
-                "season": kept_season,
-            },
+            {"player": player_id, "since": since, "until": until},
         ).fetchone()[0]
     )
 

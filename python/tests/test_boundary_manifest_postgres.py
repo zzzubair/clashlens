@@ -1031,8 +1031,8 @@ def _seed_days(
     saved response a board entry points to. A day is Partial, without its
     end Reset reading, and starts where its reading less its counted battles
     stamped by then puts it, unless ``results`` gives its state, failure
-    reasons, end, automatic loss and its state, start and end Reset readings
-    and Reset kind instead."""
+    reasons, end, automatic loss and its state, start and end Reset readings,
+    the end reading's time and Reset kind instead."""
     season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
     with psycopg.connect(connection_info) as connection:
         observations = {
@@ -1071,6 +1071,7 @@ def _seed_days(
                     if counted and at <= read_at
                 ),
                 "end": None,
+                "end_read_at": None,
                 "boundary_kind": None,
                 **(results or {}).get(player_id, {}),
             }
@@ -1121,6 +1122,10 @@ def _seed_days(
                             "contributions": contributions,
                             "next_start_trophies": result["end"],
                             "boundary_kind": result["boundary_kind"],
+                            "end_baseline_evidence": {"profile": {
+                                "observed_at": result["end_read_at"]
+                                and result["end_read_at"].isoformat(),
+                            }},
                         }
                     ),
                 ),
@@ -1376,8 +1381,8 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
     its Reset readings at both ends. Without that, a reading plus the
     battles after it is proven only when the day's start reading plus all
     its battles, or without a start its end Reset reading, less any known
-    automatic loss, comes to it too; a Reset that resets trophies proves
-    nothing."""
+    automatic loss, comes to it too; a Reset that resets trophies, a
+    Season's end or a Monday's raise to 5,000, proves nothing."""
     readings = [
         ("#2QCYU8C2G", 4703, datetime(2026, 10, 7, 4, 37, 5, tzinfo=UTC)),
         ("#GURYYP99", 4923, _october(7, 4, 54)),  # no end reading
@@ -1386,6 +1391,8 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         ("#P2CC9URVR", 5080, _october(7, 4, 40)),  # less an unknown loss
         ("#Y8V9YYP9C", 5151, _october(7, 4, 40)),  # Season reset, disagrees
         ("#YPG0UY9LU", 5047, _october(7, 4, 40)),  # Season reset, agrees
+        ("#QQC2GRQU", 4940, _october(7, 4, 40)),  # weekly raise, agrees
+        ("#LJQCVPVPL", 4950, _october(7, 4, 40)),  # weekly raise, disagrees
     ]
     days = {
         1: (True, [
@@ -1398,7 +1405,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
             ("offense", 69, _october(7, 4, 58), True),
         ]),
         **{player: (True, [("offense", 40, _october(7, 4, 50), True)])
-           for player in range(3, 8)},
+           for player in range(3, 10)},
     }
     no_start = {"failure_reasons": ["missing_start_baseline"], "start": None}
     complete = {"state": "Complete", "failure_reasons": []}
@@ -1413,6 +1420,11 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
             "end": 5000,
         },
         7: {**complete, "final": 5087, "boundary_kind": "season", "end": 5000},
+        8: {**complete, "final": 4980, "boundary_kind": "weekly", "end": 5000},
+        9: {
+            **complete, "final": 4980, "start": 4940, "boundary_kind": "weekly",
+            "end": 5000,
+        },
     }
     with domain_database(database_url, include_coordinator=True) as connection_info:
         generation_id = _seed_board(connection_info, readings)
@@ -1426,6 +1438,8 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
                 ("#P2CC9URVR", 5120, "uncertain"),
                 ("#YPG0UY9LU", 5087, "confirmed"),
                 ("#GURYYP99", 4992, "uncertain"),
+                ("#LJQCVPVPL", 4990, "uncertain"),
+                ("#QQC2GRQU", 4980, "confirmed"),
                 ("#2QCYU8C2G", 4931, "confirmed"),
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
