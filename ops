@@ -1343,7 +1343,7 @@ backup() {
   prepare_backup
   wal_g backup-push /var/lib/postgresql/data/pgdata
   backup_prune --apply
-  printf 'Base backup uploaded and seven-day retention applied.\n'
+  printf 'Base backup uploaded and ten-day retention applied.\n'
 }
 
 backup_status() {
@@ -1359,13 +1359,13 @@ times = [dt.datetime.fromisoformat(r["finish_time"].replace("Z", "+00:00")) for 
 now = dt.datetime.now(dt.timezone.utc)
 age = (now - max(times)).total_seconds()
 print(f"Remote base backups: {len(rows)}; newest age: {age:.0f} seconds\nOldest completed base backup: {min(times).isoformat()}")
-if min(times) > now - dt.timedelta(days=7):
-    print("Seven-day window is still warming up")
+if min(times) > now - dt.timedelta(days=10):
+    print("Ten-day window is still warming up")
 if "/" in sys.argv[1]:
     high, low = (int(part, 16) for part in sys.argv[1].split("/"))
     replay = (high << 32 | low) - rows[times.index(max(times))]["start_lsn"]
     print(f"A restore to now replays {replay / 1e9:.1f} GB of change log after the newest backup")
-if not 0 <= age <= 691200:
+if not 0 <= age <= 129600:
     sys.exit("Latest remote base backup is stale or has an invalid time")
 ' "$("$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" psql -X -At -c "SELECT pg_current_wal_lsn()" 2>/dev/null || true)"
   "$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" sh -ec '
@@ -1389,7 +1389,7 @@ backup_prune() {
   anchor=$(wal_g backup-list --detail --json | python3 -c '
 import datetime as dt, json, re, sys
 now = dt.datetime.now(dt.timezone.utc)
-cutoff, candidates = now - dt.timedelta(days=7, hours=1), []
+cutoff, candidates = now - dt.timedelta(days=10, hours=1), []
 for row in json.load(sys.stdin):
     if not re.fullmatch(r"base_[0-9A-F]{24}(_D_[0-9A-F]{24})?", row["backup_name"]):
         sys.exit("Retention refuses unexpected backup names")
@@ -1401,7 +1401,7 @@ for row in json.load(sys.stdin):
 if candidates:
     print(max(candidates)[1])
 ') || die "could not choose a safe retention boundary"
-  [[ -n "$anchor" ]] || { printf 'No backup predates the seven-day window; nothing will be deleted.\n'; return; }
+  [[ -n "$anchor" ]] || { printf 'No backup predates the ten-day window; nothing will be deleted.\n'; return; }
   wal_g delete before FIND_FULL "$anchor" --use-sentinel-time ${apply:+"$apply"}
 }
 

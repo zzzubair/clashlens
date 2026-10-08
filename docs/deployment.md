@@ -657,19 +657,23 @@ protected copy off rogue so losing the host does not also lose recovery access.
 Rotate credentials by replacing the file, running the approved `ops up`,
 verifying backup and restore, then revoking the old key in Cloudflare.
 
-The timer starts a full backup Sundays at 03:00 UTC. Missed calendar runs are
+The timer starts a full backup every day at 12:00 UTC, well away from the
+04:00–07:00 UTC Reset work. Missed calendar runs are
 caught up; restarting the stack does not add another full backup. Run
 `./ops backup` once during the approved initial rollout. PostgreSQL continuously uploads
-its change log, called WAL, with `archive_timeout=300`. A successful full backup
-then prunes backups older than the newest backup completed before seven days and
+its change log, called WAL, with `archive_timeout=300`. A restore can target any
+point in the last ten days, chosen on 2026-10-08 so a weekly tournament's
+promotions and demotions leave about three spare days to notice and fix a
+problem. A successful full backup
+then prunes backups older than the newest backup completed before ten days and
 one hour ago. It retains that backup, all newer backups and WAL, and, when that
 backup is a WAL-G delta backup (only the pages changed since an earlier backup),
 the full backup its chain starts from (`wal-g delete before FIND_FULL`). Only
 full and delta backup names are accepted. Delta backups are not switched on.
 Until such a backup exists, pruning deletes nothing. Extra manual backups cannot
 shorten the recovery window. The one-hour margin covers scheduling and backup
-duration; this typically retains two or three weekly full backups, rather than
-exactly two.
+duration; right after the 12:00 prune this keeps 12 daily full backups and about
+11 days of WAL, growing to about 12 days before the next prune.
 
 ```sh
 ./ops backup                  # upload now, then apply age-based retention
@@ -689,7 +693,7 @@ Release fingerprints use byte-ordered filenames so terminal and scheduled-servic
 language settings cannot make unchanged code appear different. Rebuild and deploy
 after upgrading this check; do not edit a saved fingerprint or bypass the guard.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
-missing/unreachable remote backups, a full backup older than eight days, disabled
+missing/unreachable remote backups, a newest full backup older than 36 hours, disabled
 archiving, or completed WAL files waiting over ten minutes. No WAL activity during
 an idle period is not itself failure. It also prints how many GB of WAL a restore
 to now would replay after the newest backup, the part of a restore that grows
@@ -792,25 +796,40 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    summaries. Read every retained raw object referenced by the sample and
    verify its hash, timing it as the raw-check time. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
-5. Repeat for the seven-day-old boundary, using a full backup from before it.
+5. Repeat for the ten-day-old boundary, using a full backup from before it.
    If the restore could take more than two days while production keeps
    running, first run `systemctl --user stop clashlens-archive-retention.timer`.
    Repeat affected checks after the season history and cleanup work in #140
    changes stored data or maintenance.
 
+Expected timings, from the 8 October 2026 real-size rehearsal (2 processor
+cores at the lowest scheduling priority, beside live production): fetching a
+15.55 GB compressed full backup took 268 seconds, about 58 MB/s, and replay ran
+at about 51 GB of change log an hour. With a full backup every day, a restore
+replays at most about one day of change log after its full backup: about 105 GB
+before upload compression (89 GB as stored), so about 2 hours of replay plus
+5–8 minutes of fetching, and about half that on average. It falls to about
+1.5 hours once a day's change log is about 75 GB before upload compression.
+The rehearsal did not measure
+an unthrottled replay or the raw-object check time.
+
 ### Targets, cost and remaining rollout checks
 
 The intended maximum data loss is **5 minutes plus upload delay**, not a hard
-five-minute guarantee. A provider outage can exceed it. The initial operational
-restore target is **60 minutes**, pending measurement at production size.
-Seven-day recovery starts only after seven days of uninterrupted archived history.
+five-minute guarantee. A provider outage can exceed it. The worst-case restore
+time accepted on 2026-10-08 is about **1.5 hours** with daily full backups,
+instead of the earlier 60-minute target, which would need a full backup about
+every 12 hours; at today's change-log rate it is about 2 hours (see
+[expected timings](#restore-into-a-separate-database)).
+Ten-day recovery starts only after ten days of uninterrupted archived history.
 
-The approved pricing model assumed 100 GB per full backup and 30 GB of WAL per
-seven days. Production wrote 455 GB of WAL (before upload compression) in the
-4.2 days after the 4 October 2026 full backup, so that WAL figure no longer
-holds. Keeping two to three full backups plus up to roughly 14 days of WAL
-models **260–360 GB**, about **$3.75–$5.25/month** at the #120 R2 rate and free
-allowance, rather than its original roughly $3 estimate. This is a model, not
+On 8 October 2026 R2 held 707.87 GB of WAL, uploaded at 89.36 GB/day after
+compression, and the newest full backup was 15.55 GB compressed (37.47 GB
+before compression); the 64.77 GB database implies about 26.8 GB per full.
+Keeping 12–13 daily fulls of 16–27 GB plus 11–12 days of WAL models about
+**1.17–1.42 TB**, about **$17.55–$21.30/month** at R2 Standard's
+$0.015/GB-month, against 1.25–1.88 TB of WAL alone with weekly fulls. Larger
+databases make each daily full bigger. This is a model, not
 measured production growth. Manual backups add up to another full backup each
 until they age out; failed uploads can leave partial objects requiring separately
 reviewed cleanup. Real traffic must be measured before accepting the €60 total
@@ -836,9 +855,11 @@ data loss. The earlier target was minutes old, **not seven days old**.
 The backup sorting fix #134 was merged and deployed; its scheduled service was
 also invoked successfully, as recorded in #122. The September 27 03:00 UTC backup
 fired naturally, as recorded in [#140](https://github.com/zzzubair/clashlens/issues/140).
-Before closing #122, measure data loss and restore time at the revised size,
+The 8 October rehearsal measured restore time at production size by restoring
+a point 4.4 days old and reading its player count; it did not read raw objects.
+Before closing #122, measure data loss,
 verify restored raw references across protected expiry, restore a genuine
-seven-day-old point, and verify host reboot. Earlier small restores and service
+ten-day-old point, and verify host reboot. Earlier small restores and service
 checks do not prove those remaining gates. Keep real collection disabled until
 backups and #124 alerts are proven. This documentation update does not deploy
 or close #122.
@@ -887,8 +908,9 @@ Enable it in two approved steps:
 
 1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its per-batch
    counts and bytes for responses to delete and mark in the deployment report.
-2. Only after #122/#129 prove the seven-day-old restore above and that report
-   is approved, set `apply` and run `./ops up`.
+2. After that report is approved, set `apply` and run `./ops up`. The owner
+   approved `apply` on 2026-10-08, after the real-size restore rehearsal above,
+   with the 12-day recovery hold.
 
 Throughput is unmeasured. At an assumed 50 ms per deletion, deleting 1,000
 objects takes 50 seconds. With the 30-second gap, that is a theoretical

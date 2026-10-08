@@ -1,6 +1,6 @@
 # Managed by Clash Lens ./ops.
 [Unit]
-Description=Clash Lens weekly PostgreSQL backup
+Description=Clash Lens daily PostgreSQL backup
 PartOf=clashlens.target
 Requires=clashlens-postgres.service
 After=clashlens-postgres.service
