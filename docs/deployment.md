@@ -1138,8 +1138,8 @@ investigation. A failed processing job that cannot be repaired can be
 accepted with `--accept-job-id` and a `--reason` of 8 to 500 characters: it
 keeps its failed state and evidence, the acceptance records `ops:` and the host
 account, the time and the reason, and the failed-work alerts stop counting it.
-A job can be accepted once; nothing undoes an acceptance. Transport failures are evidence governed by the normal work
-policy and are not manually requeued.
+A job can be accepted once; nothing undoes an acceptance. Transport failures
+are evidence governed by the normal work policy and are not manually requeued.
 
 ## Worker processes
 
