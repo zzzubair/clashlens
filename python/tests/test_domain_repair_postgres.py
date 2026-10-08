@@ -894,9 +894,11 @@ def _eod_states(connection_info: str, player_id: int, season_id: str) -> dict:
 
 
 def _recalculations(connection_info: str) -> list[str]:
+    """The Legend day each waiting recalculation a check's change queued
+    calculates, as its job names it."""
     with psycopg.connect(connection_info) as connection:
-        return [text(key) for (key,) in connection.execute(
-            "SELECT deduplication_key FROM python_processing_jobs"
+        return [text(day) for (day,) in connection.execute(
+            "SELECT input_json ->> 'ranked_day_start' FROM python_processing_jobs"
             " WHERE deduplication_key LIKE 'reconcile:later-reading:%check-%'"
             " AND status = 'pending' ORDER BY id"
         ).fetchall()]
@@ -927,7 +929,7 @@ def test_a_finished_check_that_settles_queues_its_days_recalculation(
     assert judged == 1
     assert (before, after) == ("provisional", "provisional")
     day_3 = (resets[0] - DAY).strftime("%Y-%m-%dT%H:%M:%SZ")
-    assert [key.split(":")[3] for key in queued] == [day_3]
+    assert queued == [day_3]
 
 
 def test_a_settled_check_waits_for_the_following_check_holding_no_summary(
@@ -967,7 +969,7 @@ def test_a_settled_check_waits_for_the_following_check_holding_no_summary(
             database.close()
         queued = _recalculations(connection_info)
 
-    assert [key.split(":")[3] for key in queued] == [
+    assert queued == [
         (reset - DAY).strftime("%Y-%m-%dT%H:%M:%SZ") for reset in resets
     ]
 
