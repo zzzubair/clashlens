@@ -47,8 +47,9 @@ larger. Keep existing safeguards.
 `./ops` runs Clash Lens as rootless Podman containers managed by the user's
 systemd service manager. The tracked files under `deploy/quadlet/` are
 Quadlets: Podman turns them into ordinary system services. PostgreSQL, the
-collector, private API, worker, and website are owned by one
-`clashlens.target`, so they start together after reboot and stop together.
+collector, private API, worker, website and, when turned on, the
+[Discord bot](#discord-bot) are owned by one `clashlens.target`, so they start
+together after reboot and stop together.
 
 Stopping the pod applies one time limit to every container still running,
 replacing each container's own limit. `clashlens.pod` sets that limit to
@@ -936,12 +937,20 @@ Podman secret only the cleanup container mounts. It logs in as
 Fixture stacks get no timer, and the role cannot log in there. Checks and
 failure handling are in [operating](operating.md#finished-job-cleanup-failed).
 
+## Discord bot
+
+`./ops up` installs the Discord bot's unit in every mode but starts it only in
+production with `CLASHLENS_DISCORD_BOT=on` and the mode-600 token file
+`clashlens-discord-bot.token` under `CLASHLENS_API_KEY_HOST_DIR`. The
+[Discord bot](discord-bot.md) page has the go-live checklist.
+
 ## Status and logs
 
 ```sh
 ./ops status
 ./ops logs
 ./ops logs collector
+./ops logs discord-bot
 ./ops logs postgres --since today
 ./ops logs worker -f
 ./ops queue-status

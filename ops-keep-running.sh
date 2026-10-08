@@ -30,13 +30,13 @@ stop_units() {
   else
     "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
   fi
-  for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
+  for unit in clashlens-discord-bot clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
     [[ "$keep" != *" $unit "* ]] || continue
     "$SYSTEMCTL_BIN" --user stop "$unit.service" >/dev/null 2>&1 || true
   done
   state=$($SYSTEMCTL_BIN --user is-enabled clashlens.target 2>/dev/null || true)
   [[ "$state" != enabled && "$state" != enabled-runtime ]] || die "could not disable clashlens.target"
-  for unit in clashlens-website clashlens-worker clashlens-api clashlens-collector clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
+  for unit in clashlens-discord-bot clashlens-website clashlens-worker clashlens-api clashlens-collector clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
     [[ "$keep" != *" $unit "* ]] || continue
     state=$($SYSTEMCTL_BIN --user is-active "$unit.service" 2>/dev/null || true)
     case "$state" in active|activating|deactivating|reloading) die "could not stop $unit.service" ;; esac

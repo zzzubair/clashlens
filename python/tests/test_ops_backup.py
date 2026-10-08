@@ -1120,3 +1120,75 @@ def test_blog_folder_is_mounted_read_only_only_when_configured(
         if blog_dir is None
         else ["CLASHLENS_BLOG_DIR=/blog", "CLASHLENS_BLOG_OWNER=google:owner-1"]
     )
+
+
+@pytest.mark.parametrize(
+    ("mode", "setting", "started"),
+    [("production", None, False), ("production", "on", True), ("fixture", "on", False)],
+)
+def test_discord_bot_is_installed_but_started_only_when_turned_on(
+    tmp_path, mode_config, mode, setting, started
+):
+    if setting:
+        with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+            config.write(f"CLASHLENS_DISCORD_BOT={setting}\n")
+        token = tmp_path / "secrets" / "clashlens-discord-bot.token"
+        token.write_text("bot-token-value\n")
+        token.chmod(0o600)
+    config_home = render_units(tmp_path, mode_config, mode)
+    bot = _systemd_unit(config_home / "containers" / "systemd" / "clashlens-discord-bot.container")
+    target = _systemd_unit(config_home / "systemd" / "user" / "clashlens.target")
+    # Nothing enables the unit itself; only the stack's target can start it.
+    assert "Install" not in bot
+    assert ("clashlens-discord-bot.service" in target["Unit"]["Wants"]) is started
+    assert "--entrypoint=python" in bot["Container"]["PodmanArgs"]
+    assert bot["Container"]["Exec"] == ["-m", "bot", "run"]
+    secrets = " ".join(bot["Container"]["Secret"])
+    assert "clashlens-api-database-url," in secrets
+    assert "clashlens-discord-bot-token," in secrets
+    assert "PublishPort" not in bot["Container"]
+    # Without a website address the bot's links point nowhere real.
+    assert "CLASHLENS_PUBLIC_ORIGIN=https://disabled.invalid" in bot["Container"]["Environment"]
+
+
+def test_discord_bot_token_becomes_a_secret_only_when_the_bot_is_on(tmp_path, mode_config):
+    token = tmp_path / "secrets" / "clashlens-discord-bot.token"
+    store = tmp_path / "podman-secrets"
+    store.mkdir()
+    podman = tmp_path / "podman"
+    podman.write_text(FAKE_SECRET_STORE)
+    podman.chmod(0o700)
+
+    def prepare():
+        return subprocess.run(
+            ["bash", "-c", MODE_CONFIG + "prepare_secrets\n", "bot-secret-test", str(OPS)],
+            env=dict(
+                mode_config, TEST_MODE="production", PODMAN_BIN=str(podman), SECRET_STORE=str(store)
+            ),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+    assert prepare().returncode == 0
+    assert not (store / "clashlens-discord-bot-token").exists()
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write("CLASHLENS_DISCORD_BOT=on\n")
+    # Turned on without a token file, startup stops before changing anything.
+    missing = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + "validate_production_secret_files\n", "bot-secret-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert missing.returncode != 0
+    assert "clashlens-discord-bot.token" in missing.stderr
+    token.write_text("bot-token-value\n")
+    token.chmod(0o600)
+    result = prepare()
+    assert result.returncode == 0, result.stderr
+    assert (store / "clashlens-discord-bot-token").read_text() == "bot-token-value\n"
+    assert "bot-token-value" not in result.stdout + result.stderr
