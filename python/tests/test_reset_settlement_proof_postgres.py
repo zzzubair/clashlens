@@ -1379,10 +1379,10 @@ def _sweep_with_a_gap_the_day_before(monkeypatch) -> None:
     monkeypatch.setattr(late_battle_sweep, "_STALE_DAYS", f"""
         SELECT player.id, %(boundary)s::timestamptz - interval '2 days'
         FROM players AS player WHERE player.normalized_tag = '{TAG}'
-          AND %(window_start)s::timestamptz IS NOT NULL AND %(rule)s IS NOT NULL
+          AND %(window_start)s::timestamptz IS NOT NULL AND %(rule)s::text IS NOT NULL
     """)
     monkeypatch.setattr(late_battle_sweep, "_OUTDATED_DAYS", """
-        SELECT NULL::bigint, NULL::timestamptz WHERE %(rule)s IS NULL
+        SELECT NULL::bigint, NULL::timestamptz WHERE %(rule)s::text IS NULL
     """)
     original = reconciliation_db.reconcile_ranked_day
     monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day",
