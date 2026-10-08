@@ -640,18 +640,21 @@ def settled_start(data: ReconciliationInput) -> tuple[int | None, int, int]:
     later reading settled the Reset reading; the day then starts from that.
     A previous day not Complete whose end two readings prove
     (``DayEnd.proven_end``) starts the day from that end. A previous day
-    whose saved version stored no proven end adjusts nothing.
+    not Complete whose saved version stored no proven end adjusts nothing;
+    a Complete one still takes off its unsettled loss or reading correction,
+    which its own balanced calculation gives.
     """
     previous = data.previous_day
     if (
         data.start_trophies is None
         or previous is None
-        or previous.proven_end is None
         or previous.end_baseline_id is None
         or previous.end_baseline_id != data.start_baseline_id
     ):
         return data.start_trophies, 0, 0
     if not previous.complete:
+        if previous.proven_end is None:
+            return data.start_trophies, 0, 0
         return previous.proven_end, data.start_trophies - previous.proven_end, 0
     if not (previous.unsettled_automatic_loss or previous.reset_reading_correction):
         return data.start_trophies, 0, 0

@@ -1281,7 +1281,7 @@ def test_the_next_day_starts_from_the_reading_less_the_unsettled_loss() -> None:
     # Their reading at 05:17:25 was 4,770. On 3 October they won 215 in 8
     # attacks and lost 240 in 8 defenses, and the 4 October reading was 4,745.
     previous = PreviousRankedDay(
-        True, 3, 92, 0, unsettled_automatic_loss=155, end_baseline_id=93593, proven_end=4770
+        True, 3, 92, 0, unsettled_automatic_loss=155, end_baseline_id=93593
     )
     day = {
         "start_trophies": 4925,

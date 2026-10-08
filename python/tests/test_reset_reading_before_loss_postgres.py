@@ -343,7 +343,7 @@ def test_season_repair_settles_days_saved_before_the_later_reading_rule(
     ("later_gain", "saved_late", "day_b_state", "day_c_state", "new_versions",
      "late_jobs"),
     [
-        (WIN, False, "Inconsistent", "Partial", 2, 0),
+        (WIN, False, "Inconsistent", "Partial", 2, 1),
         (0, False, "Complete", "Complete", 0, 0),
         (WIN, True, "Inconsistent", "Partial", 2, 1),
     ],
@@ -356,9 +356,9 @@ def test_later_reading_against_a_balanced_day_ends_its_proof(
     minutes after its end Reset, before any battle of day C, shows an attack
     more: both readings missed the same delayed credit. The recheck after
     the Reset makes day B Inconsistent, so day C, with one defense, no
-    longer takes its automatic loss from day B's defenses. Saved only after
-    that recheck ran, the profile queues one recalculation of day B, at
-    backfill priority, with the same result. A later reading showing day
+    longer takes its automatic loss from day B's defenses. Saved before or
+    after that recheck ran, the profile queues one recalculation of day B,
+    at backfill priority, with the same result. A later reading showing day
     B's end changes nothing and saves nothing new."""
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
@@ -1168,6 +1168,7 @@ def test_a_day_proven_by_two_readings_starts_the_next_day_after_its_loss(
         jobs += _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(reading),
             log=_log(*day_b), profile_at=DAY_B + timedelta(minutes=1),
+            log_at=DAY_B + timedelta(minutes=2),
         )
         jobs += _reset_work(
             connection_info, archive_server, DAY_C, profile=_profile(end_c),
@@ -1226,6 +1227,7 @@ def _check_on_the_day_before(
     _drain(connection_info, archive_server, _reset_work(
         connection_info, archive_server, ended, profile=_profile(START),
         log=_log_before(ended), profile_at=ended + timedelta(minutes=1),
+        log_at=ended + timedelta(minutes=2),
     ))
     _drain(connection_info, archive_server, [
         _save(connection_info, archive_server, "profile", _profile(trophies),
@@ -1342,7 +1344,8 @@ def _day_c_entry(
         observed_at=DAY_D - timedelta(minutes=23), normalized_tag=TAG,
     )
     _process(connection_info, archive_server, [
-        *_reset_work(connection_info, archive_server, DAY_D, log=_log(*day_c)), job,
+        *_reset_work(connection_info, archive_server, DAY_D, log=_log(*day_c), status="failed"),
+        job,
     ])
     with psycopg.connect(connection_info) as connection:
         player_id, version_id = connection.execute(
@@ -1412,6 +1415,7 @@ def _proven_partial_day_b(connection_info: str, archive_server, quiet: bool = Tr
     _process(connection_info, archive_server, _reset_work(
         connection_info, archive_server, DAY_C, profile=_profile(4988),
         log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=1),
+        log_at=DAY_C + timedelta(minutes=2),
     ))
     if quiet:
         _quiet_day_b(connection_info, archive_server)

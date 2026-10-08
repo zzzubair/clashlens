@@ -1105,6 +1105,7 @@ def test_a_rejected_end_stays_rejected_as_the_next_days_start(
             *_reset_work(
                 connection_info, archive_server, DAY_C, profile=_profile(reading),
                 log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=1),
+                log_at=DAY_C + timedelta(minutes=2),
             ),
             store_observation(
                 connection_info, archive_server, occurrence_key="day-b-later",
@@ -1176,7 +1177,7 @@ def test_a_day_stores_its_proven_end_and_a_recovered_reading_saves_a_new_one(
         _proven_partial_day_b(connection_info, archive_server, quiet=False)
         _process(connection_info, archive_server, _reset_work(
             connection_info, archive_server, DAY_D,
-            log=_log((DAY_C + timedelta(hours=2), False)),
+            log=_log((DAY_C + timedelta(hours=2), False)), status="failed",
         ))
         before = stored(connection_info)
         _quiet_day_b(connection_info, archive_server)

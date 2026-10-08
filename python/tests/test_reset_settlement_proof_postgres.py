@@ -19,7 +19,7 @@ from domain_test_support import domain_database, store_observation, text
 from test_domain_processing_postgres import _role_connection
 from test_reconciliation_postgres import BATTLE_FIXTURE, DAY_END, _processor, _profile
 
-from clashlens import reset_settlement
+from clashlens import first_battle_log, reset_settlement
 from clashlens.boundary import lock_boundary_publication
 from clashlens.collector_db import BATTLE_PARSER_VERSION, PROFILE_PARSER_VERSION
 from clashlens.domain import allocate_trophies, ranked_day_for
@@ -128,6 +128,7 @@ def _scenario(connection_info, archive_server, *, profile_offset: int = 0,
         )
         if with_root:
             _settle_root(connection, player)
+        first_battle_log._queue(connection, player, RESET - 2 * DAY, None, key="day-before")
     return {**jobs, "player": player, "target": target, "automatic": automatic,
             "work": work["reset_settlement"]}
 
@@ -929,12 +930,12 @@ def _later_profiles(
 
     season = int(ranked_day_for(DAY_2_RESET - DAY).official_season_id)
     jobs = []
-    for index, (tag, trophies, read_at) in enumerate(readings):
+    for tag, trophies, read_at in readings:
         payload = json.loads(_profile(trophies, tag))
         payload["currentLeagueSeasonId"] = season
         payload["previousLeagueSeasonId"] = season - 28 * 86400
         jobs.append(store_observation(
-            connection_info, archive_server, occurrence_key=f"later-{index}-{tag}",
+            connection_info, archive_server, occurrence_key=f"later-{tag}-{read_at.isoformat()}",
             endpoint="profile", body=json.dumps(payload).encode(),
             observed_at=read_at, normalized_tag=tag,
             parser_version=PROFILE_PARSER_VERSION,

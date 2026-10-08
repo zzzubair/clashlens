@@ -45,7 +45,7 @@ def _log(*battles: tuple[datetime, bool], filler: list[datetime] = ()) -> bytes:
             **template, "attack": attack, "battleTime": 120,
             "battleTimestamp": at.strftime("%Y%m%dT%H%M%S.000Z"),
             "stars": 3 if attack else 2, "destructionPercentage": 100 if attack else 60,
-            "opponentPlayerTag": f"#{'89QGRJCUV'[index]}PP",
+            "opponentPlayerTag": f"#{'89QGRJCUV'[index % 9]}{'PY'[index // 9]}P",
         }
         for index, (at, attack) in enumerate(battles)
     ] + [

@@ -15,7 +15,7 @@ from domain_test_support import domain_database, store_observation, text
 
 from clashlens import battle_day_repair, boundary
 from clashlens.army_decoder import DECODER_VERSION
-from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
+from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays, saved_proof_facts
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database, _text_value
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
@@ -332,7 +332,7 @@ def per_player_inputs(
     player at a time.
 
     Kept verbatim from boundary._freeze_boundary_manifest before it read
-    the whole population at once.
+    the whole population at once, plus the Reset proof each day stored.
     """
     generation = connection.execute(
         "SELECT boundary_at, generation FROM boundary_publication_generations WHERE id = %s",
@@ -487,10 +487,10 @@ def per_player_inputs(
                 }
                 if _text_value(profile[7]) != "eligible":
                     identity["snapshot_quality"] = "invalid"
-                elif season_is_current(
-                    _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
-                ):
+                elif season_is_current(_text_value(profile[8]), generation[0] - RANKED_DAY_DURATION):
                     identity["snapshot_quality"] = "eligible"
+                    if version_id is not None:  # with the proof its day stored
+                        identity["reset_proof"] = saved_proof_facts(connection, [version_id]).get(version_id) or {}
                 else:
                     # Trophies from before this player's Season reset never
                     # stand for the ended day's Season.

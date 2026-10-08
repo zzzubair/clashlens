@@ -1254,6 +1254,11 @@ def test_official_total_ends_a_last_day_whose_season_end_reset_was_never_read(
             endpoint="battle_log", body=_log(*battles),
             observed_at=last_day + timedelta(hours=10), normalized_tag=TAG,
         )[1])
+        # Queued by the day's battle log while the day is live; this one is past.
+        database, _ = _processor(connection_info, archive_server)
+        jobs.append(reconciliation_db.enqueue_reconciliation(
+            database, player_tag=TAG, day_start=last_day, now=boundary, request_key="live"))
+        database.close()
         _process(connection_info, archive_server, jobs)
         before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
         _process(connection_info, archive_server, [store_observation(
@@ -1357,7 +1362,7 @@ def test_a_recovered_log_takes_army_battle_locks_before_the_resets_board(
         _, log_job = store_observation(
             connection_info, archive_server, occurrence_key="recovered-log",
             endpoint="battle_log",
-            body=_log((boundary + timedelta(minutes=8), True), earlier),
+            body=_log(earlier, (boundary + timedelta(minutes=8), True)),
             observed_at=boundary + timedelta(minutes=20), normalized_tag=TAG,
         )
         _log_finishes_beside(
