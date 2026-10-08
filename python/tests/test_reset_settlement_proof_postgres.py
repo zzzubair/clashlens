@@ -146,10 +146,21 @@ def _settle_root(connection, player: int, *, delayed_work_id: int | None = None)
 
 
 def _process(connection_info, archive_server, jobs: list[int]) -> None:
+    """Process ``jobs``, then the day calculations they queued, as the
+    worker does: a check pools the saved day before's defenses."""
     database, processor = _processor(connection_info, archive_server)
     try:
         for job in jobs:
             assert processor.process_job(job, owner=f"job-{job}") is not None
+        while True:
+            with database.pool.connection() as connection:
+                pending = connection.execute(
+                    "SELECT id FROM python_processing_jobs WHERE status = 'pending'"
+                    " AND work_type = 'reconcile_ranked_day' ORDER BY id LIMIT 1"
+                ).fetchone()
+            if pending is None:
+                return
+            processor.process_job(int(pending[0]), owner="reconcile")
     finally:
         database.close()
 
@@ -1246,3 +1257,84 @@ def _publish_boards(database) -> list:
                 """
             ).fetchall()
         ]
+
+
+def test_a_check_is_judged_again_when_the_day_before_its_ended_day_changes(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """The check pools the saved day before's defenses. Calculated again
+    with a gap in its battle logs, that day leaves the settled check
+    unresolved; calculated again whole, the check settles again."""
+    from dataclasses import replace
+
+    from clashlens import reconciliation_db
+
+    monkeypatch.setenv(SWITCH, "true")
+    prior_day = RESET - 2 * DAY
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        settled = _verdict(connection_info)[:3]
+
+        def recalculate(key: str) -> None:
+            database, _ = _processor(connection_info, archive_server)
+            try:
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=prior_day, now=RESET,
+                    request_key=key,
+                )
+            finally:
+                database.close()
+            _process(connection_info, archive_server, [job])
+
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(
+            reconciliation_db, "reconcile_ranked_day",
+            lambda data: replace(original(data), coverage_complete=False),
+        )
+        recalculate("with-gap")
+        gap = _verdict(connection_info)[:3]
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
+        recalculate("whole")
+        whole = _verdict(connection_info)[:3]
+
+    assert settled == ("settled", scenario["target"], [])
+    assert gap == ("unresolved", None, ["previous_day_defenses_unknown"])
+    assert whole == settled
+
+
+def test_season_repair_judges_old_rule_checks_again(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """A check rejected under the old rule, whose named log had to reach
+    back before the day before, is judged again by the Season repair under
+    the present one, and settles."""
+    from domain_test_support import repair_season
+
+    monkeypatch.setenv(SWITCH, "true")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _process(connection_info, archive_server,
+                 [scenario[job] for job in ORDERS["named_check_last"]])
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                UPDATE reset_boundary_settlements
+                SET state = 'unresolved', selected_trophies = NULL, proof_kind = NULL,
+                    proof_rule_version = 'reset-settlement-observed-adjustment-v1',
+                    proof_fingerprint = 'old', reasons = '["battle_log_too_short"]'
+                WHERE boundary_at = %s
+                """,
+                (RESET,),
+            )
+        repair_season(connection_info, ranked_day_for(RESET - DAY).official_season_id)
+        with psycopg.connect(connection_info) as connection:
+            rule = connection.execute(
+                "SELECT proof_rule_version FROM reset_boundary_settlements"
+                " WHERE boundary_at = %s",
+                (RESET,),
+            ).fetchone()[0]
+
+        assert _verdict(connection_info)[:3] == ("settled", scenario["target"], [])
+    assert rule == reset_settlement.PROOF_RULE_VERSION

@@ -1102,3 +1102,43 @@ def test_an_older_official_total_never_blocks_the_saved_one(
         ("Complete", final), ("Complete", final), ("Inconsistent", final - 20),
     ]
     assert queued == 2
+
+
+def test_profiles_saved_before_the_log_of_the_first_new_day_battle_are_kept(
+    database_url: str, archive_server
+) -> None:
+    """Day B balances and passes its recheck. Profiles read at 06:40 and
+    06:00 are processed before the battle log showing day C's first battle
+    at 06:30: until that battle is saved, neither may be skipped. The 06:00
+    one, an attack above day B's end, is day B's later reading once the log
+    arrives, so day B and its board entry are no longer confirmed."""
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        end_b = _balanced_days(connection_info, archive_server, [])
+        _day_end_recheck(connection_info, archive_server)
+        for minutes, trophies in ((100, end_b - LOSS), (60, end_b + WIN)):
+            _process(connection_info, archive_server, [store_observation(
+                connection_info, archive_server, occurrence_key=f"profile-{minutes}",
+                endpoint="profile", body=_profile(trophies),
+                observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
+            )[1]])
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="day-c-log",
+            endpoint="battle_log", body=_log((DAY_C + timedelta(minutes=90), False)),
+            observed_at=DAY_C + timedelta(minutes=110), normalized_tag=TAG,
+        )[1]])
+        with psycopg.connect(connection_info) as connection:
+            state, reasons, later = connection.execute(
+                """
+                SELECT state, failure_reasons,
+                       (input_evidence -> 'later_next_start_reading' ->> 'trophies')::integer
+                FROM ranked_day_versions WHERE ranked_day_start = %s
+                ORDER BY version DESC LIMIT 1
+                """,
+                (DAY_B,),
+            ).fetchone()
+        board = _board_entry(connection_info, archive_server, DAY_B)
+
+    assert (state, reasons, later) == (
+        "Inconsistent", ["later_reading_contradicts"], end_b + WIN,
+    )
+    assert board[1] is False

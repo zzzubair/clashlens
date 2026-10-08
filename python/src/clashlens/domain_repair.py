@@ -297,7 +297,8 @@ def _repair_jobs(
 
 def _repair_inputs(database: Database, season_id: str, max_jobs: int) -> int:
     """Queue repairs of the Season's saved evidence first: its battles moved
-    day, then its Reset pairs left partial. How many it queued."""
+    day, then its Reset pairs left partial, then its Reset settlement checks
+    judged under an older proof rule. How many it queued or judged."""
     from . import battle_day_repair, reset_baselines
 
     moved = battle_day_repair.enqueue_rebuilds(
@@ -308,7 +309,38 @@ def _repair_inputs(database: Database, season_id: str, max_jobs: int) -> int:
     pairs = reset_baselines.repair_current_season_reset_baselines(
         database, max_works=max_jobs, season_id=season_id
     )
-    return max(len(pairs["job_ids"]), pairs["evaluated_count"])
+    if pairs["job_ids"] or pairs["evaluated_count"]:
+        return max(len(pairs["job_ids"]), pairs["evaluated_count"])
+    return _rejudge_checks(database, season_id, max_jobs)
+
+
+def _rejudge_checks(database: Database, season_id: str, limit: int) -> int:
+    """Judge again, under the current proof rule, up to ``limit`` of the
+    Season's Reset settlement checks judged under an older one, or never,
+    oldest Reset first, each in its own transaction; how many it judged."""
+    from . import reset_settlement
+
+    start = datetime.fromtimestamp(int(season_id), UTC)
+    with database.pool.connection() as connection:
+        if not reset_settlement._has_settlements(database, connection):
+            return 0
+        rows = connection.execute(
+            """
+            SELECT player_id, boundary_at FROM reset_boundary_settlements
+            WHERE boundary_at > %s AND boundary_at <= %s
+              AND delayed_work_id IS NOT NULL
+              AND proof_rule_version IS DISTINCT FROM %s
+            ORDER BY boundary_at, player_id
+            LIMIT %s
+            """,
+            (start, start + SEASON_DURATION, reset_settlement.PROOF_RULE_VERSION, limit),
+        ).fetchall()
+        for player_id, boundary_at in rows:
+            with connection.transaction():
+                reset_settlement.refresh_boundary(
+                    database, connection, int(player_id), boundary_at
+                )
+    return len(rows)
 
 
 def _queue_days(

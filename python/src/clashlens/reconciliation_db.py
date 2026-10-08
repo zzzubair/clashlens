@@ -148,8 +148,27 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                 ).fetchone() is not None:
                     day_starts.add(following)
                     pending.insert(0, following)
+            _rejudge_settlement_checks(database, connection, player_id, day_starts)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
+            )
+
+
+def _rejudge_settlement_checks(
+    database: Database, connection: Any, player_id: int, day_starts: set[datetime]
+) -> None:
+    """Judge again, oldest Reset first and after every day's publication
+    lock, each Reset settlement check that roots its start or pools its
+    automatic loss on one of these ended days, the day before its own."""
+    from . import reset_settlement
+
+    if not reset_settlement._has_settlements(database, connection):
+        return
+    now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+    for day_start in sorted(day_starts):
+        if day_start + timedelta(days=1) <= now:
+            reset_settlement.refresh_boundary(
+                database, connection, player_id, day_start + timedelta(days=2)
             )
 
 

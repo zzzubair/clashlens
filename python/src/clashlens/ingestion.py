@@ -43,8 +43,9 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
     ``ranked_day_inputs.load_later_reading``). A profile read before the
     player's first battle of the day is covered only by a newer one also
     read before it: it may be the ended day's later reading, which a reading
-    after that battle cannot replace. Every other profile can still be
-    skipped, so a post-Reset backlog costs at most that window's profiles.
+    after that battle cannot replace. Until a saved battle shows when that
+    first battle was, any profile may be, so none is skipped. Every other
+    profile can still be skipped.
     """
     if claim.normalized_tag is None or claim.observed_at is None:
         return False
@@ -63,11 +64,9 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
             connection, int(player[0]), claim.observed_at,
             battle_window(day.start)[0], day_end,
         )[1]
-        until = (
-            first_battle
-            if first_battle is not None and claim.observed_at < first_battle
-            else day_end
-        )
+        if first_battle is None:
+            return False
+        until = first_battle if claim.observed_at < first_battle else day_end
         return connection.execute(
             """
             SELECT EXISTS (
