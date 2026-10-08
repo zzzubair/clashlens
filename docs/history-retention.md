@@ -144,7 +144,7 @@ active schema (heap plus indexes/TOAST), row counts, compact-summary size
 distribution, relation-kind inclusions/exclusions, and the explicitly labeled
 migration metadata exclusion. Partition parents are cataloged with zero
 allocation so their children are not double-counted. The unmeasured list is:
-generated WAL, retained WAL and base backups (seven-day recovery
+generated WAL, retained WAL and base backups (ten-day recovery
 window), spool occupancy, and remote raw bytes/request tariffs. The
 projection covers six calendar months (about 6.5 twenty-eight-day
 seasons) against measured usable capacity with headroom. Live detail and
