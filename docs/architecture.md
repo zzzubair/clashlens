@@ -238,6 +238,8 @@ job keeps its claim even if the work outlasts the lease time.
 Renewing a claim always checks that it still holds the job, but writes a new
 lease only once less than half of it is left: a response's job is renewed
 just after it is claimed, and each write changed the job's row and lookup lists.
+Renewals before and during a remote archive read always write a full new lease,
+so a retried read never runs past it.
 
 An ordinary check's job is finished as `superseded`, without being
 applied, when newer processed evidence from the same player and Legend day

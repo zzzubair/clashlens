@@ -141,6 +141,41 @@ def test_renewing_a_fresh_lease_checks_ownership_without_rewriting_the_job(
             collector.close()
 
 
+def test_required_renewal_writes_a_full_lease_for_a_remote_read(database_url: str) -> None:
+    with upload_database(database_url) as connection_info, psycopg.connect(
+        connection_info, autocommit=True
+    ) as connection:
+        collector, _first = _archived_body(connection_info, "remote-read")
+        jobs = Database(connection_info)
+        try:
+            claim = jobs.claim_jobs(owner="lane", lease_seconds=30, work_types=RESPONSE_WORK_TYPES)[0]
+            # 16 of 30 seconds left: a check-only renewal would leave it there.
+            connection.execute(
+                "UPDATE python_processing_jobs SET lease_expires_at = clock_timestamp() + interval '16 seconds' WHERE id = %s",
+                (claim.job_id,),
+            )
+            jobs.renew_claim(claim, lease_seconds=30, always=True)
+            job_left, same = connection.execute(
+                """SELECT job.lease_expires_at - clock_timestamp(), job.lease_expires_at = attempt.lease_expires_at
+                   FROM python_processing_jobs AS job
+                   JOIN python_processing_attempts AS attempt ON attempt.job_id = job.id
+                   WHERE attempt.id = %s""",
+                (claim.attempt_id,),
+            ).fetchone()
+            assert timedelta(seconds=25) < job_left <= timedelta(seconds=30)
+            assert same
+            # A worker that lost the job is still rejected.
+            connection.execute(
+                "UPDATE python_processing_jobs SET lease_token = 'another-worker' WHERE id = %s",
+                (claim.job_id,),
+            )
+            with pytest.raises(LeaseLost):
+                jobs.renew_claim(claim, lease_seconds=30, always=True)
+        finally:
+            jobs.close()
+            collector.close()
+
+
 @pytest.mark.parametrize("cold", [False, True], ids=["warm", "cold"])
 def test_write_volume_per_sighting_and_job(database_url: str, cold: bool) -> None:
     sightings, job_count = 96, 40

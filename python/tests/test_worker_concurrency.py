@@ -706,7 +706,7 @@ class _BatchQueue:
         return [SimpleNamespace(job_id=job_id)
                 for job_id in range(self.next_id - count, self.next_id)]
 
-    def renew_claim(self, _claim, *, lease_seconds: int) -> None:
+    def renew_claim(self, _claim, *, lease_seconds: int, **_kwargs) -> None:
         raise PoolTimeout("no connection to renew with")
 
     def release_claims(self, claims) -> int:

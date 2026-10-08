@@ -192,7 +192,7 @@ def test_worker_finishes_a_claim_call_despite_rejected_newest_jobs(
                 domain_rule_version=DOMAIN_RULE_VERSION,
             )
 
-        def renew_claim(self, claim, *, lease_seconds):
+        def renew_claim(self, claim, *, lease_seconds, **_kwargs):
             pass
 
     monkeypatch.setattr("clashlens.worker.monotonic", lambda: clock.now)
@@ -227,7 +227,7 @@ def test_worker_keeps_every_fourth_claim_oldest_first(monkeypatch) -> None:
                 domain_rule_version=DOMAIN_RULE_VERSION,
             )
 
-        def renew_claim(self, claim, *, lease_seconds):
+        def renew_claim(self, claim, *, lease_seconds, **_kwargs):
             pass
 
     monkeypatch.setattr(
@@ -280,7 +280,7 @@ def test_worker_terminalizes_race_to_retired_season() -> None:
     finished: list[tuple[int, str]] = []
 
     class RetiredDatabase:
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             del lease_seconds
 
     def complete_reconciliation(_database: object, _claim: object) -> None:
@@ -343,7 +343,7 @@ def test_new_observation_reads_only_the_local_spool() -> None:
         def __init__(self) -> None:
             self.profile = None
 
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             assert lease_seconds == 30
 
     def complete_profile(_database: object, _claim: object, profile: object) -> None:
@@ -387,7 +387,7 @@ def test_league_history_processing_produces_a_bounded_worker_snapshot() -> None:
     digest = hashlib.sha256(body).hexdigest()
 
     class Database:
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             assert lease_seconds == 30
 
     class Archive:
@@ -454,7 +454,7 @@ def test_missing_new_observation_without_an_archived_copy_fails_as_missing_proof
             raise AssertionError("no archived copy exists to read back")
 
     class Database:
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             assert lease_seconds == 30
 
     def fail_claim(_database: object, _claim: object, *, category: str, detail: str, retryable: bool) -> str:
@@ -514,7 +514,7 @@ def test_replay_observation_can_use_archive_fallback() -> None:
             return ArchiveReadResult(body, "s3://evidence/source", digest)
 
     class Database:
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             assert lease_seconds == 30
 
     def complete_profile(_database: object, _claim: object, _profile: object) -> None:

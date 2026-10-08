@@ -1277,12 +1277,12 @@ class Database:
                     )
                 return len(job_ids)
 
-    def renew_claim(self, claim: Claim, *, lease_seconds: int) -> None:
+    def renew_claim(self, claim: Claim, *, lease_seconds: int, always: bool = False) -> None:
         """Raise LeaseLost unless the claim still holds the job; extend it if due.
 
-        A lease with at least half of ``lease_seconds`` left is only checked:
-        each rewrite changed the job row and its lookup lists, and the worker
-        renews a response's job just after claiming it.
+        Unless ``always``, a lease with at least half of ``lease_seconds`` left
+        is only checked: each rewrite changed the job row and its lookup lists,
+        and the worker renews a response's job just after claiming it.
         """
         if lease_seconds <= 0:
             raise ValueError("lease duration must be positive")
@@ -1298,7 +1298,7 @@ class Database:
                 ).fetchone()
                 if due is None:
                     raise LeaseLost("job lease could not be renewed")
-                if not due[0]:
+                if not due[0] and not always:
                     return
                 renewed = connection.execute(
                     f"""
