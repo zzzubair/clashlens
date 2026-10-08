@@ -30,6 +30,7 @@ from psycopg.errors import (
 from psycopg_pool import PoolTimeout, TooManyRequests
 
 from . import (
+    analytics,
     army_ingestion,
     army_rank_bands,
     battle_ingestion,
@@ -330,8 +331,9 @@ class TimedMaintenance:
     """Reset publication checks and queue maintenance, each every 10 seconds.
 
     The publication checks also count the newest leaderboard's army rank-band
-    totals once they are missing or stale. They run only in the worker
-    process holding the maintenance permit.
+    totals once they are missing or stale, and every five minutes recount the
+    Season's attacks the Live Leaderboard orders equal trophies by. They run
+    only in the worker process holding the maintenance permit.
 
     Given ``derived_turns``, the publication checks and correction sweep run
     only after taking a derived lane's turn, and stay due without one; queue
@@ -375,6 +377,7 @@ class TimedMaintenance:
                 self.late_battles.run_when_due()
                 if isinstance(self.database, Database):
                     army_rank_bands.refresh_rank_band_totals(self.database)
+                    analytics.refresh_live_attack_tallies(self.database)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()

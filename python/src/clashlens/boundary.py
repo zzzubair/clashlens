@@ -1055,8 +1055,9 @@ def queue_board_rebuilds(
 ) -> dict[str, Any]:
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
     whose frozen input still ranks a reading taken before the player's
-    profile answered "player not found", or whose saved entries differ from
-    the trophies at the Reset ``reset_trophies`` now gives, or its mark. On 5
+    profile answered "player not found", whose saved entries differ from
+    the trophies at the Reset ``reset_trophies`` now gives, or its mark, or
+    that an older ordering rule ordered. On 5
     to 7 October 2026 that was 24 players on Day 1 and 34 on Day 2, two of
     them first and second on Day 2, and 290 Day 2 entries missing battles
     after their readings; on 8 October, 3 Day 3 entries marked proven but
@@ -1152,7 +1153,17 @@ def queue_board_rebuilds(
                     != expected.get(int(player_id))
                     for player_id, trophies, confidence in entries
                 )
-                if not not_found and not late_battles:
+                # A board ordered by an older rule, such as equal trophies
+                # by tag hash alone before the shared tie order.
+                rule = connection.execute(
+                    "SELECT ordering_rule_version FROM leaderboard_snapshots WHERE id = %s",
+                    (snapshot_id,),
+                ).fetchone()
+                reordered = (
+                    rule is not None
+                    and _text_value(rule[0]) != SNAPSHOT_ORDERING_RULE_VERSION
+                )
+                if not not_found and not late_battles and not reordered:
                     continue
                 queued = connection.execute(
                     """
@@ -1192,6 +1203,7 @@ def queue_board_rebuilds(
                         "generation": int(generation),
                         "profile_not_found": len(not_found),
                         "late_battles": late_battles,
+                        "reordered": reordered,
                         "correction": (
                             "already_queued" if queued is not None
                             else "queued" if queue

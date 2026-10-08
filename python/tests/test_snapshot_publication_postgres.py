@@ -7,7 +7,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, seed_attacks, store_observation, text
 from psycopg.types.json import Jsonb
 
 from clashlens import api_leaderboard, boundary, snapshots
@@ -15,6 +15,7 @@ from clashlens.analytics import deterministic_tag_hash
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
+from clashlens.domain import ranked_day_for
 from clashlens.worker import ObservationProcessor
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -804,8 +805,8 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
                 ).fetchall()
             assert len(snapshots) == 2
             assert [text(row[5]) for row in snapshots] == [
-                "tracked-player-order-v1",
-                "tracked-player-order-v1",
+                "tracked-player-order-v2",
+                "tracked-player-order-v2",
             ]
             for row in snapshots:
                 assert text(row[6]) == "profile-freshness-10m-v1"
@@ -950,6 +951,79 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
             assert corrected_analytics_job_id != first_analytics_job_id
         finally:
             database.close()
+
+
+def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
+    database_url: str,
+    archive_server,
+) -> None:
+    boundary = datetime(2026, 8, 5, 5, tzinfo=UTC)
+    season_start = ranked_day_for(boundary - timedelta(days=1)).season_start
+    # The tag hash alone would put ``first`` ahead.
+    first, second = sorted(("#2PP", "#28"), key=deterministic_tag_hash)
+    with domain_database(database_url) as connection_info:
+        for tag in (first, second):
+            _process_profile(
+                connection_info,
+                archive_server,
+                occurrence_key=f"tie-order-{tag}",
+                tag=tag,
+                trophies=6123,
+                observed_at=boundary - timedelta(hours=1),
+            )
+        with psycopg.connect(connection_info) as connection:
+            ids = dict(connection.execute("SELECT normalized_tag, id FROM players").fetchall())
+            seed_attacks(connection, ids[second], [(boundary - timedelta(days=2), 60)])
+            # 50% in the Season before the Reset; 87.5% counting the attacks
+            # from before the Season or after the Reset as well.
+            seed_attacks(
+                connection,
+                ids[first],
+                [
+                    (boundary - timedelta(days=2), 50),
+                    (season_start - timedelta(days=1), 100),
+                    (boundary, 100),
+                    (boundary, 100),
+                ],
+            )
+        snapshot_job_id = _seed_snapshot_job(
+            connection_info, player_id=ids[first], boundary_at=boundary, end_trophies=6123
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _process_snapshot_and_analytics(
+                connection_info, database, processor, snapshot_job_id, owner_prefix="tie-order"
+            )
+            with database.pool.connection() as connection:
+                order = connection.execute(
+                    """
+                    SELECT p.normalized_tag, e.trophies
+                    FROM leaderboard_snapshot_entries AS e
+                    JOIN leaderboard_snapshots AS s ON s.id = e.snapshot_id
+                    JOIN players AS p ON p.id = e.player_id
+                    WHERE s.boundary_at = %s AND s.snapshot_kind = 'frozen'
+                    ORDER BY e.position
+                    """,
+                    (boundary,),
+                ).fetchall()
+                frozen = dict(
+                    connection.execute(
+                        """
+                        SELECT player_id, input_identity->'season_attacks'
+                        FROM boundary_publication_manifest_entries((
+                            SELECT snapshot_manifest_id
+                            FROM boundary_publication_generations
+                            WHERE boundary_at = %s
+                        ))
+                        """,
+                        (boundary,),
+                    ).fetchall()
+                )
+        finally:
+            database.close()
+    assert [(text(row[0]), row[1]) for row in order] == [(second, 6123), (first, 6123)]
+    assert frozen[ids[second]] == {"attacks": 1, "destruction": 60}
+    assert frozen[ids[first]] == {"attacks": 1, "destruction": 50}
 
 
 def test_snapshot_quality_counts_and_reader_ignore_building_candidate(

@@ -14,6 +14,7 @@ import psycopg
 from domain_test_support import domain_database, store_observation, text
 
 from clashlens import battle_day_repair, boundary
+from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, season_attack_tallies
 from clashlens.army_decoder import DECODER_VERSION
 from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
 from clashlens.catalog import CATALOG_VERSION
@@ -448,6 +449,15 @@ def per_player_inputs(
                 official_entry[1].astimezone(UTC).isoformat()
                 if official_entry
                 else None
+            )
+            tally = season_attack_tallies(
+                connection,
+                season_start=ranked_day_for(generation[0] - RANKED_DAY_DURATION).season_start,
+                cutoff=generation[0],
+                player_ids=[player_id],
+            ).get(player_id)
+            identity["season_attacks"] = (
+                {"attacks": tally[0], "destruction": tally[1]} if tally else None
             )
             profile = connection.execute(
                 """
@@ -989,6 +999,7 @@ def test_board_rebuild_queues_one_correction_per_board_still_ranking_a_missing_p
                 "generation": 1,
                 "profile_not_found": 1,
                 "late_battles": 0,
+                "reordered": False,
             }
             reports = [
                 boundary.queue_board_rebuilds(database, season, queue=queue)
@@ -1247,6 +1258,7 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
                     "generation": 1,
                     "profile_not_found": 0,
                     "late_battles": 1,
+                    "reordered": False,
                     "correction": "queued",
                 }
             ]
@@ -1432,6 +1444,15 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
             assert boundary.queue_board_rebuilds(database, season, queue=False)[
                 "boards"
             ] == []
+            # A board ordered by an older ordering rule is rebuilt too.
+            for rule, reordered in (("old", [True]), (SNAPSHOT_ORDERING_RULE_VERSION, [])):
+                with database.pool.connection() as connection:
+                    connection.execute("SET LOCAL session_replication_role = replica")
+                    connection.execute(
+                        "UPDATE leaderboard_snapshots SET ordering_rule_version = %s", (rule,)
+                    )
+                assert [board["reordered"] for board in boundary.queue_board_rebuilds(
+                    database, season, queue=False)["boards"]] == reordered
             # A board built before this rule showed the reading plus the
             # battles after it as proven.
             with database.pool.connection() as connection:
@@ -1448,6 +1469,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
                     "generation": 1,
                     "profile_not_found": 0,
                     "late_battles": 1,
+                    "reordered": False,
                     "correction": "not_queued",
                 }
             ]

@@ -13,6 +13,8 @@ from .analytics import (
     PROFILE_FRESHNESS_SECONDS,
     SNAPSHOT_ORDERING_RULE_VERSION,
     deterministic_tag_hash,
+    season_attack_tallies,
+    tie_order_key,
 )
 from .boundary_manifest import reset_trophies
 from .db import (
@@ -226,17 +228,33 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     """,
                     (boundary_at, ended_season_id),
                 ).fetchall()
+                season_attacks = season_attack_tallies(
+                    connection,
+                    season_start=ranked_day_for(
+                        boundary_at - RANKED_DAY_DURATION
+                    ).season_start,
+                    cutoff=boundary_at,
+                    player_ids=[int(row[0]) for row in profile_rows],
+                )
             else:
                 manifest_profiles = connection.execute(
                     """
                     SELECT player_id, input_identity->'profile_snapshot',
                            input_identity->>'profile_version_id',
                            input_identity->>'snapshot_quality',
-                           ranked_day_version_id
+                           ranked_day_version_id,
+                           input_identity->'season_attacks'
                     FROM boundary_publication_manifest_entries(%s)
                     """,
                     (generation_row[4],),
                 ).fetchall()
+                season_attacks = {
+                    int(row[0]): (
+                        int(row[5]["attacks"]), int(row[5]["destruction"])
+                    )
+                    for row in manifest_profiles
+                    if isinstance(row[5], dict)
+                }
                 ranked_day_versions = {
                     int(row[0]): int(row[4])
                     for row in manifest_profiles
@@ -357,13 +375,13 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         "confidence": "confirmed" if proven else "uncertain",
                         "tie_hash": deterministic_tag_hash(_text_value(row[1])),
                         "official": official_by_player.get(int(row[0])),
+                        "season_attacks": season_attacks.get(int(row[0]), (0, 0)),
                     }
                 )
             entries.sort(
                 key=lambda item: (
                     -int(item["trophies"]),
-                    str(item["tie_hash"]),
-                    str(item["tag"]),
+                    *tie_order_key(*item["season_attacks"], str(item["tag"])),
                 )
             )
 

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from urllib.parse import urlencode
 
 import pytest
+from domain_test_support import as_api_role, seed_attacks
 from fastapi.testclient import TestClient
 from test_api_db_public_ops import NOW, seed_profile
 from test_api_migration import migrated_production_database
 from test_freshness_metrics_postgres import seed_check
 from test_private_api import NOW_SECONDS, TS_CURRENT, signed_headers
 
-from clashlens import api_leaderboard, api_players
+from clashlens import analytics, api_leaderboard, api_players
+from clashlens.analytics import tie_order_key
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
+from clashlens.domain import ranked_day_for
 
 
 @pytest.fixture()
@@ -68,6 +72,60 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
     assert moved["entries"][0]["tag"] == target["tag"]
     assert moved["entries"][0]["position"] == 1
     assert len(moved["entries"]) == 100
+
+
+def test_equal_trophies_follow_season_attack_destruction(board_database, monkeypatch):
+    database = board_database
+    season_start = ranked_day_for(NOW).season_start
+    # Per tag, the destruction of each attack this Season: 100% over one;
+    # 80% over four beats 80% over two; three zero-star attacks at 0% beat
+    # none at all.
+    seeded = {"#P22": [100], "#P28": [100, 60, 80, 80], "#P29": [100, 60], "#P2P": [0, 0, 0]}
+    with database.pool.connection() as connection:
+        ids = dict(connection.execute("SELECT normalized_tag, id FROM players").fetchall())
+        for tag, destructions in seeded.items():
+            seed_attacks(
+                connection,
+                ids[tag],
+                [(season_start + timedelta(days=day), d) for day, d in enumerate(destructions)],
+            )
+        # An attack from the previous Season does not count.
+        seed_attacks(connection, ids["#P2Y"], [(season_start - timedelta(days=1), 100)])
+    before = api_leaderboard.get_live_leaderboard(database, limit=200, now=NOW)
+    monkeypatch.setattr(analytics, "_next_live_tally_at", float("-inf"))
+    analytics.refresh_live_attack_tallies(database, now=NOW)
+    reader = ApiDatabase(as_api_role(database.pool.conninfo))
+    try:
+        board = api_leaderboard.get_live_leaderboard(reader, limit=200, now=NOW)
+        found = api_leaderboard.search_live_leaderboard(reader, "#P2P", now=NOW)
+        with reader.pool.connection() as connection:
+            positions = api_leaderboard.live_positions(connection, ["#P28"], now=NOW)
+    finally:
+        reader.close()
+
+    tags = [entry["tag"] for entry in board["entries"]]
+    assert tags[:4] == ["#P22", "#P28", "#P29", "#P2P"]
+    # The Daily board's order for the same counts; before any count, the tag hash.
+    counts = {tag: (len(values), sum(values)) for tag, values in seeded.items()}
+    assert tags == sorted(tags, key=lambda tag: tie_order_key(*counts.get(tag, (0, 0)), tag))
+    assert [entry["tag"] for entry in before["entries"]] == sorted(
+        tags, key=lambda tag: tie_order_key(0, 0, tag)
+    )
+    assert board["ordering_rule_version"] == "tracked-trophies-attack-destruction-v2"
+    assert found["results"][0]["rank"] == 4
+    assert positions == {"#P28": 2}
+
+    # Battles moved out of the Season leave a player with no attacks.
+    with database.pool.connection() as connection, connection.transaction():
+        connection.execute("SET LOCAL session_replication_role = replica")
+        connection.execute(
+            "UPDATE legend_battles SET ranked_day_start = %s WHERE attacker_player_id = %s",
+            (season_start - timedelta(days=1), ids["#P22"]),
+        )
+    monkeypatch.setattr(analytics, "_next_live_tally_at", float("-inf"))
+    analytics.refresh_live_attack_tallies(database, now=NOW)
+    moved = api_leaderboard.get_live_leaderboard(database, limit=200, now=NOW)
+    assert [entry["tag"] for entry in moved["entries"]][:3] == ["#P28", "#P29", "#P2P"]
 
 
 def test_search_hides_not_found_inactive_and_unaccepted_players(board_database):

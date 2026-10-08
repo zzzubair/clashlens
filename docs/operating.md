@@ -396,6 +396,11 @@ the worker logs a `late_battle_sweep` line with status `complete` once every
 player's correction for a Reset has succeeded, `retrying` after a
 `player_failed` line, or `failed` if the check itself errored; after either
 of those it tries again 10 minutes later.
+Every five minutes the worker also recounts each player's attacks and attack
+destruction this Season into `live_attack_tallies`, which orders equal trophies
+on the Live Leaderboard, and logs a `live_attack_tallies` line with status
+`complete` and how many players' counts changed, or `failed`; the board keeps
+the last counts until the next one succeeds.
 
 A waiting upload with `oldest_pending_upload_age_seconds` over 15 minutes
 points at the archive or the uploads process: see

@@ -419,8 +419,9 @@ export default function TrackedLeaderboardRoute() {
             <>
               <p className="standings-explanation" id="rank-explanation">
                 Rank is your position among players tracked by Clash Lens, not the
-                official global rank. Equal trophies use a fixed order based on player
-                tags.
+                official global rank. Equal trophies go to the higher average attack
+                destruction this Season, then more attacks, then a fixed order based on
+                player tags.
                 {view === "live"
                   ? " Last updated is when we last confirmed each player's profile, even if it was unchanged."
                   : null}

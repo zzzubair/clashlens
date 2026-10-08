@@ -261,7 +261,7 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             }
             assert [entry["tag"] for entry in live["entries"]] == ["#8PY", "#2PP"]
             assert live["kind"] == "live"
-            assert live["ordering_rule_version"] == "tracked-trophies-md5-v1"
+            assert live["ordering_rule_version"] == "tracked-trophies-attack-destruction-v2"
             assert live["generated_at"] == NOW.isoformat()
             assert live["source_observations"] == {
                 "oldest_observed_at": "2026-08-06T12:00:00+00:00",
