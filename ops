@@ -26,7 +26,7 @@ source "$ROOT/ops-keep-running.sh"
 usage() {
   cat <<'EOF'
 Usage: ./ops build [--fixture]
-       ./ops up [--fixture] [--restart-collector]
+       ./ops up [--fixture] [--restart-collector|--keep-collector]
        ./ops down
        ./ops status
        ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention|ranked-day-compaction|history-retention]
@@ -43,7 +43,8 @@ Usage: ./ops build [--fixture]
 build creates a pinned release. up installs and starts that release; it never
 builds or pulls an image. --fixture is an isolated stack with no live keys.
 up leaves the collector, database, pod and network running when their images
-and configuration are unchanged; --restart-collector restarts them anyway.
+and configuration are unchanged; --restart-collector restarts them anyway, and
+--keep-collector keeps the running collector image for a worker/API-only change.
 down disables the stack across reboot and keeps all database, spool and archive data.
 EOF
 }
@@ -70,6 +71,7 @@ finish() {
   cleanup_admin_secret || result=1
   if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
     (stop_units) || true
+    deploy_failed_alert
   fi
   exit "$result"
 }
@@ -670,6 +672,7 @@ promote_active_release() {
   local temporary
   temporary=$(mktemp "$STATE_DIR/active-release.env.XXXXXX")
   chmod 600 "$temporary"
+  [[ ! -f "$ACTIVE_RELEASE_FILE" ]] || cp -p -- "$ACTIVE_RELEASE_FILE" "$STATE_DIR/previous-release.env"
   { grep -v -e '^COLLECTOR_IMAGE=' -e '^POSTGRES_IMAGE=' -- "$RELEASE_FILE"; printf 'COLLECTOR_IMAGE=%s\nPOSTGRES_IMAGE=%s\n' "${RELEASE[COLLECTOR_IMAGE]}" "${RELEASE[POSTGRES_IMAGE]}"; } > "$temporary"
   mv -f "$temporary" "$ACTIVE_RELEASE_FILE"
 }
@@ -1010,6 +1013,7 @@ apply_migrations() {
   local migration base prefix version exists
   exists=$(psql_exec --tuples-only --no-align --command "SELECT to_regclass('public.clash_lens_schema_migrations') IS NOT NULL")
   if [[ "$(trim "$exists")" != t ]]; then psql_exec < "$ROOT/deploy/migrations/0001_collector.sql"; fi
+  check_migrations
   for migration in "$ROOT"/deploy/migrations/*.sql; do
     [[ "${migration##*/}" == 0001_collector.sql ]] && continue
     base=${migration##*/}; prefix=${base%%_*}; version=$((10#$prefix))
@@ -1164,10 +1168,12 @@ up_stack() {
   migrate_legacy_units
   guard_systemd_units
   keep_running_plan
+  try_pending_migrations
+  mkdir -p "$STATE_DIR"
+  stage_configuration
   write_alert_intent stopped
   UP_IN_PROGRESS=true
   stop_units
-  mkdir -p "$STATE_DIR"
   local mode_file
   mode_file=$(mktemp "$STATE_DIR/mode.XXXXXX")
   chmod 600 "$mode_file"
@@ -1433,22 +1439,13 @@ history_prune() {
     "${RELEASE[PYTHON_IMAGE]}" prune-history --jobs-only --retention-hours 48 --max-jobs 1000 --apply
 }
 
-write_alert_intent() {
-  local temporary
-  temporary=$(mktemp "$STATE_DIR/alert-intent.XXXXXX")
-  chmod 600 "$temporary"
-  printf '%s\n' "$1" > "$temporary"
-  mv -f "$temporary" "$STATE_DIR/alert-intent"
-}
-
 alert_check() {
   [[ "$(current_prefix)" == clashlens ]] || die "alert-check is unavailable in fixture mode"
   validate_directory_ancestry "$STATE_DIR"
   load_kv_file "$ENV_FILE" CONFIG
-  python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" \
-    "$(setting CLASHLENS_DISCORD_ALERT_WEBHOOK_FILE "$(setting CLASHLENS_API_KEY_HOST_DIR /srv/clashlens-secrets)/clashlens-discord-alert-webhook")" \
+  python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" "$(alert_webhook_file)" \
     "$(setting CLASHLENS_HEALTH_PORT 8081)" "$(setting CLASHLENS_SPOOL_ROOT /srv/clashlens-data/spool)" \
-    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
+    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)" "$(setting CLASHLENS_PUBLIC_ORIGIN)"
 }
 
 command=${1:-}
@@ -1458,7 +1455,7 @@ case "$command" in
   build) acquire_mutation_lock; parse_mode "$@"; build_release ;;
   up)
     acquire_mutation_lock; up_args=()
-    for arg; do if [[ "$arg" == --restart-collector ]]; then RESTART_COLLECTOR=true; else up_args+=("$arg"); fi; done
+    for arg; do case "$arg" in --restart-collector) RESTART_COLLECTOR=true ;; --keep-collector) KEEP_COLLECTOR=true ;; *) up_args+=("$arg") ;; esac; done
     parse_mode "${up_args[@]}"; up_stack
     ;;
   down)

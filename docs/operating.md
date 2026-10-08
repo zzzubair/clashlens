@@ -76,7 +76,7 @@ Healthy looks like this:
   not prove player data can be read.
 - During active tracking, successful fetches keep advancing. Compare fetch age,
   spool bytes, object count and filesystem usage with the
-  [alert conditions](deployment.md#alert-conditions).
+  [alert conditions](alerts.md).
 - Queue `failed` is zero, or every existing failure has an investigated cause.
   `oldest_due_seconds` is the age of the oldest overdue job, or `null` if none.
   `overdue` counts jobs past their due time; `scheduled_later` counts jobs
@@ -102,7 +102,7 @@ journalctl --user -u clashlens-alert.service --since '10 minutes ago' -n 30 --no
 ```
 
 The private probe should exit successfully; its
-[private-read condition](deployment.md#alert-conditions) explains what it checks.
+[private-read condition](alerts.md) explains what it checks.
 The alert timer should be active with recent successful runs matching the
 [configured schedule](deployment.md#private-discord-alerts).
 The alert, backup, raw-response cleanup, ranked-day copy cleanup and finished-job cleanup services run once per timer firing, so `inactive (dead)`
@@ -249,9 +249,12 @@ it again, and confirm the PostgreSQL and collector start times are unchanged
 use the database. `./ops down` stops the whole stack. `./ops up` restarts it,
 but leaves the collector, PostgreSQL, pod and network running when none of them
 changed ([rule](deployment.md#when-up-restarts-the-collector));
-`./ops up --restart-collector` restarts them anyway.
+`./ops up --restart-collector` restarts them anyway. Any Python change makes a
+plain `./ops up` restart them; for a worker-only or API-only change, run `./ops
+up --keep-collector` by hand to keep them running (choosing this automatically
+is a follow-up).
 
-Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
+Use the [alert conditions and delivery rules](alerts.md)
 to interpret messages. Confirm both the measurements below and the recovery
 message in the private operator channel. `./ops alert-check` can run the check
 immediately, but **sends real Discord messages** and saves alert state.
@@ -260,14 +263,14 @@ conditions are healthy. The website-unreachable alert comes from the
 [outside check](deployment.md#outside-availability-check) on the Paris relay.
 
 The Live Leaderboard alert and every recovery wait on purpose, as set out in
-the [alert conditions](deployment.md#alert-conditions). Expect a recovery up to
+the [alert conditions](alerts.md). Expect a recovery up to
 15 minutes after the fix. A few percent of players a little past ten minutes,
 such as after a deploy, is normal near the official API request limit and does
 not alert.
 
 ### Tracker stopped
 
-Use the [fetch-gap condition](deployment.md#alert-conditions), which accounts
+Use the [fetch-gap condition](alerts.md), which accounts
 for the Reset pause and a tracker that has never fetched successfully.
 
 **First checks:** `./ops logs collector --since '15 minutes ago' --no-pager`,
@@ -284,7 +287,7 @@ Discord recovery message. Interpret fetch age using the linked Reset rule.
 ### Disk or spool over 80%
 
 Compare all four measurements with the
-[capacity condition](deployment.md#alert-conditions).
+[capacity condition](alerts.md).
 
 **First checks:** repeat the daily metrics, `df` and `./ops queue-status`;
 read `./ops logs collector --since '1 hour ago' --no-pager` and
@@ -302,7 +305,7 @@ stable or fall, followed by the Discord recovery message.
 ### Service restart loop
 
 Find the restarting unit and check it against the
-[restart condition](deployment.md#alert-conditions):
+[restart condition](alerts.md):
 
 ```sh
 journalctl --user --since '1 hour ago' --no-pager \
@@ -322,7 +325,7 @@ old events to leave that window even after the cause is fixed.
 
 ### Backup failed or stale
 
-Use the [backup alert condition](deployment.md#alert-conditions) for immediate
+Use the [backup alert condition](alerts.md) for immediate
 failures, the grace period for unavailable checks, journal diagnostics and incident
 times. Use the
 [backup failure conditions](deployment.md#postgresql-backups-and-recovery)
@@ -345,7 +348,7 @@ A backup listing does not prove restore.
 
 ### Data reads failing
 
-Use the [private-read condition](deployment.md#alert-conditions). This check
+Use the [private-read condition](alerts.md). This check
 does not cover every player page or army analytics query.
 
 **First checks:** repeat the daily private probe, then
@@ -361,7 +364,7 @@ Discord recovery arrives. Website `/healthz` alone is insufficient.
 
 ### Collection or processing behind
 
-Use the [overdue-check and Live Leaderboard conditions](deployment.md#alert-conditions).
+Use the [overdue-check and Live Leaderboard conditions](alerts.md).
 Check collection and leaderboard freshness separately; a processing backlog
 alone does not prove the leaderboard is stale.
 
@@ -394,8 +397,10 @@ player's correction for a Reset has succeeded, `retrying` after a
 `player_failed` line, or `failed` if the check itself errored; after either
 of those it tries again 10 minutes later.
 
-A waiting upload with `oldest_pending_upload_age_seconds` over an hour points
-at the archive: look for upload errors in `./ops logs collector`.
+A waiting upload with `oldest_pending_upload_age_seconds` over 15 minutes
+points at the archive or the collector's upload work: look for upload errors in
+`./ops logs collector`. Until it is archived, a raw response exists only on the
+server's disk.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
@@ -754,19 +759,56 @@ alert means a new permanent failure in the last 24 hours; its recovery means no 
 24 hours, not that anything was repaired. A manual retry of a failed item
 clears the alert early; a repeat failure raises a fresh alert.
 
+The separate **failed work waiting for a person** alert stays open while any
+failed job or upload is left, however old, and says how many there are. It
+recovers 15 minutes after the last one is retried or replayed, or, for a daily
+result calculation, after its replacement from the current-Season republish
+finishes. The failed job itself stays failed as a record. A replacement that
+found the same result can count as failed again after the 48-hour finished-job
+cleanup ([details](alerts.md)).
+
 ### Reset publication missing
 
-**First checks:** `./ops logs worker --since '2 hours ago' --no-pager`, then:
+This alert fires when the website's public Daily leaderboard page does not
+show the latest Reset's frozen leaderboard by 05:30 UTC, including when that
+page cannot be read then, and when an earlier Reset is still unpublished. The **Reset
+behind its 05:30 target** early warning comes first and names the stage:
+collection not ended at 05:10, Reset work projected past 05:25 at 05:15, or
+inputs not frozen at 05:25.
+
+**First checks:** `./ops queue-status` for Reset work left, `./ops logs worker
+--since '2 hours ago' --no-pager`, `./ops logs website` if the alert says the
+website check could not read the board, then:
 
 ```sh
 podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
   "SELECT boundary_at, generation, snapshot_state, army_state FROM boundary_publication_generations ORDER BY 1, 2"
+podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
+  "SELECT * FROM reset_acceptance_records ORDER BY boundary_at DESC LIMIT 2"
 ```
+
+The second shows, for the latest Resets, when collection ended, when the Reset
+readings were processed, when the board's inputs froze, when it was saved as
+published and when the website first showed it, with the board's input states
+and how many of the Reset's boundaries were settled.
 
 **Fix or escalate:** escalate; repairing a publication needs an approved change.
 
-**Recovered:** every Reset since the first one has published its frozen
-leaderboard and army results.
+**Recovered:** the latest board is readable and every Reset since the first
+one has published its frozen leaderboard and army results.
+
+### Deploy failed
+
+**First checks:** `./ops status`, then `./ops logs` for the step that failed.
+`./ops up` printed it when it stopped. The alert schedule keeps running while
+the stack is stopped, so the other alerts a stopped stack raises follow.
+
+**Fix or escalate:** fix the cause and run `./ops up` again, or escalate. To go
+back to the earlier code, follow the
+[rollback](deployment.md#existing-service-lifecycle) steps; never reverse a
+migration.
+
+**Recovered:** 15 minutes after an `./ops up` succeeds.
 
 ### Untracked Legend I battlers
 

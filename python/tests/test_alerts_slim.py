@@ -330,8 +330,8 @@ def test_readable_but_unhealthy_checks_are_not_unreadable(runtime):
     assert len(monitoring(rt)) == 2
 
 
-@pytest.mark.parametrize(("leaderboard", "alerted"), [("1 13000 1201", 0), ("", 1)])
-def test_reset_pause_hides_stale_but_not_unreadable_leaderboard(
+@pytest.mark.parametrize(("leaderboard", "alerted"), [("9000 13000 1200", 0), ("", 1)])
+def test_reset_window_hides_widespread_staleness_but_not_an_unreadable_leaderboard(
     runtime, monkeypatch, leaderboard, alerted
 ):
     rt = runtime

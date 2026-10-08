@@ -217,6 +217,7 @@ def test_ops_rejects_a_bad_check_limit_before_stopping_and_forwards_a_good_one(
 source "$1" help >/dev/null
 STATE_DIR="$2"
 MODE=fixture
+RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)
 [[ -z "$3" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$3
 [[ -z "$4" ]] || CONFIG[CLASHLENS_PROMOTION_RECHECK_PER_SECOND]=$4
 for step in require_host load_release guard_generated_units guard_existing_resources \
@@ -268,6 +269,7 @@ def test_ops_rejects_a_bad_promotion_rate_before_stopping(
 source "$1" help >/dev/null
 STATE_DIR="$2"
 MODE=fixture
+RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)
 CONFIG[CLASHLENS_PROMOTION_RECHECK_PER_SECOND]=$3
 for step in require_host load_release guard_generated_units guard_existing_resources \
     guard_trusted_proxy_ip guard_network_subnet cleanup_stale_admin_state ensure_linger \

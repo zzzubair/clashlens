@@ -1422,3 +1422,29 @@ def test_deferred_player_is_not_due_before_the_given_time(
         with psycopg.connect(connection_info) as connection:
             due = dict(connection.execute("SELECT id, next_due_at FROM players"))
         assert due == {finished: reset, inactive: NOW - timedelta(seconds=1)}
+
+
+def test_a_collector_database_wait_stops_at_its_limit(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Older collector code waited 10 minutes on one row lock (8 Oct 2026
+    # statement statistics); any such wait now ends at the limit and is retried.
+    from clashlens import collector_liveness
+
+    monkeypatch.setattr(collector_liveness, "STATEMENT_TIMEOUT", "300ms")
+    with domain_database(database_url) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info, max_size=1)
+        try:
+            with psycopg.connect(connection_info) as holder:
+                holder.execute(
+                    "SELECT 1 FROM players WHERE id = %s FOR UPDATE", (player_id,)
+                )
+                with database.pool.connection() as connection:
+                    with pytest.raises(psycopg.errors.QueryCanceled):
+                        connection.execute(
+                            "SELECT 1 FROM players WHERE id = %s FOR UPDATE",
+                            (player_id,),
+                        )
+        finally:
+            database.close()

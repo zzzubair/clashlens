@@ -442,13 +442,19 @@ def test_pod_address_and_stop_limits_are_rendered(tmp_path, mode_config, mode):
     memory = postgres["Container"]["Memory"]
     assert int(buffers[:-2]) * mib[buffers[-2:]] * 2 <= int(memory[:-1]) * mib[memory[-1]]
     # Podman reads these with Go's duration parser, which rejects systemd's "min".
-    assert postgres.has_option("Container", "HealthStartPeriod")
+    assert postgres.has_option("Container", "HealthStartupInterval")
     go_duration = re.compile(r"(\d+(ns|us|ms|s|m|h))+")
     for path in units.glob("*.container"):
         unit = configparser.ConfigParser(interpolation=None, strict=False)
         unit.optionxform = str
         unit.read(path)
-        for key in ("HealthInterval", "HealthTimeout", "HealthStartPeriod"):
+        for key in (
+            "HealthInterval",
+            "HealthTimeout",
+            "HealthStartPeriod",
+            "HealthStartupInterval",
+            "HealthStartupTimeout",
+        ):
             value = unit.get("Container", key, fallback=None)
             assert value is None or go_duration.fullmatch(value), (path.name, key, value)
     if mode == "fixture":
