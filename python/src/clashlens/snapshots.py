@@ -127,8 +127,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 official_identity = connection.execute(
                     """
                     SELECT DISTINCT input_identity->>'official_top200_version_id'
-                    FROM boundary_publication_manifest_rows
-                    WHERE manifest_id = %s
+                    FROM boundary_publication_manifest_entries(%s)
                     """,
                     (manifest_id,),
                 ).fetchall()
@@ -144,10 +143,9 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     """
                     SELECT ranked.id, ranked.ranked_day_start,
                            ranked.ranked_day_end, ranked.input_hash, ranked.version
-                    FROM boundary_publication_manifest_rows AS manifest
+                    FROM boundary_publication_manifest_entries(%s) AS manifest
                     JOIN ranked_day_versions AS ranked
                       ON ranked.id = manifest.ranked_day_version_id
-                    WHERE manifest.manifest_id = %s
                     ORDER BY ranked.id DESC
                     LIMIT 1
                     """,
@@ -235,8 +233,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                            input_identity->>'profile_version_id',
                            input_identity->>'snapshot_quality',
                            ranked_day_version_id
-                    FROM boundary_publication_manifest_rows
-                    WHERE manifest_id = %s
+                    FROM boundary_publication_manifest_entries(%s)
                     """,
                     (generation_row[4],),
                 ).fetchall()
@@ -316,8 +313,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     SELECT player_id, input_identity->>'official_rank',
                            input_identity->>'official_rank_observed_at',
                            input_identity->>'official_top200_version_id'
-                    FROM boundary_publication_manifest_rows
-                    WHERE manifest_id = %s
+                    FROM boundary_publication_manifest_entries(%s)
                     """,
                     (generation_row[4],),
                 ).fetchall()
@@ -503,8 +499,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     """
                     SELECT player_id, classification,
                            input_identity->>'snapshot_quality'
-                    FROM boundary_publication_manifest_rows
-                    WHERE manifest_id = %s
+                    FROM boundary_publication_manifest_entries(%s)
                     """,
                     (generation_row[4],),
                 ).fetchall()

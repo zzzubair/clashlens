@@ -5,6 +5,11 @@ one or more queries per player, and every manifest row is written in one
 insert. A Reset's publication lock is held for the whole freeze, so this is
 what shortens how long other work waits for it. The rows and digest are the
 same as reading each player's inputs one at a time.
+
+A correction's manifest repeats almost every row of the Reset's earlier ones,
+so it stores only the rows that differ from the Reset's newest full manifest
+and reads the rest from it; boundary_publication_manifest_entries rebuilds
+the complete rows the digest covers.
 """
 
 from __future__ import annotations
@@ -104,55 +109,100 @@ def freeze_boundary_manifest(
         ),
         **({"season_inputs": season_inputs} if season_inputs is not None else {}),
     }
-    digest = hashlib.sha256(
-        json.dumps(
-            {
-                "generation": int(generation[1]),
-                "artifact_kind": artifact_kind,
-                "rule_versions": rule_versions,
-                "rows": manifest_rows,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    digest = manifest_digest(
+        {
+            "generation": int(generation[1]),
+            "artifact_kind": artifact_kind,
+            "rule_versions": rule_versions,
+            "rows": manifest_rows,
+        }
+    )
+    columns = _row_columns(manifest_rows)
+    base_id, sources = _reuse_plan(connection, generation[0], artifact_kind, columns)
+    stored_rule_versions = rule_versions
+    season_changes = (
+        _season_input_changes(connection, base_id, season_inputs)
+        if base_id is not None and season_inputs is not None
+        else None
+    )
+    if season_changes is not None:
+        stored_rule_versions = {
+            **{key: value for key, value in rule_versions.items() if key != "season_inputs"},
+            "season_input_changes": season_changes,
+        }
     manifest = connection.execute(
         """
         INSERT INTO boundary_publication_manifests
-            (generation_id, artifact_kind, rule_versions, digest)
-        VALUES (%s, %s, %s, %s)
+            (generation_id, artifact_kind, rule_versions, digest,
+             base_manifest_id, newest_ranked_day_version_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
-        (generation_id, artifact_kind, Jsonb(rule_versions), digest),
+        (
+            generation_id,
+            artifact_kind,
+            Jsonb(stored_rule_versions),
+            digest,
+            base_id,
+            max((value for value in columns[2] if value is not None), default=None),
+        ),
     ).fetchone()
     assert manifest is not None
     manifest_id = int(manifest[0])
+    # With a base, only rows that differ from it are stored; a row whose
+    # identity an earlier manifest stores names that manifest, not a copy.
+    stored = [
+        index
+        for index in range(len(manifest_rows))
+        if base_id is None or sources[index] != base_id
+    ]
     connection.execute(
         """
         INSERT INTO boundary_publication_manifest_rows
             (manifest_id, ordinal, player_id, ranked_day_version_id,
-             input_hash, classification, unavailable_reason, input_identity)
+             input_hash, classification, unavailable_reason, input_identity,
+             identity_manifest_id)
         SELECT %s, manifest_row.*
         FROM unnest(
             %s::integer[], %s::bigint[], %s::bigint[], %s::text[],
-            %s::text[], %s::text[], %s::jsonb[]
+            %s::text[], %s::text[], %s::jsonb[], %s::bigint[]
         ) AS manifest_row
         """,
         (
             manifest_id,
-            list(range(1, len(manifest_rows) + 1)),
-            [identity["player_id"] for identity in manifest_rows],
-            [identity["ranked_day_version_id"] for identity in manifest_rows],
-            [identity["input_hash"] for identity in manifest_rows],
-            [identity["classification"] for identity in manifest_rows],
+            *([column[index] for index in stored] for column in columns[:6]),
             [
-                "reset_baseline_failed"
-                if identity["classification"] == "Unavailable"
-                else None
-                for identity in manifest_rows
+                None if base_id is not None and sources[index] else columns[6][index]
+                for index in stored
             ],
-            [Jsonb(identity) for identity in manifest_rows],
+            [sources[index] if base_id is not None else None for index in stored],
         ),
+    )
+    identities = [
+        len(json.dumps(identity, separators=(",", ":"))) for identity in manifest_rows
+    ]
+    print(
+        json.dumps(
+            {
+                "event": "boundary_manifest_frozen",
+                "manifest_id": manifest_id,
+                "artifact_kind": artifact_kind,
+                "base_manifest_id": base_id,
+                "rows": len(manifest_rows),
+                "rows_stored": len(stored),
+                "identities_stored": sum(
+                    base_id is None or not sources[index] for index in stored
+                ),
+                "identity_bytes": sum(identities),
+                "identity_bytes_stored": sum(
+                    identities[index]
+                    for index in stored
+                    if base_id is None or not sources[index]
+                ),
+                "season_inputs_reused": season_changes is not None,
+            }
+        ),
+        flush=True,
     )
     connection.execute(
         """
@@ -173,6 +223,192 @@ def freeze_boundary_manifest(
         (manifest_id, generation_id),
     )
     return manifest_id, digest
+
+
+def manifest_digest(contents: Mapping[str, Any]) -> str:
+    """The digest of a manifest's generation, kind, rule versions and rows."""
+    return hashlib.sha256(
+        json.dumps(contents, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def manifest_contents(connection: Any, manifest_id: int) -> tuple[str, dict[str, Any]]:
+    """A manifest's stored digest and the contents it covers, rebuilt from
+    whatever it and its base store, for checking one against the other."""
+    row = connection.execute(
+        """
+        SELECT manifest.digest, generation.generation, manifest.artifact_kind,
+               manifest.rule_versions, base.rule_versions -> 'season_inputs'
+        FROM boundary_publication_manifests AS manifest
+        JOIN boundary_publication_generations AS generation
+          ON generation.id = manifest.generation_id
+        LEFT JOIN boundary_publication_manifests AS base
+          ON base.id = manifest.base_manifest_id
+        WHERE manifest.id = %s
+        """,
+        (manifest_id,),
+    ).fetchone()
+    rule_versions = dict(row[3])
+    changes = rule_versions.pop("season_input_changes", None)
+    if changes is not None:
+        rule_versions["season_inputs"] = {
+            key: _apply_list_changes(row[4][key], change)
+            for key, change in changes.items()
+        }
+    rows = connection.execute(
+        """
+        SELECT input_identity FROM boundary_publication_manifest_entries(%s)
+        ORDER BY ordinal
+        """,
+        (manifest_id,),
+    ).fetchall()
+    return _text_value(row[0]), {
+        "generation": int(row[1]),
+        "artifact_kind": _text_value(row[2]),
+        "rule_versions": rule_versions,
+        "rows": [identity for (identity,) in rows],
+    }
+
+
+def _row_columns(manifest_rows: list[dict[str, Any]]) -> list[list[Any]]:
+    """The stored columns of each row, in order."""
+    return [
+        list(range(1, len(manifest_rows) + 1)),
+        [identity["player_id"] for identity in manifest_rows],
+        [identity["ranked_day_version_id"] for identity in manifest_rows],
+        [identity["input_hash"] for identity in manifest_rows],
+        [identity["classification"] for identity in manifest_rows],
+        [
+            "reset_baseline_failed"
+            if identity["classification"] == "Unavailable"
+            else None
+            for identity in manifest_rows
+        ],
+        [Jsonb(identity) for identity in manifest_rows],
+    ]
+
+
+def _same_row(stored: str) -> str:
+    """Whether ``stored`` holds the ``new`` row, generation aside. Identities
+    compare as stored text, so a reused one reads back exactly as sent."""
+    return f"""
+        {stored}.ranked_day_version_id IS NOT DISTINCT FROM new.ranked_day_version_id
+        AND {stored}.input_hash IS NOT DISTINCT FROM new.input_hash
+        AND {stored}.classification = new.classification
+        AND {stored}.unavailable_reason IS NOT DISTINCT FROM new.unavailable_reason
+        AND ({stored}.input_identity - 'generation')::text
+            = (new.input_identity - 'generation')::text
+    """
+
+
+def _reuse_plan(
+    connection: Any, boundary_at: datetime, artifact_kind: str, columns: list[list[Any]]
+) -> tuple[int | None, list[int | None]]:
+    """The full manifest a new one can build on, and for each row the
+    manifest whose identical row it reuses, or None to store it in full.
+
+    The base is the newest full manifest of this Reset and kind, so no
+    manifest is ever more than one step from its rows. A row equal to the
+    base's is the base's; a row equal to the newest manifest's names the
+    manifest storing that identity. A changed membership, or more than half
+    the rows differing from the base, freezes a new full manifest instead.
+    """
+    previous = connection.execute(
+        """
+        SELECT manifest.id, COALESCE(manifest.base_manifest_id, manifest.id)
+        FROM boundary_publication_manifests AS manifest
+        JOIN boundary_publication_generations AS generation
+          ON generation.id = manifest.generation_id
+        WHERE generation.boundary_at = %s AND manifest.artifact_kind = %s
+          AND manifest.rows_sealed
+        ORDER BY manifest.id DESC
+        LIMIT 1
+        """,
+        (boundary_at, artifact_kind),
+    ).fetchone()
+    if previous is None:
+        return None, []
+    previous_id, base_id = int(previous[0]), int(previous[1])
+    members = connection.execute(
+        "SELECT count(*) FROM boundary_publication_manifest_rows WHERE manifest_id = %s",
+        (base_id,),
+    ).fetchone()[0]
+    if int(members) != len(columns[0]):
+        return None, []
+    plan = connection.execute(
+        f"""
+        SELECT base.player_id IS NOT NULL, COALESCE({_same_row("base")}, false),
+               CASE WHEN {_same_row("previous")}
+                    THEN previous.identity_manifest_id END
+        FROM unnest(
+            %s::integer[], %s::bigint[], %s::bigint[], %s::text[],
+            %s::text[], %s::text[], %s::jsonb[]
+        ) AS new (ordinal, player_id, ranked_day_version_id, input_hash,
+                  classification, unavailable_reason, input_identity)
+        LEFT JOIN boundary_publication_manifest_rows AS base
+          ON base.manifest_id = %s AND base.ordinal = new.ordinal
+         AND base.player_id = new.player_id
+        LEFT JOIN boundary_publication_manifest_entries(%s) AS previous
+          ON previous.ordinal = new.ordinal AND previous.player_id = new.player_id
+        ORDER BY new.ordinal
+        """,
+        (*columns, base_id, previous_id),
+    ).fetchall()
+    if not all(member for member, _, _ in plan):
+        return None, []
+    sources = [
+        base_id if same else int(holder) if holder is not None else None
+        for _, same, holder in plan
+    ]
+    if 2 * sum(source != base_id for source in sources) > len(sources):
+        return None, []
+    return base_id, sources
+
+
+def _season_input_changes(
+    connection: Any, base_id: int, season_inputs: Mapping[str, list[int]]
+) -> dict[str, dict[str, list[int]]] | None:
+    """Each Season input list's changes from the base manifest's, or None when
+    they change more than half the IDs and the full lists are stored."""
+    base = connection.execute(
+        "SELECT rule_versions -> 'season_inputs' FROM boundary_publication_manifests WHERE id = %s",
+        (base_id,),
+    ).fetchone()[0]
+    if not isinstance(base, dict) or set(base) != set(season_inputs):
+        return None
+    changes = {}
+    for key, values in season_inputs.items():
+        change = _list_changes(base[key], values)
+        if change is None:
+            return None
+        changes[key] = change
+    changed = sum(len(change["removed"]) + len(change["added"]) for change in changes.values())
+    if 2 * changed > sum(len(values) for values in season_inputs.values()):
+        return None
+    return changes
+
+
+def _list_changes(base: list[int], values: list[int]) -> dict[str, list[int]] | None:
+    """The IDs ``values`` drops from ``base`` and the ones it adds, with
+    where each lands, or None when applying them would not give ``values``
+    back exactly."""
+    kept, present = set(values), set(base)
+    added = [(index, value) for index, value in enumerate(values) if value not in present]
+    change = {
+        "removed": [value for value in base if value not in kept],
+        "at": [index for index, _ in added],
+        "added": [value for _, value in added],
+    }
+    return change if _apply_list_changes(base, change) == values else None
+
+
+def _apply_list_changes(base: list[int], change: Mapping[str, list[int]]) -> list[int] | None:
+    removed = set(change["removed"])
+    kept = iter(value for value in base if value not in removed)
+    added = dict(zip(change["at"], change["added"], strict=True))
+    length = len(base) - len(removed) + len(added)
+    values = [added[index] if index in added else next(kept, None) for index in range(length)]
+    return values if None not in values and next(kept, None) is None else None
 
 
 def _member(row: Any, artifact_kind: str) -> tuple[int, int | None, str | None, str]:

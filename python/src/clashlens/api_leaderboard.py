@@ -369,16 +369,19 @@ def get_frozen_leaderboard(
                 LEFT JOIN boundary_publication_generations AS generation
                   ON generation.snapshot_id = snapshot.id
                 LEFT JOIN LATERAL (
+                    -- A proof frozen since 0081 records its newest ranked day;
+                    -- an older one stores all its rows, so they give it.
                     SELECT ranked.official_season_id, ranked.season_day_number
-                    FROM (
-                        SELECT member.ranked_day_version_id
-                        FROM boundary_publication_manifest_rows AS member
-                        WHERE member.manifest_id = generation.snapshot_manifest_id
-                          AND member.ranked_day_version_id IS NOT NULL
-                        ORDER BY member.ranked_day_version_id DESC LIMIT 1
-                    ) AS member
+                    FROM boundary_publication_manifests AS manifest
                     JOIN ranked_day_versions AS ranked
-                      ON ranked.id = member.ranked_day_version_id
+                      ON ranked.id = COALESCE(
+                          manifest.newest_ranked_day_version_id,
+                          (SELECT member.ranked_day_version_id
+                           FROM boundary_publication_manifest_rows AS member
+                           WHERE member.manifest_id = manifest.id
+                             AND member.ranked_day_version_id IS NOT NULL
+                           ORDER BY member.ranked_day_version_id DESC LIMIT 1))
+                    WHERE manifest.id = generation.snapshot_manifest_id
                 ) AS generation_day ON true
                 WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
                   AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
@@ -453,16 +456,19 @@ def get_frozen_leaderboard(
                     LEFT JOIN boundary_publication_generations AS generation
                       ON generation.snapshot_id = snapshot.id
                     LEFT JOIN LATERAL (
+                        -- A proof frozen since 0081 records its newest ranked day;
+                        -- an older one stores all its rows, so they give it.
                         SELECT ranked.official_season_id, ranked.season_day_number
-                        FROM (
-                            SELECT member.ranked_day_version_id
-                            FROM boundary_publication_manifest_rows AS member
-                            WHERE member.manifest_id = generation.snapshot_manifest_id
-                              AND member.ranked_day_version_id IS NOT NULL
-                            ORDER BY member.ranked_day_version_id DESC LIMIT 1
-                        ) AS member
+                        FROM boundary_publication_manifests AS manifest
                         JOIN ranked_day_versions AS ranked
-                          ON ranked.id = member.ranked_day_version_id
+                          ON ranked.id = COALESCE(
+                              manifest.newest_ranked_day_version_id,
+                              (SELECT member.ranked_day_version_id
+                               FROM boundary_publication_manifest_rows AS member
+                               WHERE member.manifest_id = manifest.id
+                                 AND member.ranked_day_version_id IS NOT NULL
+                               ORDER BY member.ranked_day_version_id DESC LIMIT 1))
+                        WHERE manifest.id = generation.snapshot_manifest_id
                     ) AS generation_day ON true
                     WHERE snapshot.id = %s
                       AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')

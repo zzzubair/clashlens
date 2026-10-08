@@ -563,11 +563,15 @@ The timer starts a full backup Sundays at 03:00 UTC. Missed calendar runs are
 caught up; restarting the stack does not add another full backup. Run
 `./ops backup` once during the approved initial rollout. PostgreSQL continuously uploads
 its change log, called WAL, with `archive_timeout=300`. A successful full backup
-then prunes backups older than the full backup completed before seven days and
-one hour ago. It retains that backup and all newer backups and WAL. Until such
-a backup exists, pruning deletes nothing. Extra manual backups cannot shorten
-the recovery window. The one-hour margin covers scheduling and backup duration;
-this typically retains two or three weekly full backups, rather than exactly two.
+then prunes backups older than the newest backup completed before seven days and
+one hour ago. It retains that backup, all newer backups and WAL, and, when that
+backup is a WAL-G delta backup (only the pages changed since an earlier backup),
+the full backup its chain starts from (`wal-g delete before FIND_FULL`). Only
+full and delta backup names are accepted. Delta backups are not switched on.
+Until such a backup exists, pruning deletes nothing. Extra manual backups cannot
+shorten the recovery window. The one-hour margin covers scheduling and backup
+duration; this typically retains two or three weekly full backups, rather than
+exactly two.
 
 ```sh
 ./ops backup                  # upload now, then apply age-based retention
@@ -589,7 +593,9 @@ after upgrading this check; do not edit a saved fingerprint or bypass the guard.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
 missing/unreachable remote backups, a full backup older than eight days, disabled
 archiving, or completed WAL files waiting over ten minutes. No WAL activity during
-an idle period is not itself failure. `./ops alert-check` alerts on this command
+an idle period is not itself failure. It also prints how many GB of WAL a restore
+to now would replay after the newest backup, the part of a restore that grows
+between backups; it does not fail on that number. `./ops alert-check` alerts on this command
 and disk space: PostgreSQL retains unarchived WAL locally during a storage outage
 and that queue is not capped by `max_wal_size`. Never delete unarchived WAL to
 free space.
@@ -654,10 +660,12 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
 `/run/secrets/walg.json` with uid/gid 70 and mode 0400.
 
 1. Run `wal-g --config /run/secrets/walg.json backup-list --detail --json`.
-   Choose a full backup whose **finish time precedes the desired recovery time**.
-   `LATEST` is unsuitable when recovering an older point.
+   Choose the newest backup whose **finish time precedes the desired recovery
+   time**; a delta backup fetches its chain itself. `LATEST` is unsuitable when
+   recovering an older point. Note its `start_lsn`.
 2. Run `wal-g --config /run/secrets/walg.json backup-fetch /var/lib/postgresql/data/pgdata BACKUP_NAME`
-   against the new volume. Create `recovery.signal` in that directory.
+   against the new volume, timing it: that is the download time. Create
+   `recovery.signal` in that directory.
 3. Start PostgreSQL with that volume and `PGDATA`, the read-only secret,
    `hba_file=/etc/clashlens/pg_hba.conf`, `archive_mode=off`, an empty
    `archive_command`,
@@ -666,9 +674,13 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
 4. Confirm `SHOW hba_file` returns `/etc/clashlens/pg_hba.conf`, and both
    `pg_is_in_recovery()` and `pg_is_wal_replay_paused()` are true,
    and the log says recovery reached the chosen time. Merely accepting queries
-   does not prove the target was reached. Compare expected accounts, saved-player
-   links, player history, battle links and army summaries. Read every retained raw
-   object referenced by the sample and verify its hash. Missing required evidence
+   does not prove the target was reached. The time from starting PostgreSQL to
+   that log line is the replay time; `pg_last_wal_replay_lsn()` minus the
+   backup's `start_lsn` is the WAL it replayed, and the two give the replay rate
+   that decides how much WAL fits in the restore target. Compare expected
+   accounts, saved-player links, player history, battle links and army
+   summaries. Read every retained raw object referenced by the sample and
+   verify its hash, timing it as the raw-check time. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
 5. Repeat for the seven-day-old boundary, using a full backup from before it.
    If the restore could take more than two days while production keeps
@@ -684,7 +696,9 @@ restore target is **60 minutes**, pending measurement at production size.
 Seven-day recovery starts only after seven days of uninterrupted archived history.
 
 The approved pricing model assumed 100 GB per full backup and 30 GB of WAL per
-seven days. Keeping two to three full backups plus up to roughly 14 days of WAL
+seven days. Production wrote 455 GB of WAL (before upload compression) in the
+4.2 days after the 4 October 2026 full backup, so that WAL figure no longer
+holds. Keeping two to three full backups plus up to roughly 14 days of WAL
 models **260–360 GB**, about **$3.75–$5.25/month** at the #120 R2 rate and free
 allowance, rather than its original roughly $3 estimate. This is a model, not
 measured production growth. Manual backups add up to another full backup each

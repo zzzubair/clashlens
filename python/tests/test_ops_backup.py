@@ -141,10 +141,21 @@ elif "delete" in args:
     if "--confirm" in args:
         boundary = args[args.index("before") + 1]
         rows = json.loads(os.environ["BACKUPS"])
+        if boundary == "FIND_FULL":
+            # A delta backup is named after the backup it builds on.
+            boundary = args[args.index("FIND_FULL") + 1]
+            while "_D_" in boundary:
+                base = "base_" + boundary.split("_D_")[1]
+                boundary = next(
+                    r["backup_name"] for r in rows
+                    if r["backup_name"].split("_D_")[0] == base
+                )
         start = next(r["start_time"] for r in rows if r["backup_name"] == boundary)
         Path(os.environ["REMAINING"]).write_text(json.dumps([
             r["backup_name"] for r in rows if r["start_time"] >= start
         ]))
+elif "SELECT pg_current_wal_lsn()" in args:
+    print(os.environ.get("CURRENT_LSN", ""))
 elif args[:2] == ["--user", "is-active"]:
     print("active")
 """
@@ -168,20 +179,27 @@ elif args[:2] == ["--user", "is-active"]:
     return env, Path(env["REMAINING"])
 
 
-def backup_row(number, days, *, duration_hours=0):
+def backup_row(number, days, *, duration_hours=0, delta_of=None, start_lsn=0):
     start = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
     return {
-        "backup_name": f"base_{number:024X}",
+        "backup_name": f"base_{number:024X}"
+        + (f"_D_{delta_of:024X}" if delta_of is not None else ""),
         "start_time": start.isoformat(),
         "finish_time": (start + dt.timedelta(hours=duration_hours)).isoformat(),
+        "start_lsn": start_lsn,
     }
 
 
-def run_ops(runtime, rows, *args, upload_exit=0):
+def run_ops(runtime, rows, *args, upload_exit=0, current_lsn=""):
     env, _ = runtime
     return subprocess.run(
         ["bash", str(OPS), *args],
-        env=dict(env, BACKUPS=json.dumps(rows), UPLOAD_EXIT=str(upload_exit)),
+        env=dict(
+            env,
+            BACKUPS=json.dumps(rows),
+            UPLOAD_EXIT=str(upload_exit),
+            CURRENT_LSN=current_lsn,
+        ),
         capture_output=True,
         text=True,
         timeout=OPS_TIMEOUT,
@@ -622,6 +640,42 @@ def test_extra_manual_backups_do_not_shorten_recovery_window(runtime):
     result = run_ops(runtime, rows, "backup-prune", "--apply")
     assert result.returncode == 0, result.stderr
     assert json.loads(runtime[1].read_text()) == [r["backup_name"] for r in rows[1:]]
+
+
+def test_retention_keeps_the_full_backup_a_kept_delta_builds_on(runtime):
+    rows = [
+        backup_row(1, 21),
+        backup_row(2, 20, delta_of=1),
+        backup_row(3, 14),
+        backup_row(4, 10, delta_of=3),
+        backup_row(5, 9, delta_of=4),
+        backup_row(6, 6, delta_of=5),
+        backup_row(7, 1),
+    ]
+    result = run_ops(runtime, rows, "backup-prune", "--apply")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(runtime[1].read_text()) == [r["backup_name"] for r in rows[2:]]
+
+
+def test_retention_refuses_unexpected_backup_names(runtime):
+    rows = [backup_row(1, 21), backup_row(2, 14)]
+    rows[0]["backup_name"] += "_X"
+    result = run_ops(runtime, rows, "backup-prune", "--apply")
+    assert result.returncode != 0
+    assert "unexpected backup names" in result.stderr
+    assert not runtime[1].exists()
+
+
+def test_status_reports_change_log_a_restore_replays(runtime):
+    rows = [
+        backup_row(1, 6, start_lsn=1_000_000_000),
+        backup_row(2, 1, start_lsn=3_000_000_000),
+    ]
+    # 0x1/0x2A05F200 is 4,294,967,296 + 705,032,704 = 5,000,000,000.
+    result = run_ops(runtime, rows, "backup-status", current_lsn="1/2A05F200")
+    assert result.returncode == 0, result.stderr
+    assert "A restore to now replays 2.0 GB of change log" in result.stdout
+    assert "replays" not in run_ops(runtime, rows, "backup-status").stdout
 
 
 def test_retention_preview_does_not_delete(runtime):
