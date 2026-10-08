@@ -712,7 +712,7 @@ recording it done or failed. Its 60-second claim is renewed every 20 seconds in
 the background, and before a step only when less than 40 seconds are left.
 Every 30 seconds, claims that ran out return to the queue in batches of up to
 1,000, found through an index of claimed rows
-([migration 0081](../deploy/migrations/0081_upload_lease_expiry_lookup.sql)).
+([migration 0082](../deploy/migrations/0082_upload_lease_expiry_lookup.sql)).
 Without it each pass read the whole upload table: 1.1 GB, 405 ms on average and
 up to 6.2 s, on 8 October. See [migration 0042](../deploy/migrations/0042_upload_claim_order.sql)
 for the ordered upload lookup. When a pending upload's saved copy is gone, the

@@ -89,7 +89,7 @@ NEXT_DUE_UPLOAD_SQL = f"""
 """
 
 
-# collector_response_uploads_lease_expiry (migration 0081) holds only leased
+# collector_response_uploads_lease_expiry (migration 0082) holds only leased
 # rows, so this reads those, not the whole table.
 RELEASE_EXPIRED_UPLOADS_SQL = """
     UPDATE collector_response_uploads
