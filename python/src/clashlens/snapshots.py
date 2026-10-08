@@ -272,7 +272,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     connection,
                     boundary_at,
                     {
-                        row[0]: (ranked_day_versions[row[0]], row[4])
+                        row[0]: (ranked_day_versions[row[0]], row[3], row[4])
                         for row in profile_rows
                         if row[0] in ranked_day_versions
                     },

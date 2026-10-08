@@ -244,8 +244,9 @@ export default function TrackedLeaderboardRoute() {
             {formatDate(daily.seasonEndAt)} · Day reset{" "}
             <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s total
             at this Reset, before the game&apos;s automatic defense loss: their last value
-            saved before the Reset plus the battles recorded after it. Where we can&apos;t
-            confirm every later battle was recorded, the saved value is shown alone.
+            saved before the Reset plus the battles recorded after it. Boards published
+            before we started adding those battles, and not rebuilt since, show the saved
+            value alone, as do players whose later battles we can&apos;t confirm.
           </p>
         ) : newestObservedAt ? (
           <p className="rankings-context">

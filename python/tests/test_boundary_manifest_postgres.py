@@ -1204,3 +1204,58 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
             ]
         finally:
             database.close()
+
+
+def test_board_keeps_a_reading_its_later_battles_cannot_prove(
+    database_url: str,
+) -> None:
+    """A reading answered at 04:54:59 for a request sent a second earlier may
+    or may not hold an attack stamped 04:54:58, and a battle whose trophies
+    the two players' logs disagree on proves nothing; each such entry keeps
+    its reading and is marked uncertain."""
+    readings = [
+        ("#INFLIGHT", 5088, datetime(2026, 10, 7, 4, 54, 59, tzinfo=UTC)),
+        ("#DISPUTED", 5100, _october(7, 4, 40)),
+        ("#DISPUTEDDAY", 5090, _october(7, 4, 40)),
+    ]
+    days = {
+        1: (True, [
+            ("offense", 40, datetime(2026, 10, 7, 4, 54, 58, tzinfo=UTC), True),
+            ("offense", 40, _october(7, 4, 57), True),
+        ]),
+        2: (True, [("offense", 40, _october(7, 4, 57), True)]),
+        3: (True, [("offense", 40, _october(7, 4, 57), True)]),
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(connection_info, generation_id, days)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            # One player's log says +40, the other's +0.
+            connection.execute(
+                """
+                UPDATE ranked_day_versions
+                SET input_evidence = jsonb_set(
+                    input_evidence, '{contributions,0,disagreement}', 'true'
+                )
+                WHERE id = 2
+                """
+            )
+            connection.execute(
+                "UPDATE ranked_day_versions"
+                " SET failure_reasons = '[\"duplicate_contribution_disagreement\"]'"
+                " WHERE id = 3"
+            )
+        database = Database(connection_info)
+        try:
+            assert _build_board(connection_info, database, generation_id) == [
+                ("#DISPUTED", 5100, "uncertain"),
+                ("#DISPUTEDDAY", 5090, "uncertain"),
+                ("#INFLIGHT", 5088, "uncertain"),
+            ]
+            season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+            assert boundary.queue_board_rebuilds(database, season, queue=False)[
+                "boards"
+            ] == []
+        finally:
+            database.close()

@@ -1107,7 +1107,8 @@ def queue_board_rebuilds(
                     """
                     SELECT player_id,
                            input_identity->'profile_snapshot'->>'observed_at',
-                           ranked_day_version_id
+                           ranked_day_version_id,
+                           input_identity->'profile_snapshot'->>'observation_id'
                     FROM boundary_publication_manifest_rows
                     WHERE manifest_id = %s
                       AND input_identity->>'snapshot_quality' = 'eligible'
@@ -1124,7 +1125,9 @@ def queue_board_rebuilds(
                     connection,
                     boundary_at,
                     {
-                        int(row[0]): (int(row[2]), readings[int(row[0])])
+                        int(row[0]): (
+                            int(row[2]), int(row[3]), readings[int(row[0])]
+                        )
                         for row in rows
                         if row[2] is not None
                     },

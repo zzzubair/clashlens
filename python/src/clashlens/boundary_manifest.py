@@ -21,6 +21,7 @@ from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .db import Database, _text_value
 from .domain import RANKED_DAY_DURATION, season_is_current
+from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
     "complete": "Complete",
@@ -437,18 +438,20 @@ def profiles_not_found(
 def battles_after_readings(
     connection: Any,
     boundary_at: datetime,
-    readings: Mapping[int, tuple[int, datetime]],
+    readings: Mapping[int, tuple[int, int, datetime]],
 ) -> dict[int, int]:
     """Each player's trophy change from their ended day's battles stamped
     after their reading, for players whose day proves none is missing.
 
     ``readings`` maps a player to the version of their day ending at
-    ``boundary_at`` and their reading's time. The reading plus this change
-    is their trophies at the Reset before the automatic defense loss. A
-    battle stamped after the reading cannot be in it, so none is counted
-    twice. Proof is the day's continuous battle logs, a reading taken on that
-    day and a time on every battle the day counts; a player without it is
-    left out, and the board keeps their reading and marks it uncertain.
+    ``boundary_at``, their reading's saved response and its time. The
+    reading plus this change is their trophies at the Reset before the
+    automatic defense loss. A battle stamped after the reading cannot be in
+    it, so none is counted twice. Proof is the day's continuous battle logs,
+    a reading taken on that day, a time on every battle the day counts, none
+    stamped between the reading's request and its response, and no battle
+    amount the two players' logs disagree on; a player without it is left
+    out, and the board keeps their reading and marks it uncertain.
     """
     if not readings:
         return {}
@@ -457,12 +460,15 @@ def battles_after_readings(
         for row in connection.execute(
             """
             SELECT reading.player_id, late.trophy_change
-            FROM unnest(%s::bigint[], %s::bigint[], %s::timestamptz[])
-                AS reading (player_id, version_id, observed_at)
+            FROM unnest(
+                %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
+            ) AS reading (player_id, version_id, observation_id, observed_at)
             JOIN ranked_day_versions AS ranked
               ON ranked.id = reading.version_id
              AND ranked.player_id = reading.player_id
              AND ranked.ranked_day_end = %s
+            JOIN collector_observations AS observation
+              ON observation.id = reading.observation_id
             CROSS JOIN LATERAL (
                 SELECT COALESCE(sum(
                            CASE WHEN battle.value->>'lens' = 'offense' THEN 1
@@ -472,20 +478,30 @@ def battles_after_readings(
                            WHERE (battle.value->>'battle_timestamp')::timestamptz
                                  > reading.observed_at
                        ), 0),
-                       bool_and(battle.value->>'battle_timestamp' IS NOT NULL)
+                       bool_and(
+                           battle.value->>'battle_timestamp' IS NOT NULL
+                           AND (battle.value->>'battle_timestamp')::timestamptz
+                               NOT BETWEEN observation.request_started_at
+                                       AND reading.observed_at
+                           AND battle.value->>'disagreement'
+                               IS DISTINCT FROM 'true'
+                       )
                 FROM jsonb_array_elements(ranked.input_evidence->'contributions')
                     AS battle
                 WHERE battle.value->>'included' = 'true'
-            ) AS late (trophy_change, every_battle_timed)
+            ) AS late (trophy_change, every_battle_proven)
             WHERE ranked.coverage_complete
               AND reading.observed_at >= ranked.ranked_day_start
-              AND late.every_battle_timed IS NOT FALSE
+              AND NOT ranked.failure_reasons ?| %s::text[]
+              AND late.every_battle_proven IS NOT FALSE
             """,
             (
                 list(readings),
-                [version_id for version_id, _ in readings.values()],
-                [observed_at for _, observed_at in readings.values()],
+                [version_id for version_id, _, _ in readings.values()],
+                [observation_id for _, observation_id, _ in readings.values()],
+                [observed_at for _, _, observed_at in readings.values()],
                 boundary_at,
+                sorted(DISPUTED_BATTLE_REASONS),
             ),
         ).fetchall()
     }
