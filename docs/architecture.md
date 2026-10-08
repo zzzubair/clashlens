@@ -221,7 +221,7 @@ two maintenance connections and the maintenance lock's one) may not exceed
 38. With the collector's 32 and the API's 8 that leaves two for operators
 within 80 of PostgreSQL's 100.
 
-All threads still share one `--database-pool-size` pool; giving response and
+All threads in a process share its one `--database-pool-size` pool; giving response and
 derived threads separate connection limits is deferred. A thread that waits
 30 seconds without getting a connection from that pool affects only itself.
 If it was claiming, it logs `worker_claim` with `pool_busy`, waits
