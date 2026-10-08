@@ -242,11 +242,12 @@ export default function TrackedLeaderboardRoute() {
           <p className="rankings-context">
             Legend season {formatDate(daily.seasonStartAt)} –{" "}
             {formatDate(daily.seasonEndAt)} · Day reset{" "}
-            <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s total
-            at this Reset, before the game&apos;s automatic defense loss: their last value
-            saved before the Reset plus the battles recorded after it. Boards published
-            before we started adding those battles, and not rebuilt since, show the saved
-            value alone, as do players whose later battles we can&apos;t confirm.
+            <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s
+            total at this Reset, before the game&apos;s automatic defense loss: their last
+            value saved before the Reset plus the battles recorded after it. Boards
+            published before we started adding those battles, and not rebuilt since, show
+            the saved value alone, as do players whose later battles we can&apos;t
+            confirm.
           </p>
         ) : newestObservedAt ? (
           <p className="rankings-context">
@@ -276,10 +277,10 @@ export default function TrackedLeaderboardRoute() {
               <strong>These standings are incomplete.</strong> No player updates were
               saved in the {formatAge(secondsBeforeReset(newestInput))} before this
               day&apos;s Reset; the newest is from <LocalTimestamp value={newestInput} />.
-              Trophies start from each player&apos;s last saved value before then.
-              Battles recorded after it are added where we can confirm them, except on
-              boards published before we started adding them, so trophies may still miss
-              changes made before the Reset.
+              Trophies start from each player&apos;s last saved value before then. Battles
+              recorded after it are added where we can confirm them, except on boards
+              published before we started adding them, so trophies may still miss changes
+              made before the Reset.
             </p>
           </div>
         ) : null}
