@@ -440,6 +440,7 @@ def recalculate_ranked_day(
                 if isinstance(reading_at, str)
                 else ranked_day.end
             ),
+            end_battle_log_observation_id=end_battle_log_observation_id,
         )
         new_day_contributions = ranked_day_inputs.load_contributions(
             connection, player_id, ranked_day_for(ranked_day.end)

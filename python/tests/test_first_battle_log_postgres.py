@@ -505,6 +505,55 @@ def test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end(
     assert day_2[3] == end_2
 
 
+def test_day_after_a_reading_before_the_loss_takes_the_loss_off_once(
+    database_url: str, archive_server
+) -> None:
+    """Day 1's Reset reading is rejected and the next reading, at 05:03,
+    came before the automatic loss landed. Day 1's calculated end, after
+    the loss, starts Day 2 as it is."""
+    day_3 = DAY_2 + timedelta(days=1)
+    filler = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(44)]
+    day_2_battles = [
+        (DAY_2 + timedelta(hours=2), True), (DAY_2 + timedelta(hours=5), False),
+    ]
+    end_1 = 5000 + 2 * WIN - LOSS - LOSS
+    end_2 = end_1 + WIN - LOSS - 7 * ((LOSS + LOSS) // 2)
+    log_1 = _log(*ATTACKS, *DEFENSE, filler=filler)
+    log_2 = _log(*ATTACKS, *DEFENSE, *day_2_battles, filler=filler)
+    season_zero = json.loads(_profile(end_1 + LOSS))
+    season_zero["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _first_seen(
+            connection_info, archive_server, DAY_1 + timedelta(hours=8),
+            profile=_new_season_profile(5000 + 2 * WIN - LOSS), log=log_1,
+        )
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=json.dumps(season_zero).encode(), log=log_1)
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="before-loss",
+            endpoint="profile", body=_new_season_profile(end_1 + LOSS),
+            observed_at=DAY_2 + timedelta(minutes=3), normalized_tag=TAG,
+        )[1])
+        jobs += _reset_work(connection_info, archive_server, day_3,
+                            profile=_new_season_profile(end_2), log=log_2)
+        _process(connection_info, archive_server, jobs)
+        for day_start in (DAY_1, DAY_2):
+            database = Database(connection_info)
+            try:
+                jobs = [reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start, now=day_3,
+                    request_key="after-reading",
+                )]
+            finally:
+                database.close()
+            _process(connection_info, archive_server, jobs)
+        day_1 = _day_1(connection_info)
+        day_2 = _day(connection_info, DAY_2)
+    assert day_1[0] == "Complete" and day_1[3] == end_1
+    assert day_2[2] == end_1 and day_2[6] == "previous_day_end"
+    assert day_2[:2] == ("Complete", "inferred") and day_2[3] == end_2
+
+
 def test_day_with_no_defense_and_no_end_reading_starts_nothing(
     database_url: str, archive_server
 ) -> None:

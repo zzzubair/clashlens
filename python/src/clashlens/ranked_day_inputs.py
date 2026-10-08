@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from itertools import pairwise
 from typing import Any
 
 from . import battle, domain, reading_rule
@@ -19,6 +20,8 @@ from .reconciliation import (
     BattleContribution,
     CoverageObservation,
     PreviousRankedDay,
+    log_has_row_gap,
+    logs_leave_gap,
 )
 
 # Reasons after which a day's end cannot start the next day: a 9th attack or
@@ -710,7 +713,8 @@ def load_profile_trophies(
 # one ending in a trophy mismatch, one with every battle but no reading that
 # judged its end, or a complete day after Day 1 with no used defense slots
 # whose readings showed no automatic loss; or disprove: one settled by
-# battles its Reset reading missed.
+# battles its Reset reading missed, or any a reading completed without
+# proving it, such as one read before the automatic loss landed.
 LATER_READING_DAY_SQL = """(
     failure_reasons ? 'trophy_equation_mismatch'
     OR (state = 'Partial' AND failure_reasons = '["missing_end_baseline"]'::jsonb)
@@ -719,6 +723,7 @@ LATER_READING_DAY_SQL = """(
         AND automatic_defense_evidence_state = 'not_applicable'
         AND unexplained_residual = 0
         AND NOT input_evidence ? 'zero_result_defense_slots')
+    OR (state = 'Complete' AND input_evidence -> 'end_reading' ->> 'exact' = 'false')
 )"""
 
 
@@ -731,14 +736,16 @@ def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> N
 
 def load_readings(
     database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
-    *, after: datetime,
+    *, after: datetime, end_battle_log_observation_id: int | None,
 ) -> tuple[reading_rule.Reading, ...]:
     """Every profile of this player read after ``after`` and before the next
     Reset that can judge the day's end (``reading_rule``): one accepted,
     eligible and naming the day's Season, or a Legend I profile naming
-    Season 0, which can only confirm. A reading taken after the player's
-    newest battle log can only confirm too: a battle after that log is not
-    known yet. Readings from when an unreadable row of a battle log saved
+    Season 0, which can only confirm. A reading can contradict only while
+    the player's battle logs from the day's end Reset log on are continuous
+    up to it: one taken after the last log before one that may have missed
+    a battle, or after the newest, can only confirm, as a battle it shows
+    may not be known. Readings from when an unreadable row of a battle log saved
     since the Reset happened are left out, and all of them when even that
     time is unreadable: a battle they may show cannot be placed."""
     until = ranked_day.end + timedelta(days=1)
@@ -747,10 +754,17 @@ def load_readings(
     )
     if any(at is None for at in unreadable):
         return ()
-    newest_log = connection.execute(
-        "SELECT max(observed_at) FROM battle_log_observations WHERE player_id = %s",
-        (player_id,),
-    ).fetchone()[0]
+    logs = load_coverage(
+        database, connection, player_id, domain.ranked_day_for(ranked_day.end),
+        end_battle_log_observation_id, None,
+    )
+    known_until = None
+    for previous, current in pairwise((None, *logs)):
+        if log_has_row_gap(current) or (
+            previous is not None and logs_leave_gap(previous, current)
+        ):
+            break
+        known_until = current.observed_at
     rows = connection.execute(
         f"""
         SELECT observed.response_completed_at, profile.trophies,
@@ -778,7 +792,7 @@ def load_readings(
     return tuple(
         reading_rule.Reading(
             at, int(trophies),
-            confirm_only=not accepted or newest_log is None or at > newest_log,
+            confirm_only=not accepted or known_until is None or at > known_until,
         )
         for at, trophies, accepted in rows
         if trophies is not None

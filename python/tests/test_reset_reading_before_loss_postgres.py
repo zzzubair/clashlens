@@ -479,6 +479,51 @@ def test_reset_reading_before_the_last_attack_landed_settles_both_days(
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
 
 
+def test_reading_during_a_battle_log_gap_cannot_contradict_the_day(
+    database_url: str, archive_server
+) -> None:
+    # Day B's Reset reading proves it. A new-day attack at 05:08 is in no
+    # saved log: the next, at 05:30, is a full 50 rows of other battles
+    # sharing no row with the Reset log. A 05:20 reading shows that attack.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=_profile(end_b), log=_log(*day_b),
+        )
+        for endpoint, body, minutes in (
+            ("profile", _profile(end_b + WIN), 20),
+            ("battle_log", _log(filler=[
+                DAY_C + timedelta(minutes=10, seconds=10 * row) for row in range(50)
+            ]), 30),
+        ):
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=f"gap-{endpoint}",
+                endpoint=endpoint, body=body,
+                observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
+            )[1])
+        _process(connection_info, archive_server, jobs)
+        database = Database(connection_info)
+        try:
+            jobs = [reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=DAY_B, now=DAY_D,
+                request_key="after-gap",
+            )]
+        finally:
+            database.close()
+        _process(connection_info, archive_server, jobs)
+        day_b_row, _ = _latest_days(connection_info)
+
+    assert day_b_row[:4] == ("Complete", "exact", 6000, end_b)
+    assert day_b_row[8] == []
+
+
 def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     database_url: str, archive_server
 ) -> None:
