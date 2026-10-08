@@ -1196,8 +1196,9 @@ def _load_reset_baseline(
     # the player has a Legend I profile for the new Season. So does any
     # Reset read before the player signed up for the Season: a Legend I
     # profile at 5,000 naming Season 0, as #YPG2LRYQ's at 05:00 on 6 October
-    # 2026 before it signed up at 05:19, when no profile before it named the
-    # Season: the game also sends Season 0 to players already signed up. The
+    # 2026 before it signed up at 05:19, when no profile read before it named
+    # the Season and no Legend battle came earlier in the Season: the game
+    # also sends Season 0 to players already signed up. The
     # reading's trophies stay unused; the Reset is complete only once its
     # battle log proves the day's battles from the Reset.
     before_sign_up = bool(
@@ -1292,8 +1293,10 @@ def _season_rule_holds(
     *, before: datetime | None = None,
 ) -> bool:
     """Whether the player has an accepted Legend I profile naming the Season
-    of the Legend day starting at ``boundary_at``, read before ``before``
-    when given."""
+    of the Legend day starting at ``boundary_at``. With ``before``, only a
+    profile read before it counts, or a Legend battle on an earlier Legend
+    day of that Season."""
+    day = ranked_day_for(boundary_at)
     return bool(
         connection.execute(
             """
@@ -1302,15 +1305,25 @@ def _season_rule_holds(
                 FROM player_profile_versions AS profile
                 JOIN players AS player
                   ON player.normalized_tag = profile.normalized_tag
-                WHERE player.id = %s
-                  AND profile.current_league_season_id = %s
+                LEFT JOIN player_profile_effects AS effect
+                  ON effect.profile_version_id = profile.id
+                WHERE player.id = %(player)s
+                  AND profile.current_league_season_id = %(season)s
                   AND profile.eligibility_state = 'eligible'
                   AND profile.source_contract_state = 'accepted'
-                  AND (%s::timestamptz IS NULL OR profile.observed_at < %s)
-            )
+                  AND (%(before)s::timestamptz IS NULL
+                       OR COALESCE(effect.observed_at, profile.observed_at)
+                          < %(before)s)
+            ) OR (%(before)s::timestamptz IS NOT NULL AND EXISTS (
+                SELECT 1 FROM legend_battles
+                WHERE ranked_day_start >= %(season_start)s
+                  AND ranked_day_start < %(day)s
+                  AND (attacker_player_id = %(player)s
+                       OR defender_player_id = %(player)s)
+            ))
             """,
-            (player_id, ranked_day_for(boundary_at).official_season_id,
-             before, before),
+            {"player": player_id, "season": day.official_season_id,
+             "before": before, "season_start": day.season_start, "day": day.start},
         ).fetchone()[0]
     )
 

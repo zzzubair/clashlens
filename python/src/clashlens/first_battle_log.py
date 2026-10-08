@@ -577,8 +577,9 @@ def requeue_sign_up_days(
 ) -> dict[str, Any]:
     """Find, and with ``queue`` recalculate, each player's oldest ended day
     of the Season whose start Reset reading was taken before they signed up
-    (a Legend I profile at 5,000 naming Season 0, no earlier profile naming
-    the Season, a later one that does), from the day before it, and their
+    (a Legend I profile at 5,000 naming Season 0, no profile read before it
+    naming the Season nor Legend battle earlier in the Season, a later
+    profile that does), from the day before it, and their
     later saved days. Before October 2026 only a Season's first Reset started
     at 5,000 by the Season rule: 48 ended sign-up days on 6 October 2026.
     Each player and day is queued once, at backfill priority, as
@@ -621,24 +622,42 @@ def requeue_sign_up_days(
                       UNION
                       SELECT id FROM player_profile_versions
                       WHERE observation_id = reset.profile_observation_id)
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(
+                        (SELECT min(observed_at) FROM player_profile_effects
+                         WHERE observation_id = reset.profile_observation_id),
+                        reading.observed_at) AS observed_at
+                ) AS read
                 WHERE day.failure_reasons ? 'missing_start_baseline'
                   AND reading.current_league_season_id = '0'
                   AND reading.eligibility_state = 'eligible'
                   AND reading.trophies = 5000
                   AND EXISTS (
                       SELECT 1 FROM player_profile_versions AS signed
+                      LEFT JOIN player_profile_effects AS effect
+                        ON effect.profile_version_id = signed.id
                       WHERE signed.player_id = day.player_id
                         AND signed.current_league_season_id = %(season)s
                         AND signed.eligibility_state = 'eligible'
                         AND signed.source_contract_state = 'accepted'
-                        AND signed.observed_at > reading.observed_at)
+                        AND COALESCE(effect.observed_at, signed.observed_at)
+                            > read.observed_at)
                   AND NOT EXISTS (
                       SELECT 1 FROM player_profile_versions AS signed
+                      LEFT JOIN player_profile_effects AS effect
+                        ON effect.profile_version_id = signed.id
                       WHERE signed.player_id = day.player_id
                         AND signed.current_league_season_id = %(season)s
                         AND signed.eligibility_state = 'eligible'
                         AND signed.source_contract_state = 'accepted'
-                        AND signed.observed_at < reading.observed_at)
+                        AND COALESCE(effect.observed_at, signed.observed_at)
+                            < read.observed_at)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM legend_battles
+                      WHERE ranked_day_start >= %(start)s
+                        AND ranked_day_start < day.ranked_day_start
+                        AND (attacker_player_id = day.player_id
+                             OR defender_player_id = day.player_id))
                 ORDER BY day.player_id, day.ranked_day_start
                 """,
                 {"start": season_start, "end": season_start + domain.SEASON_DURATION,

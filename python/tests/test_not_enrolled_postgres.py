@@ -171,3 +171,59 @@ def test_sign_up_day_starts_at_5000_by_the_season_rule(
         day = _sign_up_day(connection_info)
 
     assert day == ("Complete", "inferred", 5000, 5000 + WIN, "season_rule")
+
+
+def _sign_up_days(connection_info: str) -> int:
+    database = Database(connection_info)
+    try:
+        return first_battle_log.requeue_sign_up_days(
+            database, ranked_day_for(DAY_2).official_season_id,
+            queue=False, max_jobs=100,
+        )["players"]
+    finally:
+        database.close()
+
+
+def test_a_season_profile_read_before_the_reset_but_saved_last_rules_out_sign_up(
+    database_url: str, archive_server
+) -> None:
+    # The same profile read at 04:50 and 05:20: the later reading is saved
+    # first, so the saved profile is first dated 05:20.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        late, early = (
+            store_observation(
+                connection_info, archive_server, occurrence_key=key,
+                endpoint="profile", body=_new_season_profile(5240),
+                observed_at=DAY_2 + timedelta(minutes=minutes), normalized_tag=TAG,
+            )[1]
+            for key, minutes in (("late", 20), ("early", -10))
+        )
+        _process(connection_info, archive_server, [late, early])
+        jobs = _reset_work(connection_info, archive_server, DAY_2,
+                           profile=_not_signed_up(), log=_log(),
+                           profile_at=DAY_2 + timedelta(minutes=1))
+        jobs += _reset_work(connection_info, archive_server, DAY_3,
+                            profile=_new_season_profile(5240), log=_log())
+        _process(connection_info, archive_server, jobs)
+        day = _sign_up_day(connection_info)
+        players = _sign_up_days(connection_info)
+
+    assert (day[2], day[4], players) == (None, None, 0)
+
+
+def test_earlier_legend_battles_in_the_season_rule_out_sign_up(
+    database_url: str, archive_server
+) -> None:
+    # First found at the Day 2 Reset, whose battle log shows Day 1 battles.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, DAY_2,
+                           profile=_not_signed_up(),
+                           log=_log((DAY_1 + timedelta(hours=1), True)))
+        jobs += _reset_work(connection_info, archive_server, DAY_3,
+                            profile=_new_season_profile(5160),
+                            log=_log((DAY_1 + timedelta(hours=1), True)))
+        _process(connection_info, archive_server, jobs)
+        day = _sign_up_day(connection_info)
+        players = _sign_up_days(connection_info)
+
+    assert (day[2], day[4], players) == (None, None, 0)
