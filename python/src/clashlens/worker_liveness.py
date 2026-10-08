@@ -5,10 +5,11 @@ failures in a row. On 7 Oct 2026 that check waited on the spool lock and on a
 new database connection, so a slow lock holder got a working worker killed
 four times. Once the worker runs, each claim lane and the maintenance timer
 mark the time every time round their loops, and the progress file records
-each thread's last mark. The check fails when no thread has written it for
-STUCK_SECONDS, or when one thread has not come round for its own limit while
-the others still do; until 8 Oct 2026 any one thread kept the whole worker
-healthy. STUCK_SECONDS is longer than the worker's 15-minute database query
+each thread's last mark and limit. The check fails when one thread has not
+come round for its own limit, whether or not the others still do; until 8 Oct
+2026 any one thread kept the whole worker healthy. A lone thread running a
+long build writes nothing until it comes round, so only a file that cannot be
+read falls back to its age: not written for STUCK_SECONDS. STUCK_SECONDS is longer than the worker's 15-minute database query
 limit, so a slow database slows the lanes without making them look stuck.
 Until the first write the check still proves the worker's dependencies once.
 Each of several worker processes writes its own file, and the check fails
@@ -101,9 +102,11 @@ def seconds_since_progress() -> float | None:
     return max(ages, default=None)
 
 
-def stuck_thread() -> str | None:
-    """The first thread past its own limit, from every process's file."""
-    overdue = []
+def stuck_thread() -> tuple[bool, str | None]:
+    """Whether a process's progress file that cannot be read has not been
+    written for STUCK_SECONDS, and the first thread past its own limit in the
+    files that can."""
+    stale, overdue = False, []
     for path in _progress_files():
         try:
             threads = json.loads(Path(path).read_text())
@@ -112,9 +115,14 @@ def stuck_thread() -> str | None:
                 for name, (marked_at, limit) in threads.items()
                 if time.time() - float(marked_at) >= float(limit)
             ]
+        except FileNotFoundError:
+            continue
         except (OSError, ValueError, TypeError, AttributeError):
-            continue  # The file's age still catches a worker that stopped.
-    return min(overdue, default=None)
+            try:
+                stale |= time.time() - os.stat(path).st_mtime >= STUCK_SECONDS
+            except OSError:
+                continue
+    return stale, min(overdue, default=None)
 
 
 def worker_readiness(
@@ -131,8 +139,8 @@ def worker_readiness(
         return {"status": "not_ready", "spool": spool}
     since = seconds_since_progress()
     if since is not None:
-        thread = stuck_thread()
-        stuck = since >= STUCK_SECONDS or thread is not None
+        stale, thread = stuck_thread()
+        stuck = stale or thread is not None
         return {
             "status": "not_ready" if stuck else "ready",
             "reason": "worker_stuck" if stuck else "worker_progressing",

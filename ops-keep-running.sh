@@ -105,8 +105,7 @@ keep_running_parts() {
   KEEP_PARTS[POSTGRES_SECRETS]=$(secret_digest "$QUADLET_DIR/clashlens-postgres.container") || return 1
 }
 
-# After the new files are written, before anything stops: restart them all if
-# anything they read changed.
+# After the new files are written: restart them all if anything they read changed.
 keep_running_check() {
   local index value changed=() reason=
   if ! keep_running_parts; then
@@ -128,6 +127,7 @@ keep_running_check() {
   rm -f -- "$KEEP_RECORD"
   printf 'Restarting the collector with the database, pod and network: %s.\n' "$reason"
   KEEP_RUNNING=false
+  stop_units
 }
 
 keep_running_record() {
@@ -167,13 +167,41 @@ check_migrations() {
   [[ -z "$missing" ]] || die "the database has migrations $missing that this release lacks"
 }
 
-# Before anything stops: check the migrations and apply the pending ones to the
-# running database, so a release that lacks one, or a migration that fails,
-# leaves the old release running. A database that is not running yet gets the
-# same after it starts.
-migrate_running_database() {
+# Before anything stops: refuse a release that lacks a migration the database
+# has applied, then try the pending ones in one transaction that is rolled
+# back, so one that fails stops up while the old release runs on an unchanged
+# database. A trial waits at most 5 seconds for each lock; once it has one it
+# holds it until the rollback, so a slow migration slows the old release for
+# that long. One that builds an index concurrently cannot run inside a
+# transaction and is left to the real run. A database that is not running gets
+# only the release check, after it starts.
+try_pending_migrations() {
+  local migration trial=
   [[ "$(container_state "$(container_name "$PREFIX" postgres)")" == healthy ]] || return 0
-  apply_migrations
+  check_migrations
+  for migration in "$ROOT"/deploy/migrations/*.sql; do
+    grep -qx 'BEGIN;' "$migration" || continue
+    [[ "$(psql_exec --tuples-only --no-align --command "SELECT EXISTS (SELECT 1 FROM clash_lens_schema_migrations WHERE version=$((10#$(basename "$migration" | cut -d_ -f1))))")" != t ]] || continue
+    trial+=$(grep -vx -e 'BEGIN;' -e 'COMMIT;' "$migration")$'\n'
+  done
+  [[ -n "$trial" ]] || return 0
+  printf "BEGIN;\nSET LOCAL lock_timeout = '5s';\n%s\nROLLBACK;\n" "$trial" | psql_exec >/dev/null || \
+    die "a pending migration failed when tried on the running database; nothing was stopped or changed"
+}
+
+# Before anything stops: write the release's settings and unit files into a
+# scratch folder, so a value they reject stops up while the old release runs
+# with its own. Up writes them for real, and the secrets, once services stop;
+# the secret files were already checked when the settings were loaded.
+stage_configuration() {
+  local stage
+  stage=$(mktemp -d "$STATE_DIR/staged.XXXXXX")
+  (
+    trap 'rm -rf -- "$stage"' EXIT
+    STATE_DIR=$stage QUADLET_DIR=$stage/quadlet USER_UNIT_DIR=$stage/units
+    write_environment
+    render_units
+  )
 }
 
 # A failed up has stopped the stack and the alert schedule with it; restarting

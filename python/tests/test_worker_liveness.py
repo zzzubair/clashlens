@@ -205,6 +205,37 @@ def test_one_stuck_lane_fails_the_check_while_the_other_lanes_keep_working(
     assert (exit_code, payload.get("stuck_thread")) == (1, builds)
 
 
+def test_a_lone_thread_running_a_long_build_keeps_its_hour(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    # With one worker thread, nothing else writes the progress file while it
+    # runs a build, so the file's own age must not overrule the thread's hour.
+    root = tmp_path / "spool"
+    Spool(root, max_body_bytes=1024)
+    monkeypatch.setattr(cli, "Database", _SlowDatabase)
+    progress_file = tmp_path / "progress"
+    monkeypatch.setattr(worker_liveness, "PROGRESS_FILE", str(progress_file))
+    monkeypatch.setattr(worker_liveness, "MARK_INTERVAL_SECONDS", 0.0)
+    now = [time.time()]
+    monkeypatch.setattr(
+        worker_liveness,
+        "time",
+        SimpleNamespace(time=lambda: now[0], monotonic=time.monotonic),
+    )
+    progress = worker_liveness.ProgressMark(long_running=["MainThread"])
+    arguments = _arguments(tmp_path, spool_root=root)
+
+    _mark_as(progress, "MainThread")
+    now[0] += 25 * 60
+    os.utime(progress_file, (now[0] - 25 * 60, now[0] - 25 * 60))
+    exit_code, payload = _ready(arguments, capsys)
+    assert (exit_code, payload["reason"]) == (0, "worker_progressing")
+
+    now[0] += 36 * 60
+    exit_code, payload = _ready(arguments, capsys)
+    assert (exit_code, payload.get("stuck_thread")) == (1, "MainThread")
+
+
 def test_lanes_and_the_timer_each_report_their_own_progress() -> None:
     stop = Event()
     lanes_stuck = Event()

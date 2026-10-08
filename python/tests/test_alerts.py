@@ -60,6 +60,7 @@ def runtime(tmp_path, monkeypatch):
         read_requests=[],
         probe_status=200,
         website_status=302,
+        board_page='<h1 id="leaderboard-title">Day 7 standings</h1>',
         calls=[],
     )
     key = b"a" * 32
@@ -98,7 +99,7 @@ def runtime(tmp_path, monkeypatch):
                 # The public page sends a visitor on to the board it accepted.
                 body, status = b"", rt.website_status
             elif self.path.startswith("/leaderboards/tracked?"):
-                body, status = b"<html></html>", 200
+                body, status = rt.board_page.encode(), 200
             else:
                 proof = verify_proof(
                     headers=[

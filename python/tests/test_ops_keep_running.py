@@ -46,8 +46,8 @@ RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 RESTART_COLLECTOR=$RESTART
 UP_IN_PROGRESS=$FAILS
 keep_running_plan
-keep_running_check
 stop_units
+keep_running_check
 [[ "$FAILS" != true ]] || die "the stack did not become healthy; run ./ops logs"
 keep_running_record
 printf 'keep=%s collector=%s\n' "$KEEP_RUNNING" "${RELEASE[COLLECTOR_IMAGE]}"

@@ -18,18 +18,13 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                                   THEN greatest(COALESCE(observation.created_at, job.created_at), job.due_at)
                                   ELSE COALESCE(observation.created_at, job.created_at) END)
                          FILTER (WHERE job.status <> 'pending' OR job.due_at <= clock_timestamp()))) AS age,
-                   -- Due work not running now, however often it was claimed or retried:
-                   -- the wait counts from when it was saved, or became due if never tried.
-                   -- Builds the worker holds back for a past Reset (past_reset_pacing)
-                   -- are not waiting.
+                   -- Unfinished due work, running or not: the wait counts from when it
+                   -- was saved, so claims, retries and an operator's retry never restart
+                   -- it. Builds the worker holds back for a past Reset
+                   -- (past_reset_pacing) are not waiting.
                    greatest(0, extract(epoch FROM clock_timestamp()
-                       - min(CASE WHEN job.status = 'pending'
-                                  THEN greatest(COALESCE(observation.created_at, job.created_at), job.due_at)
-                                  ELSE COALESCE(observation.created_at, job.created_at) END)
-                         FILTER (WHERE ((job.status = 'pending' AND job.due_at <= clock_timestamp())
-                                        OR job.status IN ('waiting_retry', 'waiting_dependency')
-                                        OR (job.status = 'leased'
-                                            AND job.lease_expires_at < clock_timestamp()))
+                       - min(COALESCE(observation.created_at, job.created_at))
+                         FILTER (WHERE (job.status <> 'pending' OR job.due_at <= clock_timestamp())
                                    AND NOT COALESCE(
                                        job.work_type IN ('build_snapshot', 'build_army_analytics')
                                        AND job.input_json->>'boundary_at' < %(hold)s::text,

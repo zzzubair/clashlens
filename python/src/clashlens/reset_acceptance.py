@@ -10,8 +10,10 @@ Reset readings were all collected and all processed; when the first frozen
 board's inputs froze, when it was saved as published and when the website
 first showed it; that board's input states (Complete, Partial, Inconsistent
 and the rest); and how many of the Reset's boundaries were settled when the
-check first saw that board. Each value is set once, when first seen. Rows are
-never deleted: one a day, under 1 KB each.
+website first showed it. Each value is set once, when first seen. A record
+stays open to its later stages for a week: a reading can wait days for the
+archive before it is processed. Rows are never deleted: one a day, under 1 KB
+each.
 """
 
 from __future__ import annotations
@@ -28,21 +30,30 @@ def refresh(
     readable_boundary: datetime | None,
     readable_at: datetime | None,
 ) -> dict[str, Any] | None:
-    """Update the latest Reset's record and return it; None before any sweep."""
+    """Update the latest Reset's record, and any unfinished from the last week,
+    and return the latest; None before any sweep."""
     with connection.transaction():
         connection.execute("SET LOCAL lock_timeout = '1s'")
         # The settlement count reads the whole settlement table once a day.
         connection.execute("SET LOCAL statement_timeout = '20s'")
+        # The previous Reset too, for a stage the check was not running for.
         sweeps = connection.execute(
             """
             SELECT id, boundary_at, cardinality(member_ids), membership_captured_at
-            FROM collector_reset_sweeps ORDER BY boundary_at DESC LIMIT 2
+            FROM collector_reset_sweeps
+            WHERE boundary_at >= (SELECT max(boundary_at) - interval '1 day'
+                                  FROM collector_reset_sweeps)
+               OR boundary_at IN (
+                   SELECT boundary_at FROM reset_acceptance_records
+                   WHERE (proof_processed_at IS NULL OR readable_at IS NULL)
+                     AND boundary_at > (SELECT max(boundary_at) - interval '7 days'
+                                        FROM collector_reset_sweeps))
+            ORDER BY boundary_at
             """
         ).fetchall()
         if not sweeps:
             return None
-        # The previous Reset too, for a stage the check was not running for.
-        for sweep_id, boundary_at, captured, captured_at in reversed(sweeps):
+        for sweep_id, boundary_at, captured, captured_at in sweeps:
             connection.execute(
                 """
                 INSERT INTO reset_acceptance_records (
@@ -129,6 +140,16 @@ def _refresh_one(
         changes["published_at"] = published_at
     if record["readable_at"] is None and readable_at is not None:
         changes["readable_at"] = readable_at
+        changes["settlement"] = Jsonb(
+            _counts(
+                connection,
+                """
+                SELECT state, count(*) FROM reset_boundary_settlements
+                WHERE boundary_at = %s GROUP BY state
+                """,
+                (boundary_at,),
+            )
+        )
     if record["board_inputs"] is None and manifest_id is not None:
         changes["board_inputs"] = Jsonb(
             _counts(
@@ -139,16 +160,6 @@ def _refresh_one(
                 GROUP BY classification
                 """,
                 (manifest_id,),
-            )
-        )
-        changes["settlement"] = Jsonb(
-            _counts(
-                connection,
-                """
-                SELECT state, count(*) FROM reset_boundary_settlements
-                WHERE boundary_at = %s GROUP BY state
-                """,
-                (boundary_at,),
             )
         )
     if not changes:

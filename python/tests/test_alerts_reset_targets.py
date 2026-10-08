@@ -126,22 +126,27 @@ def test_a_board_not_readable_at_0530_alerts_then_recovers(rt) -> None:
 
 
 @pytest.mark.parametrize(
-    "website",
+    ("website", "board_page"),
     [
-        503,  # The website, or the API behind it, could not answer.
-        200,  # The page rendered without a board: the website rejected it.
+        # The website, or the API behind it, could not answer.
+        (503, None),
+        # The page rendered without a board: the website rejected it.
+        (200, None),
+        # The board's own page answered with an error message.
+        (302, "<h2>This standings page is unavailable</h2>"),
     ],
 )
-def test_a_board_the_website_cannot_show_by_0530_alerts(rt, website) -> None:
+def test_a_board_the_website_cannot_show_by_0530_alerts(rt, website, board_page) -> None:
     reset = at(rt, 5, 30)
     rt.reset = f"{reset} 13251 13251 {reset + 1500} 0"
     rt.website_status = website
+    shown, rt.board_page = rt.board_page, board_page or rt.board_page
     assert rt.run() == 1
     late = posts(rt, "not readable by 05:30")
     assert len(late) == 1
     assert "board was not readable at 05:30; the website check could not read it" in late[0]
     # The page shows the board again.
-    rt.website_status = 302
+    rt.website_status, rt.board_page = 302, shown
     at(rt, 5, 40)
     assert rt.run() == 0
     at(rt, 5, 55)

@@ -31,12 +31,13 @@ HealthOnFailure=kill
 # Stopping a replay only starts it again from the beginning, so no fixed limit
 # stops one: the regular check above starts only once this startup check finds
 # the database ready, and the start may take as long as it needs. While not
-# ready, the startup check reads which change-log file the replay is on and
-# stops the database (an immediate shutdown, which systemd restarts) only when
-# that file has not changed for 10 minutes; a 16 MB file takes about 2 s. When
-# it cannot see a replay at all it waits rather than stop one. The alert check
+# ready, the startup check reads which change-log file PostgreSQL's startup
+# process is replaying, by its full 24-character name, and stops the database
+# (an immediate shutdown, which systemd restarts) only when that file has not
+# changed for 10 minutes; a 16 MB file takes about 2 s. When it cannot see a
+# replay at all it waits rather than stop one. The alert check
 # warns from minute five, and ./ops logs postgres shows the replay's progress.
-HealthStartupCmd=pg_isready -q -U @@POSTGRES_USER@@ -d @@POSTGRES_DB@@ || { ps -o args | grep -o 'recovering [0-9A-F]*' > /tmp/replay.now && if cmp -s /tmp/replay.now /tmp/replay; then find /tmp/replay -mmin +10 | grep -q . && kill -QUIT 1; else mv /tmp/replay.now /tmp/replay; fi; exit 1; }
+HealthStartupCmd=pg_isready -q -U @@POSTGRES_USER@@ -d @@POSTGRES_DB@@ || { ps -o args | grep -oE 'postgres: startup recovering [0-9A-F]{24}' > /tmp/replay.now && if cmp -s /tmp/replay.now /tmp/replay; then find /tmp/replay -mmin +10 | grep -q . && kill -QUIT 1; else mv /tmp/replay.now /tmp/replay; fi; exit 1; }
 HealthStartupInterval=10s
 HealthStartupTimeout=5s
 Notify=healthy

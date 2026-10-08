@@ -1167,8 +1167,12 @@ up_stack() {
   migrate_legacy_units
   guard_systemd_units
   keep_running_plan
-  migrate_running_database
+  try_pending_migrations
   mkdir -p "$STATE_DIR"
+  stage_configuration
+  write_alert_intent stopped
+  UP_IN_PROGRESS=true
+  stop_units
   local mode_file
   mode_file=$(mktemp "$STATE_DIR/mode.XXXXXX")
   chmod 600 "$mode_file"
@@ -1178,9 +1182,6 @@ up_stack() {
   prepare_secrets
   render_units
   keep_running_check
-  write_alert_intent stopped
-  UP_IN_PROGRESS=true
-  stop_units
   "$SYSTEMCTL_BIN" --user daemon-reload
   "$SYSTEMCTL_BIN" --user start clashlens-postgres.service
   wait_postgres

@@ -451,18 +451,29 @@ def test_metrics_show_finished_work_reset_work_left_and_old_failures(
             assert "completed_job_reconcile_ranked_day_2m" not in metrics
             assert "oldest_failed_processing_age_seconds" not in metrics
 
-            # Claimed and retried, or waiting for the archive, the work still
-            # waits: its clock runs from when it was created, not its next try.
-            for state in ("waiting_retry", "waiting_dependency"):
+            # Running, retried, waiting for the archive or retried by an
+            # operator, the work still waits: its clock runs from when it was
+            # created, not from its claim or its next try.
+            for state, lease, due in (
+                ("leased", "1 hour", "-1 minute"),
+                ("waiting_retry", None, "5 minutes"),
+                ("waiting_dependency", None, "5 minutes"),
+                ("pending", None, "0 minutes"),
+            ):
                 with psycopg.connect(connection_info) as connection:
                     connection.execute(
                         """
                         UPDATE python_processing_jobs
-                        SET status = %s, attempt_count = 1,
+                        SET status = %(state)s, attempt_count = 1,
+                            lease_owner = CASE WHEN %(lease)s::interval IS NOT NULL
+                                               THEN 'busy-lane' END,
+                            lease_token = CASE WHEN %(lease)s::interval IS NOT NULL
+                                               THEN 'busy-token' END,
+                            lease_expires_at = clock_timestamp() + %(lease)s::interval,
                             created_at = clock_timestamp() - interval '10 minutes',
-                            due_at = clock_timestamp() + interval '5 minutes'
+                            due_at = clock_timestamp() + %(due)s::interval
                         """,
-                        (state,),
+                        {"state": state, "lease": lease, "due": due},
                     )
                 metrics = database.health_metrics()
                 assert metrics["waiting_job_reconcile_ranked_day_age_seconds"] >= 600

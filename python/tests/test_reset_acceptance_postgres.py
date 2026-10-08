@@ -207,6 +207,14 @@ def test_the_reset_record_keeps_each_stage_time_and_the_board_counts(
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
             _publish(owner, RESET, players)
+        # The board's inputs froze, but the website does not show it yet.
+        record = refresh()
+        assert record["board_inputs"] is not None
+        assert record["readable_at"] is record["settlement"] is None
+        # A boundary check finishes before the website shows the board.
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            owner.execute("UPDATE reset_boundary_settlements SET state = 'unresolved'")
         # The website first showed the board at 05:29; the check saved it later.
         record = refresh(29)
         assert record["proof_processed_at"] == RESET + timedelta(minutes=17)
@@ -214,14 +222,54 @@ def test_the_reset_record_keeps_each_stage_time_and_the_board_counts(
         assert record["published_at"] == RESET + timedelta(minutes=24)
         assert record["readable_at"] == RESET + timedelta(minutes=29)
         assert record["board_inputs"] == {"Complete": 1, "Partial": 1, "Unavailable": 1}
-        assert record["settlement"] == {"provisional": 1, "unresolved": 1}
+        assert record["settlement"] == {"unresolved": 2}
         # Each value is kept as first seen.
         with psycopg.connect(connection_info, autocommit=True) as owner:
             owner.execute("SET session_replication_role = replica")
-            owner.execute("UPDATE reset_boundary_settlements SET state = 'unresolved'")
+            owner.execute("UPDATE reset_boundary_settlements SET state = 'provisional'")
         record = refresh(40)
         assert record["readable_at"] == RESET + timedelta(minutes=29)
-        assert record["settlement"] == {"provisional": 1, "unresolved": 1}
+        assert record["settlement"] == {"unresolved": 2}
+
+
+def test_an_older_reset_record_keeps_updating_until_its_readings_are_processed(
+    database_url: str,
+) -> None:
+    # A reading can wait days for the archive while newer Resets go by.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            _seed_reset(owner, RESET)
+
+        def refresh_and_read() -> dict:
+            with psycopg.connect(_as_worker(connection_info)) as connection:
+                reset_acceptance.refresh(connection, readable_boundary=None, readable_at=None)
+            with psycopg.connect(connection_info) as owner:
+                return owner.execute(
+                    "SELECT proof_processed_at FROM reset_acceptance_records"
+                    " WHERE boundary_at = %s",
+                    (RESET,),
+                ).fetchone()
+
+        assert refresh_and_read() == (None,)
+        # Two newer Resets go by before the reading is processed.
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            for days in (1, 2):
+                owner.execute(
+                    "INSERT INTO collector_reset_sweeps (boundary_at, member_ids)"
+                    " VALUES (%s, '{}')",
+                    (RESET + timedelta(days=days),),
+                )
+        assert refresh_and_read() == (None,)
+        with psycopg.connect(connection_info, autocommit=True) as owner:
+            owner.execute("SET session_replication_role = replica")
+            owner.execute(
+                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s"
+                " WHERE status = 'pending'",
+                (RESET + timedelta(days=2, hours=3),),
+            )
+        assert refresh_and_read() == (RESET + timedelta(days=2, hours=3),)
 
 
 def test_the_alert_probe_prints_the_latest_resets_progress(

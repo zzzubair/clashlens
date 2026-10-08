@@ -80,17 +80,23 @@ migration, and unit input; `up` refuses to mix those images with changed init
 files. A new build is only staged: operator and recovery commands keep using
 the last successfully started release until `up` promotes the new one.
 
-Before it stops anything, `up` checks the release's images, writes its
-settings, secrets and unit files, checks that the release includes every
-migration the running database has already applied (otherwise it refuses with
-`the database has migrations N that this release lacks`), and applies the
-release's pending migrations to the running database. A release without an
-applied migration would run code on tables it does not know, and a migration
-that fails leaves the old release running. Pending migrations therefore run
-while the old release still serves, for the minute or so until it stops, so
-each must keep that release working: add tables and columns rather than drop
-or rename them. A database that is not running yet gets the same check and
-migrations after it starts. If `up` fails after it has stopped services, it
+Before it stops anything, `up` checks the release's images and secret files,
+writes its settings and unit files into a scratch folder in the state
+directory and deletes it again, so a value they reject stops `up` while the
+old release runs with its own files. It then checks that the release
+includes every migration the running database has already applied (otherwise
+it refuses with `the database has migrations N that this release lacks`), and
+tries the release's pending migrations on the running database in one
+transaction that is rolled back, refusing with `a pending migration failed
+when tried on the running database; nothing was stopped or changed` if one
+fails. The trial waits at most 5 seconds for each lock, but once it has one it
+holds it until the rollback, so a migration that rewrites a large table slows
+the old release for as long as it takes. A migration that builds an index
+concurrently cannot run inside a transaction and is only run for real. Only
+after services stop does `up` write the settings, secrets and unit files in
+place and apply the migrations, as before. A database that is not running yet
+gets only the release check, after it starts. If `up` fails after it has
+stopped services, it
 leaves them stopped, records the deploy as failed and starts the alert
 schedule again, so the alert check sends `A deploy failed and left Clash Lens
 stopped` within a minute and retries delivery every minute; the next `up` that
@@ -654,7 +660,8 @@ the unit waits for the database as long as it takes (`TimeoutStartSec=infinity`)
 and the regular health check, which kills the container after twelve failures
 in a row, starts only once a startup check (`HealthStartupCmd`) finds the
 database ready. Every 10 seconds until then, the startup check reads which
-16 MB change-log file the replay is on, from its process name, and stops the
+16 MB change-log file PostgreSQL's startup process is replaying, by its full
+24-character name in that process's name, and stops the
 database (an immediate shutdown, which systemd restarts) only when that file
 has not changed for 10 minutes; at the measured speed a file takes about two
 seconds. If it cannot see a replay at all, it waits rather than stop one.
@@ -877,8 +884,9 @@ still reports the database, spool capacity and keys for a person to read.
 
 The worker's check is `clashlens.cli ready`. Each worker thread and the
 maintenance timer write when they last came round, and the check fails when one
-of them has not for 20 minutes while the others keep going, or for an hour for
-the thread that runs board builds and for the timer. The longest finished job
+of them has not for 20 minutes, whether or not the others keep going, or for an
+hour for the thread that runs board builds and for the timer. Only a progress
+file that cannot be read falls back to its own age: not written for 20 minutes. The longest finished job
 from 1 to 8 Oct 2026 took 465 seconds, or 844 seconds for an army build.
 
 PostgreSQL logs statements slower than 5 seconds, waits for a lock longer than
@@ -1070,10 +1078,12 @@ use the [operating notes](operating.md#respond-to-alerts).
     `waiting_job_<work_type>_age_seconds` and `completed_job_<work_type>_2m`.
     This holds however busy the worker's threads look: threads that keep
     claiming and failing, or keep finding nothing they may claim, finish
-    nothing. A job waiting to be retried or for the archive to come back
-    counts from when it was saved, not from its next try, so claims and
-    retries never restart its wait; a job that is running does not count,
-    nor a past Reset's build the worker holds back between 04:30 and 07:00.
+    nothing. Every unfinished job that is due counts, including one that is
+    running, waiting to be retried or waiting for the archive, from when it
+    was saved, so claims, retries and an operator's retry never restart its
+    wait. A single job that runs longer than 2 minutes, such as an army
+    build, also warns. A past Reset's build the worker holds back between
+    04:30 and 07:00 does not count.
 
   For either warning, a container that cannot be inspected, missing
   measurements, or a sampled minute that starts before 05:00 leave it
@@ -1118,8 +1128,10 @@ use the [operating notes](operating.md#respond-to-alerts).
   as published and when the website's public page first showed it, to the
   second of that read; that board's input states (Complete, Partial,
   Inconsistent and the rest); and how many of the Reset's boundaries were
-  settled, provisional or unresolved when the check first saw that board.
-  Each value is kept as first seen. One row a day, under 1 KB: about 0.4 MB a
+  settled, provisional or unresolved when the website first showed it. Each
+  value is kept as first seen. A record that has not yet seen its readings
+  processed or its board shown keeps being updated for a week, since a reading
+  can wait days for the archive. One row a day, under 1 KB: about 0.4 MB a
   year.
 - **More than 10 untracked recent Legend I battlers**: players in a saved
   Legend I battle of the current or previous Legend day who are not tracked

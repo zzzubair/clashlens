@@ -391,8 +391,9 @@ def website_daily_board(port: int) -> list[str]:
     shows, or an empty list when it shows none yet.
 
     The page sends a visitor on to the board's own address only once the
-    website has read the newest frozen board from the API and accepted it, so
-    a board the website cannot reach or rejects does not count.
+    website has read the newest frozen board from the API and accepted it, and
+    that address must then show the board's own heading, so a board the
+    website cannot reach, rejects or fails to show does not count.
     """
     origin = f"http://127.0.0.1:{port}"
     try:
@@ -413,7 +414,8 @@ def website_daily_board(port: int) -> list[str]:
         or not re.fullmatch(r"[1-9][0-9]?", daily[1])
     ):
         raise CheckError("Daily leaderboard page sent an invalid board address")
-    request(target)  # The board's own page also renders.
+    if f">Day {daily[1]} standings</h1>" not in request(target).decode(errors="replace"):
+        raise CheckError("Daily leaderboard page did not show the board")
     return daily
 
 

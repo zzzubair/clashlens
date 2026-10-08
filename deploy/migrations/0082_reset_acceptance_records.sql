@@ -3,7 +3,7 @@
 -- Reset readings were collected and processed; when the first frozen board's
 -- inputs froze, when it was saved as published and when the website's public
 -- Daily leaderboard page first showed it; that board's input states; and how
--- many of the Reset's boundaries were settled when that board was first seen.
+-- many of the Reset's boundaries were settled when the website first showed it.
 -- The alert check fills it once a minute through the worker's role
 -- (reset_acceptance.py). Under 1 KB a row, one row a day: about 0.4 MB a year.
 -- Nothing deletes these rows.

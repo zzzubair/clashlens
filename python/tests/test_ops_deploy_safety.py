@@ -21,21 +21,27 @@ KNOWN = sorted(
     int(path.name.split("_", 1)[0]) for path in (ROOT / "deploy/migrations").glob("*.sql")
 )
 # The real up, with the host and configuration checks and the writing of
-# settings, secrets and unit files skipped.
+# settings and secrets skipped. Unit files hold a marker, or are rejected.
 UP = r"""
 source "$1" help >/dev/null
 for check in require_host load_release load_production_config validate_runtime_values \
   guard_generated_units guard_existing_resources guard_trusted_proxy_ip guard_network_subnet \
   cleanup_stale_admin_state ensure_linger migrate_legacy_units guard_systemd_units \
-  write_environment prepare_secrets render_units; do
+  write_environment prepare_secrets; do
   eval "$check() { :; }"
 done
+render_units() {
+  mkdir -p "$QUADLET_DIR"
+  echo rendered > "$QUADLET_DIR/marker"
+  [[ -z "$REJECT" ]] || die "unrendered value in clashlens-worker.container"
+}
 MODE=production PREFIX=clashlens POSTGRES_USER=clashlens POSTGRES_DB=clashlens
 RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 up_stack
 """
 # A running database that has applied $APPLIED and answers psql as PostgreSQL
-# would; a migration it is fed fails when it contains $FAILING.
+# would; SQL it is fed fails when it contains $FAILING, and is logged as a
+# trial when it ends in a rollback.
 FAKE_PODMAN = f"""#!{sys.executable}
 import os, re, sys
 args = sys.argv[1:]
@@ -45,7 +51,8 @@ applied = os.environ["APPLIED"].split()
 with open(os.environ["CALLS"], "a") as calls:
     if "--command" not in args:
         migration = sys.stdin.read()
-        calls.write("psql migration\\n")
+        trial = migration.rstrip().endswith("ROLLBACK;")
+        calls.write("psql trial\\n" if trial else "psql migration\\n")
         sys.exit(3 if os.environ.get("FAILING") and os.environ["FAILING"] in migration else 0)
     query = args[args.index("--command") + 1]
     if "to_regclass" in query:
@@ -57,7 +64,7 @@ with open(os.environ["CALLS"], "a") as calls:
 """
 
 
-def up(stack, applied: list[int], failing: str = ""):  # noqa: F811
+def up(stack, applied: list[int], failing: str = "", reject: str = ""):  # noqa: F811
     tmp_path = stack["tmp_path"]
     fake = tmp_path / "bin"
     fake.mkdir(exist_ok=True)
@@ -73,6 +80,7 @@ def up(stack, applied: list[int], failing: str = ""):  # noqa: F811
             MANAGER=stack["env"]["PODMAN_BIN"],
             APPLIED=" ".join(map(str, applied)),
             FAILING=failing,
+            REJECT=reject,
         ),
         capture_output=True,
         text=True,
@@ -81,6 +89,9 @@ def up(stack, applied: list[int], failing: str = ""):  # noqa: F811
     )
     result.calls = calls.read_text().splitlines() if calls.exists() else []
     result.stops = [i for i, call in enumerate(result.calls) if call.startswith("--user stop ")]
+    state = tmp_path / "state" / "clashlens"
+    result.staged = list(state.glob("staged.*"))
+    result.rendered = (tmp_path / "config" / "containers" / "systemd" / "marker").exists()
     return result
 
 
@@ -91,13 +102,16 @@ def test_a_release_missing_an_applied_migration_is_refused_before_stopping(
     assert result.returncode != 0
     assert "the database has migrations 999 that this release lacks" in result.stderr
     assert not result.stops
-    assert "psql migration" not in result.calls
+    assert "psql trial" not in result.calls
 
 
 def test_a_failing_migration_leaves_the_old_release_running(stack) -> None:  # noqa: F811
+    # Tried in a transaction that is rolled back: nothing is applied.
     result = up(stack, KNOWN[:-1], failing="reset_acceptance_records")
     assert result.returncode != 0
-    assert "psql migration" in result.calls
+    assert "a pending migration failed when tried on the running database" in result.stderr
+    assert "psql trial" in result.calls
+    assert "psql migration" not in result.calls
     assert not result.stops
     assert not [call for call in result.calls if "start clashlens-alert.timer" in call]
     intent = stack["tmp_path"] / "state" / "clashlens" / "alert-intent"
@@ -107,13 +121,16 @@ def test_a_failing_migration_leaves_the_old_release_running(stack) -> None:  # n
 def test_a_failed_up_after_stopping_restarts_the_alert_schedule(
     stack,  # noqa: F811
 ) -> None:
-    # The newest migration is still to apply: it is applied to the running
-    # database before anything stops. This test's up then fails after
+    # The newest migration is still to apply: it is only tried, and rolled
+    # back, before anything stops. This test's up then fails after
     # stopping, as a real one can at any later step.
     result = up(stack, KNOWN[:-1])
     assert result.returncode != 0
     assert "lacks" not in result.stderr
-    assert result.calls.index("psql migration") < result.stops[0]
+    assert result.calls.index("psql trial") < result.stops[0]
+    assert "psql migration" not in result.calls[: result.stops[0]]
+    # Unit files are written in place only after services stop.
+    assert result.rendered and not result.staged
     assert "--user stop clashlens-worker.service" in result.calls
     assert any("clashlens-alert.timer" in result.calls[i] for i in result.stops)
     # The schedule comes back so the check reports the failed deploy and
@@ -122,6 +139,15 @@ def test_a_failed_up_after_stopping_restarts_the_alert_schedule(
     assert restart > result.stops[-1]
     intent = stack["tmp_path"] / "state" / "clashlens" / "alert-intent"
     assert intent.read_text() == "failed\n"
+
+
+def test_a_rejected_unit_file_stops_nothing_and_changes_nothing(stack) -> None:  # noqa: F811
+    result = up(stack, KNOWN, reject="1")
+    assert result.returncode != 0
+    assert "unrendered value in clashlens-worker.container" in result.stderr
+    assert not result.stops
+    # Written only into a scratch folder, which is gone again.
+    assert not result.rendered and not result.staged
 
 
 @pytest.fixture
@@ -144,8 +170,10 @@ def replay_check(tmp_path):
 
     def check(*, ready=False, replaying=None, minutes_since_change=0):
         (tmp_path / "ready").write_text("0" if ready else "1")
+        # The checker itself shows in the list, with its own pattern.
         (tmp_path / "processes").write_text(
-            "postgres\n" + (f"postgres: startup recovering {replaying}\n" if replaying else "")
+            f"postgres\nsh -c {command}\n"
+            + (f"postgres: startup recovering {replaying}\n" if replaying else "")
         )
         seen = tmp_path / "replay"
         if seen.exists():
@@ -188,8 +216,10 @@ def test_a_crash_replay_stuck_on_one_file_for_ten_minutes_is_stopped(
 
 def test_a_start_with_no_visible_replay_is_left_to_finish(replay_check) -> None:
     replay_check(replaying="000000010000000A00000007")
-    # The replay is done or cannot be seen: waiting is safer than stopping it.
-    assert replay_check(minutes_since_change=60) == (1, "")
+    # The replay is done or cannot be seen, and the checker's own pattern in
+    # the process list is no replay either: waiting is safer than stopping it.
+    for _check in range(3):
+        assert replay_check(minutes_since_change=60) == (1, "")
 
 
 def test_up_keeps_the_release_it_replaces_for_a_rollback(tmp_path) -> None:
