@@ -8,6 +8,7 @@ processes have, against one queue.
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 from threading import Event
@@ -162,6 +163,64 @@ def test_only_one_build_runs_across_worker_processes(
         finally:
             first.close()
             second.close()
+
+
+def test_a_claim_overlapping_a_build_claim_sees_its_committed_lease(
+    database_url: str, archive_server
+) -> None:
+    # The first process's claim leases a build and holds its transaction open;
+    # the second keeps claiming while it commits. A claim that took the permit
+    # as the first let it go must still see the build it just leased.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _queue_builds(connection_info, 3)
+        first, second = Database(connection_info), Database(connection_info, max_size=4)
+        leased, commit = Event(), Event()
+        lease_rows = first._lease_rows
+
+        def lease_and_hold(*args, **kwargs):
+            claims = lease_rows(*args, **kwargs)
+            leased.set()
+            assert commit.wait(10)
+            return claims
+
+        first._lease_rows = lease_and_hold
+        overlapping: list = []
+        try:
+            for _trial in range(300):
+                leased.clear()
+                commit.clear()
+                stop = Event()
+                held: list = []
+                claimer = threading.Thread(target=lambda held=held: held.append(first.claim_job(
+                    owner="process-1", lease_seconds=60,
+                    work_types=POPULATION_BUILD_WORK_TYPES)))
+                claimer.start()
+                assert leased.wait(10)
+
+                def keep_claiming(stop: Event = stop) -> None:
+                    while not stop.is_set():
+                        overlapping.extend(second.claim_jobs(
+                            owner="process-2", work_types=POPULATION_BUILD_WORK_TYPES))
+
+                rivals = [threading.Thread(target=keep_claiming) for _ in range(4)]
+                for rival in rivals:
+                    rival.start()
+                time.sleep(random.random() / 1000)
+                commit.set()
+                claimer.join(10)
+                time.sleep(0.002)
+                stop.set()
+                for rival in rivals:
+                    rival.join(10)
+                assert held and held[0] is not None
+                first.release_claims([*held, *overlapping])
+                if overlapping:
+                    break
+        finally:
+            commit.set()
+            first.close()
+            second.close()
+    assert overlapping == []
 
 
 def test_one_process_at_a_time_runs_publication_maintenance(database_url: str) -> None:

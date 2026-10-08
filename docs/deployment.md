@@ -1284,11 +1284,11 @@ In `app.env`, `CLASHLENS_WORKER_PROCESSES` (1 or 2, default 1) sets how many
 worker processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
 12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default about
 two thirds of them, 8 of 12) how many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
-(default 12) each process's connections. All processes share the container's
+(default 12, at most 16) each process's connections. All processes share the container's
 memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
-worker refuses to start when the processes would open more than 38 database
-connections, so two processes may have at most 16 each; with the collector's
-32 and the API's 8 that leaves two of 80 for operators.
+worker refuses to start with more than 16 connections a process or 38 in
+all; with the collector's 32 and the API's 8 that leaves two of 80 for
+operators.
 
 The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
 is 2 processes of 16 threads, 12 for responses, and 16 connections each, 38

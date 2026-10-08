@@ -193,7 +193,9 @@ thirds, 8 of the production worker's 12; they alone use the newest-job plan.
 The rest claim derived work: daily results, builds and army redecodes. Only
 one derived thread may claim a snapshot, analytics or army build. It looks
 for a build first and takes other derived work only when none is ready, so
-the other derived threads keep daily results moving. Across all worker
+the other derived threads keep daily results moving. It claims no build while
+a batch of derived claims waits for a thread, so it takes the waiting claim
+instead. Across all worker
 processes one build runs at a time: a build's database transaction holds a
 lock for its whole run, and a build claimed but not yet started holds a live
 lease; while either holds, claims skip builds and take other work. The Reset
@@ -213,11 +215,11 @@ Each claims under its own owner, `<owner>.process-<n>`, and touches its own
 health-check progress file, created as the processes start, so the check
 fails when any one is stuck, even before its first job. When
 any process exits the others are stopped and the container restarts them
-all. Their database connections are budgeted: processes times (pool size plus
-the two maintenance connections and the maintenance lock's one) may not
-exceed 38, so two processes have at most 16 pool connections each. With the
-collector's 32 and the API's 8 that leaves two for operators within 80 of
-PostgreSQL's 100.
+all. Their database connections are budgeted: each process's
+`--database-pool-size` is at most 16, and processes times (pool size plus the
+two maintenance connections and the maintenance lock's one) may not exceed
+38. With the collector's 32 and the API's 8 that leaves two for operators
+within 80 of PostgreSQL's 100.
 
 All threads still share one `--database-pool-size` pool; giving response and
 derived threads separate connection limits is deferred. A thread that waits

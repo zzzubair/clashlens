@@ -239,20 +239,21 @@ SESSION_ENDED = (IdleInTransactionSessionTimeout, TransactionTimeout)
 # Connections for the maintenance timer, kept apart from the lanes' pool so a
 # slow round never holds a connection a lane is waiting for.
 MAINTENANCE_POOL_SIZE = 2
+# Lane connections one worker process may open.
+MAX_WORKER_POOL_SIZE = 16
 # Connections all worker processes together may open: each process's lane
-# pool, maintenance pool and maintenance permit, so two processes have at most
-# 16 lane connections each. With the collector's 32 and the API's 8 that is
-# 78, leaving two for operators within 80 of PostgreSQL's 100.
+# pool, maintenance pool and maintenance permit. With the collector's 32 and
+# the API's 8 that is 78, leaving two for operators within 80 of PostgreSQL's
+# 100.
 WORKER_CONNECTION_BUDGET = 38
 
 
 def check_connection_budget(processes: int, pool_size: int) -> None:
-    per_process = MAINTENANCE_POOL_SIZE + 1
-    if processes * (pool_size + per_process) > WORKER_CONNECTION_BUDGET:
+    total = processes * (pool_size + MAINTENANCE_POOL_SIZE + 1)
+    if pool_size > MAX_WORKER_POOL_SIZE or total > WORKER_CONNECTION_BUDGET:
         raise ValueError(
-            f"worker processes would open more than {WORKER_CONNECTION_BUDGET}"
-            f" database connections: {processes} may have at most"
-            f" {WORKER_CONNECTION_BUDGET // processes - per_process} each"
+            f"worker processes may have at most {MAX_WORKER_POOL_SIZE} database"
+            f" connections each and {WORKER_CONNECTION_BUDGET} in all"
         )
 
 
@@ -745,12 +746,16 @@ class ObservationProcessor:
         started_at = monotonic()
         # A claim counts against its kind's lanes from the moment a lane holds
         # it: a batched claim as it leaves its batch, any other before it is
-        # made. The build lane is one of the derived lanes.
+        # made. The build lane is one of the derived lanes, so it claims no
+        # build while claims its batch leased wait for a lane.
         kind = DERIVED_WITHOUT_BUILDS if work_types == POPULATION_BUILD_WORK_TYPES else work_types
         batched = self.claim_batch > 1 and work_types in self._batches
         counted = kind in self._running
         if counted and not batched:
-            self._count_running(kind, 1)
+            with self._batch_locks[kind]:
+                if self._batches[kind]:
+                    return None
+                self._count_running(kind, 1)
         claim = None
         try:
             claim = self._claim_next(

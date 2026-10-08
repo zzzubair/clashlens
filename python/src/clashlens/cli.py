@@ -39,7 +39,7 @@ from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
 from .collector import Collector
 from .collector_db import CollectorDatabase
 from .collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
-from .db import CONTRACT_VERSION, MAX_POOL_SIZE, Database
+from .db import CONTRACT_VERSION, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
 from .operating import (
     WORKER_SNAPSHOT_INTERVAL_SECONDS,
@@ -57,6 +57,7 @@ from .worker import (
     MAINTENANCE_POOL_SIZE,
     MAX_CONCURRENCY,
     MAX_PROCESSES,
+    MAX_WORKER_POOL_SIZE,
     ObservationProcessor,
     ProcessResult,
     StageMetrics,
@@ -189,7 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worker.add_argument("--process-index", type=int, default=0, help=argparse.SUPPRESS)
     worker.add_argument(
-        "--database-pool-size", type=_bounded_int("database pool size", 1, MAX_POOL_SIZE),
+        "--database-pool-size",
+        type=_bounded_int("database pool size", 1, MAX_WORKER_POOL_SIZE),
         default=None, help="PostgreSQL pool size per process (default: 8, or 4 sequential)",
     )
     worker.add_argument(

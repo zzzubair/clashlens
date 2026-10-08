@@ -10,7 +10,12 @@ import pytest
 from psycopg_pool import PoolTimeout
 
 from clashlens import cli, reconciliation_db
-from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION, RESPONSE_WORK_TYPES
+from clashlens.db import (
+    DOMAIN_RULE_VERSION,
+    POPULATION_BUILD_WORK_TYPES,
+    PROCESSING_VERSION,
+    RESPONSE_WORK_TYPES,
+)
 from clashlens.worker import (
     DERIVED_WITHOUT_BUILDS,
     MAX_CONCURRENCY,
@@ -646,8 +651,10 @@ def test_each_worker_process_runs_the_same_worker_under_its_own_owner() -> None:
 
 def test_worker_processes_over_the_connection_budget_never_start(capsys) -> None:
     # Two processes of 32 connections each would leave the collector short.
-    assert cli.main([*WORKER_ARGV, "--database-pool-size", "32"]) == 1
-    assert "ValueError" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as refused:
+        cli.main([*WORKER_ARGV, "--database-pool-size", "32"])
+    assert refused.value.code == 2
+    assert "database pool size" in capsys.readouterr().err
     assert cli.main([*WORKER_ARGV[:-2], "--response-lanes", "16"]) == 1
 
 
@@ -679,8 +686,13 @@ class _BatchQueue:
         self.released: list[int] = []
         self.next_id = 0
 
-    def claim_job(self, **_options) -> None:
-        return None
+    builds = 0
+
+    def claim_job(self, **_options) -> SimpleNamespace | None:
+        if not self.builds:
+            return None
+        self.builds -= 1
+        return SimpleNamespace(job_id="build")
 
     def claim_jobs(
         self, *, limit: int, work_types=None, **_options
@@ -787,11 +799,15 @@ def test_a_derived_batch_leaves_out_the_lane_whose_turn_maintenance_holds() -> N
     assert (claimed, running) == (3, 3)
 
 
-def test_two_worker_processes_get_at_most_16_connections_each() -> None:
+def test_each_worker_process_gets_at_most_16_connections() -> None:
     check_connection_budget(2, 16)
-    check_connection_budget(1, 35)
-    with pytest.raises(ValueError, match="at most 16 each"):
-        check_connection_budget(2, 17)
+    for processes in (1, 2):
+        with pytest.raises(ValueError, match="at most 16 database connections each"):
+            check_connection_budget(processes, 17)
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(
+                [*WORKER_ARGV, "--processes", str(processes), "--database-pool-size", "17"]
+            )
 
 
 @pytest.mark.parametrize("processes", ["3", "4"])
@@ -800,3 +816,44 @@ def test_a_third_or_fourth_worker_process_is_refused(processes, capsys) -> None:
         cli.build_parser().parse_args([*WORKER_ARGV, "--processes", processes])
     assert refused.value.code == 2
     assert "between 1 and 2" in capsys.readouterr().err
+
+
+def test_the_build_lane_takes_a_waiting_batched_claim_before_a_build() -> None:
+    queue = _BatchQueue(waiting=3)
+    queue.builds = 1
+    processor = ObservationProcessor(queue, archive=None, claim_batch=8)
+    processor.batch_lanes[DERIVED_WITHOUT_BUILDS] = 3
+    started, finish = [], Event()
+
+    def job(claim, *, lease_seconds: int):
+        started.append(claim.job_id)
+        assert finish.wait(10)
+        return claim
+
+    processor._process_claim = job
+    lanes = [threading.Thread(target=processor.process_once, kwargs={
+        "owner": f"lane-{lane}", "lease_seconds": 60, "work_types": DERIVED_WITHOUT_BUILDS})
+        for lane in range(2)]
+    build_lane = threading.Thread(target=lambda: [
+        processor.process_once(owner="build-lane", lease_seconds=60, work_types=kinds)
+        for kinds in (POPULATION_BUILD_WORK_TYPES, DERIVED_WITHOUT_BUILDS)])
+    try:
+        for count, lane in enumerate(lanes, start=1):
+            lane.start()
+            deadline = time.monotonic() + 5
+            while len(started) < count and time.monotonic() < deadline:
+                time.sleep(0.01)
+        # Three claims leased for three lanes, two started: the build lane's
+        # next turn belongs to the third, which would otherwise wait unstarted.
+        build_lane.start()
+        deadline = time.monotonic() + 5
+        while len(started) < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        running = sorted(started, key=str)
+    finally:
+        finish.set()
+        for thread in [*lanes, build_lane]:
+            if thread.is_alive():
+                thread.join(10)
+    assert running == [0, 1, 2]
+    assert queue.builds == 1
