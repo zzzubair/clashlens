@@ -661,17 +661,28 @@ def load_later_reading(
 ) -> tuple[datetime, int] | None:
     """The last accepted, eligible profile naming the day's Season read after
     its end Reset reading at ``reading_at`` and before the player's first
-    battle of the next day, by either player's report, within a day;
-    ``None`` without one."""
+    battle of the next day, by either player's report or an unreadable row
+    of a battle log saved since the Reset, within a day; ``None`` without
+    one, or when such a row's time is unreadable too."""
     boundary_at = ranked_day.end
     until = boundary_at + timedelta(days=1)
+    new_day_from = domain.battle_window(boundary_at)[0]
     first_new_day = load_first_reports(
-        connection, player_id, reading_at, domain.battle_window(boundary_at)[0], until
+        connection, player_id, reading_at, new_day_from, until
     )[1]
+    unreadable = load_unreadable_report_times(
+        database, connection, player_id, boundary_at, until
+    )
+    if any(at is None for at in unreadable):
+        return None
+    cutoffs = [
+        at for at in (first_new_day, *unreadable)
+        if at is not None and at >= new_day_from
+    ]
     readings = [
         (at, trophies)
         for at, trophies in load_profile_trophies(
-            database, connection, player_id, reading_at, first_new_day or until,
+            database, connection, player_id, reading_at, min([until, *cutoffs]),
             season_id=ranked_day.official_season_id,
         )
         if trophies is not None

@@ -223,45 +223,61 @@ def test_rejected_later_reading_does_not_settle_the_day(
     assert "next_start_reading_correction" not in rows[0][7]
 
 
-def test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck(
-    database_url: str, archive_server
-) -> None:
-    # As #9R2LRYY8V on 6 October 2026, but read early: day A takes 8
-    # defenses, day B none, and the Reset reading ending day B still shows
-    # its start; a reading 10 minutes later, before any new-day battle, shows
-    # the 8 * LOSS the game then charged.
+def _zero_defense_day_read_early(
+    connection_info: str, archive_server, *, new_day_log: bytes | None = None
+) -> tuple[int, int]:
+    """As #9R2LRYY8V on 6 October 2026, but read early: day A takes 8
+    defenses, day B none, and the Reset reading ending day B still shows its
+    start; a reading 10 minutes later shows 8 * LOSS less, then the day-end
+    recheck runs. ``new_day_log`` is saved 9 minutes after that Reset. Return
+    day B's start and that start less 8 * LOSS."""
     day_a = [(DAY_A + timedelta(hours=hour), False) for hour in range(1, 9)]
     day_c = [(DAY_C + timedelta(hours=1), True)]
     start_b = 6000 - 8 * LOSS
     end_b = start_b - 8 * LOSS
+    jobs = _reset_work(
+        connection_info, archive_server, DAY_A, profile=_profile(6000), log=_log()
+    )
+    jobs += _reset_work(
+        connection_info, archive_server, DAY_B,
+        profile=_profile(start_b), log=_log(*day_a),
+    )
+    jobs += _reset_work(
+        connection_info, archive_server, DAY_C,
+        profile=_profile(start_b), log=_log(),
+    )
+    jobs += _reset_work(
+        connection_info, archive_server, DAY_D,
+        profile=_profile(end_b + WIN), log=_log(*day_c),
+    )
+    _process(connection_info, archive_server, jobs)
+    assert [row[0] for row in _latest_days(connection_info)] == [
+        "Complete", "Inconsistent",
+    ]
+    later_jobs = []
+    if new_day_log is not None:
+        later_jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="new-day-log",
+            endpoint="battle_log", body=new_day_log,
+            observed_at=DAY_C + timedelta(minutes=9), normalized_tag=TAG,
+        )[1])
+    later_jobs.append(store_observation(
+        connection_info, archive_server, occurrence_key="later-profile",
+        endpoint="profile", body=_profile(end_b),
+        observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
+    )[1])
+    _process(connection_info, archive_server, later_jobs)
+    _day_end_recheck(connection_info, archive_server)
+    return start_b, end_b
+
+
+def test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck(
+    database_url: str, archive_server
+) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        jobs = _reset_work(
-            connection_info, archive_server, DAY_A, profile=_profile(6000), log=_log()
-        )
-        jobs += _reset_work(
-            connection_info, archive_server, DAY_B,
-            profile=_profile(start_b), log=_log(*day_a),
-        )
-        jobs += _reset_work(
-            connection_info, archive_server, DAY_C,
-            profile=_profile(start_b), log=_log(),
-        )
-        jobs += _reset_work(
-            connection_info, archive_server, DAY_D,
-            profile=_profile(end_b + WIN), log=_log(*day_c),
-        )
-        _process(connection_info, archive_server, jobs)
-        before = [row[0] for row in _latest_days(connection_info)]
-        _, profile_job = store_observation(
-            connection_info, archive_server, occurrence_key="later-profile",
-            endpoint="profile", body=_profile(end_b),
-            observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
-        )
-        _process(connection_info, archive_server, [profile_job])
-        _day_end_recheck(connection_info, archive_server)
+        start_b, end_b = _zero_defense_day_read_early(connection_info, archive_server)
         day_b_row, day_c_row = _latest_days(connection_info)
 
-    assert before == ["Complete", "Inconsistent"]
     assert day_b_row[:7] == (
         "Complete", "inferred", start_b, end_b, end_b, 8 * LOSS, "calculated",
     )
@@ -269,3 +285,21 @@ def test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck(
     assert day_b_row[7]["unsettled_automatic_loss"] == 8 * LOSS
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
     assert day_c_row[7]["start_unsettled_automatic_loss"] == 8 * LOSS
+
+
+def test_unreadable_new_day_battle_before_the_later_reading_charges_nothing(
+    database_url: str, archive_server
+) -> None:
+    # A new-day defense 8 minutes after the Reset, saved without its
+    # direction, could explain the later reading's drop by itself.
+    payload = json.loads(_log((DAY_C + timedelta(minutes=8), False)))
+    payload["items"][0].pop("attack")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        start_b, _ = _zero_defense_day_read_early(
+            connection_info, archive_server, new_day_log=json.dumps(payload).encode()
+        )
+        day_b_row, _ = _latest_days(connection_info)
+
+    assert day_b_row[0] == "Complete"
+    assert day_b_row[4:6] == (start_b, None)
+    assert "unsettled_automatic_loss" not in day_b_row[7]
