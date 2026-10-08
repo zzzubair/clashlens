@@ -692,18 +692,30 @@ def _dropped_profile(trophies: int) -> bytes:
     return json.dumps(payload).encode()
 
 
-@pytest.mark.parametrize("reset_reading,official_gaps,state", [
-    ("dropped", (0,), "Complete"),
-    ("dropped", (-30,), "Inconsistent"),
-    # The Reset still reads Legend I and the old Season; Legend II comes later.
-    ("old_season", (0,), "Complete"),
+def _store_dropped_login(connection_info, archive_server, key, at, final) -> int:
+    return store_observation(
+        connection_info, archive_server, occurrence_key=key,
+        endpoint="profile", body=_dropped_profile(final),
+        observed_at=at, normalized_tag=TAG,
+    )[1]
+
+
+@pytest.mark.parametrize("reset_reading,login,official_gaps,state", [
+    ("dropped", None, (0,), "Complete"),
+    ("dropped", None, (-30,), "Inconsistent"),
+    # The Reset still reads Legend I and the old Season; Legend II comes
+    # later, before or after the official total.
+    ("old_season", "before_history", (0,), "Complete"),
+    ("old_season", "after_history", (0,), "Complete"),
+    # The same Legend II profile was already saved before the Season.
+    ("old_season", "seen_before_season", (0,), "Complete"),
     # A row without a total changes nothing; the next one with it still counts.
-    ("dropped", (None, 0), "Complete"),
+    ("dropped", None, (None, 0), "Complete"),
     # A newer official total replaces the one the day already used.
-    ("dropped", (0, -30), "Inconsistent"),
+    ("dropped", None, (0, -30), "Inconsistent"),
 ])
 def test_player_dropped_at_the_season_end_ends_at_the_official_total(
-    database_url: str, archive_server, reset_reading: str,
+    database_url: str, archive_server, reset_reading: str, login: str | None,
     official_gaps: tuple[int | None, ...], state: str,
 ) -> None:
     from test_first_battle_log_postgres import LOSS, WIN, _log
@@ -717,20 +729,25 @@ def test_player_dropped_at_the_season_end_ends_at_the_official_total(
     ]
     final = 6000 + WIN - 8 * LOSS
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        jobs = _reset_work(connection_info, archive_server, last_day,
-                           profile=_profile(6000), log=_battle_log(empty=True))
+        jobs = []
+        if login == "seen_before_season":
+            jobs.append(_store_dropped_login(
+                connection_info, archive_server, "early-login",
+                boundary - timedelta(days=20), final,
+            ))
+        jobs += _reset_work(connection_info, archive_server, last_day,
+                            profile=_profile(6000), log=_battle_log(empty=True))
         jobs += _reset_work(
             connection_info, archive_server, boundary,
             profile=(_dropped_profile(final) if reset_reading == "dropped"
                      else _season_profile(final, OLD_SEASON)),
             log=_log(*battles),
         )
-        if reset_reading == "old_season":
-            jobs.append(store_observation(
-                connection_info, archive_server, occurrence_key="dropped-login",
-                endpoint="profile", body=_dropped_profile(final),
-                observed_at=boundary + timedelta(hours=2), normalized_tag=TAG,
-            )[1])
+        if login in {"before_history", "seen_before_season"}:
+            jobs.append(_store_dropped_login(
+                connection_info, archive_server, "dropped-login",
+                boundary + timedelta(hours=2), final,
+            ))
         _process(connection_info, archive_server, jobs)
         before = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
         # The official Season-end placement arrives hours later.
@@ -753,6 +770,13 @@ def test_player_dropped_at_the_season_end_ends_at_the_official_total(
                 }]}).encode(),
             )
             _process(connection_info, archive_server, [history_job])
+        if login == "after_history":
+            assert {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[
+                last_day][1] == "Partial"
+            _process(connection_info, archive_server, [_store_dropped_login(
+                connection_info, archive_server, "dropped-login",
+                boundary + timedelta(hours=8), final,
+            )])
         after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
 
     assert before[:2] == (last_day, "Partial")

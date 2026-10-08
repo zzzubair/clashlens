@@ -691,23 +691,40 @@ def _dropped_from_legend_i(
     connection: Any, player_id: int, season_end: datetime
 ) -> bool:
     """Whether a profile of the player read since ``season_end`` shows a
-    league below Legend I before any Legend I profile for the next Season."""
+    league below Legend I before any Legend I profile for the next Season.
+    Each reading counts at its own time; a saved profile can be read again."""
     return bool(
         connection.execute(
             """
-            SELECT EXISTS (
-                SELECT 1
+            WITH version AS (
+                SELECT version.id, version.observed_at, version.eligibility_state,
+                       version.source_contract_state,
+                       version.current_league_season_id
                 FROM players AS player
-                JOIN player_profile_versions AS dropped
-                  ON dropped.normalized_tag = player.normalized_tag
+                JOIN player_profile_versions AS version
+                  ON version.normalized_tag = player.normalized_tag
                 WHERE player.id = %(player)s
-                  AND dropped.observed_at >= %(end)s
-                  AND dropped.eligibility_state = 'ineligible'
+            ), reading AS (
+                SELECT version.*, seen.observed_at AS read_at
+                FROM version
+                JOIN player_profile_effects AS seen
+                  ON seen.profile_version_id = version.id
+                 AND seen.observed_at >= %(end)s
+                UNION ALL
+                SELECT version.*, version.observed_at
+                FROM version
+                WHERE version.observed_at >= %(end)s
                   AND NOT EXISTS (
-                      SELECT 1 FROM player_profile_versions AS kept
-                      WHERE kept.normalized_tag = player.normalized_tag
-                        AND kept.observed_at >= %(end)s
-                        AND kept.observed_at < dropped.observed_at
+                      SELECT 1 FROM player_profile_effects AS seen
+                      WHERE seen.profile_version_id = version.id
+                  )
+            )
+            SELECT EXISTS (
+                SELECT 1 FROM reading AS dropped
+                WHERE dropped.eligibility_state = 'ineligible'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reading AS kept
+                      WHERE kept.read_at < dropped.read_at
                         AND kept.eligibility_state = 'eligible'
                         AND kept.source_contract_state = 'accepted'
                         AND kept.current_league_season_id = %(season)s

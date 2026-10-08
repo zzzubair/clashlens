@@ -302,51 +302,64 @@ def _recalculate_season_ends(
     connection: Any, player_id: int, history: ParsedLeagueHistory,
     observation_id: int, observed_at: datetime,
 ) -> None:
-    """Queue the last day of a Season that ended up to 3 days before this
-    response when the player's official Legend I total it saved can give
-    that day's end (see ``reconciliation_db._official_final``): the day is
-    still saved without an end, or with a different official total.
-    Older Seasons are left as saved."""
-    from . import first_battle_log
-    from .db import PYTHON_BACKFILL_PRIORITY
+    """Queue the last day of each Season this response gives the player's
+    official Legend I total for (see ``reconciliation_db._official_final``)."""
     from .profile import LEGEND_I_TIER_ID
-    from .reconciliation import RECONCILIATION_RULE_VERSION
 
     for entry in history.entries:
         if entry.league_tier_id != LEGEND_I_TIER_ID or entry.league_trophies is None:
             continue
         ended = int(entry.league_season_id)
-        if not ended <= observed_at.timestamp() <= ended + 3 * 86400:
-            continue
-        season_end = datetime.fromtimestamp(ended, UTC)
-        day_start = season_end - timedelta(days=1)
-        stale = connection.execute(
-            """
-            SELECT day.failure_reasons ? 'missing_end_baseline'
-                   OR (day.input_evidence -> 'end_baseline_evidence'
-                       ->> 'official_final_trophies')::integer
-                      <> entry.league_trophies
-            FROM player_league_history_entries AS entry
-            CROSS JOIN LATERAL (
-                SELECT failure_reasons, input_evidence
-                FROM ranked_day_versions
-                WHERE player_id = entry.player_id AND ranked_day_start = %s
-                  AND reconciliation_rule_version = %s
-                ORDER BY version DESC, id DESC LIMIT 1
-            ) AS day
-            WHERE entry.player_id = %s AND entry.league_season_id = %s
-              AND entry.observation_id = %s
-            """,
-            (day_start, RECONCILIATION_RULE_VERSION, player_id,
-             entry.league_season_id, observation_id),
-        ).fetchone()
-        if stale is None or not stale[0]:
-            continue
-        first_battle_log._queue(
-            connection, int(player_id), day_start, None,
-            key=(f"reconcile:official-final:{player_id}:"
-                 f"{day_start:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}:"
-                 f"{observation_id}"),
-            trigger="official_final", later_days=False,
-            priority=PYTHON_BACKFILL_PRIORITY,
-        )
+        if ended <= observed_at.timestamp():
+            queue_season_end(
+                connection, player_id, datetime.fromtimestamp(ended, UTC),
+                observation_id, observed_at, entry.league_trophies,
+            )
+
+
+def queue_season_end(
+    connection: Any, player_id: int, season_end: datetime,
+    observation_id: int, observed_at: datetime,
+    official_total: int | None = None,
+) -> None:
+    """Queue, once per response, the last day of the Season ending at
+    ``season_end`` when the response, read up to 3 days after it, can give
+    that day's end: the day is still saved without an end, or with another
+    official total than ``official_total``, and its official Legend I total
+    is saved. Older Seasons are left as saved."""
+    from . import first_battle_log
+    from .db import PYTHON_BACKFILL_PRIORITY
+    from .profile import LEGEND_I_TIER_ID
+    from .reconciliation import RECONCILIATION_RULE_VERSION
+
+    if observed_at > season_end + timedelta(days=3):
+        return
+    day_start = season_end - timedelta(days=1)
+    stale = connection.execute(
+        """
+        SELECT failure_reasons ? 'missing_end_baseline'
+               OR (input_evidence -> 'end_baseline_evidence'
+                   ->> 'official_final_trophies')::integer <> %s
+        FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s
+          AND reconciliation_rule_version = %s
+          AND EXISTS (
+              SELECT 1 FROM player_league_history_entries
+              WHERE player_id = %s AND league_season_id = %s
+                AND league_tier_id = %s AND league_trophies IS NOT NULL
+          )
+        ORDER BY version DESC, id DESC LIMIT 1
+        """,
+        (official_total, player_id, day_start, RECONCILIATION_RULE_VERSION,
+         player_id, str(int(season_end.timestamp())), LEGEND_I_TIER_ID),
+    ).fetchone()
+    if stale is None or not stale[0]:
+        return
+    first_battle_log._queue(
+        connection, int(player_id), day_start, None,
+        key=(f"reconcile:official-final:{player_id}:"
+             f"{day_start:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}:"
+             f"{observation_id}"),
+        trigger="official_final", later_days=False,
+        priority=PYTHON_BACKFILL_PRIORITY,
+    )
