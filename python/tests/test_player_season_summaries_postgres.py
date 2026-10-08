@@ -1279,6 +1279,7 @@ def _publish(
         result=result if result is not None else _publication_result(),
         contribution_evidence=[],
     )
+    reconciliation_db.finish_recalculation(database, connection, player_id, [start])
 
 
 def test_day28_publication_establishes_summary(database_url: str) -> None:
@@ -1431,63 +1432,3 @@ def test_summary_row_size_is_small_and_labeled(database_url: str) -> None:
             assert size < 32768
         finally:
             database.close()
-
-
-def test_a_settled_reset_check_stores_the_season_summary_again(
-    database_url: str, monkeypatch
-) -> None:
-    """A Season's summary is stored while day 3's Reset check is
-    provisional, so day 3's end is not accepted. The check is judged again
-    and settles on that end, with no day calculated again: the stored
-    summary is stored again and accepts it."""
-    from clashlens import reset_settlement
-    from clashlens.domain import ranked_day_for
-
-    season = ranked_day_for(datetime(2026, 7, 15, 6, tzinfo=UTC))
-    season_id = season.official_season_id
-    reset = season.season_start + timedelta(days=3)
-    monkeypatch.setenv(reset_settlement.NEW_PROOFS_SWITCH, "true")
-    monkeypatch.setattr(
-        reset_settlement, "load_proof_inputs",
-        lambda _database, _connection, _player, at: object() if at == reset else None,
-    )
-    monkeypatch.setattr(reset_settlement, "evaluate_boundary", lambda _inputs: (
-        reset_settlement.Verdict(reset_settlement.SETTLED, (), 6030, {})
-    ))
-
-    def day_3(connection, player_id) -> str:
-        return {
-            entry["season_day_number"]: entry["eod_state"]
-            for entry in _summary(connection, player_id, season_id)["daily_entries"]
-        }[3]
-
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            player_id = _player(connection)
-            for day in range(1, 29):
-                start = season.season_start + timedelta(days=day - 1)
-                version_id = _ranked(
-                    connection, player_id, day, start, start + timedelta(days=1),
-                    season=season_id,
-                )
-                _log(connection, player_id, day, version_id, start, season=season_id)
-            connection.execute(
-                "INSERT INTO reset_boundary_settlements (player_id, boundary_at)"
-                " VALUES (%s, %s)",
-                (player_id, reset),
-            )
-            connection.commit()
-            materialize_player_season(connection, player_id, season_id)
-            connection.commit()
-            before = day_3(connection, player_id)
-        database = Database(connection_info)
-        try:
-            with database.pool.connection() as connection, connection.transaction():
-                reset_settlement.refresh_boundary(database, connection, player_id, reset)
-        finally:
-            database.close()
-        with psycopg.connect(connection_info) as connection:
-            after = day_3(connection, player_id)
-
-    assert (before, after) == ("provisional", "accepted")
-

@@ -85,6 +85,7 @@ from .domain import (
     TROPHY_ALLOCATION_RULE_VERSION,
 )
 from .reconciliation import RECONCILIATION_RULE_VERSION
+from .season_summaries import refresh_stored_seasons
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 # The rules saved days and Daily boards come out by; see season_repair.
@@ -349,9 +350,11 @@ def _rejudge_checks(database: Database, season_id: str, limit: int) -> int:
         ).fetchall()
         for player_id, boundary_at in rows:
             with connection.transaction():
+                changed: set[tuple[int, str]] = set()
                 reset_settlement.refresh_boundary(
-                    database, connection, int(player_id), boundary_at
+                    database, connection, int(player_id), boundary_at, changed
                 )
+                refresh_stored_seasons(database, connection, changed)
     return len(rows)
 
 

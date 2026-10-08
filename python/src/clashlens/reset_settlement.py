@@ -1285,7 +1285,8 @@ def load_proof_inputs(
 
 
 def refresh_boundary(
-    database: Database, connection: Any, player_id: int, boundary_at: datetime, *, depth: int = 0
+    database: Database, connection: Any, player_id: int, boundary_at: datetime,
+    changed: set[tuple[int, str]], *, depth: int = 0,
 ) -> None:
     """Re-judge one Reset and record a changed verdict (guard 7).
 
@@ -1293,7 +1294,8 @@ def refresh_boundary(
     inputs are re-read after any concurrent writer finished. A finalized
     Season keeps its verdict. Admitting a new ``settled`` verdict needs the
     switch; losing one never does. A change to a settled verdict re-judges
-    the next Reset, whose target it roots, and stores the Season summary again.
+    the next Reset, whose target it roots, and adds (player, Season) to
+    ``changed``, whose summaries the caller stores again last.
     """
     from .season_retirement import is_season_detail_retired
 
@@ -1339,9 +1341,11 @@ def refresh_boundary(
          Jsonb(list(verdict.reasons)), player_id, boundary_at),
     )
     if SETTLED in (current[0], verdict.state):
-        refresh_stored_seasons(database, connection, player_id, [season_id])
+        changed.add((player_id, season_id))
         if depth < MAX_CASCADE:
-            refresh_boundary(database, connection, player_id, boundary_at + DAY, depth=depth + 1)
+            refresh_boundary(
+                database, connection, player_id, boundary_at + DAY, changed, depth=depth + 1
+            )
 
 
 def _lock_reset(connection: Any, player_id: int, boundary_at: datetime) -> str:
@@ -1379,24 +1383,22 @@ def _has_settlements(database: Database, connection: Any) -> bool:
     return bool(known)
 
 
-def refresh_for_observation(database: Database, connection: Any, observation_id: int) -> None:
-    """Re-judge the Resets a newly processed response can change.
-
-    A named check's own responses always count. Any other response of the
-    player, or of an opponent in its battles, from up to three days after a
-    Reset, re-judges only a finished check that is settled, passed every
-    guard, or met a later profile that disagreed or was not processed. A
-    battle log also re-judges a finished check with an unusable report at
-    any Reset that can read one of its battles. Later evidence can only
-    take proof away from the rest; they are re-judged in full when the
-    previous Reset's verdict changes. Every Reset it may re-judge is locked
-    before choosing, so a concurrent judgment is chosen from once committed.
-    """
+def refresh_for_observation(
+    database: Database, connection: Any, observation_id: int, changed: set[tuple[int, str]]
+) -> None:
+    """Re-judge the Resets a newly processed response can change, adding to
+    ``changed`` as ``refresh_boundary`` does. A named check's own responses
+    always count. Any other response of the player, or of an opponent in its
+    battles, from up to three days after a Reset, re-judges only a finished
+    check that is settled, passed every guard, or met a later profile that
+    disagreed or was not processed; a battle log also one with an unusable
+    report at any Reset that can read one of its battles. Every Reset it may
+    re-judge is locked before choosing."""
     if not _has_settlements(database, connection):
         return
     lock_resets(database, connection, observation_id, [])
     for player_id, boundary_at in _observation_resets(connection, observation_id):
-        refresh_boundary(database, connection, player_id, boundary_at)
+        refresh_boundary(database, connection, player_id, boundary_at, changed)
 
 
 def _observation_resets(connection: Any, observation_id: int | None, *,
@@ -1456,13 +1458,10 @@ def _observation_resets(connection: Any, observation_id: int | None, *,
 
 
 def refresh_terminal_work(database: Database, *, batch: int = 100) -> int:
-    """Judge up to ``batch`` finished checks that no processed response will.
-
-    A check that failed or expired before saving both responses has nothing
-    for the worker to process, so the maintenance timer judges it here.
-    Resets in a finalized Season keep their verdict and are skipped. Returns
-    how many it judged.
-    """
+    """Judge up to ``batch`` finished checks that no processed response
+    will, as one that failed or expired before saving both responses, each
+    with the Season summaries it changes; how many it judged. A finalized
+    Season keeps its verdicts."""
     with database.pool.connection() as connection:
         if not _has_settlements(database, connection):
             return 0
@@ -1492,5 +1491,7 @@ def refresh_terminal_work(database: Database, *, batch: int = 100) -> int:
             ).fetchall()
         for player_id, boundary_at in rows:
             with connection.transaction():
-                refresh_boundary(database, connection, int(player_id), boundary_at)
+                changed: set[tuple[int, str]] = set()
+                refresh_boundary(database, connection, int(player_id), boundary_at, changed)
+                refresh_stored_seasons(database, connection, changed)
     return len(rows)

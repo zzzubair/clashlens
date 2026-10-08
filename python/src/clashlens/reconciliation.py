@@ -1320,6 +1320,8 @@ def _previous_day_evidence(previous: PreviousRankedDay | None) -> dict[str, Any]
         evidence["end_baseline_id"] = previous.end_baseline_id
     if previous.zero_result_defense_slots:
         evidence["zero_result_defense_slots"] = previous.zero_result_defense_slots
+    if previous.proven_end is not None:
+        evidence["proven_end"] = previous.proven_end
     if previous.reset_reading_correction:
         evidence["reset_reading_correction"] = previous.reset_reading_correction
         evidence["end_baseline_id"] = previous.end_baseline_id

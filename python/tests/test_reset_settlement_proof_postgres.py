@@ -232,7 +232,7 @@ def test_a_battle_log_rechecks_an_unusable_battle_report(
                     (RESET + timedelta(seconds=33), RESET + 40 * MINUTE),
                 ).fetchall())
                 # A profile cannot change a battle report.
-                reset_settlement.refresh_for_observation(database, connection, saved["profile"])
+                reset_settlement.refresh_for_observation(database, connection, saved["profile"], set())
                 assert connection.execute(VERDICT, (RESET,)).fetchone()[2] == [
                     "battle_report_unusable"]
                 # A battle log saved four days later that reports the ended
@@ -242,7 +242,7 @@ def test_a_battle_log_rechecks_an_unusable_battle_report(
                     (RESET + 4 * DAY, saved["battle_log"]),
                 )
                 reset_settlement.refresh_for_observation(
-                    database, connection, saved["battle_log"])
+                    database, connection, saved["battle_log"], set())
                 assert connection.execute(VERDICT, (RESET,)).fetchone()[:3] == (
                     "settled", scenario["target"], [])
         finally:
@@ -281,7 +281,7 @@ def test_a_report_rechecks_the_reset_just_before_it_only_within_the_grace(
                         " (SELECT battle_id FROM battle_evidence WHERE observation_id = %s)",
                         (reported_at, log_id),
                     )
-                    reset_settlement.refresh_for_observation(database, connection, log_id)
+                    reset_settlement.refresh_for_observation(database, connection, log_id, set())
                     reasons = connection.execute(VERDICT, (RESET,)).fetchone()[2]
                     assert (reasons != ["battle_report_unusable"]) is rechecked, reported_at
                     connection.rollback()
@@ -312,7 +312,7 @@ def test_switch_off_keeps_the_candidate_and_never_suppresses_invalidation(
         def refresh(boundary: datetime = RESET) -> None:
             # The worker's own role records verdicts.
             with _role_connection(connection_info, "clashlens_python_worker") as worker:
-                reset_settlement.refresh_boundary(database, worker, player, boundary)
+                reset_settlement.refresh_boundary(database, worker, player, boundary, set())
 
         try:
             monkeypatch.setenv(SWITCH, "true")
@@ -453,7 +453,7 @@ def test_terminal_work_refresh_and_fence_use_dependency_days(
 
             # Finalizing the ended day's Season freezes the verdict.
             with psycopg.connect(connection_info) as connection:
-                reset_settlement.refresh_boundary(database, connection, player, RESET)
+                reset_settlement.refresh_boundary(database, connection, player, RESET, set())
             assert _verdict(connection_info, RESET)[:3] == ("provisional", None, [])
         finally:
             database.close()
@@ -486,12 +486,12 @@ def test_invalidated_root_rejudges_the_next_reset(
                     (scenario["player"], TAG, sweep, RESET - DAY + 20 * MINUTE),
                 ).fetchone()[0]
                 _settle_root(connection, scenario["player"], delayed_work_id=work)
-                reset_settlement.refresh_boundary(database, connection, scenario["player"], RESET)
+                reset_settlement.refresh_boundary(database, connection, scenario["player"], RESET, set())
                 assert connection.execute(VERDICT, (RESET,)).fetchone()[:3] == (
                     "settled", scenario["target"], [])
                 # Re-judging the root takes its proof away, and with it the next one's.
                 reset_settlement.refresh_boundary(
-                    database, connection, scenario["player"], RESET - DAY)
+                    database, connection, scenario["player"], RESET - DAY, set())
                 assert connection.execute(VERDICT, (RESET - DAY,)).fetchone()[:3] == (
                     "provisional", None, ["settlement_check_pending"])
                 assert connection.execute(VERDICT, (RESET,)).fetchone()[:3] == (
@@ -532,7 +532,7 @@ def test_reset_profile_waits_for_the_publication_lock_before_its_reset_lock(
                     (f"reset-settlement:{scenario['player']}:{RESET.isoformat()}",),
                 ).fetchone()[0]
                 late_log.execute("SET LOCAL lock_timeout = '5s'")
-                reset_settlement.refresh_boundary(database, late_log, scenario["player"], RESET)
+                reset_settlement.refresh_boundary(database, late_log, scenario["player"], RESET, set())
                 late_log.commit()
                 assert profile.result(timeout=60) == "processed"
         finally:
@@ -618,7 +618,7 @@ def test_a_response_rechecks_a_reset_judged_while_it_waited(
 
             def refresh() -> None:
                 with psycopg.connect(connection_info) as connection:
-                    reset_settlement.refresh_for_observation(database, connection, later_profile)
+                    reset_settlement.refresh_for_observation(database, connection, later_profile, set())
 
             with psycopg.connect(connection_info) as named, ThreadPoolExecutor(1) as pool:
                 # A named-check job judges the pending Reset from evidence

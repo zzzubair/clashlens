@@ -529,24 +529,32 @@ def acquire_player_season_lock(
     )
 
 
-def refresh_stored_seasons(
-    database: Any, connection: Any, player_id: int, season_ids: Any
-) -> None:
-    """Store again each of the player's saved summaries of ``season_ids``,
-    oldest first, from its days and their Reset proofs as they are now: after
-    the days are calculated again, or a Reset settlement check changes what
-    a day's end accepts."""
+def refresh_stored_seasons(database: Any, connection: Any, pairs: Any) -> None:
+    """Store again each (player, Season) summary of ``pairs`` from its days
+    and their Reset proofs as they are now, or store it first once the
+    Season's Day 28 is published Complete: after days are calculated again,
+    or a Reset settlement check changes what a day's end accepts. Callers
+    write it last in their transaction, after every Reset check they judge,
+    so a summary's lock is never held while a Reset's is wanted."""
     if not getattr(database, "_supports_season_summaries", False):
         return
-    for season_id in sorted(set(season_ids)):
+    for player_id, season_id in sorted(set(pairs)):
+        if season_id == "unknown":
+            continue
         acquire_player_season_lock(connection, player_id, season_id)
         if connection.execute(
             """
-            SELECT 1 FROM player_season_summaries
-            WHERE player_id = %s AND official_season_id = %s
+            SELECT EXISTS (
+                SELECT 1 FROM player_season_summaries
+                WHERE player_id = %(player)s AND official_season_id = %(season)s
+            ) OR EXISTS (
+                SELECT 1 FROM api_player_daily_logs
+                WHERE player_id = %(player)s AND official_season_id = %(season)s
+                  AND season_day_number = 28 AND state = 'Complete'
+            )
             """,
-            (player_id, season_id),
-        ).fetchone():
+            {"player": int(player_id), "season": season_id},
+        ).fetchone()[0]:
             materialize_player_season(connection, player_id=player_id, season_id=season_id)
 
 

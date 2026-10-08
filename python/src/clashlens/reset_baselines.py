@@ -28,6 +28,7 @@ from .domain import (
     season_is_current,
 )
 from .reconciliation import RECONCILIATION_RULE_VERSION
+from .season_summaries import refresh_stored_seasons
 
 # Reset work stops collecting at 04:55 UTC the next day, as in the collector.
 RESET_COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
@@ -43,6 +44,7 @@ def _refresh_reset_baseline_evidence(
 ) -> None:
     if claim.observation_id is None:
         return
+    changed: set[tuple[int, str]] = set()
     _evaluate_reset_baseline(
         database,
         connection,
@@ -52,8 +54,12 @@ def _refresh_reset_baseline_evidence(
         processing_version=claim.processing_version,
         failure_category=failure_category,
         failure_retryable=failure_retryable,
+        changed=changed,
     )
-    reset_settlement.refresh_for_observation(database, connection, claim.observation_id)
+    reset_settlement.refresh_for_observation(
+        database, connection, claim.observation_id, changed
+    )
+    refresh_stored_seasons(database, connection, changed)
 
 
 # The Season whose Reset pairs a repair re-checks: the one named, or else the
@@ -523,8 +529,11 @@ def _evaluate_reset_baseline(
     starts_ended_day: bool = False,
     recalculate_season: str | None = None,
     work_id: int | None = None,
+    changed: set[tuple[int, str]] | None = None,
 ) -> tuple[list[int], list[str]]:
     """Record Reset pair evidence and return queued job IDs and failure reasons.
+    A Reset settlement check it judges again adds to ``changed`` when given,
+    whose Season summaries the caller stores again last; otherwise this does.
 
     A repair's selected ended days share one job so their dependent results
     are rebuilt oldest first in one transaction, including later saved days
@@ -699,7 +708,13 @@ def _evaluate_reset_baseline(
             player_id=int(player_id),
             state=state,
         )
-    reset_settlement.refresh_boundary(database, connection, int(player_id), boundary_at)
+    own = changed is None
+    changed = set() if changed is None else changed
+    reset_settlement.refresh_boundary(
+        database, connection, int(player_id), boundary_at, changed
+    )
+    if own:
+        refresh_stored_seasons(database, connection, changed)
     if state == "partial":
         return [], reasons
     # Failed evidence still finishes the day it ends, as incomplete; only a

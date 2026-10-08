@@ -1416,10 +1416,11 @@ def test_a_reading_plus_its_battles_is_proven_only_from_a_proven_start(
     assert proven == (end_b + whole_c, True)
 
 
-def _proven_partial_day_b(connection_info: str, archive_server) -> list:
+def _proven_partial_day_b(connection_info: str, archive_server, quiet: bool = True) -> list:
     """Day B, with no start reading, takes eight defenses, its battle logs
-    reaching back before it; its Reset reading at 05:01 and a quiet one at
-    05:25 both show 4,988, which proves its end. Return its battles."""
+    reaching back before it; its Reset reading at 05:01 and, with ``quiet``,
+    a quiet one at 05:25 both show 4,988, which proves its end. Return its
+    battles."""
     day_b = [(DAY_B - timedelta(hours=1), False)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)
     ]
@@ -1427,12 +1428,17 @@ def _proven_partial_day_b(connection_info: str, archive_server) -> list:
         connection_info, archive_server, DAY_C, profile=_profile(4988),
         log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=1),
     ))
+    if quiet:
+        _quiet_day_b(connection_info, archive_server)
+    return day_b
+
+
+def _quiet_day_b(connection_info: str, archive_server) -> None:
     _process(connection_info, archive_server, [store_observation(
         connection_info, archive_server, occurrence_key="quiet-day-b",
         endpoint="profile", body=_profile(4988),
         observed_at=DAY_C + timedelta(minutes=25), normalized_tag=TAG,
     )[1]])
-    return day_b
 
 
 def test_a_proven_partial_day_before_proves_the_boards_start(
@@ -1450,24 +1456,37 @@ def test_a_proven_partial_day_before_proves_the_boards_start(
     assert entry == (4988, True)
 
 
+@pytest.mark.parametrize("recovered", [False, True])
 def test_a_proven_partial_day_before_lets_a_late_attack_settle_the_day(
-    database_url: str, archive_server
+    database_url: str, archive_server, recovered: bool
 ) -> None:
     """Day C starts from Partial day B's proven end of 4,988, takes eight
     defenses and an attack at 04:57 that its Reset reading at 05:00 does not
     hold yet. Its start is proven, so that attack settles the day: day C is
-    Complete, not Inconsistent."""
+    Complete, not Inconsistent. Recovered after day C was saved Inconsistent
+    from the same 4,988, B's quiet reading proves that start and calculates
+    day C again, which records the proof its start read."""
     day_c = [(DAY_C + timedelta(hours=hour), False) for hour in range(2, 10)] + [
         (DAY_D - timedelta(minutes=3), True)
     ]
     end_c = 4988 + WIN - 8 * LOSS
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        _proven_partial_day_b(connection_info, archive_server)
+        _proven_partial_day_b(connection_info, archive_server, quiet=not recovered)
         _process(connection_info, archive_server, _reset_work(
             connection_info, archive_server, DAY_D, profile=_profile(end_c - WIN),
             log=_log(*day_c),
         ))
+        if recovered:
+            assert _latest_days(connection_info, (DAY_C,))[0][0] == "Inconsistent"
+            _quiet_day_b(connection_info, archive_server)
         day_c_row = _latest_days(connection_info, (DAY_C,))[0]
+        with psycopg.connect(connection_info) as connection:
+            recorded = connection.execute(
+                "SELECT input_evidence -> 'previous_day' ->> 'proven_end' FROM ranked_day_versions"
+                " WHERE ranked_day_start = %s ORDER BY version DESC LIMIT 1",
+                (DAY_C,),
+            ).fetchone()[0]
 
     assert (day_c_row[0], *day_c_row[2:5]) == ("Complete", 4988, end_c, end_c)
+    assert recorded == "4988"
 

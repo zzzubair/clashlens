@@ -1404,3 +1404,55 @@ def test_a_reset_log_takes_its_pairs_work_lock_before_the_resets_board(
             ),
             boundary,
         )
+
+
+def test_a_recalculation_judges_its_checks_before_taking_the_summary(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """A recalculation of the day before a settled check's ended day
+    publishes it, then judges that check again. While another job holds the
+    check, it waits holding no Season summary, which that job can take, so
+    neither is cancelled."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from test_reset_settlement_proof_postgres import (
+        ORDERS,
+        RESET,
+        SWITCH,
+        _scenario,
+        _wait_for_advisory_wait,
+    )
+    from test_reset_settlement_proof_postgres import _process as _drain
+
+    from clashlens.domain import ranked_day_for
+    from clashlens.season_summaries import (
+        acquire_player_season_lock,
+        materialize_player_season,
+    )
+
+    monkeypatch.setenv(SWITCH, "true")
+    monkeypatch.setattr(reconciliation_db, "limit_lock_waits", lambda _connection: None)
+    season_id = ranked_day_for(RESET - timedelta(days=1)).official_season_id
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        scenario = _scenario(connection_info, archive_server)
+        _drain(connection_info, archive_server,
+               [scenario[job] for job in ORDERS["named_check_last"]])
+        with psycopg.connect(connection_info) as connection:
+            materialize_player_season(connection, scenario["player"], season_id)
+            connection.commit()
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=RESET - timedelta(days=2),
+                now=RESET, request_key="lock-order",
+            )
+            with psycopg.connect(connection_info) as holder, ThreadPoolExecutor(1) as pool:
+                reset_settlement._lock_reset(holder, scenario["player"], RESET)
+                recalculation = pool.submit(processor.process_job, job, owner="lock-order")
+                _wait_for_advisory_wait(holder, recalculation)
+                holder.execute("SET LOCAL lock_timeout = '5s'")
+                acquire_player_season_lock(holder, scenario["player"], season_id)
+                holder.commit()
+                assert recalculation.result(timeout=60).outcome == "processed"
+        finally:
+            database.close()

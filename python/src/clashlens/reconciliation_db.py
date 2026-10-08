@@ -44,11 +44,7 @@ from .reconciliation import (
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
-from .season_summaries import (
-    acquire_player_season_lock,
-    materialize_player_season,
-    refresh_stored_seasons,
-)
+from .season_summaries import refresh_stored_seasons
 
 # The 2026-10-05 and 2026-10-06 Resets saved every reading within 45 minutes.
 DAY_END_RECALCULATION_DELAY = timedelta(hours=2)
@@ -183,18 +179,15 @@ def proven_end(database: Database, connection: Any, version_id: int) -> int | No
 def _start_moved(
     database: Database, connection: Any, player_id: int, day_start: datetime
 ) -> bool:
-    """Whether the following saved day of this day, not Complete, started
-    from another proven end than the day's now (``proven_end``), as when a
-    later reading saved since proves or no longer proves it."""
+    """Whether the following saved day of this day, not Complete, was
+    calculated with another proven end of it than the day's now
+    (``proven_end``), or none, as when a later reading saved since proves or
+    no longer proves it: its start, and whether that start is proven."""
     rows = connection.execute(
         """
         SELECT DISTINCT ON (ranked_day_start)
-               id, state = 'Complete' AND coverage_complete, start_trophies,
-               COALESCE(
-                   (formula_components ->> 'start_reading_trophies')::int,
-                   start_trophies
-               ),
-               end_baseline_id, start_baseline_id
+               id, state = 'Complete' AND coverage_complete,
+               (input_evidence -> 'previous_day' ->> 'proven_end')::int
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start IN (%s, %s)
           AND reconciliation_rule_version = %s
@@ -203,10 +196,9 @@ def _start_moved(
         (player_id, day_start, day_start + timedelta(days=1),
          RECONCILIATION_RULE_VERSION),
     ).fetchall()
-    if len(rows) < 2 or rows[0][1] or rows[0][4] is None or rows[0][4] != rows[1][5]:
+    if len(rows) < 2 or rows[0][1]:
         return False
-    proven = proven_end(database, connection, int(rows[0][0]))
-    return rows[1][2] != (rows[1][3] if proven is None else proven)
+    return proven_end(database, connection, int(rows[0][0])) != rows[1][2]
 
 
 def proven_end_moved(
@@ -248,22 +240,31 @@ def finish_recalculation(
     oldest Reset first and after every day's publication lock, each Reset
     settlement check that roots its start or pools its automatic loss on one
     of these ended days, the day before its own, and the checks after it
-    that verdict roots; then store again the player's saved Season summaries
-    of those days, whose accepted ends and movements read those checks."""
+    that verdict roots; then, after every such check, store again the
+    player's saved Season summaries of those days and of the checks that
+    changed, whose accepted ends and movements read them, or the first one
+    once the Season's Day 28 is published Complete."""
     from . import reset_settlement
 
     days = sorted(set(day_starts))
+    changed: set[tuple[int, str]] = set()
     if days and reset_settlement._has_settlements(database, connection):
         now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         for day_start in days:
             if day_start + timedelta(days=1) <= now:
                 reset_settlement.refresh_boundary(
-                    database, connection, player_id, day_start + timedelta(days=2)
+                    database, connection, player_id, day_start + timedelta(days=2), changed
                 )
-    refresh_stored_seasons(database, connection, player_id, {
-        ranked_day_for(day_start + offset).official_season_id
-        for day_start in days for offset in (timedelta(0), timedelta(days=1))
-    })
+    seasons = connection.execute(
+        """
+        SELECT DISTINCT official_season_id FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = ANY(%s)
+        """,
+        (player_id, [day + offset for day in days for offset in (timedelta(0), timedelta(days=1))]),
+    ).fetchall()
+    refresh_stored_seasons(
+        database, connection, changed | {(player_id, _text_value(row[0])) for row in seasons}
+    )
 
 
 def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> bool:
@@ -1204,39 +1205,6 @@ def _publish_player_daily_log(
             """,
             daily_log_values,
         )
-    # Refresh the compact historical summary in the same transaction:
-    # a late correction updates an already-summarized season, and a
-    # completed day-28 publication establishes one. Active seasons stay
-    # on explicit backfill, and unchanged input is a no-op, so routine
-    # live publication is unaffected.
-    if public_state != "Live" and getattr(
-        database, "_supports_season_summaries", False
-    ) and official_season_id != "unknown":
-        refresh = season_day_number == 28 and public_state == "Complete"
-        if not refresh:
-            # Probe under the per-player-season lock so a racing first
-            # backfill commits or is fenced out before the check, the
-            # same serialization the retired exclusive season lock
-            # used to give this read for free.
-            acquire_player_season_lock(
-                connection, player_id, official_season_id
-            )
-            refresh = (
-                connection.execute(
-                    """
-                    SELECT 1 FROM player_season_summaries
-                    WHERE player_id = %s AND official_season_id = %s
-                    """,
-                    (player_id, official_season_id),
-                ).fetchone()
-                is not None
-            )
-        if refresh:
-            materialize_player_season(
-                connection,
-                player_id=player_id,
-                season_id=official_season_id,
-            )
 
 
 def _enqueue_live_reconciliation(
