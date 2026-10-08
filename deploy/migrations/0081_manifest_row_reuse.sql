@@ -36,8 +36,9 @@ ALTER TABLE boundary_publication_manifest_rows
         CHECK ((input_identity IS NULL) = (identity_manifest_id IS NOT NULL)) NOT VALID;
 
 -- A base is always a sealed full manifest of the same Reset and kind, and a
--- reused identity is always one stored in full, so rebuilding any manifest
--- reads at most one other manifest's rows.
+-- reused identity is always one stored in full, so rebuilding a manifest
+-- reads its own rows, its base's, and for a reused identity the one row
+-- storing it (each lookup is one step).
 CREATE OR REPLACE FUNCTION clashlens_boundary_manifest_reuse_guard()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
