@@ -547,7 +547,7 @@ def _snapshot_rows(
     # What each day's Reset proof reads besides the day, frozen so every
     # build of this board proves the same (``reset_trophies``).
     proof_facts = saved_proof_facts(
-        database, connection,
+        connection,
         [int(row[1]) for row in members if row[1] is not None and int(row[0]) in profiles],
     )
     manifest_rows: list[dict[str, Any]] = []
@@ -612,8 +612,8 @@ def _snapshot_rows(
                 identity["snapshot_quality"] = "profile_not_found"
             else:
                 identity["snapshot_quality"] = "eligible"
-                if version_id in proof_facts:
-                    identity["reset_proof"] = proof_facts[version_id]
+                if version_id is not None:
+                    identity["reset_proof"] = proof_facts.get(version_id) or {}
         else:
             identity["profile_version_id"] = None
             identity["profile_input_hash"] = None
@@ -713,13 +713,11 @@ def reset_proof_facts(
     return day_proof_facts(database, connection, rows)
 
 
-def saved_proof_facts(
-    database: Database, connection: Any, version_ids: list[int]
-) -> dict[int, dict[str, Any]]:
+def saved_proof_facts(connection: Any, version_ids: list[int]) -> dict[int, dict[str, Any]]:
     """What each saved day's Reset proof read when the day was calculated,
-    as it stored it (``stored_proof``); a day saved before proofs were
-    stored, as the evidence saved now gives it (``reset_proof_facts``)."""
-    stored = {
+    as it stored it (``stored_proof``). A day saved without one proves
+    nothing by it until it is calculated again."""
+    return {
         int(row[0]): row[1] for row in connection.execute(
             """
             SELECT id, formula_components -> 'reset_proof' FROM ranked_day_versions
@@ -728,9 +726,6 @@ def saved_proof_facts(
             (list(version_ids),),
         ).fetchall()
     }
-    return {**reset_proof_facts(
-        database, connection, [version for version in version_ids if version not in stored]
-    ), **stored}
 
 
 def day_proof_facts(

@@ -26,7 +26,7 @@ from test_reset_settlement_state_postgres import (
 )
 
 from clashlens import ranked_day_inputs, reconciliation_db, reset_settlement
-from clashlens.boundary_manifest import reset_proof_facts, reset_trophies
+from clashlens.boundary_manifest import reset_trophies
 from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
 
@@ -708,15 +708,9 @@ def test_season_repair_settles_an_early_reset_reading_and_its_board_entry(
                 """,
                 (DAY_C, DAY_B),
             ).fetchone()
-            database, _ = _processor(connection_info, archive_server)
-            try:
-                board = reset_trophies(
-                    connection, DAY_C,
-                    {player_id: (version_id, reading_id, reading_at, 4839)},
-                    reset_proof_facts(database, connection, [version_id]),
-                )
-            finally:
-                database.close()
+            board = reset_trophies(
+                connection, DAY_C, {player_id: (version_id, reading_id, reading_at, 4839)}
+            )
 
     assert (before[0], before[8]) == ("Inconsistent", ["trophy_equation_mismatch"])
     assert after[:5] == ("Complete", "inferred", 5088, 4869, 4869)
@@ -763,15 +757,10 @@ def _board_entry(connection_info: str, archive_server, day: datetime) -> tuple[i
             """,
             (day,),
         ).fetchone()
-        database, _ = _processor(connection_info, archive_server)
-        try:
-            return reset_trophies(
-                connection, day + timedelta(days=1),
-                {player_id: (version_id, reading_id, reading_at, trophies)},
-                reset_proof_facts(database, connection, [version_id]),
-            )[player_id]
-        finally:
-            database.close()
+        return reset_trophies(
+            connection, day + timedelta(days=1),
+            {player_id: (version_id, reading_id, reading_at, trophies)},
+        )[player_id]
 
 
 def test_a_profile_before_the_first_new_day_battle_is_never_skipped(
@@ -1365,15 +1354,9 @@ def _day_c_entry(
             "SELECT response_completed_at FROM collector_observations WHERE id = %s",
             (observation_id,),
         ).fetchone()[0]
-        database, _ = _processor(connection_info, archive_server)
-        try:
-            return reset_trophies(
-                connection, DAY_D,
-                {player_id: (version_id, observation_id, read_at, reading)},
-                reset_proof_facts(database, connection, [version_id]),
-            )[player_id]
-        finally:
-            database.close()
+        return reset_trophies(
+            connection, DAY_D, {player_id: (version_id, observation_id, read_at, reading)}
+        )[player_id]
 
 
 def test_a_reading_plus_its_battles_is_proven_only_from_a_proven_start(

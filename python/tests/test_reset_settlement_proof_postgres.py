@@ -917,8 +917,13 @@ def _later_profiles(
     connection_info: str, archive_server, readings: list[tuple[str, int, datetime]]
 ) -> None:
     """Save and process each (tag, trophies, read at) as a Legend I profile
-    naming the October 2026 Season, the Day 2 board's."""
+    naming the October 2026 Season, the Day 2 board's; each seeded day then
+    stores what its proof reads, as its calculation after them would."""
+    from psycopg.types.json import Jsonb
     from test_boundary_manifest_postgres import DAY_2_RESET
+
+    from clashlens.boundary_manifest import reset_proof_facts
+    from clashlens.db import Database
 
     season = int(ranked_day_for(DAY_2_RESET - DAY).official_season_id)
     jobs = []
@@ -933,6 +938,17 @@ def _later_profiles(
             parser_version=PROFILE_PARSER_VERSION,
         )[1])
     _process(connection_info, archive_server, jobs)
+    database = Database(connection_info)
+    with database.pool.connection() as connection:
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for version, facts in reset_proof_facts(database, connection, [row[0] for row in (
+            connection.execute("SELECT DISTINCT ON (player_id) id FROM ranked_day_versions"
+                               " WHERE ranked_day_end = %s ORDER BY player_id, version DESC",
+                               (DAY_2_RESET,)).fetchall())]).items():
+            connection.execute("UPDATE ranked_day_versions SET formula_components = jsonb_set("
+                               "COALESCE(formula_components, '{}'), '{reset_proof}', %s)"
+                               " WHERE id = %s", (Jsonb(facts), version))
+    database.close()
 
 
 def _set_defenses(connection_info: str, defenses: dict[int, int]) -> None:
@@ -1340,15 +1356,33 @@ def test_season_repair_judges_old_rule_checks_again(
     assert rule == reset_settlement.PROOF_RULE_VERSION
 
 
+def _sweep_with_a_gap_the_day_before(monkeypatch) -> None:
+    """The late-battle sweep finds the day before the ended day, and every
+    recalculation finds a gap in that day's battle logs."""
+    from dataclasses import replace
+
+    from clashlens import late_battle_sweep, reconciliation_db
+
+    monkeypatch.setattr(late_battle_sweep, "_STALE_DAYS", f"""
+        SELECT player.id, %(boundary)s::timestamptz - interval '2 days'
+        FROM players AS player WHERE player.normalized_tag = '{TAG}'
+          AND %(window_start)s::timestamptz IS NOT NULL AND %(rule)s IS NOT NULL
+    """)
+    monkeypatch.setattr(late_battle_sweep, "_OUTDATED_DAYS", """
+        SELECT NULL::bigint, NULL::timestamptz WHERE %(rule)s IS NULL
+    """)
+    original = reconciliation_db.reconcile_ranked_day
+    monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day",
+                        lambda data: replace(original(data), coverage_complete=False))
+
+
 def test_late_battle_sweep_judges_the_check_its_day_before_feeds_again(
     database_url: str, archive_server, monkeypatch
 ) -> None:
     """The scheduled late-battle sweep recalculates the day before the
     ended day with a gap in its battle logs: the settled check that pooled
     that day's defenses is judged again and no longer settles."""
-    from dataclasses import replace
-
-    from clashlens import late_battle_sweep, reconciliation_db
+    from clashlens import late_battle_sweep
 
     monkeypatch.setenv(SWITCH, "true")
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -1357,20 +1391,7 @@ def test_late_battle_sweep_judges_the_check_its_day_before_feeds_again(
                  [scenario[job] for job in ORDERS["named_check_last"]])
         settled = _verdict(connection_info)[:3]
         # The sweep finds the day before's late report.
-        monkeypatch.setattr(late_battle_sweep, "_STALE_DAYS", f"""
-            SELECT player.id, %(boundary)s::timestamptz - interval '2 days'
-            FROM players AS player
-            WHERE player.normalized_tag = '{TAG}'
-              AND %(window_start)s::timestamptz IS NOT NULL AND %(rule)s IS NOT NULL
-        """)
-        monkeypatch.setattr(late_battle_sweep, "_OUTDATED_DAYS", """
-            SELECT NULL::bigint, NULL::timestamptz WHERE %(rule)s IS NULL
-        """)
-        original = reconciliation_db.reconcile_ranked_day
-        monkeypatch.setattr(
-            reconciliation_db, "reconcile_ranked_day",
-            lambda data: replace(original(data), coverage_complete=False),
-        )
+        _sweep_with_a_gap_the_day_before(monkeypatch)
         database, _ = _processor(connection_info, archive_server)
         try:
             assert late_battle_sweep.sweep_late_battles(
@@ -1391,29 +1412,14 @@ def test_late_battle_sweep_locks_every_day_before_any_reset(
     Reset ending the day before. The sweep recalculating both days waits for
     the ended day's lock before it recalculates the day before, so it holds
     no lock of that Reset meanwhile, and both finish."""
-    from dataclasses import replace
-
     from clashlens import late_battle_sweep, ranked_day_inputs, reconciliation_db
 
     with domain_database(database_url, include_coordinator=True) as connection_info:
         scenario = _scenario(connection_info, archive_server)
         _process(connection_info, archive_server,
                  [scenario[job] for job in ORDERS["named_check_last"]])
-        monkeypatch.setattr(late_battle_sweep, "_STALE_DAYS", f"""
-            SELECT player.id, %(boundary)s::timestamptz - interval '2 days'
-            FROM players AS player
-            WHERE player.normalized_tag = '{TAG}'
-              AND %(window_start)s::timestamptz IS NOT NULL AND %(rule)s IS NOT NULL
-        """)
-        monkeypatch.setattr(late_battle_sweep, "_OUTDATED_DAYS", """
-            SELECT NULL::bigint, NULL::timestamptz WHERE %(rule)s IS NULL
-        """)
         # The day before's result changes, so recalculating it locks its Reset.
-        original = reconciliation_db.reconcile_ranked_day
-        monkeypatch.setattr(
-            reconciliation_db, "reconcile_ranked_day",
-            lambda data: replace(original(data), coverage_complete=False),
-        )
+        _sweep_with_a_gap_the_day_before(monkeypatch)
         monkeypatch.setattr(reconciliation_db, "limit_lock_waits", lambda _connection: None)
         database, _ = _processor(connection_info, archive_server)
         try:

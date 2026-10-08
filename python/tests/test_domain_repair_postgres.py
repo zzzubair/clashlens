@@ -1166,3 +1166,104 @@ def test_a_day_stores_its_proven_end_and_a_recovered_reading_saves_a_new_one(
     assert after[0] > before[0]
     assert after[1:] == ([4988, 0], "4988")
 
+
+
+def test_a_board_from_an_unchanged_version_stays_uncertain_until_recalculated(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """Day B, with no start, takes eight defenses; its Reset reading at 05:01
+    shows 4,988. A matching quiet reading at 05:25 is saved without day B
+    being calculated again: its board entry, from that unchanged version,
+    stays uncertain. Calculated again, day B stores the proof in a new
+    version, and the entry is confirmed."""
+    from test_reconciliation_postgres import _processor
+    from test_reset_reading_before_loss_postgres import (
+        DAY_B,
+        TAG,
+        _board_entry,
+        _process,
+        _proven_partial_day_b,
+        _quiet_day_b,
+    )
+
+    from clashlens import reconciliation_db, reset_settlement
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _proven_partial_day_b(connection_info, archive_server, quiet=False)
+        monkeypatch.setattr(reset_settlement, "profile_rechecks", lambda *_: ([], None))
+        _quiet_day_b(connection_info, archive_server)
+        monkeypatch.undo()
+        unchanged = _board_entry(connection_info, archive_server, DAY_B)
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=DAY_B, now=DAY_B + 2 * DAY,
+                request_key="again",
+            )
+        finally:
+            database.close()
+        _process(connection_info, archive_server, [job])
+        recalculated = _board_entry(connection_info, archive_server, DAY_B)
+
+    assert unchanged == (4988, False)
+    assert recalculated == (4988, True)
+
+
+def test_season_repair_waits_for_the_calculations_its_jobs_queue_again(
+    database_url: str,
+) -> None:
+    """A Season repair's day job has run, but queued the day to be
+    calculated again, as when a Reset check it judged settled: until that
+    calculation has run, the repair stays at its days, and while it has
+    failed it holds the boards and summaries like any failed day job."""
+    from domain_test_support import repair_season
+    from test_boundary_manifest_postgres import (
+        DAY_2_RESET,
+        _october,
+        _seed_board,
+        _seed_days,
+    )
+
+    from clashlens import reset_settlement
+    from clashlens.domain import ranked_day_for
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(
+            connection_info, [("#2QCYU8C2G", 4931, _october(7, 4, 37))]
+        )
+        _seed_days(connection_info, generation_id, {1: (True, [])}, {1: {
+            "state": "Complete", "failure_reasons": [], "final": 4931, "start": 4931,
+            "end": 4931,
+        }})
+        repair_season(connection_info, NEXT_SEASON)
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete'"
+                    " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+                )
+                reset_settlement._queue_recalculation(
+                    connection, 1, ranked_day_for(DAY_2_RESET - DAY), "check-follow-up"
+                )
+            runs = []
+            for status, category in (
+                ("pending", None), ("failed", "invalid_work_input"), ("complete", None),
+            ):
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "UPDATE python_processing_jobs SET status = %s, failure_category = %s"
+                        " WHERE deduplication_key LIKE 'reconcile:later-reading:%%'",
+                        (status, category),
+                    )
+                runs.append(domain_repair.season_repair(
+                    database, NEXT_SEASON, "queue", max_jobs=100
+                ))
+        finally:
+            database.close()
+
+    assert [(run["phase"], run["unfinished"], run["failed"]) for run in runs[:2]] == [
+        ("days", 1, 0), ("days", 0, 1),
+    ]
+    assert [job["player_id"] for job in runs[1]["failed_blockers"]] == [1]
+    assert runs[2]["phase"] != "days"

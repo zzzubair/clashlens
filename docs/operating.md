@@ -625,7 +625,7 @@ board, then each one that still differs from its days, as when a board
 correction since moved an earlier player's final rank, reading every summary
 of the Season each run; it is `done` only when none differs. Run `queue`
 again until `phase` is `done`; `left_to_queue` and
-`unfinished` count the day jobs still to queue and still to run. A day that
+`unfinished` count the day jobs still to queue and still to run, including the calculations of the repaired players' days of the Season queued again since, such as when a Reset check a repair job judged settled, whose new version stores that verdict; a failed one holds the repair as a failed day job does. A day that
 comes out the same saves nothing new. A recalculation that failed is kept and
 not queued again: `failed` counts them and `failed_blockers` lists at most
 `--max-jobs` (job, player, failure reason). While any has failed, the repair

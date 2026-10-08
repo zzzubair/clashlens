@@ -15,7 +15,6 @@ from .boundary_manifest import (
     _moved_decode_ids,
     profiles_not_found,
     reset_trophies,
-    saved_proof_facts,
 )
 from .boundary_manifest import (
     freeze_boundary_manifest as _freeze_boundary_manifest,
@@ -1157,9 +1156,6 @@ def queue_board_rebuilds(
                         for row in rows
                         if row[2] is not None
                     },
-                    saved_proof_facts(database, connection, [
-                        int(latest.get(row[0], row[2])) for row in rows if row[2] is not None
-                    ]),
                 )
                 expected = {
                     int(row[0]): at_reset.get(int(row[0]), (int(row[4]), False))

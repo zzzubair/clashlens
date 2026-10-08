@@ -284,24 +284,33 @@ def _stale_players(connection: Any, season_id: str) -> tuple[int, list[int]]:
 def _repair_jobs(
     connection: Any, revision: str, season_id: str, players: list[int], limit: int
 ) -> dict[str, Any]:
-    """How many of the players' day jobs are unfinished, and the failed ones."""
-    keys = {_repair_key(revision, season_id, player): player for player in players}
+    """How many of the players' day jobs are unfinished, and the failed ones,
+    counting the calculations of their days of the Season those jobs and
+    later evidence queue again (``reset_settlement._queue_recalculation``),
+    such as a Reset check that settled while a day was calculated, which
+    stores its verdict in a new version of the day."""
+    start = datetime.fromtimestamp(int(season_id), UTC)
     rows = connection.execute(
         """
-        SELECT deduplication_key, id, state, failure_category
+        SELECT id, state, failure_category, (input_json ->> 'player_id')::bigint
         FROM python_processing_jobs_worker
-        WHERE deduplication_key = ANY(%s)
+        WHERE (input_json ->> 'player_id')::bigint = ANY(%s)
+          AND (deduplication_key = ANY(%s) OR (
+              deduplication_key LIKE 'reconcile:later-reading:%%'
+              AND (input_json ->> 'ranked_day_start')::timestamptz >= %s
+              AND (input_json ->> 'ranked_day_start')::timestamptz < %s))
         ORDER BY id
         """,
-        (list(keys),),
+        (players, [_repair_key(revision, season_id, player) for player in players],
+         start, start + SEASON_DURATION),
     ).fetchall()
-    failed = [row for row in rows if _text_value(row[2]) == "failed"]
+    failed = [row for row in rows if _text_value(row[1]) == "failed"]
     return {
-        "unfinished": sum(_text_value(row[2]) in _UNFINISHED_JOB_STATES for row in rows),
+        "unfinished": sum(_text_value(row[1]) in _UNFINISHED_JOB_STATES for row in rows),
         "failed": len(failed),
         "failed_blockers": [
-            {"job_id": int(row[1]), "player_id": keys[_text_value(row[0])],
-             "failure_category": _text_value(row[3]) if row[3] else None}
+            {"job_id": int(row[0]), "player_id": int(row[3]),
+             "failure_category": _text_value(row[2]) if row[2] else None}
             for row in failed[:limit]
         ],
     }
