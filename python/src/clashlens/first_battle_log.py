@@ -573,13 +573,17 @@ def requeue_zero_result_slots(
 
 
 def requeue_overlap_gap(
-    database: Database, season_id: str, *, queue: bool, max_jobs: int
+    database: Database, season_id: str, *, queue: bool, max_jobs: int,
+    reason: str = "battle_log_overlap_gap", trigger: str = "overlap_gap",
 ) -> dict[str, Any]:
     """Find, and with ``queue`` recalculate, each player's oldest ended day
-    of the Season whose latest result reports ``battle_log_overlap_gap``, and
-    their later saved days. Before October 2026 two full logs overlapped
-    only through a shared Legend battle, so logs sharing only other battles
-    were a gap: 911 ended days on 5 and 6 October 2026. A day is queued once
+    of the Season whose latest result reports ``reason``, and their later
+    saved days. Before October 2026 two full logs overlapped only through a
+    shared Legend battle, so logs sharing only other battles were a gap: 911
+    ended days on 5 and 6 October 2026. With ``trophy_equation_mismatch``, it
+    recalculates days that zero-defense charges or a later reading settling
+    the Reset reading can now finish: 123 ended days on 5 and 6 October
+    2026. A day is queued once
     while its finished request is kept, about 48 hours; a later run queues a
     day still reporting a gap again, which only recalculates it. A failed
     request is kept and not queued again: it is counted in ``failed`` and up
@@ -590,7 +594,7 @@ def requeue_overlap_gap(
         raise ValueError(f"{season_id} is not a Season's start")
 
     def key(player_id: Any, day: datetime) -> str:
-        return (f"reconcile:overlap-gap:{player_id}:"
+        return (f"reconcile:{trigger.replace('_', '-')}:{player_id}:"
                 f"{day.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}")
 
     with database.pool.connection() as connection:
@@ -608,10 +612,11 @@ def requeue_overlap_gap(
                 )
                 SELECT DISTINCT ON (player_id) player_id, ranked_day_start
                 FROM latest
-                WHERE failure_reasons ? 'battle_log_overlap_gap'
+                WHERE failure_reasons ? %(reason)s
                 ORDER BY player_id, ranked_day_start
                 """,
-                {"start": season_start, "end": season_start + domain.SEASON_DURATION},
+                {"start": season_start, "end": season_start + domain.SEASON_DURATION,
+                 "reason": reason},
             ).fetchall()
             queued = {
                 row[0]: row[1:] for row in connection.execute(
@@ -632,7 +637,7 @@ def requeue_overlap_gap(
                 for player_id, day in (waiting[:max_jobs] if queue else [])
                 if (job_id := _queue(
                     connection, int(player_id), day, None,
-                    key=key(player_id, day), trigger="overlap_gap",
+                    key=key(player_id, day), trigger=trigger,
                     priority=PYTHON_BACKFILL_PRIORITY,
                 )) is not None
             ]
