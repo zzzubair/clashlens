@@ -167,8 +167,9 @@ class ReconciliationInput:
     # The last accepted, eligible profile naming the day's Season read after
     # the end Reset reading and before the player's first battle of the next
     # day, by either player's report, as (read at, trophies). Loaded only for
-    # a day the end reading does not reconcile, or one with no used defense
-    # slots it shows uncharged (see ``reads_later_reading``).
+    # a day the end reading does not reconcile, one with no used defense
+    # slots it shows uncharged, or one settled by battles the end reading
+    # missed (see ``reads_later_reading``).
     later_next_start_reading: tuple[datetime, int] | None = None
 
     def __post_init__(self) -> None:

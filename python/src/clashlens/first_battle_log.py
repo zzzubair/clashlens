@@ -583,8 +583,8 @@ def requeue_overlap_gap(
     shared Legend battle, so logs sharing only other battles were a gap: 911
     ended days on 5 and 6 October 2026. With
     ``ranked_day_inputs.LATER_READING_DAY_SQL``, it recalculates days that
-    zero-defense charges or a later reading settling the Reset reading can
-    now finish: 123 ended days ending in a mismatch on 5 and 6 October
+    zero-defense charges, or a later reading or the day's last battles
+    settling the Reset reading, can now finish: 123 ended days ending in a mismatch on 5 and 6 October
     2026, and zero-defense days whose Reset reading came before the game
     charged them. A day is queued once
     while its finished request is kept, about 48 hours; a later run queues a
