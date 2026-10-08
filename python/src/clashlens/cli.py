@@ -78,7 +78,7 @@ from .worker import (
 from .worker_liveness import ProgressMark, progress_file, worker_readiness
 
 MAX_REPORTED_RESULTS = 100
-# Save plus request threads leave 64 of the collector container's 512 for the rest.
+# Save plus request threads leave 96 of the collector's 544: 32 for uploads, 64 spare.
 _SAVE_THREADS, _THREAD_BUDGET = 384, 448
 UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"

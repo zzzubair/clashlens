@@ -186,7 +186,7 @@ def test_collector_threads_stay_under_the_container_limit(
     with pytest.raises(Started) as started:
         _run_collector(arguments)
     assert started.value.args == threads
-    # 64 of the container's 512 processes and threads stay for everything else.
+    # 32 upload threads and 64 spare fill the rest of the container's 544.
     assert sum(started.value.args) <= 448
 
 
