@@ -691,10 +691,10 @@ A copy saved back this way is admitted while the files on disk stay within the
 spool's folder limits plus 32 files and 32 largest bodies, one per concurrent
 worker job (`worker.MAX_CONCURRENCY`). Space the collector has reserved for a
 response it is still fetching is not on disk yet, and the worker cannot see that
-reservation in the collector's process. So the worst case is the limits plus
-those 32 files and bodies plus one file and one largest body for each collector
-save in flight, at most the collector's regular parallelism (up to 384).
-Repairs happen only during recovery; a repair past the allowance waits as a
+reservation in the collector's process. So repairs may fill the folder to its
+limits plus those 32 files and bodies, and then every reservation the collector
+already holds, one file and one largest body each, whichever request made it,
+can still be saved on top. Repairs happen only during recovery; a repair past the allowance waits as a
 full spool, never as missing proof. The collector's own saves still stop at the
 limits.
 

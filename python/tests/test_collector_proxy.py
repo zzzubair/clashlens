@@ -671,7 +671,7 @@ def test_a_relay_connection_that_runs_out_of_time_is_a_timeout_and_a_relay_failu
         client = OfficialApiClient(
             relay["origin"],
             proxy_url=proxy_url,
-            connection_timeout_seconds=0.3,
+            connection_timeout_seconds=1,
             total_timeout_seconds=5,
         )
         verifier = OfficialVerificationClient(
@@ -679,27 +679,41 @@ def test_a_relay_connection_that_runs_out_of_time_is_a_timeout_and_a_relay_failu
             proxy_url=proxy_url,
             api_origin=relay["origin"],
             allow_insecure_test_origin=True,
-            timeout_seconds=0.3,
+            timeout_seconds=1,
         )
+        connecting = []
 
         async def fetch() -> str:
+            # A request still connecting holds no tunnel yet.
+            attempt = asyncio.create_task(
+                client.fetch_player(key_pool(), "#2PP", "profile")
+            )
+            await asyncio.sleep(0.3)
+            connecting.append(_metrics(client))
             with pytest.raises(ProviderFailure) as caught:
-                await client.fetch_player(key_pool(), "#2PP", "profile")
+                await attempt
             return caught.value.category
 
         try:
             started = monotonic()
             assert asyncio.run(fetch()) == "proxy_timeout"
-            assert monotonic() - started < 2
+            assert monotonic() - started < 3
             metrics = _metrics(client)
-            with pytest.raises(VerificationTransportError):
-                verifier.verify("#2PP", "player-token")
+            with ThreadPoolExecutor(max_workers=1) as threads:
+                verification = threads.submit(verifier.verify, "#2PP", "player-token")
+                sleep(0.3)
+                connecting.append(verifier.relay_snapshot())
+                with pytest.raises(VerificationTransportError):
+                    verification.result()
         finally:
             client._http.clear()
             client._executor.shutdown()
             for waiting in queued:
                 waiting.close()
 
+    assert connecting[0]["clashlens_collector_api_requests_in_flight"] == 1
+    assert connecting[0]["clashlens_collector_relay_tunnels_open"] == 0
+    assert connecting[1]["tunnels_open"] == 0
     assert metrics["clashlens_collector_relay_requests_total"] == 1
     assert metrics["clashlens_collector_relay_timeouts_total"] == 1
     assert metrics["clashlens_collector_relay_admission_failures_total"] == 1

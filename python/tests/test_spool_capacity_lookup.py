@@ -100,8 +100,8 @@ def test_repairs_may_pass_the_folder_limit_only_by_their_allowance(
     assert collector.reconcile()["final_objects"] == (
         limits["max_objects"] + MAX_CONCURRENCY
     )
-    # The worst case: the limit, the repairs' allowance and the one collector
-    # save that was in flight.
+    # Every reservation the collector already held, here one, still lands on
+    # top of the limit and the repairs' allowance.
     last.publish(b"fetched", _digest(b"fetched"))
     assert collector.reconcile()["final_objects"] == (
         limits["max_objects"] + MAX_CONCURRENCY + 1

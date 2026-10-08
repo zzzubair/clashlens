@@ -276,7 +276,8 @@ The collector's `/metrics` shows its side. `clashlens_collector_api_connection_l
 is the most connections it keeps open, so the most relay tunnels it holds, and
 `clashlens_collector_api_requests_in_flight` how many of them a request is using.
 `clashlens_collector_relay_tunnels_open` counts the tunnels it holds now: those
-a request is using and idle ones kept open for the next request.
+a request is using and idle ones kept open for the next request. A tunnel
+counts once its connection through the relay is made, not while connecting.
 `clashlens_collector_relay_requests_total` counts requests sent through the
 relay; `clashlens_collector_relay_admission_failures_total` those the relay
 refused, closed unanswered as it does at its connection limit, or could not be
@@ -291,8 +292,8 @@ In `clashlens_collector_requests_total`, the same failures show as
 out of time) and `outcome="timeout"` per endpoint.
 
 The API's `/operatorz` shows player verification's side under
-`player_verification_relay`: `tunnels_open` (each verification opens a tunnel
-and closes it when answered), `requests`, `timeouts`, `admission_failures` and
+`player_verification_relay`: `tunnels_open` (each verification opens a tunnel,
+counted once connected, and closes it when answered), `requests`, `timeouts`, `admission_failures` and
 `reachable` (`null` before the first verification). Counts on both sides reset
 when the process restarts.
 

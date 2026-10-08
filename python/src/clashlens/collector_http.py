@@ -6,6 +6,7 @@ import math
 import socket
 import sys
 import threading
+import weakref
 from collections import deque
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from time import monotonic
-from typing import TypeVar
+from typing import Any, TypeVar
 from urllib.parse import quote, urljoin, urlsplit
 
 import certifi
@@ -317,13 +318,42 @@ class _DeadlineHTTPConnection(HTTPConnection):
         super().request(*args, **kwargs)
 
 
+class _OpenTunnels:
+    """Relay connections that finished connecting and have not closed."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open: weakref.WeakSet[HTTPSConnection] = weakref.WeakSet()
+
+    def add(self, connection: HTTPSConnection) -> None:
+        with self._lock:
+            self._open.add(connection)
+
+    def discard(self, connection: HTTPSConnection) -> None:
+        with self._lock:
+            self._open.discard(connection)
+
+    def snapshot(self) -> set[HTTPSConnection]:
+        with self._lock:
+            return set(self._open)
+
+
 class _DeadlineHTTPSConnection(HTTPSConnection):
+    tunnels: _OpenTunnels | None = None
+
     def _new_conn(self) -> socket.socket:
         return _new_deadline_socket(self)
 
     def connect(self) -> None:
         super().connect()
+        if self.tunnels is not None:
+            self.tunnels.add(self)
         _register_request_connection(self)
+
+    def close(self) -> None:
+        if self.tunnels is not None:
+            self.tunnels.discard(self)
+        super().close()
 
     def _tunnel(self) -> None:
         try:
@@ -343,6 +373,12 @@ class _DeadlineHTTPConnectionPool(HTTPConnectionPool):
 
 class _DeadlineHTTPSConnectionPool(HTTPSConnectionPool):
     ConnectionCls = _DeadlineHTTPSConnection
+    tunnels: _OpenTunnels | None = None
+
+    def _new_conn(self) -> HTTPSConnection:
+        connection = super()._new_conn()
+        connection.tunnels = self.tunnels
+        return connection
 
 
 class _DeadlinePoolManager(urllib3.PoolManager):
@@ -355,12 +391,20 @@ class _DeadlinePoolManager(urllib3.PoolManager):
 
 
 class _DeadlineProxyManager(urllib3.ProxyManager):
-    def __init__(self, proxy_url: str, **connection_pool_kw: object) -> None:
+    def __init__(
+        self, proxy_url: str, *, tunnels: _OpenTunnels, **connection_pool_kw: object
+    ) -> None:
         super().__init__(proxy_url, **connection_pool_kw)
+        self.tunnels = tunnels
         self.pool_classes_by_scheme = {
             "http": _DeadlineHTTPConnectionPool,
             "https": _DeadlineHTTPSConnectionPool,
         }
+
+    def _new_pool(self, *args: Any, **kwargs: Any) -> HTTPConnectionPool:
+        pool = super()._new_pool(*args, **kwargs)
+        pool.tunnels = self.tunnels
+        return pool
 
 
 class ProviderOutage:
@@ -672,6 +716,7 @@ class OfficialApiClient:
         self.max_connections = max_connections
         self.provider_outage = ProviderOutage()
         self._proxied = bool(proxy_url)
+        self._tunnels = _OpenTunnels()
         self._relay_counts = {"requests": 0, "timeouts": 0, "admission_failures": 0}
         self._relay_reachable: int | None = None
         pool_options = {
@@ -687,7 +732,7 @@ class OfficialApiClient:
             ),
         }
         self._http = (
-            _DeadlineProxyManager(proxy_url, **pool_options)
+            _DeadlineProxyManager(proxy_url, tunnels=self._tunnels, **pool_options)
             if proxy_url
             else _DeadlinePoolManager(**pool_options)
         )
@@ -720,8 +765,11 @@ class OfficialApiClient:
         return lines
 
     def _open_connections(self) -> int:
-        """Connections a request is using, or kept open for the next one."""
-        total = 0
+        """Connected tunnels a request is using, or kept open for the next one.
+
+        An idle one the relay has since closed no longer counts.
+        """
+        tunnels = self._tunnels.snapshot()
         pools = self._http.pools
         # Iterating the container itself is refused as unsafe across threads.
         for pool_key in pools.keys():  # noqa: SIM118
@@ -730,12 +778,12 @@ class OfficialApiClient:
                 continue
             with idle.mutex:
                 waiting = list(idle.queue)
-            total += idle.maxsize - len(waiting)
-            total += sum(
-                connection is not None and connection.is_connected
+            tunnels -= {
+                connection
                 for connection in waiting
-            )
-        return total
+                if connection in tunnels and not connection.is_connected
+            }
+        return len(tunnels)
 
     def _count_relay(self, outcome: str) -> None:
         counts = self._relay_counts
