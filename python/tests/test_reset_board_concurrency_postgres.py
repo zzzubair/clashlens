@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import psycopg
+import pytest
 from domain_test_support import domain_database
 from test_boundary_publication_lock_order_postgres import _wait_for_waiters
 from test_boundary_publication_postgres import (
@@ -370,15 +371,18 @@ def test_reset_priority_jobs_are_claimable_alongside_unlimited_work(
         assert claim is not None and claim.job_id == job_id
 
 
-def test_reset_backlog_and_old_live_work_take_turns_in_every_lane(
-    database_url: str,
+@pytest.mark.parametrize("live_waited", ["25 minutes", "1 minute"])
+def test_reset_backlog_and_live_work_take_turns_in_every_lane(
+    database_url: str, live_waited: str
 ) -> None:
     # Around 05:21 the new day's recalculations queued at 05:00 have waited
     # over 20 minutes, so they win on waiting time while the ended day's
-    # results the board needs are still queued. Each lane alternates, so both
-    # keep moving: the Reset backlog finishes, and old live work never waits
-    # more than one turn per lane behind it, even on the lane that first
-    # checks for a build and finds none.
+    # results the board needs are still queued. On 8 Oct 2026 live responses
+    # that had waited under 20 minutes lost every claim to the Reset backlog
+    # instead, for 21 minutes. Each lane alternates, so both keep moving: the
+    # Reset backlog finishes, and live work never waits more than one turn per
+    # lane behind it, even on the lane that first checks for a build and finds
+    # none.
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             classes: dict[int, str] = {}
@@ -411,10 +415,10 @@ def test_reset_backlog_and_old_live_work_take_turns_in_every_lane(
                         classes[job_id] = kind
             connection.execute(
                 "UPDATE python_processing_jobs"
-                " SET created_at = clock_timestamp() - interval '25 minutes',"
-                " due_at = clock_timestamp() - interval '25 minutes'"
+                " SET created_at = clock_timestamp() - %s::interval,"
+                " due_at = clock_timestamp() - %s::interval"
                 " WHERE priority = %s",
-                (PYTHON_LIVE_PRIORITY,),
+                (live_waited, live_waited, PYTHON_LIVE_PRIORITY),
             )
             connection.commit()
         database = Database(connection_info)

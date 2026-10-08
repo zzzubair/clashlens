@@ -1218,27 +1218,32 @@ readings, results for the Legend day that just ended, and the board's snapshot
 and analytics builds are queued at priority 300 instead of 100
 (`PYTHON_RESET_PRIORITY` in [`db.py`](../python/src/clashlens/db.py)). A claim
 adds 10 for each minute live work has waited, while Reset-priority work keeps
-its fixed score, so they go first unless live work has waited 20 minutes,
-however long they have waited themselves. Every other job each worker thread
-claims still takes Reset-priority work first (`RESET_FIRST_CLAIM_EVERY` in
-[`worker.py`](../python/src/clashlens/worker.py)), so while both wait, live
-work older than 20 minutes, such as the new day's results queued at 05:00,
-and the board's Reset work each get at least half of the jobs every thread
-claims. That only holds for live jobs among the 32 a claim looks at, picked by
-when each became due: a retried live job is
-due again from its retry time, so it can still wait behind Reset work longer
-than 20 minutes. On 2026-10-07 the collector's outage delayed about 19,000
+its fixed score, so by waiting time they go first unless live work has waited
+20 minutes, however long they have waited themselves. Each worker thread
+alternates (`RESET_FIRST_CLAIM_EVERY` in
+[`worker.py`](../python/src/clashlens/worker.py)): every other job it claims
+takes Reset-priority work first, and the rest take other due work first, with
+backfill still last. So while both wait, the board's Reset work and live work,
+such as new responses and the new day's results, each get at least half of the
+jobs every thread claims, however recently the live work arrived. On
+2026-10-08 the rest still went by waiting time, so live responses that arrived
+after 05:09 waited 21 minutes behind the Reset backlog. Build claims always
+take Reset-priority work first, so the board's build and checks never wait
+behind an army build. Among live work, a claim looks only at the 32 jobs that
+became due first, so a retried live job, due again from its retry time, can
+wait behind older live work. On 2026-10-07 the collector's outage delayed about 19,000
 Reset readings by 35 minutes; while they also earned the waiting bonus, no live
 reading was processed until they were all done, 40 minutes later, and live
 pages fell up to 59 minutes behind. Operator batches
 (`republish-current-season --first-logs`, `--day-1`, `--overlap-gap`, `--mismatch` and `--sign-up`)
 are queued at backfill priority, 25, which a worker thread only runs when no
 higher-priority work that thread can claim is due; a thread that does not process saved
-responses can run one while responses still wait. A claim from the newest-job
-plan takes its planned job only if, in the same database statement, no
-Reset-priority work it could take is waiting: due, waiting on its saved
-response, or with an expired lease. If there is any, the same claim uses that
-order instead. Asking for one particular job by number still takes that job.
+responses can run one while responses still wait. On a thread's Reset-first
+turn, a claim from the newest-job plan takes its planned job only if, in the
+same database statement, no Reset-priority work it could take is waiting: due,
+waiting on its saved response, or with an expired lease. If there is any, the
+same claim uses that order instead. On the other turn it takes its planned
+job. Asking for one particular job by number still takes that job.
 The board maintenance pass waits at most 50 milliseconds for a Reset's lock
 and otherwise tries again on its next pass.
 

@@ -15,7 +15,12 @@ import pytest
 from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
 
 from clashlens import cli, ingestion, job_outcomes, reconciliation_db, worker
-from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION, LeaseLost
+from clashlens.db import (
+    DOMAIN_RULE_VERSION,
+    POPULATION_BUILD_WORK_TYPES,
+    PROCESSING_VERSION,
+    LeaseLost,
+)
 from clashlens.domain import DomainRuleError
 from clashlens.league_history import (
     LEAGUE_HISTORY_ENDPOINT_VERSION,
@@ -25,6 +30,7 @@ from clashlens.league_history import (
 )
 from clashlens.operating import WorkerMetrics
 from clashlens.worker import (
+    DERIVED_WITHOUT_BUILDS,
     ObservationProcessor,
     ProcessResult,
     StageMetrics,
@@ -234,6 +240,27 @@ def test_worker_keeps_every_fourth_claim_oldest_first(monkeypatch) -> None:
     assert results == [ProcessResult(job_id, "processed") for job_id in (8, 9, 10, 7)]
     assert completed == [8, 9, 10, 7]
     assert queued == [11]
+
+
+def test_build_claims_take_reset_work_first_on_every_turn() -> None:
+    # The board's build and checks run at Reset priority and army builds at
+    # live priority, so only the build lane's other claims take turns.
+    calls = []
+
+    class Database:
+        def claim_job(self, *, owner, lease_seconds, work_types, reset_first):
+            calls.append((work_types, reset_first))
+            return SimpleNamespace(job_id=len(calls))
+
+    processor = ObservationProcessor(Database(), archive=object())
+    for work_types in (POPULATION_BUILD_WORK_TYPES,) * 2 + (DERIVED_WITHOUT_BUILDS,) * 2:
+        processor._claim_next(owner="builds", lease_seconds=60, work_types=work_types)
+    assert calls == [
+        (POPULATION_BUILD_WORK_TYPES, True),
+        (POPULATION_BUILD_WORK_TYPES, True),
+        (DERIVED_WITHOUT_BUILDS, True),
+        (DERIVED_WITHOUT_BUILDS, False),
+    ]
 
 
 def test_stage_metrics_report_bounded_histogram_percentiles() -> None:
