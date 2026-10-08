@@ -805,7 +805,6 @@ def test_a_later_reading_against_a_complete_day_keeps_its_board_entry_uncertain(
     disproves it, so the board shows the last reading plus later battles,
     uncertain. One showing the day's end, or none, leaves it proven."""
     from test_boundary_manifest_postgres import (
-        DAY_2_RESET,
         _build_board,
         _october,
         _seed_board,
@@ -813,7 +812,6 @@ def test_a_later_reading_against_a_complete_day_keeps_its_board_entry_uncertain(
     )
 
     from clashlens.db import Database
-    from clashlens.domain import RANKED_DAY_DURATION
 
     readings = [
         ("#2QCYU8C2G", 5240, _october(7, 4, 55)),  # later reading disagrees
@@ -834,19 +832,10 @@ def test_a_later_reading_against_a_complete_day_keeps_its_board_entry_uncertain(
             connection_info, generation_id, {player: (True, battles) for player in (1, 2, 3)},
             {player: complete for player in (1, 2, 3)},
         )
-        season = int(ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id)
-        later_jobs = []
-        for player, trophies in ((1, 5240), (2, 5200)):
-            payload = json.loads(_profile(trophies, readings[player - 1][0]))
-            payload["currentLeagueSeasonId"] = season
-            payload["previousLeagueSeasonId"] = season - 28 * 86400
-            later_jobs.append(store_observation(
-                connection_info, archive_server, occurrence_key=f"later-{player}",
-                endpoint="profile", body=json.dumps(payload).encode(),
-                observed_at=_october(7, 5, 10), normalized_tag=readings[player - 1][0],
-                parser_version=PROFILE_PARSER_VERSION,
-            )[1])
-        _process(connection_info, archive_server, later_jobs)
+        _later_profiles(connection_info, archive_server, [
+            ("#2QCYU8C2G", 5240, _october(7, 5, 10)),
+            ("#GURYYP99", 5200, _october(7, 5, 10)),
+        ])
         database = Database(connection_info)
         try:
             board = _build_board(connection_info, database, generation_id)
@@ -911,3 +900,181 @@ def test_board_takes_a_complete_days_end_over_a_reading_it_cannot_place(
             database.close()
 
     assert board == [("#PVL2L2YQ8", 5141, "confirmed"), ("#QQ98LYP2", 5099, "confirmed")]
+
+
+def _later_profiles(
+    connection_info: str, archive_server, readings: list[tuple[str, int, datetime]]
+) -> None:
+    """Save and process each (tag, trophies, read at) as a Legend I profile
+    naming the October 2026 Season, the Day 2 board's."""
+    from test_boundary_manifest_postgres import DAY_2_RESET
+
+    season = int(ranked_day_for(DAY_2_RESET - DAY).official_season_id)
+    jobs = []
+    for index, (tag, trophies, read_at) in enumerate(readings):
+        payload = json.loads(_profile(trophies, tag))
+        payload["currentLeagueSeasonId"] = season
+        payload["previousLeagueSeasonId"] = season - 28 * 86400
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key=f"later-{index}-{tag}",
+            endpoint="profile", body=json.dumps(payload).encode(),
+            observed_at=read_at, normalized_tag=tag,
+            parser_version=PROFILE_PARSER_VERSION,
+        )[1])
+    _process(connection_info, archive_server, jobs)
+
+
+def _set_defenses(connection_info: str, defenses: dict[int, int]) -> None:
+    """Set each seeded day's used defense slots."""
+    with psycopg.connect(connection_info) as connection:
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for version_id, count in defenses.items():
+            connection.execute(
+                "UPDATE ranked_day_versions SET defense_count = %s WHERE id = %s",
+                (count, version_id),
+            )
+
+
+def test_a_board_retry_proves_what_its_frozen_inputs_proved(
+    database_url: str, archive_server,
+) -> None:
+    """A board freezes the later readings and Reset checks its proof reads.
+    A recovered profile read at 05:10 showing 5,240, saved after the board's
+    inputs were frozen for a Complete day ending at 5,200, does not change
+    a build of those inputs; the Season repair's check, reading the
+    evidence saved now, lists the board for a rebuild."""
+    from test_boundary_manifest_postgres import (
+        DAY_2_RESET,
+        _build_board,
+        _october,
+        _seed_board,
+        _seed_days,
+    )
+
+    from clashlens import boundary
+    from clashlens.db import Database
+
+    battles = [
+        ("defense", 40, _october(7, 3), True),
+        ("offense", 40, _october(7, 4, 50), True),
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(
+            connection_info, [("#2QCYU8C2G", 5240, _october(7, 4, 55))]
+        )
+        _seed_days(connection_info, generation_id, {1: (True, battles)}, {1: {
+            "state": "Complete", "failure_reasons": [], "final": 5200, "start": 5200,
+            "end": 5200, "end_read_at": _october(7, 5, 2),
+        }})
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                boundary._freeze_boundary_manifest(
+                    database, connection, generation_id=generation_id,
+                    artifact_kind="snapshot",
+                )
+            _later_profiles(
+                connection_info, archive_server, [("#2QCYU8C2G", 5240, _october(7, 5, 10))]
+            )
+            board = _build_board(connection_info, database, generation_id)
+            season = ranked_day_for(DAY_2_RESET - DAY).official_season_id
+            rebuilds = boundary.queue_board_rebuilds(database, season, queue=False)
+        finally:
+            database.close()
+
+    assert board == [("#2QCYU8C2G", 5200, "confirmed")]
+    assert [entry["late_battles"] for entry in rebuilds["boards"]] == [1]
+
+
+def test_board_proves_a_days_end_by_its_end_and_later_readings(
+    database_url: str, archive_server,
+) -> None:
+    """Day 3 rows of the 7 October 2026 board whose day does not prove its
+    own end. #289Y8RYJL, Partial with no start and 8 defenses: its reading
+    of 5,001 at 04:56 may or may not hold a defense at 04:54:37, but its end
+    Reset reading of 4,988 at 05:05:06 and a reading of 4,988 at 05:25:32
+    agree, so 4,988 is proven. #8L2RVPU9Y, Inconsistent from a wrong start:
+    4,981 at 05:06:05 and at 06:21:31, after its last battle at 05:00:12,
+    prove 4,981. #R988P2Y9 read 5,017 at 05:08:33 and 4,977 at 05:22:14
+    with no battle between: they disagree, so its entry stays uncertain.
+    #Y9J9QC90Q, Partial with an unknown automatic loss, read 4,673 at
+    04:48:08 without an attack of 20 stamped 04:47:35, then attacked for
+    129: whatever its readings after the Reset show, 4,802 stays uncertain."""
+    from test_boundary_manifest_postgres import (
+        _build_board,
+        _october,
+        _seed_board,
+        _seed_days,
+    )
+
+    from clashlens.db import Database
+
+    def at(hour: int, minute: int, second: int, day: int = 7) -> datetime:
+        return datetime(2026, 10, day, hour, minute, second, tzinfo=UTC)
+
+    readings = [
+        ("#289Y8RYJL", 5001, at(4, 56, 0)),
+        ("#8L2RVPU9Y", 4901, at(4, 40, 0)),
+        ("#R988P2Y9", 5017, at(4, 30, 0)),
+        ("#Y9J9QC90Q", 4673, at(4, 48, 8)),
+    ]
+    days = {
+        1: (True, [("defense", 2, _october(6, 6 + hour), True) for hour in range(7)]
+            + [("defense", 13, at(4, 54, 37), True)]),
+        2: (True, [
+            ("offense", 40, _october(6, 10), True),
+            ("offense", 38, _october(6, 14), True),
+        ] + [("defense", 4, _october(6, 15 + hour), True) for hour in range(7)]
+            + [("defense", 4, at(5, 0, 12), True)]),
+        3: (True, [("defense", 5, _october(6, 6 + hour), True) for hour in range(8)]),
+        4: (True, [
+            ("offense", 40, at(2, 0, 0), True),
+            ("offense", 33, at(3, 0, 0), True),
+            ("offense", 20, at(4, 47, 35), True),
+            ("offense", 40, at(4, 50, 0), True),
+            ("offense", 40, at(4, 52, 0), True),
+            ("offense", 40, at(4, 54, 0), True),
+            ("offense", 9, at(4, 57, 0), True),
+        ]),
+    }
+    no_start = {"failure_reasons": ["missing_start_baseline"], "start": None}
+    results = {
+        1: {**no_start, "state": "Partial", "end": 4988, "end_read_at": at(5, 5, 6)},
+        2: {
+            "state": "Inconsistent", "failure_reasons": ["trophy_equation_mismatch"],
+            "start": 4930, "final": 4976, "end": 4981, "end_read_at": at(5, 6, 5),
+        },
+        3: {**no_start, "state": "Partial", "end": 5017, "end_read_at": at(5, 8, 33)},
+        4: {
+            "state": "Partial", "failure_reasons": ["automatic_defense_basis_unavailable"],
+            "start": 4600, "automatic_state": "unknown", "end": 4822,
+            "end_read_at": at(5, 2, 0),
+        },
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(connection_info, generation_id, days, results)
+        _set_defenses(connection_info, {1: 8, 2: 8, 3: 8})
+        _later_profiles(connection_info, archive_server, [
+            ("#289Y8RYJL", 4988, at(5, 25, 32)),
+            ("#8L2RVPU9Y", 4981, at(6, 21, 31)),
+            ("#R988P2Y9", 4977, at(5, 22, 14)),
+            ("#Y9J9QC90Q", 4822, at(5, 20, 0)),
+        ])
+        database = Database(connection_info)
+        try:
+            board = _build_board(connection_info, database, generation_id)
+        finally:
+            database.close()
+        with psycopg.connect(connection_info) as connection:
+            state = connection.execute(
+                "SELECT state FROM ranked_day_versions WHERE id = 2"
+            ).fetchone()[0]
+
+    assert board == [
+        ("#R988P2Y9", 5017, "uncertain"),
+        ("#289Y8RYJL", 4988, "confirmed"),
+        ("#8L2RVPU9Y", 4981, "confirmed"),
+        ("#Y9J9QC90Q", 4802, "uncertain"),
+    ]
+    assert state == "Inconsistent"

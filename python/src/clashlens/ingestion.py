@@ -6,7 +6,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import first_battle_log, job_outcomes, reconciliation_db, reset_baselines
+from . import first_battle_log, job_outcomes, reset_baselines, reset_settlement
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
@@ -307,9 +307,13 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 "SELECT clashlens_cancel_inactive_discovery_work(%s)",
                 (player[0],),
             )
-            reconciliation_db.queue_late_reading_recalculation(
-                database, connection, player[0], observation_id, profile
-            )
+            if (
+                profile.source_contract_state == "accepted"
+                and profile.eligibility_state == "eligible"
+            ):
+                reset_settlement.recheck_after_profile(
+                    database, connection, player[0], observation_id
+                )
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
@@ -493,9 +497,13 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                     else None
                 ),
             )
-            reconciliation_db.queue_late_reading_recalculation(
-                database, connection, player[0], observation_id, profile
-            )
+            if (
+                profile.source_contract_state == "accepted"
+                and profile.eligibility_state == "eligible"
+            ):
+                reset_settlement.recheck_after_profile(
+                    database, connection, player[0], observation_id
+                )
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"

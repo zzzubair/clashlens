@@ -232,7 +232,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     SELECT player_id, input_identity->'profile_snapshot',
                            input_identity->>'profile_version_id',
                            input_identity->>'snapshot_quality',
-                           ranked_day_version_id
+                           ranked_day_version_id, input_identity->'reset_proof'
                     FROM boundary_publication_manifest_entries(%s)
                     """,
                     (generation_row[4],),
@@ -266,13 +266,17 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 # The trophies at the Reset, before the automatic defense
                 # loss, from each reading and the ended day.
                 at_reset = reset_trophies(
-                    database,
                     connection,
                     boundary_at,
                     {
                         row[0]: (ranked_day_versions[row[0]], row[3], row[4], row[2])
                         for row in profile_rows
                         if row[0] in ranked_day_versions
+                    },
+                    {
+                        int(row[4]): row[5]
+                        for row in manifest_profiles
+                        if row[4] is not None
                     },
                 )
 

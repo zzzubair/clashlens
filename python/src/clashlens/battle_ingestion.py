@@ -13,6 +13,7 @@ from . import (
     job_outcomes,
     reconciliation_db,
     reset_baselines,
+    reset_settlement,
 )
 from .battle import ParsedBattleLog, ParsedBattleRow
 from .db import (
@@ -500,6 +501,10 @@ def complete_battle_log(
             reset_baselines._refresh_reset_baseline_evidence(
                 database, connection, claim
             )
+            reset_settlement.recheck_after_battle_log(
+                database, connection, claim.observation_id, reporter_id,
+                battle_log.observed_at, battle_log.has_row_gap,
+            )
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}
             if shared_state_changed_battle_ids:
@@ -916,6 +921,10 @@ def _complete_battle_log_legacy(
             )
             reset_baselines._refresh_reset_baseline_evidence(
                 database, connection, claim
+            )
+            reset_settlement.recheck_after_battle_log(
+                database, connection, claim.observation_id, reporter_id,
+                battle_log.observed_at, battle_log.has_row_gap,
             )
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}

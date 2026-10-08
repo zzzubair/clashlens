@@ -93,7 +93,7 @@ def freeze_boundary_manifest(
         (generation_id,),
     ).fetchall()
     if artifact_kind == "snapshot":
-        manifest_rows = _snapshot_rows(connection, members, generation)
+        manifest_rows = _snapshot_rows(database, connection, members, generation)
     else:
         manifest_rows = _army_rows(connection, members, generation)
     season_inputs = (
@@ -428,7 +428,7 @@ def _rechecks(status: str, version_id: int | None) -> bool:
 
 
 def _snapshot_rows(
-    connection: Any, members: list[Any], generation: Any
+    database: Database, connection: Any, members: list[Any], generation: Any
 ) -> list[dict[str, Any]]:
     boundary_at = generation[0]
     player_ids = [int(row[0]) for row in members]
@@ -539,6 +539,14 @@ def _snapshot_rows(
             ([row[1] for row in members if row[1] is not None],),
         ).fetchall()
     }
+    # What each day's Reset proof reads besides the day, frozen so every
+    # build of this board proves the same (``reset_trophies``).
+    from .reset_settlement import reset_proof_facts
+
+    proof_facts = reset_proof_facts(
+        database, connection,
+        [int(row[1]) for row in members if row[1] is not None and int(row[0]) in profiles],
+    )
     manifest_rows: list[dict[str, Any]] = []
     for row in members:
         player_id, version_id, input_hash, status = _member(row, "snapshot")
@@ -601,6 +609,8 @@ def _snapshot_rows(
                 identity["snapshot_quality"] = "profile_not_found"
             else:
                 identity["snapshot_quality"] = "eligible"
+                if version_id in proof_facts:
+                    identity["reset_proof"] = proof_facts[version_id]
         else:
             identity["profile_version_id"] = None
             identity["profile_input_hash"] = None
@@ -670,19 +680,22 @@ def profiles_not_found(
 
 
 def reset_trophies(
-    database: Database,
     connection: Any,
     boundary_at: datetime,
     readings: Mapping[int, tuple[int, int, datetime, int]],
+    facts: Mapping[int, Mapping[str, Any] | None],
 ) -> dict[int, tuple[int, bool]]:
     """Each player's trophies at the Reset before the automatic defense
     loss, and whether they are proven.
 
     ``readings`` maps a player to the version of their day ending at
     ``boundary_at``, their reading's saved response, its time and its
-    trophies. A day whose end is proven (``reset_settlement.DayEnd``, the
-    proof the Season summary reads too) gives the total: its end plus its
-    automatic loss, whatever the reading shows. An attacker's profile can
+    trophies; ``facts`` maps each version to what its Reset proof reads
+    besides the day (``reset_settlement.reset_proof_facts``), as the board
+    froze them, so a retry gives the same totals. A day whose end is proven
+    (``reset_settlement.DayEnd``, the proof the Season summary reads too)
+    gives the total: its end plus its automatic loss, whatever the reading
+    shows. An attacker's profile can
     show an attack minutes after its report time: on 7 October 2026
     #2QCYU8C2G read 4,703 at 04:37:05 without its attack stamped 04:34:08,
     and the board showed 4,902, not 4,931. At a Reset that resets trophies
@@ -704,6 +717,13 @@ def reset_trophies(
     delayed credit as the reading it is checked against.
     Without the battles' proof the total is the reading alone; any total not
     proven is marked uncertain.
+
+    A day neither its own calculation nor the reading proves is still
+    proven when its end Reset reading and a later reading agree
+    (``DayEnd.end_proof``): its end Reset reading is the total. Replayed on
+    the 7 October 2026 Day 3 board's 11,769 entries, that corrected 8
+    entries, such as #8L2RVPU9Y from 4,901 to 4,981, changed no other
+    value, and confirmed 781 Partial and 10 Inconsistent days' entries.
     """
     # The shared Reset proof imports the board's publication code.
     from .reset_settlement import day_ends
@@ -772,7 +792,7 @@ def reset_trophies(
     ends = day_ends(
         connection,
         [reading[0] for player, reading in readings.items() if player in battles],
-        database=database,
+        facts,
     )
     return {
         player_id: _reset_total(
@@ -797,6 +817,8 @@ def _reset_total(
     proof = end.proof
     if proof in {VERIFIED, BALANCED}:
         return end.before_loss, True
+    if end.end_proof is not None:
+        return end.end_proof, True
     if total is None:
         return reading, False
     if proof == CONTRADICTED:

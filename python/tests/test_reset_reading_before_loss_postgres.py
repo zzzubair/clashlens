@@ -11,13 +11,13 @@ starts from the reading less that loss. On 2 October 2026 this explained
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import psycopg
 import pytest
 from domain_test_support import domain_database, repair_season, store_observation
 from test_first_battle_log_postgres import LOSS, WIN, _log, _queued_priorities
-from test_reconciliation_postgres import DAY_START, _profile
+from test_reconciliation_postgres import BATTLE_FIXTURE, DAY_START, _processor, _profile
 from test_reset_settlement_state_postgres import (
     BOUNDARIES,
     TAG,
@@ -25,7 +25,8 @@ from test_reset_settlement_state_postgres import (
     _reset_work,
 )
 
-from clashlens import ranked_day_inputs, reconciliation_db
+from clashlens import ranked_day_inputs, reconciliation_db, reset_settlement
+from clashlens.boundary_manifest import reset_trophies
 from clashlens.db import PYTHON_BACKFILL_PRIORITY
 from clashlens.domain import ranked_day_for
 
@@ -111,8 +112,9 @@ def _early_reading_days(
     """As #P20G0CUJY on 6 October 2026: the Reset reading ending day B leaves
     out its attack gain, and ``later_profile`` is read 10 minutes after that
     Reset, before any new-day battle; ``processed_first`` responses, (endpoint,
-    body, read after that Reset), are processed before it. Return day B's
-    start and calculated end."""
+    body, read after that Reset), are processed before it. They are processed
+    alone: what they queue runs with the next work. Return day B's start and
+    calculated end."""
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
@@ -147,7 +149,12 @@ def _early_reading_days(
         endpoint="profile", body=later_profile,
         observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
     )[1])
-    _process(connection_info, archive_server, jobs)
+    database, processor = _processor(connection_info, archive_server)
+    try:
+        for job in jobs:
+            assert processor.process_job(job, owner=f"job-{job}") is not None
+    finally:
+        database.close()
     return start_b, end_b
 
 
@@ -393,9 +400,9 @@ def test_later_reading_against_a_balanced_day_ends_its_proof(
             added = connection.execute(count, ([DAY_B, DAY_C],)).fetchone()[0] - saved
             queued = connection.execute(
                 "SELECT count(*) FROM python_processing_jobs"
-                " WHERE deduplication_key LIKE 'reconcile:late-reading:%'"
+                " WHERE deduplication_key LIKE 'reconcile:later-reading:%'"
             ).fetchone()[0]
-        priorities = _queued_priorities(connection_info, "reconcile:late-reading:")
+        priorities = _queued_priorities(connection_info, "reconcile:later-reading:")
         day_b_row, day_c_row = _latest_days(connection_info)
 
     assert [row[:5] for row in before] == [
@@ -578,3 +585,139 @@ def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     assert sorted(
         (battle.battle_timestamp, battle.battle_seconds) for battle in battles
     ) == [(day_b[0][0], 120), (day_b[1][0], None), (day_b[2][0], None)]
+
+
+def test_a_new_day_battle_saved_late_clears_a_later_readings_contradiction(
+    database_url: str, archive_server
+) -> None:
+    """Day B balances on its Reset readings and passes its recheck. A
+    recovered profile read 10 minutes after the Reset shows an attack more,
+    so day B becomes Inconsistent. The battle log saved after it holds an
+    attack of day C at 05:08: that profile came after day C's first battle,
+    so it was never day B's later reading, and day B is Complete again."""
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    end_c = end_b - LOSS - 7 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=_profile(end_b), log=_log(*day_b),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D,
+            profile=_profile(end_c), log=_log((DAY_C + timedelta(hours=1), False)),
+        )
+        _process(connection_info, archive_server, jobs)
+        _day_end_recheck(connection_info, archive_server)
+        late = []
+        for endpoint, body, after in (
+            ("profile", _profile(end_b + WIN), timedelta(minutes=10)),
+            ("battle_log", _log((DAY_C + timedelta(minutes=8), True)),
+             timedelta(minutes=9)),
+        ):
+            _process(connection_info, archive_server, [store_observation(
+                connection_info, archive_server, occurrence_key=f"late-{endpoint}",
+                endpoint=endpoint, body=body, observed_at=DAY_C + after,
+                normalized_tag=TAG,
+            )[1]])
+            late.append(_latest_days(connection_info)[0])
+        with psycopg.connect(connection_info) as connection:
+            queued = connection.execute(
+                "SELECT count(*) FROM python_processing_jobs"
+                " WHERE deduplication_key LIKE 'reconcile:later-reading:%'"
+            ).fetchone()[0]
+
+    assert [(row[0], row[8]) for row in late] == [
+        ("Inconsistent", ["later_reading_contradicts"]), ("Complete", []),
+    ]
+    assert late[1][3] == end_b
+    assert queued == 2
+
+
+def _scored_log(*battles: tuple[datetime, bool, int, int]) -> bytes:
+    """A battle log of Legend battles: (time, attack, stars, destruction)."""
+    template = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
+    opponents = [f"#Q{a}{b}" for a in "28PY" for b in "28PYLGRJCUV"]
+    return json.dumps({"items": [
+        {**template, "attack": attack, "battleTime": 120,
+         "battleTimestamp": at.strftime("%Y%m%dT%H%M%S.000Z"), "stars": stars,
+         "destructionPercentage": destruction, "opponentPlayerTag": opponent}
+        for (at, attack, stars, destruction), opponent in zip(battles, opponents)
+    ]}).encode()
+
+
+def test_season_repair_settles_an_early_reset_reading_and_its_board_entry(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """#GJ00QPR2Y on 7 October 2026, saved before later readings settled a
+    day: it started at 5,088, gained 70 and lost 289, ending at 4,869, but
+    its Reset reading of 4,839 at 05:02:11 came before its attack reported
+    at 05:03:27 was credited. A reading at 05:11:33, before its first battle
+    of the next day at 05:35:43, showed 4,869. The Season repair settles
+    the day Complete, and its board entry is 4,869, proven."""
+    day_b = [(DAY_B + timedelta(hours=1), True, 3, 100)] + [
+        (DAY_B + timedelta(hours=hour), False, 3, 100) for hour in range(2, 9)
+    ] + [
+        (DAY_B + timedelta(hours=9), False, 1, 37),
+        (DAY_C + timedelta(minutes=3, seconds=27), True, 2, 92),
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(5088), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(4839),
+            log=_scored_log(*day_b), profile_at=DAY_C + timedelta(minutes=2, seconds=11),
+            log_at=DAY_C + timedelta(minutes=4),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D, profile=_profile(4909),
+            log=_scored_log((DAY_C + timedelta(minutes=35, seconds=43), True, 3, 100)),
+        )
+        _process(connection_info, archive_server, jobs)
+        # Saved, as production's were, before a later reading settled a day.
+        monkeypatch.setattr(reset_settlement, "recheck_after_profile", lambda *_: None)
+        _process(connection_info, archive_server, [store_observation(
+            connection_info, archive_server, occurrence_key="later-profile",
+            endpoint="profile", body=_profile(4869),
+            observed_at=DAY_C + timedelta(minutes=11, seconds=33), normalized_tag=TAG,
+        )[1]])
+        monkeypatch.undo()
+        before = _latest_days(connection_info, (DAY_B,))[0]
+        repair_season(connection_info, ranked_day_for(DAY_B).official_season_id)
+        _process(connection_info, archive_server, [])
+        after = _latest_days(connection_info, (DAY_B,))[0]
+        with psycopg.connect(connection_info) as connection:
+            player_id, version_id, reading_id, reading_at = connection.execute(
+                """
+                SELECT version.player_id, version.id, work.profile_observation_id,
+                       observation.response_completed_at
+                FROM ranked_day_versions AS version
+                JOIN collector_work AS work ON work.player_id = version.player_id
+                JOIN collector_reset_sweeps AS sweep
+                  ON sweep.id = work.sweep_id AND sweep.boundary_at = %s
+                JOIN collector_observations AS observation
+                  ON observation.id = work.profile_observation_id
+                WHERE version.ranked_day_start = %s
+                ORDER BY version.version DESC LIMIT 1
+                """,
+                (DAY_C, DAY_B),
+            ).fetchone()
+            database, _ = _processor(connection_info, archive_server)
+            try:
+                board = reset_trophies(
+                    connection, DAY_C,
+                    {player_id: (version_id, reading_id, reading_at, 4839)},
+                    reset_settlement.reset_proof_facts(database, connection, [version_id]),
+                )
+            finally:
+                database.close()
+
+    assert (before[0], before[8]) == ("Inconsistent", ["trophy_equation_mismatch"])
+    assert after[:5] == ("Complete", "inferred", 5088, 4869, 4869)
+    assert board == {player_id: (4869, True)}

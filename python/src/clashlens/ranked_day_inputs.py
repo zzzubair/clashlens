@@ -679,9 +679,11 @@ def load_profile_trophies(
 # no used defense slots whose Reset reading showed no automatic loss; or
 # disprove: one settled by battles its Reset reading missed, or a Complete
 # day ending on a Reset reading, not an official Season-end total, that the
-# game did not reset (see ``reconciliation.reads_later_reading``).
+# game did not reset, or one a later reading disproved (see
+# ``reconciliation.reads_later_reading``).
 LATER_READING_DAY_SQL = """(
     failure_reasons ? 'trophy_equation_mismatch'
+    OR failure_reasons ? 'later_reading_contradicts'
     OR formula_components ? 'next_start_battles_after_reading'
     OR (state = 'Complete'
         AND NOT input_evidence -> 'end_baseline_evidence'
@@ -716,10 +718,19 @@ def load_later_reading(
     )
     if closes is None:
         return None
-    return load_latest_profiles(
+    latest = load_latest_profiles(
         database, connection,
         {player_id: (player_id, ranked_day.official_season_id, reading_at, closes)},
     ).get(player_id)
+    return latest[:2] if latest else None
+
+
+def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> None:
+    """Serialize work deciding or saving one player's Legend day result."""
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
+    )
 
 
 def later_reading_until(
@@ -749,19 +760,21 @@ def load_latest_profiles(
 ) -> dict[Any, tuple[datetime, int]]:
     """For each window, (player, Season, after, until), the last profile read
     in ``(after, until)`` that is accepted, eligible and names that Season:
-    when it was read and its trophies. Each window is one lookup by index."""
+    when it was read, its trophies and its saved response. Each window is
+    one lookup by index."""
     if not windows:
         return {}
     keys = list(windows)
     rows = connection.execute(
         f"""
-        SELECT window_.position, latest.response_completed_at, latest.trophies
+        SELECT window_.position, latest.response_completed_at, latest.trophies,
+               latest.id
         FROM unnest(
             %(players)s::bigint[], %(seasons)s::text[], %(after)s::timestamptz[],
             %(until)s::timestamptz[]
         ) WITH ORDINALITY AS window_ (player_id, season_id, after, until, position)
         CROSS JOIN LATERAL (
-            SELECT observed.response_completed_at, profile.trophies
+            SELECT observed.response_completed_at, profile.trophies, observed.id
             FROM collector_observations AS observed
             {_OUTCOME}
             {_profile_join(database)}
@@ -787,7 +800,10 @@ def load_latest_profiles(
             "until": [windows[key][3] for key in keys],
         },
     ).fetchall()
-    return {keys[int(position) - 1]: (at, int(trophies)) for position, at, trophies in rows}
+    return {
+        keys[int(position) - 1]: (at, int(trophies), int(observation_id))
+        for position, at, trophies, observation_id in rows
+    }
 
 
 def first_new_day_reports(connection: Any, boundary_at: datetime) -> dict[int, datetime]:

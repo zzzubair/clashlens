@@ -1056,7 +1056,8 @@ def queue_board_rebuilds(
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
     whose frozen input still ranks a reading taken before the player's
     profile answered "player not found", or whose saved entries differ from
-    the trophies at the Reset ``reset_trophies`` now gives, or its mark. On 5
+    the trophies at the Reset ``reset_trophies`` now gives from the evidence
+    saved now, or its mark. On 5
     to 7 October 2026 that was 24 players on Day 1 and 34 on Day 2, two of
     them first and second on Day 2, and 290 Day 2 entries missing battles
     after their readings; on 8 October, 3 Day 3 entries marked proven but
@@ -1071,6 +1072,9 @@ def queue_board_rebuilds(
     nothing for it; one still queued is listed again and not queued twice.
     Resets of other Seasons are never read.
     """
+    # The shared Reset proof imports the board's publication code.
+    from .reset_settlement import reset_proof_facts
+
     season_start = datetime.fromtimestamp(int(season_id), UTC)
     if not is_season_boundary(season_start):
         raise ValueError(f"{season_id} is not a Season's start")
@@ -1123,8 +1127,8 @@ def queue_board_rebuilds(
                 not_found = profiles_not_found(connection, boundary_at, readings)
                 # Saved entries whose value or mark the current rule changes.
                 # A board not built yet saves them already.
+                versions = [int(row[2]) for row in rows if row[2] is not None]
                 at_reset = reset_trophies(
-                    database,
                     connection,
                     boundary_at,
                     {
@@ -1135,6 +1139,7 @@ def queue_board_rebuilds(
                         for row in rows
                         if row[2] is not None
                     },
+                    reset_proof_facts(database, connection, versions),
                 )
                 expected = {
                     int(row[0]): at_reset.get(int(row[0]), (int(row[4]), False))
