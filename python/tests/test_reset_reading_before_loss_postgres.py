@@ -254,6 +254,22 @@ def test_recheck_refreshes_saved_days_until_one_stays_the_same(
     )
 
 
+def _save_as_live(connection_info: str, *days) -> None:
+    """Mark each day's latest saved result Live, as saved before it ended."""
+    with psycopg.connect(connection_info) as connection:
+        for day in days:
+            connection.execute(
+                """
+                UPDATE ranked_day_versions SET state = 'Live'
+                WHERE id = (
+                    SELECT id FROM ranked_day_versions
+                    WHERE ranked_day_start = %s ORDER BY version DESC LIMIT 1
+                )
+                """,
+                (day,),
+            )
+
+
 def test_finishing_a_day_saved_live_refreshes_the_following_day(
     database_url: str, archive_server
 ) -> None:
@@ -263,22 +279,32 @@ def test_finishing_a_day_saved_live_refreshes_the_following_day(
         start_b, end_b = _early_reading_days(
             connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
         )
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                """
-                UPDATE ranked_day_versions SET state = 'Live'
-                WHERE id = (
-                    SELECT id FROM ranked_day_versions
-                    WHERE ranked_day_start = %s ORDER BY version DESC LIMIT 1
-                )
-                """,
-                (DAY_B,),
-            )
+        _save_as_live(connection_info, DAY_B)
         _day_end_recheck(connection_info, archive_server)
         day_b_row, day_c_row = _latest_days(connection_info)
 
     assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
+
+
+def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
+    database_url: str, archive_server
+) -> None:
+    # Day C was saved Live from B's early Reset reading while day B itself
+    # was not yet finished; finishing B with the later reading refreshes C.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        start_b, end_b = _early_reading_days(
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
+        )
+        _save_as_live(connection_info, DAY_B, DAY_C)
+        before = [(row[0], row[2]) for row in _latest_days(connection_info)]
+        _day_end_recheck(connection_info, archive_server)
+        day_b_row, day_c_row = _latest_days(connection_info)
+
+    assert before == [("Live", start_b), ("Live", end_b - WIN)]
+    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
+    assert day_c_row[7]["start_reading_correction"] == WIN
 
 
 def test_mismatch_batch_settles_days_saved_before_the_later_reading_rule(
