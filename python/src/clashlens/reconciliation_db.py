@@ -317,7 +317,10 @@ def recalculate_ranked_day(
         _official_final(connection, player_id, ranked_day.end)
         if boundary_kind == "season"
         and end_baseline is not None
-        and _dropped_from_legend_i(connection, player_id, ranked_day.end)
+        and _dropped_from_legend_i(
+            connection, player_id, ranked_day.end,
+            kept_season=ranked_day_for(ranked_day.end).official_season_id,
+        )
         else None
     )
     if official_final is not None:
@@ -332,6 +335,36 @@ def recalculate_ranked_day(
                 **end_baseline["evidence"], "official_final_trophies": official_final,
             },
         }
+    # A player ranked below 10,000 at a weekly Monday Reset drops to Legend
+    # II there: by league history, 478 to 1,053 of the previous Season's
+    # survivors alone on each such Monday from 17 August to 21 September
+    # 2026. Profiles still show Legend I for about 13 minutes after the
+    # Reset, so a Reset reading taken before a profile showing the lower
+    # league is that player's last Legend I total: no raise to 5,000 follows
+    # it, and the day it starts is not a Legend I day. Legend I has no
+    # weekly official total to check it against.
+    if (
+        boundary_kind == "weekly"
+        and end_baseline is not None
+        and end_baseline["trophies"] is not None
+        and _dropped_after_reading(connection, player_id, end_baseline, ranked_day.end)
+    ):
+        boundary_kind = None
+        end_baseline = {
+            **end_baseline,
+            "evidence": {**end_baseline["evidence"], "dropped_from_legend_i": True},
+        }
+    if (
+        start_baseline is not None
+        and start_baseline["eligibility_state"] == "eligible"
+        and ranked_day.start.weekday() == 0
+        and season_day is not None
+        and season_day.day_number > 1
+        and _dropped_after_reading(
+            connection, player_id, start_baseline, ranked_day.start
+        )
+    ):
+        start_baseline = {**start_baseline, "eligibility_state": "ineligible"}
 
     trophy_rule_versions = tuple(
         sorted(
@@ -440,7 +473,12 @@ def recalculate_ranked_day(
         end_baseline["evidence"]["profile"]["observed_at"]
         if end_baseline is not None else None
     )
-    if reading_at and reads_later_reading(data, result):
+    # The official total already counts every credit and the automatic loss,
+    # so a profile read before the game applied them never settles it.
+    if (
+        reading_at and official_final is None
+        and reads_later_reading(data, result)
+    ):
         # A later reading can settle an end Reset reading taken before the
         # game finished crediting the day or charging its automatic loss.
         later = ranked_day_inputs.load_later_reading(
@@ -735,12 +773,27 @@ def _official_final(connection: Any, player_id: int, season_end: datetime) -> in
     return None if row is None or row[0] is None else int(row[0])
 
 
-def _dropped_from_legend_i(
-    connection: Any, player_id: int, season_end: datetime
+def _dropped_after_reading(
+    connection: Any, player_id: int, baseline: dict[str, Any], reset: datetime
 ) -> bool:
-    """Whether a profile of the player read since ``season_end`` shows a
-    league below Legend I before any Legend I profile for the next Season.
-    Each reading counts at its own time; a saved profile can be read again."""
+    """Whether a profile read after this Reset reading, and before the next
+    Reset, shows a league below Legend I: the player dropped at ``reset``."""
+    reading_at = baseline["evidence"]["profile"]["observed_at"]
+    return reading_at is not None and _dropped_from_legend_i(
+        connection, player_id, datetime.fromisoformat(reading_at),
+        until=reset + timedelta(days=1),
+    )
+
+
+def _dropped_from_legend_i(
+    connection: Any, player_id: int, since: datetime,
+    until: datetime | None = None, kept_season: str | None = None,
+) -> bool:
+    """Whether a profile of the player read from ``since``, and before
+    ``until`` when given, shows a league below Legend I before any Legend I
+    profile naming ``kept_season``, such as the next Season after a Season's
+    end. Each reading counts at its own time; a saved profile can be read
+    again."""
     return bool(
         connection.execute(
             """
@@ -757,11 +810,11 @@ def _dropped_from_legend_i(
                 FROM version
                 JOIN player_profile_effects AS seen
                   ON seen.profile_version_id = version.id
-                 AND seen.observed_at >= %(end)s
+                 AND seen.observed_at >= %(since)s
                 UNION ALL
                 SELECT version.*, version.observed_at
                 FROM version
-                WHERE version.observed_at >= %(end)s
+                WHERE version.observed_at >= %(since)s
                   AND NOT EXISTS (
                       SELECT 1 FROM player_profile_effects AS seen
                       WHERE seen.profile_version_id = version.id
@@ -770,6 +823,8 @@ def _dropped_from_legend_i(
             SELECT EXISTS (
                 SELECT 1 FROM reading AS dropped
                 WHERE dropped.eligibility_state = 'ineligible'
+                  AND (%(until)s::timestamptz IS NULL
+                       OR dropped.read_at < %(until)s)
                   AND NOT EXISTS (
                       SELECT 1 FROM reading AS kept
                       WHERE kept.read_at < dropped.read_at
@@ -781,8 +836,9 @@ def _dropped_from_legend_i(
             """,
             {
                 "player": player_id,
-                "end": season_end,
-                "season": ranked_day_for(season_end).official_season_id,
+                "since": since,
+                "until": until,
+                "season": kept_season,
             },
         ).fetchone()[0]
     )

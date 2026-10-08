@@ -114,12 +114,13 @@ def _queue(
     connection: Any, player_id: int, day_start: datetime, observation_id: int | None,
     *, key: str | None = None, trigger: str = "first_battle_log",
     later_days: bool = True, priority: int | None = None,
+    due_at: datetime | None = None,
 ) -> int | None:
     """Queue the recalculation of one day and, with ``later_days``, every
     saved later day of its Season, by default from the player's earliest
     saved battle log, ``observation_id``; ``None`` when it was already
     queued. Without ``priority``, the day's own: Reset priority while its
-    Reset is the latest, else live."""
+    Reset is the latest, else live. Due now, or at ``due_at`` if later."""
     day = domain.ranked_day_for(day_start)
     day_text = day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     row = connection.execute(
@@ -129,8 +130,8 @@ def _queue(
             state, due_at, parser_version, processing_version,
             domain_rule_version, analytics_rule_version, priority
         ) VALUES (
-            NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
-            %s, %s, %s, %s, %s
+            NULL, 'reconcile_ranked_day', %s, %s, 'pending',
+            GREATEST(clock_timestamp(), %s::timestamptz), %s, %s, %s, %s, %s
         )
         ON CONFLICT (deduplication_key) DO NOTHING
         RETURNING id
@@ -146,6 +147,7 @@ def _queue(
                 } if later_days else {}),
                 "trigger": trigger,
             }),
+            due_at,
             DEFAULT_PARSER_VERSION,
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
@@ -283,6 +285,35 @@ def queue_not_enrolled(connection: Any, player_id: int, observed_at: datetime) -
             trigger="late_enrollment", later_days=False,
         )
         day_start += timedelta(days=1)
+
+
+def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) -> None:
+    """Once a profile read on a weekly Monday's Legend day shows a league
+    below Legend I, recalculate the day before that Reset and each saved day
+    after it, which then show the drop (see
+    ``reconciliation_db._dropped_after_reading``), for a player with a Reset
+    reading there. Runs once per player and Monday, when no other work
+    waits, no earlier than ``DAY_END_RECALCULATION_DELAY`` after that Reset,
+    once any calculation running when the profile arrived has saved."""
+    from .reconciliation_db import DAY_END_RECALCULATION_DELAY
+
+    day = domain.ranked_day_for(observed_at)
+    ended = day.start - timedelta(days=1)
+    if day.start.weekday() != 0 or day.start == day.season_start or connection.execute(
+        """
+        SELECT 1 FROM reset_baseline_evidence
+        WHERE player_id = %s AND boundary_at = %s LIMIT 1
+        """,
+        (player_id, day.start),
+    ).fetchone() is None:
+        return
+    _queue(
+        connection, player_id, ended, None,
+        key=(f"reconcile:weekly-drop:{player_id}:"
+             f"{ended:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}"),
+        trigger="weekly_drop", priority=PYTHON_BACKFILL_PRIORITY,
+        due_at=day.start + DAY_END_RECALCULATION_DELAY,
+    )
 
 
 def backfill(

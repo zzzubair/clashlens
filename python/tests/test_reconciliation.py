@@ -277,6 +277,39 @@ def test_zero_defense_day_read_before_its_loss_takes_it_from_a_later_reading() -
     assert (next_day.state, next_day.start_trophies) == ("Complete", 4391)
 
 
+def test_dropped_zero_defense_day_stays_partial() -> None:
+    # Dropped from Legend I at a weekly Reset: later profiles show Legend II,
+    # and a Reset reading below the day's end can be the automatic loss or a
+    # credit the game had not added yet, so no reading proves the loss.
+    later_at = DAY.end + timedelta(minutes=9)
+    day = _input(
+        start_trophies=4900, next_start_trophies=4940,
+        contributions=(BattleContribution("attack-1", "offense", 40),),
+        previous_day=PreviousRankedDay(True, 8, 240, 0),
+        end_baseline_evidence={"dropped_from_legend_i": True},
+    )
+    # The Reset reading misses the 240 credit, the size of the loss; a later
+    # Legend I reading shows the credit and no loss.
+    delayed = replace(
+        day, start_trophies=4700, next_start_trophies=4700,
+        contributions=(BattleContribution("attack-1", "offense", 240),),
+    )
+    cases = (
+        day, replace(day, later_next_start_reading=(later_at, 4700)),
+        replace(day, previous_day=None),
+        replace(day, previous_day=PreviousRankedDay(False, 8, 240, 0)),
+        delayed, replace(delayed, later_next_start_reading=(later_at, 4940)),
+    )
+    for case in cases:
+        result = reconcile_ranked_day(case)
+        assert result.state == "Partial"
+        assert "automatic_defense_basis_unavailable" in result.failure_reasons
+        assert result.automatic_defense_loss is None
+    assert reconcile_ranked_day(replace(day, end_baseline_evidence={})).state == (
+        "Complete"
+    )
+
+
 def _battles(tag: str, lens: str, count: int, total: int) -> tuple[BattleContribution, ...]:
     amounts = [total // count] * (count - 1) + [total - total // count * (count - 1)]
     return tuple(

@@ -1106,6 +1106,9 @@ def _automatic_defense_adjustment(
     # counting them and 3,581 without.
     attack_count += data.zero_result_attack_slots
     defense_count += data.zero_result_defense_slots
+    if defense_count == 0 and "dropped_from_legend_i" in data.end_baseline_evidence:
+        failures.append("automatic_defense_basis_unavailable")
+        return None, "unknown"
     if defense_count == 0 or defense_count >= MAX_DAILY_DEFENSES:
         return None, "not_applicable"
     previous = data.previous_day

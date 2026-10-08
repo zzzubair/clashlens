@@ -334,6 +334,12 @@ def queue_season_end(
 
     if observed_at > season_end + timedelta(days=3):
         return
+    # Profile processing holds this lock too, so whichever of a dropped
+    # profile and the official total commits second sees the other and
+    # queues the day: a calculation queued first could run without it.
+    connection.execute(
+        "SELECT 1 FROM players WHERE id = %s FOR NO KEY UPDATE", (player_id,)
+    )
     day_start = season_end - timedelta(days=1)
     stale = connection.execute(
         """
