@@ -396,6 +396,76 @@ def _inherit_deferred_army_successor_snapshot(
     return True
 
 
+def _supersede_generation(
+    database: Database,
+    connection: Any,
+    *,
+    boundary_at: datetime,
+    sweep_id: int,
+    generation_id: int,
+    generation: int,
+    pending_inputs: list[dict[str, Any]] | None = None,
+) -> tuple[int, int]:
+    """Replace ``generation_id`` with a generation rebuilding both artifacts
+    under the current rules, started as the Reset's active correction.
+    Corrections still waiting on the replaced generation wait on its
+    replacement."""
+    connection.execute(
+        """
+        UPDATE boundary_publication_generations
+        SET snapshot_state = 'superseded', army_state = 'superseded',
+            correction_state = 'finalized', updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (generation_id,),
+    )
+    connection.execute(
+        """
+        UPDATE boundary_publication_corrections
+        SET state = 'finalized', finalized_at = clock_timestamp()
+        WHERE generation_id = %s AND state = 'active'
+        """,
+        (generation_id,),
+    )
+    frozen_members = connection.execute(
+        """
+        SELECT player_id
+        FROM boundary_publication_generation_members
+        WHERE generation_id = %s
+        ORDER BY player_id
+        """,
+        (generation_id,),
+    ).fetchall()
+    new_id, new_generation = _create_boundary_generation(
+        database,
+        connection,
+        boundary_at=boundary_at,
+        sweep_id=sweep_id,
+        player_ids=[int(row[0]) for row in frozen_members],
+        generation=generation + 1,
+        supersedes_id=generation_id,
+        pending_inputs=pending_inputs,
+    )
+    connection.execute(
+        """
+        UPDATE boundary_publication_corrections
+        SET source_generation_id = %s
+        WHERE source_generation_id = %s AND state IN ('queued', 'pending_inputs')
+        """,
+        (new_id, generation_id),
+    )
+    connection.execute(
+        """
+        INSERT INTO boundary_publication_corrections
+            (boundary_at, source_generation_id, generation_id,
+             affected_artifacts, state, started_at)
+        VALUES (%s, %s, %s, ARRAY['snapshot', 'army'], 'active', clock_timestamp())
+        """,
+        (boundary_at, generation_id, new_id),
+    )
+    return new_id, new_generation
+
+
 def _try_enqueue_boundary_artifacts(
     database, connection: Any, *, boundary_at: datetime, generation_id: int
 ) -> None:
@@ -407,7 +477,8 @@ def _try_enqueue_boundary_artifacts(
     generation = connection.execute(
         """
         SELECT id, generation, sweep_id, snapshot_state, army_state,
-               expected_population_count, affected_artifacts, target_at, target_rule
+               expected_population_count, affected_artifacts, target_at, target_rule,
+               ordering_rule_version
         FROM boundary_publication_generations
         WHERE id = %s
         FOR UPDATE
@@ -472,6 +543,23 @@ def _try_enqueue_boundary_artifacts(
         and _text_value(snapshot[0]) == "ready"
         and (not affected_artifacts or "snapshot" in affected_artifacts)
     ):
+        # A board built under an older ordering rule, such as an army-only
+        # replacement of one that gains a board rebuild, freezes its inputs
+        # under the current rule in a replacement; a generation's rule
+        # cannot change once its membership is captured.
+        if _text_value(generation[9]) != SNAPSHOT_ORDERING_RULE_VERSION:
+            new_id, _ = _supersede_generation(
+                database,
+                connection,
+                boundary_at=boundary_at,
+                sweep_id=sweep_id,
+                generation_id=generation_id,
+                generation=generation_number,
+            )
+            _try_enqueue_boundary_artifacts(
+                database, connection, boundary_at=boundary_at, generation_id=new_id
+            )
+            return
         manifest = _freeze_boundary_manifest(database, 
             connection, generation_id=generation_id, artifact_kind="snapshot"
         )
@@ -948,31 +1036,13 @@ def _record_boundary_generation(
             and frozen_artifacts
             and fully_published
         ):
-            connection.execute(
-                """
-                UPDATE boundary_publication_generations
-                SET snapshot_state = 'superseded', army_state = 'superseded',
-                    correction_state = 'finalized', updated_at = clock_timestamp()
-                WHERE id = %s
-                """,
-                (generation_id,),
-            )
-            frozen_members = connection.execute(
-                """
-                SELECT player_id
-                FROM boundary_publication_generation_members
-                WHERE generation_id = %s
-                ORDER BY player_id
-                """,
-                (generation_id,),
-            ).fetchall()
-            generation_id, generation = _create_boundary_generation(database, 
+            generation_id, generation = _supersede_generation(
+                database,
                 connection,
                 boundary_at=boundary_at,
                 sweep_id=sweep_id,
-                player_ids=[int(row[0]) for row in frozen_members],
-                generation=generation + 1,
-                supersedes_id=int(current[0]),
+                generation_id=generation_id,
+                generation=generation,
                 pending_inputs=[
                     {
                         "player_id": player_id,
@@ -980,20 +1050,6 @@ def _record_boundary_generation(
                         "input_hash": ranked_day_input_hash,
                     }
                 ],
-            )
-            affected = frozen_artifacts or ["snapshot", "army"]
-            connection.execute(
-                "UPDATE boundary_publication_generations SET affected_artifacts = %s WHERE id = %s",
-                (affected, generation_id),
-            )
-            connection.execute(
-                """
-                INSERT INTO boundary_publication_corrections
-                    (boundary_at, source_generation_id, generation_id,
-                     affected_artifacts, state, started_at)
-                VALUES (%s, %s, %s, %s, 'active', clock_timestamp())
-                """,
-                (boundary_at, current[0], generation_id, affected),
             )
     snapshot_status = _boundary_snapshot_status(
         connection,

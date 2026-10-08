@@ -238,6 +238,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     cutoff=boundary_at,
                     player_ids=[int(row[0]) for row in profile_rows],
                 )
+                frozen_attacks = True
             else:
                 manifest_profiles = connection.execute(
                     """
@@ -245,11 +246,13 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                            input_identity->>'profile_version_id',
                            input_identity->>'snapshot_quality',
                            ranked_day_version_id,
-                           input_identity->'season_attacks'
+                           input_identity->'season_attacks',
+                           input_identity ? 'season_attacks'
                     FROM boundary_publication_manifest_entries(%s)
                     """,
                     (generation_row[4],),
                 ).fetchall()
+                frozen_attacks = all(row[6] for row in manifest_profiles)
                 season_attacks = {
                     int(row[0]): (
                         int(row[5]["attacks"]), int(row[5]["destruction"])
@@ -349,15 +352,14 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     and row[3] is not None
                 }
 
-            # A board orders by the rule of the generation its inputs were
-            # frozen for. One frozen under the older rule, whose inputs may
-            # hold no Season attacks, keeps that rule's SHA-256 tag hash
-            # order until the board rebuild check
-            # (boundary.queue_board_rebuilds) rebuilds it.
+            # Inputs frozen with Season attacks order by the current rule.
+            # Inputs frozen before it hold none, so their board keeps its
+            # generation's older rule and SHA-256 tag hash order until the
+            # board rebuild check (boundary.queue_board_rebuilds) rebuilds it.
             ordering_rule_version = (
-                _text_value(generation_row[8])
-                if generation_row is not None
-                else SNAPSHOT_ORDERING_RULE_VERSION
+                SNAPSHOT_ORDERING_RULE_VERSION
+                if frozen_attacks
+                else _text_value(generation_row[8])
             )
             older_order = ordering_rule_version != SNAPSHOT_ORDERING_RULE_VERSION
             entries: list[dict[str, Any]] = []

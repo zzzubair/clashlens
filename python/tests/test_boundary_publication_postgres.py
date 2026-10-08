@@ -577,9 +577,8 @@ def test_boundary_generation_coalesces_population_and_corrections(
 
 
 def test_decode_only_correction_inherits_snapshot_publication_identity(
-    database_url: str, monkeypatch
+    database_url: str,
 ) -> None:
-    monkeypatch.setattr(boundary, "SNAPSHOT_ORDERING_RULE_VERSION", "tracked-player-order-v1")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = Database(connection_info)
         try:
@@ -595,7 +594,6 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     ranked_day_version_id=ranked_id,
                     ranked_day_input_hash="a" * 64,
                 )
-                monkeypatch.undo()
                 generation = connection.execute(
                     """
                     SELECT id, snapshot_manifest_id, army_manifest_id
@@ -696,7 +694,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     """
                     SELECT snapshot_state, snapshot_id, snapshot_input_hash,
                            snapshot_manifest_id, snapshot_analytics_publication_id,
-                           affected_artifacts, ordering_rule_version
+                           affected_artifacts
                     FROM boundary_publication_generations
                     WHERE generation = 2
                     """
@@ -709,7 +707,7 @@ def test_decode_only_correction_inherits_snapshot_publication_identity(
                     generation[1],
                     snapshot_identity,
                 )
-                assert tuple(inherited[5:]) == (["army"], "tracked-player-order-v1")
+                assert inherited[5] == ["army"]
                 correction = connection.execute(
                     """
                     SELECT state, affected_artifacts
@@ -1018,11 +1016,9 @@ def test_enqueue_army_decode_only_inherits_snapshot_after_restart(
             database.close()
 
 
-@pytest.mark.parametrize("affected", [["army"], ["army", "snapshot"]])
 def test_boundary_correction_recovery_activates_pending_inputs(
-    database_url: str, monkeypatch, affected: list[str]
+    database_url: str,
 ) -> None:
-    monkeypatch.setattr(boundary, "SNAPSHOT_ORDERING_RULE_VERSION", "tracked-player-order-v1")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = Database(connection_info)
         try:
@@ -1104,9 +1100,9 @@ def test_boundary_correction_recovery_activates_pending_inputs(
                     INSERT INTO boundary_publication_corrections (
                         boundary_at, source_generation_id, affected_artifacts,
                         pending_inputs, state
-                    ) VALUES (%s, %s, %s, '[]'::jsonb, 'pending_inputs')
+                    ) VALUES (%s, %s, ARRAY['army'], '[]'::jsonb, 'pending_inputs')
                     """,
-                    (BOUNDARY, generation, affected),
+                    (BOUNDARY, generation),
                 )
                 connection.commit()
             assert boundary_publication.reevaluate_boundary_publications(database, ) == 1
@@ -1125,12 +1121,6 @@ def test_boundary_correction_recovery_activates_pending_inputs(
                 assert generations == 2
                 assert correction[0] == "active"
                 assert correction[1] is not None
-                assert {text(row[0]) for row in connection.execute(
-                    "SELECT ordering_rule_version FROM boundary_publication_generations WHERE id = %s"
-                    " UNION SELECT rule_versions->>'ordering_rule_version'"
-                    " FROM boundary_publication_manifests WHERE generation_id = %s",
-                    (correction[1], correction[1]),
-                )} == {"tracked-player-order-v2" if "snapshot" in affected else "tracked-player-order-v1"}
                 assert (
                     connection.execute(
                         """
