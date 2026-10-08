@@ -144,7 +144,13 @@ export default function App() {
     <>
       <header className="site-header">
         <Link className="site-brand" to="/" aria-label="Clash Lens home">
-          Clash Lens
+          <img
+            className="site-brand-logo"
+            src="/images/clashlens-wordmark.svg"
+            alt=""
+            width="78"
+            height="48"
+          />
         </Link>
         <nav className="primary-nav" aria-label="Main navigation">
           <NavLink to="/" end>
@@ -219,7 +225,13 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
     <>
       <header className="site-header">
         <Link className="site-brand" to="/" aria-label="Clash Lens home">
-          Clash Lens
+          <img
+            className="site-brand-logo"
+            src="/images/clashlens-wordmark.svg"
+            alt=""
+            width="78"
+            height="48"
+          />
         </Link>
         <div className="site-nav">
           <HeaderSearch key={location.pathname} />
