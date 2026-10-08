@@ -12,6 +12,7 @@ from typing import ClassVar
 import pytest
 from minio.error import S3Error
 
+from clashlens import archive as archive_module
 from clashlens.archive import (
     MAX_ARCHIVE_BODY_BYTES,
     ArchiveReadError,
@@ -513,3 +514,44 @@ def test_a_marker_check_still_running_is_never_reported_ready() -> None:
         release.set()
         assert first.result(5) == "terminal"
         assert second.result(5) == "terminal"
+
+
+def test_the_first_marker_check_fetches_the_marker_just_after_boot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Just after the host boots the monotonic clock is under 300 seconds, so
+    # no earlier check may be taken as still fresh.
+    monkeypatch.setattr(archive_module.time, "monotonic", lambda: 12.0)
+    reader = S3ArchiveReader(
+        endpoint="127.0.0.1:9",
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
+        instance_id="fixture-instance",
+        marker_key="markers/instance",
+        marker_hash=hashlib.sha256(b"this archive's marker").hexdigest(),
+        marker_payload_version="1",
+    )
+    fetched: list[str] = []
+
+    class Response:
+        def read(self, _limit: int) -> bytes:
+            return b"another archive's marker"
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class Client:
+        def get_object(self, _bucket: str, key: str) -> Response:
+            fetched.append(key)
+            return Response()
+
+    reader.client = Client()
+
+    assert reader.check_marker_health() == "terminal"
+    assert fetched == ["markers/instance"]

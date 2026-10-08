@@ -203,7 +203,7 @@ class S3ArchiveReader:
             if configured_instance
             else None
         )
-        self._marker_checked_at = 0.0
+        self._marker_checked_at = -math.inf
         # Held while a check runs, so no caller reads its result unfinished.
         self._marker_lock = threading.Lock()
         self._marker_error: ArchiveReadError | None = None
