@@ -151,7 +151,8 @@ def enqueue_rebuilds(
 ) -> dict[str, Any]:
     """Queue at most ``max_jobs`` rebuilds of players not yet done; with
     ``season_id``, as a Season repair, only of that Season's days, so no
-    other Season changes, at backfill priority.
+    other Season changes, whatever Season the days were saved under, at
+    backfill priority.
 
     A player with reconciliation queued or running that rebuilds one of those
     days waits for a later run. A player whose latest rebuild failed is not
@@ -282,7 +283,7 @@ def enqueue_rebuilds(
                             "last_ranked_day_start": last_day.astimezone(
                                 UTC
                             ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "recalculate_season": _text_value(day_season),
+                            "recalculate_season": season_id or _text_value(day_season),
                             "trigger": "battle_day_repair",
                         }
                     ),

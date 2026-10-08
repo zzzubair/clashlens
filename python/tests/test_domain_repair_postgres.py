@@ -859,3 +859,54 @@ def test_season_repair_recalculates_days_saved_before_their_season_was_known(
             database.close()
 
     assert calculated == days
+
+
+def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    """A player's September days with a moved battle and an October day were
+    all saved as Season 'unknown'. Repairing September's moved battle
+    recalculates September's days and leaves October's as saved."""
+    from test_reconciliation_postgres import _processor
+
+    from clashlens import battle_day_repair, reconciliation_db
+
+    calculated: list[datetime] = []
+    monkeypatch.setattr(
+        reconciliation_db, "recalculate_ranked_day",
+        lambda *_, day_start, **__: calculated.append(day_start) or False,
+    )
+    with _campaign_database(database_url) as (connection_info, worker):
+        day2, day3, october = START + DAY, START + 2 * DAY, END + DAY
+        with _owner(connection_info) as connection:
+            moved, opponent = _player(connection, "#MOVED"), _player(connection, "#OPP")
+            evidence_id = _report(connection, moved, opponent, day2, destruction=56)
+            connection.execute(
+                """
+                INSERT INTO battle_day_repairs (
+                    from_battle_id, to_battle_id, perspective, evidence_id,
+                    attacker_player_id, defender_player_id, from_day, to_day
+                ) SELECT 0, battle_id, 'attacker', id, %s, %s, %s, %s
+                FROM battle_evidence WHERE id = %s
+                """,
+                (moved, opponent, day3, day2, evidence_id),
+            )
+            # Day 3 still shows the battle that moved to day 2.
+            for day, battles in (
+                (day2, []), (day3, [{"source_evidence_id": evidence_id}]), (october, []),
+            ):
+                connection.execute(
+                    "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
+                    " version, state, coverage, battles, official_season_id)"
+                    " VALUES (%s, %s, 1, 'Complete', 'complete', %s, 'unknown')",
+                    (moved, day, Jsonb(battles)),
+                )
+        queued = battle_day_repair.enqueue_rebuilds(worker, max_jobs=10, season_id=SEASON)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert len(queued["job_ids"]) == 1
+            assert processor.process_job(queued["job_ids"][0], owner="moved") is not None
+        finally:
+            database.close()
+
+    assert calculated == [day2, day3]
