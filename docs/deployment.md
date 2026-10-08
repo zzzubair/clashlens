@@ -1033,9 +1033,12 @@ use the [operating notes](operating.md#respond-to-alerts).
   `failed_processing` and `failed_uploads` counts. The alert says how many of
   each and how long ago the oldest failed, and recovers only when none are
   left, through `./ops failed-items` or the replay path. A failed job keeps its
-  failed state and history, but stops counting once a replay job has processed
-  the same saved response; this also applies to the 24-hour alert above and to
-  a Reset record's processed time below. On 8 Oct 2026 nine
+  failed state and history, but stops counting once a replay has processed the
+  same saved response, shown by that response's successful processing result
+  (`observation_processing_outcomes`), which stays after the finished replay
+  job is cleaned up. This also applies to the 24-hour alert above. A Reset
+  record's processed time below counts a finished replay job, and stays
+  unknown once that job is cleaned up before the check saw it. On 8 Oct 2026 nine
   jobs from 1–2 Oct were still failed while the 24-hour alert above had long
   recovered.
 - **Saved work waiting too long**, as two separate alerts:

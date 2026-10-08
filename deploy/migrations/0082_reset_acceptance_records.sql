@@ -38,6 +38,10 @@ GRANT SELECT, INSERT, UPDATE ON TABLE reset_acceptance_records
 ALTER TABLE collector_work
     ADD COLUMN IF NOT EXISTS replaced_observation_ids bigint[] NOT NULL DEFAULT '{}';
 
+-- The collector's measurements read processing results to stop counting a
+-- failed job once a replay has processed its response.
+GRANT SELECT ON TABLE observation_processing_outcomes TO clashlens_collector;
+
 INSERT INTO clash_lens_schema_migrations(version) VALUES (82)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

@@ -512,7 +512,7 @@ def test_metrics_show_finished_work_reset_work_left_and_old_failures(
             database.close()
 
 
-def test_a_failed_job_whose_response_a_replay_processed_is_no_longer_outstanding(
+def test_a_failed_job_whose_response_a_replay_processed_stays_repaired(
     database_url: str,
 ) -> None:
     # The failed job keeps its state; only the outstanding count drops.
@@ -534,6 +534,7 @@ def test_a_failed_job_whose_response_a_replay_processed_is_no_longer_outstanding
             assert database.health_metrics()["failed_processing"] == 2
             with psycopg.connect(connection_info, autocommit=True) as connection:
                 connection.execute("SET session_replication_role = replica")
+                # The replay finishes its job and records a processed result.
                 connection.execute(
                     """
                     INSERT INTO python_processing_jobs (
@@ -542,6 +543,23 @@ def test_a_failed_job_whose_response_a_replay_processed_is_no_longer_outstanding
                     ) VALUES ('replay_observation', 'replay-9100',
                               '{"replay_request_id": 1}', 9100, 'complete', clock_timestamp())
                     """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO observation_processing_outcomes (
+                        observation_id, parser_version, processing_version, endpoint,
+                        response_hash, source_http_status, source_observed_at, outcome
+                    ) SELECT 9100, parser_version, processing_version, 'profile',
+                             repeat('a', 64), 200, clock_timestamp(), 'processed'
+                    FROM python_processing_jobs WHERE deduplication_key = 'replay-9100'
+                    """
+                )
+            assert database.health_metrics()["failed_processing"] == 1
+            # The finished-job cleanup removes the replay job; the repair stays.
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("SET session_replication_role = replica")
+                connection.execute(
+                    "DELETE FROM python_processing_jobs WHERE deduplication_key = 'replay-9100'"
                 )
                 states = connection.execute(
                     "SELECT status FROM python_processing_jobs WHERE observation_id = 9100"

@@ -35,16 +35,21 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
             WHERE job.status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
             GROUP BY job.work_type
         ), failed_jobs AS (
-            -- A failed job stays failed, but no longer counts once a replay job
-            -- processed the same response.
+            -- A failed job stays failed, but no longer counts once a replay has
+            -- processed the same response: its processing result, kept after
+            -- finished jobs are cleaned up, then shows success at the failed
+            -- job's versions (the replay overwrote the failure) or since it failed.
             SELECT count(*) AS failed_count, max(updated_at) AS newest_at, min(updated_at) AS oldest_at
             FROM python_processing_jobs AS failed
             WHERE status = 'failed'
               AND NOT EXISTS (
-                  SELECT FROM python_processing_jobs AS replay
-                  WHERE replay.work_type = 'replay_observation' AND replay.status = 'complete'
-                    AND COALESCE(replay.observation_id, replay.replay_observation_id)
-                        = COALESCE(failed.observation_id, failed.replay_observation_id))
+                  SELECT FROM observation_processing_outcomes AS repaired
+                  WHERE repaired.observation_id
+                        = COALESCE(failed.observation_id, failed.replay_observation_id)
+                    AND repaired.outcome IN ('processed', 'processed_with_gaps', 'non_success')
+                    AND ((repaired.parser_version = failed.parser_version
+                          AND repaired.processing_version = failed.processing_version)
+                         OR repaired.created_at > failed.updated_at))
         ), completed AS (
             -- Through the finished-job cleanup lookup: about 1,100 rows on 8 Oct 2026, 11 ms.
             SELECT work_type, count(*) AS completed_count FROM python_processing_jobs
