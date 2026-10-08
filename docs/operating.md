@@ -612,7 +612,7 @@ change, and how many players have saved days (`players`). The first `queue`
 saves those counts as the repair's receipt, then each run does one step, at
 most `--max-jobs` (default 100), at backfill priority, and says which in
 `phase`: `inputs`, repairs of the evidence days are built from (battles
-moved day and Reset pairs left partial; current Season only); `days`, one job
+moved day and the Season's Reset pairs left partial); `days`, one job
 per player recalculating every saved day of the Season, oldest first, so each
 day starts where the day before now ends; once every such job has finished,
 `boards`, one rebuild of each Reset board whose entries the rules now change,
@@ -623,7 +623,9 @@ board. Run `queue` again until `phase` is `done`; `left_to_queue` and
 `unfinished` count the day jobs still to queue and still to run. A day that
 comes out the same saves nothing new. A recalculation that failed is kept and
 not queued again: `failed` counts them and `failed_blockers` lists at most
-`--max-jobs` (job, player, failure reason). `receipt` writes nothing and
+`--max-jobs` (job, player, failure reason). While any has failed, the repair
+stays at `days` and rebuilds no board or summary from unrepaired days;
+investigate each and retry it by hand. `receipt` writes nothing and
 shows the saved before beside the same counts now, and checks that every
 published view agrees with the days: `boards_disagreeing` lists boards whose
 entries the rules would still change, and `summaries_disagreeing` counts
@@ -633,8 +635,7 @@ the board rule that built them (`rule`). A board rebuild is finished once its
 Reset's newest generation shows `snapshot_state` and `army_state` as
 `published` (see [Reset publication missing](#reset-publication-missing)).
 The receipt is kept per Season and rule revision, so the same revision is
-repaired once; changing an owner switch in `python/src/clashlens/domain.py`
-changes the revision too.
+repaired once.
 
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)

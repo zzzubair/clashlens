@@ -1380,14 +1380,16 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
     proves no battle stamped before it. Its Complete day ends at 4,931 from
     its Reset readings at both ends. Without that, a reading plus the
     battles after it is proven only when the day's start reading plus all
-    its battles, or without a start its end Reset reading, less any known
-    automatic loss, comes to it too; a Reset that resets trophies, a
-    Season's end or a Monday's raise to 5,000, proves nothing."""
+    its battles comes to it too. Without a start, an end Reset reading
+    agreeing with it, with or without a known automatic loss, proves
+    nothing: both readings can miss the same delayed credit. A Reset that
+    resets trophies, a Season's end or a Monday's raise to 5,000, proves
+    nothing either."""
     readings = [
         ("#2QCYU8C2G", 4703, datetime(2026, 10, 7, 4, 37, 5, tzinfo=UTC)),
         ("#GURYYP99", 4923, _october(7, 4, 54)),  # no end reading
-        ("#PL0Q0UVLC", 5100, _october(7, 4, 40)),  # end reading agrees
-        ("#P0VPRVPJJ", 5090, _october(7, 4, 40)),  # less the known loss
+        ("#PL0Q0UVLC", 5100, _october(7, 4, 40)),  # no start, end reading agrees
+        ("#P0VPRVPJJ", 5090, _october(7, 4, 40)),  # no start, less the known loss
         ("#P2CC9URVR", 5080, _october(7, 4, 40)),  # less an unknown loss
         ("#Y8V9YYP9C", 5151, _october(7, 4, 40)),  # Season reset, disagrees
         ("#YPG0UY9LU", 5047, _october(7, 4, 40)),  # Season reset, agrees
@@ -1433,8 +1435,8 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         try:
             assert _build_board(connection_info, database, generation_id) == [
                 ("#Y8V9YYP9C", 5191, "uncertain"),
-                ("#PL0Q0UVLC", 5140, "confirmed"),
-                ("#P0VPRVPJJ", 5130, "confirmed"),
+                ("#PL0Q0UVLC", 5140, "uncertain"),
+                ("#P0VPRVPJJ", 5130, "uncertain"),
                 ("#P2CC9URVR", 5120, "uncertain"),
                 ("#YPG0UY9LU", 5087, "confirmed"),
                 ("#GURYYP99", 4992, "uncertain"),

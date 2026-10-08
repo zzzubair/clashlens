@@ -25,7 +25,7 @@ from psycopg.types.json import Jsonb
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .db import Database, _text_value
-from .domain import DAILY_BOARD_VALUE, RANKED_DAY_DURATION, season_is_current
+from .domain import RANKED_DAY_DURATION, season_is_current
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -593,8 +593,7 @@ def _snapshot_rows(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
             ):
                 # Trophies from before this player's Season reset never
-                # stand for the ended day's Season, and a player not signed
-                # up yet waits off the board (domain.UNSIGNED_UP_PLAYERS).
+                # stand for the ended day's Season.
                 identity["snapshot_quality"] = "season_reset_pending"
             elif player_id in not_found:
                 # The player went missing after this reading, so its
@@ -698,9 +697,10 @@ def reset_trophies(
     its attack can end up to 4 minutes after the defender's report, and no
     battle amount the two players' logs disagree on. A reading proves no
     battle stamped before it, so that total is proven only when the day's
-    start reading plus all its battles, or without a start its end Reset
-    reading, with or without its known automatic loss, comes to it too, and
-    no later reading before the next day's first battle shows otherwise.
+    start reading plus all its battles comes to it too, and no later reading
+    before the next day's first battle shows otherwise. Without a start
+    reading it stays uncertain: the end Reset reading can miss the same
+    delayed credit as the reading it is checked against.
     Without the battles' proof the total is the reading alone; any total not
     proven is marked uncertain.
     """
@@ -784,22 +784,9 @@ def reset_trophies(
 def _reset_total(
     reading: int, end: Any, battles: tuple[bool, int, int] | None
 ) -> tuple[int, bool]:
-    """A player's trophies at the Reset and whether they are proven, from
-    their reading, their day's end (``DayEnd``) and its battles as
-    ``reset_trophies`` reads them: before the automatic defense loss, or
-    with the owner's ``eod`` rule (``domain.DAILY_BOARD_VALUE``) after it,
-    proven only once the loss is known."""
-    trophies, proven = _before_loss(reading, end, battles)
-    if DAILY_BOARD_VALUE == "before_automatic_loss" or end is None:
-        return trophies, proven
-    if end.automatic_state not in {"calculated", "confirmed", "not_applicable"}:
-        return trophies, False
-    return trophies - int(end.automatic_loss or 0), proven
-
-
-def _before_loss(
-    reading: int, end: Any, battles: tuple[bool, int, int] | None
-) -> tuple[int, bool]:
+    """A player's trophies at the Reset before the automatic defense loss
+    and whether they are proven, from their reading, their day's end
+    (``DayEnd``) and its battles as ``reset_trophies`` reads them."""
     from .reset_settlement import BALANCED, CONTRADICTED, VERIFIED
 
     if end is None or battles is None:
@@ -816,14 +803,10 @@ def _before_loss(
     if end.before_loss is not None:
         # A Complete day ending at a Reset that resets trophies.
         return total, total == end.before_loss
-    later_agrees = end.end_reset or end.agrees(total)
-    if end.start is not None:
-        return total, later_agrees and end.start + whole_day == total
+    if end.start is None:
+        return total, False
     return total, (
-        later_agrees
-        and end.end_reading is not None
-        and not end.end_reset
-        and end.end_reading in {total, total - end.known_loss}
+        (end.end_reset or end.agrees(total)) and end.start + whole_day == total
     )
 
 

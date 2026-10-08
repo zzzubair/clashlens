@@ -14,6 +14,7 @@ import json
 from datetime import timedelta
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, repair_season, store_observation
 from test_first_battle_log_postgres import LOSS, WIN, _log, _queued_priorities
 from test_reconciliation_postgres import DAY_START, _profile
@@ -325,6 +326,66 @@ def test_season_repair_settles_days_saved_before_the_later_reading_rule(
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
+
+
+@pytest.mark.parametrize(
+    ("later_gain", "day_b_state", "day_c_state", "new_versions"),
+    [(WIN, "Inconsistent", "Partial", 2), (0, "Complete", "Complete", 0)],
+)
+def test_later_reading_against_a_balanced_day_ends_its_proof(
+    database_url: str, archive_server, later_gain, day_b_state, day_c_state,
+    new_versions,
+) -> None:
+    """Day B balances on its two Reset readings, but a profile read 10
+    minutes after its end Reset, before any battle of day C, shows an attack
+    more: both readings missed the same delayed credit. The recheck after
+    the Reset makes day B Inconsistent, so day C, with one defense, no
+    longer takes its automatic loss from day B's defenses. A later reading
+    showing day B's end changes nothing and saves nothing new."""
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    day_c = [(DAY_C + timedelta(hours=1), False)]
+    end_b = 6000 + WIN - 8 * LOSS
+    end_c = end_b - LOSS - 7 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=_profile(end_b), log=_log(*day_b),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D,
+            profile=_profile(end_c), log=_log(*day_c),
+        )
+        _process(connection_info, archive_server, jobs)
+        before = _latest_days(connection_info)
+        _, profile_job = store_observation(
+            connection_info, archive_server, occurrence_key="later-profile",
+            endpoint="profile", body=_profile(end_b + later_gain),
+            observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
+        )
+        _process(connection_info, archive_server, [profile_job])
+        count = (
+            "SELECT count(*) FROM ranked_day_versions WHERE ranked_day_start = ANY(%s)"
+        )
+        with psycopg.connect(connection_info) as connection:
+            saved = connection.execute(count, ([DAY_B, DAY_C],)).fetchone()[0]
+        _day_end_recheck(connection_info, archive_server)
+        with psycopg.connect(connection_info) as connection:
+            added = connection.execute(count, ([DAY_B, DAY_C],)).fetchone()[0] - saved
+        day_b_row, day_c_row = _latest_days(connection_info)
+
+    assert [row[:5] for row in before] == [
+        ("Complete", "exact", 6000, end_b, end_b),
+        ("Complete", "exact", end_b, end_c, end_c),
+    ]
+    assert (day_b_row[0], day_c_row[0], added) == (day_b_state, day_c_state, new_versions)
+    if later_gain:
+        assert day_b_row[8] == ["later_reading_contradicts"]
+        assert day_c_row[6] == "unknown"
 
 
 def test_rejected_later_reading_does_not_settle_the_day(

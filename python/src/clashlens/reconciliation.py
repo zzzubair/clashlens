@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from itertools import pairwise
 from typing import Any
 
-from .domain import MAX_INFERRED_SHIELD_DAYS, PREVIOUS_DAY_DEFENSES, RankedDay
+from .domain import RankedDay
 from .profile import ProfileParseError, normalize_player_tag
 
 # Version 3 freezes the selected battle-event projection (including the source
@@ -412,6 +412,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             observed_boundary_adjustment = next_start_trophies - final_trophies
             if abs(residual) > TROPHY_RECONCILIATION_TOLERANCE:
                 failures.append("trophy_equation_mismatch")
+            elif end.later_contradicts:
+                failures.append("later_reading_contradicts")
             elif (
                 automatic_loss is not None
                 and automatic_state == "calculated"
@@ -528,7 +530,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     state = "Partial"
     if malformed_evidence:
         state = "Malformed"
-    elif inconsistent_evidence or "trophy_equation_mismatch" in unique_failures:
+    elif inconsistent_evidence or {
+        "trophy_equation_mismatch", "later_reading_contradicts",
+    }.intersection(unique_failures):
         state = "Inconsistent"
     elif (
         not unique_failures and coverage_complete and start_available and end_available
@@ -994,7 +998,8 @@ def _automatic_defense_adjustment(
         previous = PreviousRankedDay(True, 0, 0, 0)
     if (
         previous is None
-        or not _defenses_proven(previous)
+        or not previous.complete
+        or not previous.coverage_complete
         or not coverage_complete
         or previous.observed_defense_count < 0
     ):
@@ -1012,29 +1017,25 @@ def _automatic_defense_adjustment(
     ), "calculated"
 
 
-def _defenses_proven(previous: PreviousRankedDay) -> bool:
-    """Whether the day before proves the defense count and losses the
-    automatic loss averages over: a Complete day does; with the owner's
-    ``covered_day`` rule, so does a Partial one whose battle logs are
-    continuous, as a day missing only a Reset reading is. A disputed battle
-    makes a day Inconsistent, so it never does."""
-    if not previous.coverage_complete:
-        return False
-    if PREVIOUS_DAY_DEFENSES == "covered_day":
-        return previous.complete or previous.state == "Partial"
-    return previous.complete
-
-
 def reads_later_reading(
     data: ReconciliationInput, result: ReconciliationResult
 ) -> bool:
     """Whether a profile read after the day's end Reset reading could settle
     it: the day ended in a trophy mismatch, or used no defense slots and its
     Reset reading shows no automatic loss the game may not have applied yet;
-    or disprove it: battles the Reset reading missed settled it."""
+    or disprove it: battles the Reset reading missed settled it, or it is
+    Complete and ends on a Reset reading the game did not reset."""
     return (
         "trophy_equation_mismatch" in result.failure_reasons
         or "next_start_battles_after_reading" in result.formula_components
+        or (
+            result.state == "Complete"
+            and (
+                data.boundary_kind is None
+                or data.boundary_kind == "weekly"
+                and (result.final_trophies_before_reset or 0) > 5000
+            )
+        )
     ) or (
         result.unexplained_residual == 0
         and result.automatic_defense_evidence_state == "not_applicable"
@@ -1044,15 +1045,16 @@ def reads_later_reading(
 
 def _zero_defense_loss(data: ReconciliationInput, defense_count: int) -> int:
     """The automatic loss for all 8 defense slots of a day with none used,
-    averaged over the previous day alone, or 0 without a previous day that
-    proves its defenses. Charged only when the next Reset reading, or a
-    later one before any new-day battle, shows it."""
+    averaged over the previous day alone, or 0 without a complete previous
+    day to average. Charged only when the next Reset reading, or a later
+    one before any new-day battle, shows it."""
     previous = data.previous_day
     if (
         defense_count + data.zero_result_defense_slots
         or data.season_first_day
         or previous is None
-        or not _defenses_proven(previous)
+        or not previous.complete
+        or not previous.coverage_complete
     ):
         return 0
     previous_defenses = (
@@ -1175,7 +1177,7 @@ def _shield_state(
 
     prior_run = previous.shield_run_length if previous is not None else 0
     duration = prior_run + 1
-    if duration > MAX_INFERRED_SHIELD_DAYS:
+    if duration > 2:
         return "uncertain_sequence", None, evidence
     return "inferred_shielded", duration, evidence
 

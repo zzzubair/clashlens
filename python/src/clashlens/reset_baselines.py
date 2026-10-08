@@ -56,10 +56,27 @@ def _refresh_reset_baseline_evidence(
     reset_settlement.refresh_for_observation(database, connection, claim.observation_id)
 
 
+# The Season whose Reset pairs a repair re-checks: the one named, or else the
+# latest confirmed one.
+_REPAIR_SEASON_SQL = """
+    SELECT to_timestamp(season_id::bigint) AS current_start,
+           season_id AS current_league_season_id
+    FROM (SELECT %s::text) AS selected (season_id)
+    WHERE season_id IS NOT NULL
+    UNION ALL
+    (SELECT current_start, current_league_season_id
+     FROM legend_season_anchors
+     WHERE %s::text IS NULL AND state = 'confirmed' AND anchor_rule_version = %s
+     ORDER BY current_start DESC
+     LIMIT 1)
+"""
+
+
 def repair_current_season_reset_baselines(
-    database: Database, *, max_works: int
+    database: Database, *, max_works: int, season_id: str | None = None
 ) -> dict[str, Any]:
-    """Re-check current-season Reset pairs left partial with both results saved.
+    """Re-check current-season Reset pairs left partial with both results saved,
+    or with ``season_id`` that Season's.
 
     Until profiles and battle logs were read under their own parser versions,
     every such pair stayed partial, so its Legend day was never finished.
@@ -86,13 +103,7 @@ def repair_current_season_reset_baselines(
         with connection.transaction():
             candidates = connection.execute(
                 f"""
-                WITH current_anchor AS (
-                    SELECT current_start, current_league_season_id
-                    FROM legend_season_anchors
-                    WHERE state = 'confirmed' AND anchor_rule_version = %s
-                    ORDER BY current_start DESC
-                    LIMIT 1
-                )
+                WITH current_anchor AS ({_REPAIR_SEASON_SQL})
                 SELECT work.profile_observation_id, (
                     SELECT outcome.parser_version
                     FROM observation_processing_outcomes AS outcome
@@ -167,6 +178,8 @@ def repair_current_season_reset_baselines(
                 LIMIT %s
                 """,
                 (
+                    season_id,
+                    season_id,
                     SEASON_ANCHOR_RULE_VERSION,
                     PROCESSING_VERSION,
                     PROCESSING_VERSION,
@@ -206,7 +219,7 @@ def repair_current_season_reset_baselines(
             failure_reasons.update(reasons)
         with connection.transaction():
             recovered, failed_blockers = _recover_failed_reset_repairs(
-                connection, limit=max_works - len(candidates)
+                connection, limit=max_works - len(candidates), season_id=season_id
             )
     return {
         "job_ids": job_ids + recovered,
@@ -254,7 +267,7 @@ TRANSIENT_REPAIR_FAILURES = ("lease_expired_max_attempts", "database_deadlock")
 
 
 def _recover_failed_reset_repairs(
-    connection: Any, *, limit: int
+    connection: Any, *, limit: int, season_id: str | None
 ) -> tuple[list[int], list[dict[str, Any]]]:
     """Re-queue Reset repairs that failed while a day they rebuild stays Live.
 
@@ -274,14 +287,8 @@ def _recover_failed_reset_repairs(
         "SELECT pg_advisory_xact_lock(hashtextextended('reset-recovery', 0))"
     )
     rows = connection.execute(
-        """
-        WITH current_anchor AS (
-            SELECT current_start
-            FROM legend_season_anchors
-            WHERE state = 'confirmed' AND anchor_rule_version = %s
-            ORDER BY current_start DESC
-            LIMIT 1
-        ), failed AS (
+        f"""
+        WITH current_anchor AS ({_REPAIR_SEASON_SQL}), failed AS (
             SELECT job.id, job.deduplication_key, job.failure_category,
                    job.input_json,
                    (job.input_json ->> 'player_id')::bigint AS player_id
@@ -391,7 +398,10 @@ def _recover_failed_reset_repairs(
         WHERE position <= %s
         ORDER BY id
         """,
-        (SEASON_ANCHOR_RULE_VERSION, list(TRANSIENT_REPAIR_FAILURES), limit),
+        (
+            season_id, season_id, SEASON_ANCHOR_RULE_VERSION,
+            list(TRANSIENT_REPAIR_FAILURES), limit,
+        ),
     ).fetchall()
     job_ids: list[int] = []
     blockers: list[dict[str, Any]] = []
@@ -1058,9 +1068,6 @@ def _load_reset_endpoint_evidence(
                 first_event = ranked_day_inputs.load_first_reports(
                     connection, player_id, window_start, window_start, window_end
                 )[1]
-                # A reading after the first battle of the new day is
-                # rejected; the owner's rule for it (domain.LATE_RESET_READING)
-                # applies here and in _load_reset_baseline.
                 if first_event is not None and row[4] >= first_event:
                     reasons.append("profile_after_first_event")
                     hard_failure = True

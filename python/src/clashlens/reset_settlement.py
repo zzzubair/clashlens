@@ -131,7 +131,9 @@ class DayEnd:
     def agrees(self, total: int) -> bool:
         """Whether the later reading, if any, is ``total`` before the
         automatic loss, or after the day's known loss."""
-        return self.later is None or self.later in {total, total - self.known_loss}
+        return not later_reading_contradicts(
+            self.later, total - self.known_loss, self.known_loss
+        )
 
     @property
     def proof(self) -> str:
@@ -273,6 +275,17 @@ def _later_readings(connection: Any, rows: list[Any]) -> dict[int, int]:
     }
 
 
+def later_reading_contradicts(
+    later: int | None, next_start: int, pending_loss: int
+) -> bool:
+    """Whether a profile read after a day's end Reset reading and before the
+    player's first battle of the next day disproves the day's settled next
+    start: it shows neither that start nor that start plus an automatic loss
+    the end reading had not applied yet. Both Reset readings can miss the
+    same delayed credit, so their agreeing alone proves no day's end."""
+    return later is not None and later not in {next_start, next_start + pending_loss}
+
+
 def start_proven(data: ReconciliationInput) -> bool:
     """Whether the day's start is proven apart from its own Reset reading:
     a Season's first day starts at 5,000, and a Complete day before ending
@@ -326,6 +339,8 @@ class EndReading:
     unsettled_loss: int
     reading_correction: int
     battles_after_reading: tuple[str, ...]
+    # A later reading disproves the balanced day's end.
+    later_contradicts: bool
 
 
 def settle_end_reading(
@@ -350,6 +365,10 @@ def settle_end_reading(
     look like one of these. The game's official Season-end total already
     counts every battle and the automatic loss, so nothing read before it
     settles the day.
+
+    A clean day that balances is still disproved by a later reading
+    (``later_reading_contradicts``); the day then cannot be Complete, and the
+    next day does not start from its end.
     """
     assert data.next_start_trophies is not None
     reading = data.next_start_trophies
@@ -441,9 +460,21 @@ def settle_end_reading(
             reading_correction = expected_next + unsettled_loss - reading
             next_start = expected_next
             residual = 0
+    later_contradicts = (
+        not residual
+        and later is not None
+        and not official_end
+        and not end_hidden_by_reset
+        and clean
+        and later_reading_contradicts(
+            later[1], next_start,
+            int(automatic_loss or 0) if automatic_state == "calculated" else 0,
+        )
+    )
     return EndReading(
         automatic_loss, automatic_state, charged, expected_next, next_start,
         residual, unsettled_loss, reading_correction, battles_after_reading,
+        later_contradicts,
     )
 
 

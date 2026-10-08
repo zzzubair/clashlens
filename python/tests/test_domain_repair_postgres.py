@@ -617,8 +617,8 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
     database_url: str,
 ) -> None:
     """The first queue saves the Season as it was; each player's days are
-    queued once; only once they have all run are the boards the rules now
-    change rebuilt; the receipt shows before beside now."""
+    queued once; only once they have all run, none failed, are the boards
+    the rules now change rebuilt; the receipt shows before beside now."""
     from domain_test_support import repair_season
     from test_boundary_manifest_postgres import (
         DAY_2_RESET,
@@ -658,7 +658,18 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
             )
             with database.pool.connection() as connection:
                 connection.execute(
-                    "UPDATE python_processing_jobs SET status = 'complete'"
+                    "UPDATE python_processing_jobs SET status = 'failed',"
+                    " failure_category = 'invalid_work_input'"
+                    " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+                )
+            blocked = domain_repair.season_repair(
+                database, NEXT_SEASON, "queue", max_jobs=100
+            )
+            with database.pool.connection() as connection:
+                # As once an operator has retried it and it has run.
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete',"
+                    " failure_category = NULL"
                     " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
                 )
             boards = domain_repair.season_repair(
@@ -686,6 +697,11 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
     assert (queued["phase"], queued["queued"], queued["left_to_queue"]) == ("days", 1, 0)
     # Boards wait for every player's days.
     assert (waiting["phase"], waiting["unfinished"]) == ("days", 1)
+    # A failed day job holds the boards and summaries until it is resolved.
+    assert (blocked["phase"], blocked["unfinished"], blocked["failed"]) == ("days", 0, 1)
+    assert [job["failure_category"] for job in blocked["failed_blockers"]] == [
+        "invalid_work_input"
+    ]
     assert (boards["phase"], boards["boards_rebuilding"]) == ("boards", 1)
     assert [board["correction"] for board in boards["boards"]] == ["queued"]
     assert receipt["boards_queued_at"] is not None
@@ -698,6 +714,6 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
     assert receipt["summaries_disagreeing"] == {
         "stored": 0, "stale": 0, "stale_players": [],
     }
-    assert receipt["rule_revision"] == domain_repair.rule_revision()
+    assert receipt["rule_revision"] == domain_repair.DAY_RULES_REVISION
     # A Season in progress has no summaries to store again.
     assert (done["phase"], done["summaries_refreshed"]) == ("done", 0)

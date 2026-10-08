@@ -484,9 +484,15 @@ def recalculate_ranked_day(
             datetime.fromisoformat(reading_at),
         )
         if later is not None:
-            result = reconcile_ranked_day(
+            settled = reconcile_ranked_day(
                 replace(data, later_next_start_reading=later)
             )
+            # A later reading only agreeing with a Complete day saves nothing new.
+            if not (
+                result.state == settled.state == "Complete"
+                and result.formula_components == settled.formula_components
+            ):
+                result = settled
     result_data = {
         "state": result.state,
         "confidence": result.confidence,

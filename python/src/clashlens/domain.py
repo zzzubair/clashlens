@@ -24,37 +24,6 @@ MAX_BATTLE_TROPHIES = 40
 # itself stays at 05:00 UTC.
 BATTLE_DAY_GRACE = timedelta(minutes=5)
 
-# Rules the owner has not decided yet. Each is one switch, set to how Clash
-# Lens behaves today; the module named beside it applies it. Changing one
-# changes saved results, so a release that does reruns the Season repair
-# (``ranked_day_repair``).
-#
-# A Reset profile read after the player's first battle of the new day
-# (reset_baselines): "reject" leaves both days it bounds without that
-# Reset's trophies. A rule recovering such readings plugs in there.
-LATE_RESET_READING = "reject"
-# Whose day before can give the automatic defense loss its defense count
-# and losses (reconciliation, cl-partial-chain-rule): "complete_day" needs
-# that whole day Complete; "covered_day" any day whose battle logs are
-# continuous and whose battles undisputed, as Partial days missing only a
-# Reset reading are.
-PREVIOUS_DAY_DEFENSES = "complete_day"
-# What the Daily board ranks (boundary_manifest): "before_automatic_loss",
-# the trophies at the Reset before the game's automatic defense loss, or
-# "eod", the day's end after it.
-DAILY_BOARD_VALUE = "before_automatic_loss"
-# Order of equal trophies (snapshots, api_leaderboard): "per_board", the
-# Daily board by SHA-256 of the tag and the Live board by MD5 of it, or
-# "tag_hash", both by SHA-256 of the tag.
-TIE_ORDER = "per_board"
-# Players in Legend I who have not signed up for the Season (snapshots'
-# manifest, api_leaderboard): "hidden" leaves them off both boards until a
-# profile names the Season. A rule showing them plugs in there.
-UNSIGNED_UP_PLAYERS = "hidden"
-# The longest run of days with no battles and unchanged trophies inferred
-# as a shield (reconciliation); a longer run stays uncertain.
-MAX_INFERRED_SHIELD_DAYS = 2
-
 _ALLOCATION_THRESHOLDS: dict[int, tuple[tuple[int, int], ...]] = {
     0: ((0, 0), (10, 1), (20, 2), (30, 3), (40, 4)),
     1: (
