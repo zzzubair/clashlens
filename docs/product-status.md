@@ -176,7 +176,7 @@ existing eligibility processing locally; live import and capacity are pending.
 - Discord server/invite/channel identifiers, ticket provider/plan, permissions,
   transcript retention and support staffing. Alert thresholds, including
   job/upload stalls and missed Reset publication, are defined in
-  [alert conditions](deployment.md#alert-conditions).
+  [alert conditions](alerts.md).
 - [#61](https://github.com/zzzubair/clashlens/issues/61) group comparison was
   brought forward without extending storage; see the accounts row above for
   how cleaned-up days are shown. Compact history still does not retain all

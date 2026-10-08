@@ -76,7 +76,7 @@ Healthy looks like this:
   not prove player data can be read.
 - During active tracking, successful fetches keep advancing. Compare fetch age,
   spool bytes, object count and filesystem usage with the
-  [alert conditions](deployment.md#alert-conditions).
+  [alert conditions](alerts.md).
 - Queue `failed` is zero, or every existing failure has an investigated cause.
   `oldest_due_seconds` is the age of the oldest overdue job, or `null` if none.
   `overdue` counts jobs past their due time; `scheduled_later` counts jobs
@@ -102,7 +102,7 @@ journalctl --user -u clashlens-alert.service --since '10 minutes ago' -n 30 --no
 ```
 
 The private probe should exit successfully; its
-[private-read condition](deployment.md#alert-conditions) explains what it checks.
+[private-read condition](alerts.md) explains what it checks.
 The alert timer should be active with recent successful runs matching the
 [configured schedule](deployment.md#private-discord-alerts).
 The alert, backup, raw-response cleanup, ranked-day copy cleanup and finished-job cleanup services run once per timer firing, so `inactive (dead)`
@@ -254,7 +254,7 @@ plain `./ops up` restart them; for a worker-only or API-only change, run `./ops
 up --keep-collector` by hand to keep them running (choosing this automatically
 is a follow-up).
 
-Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
+Use the [alert conditions and delivery rules](alerts.md)
 to interpret messages. Confirm both the measurements below and the recovery
 message in the private operator channel. `./ops alert-check` can run the check
 immediately, but **sends real Discord messages** and saves alert state.
@@ -263,14 +263,14 @@ conditions are healthy. The website-unreachable alert comes from the
 [outside check](deployment.md#outside-availability-check) on the Paris relay.
 
 The Live Leaderboard alert and every recovery wait on purpose, as set out in
-the [alert conditions](deployment.md#alert-conditions). Expect a recovery up to
+the [alert conditions](alerts.md). Expect a recovery up to
 15 minutes after the fix. A few percent of players a little past ten minutes,
 such as after a deploy, is normal near the official API request limit and does
 not alert.
 
 ### Tracker stopped
 
-Use the [fetch-gap condition](deployment.md#alert-conditions), which accounts
+Use the [fetch-gap condition](alerts.md), which accounts
 for the Reset pause and a tracker that has never fetched successfully.
 
 **First checks:** `./ops logs collector --since '15 minutes ago' --no-pager`,
@@ -287,7 +287,7 @@ Discord recovery message. Interpret fetch age using the linked Reset rule.
 ### Disk or spool over 80%
 
 Compare all four measurements with the
-[capacity condition](deployment.md#alert-conditions).
+[capacity condition](alerts.md).
 
 **First checks:** repeat the daily metrics, `df` and `./ops queue-status`;
 read `./ops logs collector --since '1 hour ago' --no-pager` and
@@ -305,7 +305,7 @@ stable or fall, followed by the Discord recovery message.
 ### Service restart loop
 
 Find the restarting unit and check it against the
-[restart condition](deployment.md#alert-conditions):
+[restart condition](alerts.md):
 
 ```sh
 journalctl --user --since '1 hour ago' --no-pager \
@@ -325,7 +325,7 @@ old events to leave that window even after the cause is fixed.
 
 ### Backup failed or stale
 
-Use the [backup alert condition](deployment.md#alert-conditions) for immediate
+Use the [backup alert condition](alerts.md) for immediate
 failures, the grace period for unavailable checks, journal diagnostics and incident
 times. Use the
 [backup failure conditions](deployment.md#postgresql-backups-and-recovery)
@@ -348,7 +348,7 @@ A backup listing does not prove restore.
 
 ### Data reads failing
 
-Use the [private-read condition](deployment.md#alert-conditions). This check
+Use the [private-read condition](alerts.md). This check
 does not cover every player page or army analytics query.
 
 **First checks:** repeat the daily private probe, then
@@ -364,7 +364,7 @@ Discord recovery arrives. Website `/healthz` alone is insufficient.
 
 ### Collection or processing behind
 
-Use the [overdue-check and Live Leaderboard conditions](deployment.md#alert-conditions).
+Use the [overdue-check and Live Leaderboard conditions](alerts.md).
 Check collection and leaderboard freshness separately; a processing backlog
 alone does not prove the leaderboard is stale.
 
@@ -765,7 +765,7 @@ recovers 15 minutes after the last one is retried or replayed, or, for a daily
 result calculation, after its replacement from the current-Season republish
 finishes. The failed job itself stays failed as a record. A replacement that
 found the same result can count as failed again after the 48-hour finished-job
-cleanup ([details](deployment.md#alert-conditions)).
+cleanup ([details](alerts.md)).
 
 ### Reset publication missing
 
