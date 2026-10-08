@@ -716,11 +716,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         raise ValueError("collector requires 4 to 9 regular keys and one interactive key")
     if not regular_keys or len(interactive_keys) != 1:
         raise ValueError("collector requires regular keys and one interactive key")
-    relay_connections = (len(regular_keys) + 1) * arguments.concurrency_per_key
-    if arguments.official_proxy_url and (
-        relay_connections > collector_http.RELAY_COLLECTOR_CONNECTIONS
-    ):
-        raise ValueError("collector keys would open more relay connections than its share")
+    connections = collector_http.collector_connections(arguments, len(regular_keys))
     host, separator, port_text = arguments.health_listen.rpartition(":")
     if separator != ":" or not host:
         raise ValueError("collector health listen must be host:port")
@@ -755,9 +751,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
                 raise ProviderFailure(permit.reason, retryable=False)
             await asyncio.sleep(0.01)
 
-    archive_reader = _archive(
-        arguments, database=database, validate_archive_instance=False
-    )
+    archive_reader = _archive(arguments, database=database, validate_archive_instance=False)
     if not isinstance(archive_reader, SpoolFirstReader):
         raise TypeError("collector requires a local spool root")
     concurrency = arguments.concurrency_per_key
@@ -774,8 +768,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
             proxy_url=arguments.official_proxy_url,
             allow_insecure_test_origin=arguments.allow_insecure_official_origin,
             max_body_bytes=arguments.archive_max_body_bytes,
-            max_connections=min((len(regular_keys) + 1) * concurrency,
-                                _THREAD_BUDGET - save_threads),
+            max_connections=min(connections, _THREAD_BUDGET - save_threads),
         ),
         regular_keys=KeyPool(
             regular_keys,

@@ -650,6 +650,14 @@ _UNCLEAR_TRANSPORT_FAILURES = frozenset(
 RELAY_COLLECTOR_CONNECTIONS = 64
 
 
+def collector_connections(arguments: Any, regular_keys: int) -> int:
+    """Connections the collector's keys may open, refused above its relay share."""
+    connections = (regular_keys + 1) * arguments.concurrency_per_key
+    if arguments.official_proxy_url and connections > RELAY_COLLECTOR_CONNECTIONS:
+        raise ValueError("collector keys would open more relay connections than its share")
+    return connections
+
+
 class OfficialApiClient:
     def __init__(
         self,
