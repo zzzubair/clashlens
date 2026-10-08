@@ -1,22 +1,26 @@
 import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "clashlens-theme";
+const DARK_QUERY = "(prefers-color-scheme: dark)";
+// The browser bar matches the dark top bar in each theme.
+const BAR_COLOR = { light: "#1d1426", dark: "#0b0810" };
 let themeFrame = 0;
 
-// Light by default; dark only when chosen. Runs before paint so a saved dark
-// theme never flashes the light background.
+// A saved choice wins; otherwise the device's light or dark setting. Runs before
+// paint so the page never flashes the other theme.
 export const themeInitialization = `(() => {
   let saved;
   try { saved = localStorage.getItem("${STORAGE_KEY}"); } catch {}
-  const dark = saved === "dark";
+  const dark = saved === "dark" || saved === "light" ? saved === "dark" : matchMedia("${DARK_QUERY}").matches;
   document.documentElement.dataset.theme = dark ? "dark" : "light";
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#1b1c1f" : "#ffffff");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "${BAR_COLOR.dark}" : "${BAR_COLOR.light}");
 })();`;
 
 export function ThemeToggle() {
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
+    const media = window.matchMedia(DARK_QUERY);
     const sync = () => {
       let saved: string | null = null;
       try {
@@ -24,13 +28,18 @@ export function ThemeToggle() {
       } catch {
         /* Storage may be disabled. */
       }
-      const next = saved === "dark";
+      const next =
+        saved === "dark" || saved === "light" ? saved === "dark" : media.matches;
       applyTheme(next);
       setDark(next);
     };
     sync();
     window.addEventListener("storage", sync);
-    return () => window.removeEventListener("storage", sync);
+    media.addEventListener("change", sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      media.removeEventListener("change", sync);
+    };
   }, []);
 
   return (
@@ -89,5 +98,5 @@ function applyTheme(dark: boolean) {
   document.documentElement.dataset.theme = theme;
   document
     .querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", theme === "dark" ? "#1b1c1f" : "#ffffff");
+    ?.setAttribute("content", BAR_COLOR[theme]);
 }

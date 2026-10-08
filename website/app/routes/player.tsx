@@ -239,8 +239,8 @@ export function meta({ loaderData }: { loaderData?: PlayerLoaderData }) {
     url: `${loaderData.origin}${canonicalPlayerPath(tag)}`,
     origin: loaderData.origin,
     type: "website",
-    image: "/images/legend-league.webp",
-    imageAlt: "The Legend League badge",
+    image: "/images/og-clashlens.png",
+    imageAlt: "The Clash Lens logo",
   });
 }
 

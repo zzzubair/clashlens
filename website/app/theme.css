@@ -1,63 +1,51 @@
-@font-face {
-  font-family: Barlow;
-  font-weight: 400;
-  font-display: swap;
-  src:
-    url("/fonts/barlow-regular.woff2") format("woff2"),
-    url("/fonts/barlow-regular.ttf") format("truetype");
-}
-
-@font-face {
-  font-family: Barlow;
-  font-weight: 600;
-  font-display: swap;
-  src:
-    url("/fonts/barlow-semibold.woff2") format("woff2"),
-    url("/fonts/barlow-semibold.ttf") format("truetype");
-}
-
-@font-face {
-  font-family: Barlow;
-  font-weight: 700;
-  font-display: swap;
-  src:
-    url("/fonts/barlow-bold.woff2") format("woff2"),
-    url("/fonts/barlow-bold.ttf") format("truetype");
-}
-
 :root {
-  --cl-ink: #2a211b;
-  --cl-paper: #ffffff;
-  --cl-panel: #fff4e8;
-  --cl-accent: #e85d04;
-  --cl-accent-contrast: #b93d0b;
-  --cl-action: #ff7a1a;
-  --cl-action-hover: #ff8f3d;
-  --cl-action-shade: #e85d04;
-  --cl-on-action: #2a1405;
-  --cl-header-bg: rgb(255 255 255 / 0.85);
-  --cl-header-ink: #2a211b;
-  --cl-header-muted: #6f6359;
-  --cl-header-soft: #fff4e8;
+  /* Brand colours from the wordmark; see brand/README.md. */
+  --cl-brand-night: #1d1426;
+  --cl-brand-yellow: #ffd447;
+  --cl-brand-orange: #ff8a1f;
+  --cl-brand-ember: #b3261e;
+  --cl-brand-fill: linear-gradient(
+    180deg,
+    var(--cl-brand-yellow) 0%,
+    var(--cl-brand-orange) 100%
+  );
+  --cl-brand-fill-hover: linear-gradient(180deg, #ffe27a 0%, #ffa040 100%);
+  --cl-ink: #1d1426;
+  --cl-paper: #fff8ec;
+  --cl-panel: #fff0d6;
+  --cl-accent: #b8460c;
+  --cl-accent-contrast: #b8460c;
+  --cl-action: #ff8a1f;
+  --cl-action-hover: #ffa040;
+  --cl-action-shade: #b3261e;
+  --cl-on-action: #1d1426;
+  --cl-header-bg: var(--cl-brand-night);
+  --cl-header-ink: #fff4e2;
+  --cl-header-muted: #cdbfae;
+  --cl-header-soft: #2e2238;
   --cl-silver: #cfd5de;
   --cl-bronze: #e0a77c;
-  --cl-medal-gold: #f4c542;
-  --cl-action-text: #b93d0b;
-  --cl-action-soft: #ffead6;
-  --cl-action-border: #ffc999;
-  --cl-orange: #ff7a1a;
-  --cl-gold: #d97706;
-  --cl-muted: #6f6359;
-  --cl-border: #f3e8dc;
-  --cl-outline: #e6d6c4;
+  --cl-medal-gold: #f2c641;
+  --cl-action-text: #b8460c;
+  --cl-action-soft: #ffe9c7;
+  --cl-action-border: #e3a35c;
+  --cl-orange: #ff8a1f;
+  --cl-gold: #94590a;
+  --cl-muted: #6a5848;
+  --cl-border: #f0dfc4;
+  --cl-outline: #e3c9a3;
   --cl-surface: #ffffff;
-  --cl-positive: #15803d;
-  --cl-negative: #dc2626;
-  --cl-radius: 0;
-  --cl-font: Barlow, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
-  --cl-font-heading: "Bricolage Grotesque", var(--cl-font);
+  --cl-positive: #1f7a33;
+  --cl-negative: #c92a2a;
+  --cl-radius: 10px;
+  /* Every card and button: one outline, one hard drop below, one corner size. */
+  --cl-card-line: var(--cl-brand-night);
+  --cl-card-radius: 14px;
+  --cl-card-drop: 0 4px 0 var(--cl-card-line);
+  --cl-font: Nunito, "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  --cl-font-heading: "Lilita One", var(--cl-font);
   --cl-font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-  --cl-shadow: 0 2px 4px rgb(90 45 10 / 0.08), 0 22px 44px -18px rgb(90 45 10 / 0.42);
+  --cl-shadow: var(--cl-card-drop);
   --cl-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   color: var(--cl-ink);
   background: var(--cl-paper);

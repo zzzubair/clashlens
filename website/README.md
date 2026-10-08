@@ -433,25 +433,29 @@ The root repository `Containerfile` builds the Python asyncio collector; this
 
 ## Font assets
 
-The browser loads the three Barlow weights as WOFF2, with the original TTF files
-retained as fallbacks. The WOFF2 files were converted from those exact originals
-with fontTools 4.66.0, without removing characters or changing glyphs. Their SIL
-Open Font License remains in `public/fonts/OFL.txt`. Font conversion is a one-time
-asset step and adds no application or build dependency.
+Headings and big numbers use Lilita One; everything else uses Nunito, as decided
+in [`../brand/README.md`](../brand/README.md). Both are WOFF2 files as published
+by Google Fonts, split into Latin and Latin Extended so a browser only downloads
+the part a page needs: 12 KB for Lilita One and 75 KB for Nunito, which is one
+variable file covering weights 400 to 900. Other scripts fall back to the system
+font. Their SIL Open Font Licences are in `public/fonts/OFL-LilitaOne.txt` and
+`public/fonts/OFL-Nunito.txt`. The fonts are served by the site itself and add no
+application or build dependency.
 
-Headings use Bricolage Grotesque ExtraBold (800), one 21.7 KB WOFF2 file
-limited to Latin characters as published by Google Fonts. Other scripts fall
-back to Barlow or the system font. Its SIL Open Font License is in
-`public/fonts/OFL-BricolageGrotesque.txt`.
+## Game art and brand icons
 
-## Game art
-
-The site icons reuse the existing `../assets/icon.png` artwork. No new mark was
-generated. `public/favicon.ico` is 32 × 32; `public/apple-touch-icon.png` and
-`public/apple-touch-icon-precomposed.png` are 180 × 180;
-`public/apple-touch-icon-120x120-precomposed.png` is 120 × 120. These were resized
-with FFmpeg's Lanczos filter and are served by the existing static-file handler,
-with no API calls or database queries.
+The browser tab icon, home-screen icons and web app icons use the Clash Lens CL
+mark from [`../assets/`](../assets/). `public/favicon.ico` holds 32, 16 and 48
+pixel images of `mark-cl-block.svg`, in that order. `public/apple-touch-icon.png`
+and `public/apple-touch-icon-precomposed.png` are 180 × 180,
+`public/apple-touch-icon-120x120-precomposed.png` is 120 × 120, and
+`public/icon-192.png` and `public/icon-512.png` are listed in
+`public/site.webmanifest`; all of these are `mark-cl-block-square.svg`, which fills
+the whole square so phones can round the corners themselves. They were rendered
+from the SVGs with headless Chrome. `public/images/og-clashlens.png` is the
+1200 × 630 link preview image used by player pages, built from the wordmark.
+All are served by the existing static-file handler, with no API calls or database
+queries.
 
 `public/images/legend-league.webp` is the Legend I tier badge from the official
 API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved
@@ -465,9 +469,10 @@ the same notice. Its browser test checks the complete rendered text, link, and
 and wrapping remain unchanged.
 
 Shared orange accent colours use `--cl-accent` and `--cl-accent-contrast` in
-`theme.css` and the dark overrides in `appearance.css`. The contrast variant is
-darker in light mode and lighter in dark mode. All four values and every use
-were preserved when renaming the former blue-named settings.
+`theme.css` and the dark overrides in `appearance.css`. Both now hold the
+brand's link and accent text colour for each theme, listed in
+[`../brand/README.md`](../brand/README.md). All four values and every use were
+preserved when renaming the former blue-named settings.
 
 For that rename, full-page Chrome screenshots before and after changing only
 the colour names showed zero changed pixels on both Home in light mode
