@@ -761,7 +761,9 @@ clears the alert early; a repeat failure raises a fresh alert.
 
 The separate **failed work waiting for a person** alert stays open while any
 failed job or upload is left, however old, and says how many there are. It
-recovers 15 minutes after the last one is retried or replayed.
+recovers 15 minutes after the last one is retried or replayed, or, for a daily
+result calculation, after its replacement from the current-Season republish
+finishes. The failed job itself stays failed as a record.
 
 ### Reset publication missing
 

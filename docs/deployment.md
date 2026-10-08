@@ -1036,7 +1036,13 @@ use the [operating notes](operating.md#respond-to-alerts).
   failed state and history, but stops counting once a replay has processed the
   same saved response, shown by that response's successful processing result
   (`observation_processing_outcomes`), which stays after the finished replay
-  job is cleaned up. This also applies to the 24-hour alert above. A Reset
+  job is cleaned up. A failed daily result calculation likewise stops counting
+  once its replacement from the current-Season republish (which carries
+  `recovers_job_id`) has finished, or, after that job is cleaned up, once the
+  day has a result saved since the failure. A replacement that found the same
+  result saves no new one, so after the 48-hour cleanup its repair can no
+  longer be seen and the failure counts again. This also applies to the
+  24-hour alert above. A Reset
   record's processed time below counts a finished replay job, and stays
   unknown once that job is cleaned up before the check saw it. On 8 Oct 2026 nine
   jobs from 1–2 Oct were still failed while the 24-hour alert above had long

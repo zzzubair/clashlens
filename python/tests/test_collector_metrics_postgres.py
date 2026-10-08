@@ -568,3 +568,74 @@ def test_a_failed_job_whose_response_a_replay_processed_stays_repaired(
             assert database.health_metrics()["failed_processing"] == 1
         finally:
             database.close()
+
+
+def test_a_failed_daily_result_repaired_by_its_replacement_stops_counting(
+    database_url: str,
+) -> None:
+    # The current-Season republish queues a replacement for a failed daily
+    # result; the original stays failed as a record.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = CollectorDatabase(connection_info)
+        try:
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("SET session_replication_role = replica")
+                player = connection.execute(
+                    "INSERT INTO players (normalized_tag) VALUES ('#2PP') RETURNING id"
+                ).fetchone()[0]
+                day = {"player_id": player, "ranked_day_start": "2026-10-07T05:00:00Z"}
+                failed = connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, status, updated_at
+                    ) VALUES ('reconcile_ranked_day', 'failed-day', %s, 'failed',
+                              clock_timestamp() - interval '1 hour')
+                    RETURNING id
+                    """,
+                    (json.dumps(day),),
+                ).fetchone()[0]
+            assert database.health_metrics()["failed_processing"] == 1
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("SET session_replication_role = replica")
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, status, completed_at
+                    ) VALUES ('reconcile_ranked_day', %s, %s, 'complete', clock_timestamp())
+                    """,
+                    (
+                        f"reconcile:reset-recovery:{failed}",
+                        json.dumps({**day, "recovers_job_id": failed}),
+                    ),
+                )
+            assert database.health_metrics()["failed_processing"] == 0
+            # The cleanup removes the finished replacement. A replacement that
+            # found the same result left nothing else, so the failure shows.
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute(
+                    "DELETE FROM python_processing_jobs WHERE status = 'complete'"
+                )
+            assert database.health_metrics()["failed_processing"] == 1
+            # A replacement that saved a new result for the day stays repaired.
+            with psycopg.connect(connection_info, autocommit=True) as connection:
+                connection.execute("SET session_replication_role = replica")
+                connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end, official_season_id,
+                        season_day_number, season_anchor_rule_version,
+                        reconciliation_rule_version, input_hash, result_hash, version,
+                        state, confidence
+                    ) VALUES (%s, '2026-10-07T05:00:00Z', '2026-10-08T05:00:00Z',
+                              '2026-10', 7, 'test', 'test', repeat('a', 64),
+                              repeat('b', 64), 1, 'Complete', 'confirmed')
+                    """,
+                    (player,),
+                )
+                states = connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s", (failed,)
+                ).fetchall()
+            assert states == [("failed",)]
+            assert database.health_metrics()["failed_processing"] == 0
+        finally:
+            database.close()

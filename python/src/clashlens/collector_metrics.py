@@ -39,6 +39,9 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
             -- processed the same response: its processing result, kept after
             -- finished jobs are cleaned up, then shows success at the failed
             -- job's versions (the replay overwrote the failure) or since it failed.
+            -- A failed daily result no longer counts once its replacement from
+            -- the current-Season republish finished, or, after that job is
+            -- cleaned up, once the day has a result saved since the failure.
             SELECT count(*) AS failed_count, max(updated_at) AS newest_at, min(updated_at) AS oldest_at
             FROM python_processing_jobs AS failed
             WHERE status = 'failed'
@@ -50,6 +53,18 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                     AND ((repaired.parser_version = failed.parser_version
                           AND repaired.processing_version = failed.processing_version)
                          OR repaired.created_at > failed.updated_at))
+              AND NOT (failed.work_type = 'reconcile_ranked_day' AND (
+                  EXISTS (
+                      SELECT FROM python_processing_jobs AS replacement
+                      WHERE replacement.deduplication_key
+                            = 'reconcile:reset-recovery:' || failed.id
+                        AND replacement.status = 'complete')
+                  OR EXISTS (
+                      SELECT FROM ranked_day_versions AS day
+                      WHERE day.player_id = (failed.input_json->>'player_id')::bigint
+                        AND day.ranked_day_start
+                            = (failed.input_json->>'ranked_day_start')::timestamptz
+                        AND day.created_at > failed.updated_at)))
         ), completed AS (
             -- Through the finished-job cleanup lookup: about 1,100 rows on 8 Oct 2026, 11 ms.
             SELECT work_type, count(*) AS completed_count FROM python_processing_jobs
