@@ -121,7 +121,7 @@
 
 :root
   :is(
-    .button:not(.secondary, .button-secondary, [aria-current]),
+    .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary,
     .nav-link-primary,
     .search-controls button,
@@ -137,7 +137,7 @@
 }
 :root
   :is(
-    .button:not(.secondary, .button-secondary, [aria-current]),
+    .button:not(.secondary, .button-secondary, .danger-button, [aria-current]),
     .button-primary,
     .nav-link-primary,
     .search-controls button,

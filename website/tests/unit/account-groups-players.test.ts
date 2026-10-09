@@ -341,5 +341,10 @@ describe("adding and removing one group player", () => {
     ).replaceAll("<!-- -->", "");
     for (const text of ["20 of 20 players", "1 of 20 players", "No players yet"])
       expect(html).toContain(text);
+    // Each card offers three actions; renaming, removing and deleting wait behind Edit.
+    for (const text of ["Compare players", "Add player", ">Edit</button>"])
+      expect(html).toContain(text);
+    for (const text of ["Remove", "Save name", "Delete group"])
+      expect(html).not.toContain(text);
   });
 });

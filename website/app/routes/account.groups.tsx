@@ -1,8 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   data,
   Form,
+  Link,
   redirect,
+  replace,
   useActionData,
   useFetcher,
   useLoaderData,
@@ -21,12 +23,15 @@ import type { WebsiteErrorResponse } from "../lib/contracts";
 import { canonicalPlayerPath, MAX_PLAYER_TAG_INPUT_LENGTH } from "../lib/player-tag";
 import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
+import type { BackHandle } from "../root";
 import type { Route } from "./+types/account.groups";
 import "../account-groups.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const ACTIONS = ["create", "update", "delete", "add-player", "remove-player"] as const;
 type GroupAction = (typeof ACTIONS)[number];
+
+export const handle: BackHandle = { back: {} };
 
 export interface GroupsLoaderData {
   groups: ListedGroup[];
@@ -111,7 +116,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<GroupsLoade
 /**
  * POST /account/groups — create, rename, or delete a private group, or add or
  * remove one player. The action and group ID are explicit, deletion requires
- * a confirmation checkbox, and every mutation is same-origin with a
+ * an explicit confirmation, and every mutation is same-origin with a
  * canonical idempotency UUID. A player joins only after the game confirms
  * the tag belongs to a real player.
  */
@@ -199,6 +204,7 @@ export async function action({ request, context }: Route.ActionArgs) {
         { name: normalizedName as string },
         idempotencyKey,
       );
+      return reply(200, { notice: "Saved the new name." });
     } else if (actionMode === "delete") {
       await client.deleteGroup(groupId, idempotencyKey);
     } else if (actionMode === "remove-player") {
@@ -293,7 +299,8 @@ export async function action({ request, context }: Route.ActionArgs) {
             : safeError,
     });
   }
-  throw redirect("/account/groups");
+  // Replace the deleted group's history entry so Back does not return to it.
+  throw replace("/account/groups");
 }
 
 const INVALID_TAG =
@@ -388,6 +395,15 @@ export default function GroupsRoute() {
       ? actionData.createIdempotencyKey
       : loaderData.createIdempotencyKey;
   const createErrors = actionData?.action === "create" ? actionData.fieldErrors : {};
+  const listTitle = useRef<HTMLHeadingElement>(null);
+  const shownGroups = useRef(groups.length);
+  useEffect(() => {
+    // A deleted group's Edit takes the focus with it; hand it to the list.
+    if (groups.length < shownGroups.current && document.activeElement === document.body) {
+      listTitle.current?.focus();
+    }
+    shownGroups.current = groups.length;
+  }, [groups.length]);
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -404,7 +420,7 @@ export default function GroupsRoute() {
 
       <section className="form-panel" aria-label="Create a group">
         <h2>Create a group</h2>
-        <Form key={createKey} method="post" action="." className="stack-form">
+        <Form key={createKey} method="post" action="." className="stack-form" replace>
           <input type="hidden" name="action" value="create" />
           <input type="hidden" name="idempotencyKey" value={createKey} />
           <NameField
@@ -420,7 +436,9 @@ export default function GroupsRoute() {
       </section>
 
       <section className="data-section" aria-labelledby="group-list-title">
-        <h2 id="group-list-title">Your groups</h2>
+        <h2 id="group-list-title" ref={listTitle} tabIndex={-1}>
+          Your groups
+        </h2>
         {loaderData.error ? (
           <aside className="notice notice-unavailable" role="alert">
             <strong>Groups could not be loaded.</strong>{" "}
@@ -429,14 +447,7 @@ export default function GroupsRoute() {
         ) : groups.length > 0 ? (
           <ul className="group-card-list">
             {groups.map((group) => (
-              <GroupCard
-                key={group.groupId}
-                group={group}
-                loaderData={loaderData}
-                actionData={
-                  actionData?.groupId === group.groupId ? actionData : undefined
-                }
-              />
+              <GroupCard key={group.groupId} group={group} loaderData={loaderData} />
             ))}
           </ul>
         ) : (
@@ -453,73 +464,77 @@ export default function GroupsRoute() {
 function GroupCard({
   group,
   loaderData,
-  actionData,
 }: {
   group: ListedGroup;
   loaderData: GroupsLoaderData;
-  /** A no-JavaScript form result for this group, if any. */
-  actionData: GroupsActionData | undefined;
 }) {
   const id = group.groupId;
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState(false);
   const add = useFetcher<GroupsActionData>();
   const addForm = useRef<HTMLFormElement>(null);
-  const addResult =
-    add.data ?? (actionData?.action === "add-player" ? actionData : undefined);
-  const adding = add.state !== "idle";
-  const tagError = addResult?.fieldErrors.tag;
+  const tagInput = useRef<HTMLInputElement>(null);
+  const checking = add.state !== "idle";
+  const tagError = add.data?.fieldErrors.tag;
   useEffect(() => {
     if (add.state === "idle" && add.data?.notice) addForm.current?.reset();
   }, [add.state, add.data]);
-  const updateKey =
-    actionData?.action === "update"
-      ? actionData.updateIdempotencyKey
-      : loaderData.updateIdempotencyKeys[id];
-  const deleteKey =
-    actionData?.action === "delete"
-      ? actionData.deleteIdempotencyKey
-      : loaderData.deleteIdempotencyKeys[id];
+  useEffect(() => {
+    if (adding) tagInput.current?.focus();
+  }, [adding]);
   const count = group.players.length;
 
   return (
     <li id={`group-${id}`} className="group-card">
       <div className="group-card-head">
         <h3>{group.name}</h3>
-        <a className="button button-primary" href={`/account/groups/${id}`}>
-          Compare players
-        </a>
+        <div className="group-card-actions">
+          <Link
+            className="button button-primary"
+            to={`/account/groups/${id}`}
+            state={{ backTo: "/account/groups" }}
+          >
+            Compare players
+          </Link>
+          <button
+            type="button"
+            className="button button-secondary"
+            aria-expanded={adding}
+            aria-controls={`group-add-${id}-form`}
+            onClick={() => setAdding(!adding)}
+          >
+            Add player
+          </button>
+          <button
+            type="button"
+            className="button button-secondary"
+            aria-haspopup="dialog"
+            onClick={() => setEditing(true)}
+          >
+            Edit
+          </button>
+        </div>
       </div>
-      {count > 0 ? (
-        <ul className="player-action-list" aria-label={`Players in ${group.name}`}>
-          {group.players.map((player) => (
-            <MemberRow
-              key={player.tag}
-              groupId={id}
-              groupName={group.name}
-              player={player}
-              removeKey={loaderData.removeIdempotencyKeys[id]?.[player.tag] ?? ""}
-            />
-          ))}
-        </ul>
-      ) : (
-        <p className="muted">No players yet. Add the first one below.</p>
-      )}
-      {actionData?.action === "remove-player" && actionData.notice ? (
-        <p className="form-help" role="status">
-          {actionData.notice}
-        </p>
-      ) : null}
 
-      <add.Form method="post" action="." className="add-player-form" ref={addForm}>
+      <add.Form
+        method="post"
+        action="."
+        id={`group-add-${id}-form`}
+        className="add-player-form"
+        ref={addForm}
+        hidden={!adding}
+      >
         <input type="hidden" name="action" value="add-player" />
         <input type="hidden" name="groupId" value={id} />
         <input
           type="hidden"
           name="idempotencyKey"
-          value={addResult?.playerIdempotencyKey ?? loaderData.addIdempotencyKeys[id]}
+          value={add.data?.playerIdempotencyKey ?? loaderData.addIdempotencyKeys[id]}
         />
-        <label htmlFor={`group-add-${id}`}>Add player</label>
+        <label htmlFor={`group-add-${id}`}>Player tag</label>
         <div className="add-player-row">
           <input
+            ref={tagInput}
             id={`group-add-${id}`}
             name="tag"
             type="text"
@@ -529,15 +544,14 @@ function GroupCard({
             autoComplete="off"
             autoCapitalize="characters"
             spellCheck={false}
-            defaultValue={tagError ? addResult?.values.tag : ""}
             aria-invalid={tagError ? true : undefined}
             aria-describedby={`group-add-${id}-message`}
           />
-          <button type="submit" className="button button-primary" disabled={adding}>
-            {adding ? "Checking…" : "Add player"}
+          <button type="submit" className="button button-primary" disabled={checking}>
+            {checking ? "Checking…" : "Add"}
           </button>
         </div>
-        {adding ? (
+        {checking ? (
           <p id={`group-add-${id}-message`} className="form-help" role="status">
             Checking the tag with Clash of Clans…
           </p>
@@ -545,9 +559,9 @@ function GroupCard({
           <p id={`group-add-${id}-message`} className="field-error" role="alert">
             {tagError}
           </p>
-        ) : addResult?.notice ? (
+        ) : add.data?.notice ? (
           <p id={`group-add-${id}-message`} className="add-player-done" role="status">
-            {addResult.notice}
+            {add.data.notice}
           </p>
         ) : (
           <p id={`group-add-${id}-message`} className="form-help">
@@ -555,45 +569,183 @@ function GroupCard({
             before it joins.
           </p>
         )}
-        {addResult?.generalError ? <ErrorNotice error={addResult.generalError} /> : null}
+        {add.data?.generalError ? <ErrorNotice error={add.data.generalError} /> : null}
       </add.Form>
 
-      <form method="post" className="stack-form">
+      {count > 0 ? (
+        <ul className="player-action-list" aria-label={`Players in ${group.name}`}>
+          {group.players.map((player) => (
+            <li key={player.tag}>
+              <MemberName player={player} />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">No players yet.</p>
+      )}
+      {editing ? (
+        <EditGroup
+          group={group}
+          loaderData={loaderData}
+          onClose={() => setEditing(false)}
+        />
+      ) : null}
+    </li>
+  );
+}
+
+/** Rename, remove players and delete, kept out of the card until Edit is pressed. */
+function EditGroup({
+  group,
+  loaderData,
+  onClose,
+}: {
+  group: ListedGroup;
+  loaderData: GroupsLoaderData;
+  onClose: () => void;
+}) {
+  const id = group.groupId;
+  const dialog = useRef<HTMLDialogElement>(null);
+  const deleteButton = useRef<HTMLButtonElement>(null);
+  const [confirming, setConfirming] = useState(false);
+  const rename = useFetcher<GroupsActionData>();
+  const deletion = useFetcher<GroupsActionData>();
+  const saving = rename.state !== "idle";
+  const deleting = deletion.state !== "idle";
+  useEffect(() => {
+    dialog.current?.showModal();
+  }, []);
+
+  return (
+    <dialog
+      ref={dialog}
+      className="group-edit"
+      aria-labelledby={`group-edit-${id}-title`}
+      onClose={onClose}
+    >
+      <div className="group-edit-head">
+        <h3 id={`group-edit-${id}-title`}>Edit {group.name}</h3>
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => dialog.current?.close()}
+        >
+          Done
+        </button>
+      </div>
+
+      <rename.Form method="post" action="." className="stack-form">
         <input type="hidden" name="action" value="update" />
         <input type="hidden" name="groupId" value={id} />
-        <input type="hidden" name="idempotencyKey" value={updateKey} />
-        <NameField
-          id={`group-update-name-${id}`}
-          value={actionData?.action === "update" ? actionData.values.name : group.name}
-          error={
-            actionData?.action === "update" ? actionData.fieldErrors.name : undefined
+        <input
+          type="hidden"
+          name="idempotencyKey"
+          value={
+            rename.data?.updateIdempotencyKey ?? loaderData.updateIdempotencyKeys[id]
           }
         />
-        <button type="submit" className="button button-secondary">
-          Save name
+        <NameField
+          id={`group-update-name-${id}`}
+          value={group.name}
+          error={rename.data?.fieldErrors.name}
+        />
+        <button type="submit" className="button button-secondary" disabled={saving}>
+          {saving ? "Saving…" : "Save name"}
         </button>
-      </form>
-      <form method="post" className="stack-form danger-form">
-        <fieldset className="form-fieldset">
-          <legend>Delete group</legend>
-          <input type="hidden" name="action" value="delete" />
-          <input type="hidden" name="groupId" value={id} />
-          <input type="hidden" name="idempotencyKey" value={deleteKey} />
-          <label className="confirm-line">
-            <input type="checkbox" name="confirm" required />I understand this group and
-            its membership will be deleted.
-          </label>
-          {actionData?.action === "delete" && actionData.fieldErrors.confirm ? (
-            <p className="field-error" role="alert">
-              {actionData.fieldErrors.confirm}
-            </p>
-          ) : null}
-          <button type="submit" className="button button-secondary danger-button">
-            Delete group
-          </button>
-        </fieldset>
-      </form>
-    </li>
+        {!saving && rename.data?.notice ? (
+          <p className="add-player-done" role="status">
+            {rename.data.notice}
+          </p>
+        ) : null}
+        {rename.data?.generalError ? (
+          <ErrorNotice error={rename.data.generalError} />
+        ) : null}
+      </rename.Form>
+
+      <section aria-labelledby={`group-edit-${id}-players`}>
+        <h4 id={`group-edit-${id}-players`}>Players</h4>
+        {group.players.length > 0 ? (
+          <ul className="player-action-list">
+            {group.players.map((player) => (
+              <MemberRow
+                key={player.tag}
+                groupId={id}
+                groupName={group.name}
+                player={player}
+                removeKey={loaderData.removeIdempotencyKeys[id]?.[player.tag] ?? ""}
+              />
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">No players yet.</p>
+        )}
+      </section>
+
+      <deletion.Form method="post" action="." className="group-delete">
+        <input type="hidden" name="action" value="delete" />
+        <input type="hidden" name="groupId" value={id} />
+        <input
+          type="hidden"
+          name="idempotencyKey"
+          value={
+            deletion.data?.deleteIdempotencyKey ?? loaderData.deleteIdempotencyKeys[id]
+          }
+        />
+        <input type="hidden" name="confirm" value="on" />
+        <button
+          ref={deleteButton}
+          type="button"
+          className="button button-secondary danger-button"
+          aria-expanded={confirming}
+          aria-controls={`group-delete-${id}`}
+          onClick={() => setConfirming(!confirming)}
+        >
+          Delete group
+        </button>
+        <div id={`group-delete-${id}`} hidden={!confirming}>
+          <p>
+            Delete {group.name} and its list of players? This cannot be undone. The
+            players stay on Clash Lens.
+          </p>
+          <div className="group-card-actions">
+            <button type="submit" className="button danger-button" disabled={deleting}>
+              {deleting ? "Deleting…" : "Yes, delete group"}
+            </button>
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => {
+                setConfirming(false);
+                deleteButton.current?.focus();
+              }}
+            >
+              Keep group
+            </button>
+          </div>
+        </div>
+        {deletion.data?.generalError ? (
+          <ErrorNotice error={deletion.data.generalError} />
+        ) : null}
+      </deletion.Form>
+    </dialog>
+  );
+}
+
+function MemberName({ player }: { player: GroupPlayer }) {
+  return (
+    <span className="player-action-name">
+      <a href={canonicalPlayerPath(player.tag)}>{player.name ?? player.tag}</a>
+      {player.name === null ? null : <span className="player-tag">{player.tag}</span>}
+      <span className="group-member-detail">
+        {player.state === "tracking"
+          ? player.seasonResetPending
+            ? "Waiting for this player's Season reset"
+            : player.trophies === null
+              ? "Legend League"
+              : `${player.trophies.toLocaleString("en")} trophies`
+          : STATE_LABELS[player.state]}
+      </span>
+    </span>
   );
 }
 
@@ -610,22 +762,9 @@ function MemberRow({
 }) {
   const remove = useFetcher<GroupsActionData>();
   const removing = remove.state !== "idle";
-  const label = player.name ?? player.tag;
   return (
     <li>
-      <span className="player-action-name">
-        <a href={canonicalPlayerPath(player.tag)}>{label}</a>
-        {player.name === null ? null : <span className="player-tag">{player.tag}</span>}
-        <span className="group-member-detail">
-          {player.state === "tracking"
-            ? player.seasonResetPending
-              ? "Waiting for this player's Season reset"
-              : player.trophies === null
-                ? "Legend League"
-                : `${player.trophies.toLocaleString("en")} trophies`
-            : STATE_LABELS[player.state]}
-        </span>
-      </span>
+      <MemberName player={player} />
       <remove.Form method="post" action="." className="inline-form">
         <input type="hidden" name="action" value="remove-player" />
         <input type="hidden" name="groupId" value={groupId} />
@@ -639,7 +778,7 @@ function MemberRow({
           type="submit"
           className="button button-secondary"
           disabled={removing}
-          aria-label={`Remove ${label} from ${groupName}`}
+          aria-label={`Remove ${player.name ?? player.tag} from ${groupName}`}
         >
           {removing ? "Removing…" : "Remove"}
         </button>

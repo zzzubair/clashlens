@@ -145,7 +145,8 @@ for (const theme of ["light", "dark"] as const) {
       await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
     }
     await useTheme(page, theme);
-    const input = page.getByLabel("Add player").first();
+    await page.getByRole("button", { name: "Add player" }).first().click();
+    const input = page.getByLabel("Player tag").first();
     await expectVisibleBorder(input);
 
     await input.focus();

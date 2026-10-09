@@ -3,6 +3,11 @@
   width: min(100% - 2rem, 84rem);
 }
 
+/* Back lines up with this wider page. */
+.page-back:has(+ .compare-page) {
+  width: min(100% - 2rem, 84rem);
+}
+
 .compare-head h1 {
   margin: 0.2rem 0 0.4rem;
 }

@@ -72,20 +72,47 @@ test("a Clasher can sign in and use account features against the real backend", 
       page
         .locator(".group-card")
         .filter({ has: page.getByRole("heading", { name: "War plan" }) })
-        .getByLabel("Add player"),
+        .getByLabel("Player tag"),
     ).toHaveValue("");
   }
   await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
   const warPlan = page.locator(".group-card").filter({
     has: page.getByRole("heading", { name: "War plan" }),
   });
-  const member = warPlan.getByRole("button", { name: /^Remove .+ from War plan$/ });
-  if ((await member.count()) === 0) {
+  const players = warPlan.getByRole("list", { name: "Players in War plan" });
+  if ((await players.count()) === 0) {
     // Players join one at a time, after the game confirms the tag.
-    await warPlan.getByLabel("Add player").fill("#2PP");
     await warPlan.getByRole("button", { name: "Add player" }).click();
+    await warPlan.getByLabel("Player tag").fill("#2PP");
+    await warPlan.getByRole("button", { name: "Add", exact: true }).click();
   }
-  await expect(member).toBeVisible();
+  await expect(players).toBeVisible();
+  // Renaming, removing and deleting wait behind Edit.
+  await expect(warPlan.getByRole("button", { name: /^Remove / })).toHaveCount(0);
+  await warPlan.getByRole("button", { name: "Edit" }).click();
+  const edit = page.getByRole("dialog", { name: "Edit War plan" });
+  await expect(edit.getByLabel("Group name")).toHaveValue("War plan");
+  await expect(
+    edit.getByRole("button", { name: /^Remove .+ from War plan$/ }),
+  ).toBeVisible();
+  await edit.getByRole("button", { name: "Delete group" }).click();
+  await expect(edit.getByRole("button", { name: "Yes, delete group" })).toBeVisible();
+  await edit.getByRole("button", { name: "Done" }).click();
+  await expect(edit).toBeHidden();
+
+  // Back returns to Your groups in one step, however many views were opened.
+  for (const back of [
+    () => page.getByRole("link", { name: "Back to your groups" }).click(),
+    () => page.goBack(),
+  ]) {
+    await warPlan.getByRole("link", { name: "Compare players" }).click();
+    await page.getByRole("link", { name: "14 days", exact: true }).click();
+    await expect(page).toHaveURL(/days=14/);
+    await page.getByRole("link", { name: "Attack", exact: true }).click();
+    await expect(page).toHaveURL(/sort=attack/);
+    await back();
+    await expect(page).toHaveURL(/\/account\/groups$/);
+  }
 
   await page.goto("/account/verify-player");
   await page.getByLabel("Player tag").fill("#2PP");

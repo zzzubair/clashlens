@@ -1,4 +1,9 @@
-/* Private groups list: members with names, one-tag add, and tucked-away settings. */
+/* Private groups list: members with names, and add and edit tucked behind buttons. */
+/* Back lines up with this narrower page. */
+.page-back:has(+ .narrow-shell) {
+  width: min(100% - 2rem, 54rem);
+}
+
 .group-card-head {
   display: flex;
   flex-wrap: wrap;
@@ -83,4 +88,75 @@
   margin: 0;
   font-size: 0.86rem;
   font-weight: 650;
+}
+
+.group-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* On a phone, Compare players takes a full row and Add player and Edit share one. */
+@media (max-width: 34rem) {
+  .group-card-head > .group-card-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+
+  .group-card-head > .group-card-actions > :first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+.add-player-form[hidden] {
+  display: none;
+}
+
+/* Edit opens over the page and holds renaming, removing players and deleting. */
+.group-edit {
+  width: min(100% - 2rem, 36rem);
+  max-height: calc(100% - 2rem);
+  padding: 1.1rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+
+.group-edit[open] {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.group-edit::backdrop {
+  background: rgb(29 20 38 / 0.55);
+}
+
+.group-edit-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.group-edit h3 {
+  overflow-wrap: anywhere;
+}
+
+.group-edit h4 {
+  margin: 0 0 0.6rem;
+}
+
+.group-delete {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: start;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--cl-border);
+}
+
+.group-delete p {
+  margin: 0 0 0.75rem;
 }

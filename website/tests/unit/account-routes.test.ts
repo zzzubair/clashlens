@@ -1015,7 +1015,7 @@ describe("account routes", () => {
       );
     });
 
-    it("creates and renames groups through Python, then redirects", async () => {
+    it("creates a group with a redirect and renames one in place", async () => {
       await expect(
         groupsAction({
           request: formRequest("/account/groups", {
@@ -1030,16 +1030,15 @@ describe("account routes", () => {
         IDEMPOTENCY_KEY,
       );
 
-      await expect(
-        groupsAction({
-          request: formRequest("/account/groups", {
-            action: "update",
-            groupId: GROUP_ID,
-            name: "Clanmates",
-            idempotencyKey: IDEMPOTENCY_KEY,
-          }),
-        } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/groups"));
+      const renamed = await groupsAction({
+        request: formRequest("/account/groups", {
+          action: "update",
+          groupId: GROUP_ID,
+          name: "Clanmates",
+          idempotencyKey: IDEMPOTENCY_KEY,
+        }),
+      } as never);
+      expect(dataOf<{ notice: string }>(renamed).data.notice).toBe("Saved the new name.");
       expect(client.updateGroup).toHaveBeenCalledWith(
         GROUP_ID,
         { name: "Clanmates" },
@@ -1047,7 +1046,7 @@ describe("account routes", () => {
       );
     });
 
-    it("requires a confirmation checkbox before deleting a group", async () => {
+    it("requires a confirmation before deleting a group", async () => {
       const unconfirmed = await groupsAction({
         request: formRequest("/account/groups", {
           action: "delete",
@@ -1063,16 +1062,17 @@ describe("account routes", () => {
       assertNoStoreHeaders(headers);
       expect(client.deleteGroup).not.toHaveBeenCalled();
 
-      await expect(
-        groupsAction({
-          request: formRequest("/account/groups", {
-            action: "delete",
-            groupId: GROUP_ID,
-            confirm: "on",
-            idempotencyKey: IDEMPOTENCY_KEY,
-          }),
-        } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/groups"));
+      const deleted = await groupsAction({
+        request: formRequest("/account/groups", {
+          action: "delete",
+          groupId: GROUP_ID,
+          confirm: "on",
+          idempotencyKey: IDEMPOTENCY_KEY,
+        }),
+      } as never).catch((thrown: unknown) => thrown);
+      expect(expectRedirectTo("/account/groups")(deleted)).toBe(true);
+      // Replacing the history entry keeps Back from returning to the deleted group.
+      expect((deleted as Response).headers.get("X-Remix-Replace")).toBe("true");
       expect(client.deleteGroup).toHaveBeenCalledWith(GROUP_ID, IDEMPOTENCY_KEY);
     });
 

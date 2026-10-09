@@ -6,6 +6,7 @@ import {
   isRouteErrorResponse,
   useLoaderData,
   useLocation,
+  useMatches,
   useNavigate,
   type LoaderFunctionArgs,
   Links,
@@ -121,6 +122,22 @@ export function Layout({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * A route handle that shows Back as a full button. With `to`, Back always
+ * leads to that page: it steps back when a link from that page set
+ * `state.backTo` to it, and opens the page otherwise.
+ */
+export interface BackHandle {
+  back: { to?: string; label?: string };
+}
+
+function useBackHandle(): BackHandle["back"] | undefined {
+  const handles = useMatches().map(
+    (match) => match.handle as Partial<BackHandle> | undefined,
+  );
+  return handles.reverse().find((handle) => handle?.back)?.back;
+}
+
 export default function App() {
   const data = useLoaderData<typeof loader>();
   const location = useLocation();
@@ -134,12 +151,21 @@ export default function App() {
     }
     previousPath.current = location.pathname;
   }, [location.pathname, location.hash]);
+  const back = useBackHandle();
   const backLink = (
     <Link
-      className="header-back"
-      to="/"
-      replace
+      className={back ? "button button-secondary" : "header-back"}
+      to={back?.to ?? "/"}
+      replace={back?.to === undefined}
       onClick={(event) => {
+        if (back?.to !== undefined) {
+          // Step back only when the previous page is that page.
+          if (location.state?.backTo === back.to) {
+            event.preventDefault();
+            void navigate(-1);
+          }
+          return;
+        }
         const hasSameOriginReferrer =
           window.history.length > 1 &&
           document.referrer !== "" &&
@@ -150,7 +176,7 @@ export default function App() {
         }
       }}
     >
-      <span aria-hidden="true">←</span> Back
+      <span aria-hidden="true">←</span> {back?.label ?? "Back"}
     </Link>
   );
   return (
