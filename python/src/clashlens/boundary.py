@@ -37,6 +37,7 @@ from .domain_repair import boundary_held
 from .past_reset_pacing import (
     OPERATOR_CORRECTION,
     operator_correction_waits,
+    operator_generation,
     past_reset_build_waits,
     past_reset_correction_waits,
 )
@@ -581,7 +582,9 @@ def _try_enqueue_boundary_artifacts(
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
                 # The board goes before the slower army build.
-                ended_day_priority(boundary_at - timedelta(days=1)),
+                PYTHON_BACKFILL_PRIORITY
+                if operator_generation(connection, boundary_at, generation_number)
+                else ended_day_priority(boundary_at - timedelta(days=1)),
             ),
         )
     army = connection.execute(
@@ -622,15 +625,7 @@ def _try_enqueue_boundary_artifacts(
                 DOMAIN_RULE_VERSION,
                 ARMY_ANALYTICS_RULE_VERSION,
                 PYTHON_BACKFILL_PRIORITY
-                if connection.execute(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1 FROM boundary_publication_corrections
-                        WHERE generation_id = %s AND pending_inputs @> %s::jsonb
-                    )
-                    """,
-                    (generation_id, Jsonb([OPERATOR_CORRECTION])),
-                ).fetchone()[0]
+                if operator_generation(connection, boundary_at, generation_number)
                 else PYTHON_LIVE_PRIORITY,
             ),
         )
@@ -1292,9 +1287,10 @@ def queue_army_corrections(
 
     Each Reset gets one army-only operator correction (OPERATOR_CORRECTION),
     started as any other: once its build is published, outside a repair
-    campaign and past-Reset pacing. It is not queued, started or its army
-    build claimed from 04:00 to 07:00 UTC, the newest Reset's included; that
-    build runs at background priority and takes no battle lock. At most
+    campaign and past-Reset pacing. It is not queued or started, nor any of
+    its leaderboard, statistics or army builds claimed, from 04:00 to 07:00
+    UTC, the newest Reset's included; those builds run at background
+    priority, and the army build takes no battle lock. At most
     ``max_jobs`` corrections of the Season wait or build at once. A rebuilt Reset
     lists no such side, so a later run lists nothing for it; one still
     queued or rebuilding is listed again and not queued twice.

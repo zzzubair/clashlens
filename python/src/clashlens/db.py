@@ -228,8 +228,9 @@ def _supported_claim_filter(
     also bind the claim time and direct job id. ``past_reset_build_hold`` is
     the newest Reset while past-Reset builds wait out the quiet
     window; those builds stay queued until it is None again.
-    ``operator_build_hold`` holds operator corrections' army builds, the
-    only ones at background priority, while it is True.
+    ``operator_build_hold`` holds operator corrections' leaderboard,
+    statistics and army builds, the only builds at background priority,
+    while it is True.
     """
     # The source contract is denormalized onto the job row by migration 0009
     # (trigger python_processing_jobs_set_source_contract_v3), so every
@@ -334,7 +335,8 @@ def _supported_claim_filter(
                 AND {alias}.input_json->>'boundary_at' < %(past_reset_build_hold)s::text,
                 false)
             AND NOT (%(operator_build_hold)s
-                AND {alias}.work_type = 'build_army_analytics'
+                AND {alias}.work_type IN
+                    ('build_snapshot', 'build_analytics', 'build_army_analytics')
                 AND {alias}.priority = {PYTHON_BACKFILL_PRIORITY}))
         """,
         {

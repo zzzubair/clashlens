@@ -785,10 +785,13 @@ army-only operator correction for each listed Reset while fewer than
 not yet published) or `not_queued` (a preview, or the cap reached). The
 worker starts each as any other correction, an older Reset also 6 hours after
 its last rebuild, except that no operator correction starts, and no worker
-claims its army build, from 04:00 to 07:00 UTC, for any Reset including the
-newest; one queued at 03:55 waits until 07:00. Its army build runs at
-background priority, takes no battle lock and, like every army day build,
-holds the one army-build lock for about 80 seconds. Run `queue` again after
+claims its builds, from 04:00 to 07:00 UTC, for any Reset including the
+newest; one queued at 03:55 waits until 07:00. The same holds for its
+leaderboard and statistics builds when a revised day result joins it. Those
+builds and its army build run at background priority; corrections not
+queued here keep their usual priority and hours. The army build takes no
+battle lock and, like every army day build, holds the one army-build lock
+for about 80 seconds. Run `queue` again after
 those finish until `resets` is empty; a second run while one is waiting
 queues nothing more.
 
