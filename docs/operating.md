@@ -740,7 +740,9 @@ podman exec clashlens-python-worker \
 `preview` writes nothing and lists each of that Season's Reset boards whose
 frozen input still ranks such a player, with how many went missing
 (`profile_not_found`), or whose saved entries differ from those rules in
-trophies or in being marked proven, with how many (`late_battles`). `queue` adds one correction for
+trophies or in being marked proven, with how many (`late_battles`), or that
+orders equal trophies by an older rule than the
+[shared tie order](domain.md#live-leaderboard-ordering) (`reordered`). `queue` adds one correction for
 each, rebuilding its leaderboard and army records; `correction` reads `queued`, or
 `already_queued` when one was waiting. The worker starts each correction as
 any other: the newest Reset at once, an older one after the 04:30–07:00 UTC
