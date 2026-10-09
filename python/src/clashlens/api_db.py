@@ -648,6 +648,7 @@ _BATTLE_SUM_NEUTRAL_REASONS = frozenset(
         "start_baseline_incomplete",
         "missing_end_baseline",
         "end_baseline_incomplete",
+        "end_reading_unverified",
         "missing_end_battle_log_baseline",
         "automatic_defense_basis_unavailable",
         "player_not_eligible",

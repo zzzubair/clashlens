@@ -497,6 +497,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             )
             failures = [reason for reason in failures if reason != "missing_end_baseline"]
             failures.append("trophy_equation_mismatch")
+        elif verdict is not None and data.next_start_trophies is not None:
+            residual = None
+            failures.append("end_reading_unverified")
         elif residual is not None and abs(residual) > TROPHY_RECONCILIATION_TOLERANCE:
             failures.append("trophy_equation_mismatch")
         if verdict is not None and verdict.reading is not None:

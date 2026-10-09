@@ -201,6 +201,8 @@ const REASON_TEXT: Record<string, string> = {
   start_baseline_incomplete: "The start-of-day trophy reading is incomplete.",
   missing_end_baseline: "Trophies at the end of this day were not recorded.",
   end_baseline_incomplete: "The end-of-day trophy reading is incomplete.",
+  end_reading_unverified:
+    "The end-of-day reading could not be judged: a battle was still landing and the day's start is not proven.",
   battle_log_stale_window:
     "The battle log was not checked often enough to be sure every battle was seen.",
   battle_log_overlap_gap: "Some battles may be missing between two battle log checks.",

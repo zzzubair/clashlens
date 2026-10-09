@@ -107,12 +107,15 @@ def test_reading_before_the_loss_completes_the_day_and_settles_the_next_start(
 def _early_reading_days(
     connection_info: str, archive_server, later_profile: bytes,
     *, processed_first: tuple[tuple[str, bytes, timedelta], ...] = (),
+    saved_before_rule=None,
 ) -> tuple[int, int]:
     """As #P20G0CUJY on 6 October 2026: the Reset reading ending day B leaves
     out its attack gain, and ``later_profile`` is read 10 minutes after that
     Reset, before any new-day battle; ``processed_first`` responses, (endpoint,
-    body, read after that Reset), are processed before it. Return day B's
-    start and calculated end."""
+    body, read after that Reset), are processed before it. With
+    ``saved_before_rule``, a pytest monkeypatch, the later profile is saved as
+    before a changed profile recalculated the day before. Return day B's start
+    and calculated end."""
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
@@ -147,7 +150,13 @@ def _early_reading_days(
         endpoint="profile", body=later_profile,
         observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
     )[1])
+    if saved_before_rule is not None:
+        saved_before_rule.setattr(
+            first_battle_log, "queue_day_read_again", lambda *args: None
+        )
     _process(connection_info, archive_server, jobs)
+    if saved_before_rule is not None:
+        saved_before_rule.undo()
     return start_b, end_b
 
 
@@ -169,13 +178,9 @@ def test_later_reading_settles_a_reset_reading_missing_an_attack(
         start_b, end_b = _early_reading_days(
             connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
         )
-        # The later reading alone recalculates nothing.
-        assert [row[0] for row in _latest_days(connection_info)] == [
-            "Inconsistent", "Inconsistent",
-        ]
-        # The recheck after the Reset settles day B, which changes its next
-        # start, so day C, saved before, is calculated again too.
-        _day_end_recheck(connection_info, archive_server)
+        # The later reading, read after the Reset reading and before any
+        # new-day battle, settles day B, which changes its next start, so day
+        # C, saved before, is calculated again too.
         day_b_row, day_c_row = _latest_days(connection_info)
 
     assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
@@ -272,13 +277,14 @@ def _save_as_live(connection_info: str, *days) -> None:
 
 
 def test_finishing_a_day_saved_live_refreshes_the_following_day(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     # Day B is still saved Live, as when its Reset calculation is delayed,
     # while day C was already saved from B's early Reset reading.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         start_b, end_b = _early_reading_days(
-            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
+            saved_before_rule=monkeypatch,
         )
         _save_as_live(connection_info, DAY_B)
         _day_end_recheck(connection_info, archive_server)
@@ -289,13 +295,14 @@ def test_finishing_a_day_saved_live_refreshes_the_following_day(
 
 
 def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     # Day C was saved Live from B's early Reset reading while day B itself
     # was not yet finished; finishing B with the later reading refreshes C.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         start_b, end_b = _early_reading_days(
-            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
+            saved_before_rule=monkeypatch,
         )
         _save_as_live(connection_info, DAY_B, DAY_C)
         before = [(row[0], row[2]) for row in _latest_days(connection_info)]
@@ -309,11 +316,12 @@ def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
 
 
 def test_season_repair_settles_days_saved_before_the_later_reading_rule(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         start_b, end_b = _early_reading_days(
-            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
+            saved_before_rule=monkeypatch,
         )
         season = ranked_day_for(DAY_B).official_season_id
         preview, queued = repair_season(connection_info, season)

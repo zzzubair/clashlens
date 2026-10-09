@@ -90,22 +90,6 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                      ranked_day_for(day_start).season_end),
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)
-            if claim.input_json.get("trigger") == "day_end":
-                # Its Reset reading usually finished the day already. A day a
-                # reading since may settle or disprove runs again.
-                latest = connection.execute(
-                    f"""
-                    SELECT state = 'Live'
-                           OR {ranked_day_inputs.LATER_READING_DAY_SQL}
-                    FROM ranked_day_versions
-                    WHERE player_id = %s AND ranked_day_start = %s
-                      AND reconciliation_rule_version = %s
-                    ORDER BY version DESC LIMIT 1
-                    """,
-                    (player_id, day_start, RECONCILIATION_RULE_VERSION),
-                ).fetchone()
-                if latest is None or not latest[0]:
-                    day_starts = set()
             pending = sorted(day_starts)
             while pending:
                 day_start = pending.pop(0)
@@ -763,7 +747,7 @@ def recalculate_ranked_day(
         result=result,
         contribution_evidence=contribution_evidence,
     )
-    if result.state == "Live":
+    if result.state == "Live" or now < ranked_day.end + DAY_END_RECALCULATION_DELAY:
         _enqueue_day_end_reconciliation(connection, player_id, ranked_day)
     if existing is None:
         # A reset sweep is the sole source of expected population.
@@ -1275,16 +1259,15 @@ def _enqueue_live_reconciliation(
 def _enqueue_day_end_reconciliation(
     connection: Any, player_id: int, ranked_day: RankedDay
 ) -> None:
-    """Queue one calculation of a day saved Live, due after its Reset.
+    """Queue one calculation of a day saved before
+    DAY_END_RECALCULATION_DELAY after its Reset, or saved Live, due then.
 
-    The Reset reading normally finishes the day, but a player switched off
-    during it, such as one moved out of Legend I when a Season starts, gets
-    none and nothing else calculates the day again. On 2026-10-06 that left
-    2,037 ended Day 1 results Live. Due DAY_END_RECALCULATION_DELAY after the
-    Reset, once its readings have landed, the job runs only when no other
-    work waits, and does nothing once the day is finished, unless a reading
-    since the Reset may settle or disprove it
-    (``ranked_day_inputs.LATER_READING_DAY_SQL``).
+    Every reading and battle saved by then can settle or disprove the day,
+    and a player switched off during the Reset, such as one moved out of
+    Legend I when a Season starts, gets no Reset reading and nothing else
+    calculates the day again: on 2026-10-06 that left 2,037 ended Day 1
+    results Live. So every such day is calculated once more, about 13,000 a
+    Reset, and the job runs only when no other work waits.
     """
     day_text = ranked_day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     connection.execute(

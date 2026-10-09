@@ -709,7 +709,8 @@ def load_profile_trophies(
     return tuple((at, None if trophies is None else int(trophies)) for at, trophies in rows)
 
 
-# A saved result a profile read later may still change (``reading_rule``):
+# A saved result a profile read later may still change (``reading_rule``),
+# which ``republish-current-season --mismatch`` recalculates:
 # one ending in a trophy mismatch, one with every battle but no reading that
 # judged its end, or a complete day after Day 1 with no used defense slots
 # whose readings showed no automatic loss; or disprove: one settled by
@@ -747,8 +748,9 @@ def load_readings(
     Season 0, which can only confirm. A reading can contradict only while
     the player's battle logs from the day's end Reset log on are continuous
     up to it: one taken after the last log before one that may have missed
-    a battle, or after the newest, can only confirm, as a battle it shows
-    may not be known. Readings from when an unreadable row of a battle log saved
+    a battle, or after the newest, or the last successful check with its
+    content, can only confirm, as a battle it shows may not be known.
+    Readings from when an unreadable row of a battle log saved
     since the Reset happened are left out, and all of them when even that
     time is unreadable: a battle they may show cannot be placed."""
     until = ranked_day.end + timedelta(days=1)
@@ -768,6 +770,19 @@ def load_readings(
         ):
             break
         known_until = current.observed_at
+    else:
+        # A later successful check with the newest log's content saves no
+        # log of its own, and still shows no battle came since.
+        checked = connection.execute(
+            """
+            SELECT max(last_success_at) FROM collector_response_state
+            WHERE player_id = %s AND endpoint = 'battle_log'
+              AND last_observation_id = %s
+            """,
+            (player_id, logs[-1].observation_id),
+        ).fetchone()[0] if logs else None
+        if checked is not None and checked > known_until:
+            known_until = checked
     rows = connection.execute(
         f"""
         SELECT observed.response_completed_at, profile.trophies,
