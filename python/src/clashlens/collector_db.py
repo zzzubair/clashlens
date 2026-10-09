@@ -14,7 +14,13 @@ import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from . import collector_liveness, collector_metrics, collector_reset, collector_uploads
+from . import (
+    collector_liveness,
+    collector_metrics,
+    collector_reset,
+    collector_uploads,
+    queue_refresh,
+)
 from .db import PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY
 
 UploadClaim = collector_uploads.UploadClaim
@@ -1172,6 +1178,8 @@ class CollectorDatabase:
         ).rowcount
         if not (saved or sighted):
             return False
+        if handoff.endpoint == "battle_log" and 200 <= handoff.http_status < 300:
+            queue_refresh.queue_for_check(connection, handoff)
         self._upsert_response_state(connection, handoff, state[2], saved)
         self._record_intent_endpoint(connection, handoff, state[2])
         # Ignored duplicates still extend the deadline: retention follows raw sightings.

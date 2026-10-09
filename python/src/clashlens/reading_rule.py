@@ -7,9 +7,9 @@ plus any battle of the new day the profile already showed. A reading that
 equals it confirms the day; a reading that cannot contradicts it. A reading
 taken while a battle may or may not have landed yet is read both ways and
 can only confirm. The last trustworthy reading before the player's first
-new-day battle that is not read both ways decides, but none undoes a loss an
-earlier one showed landed; a later reading can only confirm, and only when
-none of those decided.
+new-day battle that is not read both ways decides, even against an earlier
+one that showed a loss; a later reading can only confirm, and only when none
+of those decided, never undoing a loss another later one showed.
 
 This one rule replaces four: a Reset reading taken before the automatic
 loss landed, a later reading settling a Reset reading taken too early, a
@@ -184,10 +184,11 @@ def decide(
     decide, and the last clean one among them decides: a match proves the
     day, with the loss landed when one is certain, or, read before the loss,
     confirms the battles and leaves the loss unsettled; it outranks every
-    contradiction before it. A match showing no loss after one showing it
-    landed proves nothing, as a loss cannot be undone. Only when none of
+    contradiction or earlier loss match before it: an earlier reading can
+    match a loss by missing credits that had not landed. Only when none of
     them decided, a later or confirm-only reading can confirm the day, never
-    contradict it: a new-day battle it shows may not be known yet. A reading
+    contradict it, a new-day battle it shows may not be known yet, nor undo a
+    loss an earlier such reading showed. A reading
     the ledger reads both ways settles nothing on its own, except the Reset
     reading, which contradicts when no way fits. A reading that fits only
     with a battle not yet shown, or read one way, is a guess: taken when the
@@ -228,12 +229,12 @@ def decide(
             and (not item.ambiguous or item.reading.reset_reading)
         )
 
-    def last_clean(items: Iterable[_Judged]) -> _Judged | None:
+    def last_clean(items: Iterable[_Judged], *, keep_loss: bool) -> _Judged | None:
         decider = None
         loss_landed = False
         for item in items:
             if item.matched and not item.ambiguous and not item.missed:
-                if loss_landed and not item.loss:
+                if keep_loss and loss_landed and not item.loss:
                     continue
                 loss_landed = loss_landed or bool(item.loss)
                 decider = item
@@ -242,8 +243,8 @@ def decide(
         return decider
 
     decider = (
-        last_clean(item for item in judged if deciding(item))
-        or last_clean(item for item in judged if not deciding(item))
+        last_clean((item for item in judged if deciding(item)), keep_loss=False)
+        or last_clean((item for item in judged if not deciding(item)), keep_loss=True)
     )
     if decider is not None and decider.matched:
         return Verdict(

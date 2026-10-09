@@ -6,7 +6,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import first_battle_log, job_outcomes, reset_baselines
+from . import first_battle_log, job_outcomes, queue_refresh, reset_baselines
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
@@ -219,8 +219,8 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 )
             if created_profile:
                 first_battle_log.queue_day_1(connection, player[0], profile_version_id)
-            first_battle_log.queue_day_for_reading(
-                connection, player[0], observation_id, profile.observed_at
+            queue_refresh.queue_for_reading(
+                connection, player[0], f"reading:{observation_id}", profile.observed_at
             )
             if profile.eligibility_state == "ineligible":
                 first_battle_log.queue_weekly_drop(
@@ -406,8 +406,8 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                 connection, profile_version_id, profile
             )
             first_battle_log.queue_day_1(connection, player[0], profile_version_id)
-            first_battle_log.queue_day_for_reading(
-                connection, player[0], observation_id, profile.observed_at
+            queue_refresh.queue_for_reading(
+                connection, player[0], f"reading:{observation_id}", profile.observed_at
             )
             connection.execute(
                 """

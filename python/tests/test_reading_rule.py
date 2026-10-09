@@ -7,6 +7,7 @@ is at 05:00 the next morning; the loss can land from 05:07 on.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from clashlens.domain import allocate_trophies
@@ -176,15 +177,28 @@ def test_a_day_with_no_used_defense_slot_is_charged_only_when_a_reading_shows_it
     assert (later.loss, later.exact) == (304, True)
 
 
-def test_no_later_reading_undoes_a_charge_a_reading_showed() -> None:
+def test_no_confirm_only_reading_undoes_a_charge_a_reading_showed() -> None:
     # 05:20 shows the 304 charge. At 13:00, after battles no saved log holds
     # yet, the profile is back at 5,940: it can only confirm, and the charge
-    # cannot be undone.
+    # cannot be undone, nor by one confirm-only reading after another.
     charged = Reading(at(20), 5636)
-    for later in (Reading(at(480), 5940, confirm_only=True), Reading(at(40), 5940)):
-        result = verdict(charged, later, loss=(304,), certain=False)
+    uncharged = Reading(at(480), 5940, confirm_only=True)
+    for readings in ((charged, uncharged),
+                     (replace(charged, confirm_only=True), uncharged)):
+        result = verdict(*readings, loss=(304,), certain=False)
         assert (result.outcome, result.loss, result.exact) == ("verified", 304, True)
-        assert result.reading == charged
+        assert result.reading.read_at == charged.read_at
+
+
+def test_a_later_trustworthy_reading_corrects_an_earlier_charge() -> None:
+    # A stale 05:02 reading missing the day's 304 of credits matches the 304
+    # charge; a covered 05:20 reading before any new-day battle shows the
+    # credits landed and no charge.
+    result = verdict(Reading(at(2), 5636), Reading(at(20), 5940), loss=(304,),
+                     certain=False)
+
+    assert (result.outcome, result.loss, result.exact) == ("verified", 0, True)
+    assert result.reading is not None and result.reading.read_at == at(20)
 
 
 def test_a_zero_star_attack_gains_the_attacker_what_the_defender_does_not_lose() -> None:

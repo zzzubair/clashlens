@@ -90,6 +90,16 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                      ranked_day_for(day_start).season_end),
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)
+            if claim.input_json.get("trigger") == "battle_log_check" and connection.execute(
+                """
+                SELECT 1 FROM ranked_day_versions
+                WHERE player_id = %s AND ranked_day_start = %s
+                  AND reconciliation_rule_version = %s
+                LIMIT 1
+                """,
+                (player_id, day_start, RECONCILIATION_RULE_VERSION),
+            ).fetchone() is None:
+                day_starts = set()
             pending = sorted(day_starts)
             while pending:
                 day_start = pending.pop(0)
