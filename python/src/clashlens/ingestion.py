@@ -219,9 +219,9 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 )
             if created_profile:
                 first_battle_log.queue_day_1(connection, player[0], profile_version_id)
-                first_battle_log.queue_day_read_again(
-                    connection, player[0], profile_version_id, profile.observed_at
-                )
+            first_battle_log.queue_day_for_reading(
+                connection, player[0], observation_id, profile.observed_at
+            )
             if profile.eligibility_state == "ineligible":
                 first_battle_log.queue_weekly_drop(
                     connection, player[0], profile.observed_at
@@ -406,8 +406,8 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                 connection, profile_version_id, profile
             )
             first_battle_log.queue_day_1(connection, player[0], profile_version_id)
-            first_battle_log.queue_day_read_again(
-                connection, player[0], profile_version_id, profile.observed_at
+            first_battle_log.queue_day_for_reading(
+                connection, player[0], observation_id, profile.observed_at
             )
             connection.execute(
                 """
