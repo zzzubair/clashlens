@@ -168,6 +168,16 @@ summary {
 main {
   scroll-margin-top: 6rem;
 }
+@media (max-width: 64rem) {
+  main {
+    scroll-margin-top: 8.5rem;
+  }
+}
+@media (max-width: 40rem) {
+  main {
+    scroll-margin-top: 11.5rem;
+  }
+}
 .lede,
 .coverage-summary,
 .table-detail,
