@@ -709,26 +709,6 @@ def load_profile_trophies(
     return tuple((at, None if trophies is None else int(trophies)) for at, trophies in rows)
 
 
-# A saved result a profile read later may still change (``reading_rule``),
-# which ``republish-current-season --mismatch`` recalculates:
-# one ending in a trophy mismatch or with an end no reading could judge,
-# one with every battle but no reading that
-# judged its end, or a complete day after Day 1 with no used defense slots
-# whose readings showed no automatic loss; or disprove: one settled by
-# battles its Reset reading missed, or any a reading completed without
-# proving it, such as one read before the automatic loss landed.
-LATER_READING_DAY_SQL = """(
-    failure_reasons ?| ARRAY['trophy_equation_mismatch', 'end_reading_unverified']
-    OR (state = 'Partial' AND failure_reasons = '["missing_end_baseline"]'::jsonb)
-    OR formula_components ? 'next_start_battles_after_reading'
-    OR (state = 'Complete' AND defense_count = 0 AND season_day_number > 1
-        AND automatic_defense_evidence_state = 'not_applicable'
-        AND unexplained_residual = 0
-        AND NOT input_evidence ? 'zero_result_defense_slots')
-    OR (state = 'Complete' AND input_evidence -> 'end_reading' ->> 'exact' = 'false')
-)"""
-
-
 def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> None:
     """Serialize work deciding or saving one player's Legend day result."""
     connection.execute(

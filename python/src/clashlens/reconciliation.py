@@ -363,11 +363,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         "start",
         failures,
     )
-    # The game's official Season-end total ends the day with or without a
-    # Reset reading, and no reading after the Reset can correct it.
-    official = "official_final_trophies" in data.end_baseline_evidence
+    official_end = "official_final_trophies" in data.end_baseline_evidence
     end_available = _baseline_available(
-        data.end_baseline_id is not None or official,
+        data.end_baseline_id is not None or official_end,
         data.next_start_trophies,
         data.end_baseline_complete,
         "end",
@@ -439,8 +437,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             and coverage_complete
             and not malformed_evidence
             and not inconsistent_evidence
-            and not end_hidden_by_reset
-            and not official
+            and not (end_hidden_by_reset or official_end)
             and all(reason == "missing_end_baseline" for reason in failures)
             else None
         )
