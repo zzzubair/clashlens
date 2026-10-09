@@ -17,7 +17,7 @@ from typing import Any
 BACKGROUND_PERMIT_KEY = "background-work-permit"
 BACKGROUND_JOB_LIMIT = 2
 # No background job starts while a live response or daily result has been
-# due this long; the website's delayed-updates notice reads the same work.
+# due this long, well before the website's delayed-updates notice at 15 minutes.
 LIVE_LAG_PAUSE_SECONDS = 120
 LIVE_WORK_TYPES = ("process_observation", "replay_observation", "reconcile_ranked_day")
 
