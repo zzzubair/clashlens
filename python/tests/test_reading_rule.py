@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from clashlens.domain import allocate_trophies
 from clashlens.reading_rule import Effect, Reading, decide
 
 RESET = datetime(2026, 8, 5, 5, tzinfo=UTC)
@@ -184,6 +185,21 @@ def test_no_later_reading_undoes_a_charge_a_reading_showed() -> None:
         result = verdict(charged, later, loss=(304,), certain=False)
         assert (result.outcome, result.loss, result.exact) == ("verified", 304, True)
         assert result.reading == charged
+
+
+def test_a_zero_star_attack_gains_the_attacker_what_the_defender_does_not_lose() -> None:
+    # 0 stars at 10%: the attacker gains 1, the defender loses nothing, and
+    # each player's day takes their own amount.
+    allocation = allocate_trophies(0, 10)
+    assert (allocation.attacker_gain, allocation.defender_loss) == (1, 0)
+    at_two = RESET - timedelta(hours=2)
+    attacker = verdict(Reading(at(20), 5871), end=5941, day=(
+        *DAY_BATTLES, Effect("zero-star", allocation.attacker_gain, at_two)))
+    defender = verdict(Reading(at(20), 5870), day=(
+        *DAY_BATTLES, Effect("zero-star", -allocation.defender_loss, at_two)))
+
+    assert (attacker.outcome, attacker.exact) == ("verified", True)
+    assert (defender.outcome, defender.exact) == ("verified", True)
 
 
 def test_no_reading_leaves_the_day_unverified() -> None:

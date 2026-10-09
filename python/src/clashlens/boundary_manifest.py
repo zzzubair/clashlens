@@ -695,8 +695,8 @@ def reset_trophies(
     trophies. A Complete day already gives the total: its Reset readings at
     both ends and every battle between agree, so its end plus its automatic
     loss is the total whatever the reading shows. It proves it only with
-    exact confidence: a day started by the Season rule or the day before's
-    calculated end, or read before its loss, has a part no reading matched. An attacker's profile can
+    exact confidence: a day started by the day before's calculated end, or
+    read before its loss, has a part no reading matched. An attacker's profile can
     show an attack minutes after its report time: on 7 October 2026
     #2QCYU8C2G read 4,703 at 04:37:05 without its attack stamped 04:34:08,
     and the board showed 4,902, not 4,931. A Reset that resets trophies

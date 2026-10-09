@@ -1401,7 +1401,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         ("#P2CC9URVR", 5080, _october(7, 4, 40)),  # less an unknown loss
         ("#Y8V9YYP9C", 5151, _october(7, 4, 40)),  # Season reset, disagrees
         ("#YPG0UY9LU", 5047, _october(7, 4, 40)),  # Season reset, agrees
-        ("#2GL8CJL", 5105, _october(7, 4, 40)),  # Season rule start
+        ("#2GL8CJL", 5105, _october(7, 4, 40)),  # calculated start
     ]
     days = {
         1: (True, [

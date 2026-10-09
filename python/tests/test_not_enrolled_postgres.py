@@ -163,7 +163,7 @@ def test_sign_up_day_starts_at_5000_by_the_season_rule(
             _process(connection_info, archive_server, [])
         day = _sign_up_day(connection_info)
 
-    assert day == ("Complete", "inferred", 5000, 5000 + WIN, "season_rule")
+    assert day == ("Complete", "exact", 5000, 5000 + WIN, "season_rule")
 
 
 def test_a_season_profile_read_before_the_reset_but_saved_last_rules_out_sign_up(
