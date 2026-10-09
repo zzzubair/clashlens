@@ -212,7 +212,8 @@ opponent shows only your hit. The page reads at most 4 players' days per load:
 the switcher's player and players pinned on Today; a fifth pinned player's
 cards show without battle details. With no linked player the page shows how to
 link one; a player outside Legends gets one "not in Legends" line instead of
-empty cards, and a player still being checked gets one line saying so. The
+empty cards, and any other player not yet tracked (still being checked, or
+the check failed) gets one line with the player page's status message. The
 day's numbers clear at the Reset until the page reloads.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
