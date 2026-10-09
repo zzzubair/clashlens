@@ -1115,29 +1115,31 @@ def test_deadlocked_battle_log_is_retried_without_using_an_attempt(
     assert (text(job[0]), job[1]) == ("complete", 1)
 
 
-def test_catalog_v2_migration_redecodes_saved_armies_once(
+def test_catalog_v3_migration_redecodes_current_season_armies_once(
     database_url: str, archive_server
 ) -> None:
     migration = (
-        Path(__file__).parents[2] / "deploy/migrations/0055_unit_catalog_v2.sql"
+        Path(__file__).parents[2] / "deploy/migrations/0089_unit_catalog_v3.sql"
     ).read_text(encoding="utf-8")
-    tracked_at = datetime(2026, 8, 4, 12, tzinfo=UTC)
-    untracked_at = datetime(2026, 8, 2, 12, tzinfo=UTC)
-    unpublished_at = datetime(2026, 8, 6, 12, tzinfo=UTC)
-    finalized_at = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    earlier_season_at = datetime(2026, 10, 4, 12, tzinfo=UTC)
+    untracked_at = datetime(2026, 10, 6, 12, tzinfo=UTC)
+    unpublished_at = datetime(2026, 10, 7, 12, tzinfo=UTC)
+    tracked_at = datetime(2026, 10, 8, 12, tzinfo=UTC)
+    finalized_at = datetime(2026, 10, 9, 12, tzinfo=UTC)
     with domain_database(database_url) as ci:
         _, job_id = store_observation(
             ci,
             archive_server,
-            occurrence_key="catalog-v2",
+            occurrence_key="catalog-v3",
             endpoint="battle_log",
             body=json.dumps(
                 {
                     "items": [
-                        _live_row(True, "#8PP", "h7p4e60_52u5x177s1x2", tracked_at),
-                        _live_row(True, "#9PP", "h7p4e60_52u5x177", untracked_at),
-                        _live_row(True, "#QPP", "h7p4e60_52u5x177", unpublished_at),
-                        _live_row(True, "#RPP", "h7p4e60_52u5x177", finalized_at),
+                        _live_row(True, "#8PP", "h6p17e61_49u5x177s1x2", tracked_at),
+                        _live_row(True, "#9PP", "h6p17e61_49u5x177", untracked_at),
+                        _live_row(True, "#QPP", "h6p17e61_49u5x177", unpublished_at),
+                        _live_row(True, "#RPP", "h6p17e61_49u5x177", finalized_at),
+                        _live_row(True, "#UPP", "h6p17e61_49u5x177", earlier_season_at),
                     ]
                 }
             ).encode(),
@@ -1150,9 +1152,10 @@ def test_catalog_v2_migration_redecodes_saved_armies_once(
             with psycopg.connect(ci, autocommit=True) as connection:
                 (
                     finalized_battle,
-                    unpublished_battle,
                     tracked_battle,
+                    unpublished_battle,
                     untracked_battle,
+                    earlier_season_battle,
                 ) = (
                     row[0]
                     for row in connection.execute(
@@ -1160,10 +1163,11 @@ def test_catalog_v2_migration_redecodes_saved_armies_once(
                     ).fetchall()
                 )
                 for day, season, state in (
-                    ("2026-08-04T05:00:00Z", "test-season", "Live"),
+                    ("2026-10-04T05:00:00Z", "earlier-season", "Live"),
+                    ("2026-10-08T05:00:00Z", "test-season", "Live"),
                     # A completed day with no Reset publication record.
-                    ("2026-08-06T05:00:00Z", "test-season", "Complete"),
-                    ("2026-08-08T05:00:00Z", "finalized-season", "Live"),
+                    ("2026-10-07T05:00:00Z", "test-season", "Complete"),
+                    ("2026-10-09T05:00:00Z", "finalized-season", "Live"),
                 ):
                     connection.execute(
                         """
@@ -1188,7 +1192,7 @@ def test_catalog_v2_migration_redecodes_saved_armies_once(
                 )
                 # Armies saved before the upgrade carry the old catalog.
                 connection.execute(
-                    "UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v1'"
+                    "UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v2'"
                 )
                 connection.execute(migration)
                 connection.execute(migration)
@@ -1209,15 +1213,21 @@ def test_catalog_v2_migration_redecodes_saved_armies_once(
                 ).fetchall()
         finally:
             db.close()
-    upgraded = [row for row in rows if text(row[1]) == "unit-catalog-v2"]
+    upgraded = [row for row in rows if text(row[1]) == "unit-catalog-v3"]
     assert [(row[0], text(row[2])) for row in upgraded] == [(tracked_battle, "decoded")]
     assert upgraded[0][3] is not None
-    assert upgraded[0][4][0]["equipment"] == ["equipment:52", "equipment:60"]
+    assert upgraded[0][4][0]["equipment"] == ["equipment:49", "equipment:61"]
     # The old decodes stay as history, including the battles nothing re-decoded.
     assert sorted(
-        row[0] for row in rows if text(row[1]) == "unit-catalog-v1"
+        row[0] for row in rows if text(row[1]) == "unit-catalog-v2"
     ) == sorted(
-        [tracked_battle, untracked_battle, unpublished_battle, finalized_battle]
+        [
+            tracked_battle,
+            untracked_battle,
+            unpublished_battle,
+            finalized_battle,
+            earlier_season_battle,
+        ]
     )
 
 

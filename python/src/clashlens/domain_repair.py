@@ -30,15 +30,15 @@ Recalculating a day that comes out the same saves nothing new.
 A dormant campaign design follows. Four fixes change results already
 published for a Season: the 2-star/55%
 payout (17, not 18, under trophy rule v2), the five-minute battle day move,
-unit catalogue v2 decodes and accepted Reset settlements. Each fix repairing
-alone would republish every Reset several times from half-fixed inputs, so a
+decodes under the pinned unit catalogue and accepted Reset settlements. Each
+fix repairing alone would republish every Reset several times from half-fixed inputs, so a
 campaign lists everything they change once, for one coordinated rebuild:
 
 - ``source``: one selected report the payout or day fix changes, listed once
   with every reason, including a needed decode. A battle day move counts
   only while a published day does not yet show it.
 - ``decode_batch``: up to 100 battles (keyed by battle id / 100) whose
-  selected reports need only a catalogue v2 decode.
+  selected reports need only a decode under the pinned catalogue.
 - ``day``: one player's saved Legend day, from the first their own reports
   change, or whose saved result does not yet show a finished fix or was
   built from an older result of the day before, through every later saved
@@ -75,7 +75,6 @@ from psycopg.types.json import Jsonb
 
 from . import domain
 from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
 from .db import PYTHON_BACKFILL_PRIORITY, Database, _text_value
 from .domain import (
     BATTLE_DAY_GRACE,
@@ -526,6 +525,10 @@ ACTIONS = ("preview", "register", "activate")
 # Each later repair change adds its stage; activation refuses until all exist.
 REQUIRED_STAGES = ("battle_reports", "army_decodes", "day_results", "publications")
 HANDLERS: dict[str, Any] = {}
+# The catalogue in force for September 2026, the Season this campaign is
+# for. Portal Pendant, catalogue v3's only addition, arrived on 8 October,
+# so re-decoding that Season's battles under v3 would change nothing.
+CAMPAIGN_CATALOG_VERSION = "unit-catalog-v2"
 
 
 class CampaignRefused(ValueError):
@@ -545,7 +548,7 @@ def target_versions() -> dict[str, str]:
         "trophy_rule": TROPHY_ALLOCATION_RULE_VERSION,
         "battle_day_grace": str(BATTLE_DAY_GRACE),
         "army_decoder": DECODER_VERSION,
-        "unit_catalog": CATALOG_VERSION,
+        "unit_catalog": CAMPAIGN_CATALOG_VERSION,
         "reconciliation_rule": RECONCILIATION_RULE_VERSION,
     }
 
@@ -739,7 +742,7 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
     parameters = {
         "start": start, "end": campaign_window(start)[0], "grace": BATTLE_DAY_GRACE,
         "old_rule": HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
-        "decoder": DECODER_VERSION, "catalog": CATALOG_VERSION,
+        "decoder": DECODER_VERSION, "catalog": CAMPAIGN_CATALOG_VERSION,
     }
     items = []
     query = _INVENTORY.format(unfinished_moves=UNFINISHED_MOVES)

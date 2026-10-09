@@ -101,6 +101,7 @@ def seed_population(connection_info: str, players: int) -> int:
             "boundary": BOUNDARY,
             "day": DAY,
             "season": season,
+            "catalog": CATALOG_VERSION,
         }
         for statement in _SEED:
             connection.execute(statement, parameters)
@@ -293,13 +294,13 @@ _SEED = [
         catalog_hash, status, failure_category, is_active, perspective
     ) OVERRIDING SYSTEM VALUE
     SELECT evidence.id, evidence.battle_id, evidence.id, 'army-decoder-v2',
-           'unit-catalog-v2', repeat('c', 64), 'failed', 'fixture',
+           %(catalog)s, repeat('c', 64), 'failed', 'fixture',
            NOT (evidence.perspective = 'defender' AND evidence.battle_id %% 3 = 0),
            evidence.perspective
     FROM battle_evidence AS evidence
     UNION ALL
     SELECT 100000000 + evidence.id, evidence.battle_id, evidence.id,
-           'army-decoder-v1', 'unit-catalog-v2', repeat('c', 64), 'failed',
+           'army-decoder-v1', %(catalog)s, repeat('c', 64), 'failed',
            'fixture', true, evidence.perspective
     FROM battle_evidence AS evidence
     WHERE evidence.battle_id %% 4 = 0

@@ -620,6 +620,109 @@ def test_army_fact_statements_are_bounded_and_pinned_failed_decodes_survive(
     assert large_postgres <= small_postgres + 1
 
 
+def test_frozen_build_counts_a_decode_saved_under_an_older_catalog(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server, monkeypatch)
+        try:
+            _observation, battle_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="army-older-catalog",
+                endpoint="battle_log",
+                body=json.dumps(
+                    {
+                        "items": [
+                            _battle_row(
+                                opponent="#8PP",
+                                offset_hours=1,
+                                code=FIXTURE_CODE,
+                                stars=3,
+                                destruction=100,
+                            )
+                        ]
+                    }
+                ).encode(),
+                observed_at=DAY_START + timedelta(hours=2),
+                normalized_tag="#2PP",
+            )
+            assert (
+                processor.process_job(battle_job, owner="older-catalog").outcome
+                == "processed"
+            )
+            _mark_day_complete(database)
+            database._suppress_fixture_enqueue = True
+            with database.pool.connection() as connection:
+                player_id, battle_id = connection.execute(
+                    """
+                    SELECT p.id, b.id FROM players AS p
+                    JOIN legend_battles AS b ON b.attacker_player_id = p.id
+                    WHERE p.normalized_tag = '#2PP'
+                    """
+                ).fetchone()
+                event = {
+                    "battle_id": battle_id,
+                    "lens": "offense",
+                    "included": True,
+                    "battle_timestamp": (DAY_START + timedelta(hours=1)).isoformat(),
+                    "trophy_change": 40,
+                    "stars": 3,
+                    "destruction_percentage": 100,
+                }
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, version, state, coverage,
+                        adjustments, battles, partial_reasons, ranked_day_end,
+                        official_season_id, season_day_number, confidence,
+                        attack_count, attack_three_star_count, attack_gain,
+                        defense_count, defense_three_star_count, defense_loss,
+                        net_trophy_change
+                    ) VALUES (
+                        %s, %s, 1, 'Complete', 'complete', '[]', %s, '[]', %s,
+                        %s, 23, 'exact', 1, 1, 40, 0, 0, 0, 40
+                    )
+                    """,
+                    (
+                        player_id,
+                        DAY_START,
+                        Jsonb([event]),
+                        DAY_START + timedelta(days=1),
+                        SEASON_ID,
+                    ),
+                )
+                decode_id = connection.execute(
+                    """
+                    UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v2'
+                    WHERE battle_id = %s AND perspective = 'attacker' AND is_active
+                    RETURNING id
+                    """,
+                    (battle_id,),
+                ).fetchone()[0]
+                army_ingestion._build_army_facts(
+                    database,
+                    connection,
+                    DAY_START.isoformat(),
+                    battle_ids=[battle_id],
+                    decode_ids=[decode_id],
+                )
+                connection.commit()
+                fact = connection.execute(
+                    """
+                    SELECT army_state, decode_id
+                    FROM army_analytics_battle_facts
+                    WHERE battle_id = %s AND lens = 'offense' AND is_current
+                    """,
+                    (battle_id,),
+                ).fetchone()
+            assert fact is not None
+            assert fact[0] != "decode_missing"
+            assert fact[1] == decode_id
+        finally:
+            database.close()
+
+
 def test_battle_moved_to_the_next_day_is_counted_once_in_the_season(
     database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
 ) -> None:

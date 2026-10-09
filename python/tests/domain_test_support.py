@@ -63,7 +63,7 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
             LEFT JOIN battle_army_decodes AS decode
               ON decode.battle_id = battle.id AND decode.is_active
              AND decode.decoder_version = 'army-decoder-v2'
-             AND decode.catalog_version = 'unit-catalog-v2'
+             AND decode.catalog_version = 'unit-catalog-v3'
             WHERE battle.ranked_day_start = %s
             """,
             (ranked_day_start,),

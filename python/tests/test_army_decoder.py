@@ -299,3 +299,20 @@ def test_dragon_duke_revenge_deck_army_decodes_completely() -> None:
 
 def test_event_and_barracks_meteor_golems_have_different_names() -> None:
     assert catalog.catalog_name("troop:167") != catalog.catalog_name("troop:177")
+
+
+def test_minion_prince_portal_pendant_army_decodes_completely() -> None:
+    # A Legend army saved on 2026-10-08: Minion Prince with Portal Pendant and
+    # Meteor Staff.
+    result = decode_army_share_code(
+        "h2m1p16e5_4-4p4e6_13-6p17e61_49-7p11e52_60i1x188-1x63-1x76d1x98-1x70"
+        "u1x23-4x10-4x63-3x76-30x5-3x1-1x0s4x109-1x10-1x9-2x120-2x5-1x11"
+    )
+    assert result.status == "decoded"
+    assert result.unknown == ()
+    assert result.identity_hash is not None
+    prince = next(hero for hero in result.heroes if hero.hero_typed_id == "hero:6")
+    assert {catalog.catalog_name(item) for item in prince.equipment_typed_ids} == {
+        "Portal Pendant",
+        "Meteor Staff",
+    }
