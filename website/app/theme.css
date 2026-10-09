@@ -1389,12 +1389,13 @@ h3 {
     grid-column: 2;
   }
 
+  /* Tabs that don't fit wrap onto a second row rather than hiding off the edge. */
   .primary-nav {
     grid-column: 1 / -1;
     grid-row: 2;
+    flex-wrap: wrap;
     gap: 0.25rem;
     min-width: 0;
-    overflow-x: auto;
     padding-bottom: 0.3rem;
   }
 
@@ -1403,6 +1404,17 @@ h3 {
     justify-content: center;
     padding: 0.55rem;
     white-space: nowrap;
+  }
+}
+
+/* Too narrow for one row of tabs: centre them in rows instead of stretching one across. */
+@media (max-width: 40rem) {
+  .primary-nav {
+    justify-content: center;
+  }
+
+  .primary-nav a {
+    flex: 0 0 auto;
   }
 }
 
@@ -1419,15 +1431,11 @@ h3 {
     font-size: 1.2rem;
   }
 
-  /* One swipeable row of tabs keeps the rankings higher on the screen. */
   .primary-nav {
-    margin-inline: -1rem;
-    padding: 0 1rem 0.1rem;
-    scrollbar-width: none;
+    padding-bottom: 0.1rem;
   }
 
   .primary-nav a {
-    flex: 0 0 auto;
     min-height: 2.5rem;
     padding: 0.4rem 0.5rem;
     font-size: 0.8rem;

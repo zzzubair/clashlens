@@ -356,7 +356,11 @@
   border-color: var(--cl-input-border);
 }
 
-/* Narrow phones: let short buttons wrap instead of spilling out of their card. */
+/* A button never shrinks past its own text. Narrow phones let short buttons wrap
+   instead of spilling out of their card. */
+:root .section-link {
+  min-width: min-content;
+}
 @media (max-width: 24rem) {
   :root .section-link {
     white-space: normal;
