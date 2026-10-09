@@ -172,15 +172,16 @@ class ReconciliationInput:
     # charges the automatic defense loss.
     zero_result_attack_slots: int = 0
     zero_result_defense_slots: int = 0
-    # Every other profile read from the day's start Reset to the next Reset
-    # after its end that can judge it (``reading_rule``), the day before's and
-    # new day's battles, the first report of a new-day battle only the opponent
-    # has, and from when an unreadable row leaves no reading usable.
+    # Every other profile read from the day's start Reset to the next Reset after its
+    # end that can judge it (``reading_rule``), the day before's and new day's battles,
+    # the first report of a new-day battle only the opponent has, from when an unreadable
+    # row leaves no reading usable, and until when logs cover readings from the Reset on.
     readings: tuple[reading_rule.Reading, ...] = ()
     previous_day_contributions: tuple[BattleContribution, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
     first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
+    covered_until: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.boundary_kind not in {None, "weekly", "season"}:
@@ -448,7 +449,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # (reading_rule); one hidden by a reset it can only contradict.
         verdict = (
             reading_rule.decide(
-                _readings(replace(data, readings=(), unreadable_from=None) if official_end else data),
+                _readings(replace(data, readings=(), unreadable_from=None, covered_until=None) if official_end else data),
                 reset_at=data.ranked_day.end, start_proven=start_proven, **rule, history=history,
                 unknown_from=None if official_end else data.first_unshown_report,
             )
@@ -1198,14 +1199,13 @@ def _readings(data: ReconciliationInput) -> tuple[reading_rule.Reading, ...]:
     """Every reading that can judge the day: the Reset pair's own, when
     usable and timed, and every later one loaded with the day."""
     readings = list(data.readings)
-    profile = data.end_baseline_evidence.get("profile") or {}
-    observed_at = profile.get("observed_at")
+    observed_at = (data.end_baseline_evidence.get("profile") or {}).get("observed_at")
     # A Reset reading saved without its time is read as taken at the Reset.
-    read_at = (datetime.fromisoformat(observed_at) if isinstance(observed_at, str)
-               else data.ranked_day.end)
+    read_at = datetime.fromisoformat(observed_at) if isinstance(observed_at, str) else data.ranked_day.end
     if data.next_start_trophies is not None and (
             data.unreadable_from is None or read_at < data.unreadable_from):
-        readings.append(reading_rule.Reading(read_at, data.next_start_trophies, reset_reading=True))
+        readings.append(reading_rule.Reading(read_at, data.next_start_trophies, reset_reading=True,
+                        uncovered=data.covered_until is not None and read_at > data.covered_until))
     return tuple(readings)
 
 

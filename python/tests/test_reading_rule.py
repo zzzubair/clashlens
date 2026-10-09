@@ -715,3 +715,37 @@ def test_a_credit_shown_during_the_day_stays_shown_after_its_end() -> None:
 
     assert result.state == "Inconsistent"
     assert "trophy_equation_mismatch" in result.failure_reasons
+
+
+def test_a_reading_no_log_covers_never_shows_a_loss() -> None:
+    # A day with no defense slot used ends at 6,000 before a possible 40
+    # charge. No log covers the 05:20 reading of 5,960, which may show a
+    # new-day defense no saved log holds: it proves no charge.
+    alone = verdict(Reading(at(20), 5960, uncovered=True), loss=(40,), certain=False, end=6000)
+    # Nor does the Reset pair's own reading, read after the logs that cover it.
+    reset = reconcile_ranked_day(test_reconciliation._input(
+        start_trophies=6000, next_start_trophies=5960, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 40, 0),
+        covered_until=test_reconciliation.DAY.end - timedelta(minutes=1),
+    ))
+
+    assert alone.outcome == "unverified"
+    assert (reset.automatic_defense_loss, reset.final_trophies_before_reset) != (40, 5960)
+
+
+def test_a_reading_judged_by_what_the_days_readings_left_possible_can_prove_the_charge() -> None:
+    # The day starts at 6,000, gains 40 at 09:00 (read at 09:20 as 6,040) and
+    # uses no defense slot, so a 40 charge is possible. 05:20 reads 6,000:
+    # the charge, as the +40 credit already showed and cannot be missing.
+    day = test_reconciliation.DAY
+    result = reconcile_ranked_day(test_reconciliation._input(
+        start_trophies=6000, next_start_trophies=None,
+        contributions=(BattleContribution("attack", "offense", 40,
+                                          battle_timestamp=day.start + timedelta(hours=4)),),
+        previous_day=PreviousRankedDay(True, 8, 40, 0),
+        readings=(Reading(day.start + timedelta(hours=4, minutes=20), 6040),
+                  Reading(day.end + timedelta(minutes=20), 6000)),
+    ))
+
+    assert (result.state, result.confidence, result.automatic_defense_loss) == (
+        "Complete", "exact", 40)

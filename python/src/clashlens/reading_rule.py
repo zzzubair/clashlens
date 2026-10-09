@@ -70,6 +70,10 @@ class Reading:
     # signed-up players: its trophies can confirm the ledger, never
     # contradict it.
     confirm_only: bool = False
+    # Read from the end Reset on after the battle logs that cover it: a
+    # battle it shows may not be known, so it can confirm what trustworthy
+    # readings showed but never show a loss.
+    uncovered: bool = False
     # The Reset pair's own profile.
     reset_reading: bool = False
 
@@ -261,7 +265,7 @@ def decide(
     never contradicts and confirms nothing. A reading shows a loss only when
     every way it fits has it: once every way a trustworthy reading fits has
     the loss landed, or the weekly raise applied, a later one that fits only
-    without it contradicts too (``_first_misfit``), and a clean match fits
+    without it contradicts too (``_settle``), and a clean match fits
     one way only. Otherwise the last
     trustworthy clean match decides, a match proving the day with the loss
     landed when one is certain or a reading showed it, or, read before the
@@ -294,7 +298,7 @@ def decide(
         return unknown_from is not None and item.reading.read_at >= unknown_from
 
     def trusted(item: _Judged) -> bool:
-        return not item.reading.confirm_only and not unknown(item)
+        return not (item.reading.confirm_only or item.reading.uncovered or unknown(item))
 
     def clean(item: _Judged) -> bool:
         return item.matched and not item.ambiguous and not item.missed and len(item.losses) == 1
@@ -307,16 +311,21 @@ def decide(
     judged_ids = {effect.identity for effect in (*day_effects, *new_day_effects)}
     history = None if history is None else frozenset(
         (loss, raised, shown & judged_ids) for loss, raised, shown in history)
-    misfit, shown, _ = _first_misfit((item for item in judged if trusted(item)), history)
+    misfit, settled = _settle([item for item in judged if trusted(item)], history)
     if misfit is not None:
         return replace(misfit, lagged=lagged)
-    matches = [item for item in judged if trusted(item) and clean(item)]
+    shown = shows(settled[-1]) if settled else 0
+    matches = [item for item in settled if clean(item)]
     # A confirm-only reading may show a possible loss landed, but showing none
     # proves nothing: it may be read before the loss lands. One that may show
-    # a battle only the opponent has reported proves neither.
+    # a battle only the opponent has reported proves neither, and one no log
+    # covers never shows a loss.
     possible = bool(loss_candidates) and not loss_certain
-    judged = [item for item in judged
-              if not possible or not unknown(item) and (shows(item) or trusted(item))]
+    judged = sorted(
+        [*settled, *(item for item in judged if not trusted(item)
+                     and not (item.reading.uncovered and shows(item))
+                     and (not possible or not unknown(item) and shows(item)))],
+        key=lambda item: (item.reading.read_at, item.reading.trophies))
     matches = matches or [item for item in judged if clean(item)]
     if matches:
         loss = max(shown, *(item.loss for item in matches))
@@ -373,20 +382,20 @@ def contradiction_during_day(
         if not reading.confirm_only
         and day_start + DAY_READINGS_FROM <= reading.read_at < reset_at
     )
-    misfit, _, surviving = _first_misfit(item for item in judged if item is not None)
+    misfit, settled = _settle(item for item in judged if item is not None)
     before = {effect.identity for effect in earlier}
-    return misfit, None if surviving is None else frozenset(
-        (0, False, shown - before) for _, _, shown in surviving)
+    return misfit, None if not settled else frozenset(
+        (0, False, shown - before) for _, _, shown in settled[-1].ways)
 
 
-def _first_misfit(
+def _settle(
     judged: Iterable[_Judged], surviving: frozenset[Way] | None = None,
-) -> tuple[Verdict | None, int, frozenset[Way] | None]:
-    """The first of these readings, in order, that fits no value, or no way
-    that can follow a way an earlier one fits, or one of ``surviving``: a
-    loss landed, the weekly raise applied and a credit shown stay so. Also
-    the loss every way still possible after the last one has landed, and
-    those ways."""
+) -> tuple[Verdict | None, list[_Judged]]:
+    """These readings, in order, each with only the ways it fits that can
+    follow a way the one before it fits, or one of ``surviving``: a loss
+    landed, the weekly raise applied and a credit shown stay so; and the
+    first that fits no value or no such way."""
+    settled: list[_Judged] = []
     for item in judged:
         ways = item.ways if surviving is None else frozenset(
             (loss, raised, shown) for loss, raised, shown in item.ways
@@ -396,7 +405,9 @@ def _first_misfit(
         if not ways:
             landed = max((way[0] for way in surviving or ()), default=0)
             residual = item.residual if not item.matched else (landed - item.loss) or None
-            return Verdict("contradicted", item.reading, residual=residual), landed, surviving
+            return Verdict("contradicted", item.reading, residual=residual), settled
         surviving = ways
-    losses = {way[0] for way in surviving or ()}
-    return None, losses.pop() if len(losses) == 1 else 0, surviving
+        losses = {way[0] for way in ways}
+        settled.append(replace(item, ways=ways, loss=item.loss if item.loss in losses
+                               else min(losses)))
+    return None, settled

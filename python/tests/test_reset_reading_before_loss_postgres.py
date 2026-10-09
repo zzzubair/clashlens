@@ -989,7 +989,7 @@ def test_a_log_not_joined_to_the_reset_log_makes_no_reading_trustworthy(
                 player_id = connection.execute(
                     "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
                 ).fetchone()[0]
-                readings, _ = ranked_day_inputs.load_readings(
+                readings, *_ = ranked_day_inputs.load_readings(
                     database, connection, player_id, ranked_day_for(DAY_B),
                     reset_profile_observation_id=None, end_battle_log_observation_id=None,
                 )
@@ -997,7 +997,7 @@ def test_a_log_not_joined_to_the_reset_log_makes_no_reading_trustworthy(
             database.close()
 
     later = [reading for reading in readings if reading.trophies == 6040]
-    assert later and all(reading.confirm_only for reading in later)
+    assert later and all(reading.uncovered for reading in later)
 
 
 def test_a_reading_during_the_day_is_trusted_without_a_log_after_its_end(
@@ -1020,7 +1020,7 @@ def test_a_reading_during_the_day_is_trusted_without_a_log_after_its_end(
                 player_id = connection.execute(
                     "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
                 ).fetchone()[0]
-                readings, _ = ranked_day_inputs.load_readings(
+                readings, *_ = ranked_day_inputs.load_readings(
                     database, connection, player_id, ranked_day_for(DAY_B),
                     reset_profile_observation_id=None, end_battle_log_observation_id=None,
                 )
@@ -1028,4 +1028,4 @@ def test_a_reading_during_the_day_is_trusted_without_a_log_after_its_end(
             database.close()
 
     noon = [reading for reading in readings if reading.trophies == 6010]
-    assert noon and not any(reading.confirm_only for reading in noon)
+    assert noon and not any(reading.confirm_only or reading.uncovered for reading in noon)

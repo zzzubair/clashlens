@@ -423,8 +423,9 @@ def recalculate_ranked_day(
     previous_day_contributions: tuple[BattleContribution, ...] = ()
     first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
+    covered_until: datetime | None = None
     if now >= ranked_day.end:
-        readings, unreadable_from = ranked_day_inputs.load_readings(
+        readings, unreadable_from, covered_until = ranked_day_inputs.load_readings(
             database, connection, player_id, ranked_day,
             reset_profile_observation_id=(
                 end_baseline["evidence"].get("profile_observation_id")
@@ -515,6 +516,7 @@ def recalculate_ranked_day(
         previous_day_contributions=previous_day_contributions,
         first_unshown_report=first_unshown_report,
         unreadable_from=unreadable_from,
+        covered_until=covered_until,
     )
     result = reconcile_ranked_day(data)
     result_data = {

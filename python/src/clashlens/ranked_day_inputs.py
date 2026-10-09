@@ -727,7 +727,7 @@ def load_readings(
     database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
     *, reset_profile_observation_id: int | None,
     end_battle_log_observation_id: int | None,
-) -> tuple[tuple[reading_rule.Reading, ...], datetime | None]:
+) -> tuple[tuple[reading_rule.Reading, ...], datetime | None, datetime]:
     """Every profile of this player read between the day's start Reset and
     the next Reset after its end, other than the end Reset pair's own,
     ``reset_profile_observation_id``, which the day reads as its Reset
@@ -743,7 +743,8 @@ def load_readings(
     since the Reset happened, or from the Reset when that row is older or
     its time unreadable, are left out: a battle they may show cannot be
     placed. Readings during the day stay. Also return that time, or the Reset when
-    it is unreadable, for the Reset reading."""
+    it is unreadable, for the Reset reading, and until when the logs cover
+    readings from the Reset on (the day's start when none does)."""
     until = ranked_day.end + timedelta(days=1)
     unreadable = load_unreadable_report_times(
         database, connection, player_id, ranked_day.end, until
@@ -805,15 +806,15 @@ def load_readings(
          "until": min(until, cut or until),
          "season": ranked_day.official_season_id},
     ).fetchall()
+    covered_until = known_until or ranked_day.start
     return tuple(
         reading_rule.Reading(
-            at, int(trophies),
-            confirm_only=not accepted or at >= ranked_day.end and (
-                known_until is None or at > known_until),
+            at, int(trophies), confirm_only=not accepted,
+            uncovered=at >= ranked_day.end and at > covered_until,
         )
         for at, trophies, accepted in rows
         if trophies is not None
-    ), cut
+    ), cut, covered_until
 
 
 def load_first_unshown_report(
