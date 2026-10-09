@@ -366,3 +366,45 @@ def test_a_redecode_gives_way_to_a_live_job_holding_its_battle(
                 ).fetchone()[0]) == "complete"
         finally:
             database.close()
+
+
+def test_a_live_battle_log_reuses_an_older_catalog_decode(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            battle_ids = _seed_redecode(connection_info, archive_server, database, processor)
+            _, live = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="live",
+                endpoint="battle_log",
+                body=json.dumps({"items": [_live_row(
+                    True, OPPONENTS[-1], f"u{len(OPPONENTS)}x0",
+                    DAY + timedelta(minutes=len(OPPONENTS) - 1),
+                )]}).encode(),
+                observed_at=DAY + timedelta(hours=2),
+                normalized_tag="#2PP",
+            )
+            results: list[str] = []
+            thread = threading.Thread(target=lambda: results.append(
+                processor.process_job(live, owner="live").outcome))
+            with psycopg.connect(connection_info) as other_live:
+                # Other live battle logs are saving these battles.
+                other_live.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended("
+                    "'army-redecode-battle:' || id, 0)) FROM unnest(%s::bigint[]) AS id",
+                    (battle_ids,),
+                )
+                thread.start()
+                thread.join(10)
+                assert results == ["processed"]
+                other_live.commit()
+            assert _upgraded(database) == 0
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_army_decodes"
+                ).fetchone()[0] == len(battle_ids)
+        finally:
+            database.close()
