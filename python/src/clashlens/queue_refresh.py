@@ -166,7 +166,7 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> int:
                 deduplication_key, input_json, state, due_at, parser_version,
                 processing_version, domain_rule_version, analytics_rule_version, priority)
             SELECT NULL, 'reconcile_ranked_day',
-                   concat_ws(':', 'reconcile:recheck', %(slot)s, player_id, day_text),
+                   concat_ws(':', 'reconcile:recheck', %(slot)s::text, player_id, day_text),
                    jsonb_build_object('player_id', player_id, 'trigger', 'recheck',
                                       'ranked_day_start', day_text),
                    'pending', clock_timestamp(), %(parser)s, %(processing)s,

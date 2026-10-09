@@ -466,3 +466,65 @@ def test_a_late_reading_queues_its_own_ended_day_and_the_day_before(
         queued = _queued(connection_info, "reconcile:late:")
 
     assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]
+
+
+def _quiet_days(connection_info: str, archive_server, days: list) -> int:
+    """Save each of ``days`` with no battles and unchanged trophies, a shield
+    run, and return the player's id."""
+    jobs, end = [], days[-1] + timedelta(days=1)
+    for day in [*days, end]:
+        jobs += _reset_work(
+            connection_info, archive_server, day, profile=_profile(6000), log=_log()
+        )
+    _process(connection_info, archive_server, jobs)
+    for day in days:
+        database = Database(connection_info)
+        try:
+            job = reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=day, now=end,
+                request_key=f"quiet-{day:%d}",
+            )
+        finally:
+            database.close()
+        _process(connection_info, archive_server, [job])
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+        ).fetchone()[0]
+
+
+def test_a_third_shielded_day_in_a_row_is_saved(database_url: str, archive_server) -> None:
+    # Shields stack, so a 2-day and a 1-day shield make a 3-day run.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        days = [DAY_B, DAY_C, DAY_D]
+        _quiet_days(connection_info, archive_server, days)
+        with psycopg.connect(connection_info) as connection:
+            saved = connection.execute(
+                """
+                SELECT DISTINCT ON (ranked_day_start) state, shield_state,
+                       shield_duration_days
+                FROM ranked_day_versions WHERE ranked_day_start = ANY(%s)
+                ORDER BY ranked_day_start, version DESC
+                """,
+                (days,),
+            ).fetchall()
+
+    assert [(state, str(shield), run) for state, shield, run in saved] == [
+        ("Complete", "inferred_shielded", run) for run in (1, 2, 3)
+    ]
+
+
+def test_the_daily_recheck_queues_the_last_two_ended_days(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        database = Database(connection_info)
+        try:
+            count = queue_refresh.queue_recheck(database, "night", DAY_D)
+        finally:
+            database.close()
+        queued = _queued(connection_info, "reconcile:recheck:night:")
+
+    assert count == 2
+    assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]
