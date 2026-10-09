@@ -749,3 +749,30 @@ def test_a_reading_judged_by_what_the_days_readings_left_possible_can_prove_the_
 
     assert (result.state, result.confidence, result.automatic_defense_loss) == (
         "Complete", "exact", 40)
+
+
+def test_a_reading_after_an_opponent_only_battle_never_shows_a_calculated_loss() -> None:
+    # The day ends at 6,000 before a calculated 10 loss. The opponent reports
+    # a new-day 10-trophy defense at 05:08 the player's logs lack; 05:20 reads
+    # 5,990, which may be that defense rather than the loss.
+    result = verdict(Reading(at(20), 5990), loss=(10,), end=6000, day=(),
+                     unknown_from=at(8))
+
+    assert result.outcome == "unverified"
+
+
+def test_a_season_zero_reading_is_read_with_what_the_days_readings_left_possible() -> None:
+    # As above, but the 05:20 reading of 6,000 names Season 0: the +40
+    # credit already showed, so it can only show the 40 charge.
+    day = test_reconciliation.DAY
+    result = reconcile_ranked_day(test_reconciliation._input(
+        start_trophies=6000, next_start_trophies=None,
+        contributions=(BattleContribution("attack", "offense", 40,
+                                          battle_timestamp=day.start + timedelta(hours=4)),),
+        previous_day=PreviousRankedDay(True, 8, 40, 0),
+        readings=(Reading(day.start + timedelta(hours=4, minutes=20), 6040),
+                  Reading(day.end + timedelta(minutes=20), 6000, confirm_only=True)),
+    ))
+
+    assert (result.state, result.automatic_defense_loss, result.final_trophies_before_reset) == (
+        "Complete", 40, 6000)

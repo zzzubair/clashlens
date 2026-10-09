@@ -316,15 +316,26 @@ def decide(
         return replace(misfit, lagged=lagged)
     shown = shows(settled[-1]) if settled else 0
     matches = [item for item in settled if clean(item)]
-    # A confirm-only reading may show a possible loss landed, but showing none
-    # proves nothing: it may be read before the loss lands. One that may show
-    # a battle only the opponent has reported proves neither, and one no log
-    # covers never shows a loss.
     possible = bool(loss_candidates) and not loss_certain
+
+    def confirming(item: _Judged) -> _Judged | None:
+        """An untrusted reading, never contradicting, with only the ways the
+        trustworthy readings before it leave possible. One no log covers, or
+        one that may show a battle only the opponent has reported, never
+        shows a loss, nor that a possible loss did not land; a Season 0
+        reading may show a possible loss landed, but showing none proves
+        nothing: it may be read before the loss lands."""
+        ways = _following(item.ways, next(
+            (before.ways for before in reversed(settled)
+             if before.reading.read_at <= item.reading.read_at), history))
+        if item.reading.uncovered or unknown(item):
+            ways = frozenset() if possible else frozenset(way for way in ways if not way[0])
+        elif possible and not all(way[0] for way in ways):
+            ways = frozenset()
+        return _narrowed(item, ways) if ways else None
+
     judged = sorted(
-        [*settled, *(item for item in judged if not trusted(item)
-                     and not (item.reading.uncovered and shows(item))
-                     and (not possible or not unknown(item) and shows(item)))],
+        [*settled, *filter(None, (confirming(item) for item in judged if not trusted(item)))],
         key=lambda item: (item.reading.read_at, item.reading.trophies))
     matches = matches or [item for item in judged if clean(item)]
     if matches:
@@ -397,17 +408,25 @@ def _settle(
     first that fits no value or no such way."""
     settled: list[_Judged] = []
     for item in judged:
-        ways = item.ways if surviving is None else frozenset(
-            (loss, raised, shown) for loss, raised, shown in item.ways
-            if any((not before_loss or loss == before_loss)
-                   and (raised or not before_raised) and before_shown <= shown
-                   for before_loss, before_raised, before_shown in surviving))
+        ways = _following(item.ways, surviving)
         if not ways:
             landed = max((way[0] for way in surviving or ()), default=0)
             residual = item.residual if not item.matched else (landed - item.loss) or None
             return Verdict("contradicted", item.reading, residual=residual), settled
         surviving = ways
-        losses = {way[0] for way in ways}
-        settled.append(replace(item, ways=ways, loss=item.loss if item.loss in losses
-                               else min(losses)))
+        settled.append(_narrowed(item, ways))
     return None, settled
+
+
+def _following(ways: frozenset[Way], before: frozenset[Way] | None) -> frozenset[Way]:
+    """The ways that can follow one of ``before``, if given."""
+    return ways if before is None else frozenset(
+        (loss, raised, shown) for loss, raised, shown in ways
+        if any((not before_loss or loss == before_loss)
+               and (raised or not before_raised) and before_shown <= shown
+               for before_loss, before_raised, before_shown in before))
+
+
+def _narrowed(item: _Judged, ways: frozenset[Way]) -> _Judged:
+    losses = {way[0] for way in ways}
+    return replace(item, ways=ways, loss=item.loss if item.loss in losses else min(losses))
