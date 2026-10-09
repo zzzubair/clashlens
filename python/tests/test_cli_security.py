@@ -253,17 +253,18 @@ up_stack
 
 
 @pytest.mark.parametrize(
-    ("limits", "pool", "refusal"),
+    ("limits", "threads", "pool", "refusal"),
     [
-        (("6", "8"), "", None),
-        (("", ""), "", None),
-        (("0", ""), "", "CLASHLENS_BACKGROUND_JOB_LIMIT must be a whole number"),
-        (("", "65"), "", "CLASHLENS_DAY_RECHECK_JOB_LIMIT must be a whole number"),
-        (("", ""), "8", "CLASHLENS_WORKER_DATABASE_POOL_SIZE must be at least"),
+        (("6", "8"), "12", "", None),
+        (("", ""), "12", "", None),
+        (("0", ""), "12", "", "CLASHLENS_BACKGROUND_JOB_LIMIT must be a whole number"),
+        (("", "65"), "12", "", "CLASHLENS_DAY_RECHECK_JOB_LIMIT must be a whole number"),
+        (("", ""), "12", "8", "CLASHLENS_WORKER_DATABASE_POOL_SIZE must be at least"),
+        (("", ""), "20", "", "allows at most 16 database connections"),
     ],
 )
 def test_ops_forwards_background_limits_and_keeps_a_connection_a_thread(
-    tmp_path: Path, limits: tuple[str, str], pool: str, refusal: str | None
+    tmp_path: Path, limits: tuple[str, str], threads: str, pool: str, refusal: str | None
 ) -> None:
     # The deploy settings tune background work without a code change; a pool
     # smaller than the worker's 12 threads would make jobs wait for connections.
@@ -279,7 +280,7 @@ MODE=fixture
 load_fixture_config
 [[ -z "$3" ]] || CONFIG[CLASHLENS_BACKGROUND_JOB_LIMIT]=$3
 [[ -z "$4" ]] || CONFIG[CLASHLENS_DAY_RECHECK_JOB_LIMIT]=$4
-WORKER_CONCURRENCY=12 WORKER_DB_POOL=${5:-12}
+WORKER_CONCURRENCY=$5; WORKER_DB_POOL=${6:-$5}
 validate_runtime_values
 write_environment
 """,
@@ -287,6 +288,7 @@ write_environment
             str(ops),
             str(tmp_path),
             *limits,
+            threads,
             pool,
         ],
         check=False,
