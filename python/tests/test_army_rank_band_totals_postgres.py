@@ -196,6 +196,24 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
             assert _results(api) == from_facts
             assert fact_queries == []
 
+            # Totals saved before unnamed ids counted carry the old unknown
+            # tallies and leave those ids' rows out: the page reads facts
+            # until the next check counts them again.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE army_analytics_rank_band_totals
+                    SET totals = totals || '{"cc_unknown": 0, "hero_unknown": {},
+                        "unknown": {}, "unknown_present": {}, "rows": {}}'::jsonb
+                    """
+                )
+            assert _results(api) == from_facts
+            assert fact_queries
+            fact_queries.clear()
+            army_rank_bands.refresh_rank_band_totals(database)
+            assert _results(api) == from_facts
+            assert fact_queries == []
+
             # Rebuilding day 23 without its partial attack: until the totals are
             # counted again the page reads facts, then the totals take over.
             _publish_day_correction(database, "#2PP", day_one[:1])

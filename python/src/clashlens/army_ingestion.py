@@ -1010,19 +1010,25 @@ def _build_army_fact_batch(
         "offense" if perspective == "attacker" else "defense"
         for perspective in perspective_values
     ]
-    decode_from = f"{CURRENT_DECODES} AS decode WHERE true"
-    decode_params: tuple[Any, ...] = (DECODER_VERSION, battle_id_values)
-    if decode_ids is not None:
-        decode_from = """battle_army_decodes
-            WHERE battle_id = ANY(%s::bigint[]) AND id = ANY(%s::bigint[])"""
-        decode_params = (battle_id_values, decode_ids)
     decode_rows = connection.execute(
         f"""
         SELECT battle_id, perspective, id, evidence_id, status, failure_category
-        FROM {decode_from} AND perspective = ANY(%s::text[])
+        FROM {CURRENT_DECODES} AS decode WHERE perspective = ANY(%s::text[])
         """,
-        (*decode_params, perspective_values),
+        (DECODER_VERSION, battle_id_values, perspective_values),
     ).fetchall()
+    if decode_ids is not None:
+        # A frozen build reads the armies it froze. A side it froze none for
+        # reads its newest saved army, as a build of this day now would.
+        decode_rows += connection.execute(
+            """
+            SELECT battle_id, perspective, id, evidence_id, status, failure_category
+            FROM battle_army_decodes
+            WHERE battle_id = ANY(%s::bigint[]) AND id = ANY(%s::bigint[])
+              AND perspective = ANY(%s::text[])
+            """,
+            (battle_id_values, decode_ids, perspective_values),
+        ).fetchall()
     decodes = {
         (
             int(row[0]),

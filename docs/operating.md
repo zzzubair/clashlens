@@ -757,6 +757,36 @@ finished only when each listed Reset's newest `generation` shows
 the deploy needs nothing. Only Resets inside the given Season are read, so the
 Season before is never touched.
 
+**Army rebuild after the unit catalogue v3 re-read:** while unit catalogue v3
+re-read the October 2026 Season's armies (migration 0089, stopped by 0091), a
+Reset could freeze a battle side whose only saved army was under v2 before
+frozen builds read any saved army. Its army records show that side as unread
+(`decode_missing`), leaving it out of the Armies page and Season army
+summaries. A rebuild of the Reset now reads that side's newest saved army.
+Run this only after the background-job cap change is deployed, and never
+from 04:00 to 07:00 UTC; `queue` refuses in that window:
+
+```sh
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --armies preview --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --armies queue --max-jobs 2 --season 1791176400
+```
+
+`preview` writes nothing and lists each of that Season's Resets with such
+sides, with how many (`sides`); their total is the size of the correction,
+and the number of listed Resets is how many rebuild. It was not measured
+before release, so read it from `preview`. `queue` adds one army-only
+correction for each listed Reset while fewer than `--max-jobs` corrections of
+the Season wait or rebuild (`in_flight`); `correction` reads `queued`,
+`already_queued`, `rebuilding` (a newer build not yet published) or
+`not_queued` (a preview, or the cap reached). The worker starts each as any other correction:
+an older Reset after the 04:30–07:00 UTC quiet window and 6 hours after its
+last rebuild, its army build at background priority. That build takes no
+battle lock; like every army day build it holds the one army-build lock,
+about 80 seconds. Run `queue` again after those finish until `resets` is
+empty; a second run while one is waiting queues nothing more.
+
 ### Raw-response cleanup failed
 
 Cleanup deletes old raw responses on its own timer; see
