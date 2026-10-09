@@ -332,30 +332,32 @@ def contradiction_during_day(
     pending_loss: int,
     day_effects: tuple[Effect, ...],
     earlier: tuple[Effect, ...] = (),
+    floor: int | None = None,
 ) -> Verdict | None:
     """The first trustworthy reading taken during the day, from
     ``DAY_READINGS_FROM`` after its start, that fits no value the ledger
-    allows at its time: the start plus every battle landed by then, plus
-    the day before's automatic loss, ``pending_loss``, while it may not have
-    landed, which has no fixed time; once every way a reading fits has it
-    landed, every later one must too. A battle in flight is read both ways,
-    and the latest attacks' late credits, ``earlier`` the day before's
-    battles already in the start, may be missing."""
-    total = start + pending_loss + sum(effect.change for effect in day_effects)
+    allows at its time: the day before's end, ``start`` before any weekly
+    raise to ``floor``, plus its automatic loss, ``pending_loss``, while it
+    may not have landed, which has no fixed time, then raised, then every
+    battle of the day landed by then. Once every way a reading fits has the
+    loss landed, every later one must too. A battle in flight is read both
+    ways, and the latest attacks' late credits, ``earlier`` the day before's
+    battles already in its end, may be missing."""
+    end = start + pending_loss
     for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies)):
         if reading.confirm_only or not (
                 day_start + DAY_READINGS_FROM <= reading.read_at < reset_at):
             continue
         judged = judge(
-            reading, end_before_loss=total,
+            reading, end_before_loss=end,
             loss_candidates=(pending_loss,) if pending_loss else (),
-            loss_certain=bool(pending_loss), day_effects=earlier + day_effects,
-            new_day_effects=(),
+            loss_certain=bool(pending_loss), day_effects=earlier,
+            new_day_effects=day_effects, floor=floor,
         )
         if judged is None:
             continue
         if not judged.matched:
             return Verdict("contradicted", reading, residual=judged.residual)
         if judged.losses and 0 not in judged.losses:
-            total, pending_loss = total - judged.loss, 0
+            end, pending_loss = end - judged.loss, 0
     return None

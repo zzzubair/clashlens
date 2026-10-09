@@ -316,7 +316,7 @@ def test_a_reading_during_the_day_must_show_the_battles_landed_by_then() -> None
     assert during(Reading(day_start + timedelta(hours=2, minutes=3), 6000)) is None
     assert during(Reading(day_start + timedelta(hours=2, minutes=3), 6020)) is None
     found = during(Reading(day_start + timedelta(hours=2, minutes=3), 6010))
-    assert found is not None and found.residual == -10
+    assert found is not None and found.residual == 10
     # The day before's automatic loss may not have landed at 05:20.
     assert during(Reading(day_start + timedelta(minutes=20), 6070), pending_loss=70) is None
     # Once a reading shows it landed, a later one without it disagrees.
@@ -593,3 +593,24 @@ def test_a_reading_that_fits_charged_or_uncharged_proves_no_charge() -> None:
 
     assert (both.outcome, both.loss, both.exact) == ("verified", 0, True)
     assert (alone.loss, alone.exact) == (0, False)
+
+
+def test_the_weekly_raise_applies_to_the_day_befores_late_credits_and_loss_together() -> None:
+    # Sunday ends at 5,100 before its 200 loss, 4,900 after, raised to
+    # Monday's 5,000; its last +40 attack's credit may be late. Monday has no
+    # battle by 05:20: 5,100, 5,060 or the raised 5,000 fit; 4,960 does not.
+    def monday(trophies: int):
+        return reconcile_ranked_day(test_reconciliation._input(
+            start_trophies=5000, next_start_trophies=5000, contributions=(),
+            previous_day=PreviousRankedDay(True, 8, 200, 0, automatic_loss=200,
+                                           final_trophies=4900),
+            previous_day_contributions=(BattleContribution(
+                "sunday-attack", "offense", 40,
+                battle_timestamp=test_reconciliation.DAY.start - timedelta(minutes=30)),),
+            readings=(Reading(test_reconciliation.DAY.start + timedelta(minutes=20),
+                              trophies),),
+        )).failure_reasons
+
+    for fits in (5100, 5060, 5000):
+        assert "trophy_equation_mismatch" not in monday(fits), fits
+    assert "trophy_equation_mismatch" in monday(4960)

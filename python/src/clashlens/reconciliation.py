@@ -523,15 +523,15 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             # The readings isolate the calculated settlement loss.
             automatic_state = "confirmed"
     # A reading during the day shows its start plus the battles landed by then, with the
-    # day before's late credits and loss (less what the weekly raise took) when it started it.
+    # day before's late credits and loss, before any weekly raise, when its end started it.
     previous = None if data.season_first_day or season_rule_start else data.previous_day
     pending_loss = previous.automatic_loss if previous else 0
-    if previous and (previous.final_trophies or 5000) < 5000 == start_trophies:
-        pending_loss = max(0, previous.final_trophies + pending_loss - 5000)
+    raised = previous and (previous.final_trophies or 5000) < 5000 == start_trophies
     earlier = data.previous_day_contributions if previous else ()
     during = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
-        start=start_trophies, day_effects=_effects(contributions), pending_loss=pending_loss,
+        start=previous.final_trophies if raised else start_trophies, pending_loss=pending_loss,
+        day_effects=_effects(contributions), floor=5000 if raised else None,
         earlier=_effects(_deduplicate_contributions(earlier)[0]),
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else None
