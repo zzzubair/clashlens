@@ -4,9 +4,10 @@ import json
 from datetime import timedelta
 
 import pytest
-from domain_test_support import domain_database, seed_attacks, text
+from domain_test_support import domain_database, seed_attacks, store_observation, text
 from test_boundary_publication_postgres import (
     BOUNDARY,
+    DAY_START,
     _player_and_version,
     _sweep_with_members,
 )
@@ -92,7 +93,7 @@ def _labels(connection, generation: int) -> list[str | None]:
     ["army", "army-deferred", "army-queued", "reordered", "army-then-board", "army-rebuilt"],
 )
 def test_a_replacement_saves_one_ordering_label_everywhere(
-    database_url: str, monkeypatch, replacement: str
+    database_url: str, archive_server, monkeypatch, replacement: str
 ) -> None:
     """A board built under the older ordering rule keeps that label on a
     replacement that only rebuilds army records, inheriting the board now,
@@ -110,11 +111,25 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                     tag: _player_and_version(connection, tag, 1, "a" * 64) for tag in BY_TAG
                 }
                 _sweep_with_members(connection, [ids[0] for ids in players.values()])
-                for destruction, (tag, (player_id, _)) in zip(
+                observations = {
+                    tag: store_observation(
+                        connection_info,
+                        archive_server,
+                        occurrence_key=f"labels-{tag}",
+                        endpoint="profile",
+                        body=tag.encode(),
+                        observed_at=BOUNDARY - timedelta(hours=1),
+                        normalized_tag=tag,
+                        existing_connection=connection,
+                        commit=False,
+                    )[0]
+                    for tag in BY_TAG
+                }
+                for destruction, (tag, (player_id, day_version)) in zip(
                     (50, 60), players.items(), strict=True
                 ):
                     seed_attacks(connection, player_id, [(BOUNDARY - timedelta(days=2), destruction)])
-                    # Tied at the Reset, read without the responses.
+                    # Tied at the Reset, read without parsing the responses.
                     connection.execute("SET LOCAL session_replication_role = replica")
                     connection.execute(
                         """
@@ -129,9 +144,20 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                                   'accepted', %s)
                         """,
                         (
-                            player_id, 900000 + player_id, tag, BOUNDARY - timedelta(hours=1),
+                            player_id, observations[tag], tag, BOUNDARY - timedelta(hours=1),
                             tag, json.dumps({"tag": tag, "trophies": 5300}), SEASON,
                         ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO api_player_daily_logs (
+                            player_id, ranked_day_start, ranked_day_version_id, version,
+                            state, coverage, battles, ranked_day_end,
+                            official_season_id, season_day_number
+                        ) VALUES (%s, %s, %s, 1, 'Complete', 'complete', '[]'::jsonb, %s,
+                                  'test-season', 1)
+                        """,
+                        (player_id, DAY_START, day_version, BOUNDARY),
                     )
                 connection.commit()
                 player_id, version_id = players["#2PP"]
@@ -214,6 +240,17 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                         """,
                         ("d" * 64, "d" * 64, version_id),
                     ).fetchone()[0]
+                    connection.execute(
+                        """
+                        INSERT INTO api_player_daily_logs (
+                            player_id, ranked_day_start, ranked_day_version_id, version,
+                            state, coverage, battles, ranked_day_end,
+                            official_season_id, season_day_number
+                        ) VALUES (%s, %s, %s, 2, 'Complete', 'complete', '[]'::jsonb, %s,
+                                  'test-season', 1)
+                        """,
+                        (player_id, DAY_START, revised, BOUNDARY),
+                    )
                     boundary._record_boundary_generation(
                         database,
                         connection,
