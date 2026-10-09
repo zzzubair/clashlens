@@ -315,9 +315,21 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         (isInteger(value.start_trophies) && value.start_trophies >= 0)
       ) ||
       !Array.isArray(value.offense_events) ||
-      !Array.isArray(value.defense_events)
+      !Array.isArray(value.defense_events) ||
+      !(
+        value.adjustments === undefined ||
+        (Array.isArray(value.adjustments) &&
+          value.adjustments.every(
+            (item) => isRecord(item) && isString(item.type) && isInteger(item.amount),
+          ))
+      )
     )
       malformed();
+    const adjustments = (value.adjustments ?? []) as { type: string; amount: number }[];
+    const automatic = adjustments.find((item) => item.type === "automatic_defense");
+    const reset = adjustments.find(
+      (item) => item.type === "weekly_reset" || item.type === "season_reset",
+    );
     const valid = [
       value.attack_count,
       value.attack_three_star_count,
@@ -359,6 +371,14 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         trophyLoss: value.defense_loss as number | null,
       },
       trophyChange: value.net_trophy_change as number | null,
+      automaticDefenseLoss: automatic ? -automatic.amount : null,
+      resetAdjustment: reset
+        ? {
+            kind:
+              reset.type === "weekly_reset" ? ("weekly" as const) : ("Season" as const),
+            amount: reset.amount,
+          }
+        : null,
       resetRank: mapResetRank(value.reset_rank),
       battlesComplete: value.battles_complete === true,
       offenseEvents: value.offense_events.map((event) => mapEvent(event, "offense")),

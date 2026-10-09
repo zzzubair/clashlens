@@ -203,4 +203,75 @@ describe("calculated starting trophies on the player page", () => {
       );
     },
   );
+
+  it("reads the automatic defense loss and other Reset adjustments", async () => {
+    const day = (adjustments: unknown) => ({
+      ranked_day_start: "2026-09-20T05:00:00Z",
+      ranked_day_end: "2026-09-21T05:00:00Z",
+      season_day_number: 14,
+      state: "Complete",
+      confidence: "exact",
+      completeness: { state: "complete", reason: "Complete evidence." },
+      public_confidence: "high",
+      uncertainty_reasons: [],
+      start_trophies: 5500,
+      attack_count: 0,
+      attack_three_star_count: 0,
+      attack_gain: 0,
+      defense_count: 0,
+      defense_three_star_count: 0,
+      defense_loss: 0,
+      net_trophy_change: -202,
+      offense_events: [],
+      defense_events: [],
+      adjustments,
+    });
+    const load = async (adjustments: unknown) => {
+      const saved = day(adjustments);
+      const payload = {
+        tag: "#2PP",
+        name: "Angela",
+        trophies: 5298,
+        current_league_season_id: "1788757200",
+        observed_at: "2026-09-21T12:00:00Z",
+        screen_ready: {
+          days: [saved],
+          current_day_start: null,
+          recent_day_starts: [saved.ranked_day_start],
+          season_day_starts: [saved.ranked_day_start],
+          season: null,
+          data_quality: [],
+          provenance: {
+            source: "test",
+            observed_at: "2026-09-21T12:00:00Z",
+            freshness: "fresh",
+            confidence: "high",
+            coverage: "complete",
+            version: "test",
+          },
+        },
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 })),
+      );
+      process.env.NODE_ENV = "test";
+      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+      const { createPythonClient } = await import("../../app/services/python.server");
+      return createPythonClient().getPlayer("#2PP");
+    };
+    const player = await load([
+      { type: "automatic_defense", amount: -32, evidence_state: "observed" },
+      { type: "season_reset", amount: -170, evidence_state: "official_rule" },
+    ]);
+    expect(player.recentDays[0]).toMatchObject({
+      automaticDefenseLoss: 32,
+      resetAdjustment: { kind: "Season", amount: -170 },
+    });
+    expect((await load([])).recentDays[0]).toMatchObject({
+      automaticDefenseLoss: null,
+      resetAdjustment: null,
+    });
+    await expect(load([{ type: "automatic_defense", amount: "-32" }])).rejects.toThrow();
+  });
 });

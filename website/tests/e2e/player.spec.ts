@@ -432,8 +432,10 @@ test("battle stats switch periods without requests at iPhone width", async ({ pa
   page.on("request", (request) => requests.push(request.url()));
   for (const period of ["7", "14"]) {
     await stats.getByLabel("Showing").selectOption(period);
-    // Early in a Season the window holds only the days so far.
-    await expect(stats).toContainText(/of \d+ days saved/);
+    // Early in a Season the window holds only the finished days so far.
+    await expect(stats).toContainText(
+      /of \d+ finished days saved|No finished Legend days yet/,
+    );
     await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
   }
   await stats.getByLabel("Showing").selectOption("season");

@@ -270,6 +270,50 @@ export function legendDayKey(period: string): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Every saved record of a player, in the order the log prefers them.
+function savedDays(player: PlayerPage) {
+  return [
+    ...player.seasonDays,
+    ...(player.currentDay ? [player.currentDay] : []),
+    ...player.recentDays,
+  ];
+}
+
+// A saved day is not a Legend day only when saved profiles prove the player
+// had not signed up yet and it has no battles. Not eligible is no such proof:
+// a missing Reset reading alone sets it.
+export function isLegendDay(codes: string[], battles: number) {
+  return battles > 0 || !codes.includes("not_enrolled");
+}
+
+// A finished day's end-of-day trophies: the next day's start, from any saved
+// record of that day, shown in the log or not. Only the latest finished day,
+// ended at the latest Reset, can fall back to its start plus its trophy change
+// and any weekly or Season reset at its closing Reset; an older day without
+// the next day's start has none. When both exist and disagree the whole day is
+// Uncertain and its reasons lead with the gap.
+export function dayEnd(day: RankedDaySummary, player: PlayerPage, now: number) {
+  const ended = Date.parse(day.period.split(" – ")[1]);
+  const own =
+    day.startTrophies != null && day.trophyChange !== null
+      ? day.startTrophies + day.trophyChange + (day.resetAdjustment?.amount ?? 0)
+      : null;
+  const following =
+    savedDays(player).find((saved) => Date.parse(saved.period.split(" – ")[0]) === ended)
+      ?.startTrophies ?? null;
+  const conflict =
+    own !== null && following !== null && own !== following
+      ? `Battles add up to ${own.toLocaleString("en-GB")}; next day started at ${following.toLocaleString("en-GB")}.`
+      : null;
+  const evidence = presentDay(dayEvidence(day), false);
+  return {
+    trophies: following ?? (ended <= now && now - ended < DAY_MS ? own : null),
+    status: conflict ? "Uncertain" : evidence.status,
+    reasons: conflict ? [conflict, ...evidence.reasons] : evidence.reasons,
+    conflict,
+  };
+}
+
 // The log keeps only the current Season's days at the server time, numbered
 // from its start; an ended Season's days are under that Season in Seasons.
 export function selectPlayerHistory(player: PlayerPage | null, now: number) {
@@ -278,11 +322,7 @@ export function selectPlayerHistory(player: PlayerPage | null, now: number) {
     anchor !== null && now < anchor + 28 * DAY_MS ? anchor : seasonStartAt(now);
   const seasonDay = (day: RankedDaySummary) =>
     Math.floor((Date.parse(day.period.split(" – ")[0]) - seasonStart) / DAY_MS) + 1;
-  const days = [
-    ...(player?.seasonDays ?? []),
-    ...(player?.currentDay ? [player.currentDay] : []),
-    ...(player?.recentDays ?? []),
-  ].filter(
+  const days = (player ? savedDays(player) : []).filter(
     (day) =>
       seasonDay(day) >= 1 &&
       seasonDay(day) <= 28 &&

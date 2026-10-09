@@ -159,7 +159,7 @@ A domain change is complete only when every affected source observation, derived
 - In a Season's saved-day view, final rank means the official in-game placement from
   Clash of Clans league history, which names a Season by the Reset that ended
   it. Until that placement is saved, show it as not published yet; never fall
-  back to the Clash Lens leaderboard position. The separate Older Seasons table
+  back to the Clash Lens leaderboard position. The separate Older history table
   follows the [website behavior](../website/README.md).
 
 ### Live Leaderboard ordering

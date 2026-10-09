@@ -135,7 +135,10 @@ describe("past Seasons on the player page", () => {
     const html = await renderStreamed(await loadPage());
 
     expect(mocks.getPastSeasons).toHaveBeenCalledWith(TAG);
-    expect(html).toContain("Older Seasons");
+    expect(html).toContain("Older history");
+    expect(html.replaceAll("<!-- -->", "")).toContain(
+      "Seasons that ended up to 7 Sep 2026",
+    );
     expect(html).toMatch(
       /10 Aug 2026<\/th><td class="past-season-rank">#1<\/td><td>5,856<\/td>/,
     );
@@ -143,7 +146,7 @@ describe("past Seasons on the player page", () => {
       /Jul 2024<\/th><td class="past-season-rank">#934,651<\/td><td>5,011<\/td>/,
     );
     expect(html).toMatch(/Dec 2021<\/th><td>Not recorded<\/td><td>4,965<\/td>/);
-    expect(html).toMatch(/from.*<a href="https:\/\/clashk.ing"[^>]*>ClashKing<\/a>/);
+    expect(html).toMatch(/From.*<a href="https:\/\/clashk.ing"[^>]*>ClashKing<\/a>/);
   });
 
   it("keeps the player page working when ClashKing finishes are unavailable", async () => {
@@ -156,7 +159,7 @@ describe("past Seasons on the player page", () => {
     const html = await renderStreamed(data);
     expect(html).toContain("Nova");
     expect(html).toContain("Daily Legend log");
-    expect(html).not.toContain("Older Seasons");
+    expect(html).not.toContain("Older history");
   });
 
   it("shows three columns and preserves unknown official values", async () => {
@@ -214,10 +217,10 @@ describe("past Seasons on the player page", () => {
     mocks.getPastSeasons.mockResolvedValue([]);
     const html = await renderStreamed(await loadPage());
     expect(html).toContain("Nova");
-    expect(html).not.toContain("Older Seasons");
+    expect(html).not.toContain("Older history");
   });
 
-  it("lists a long history in one table", async () => {
+  it("lists a long history in one table, closed until opened", async () => {
     const months = Array.from({ length: 12 }, (_, index) => ({
       seasonId: `2024-${String(12 - index).padStart(2, "0")}`,
       seasonStart: null,
@@ -229,7 +232,7 @@ describe("past Seasons on the player page", () => {
     const html = await renderStreamed(await loadPage());
     const section = html.slice(html.indexOf('id="past-seasons-title"'));
     const pastSeasons = section.slice(0, section.indexOf("</section>"));
-    expect(pastSeasons).not.toContain("<details");
+    expect(html).toContain('aria-labelledby="past-seasons-title"><details><summary>');
     expect(pastSeasons.match(/<table/g)?.length).toBe(1);
     expect(pastSeasons).toMatch(/Dec 2024<\/th>.*Feb 2024<\/th>.*Jan 2024<\/th>/);
   });

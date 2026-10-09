@@ -60,51 +60,68 @@ only instead of a season day number. This adds no weekly recheck or clan discove
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
-Tracked players' current pages show a Trophy trend for the last 7 and 14 finished
-Legend days of the current Season. Each window ends at the latest Reset at 05:00
-UTC and excludes today. Early in a Season a window holds only the finished days
-so far and its title says so, such as Last 7 days (3 so far); before the
-Season's first finished day the trend is hidden. The cards sum complete saved
-daily trophy changes. Missing, partial or uncertain days and unknown changes are
-omitted. Days counted shows the coverage, such as 5 of 7; no counted days shows
-Unavailable, while a known zero displays 0. Selecting a past Season hides these
-cards. The player page explains itself with titles, labels and short counts
-rather than help paragraphs.
+On a tracked player's current page only two things are live: the current
+trophies next to the name and the Daily Legend log. Everything else uses
+finished Legend days, the ones that ended at a 05:00 UTC Reset. The page has
+no Trophy trend section; [`PlayerTrends.tsx`](app/components/PlayerTrends.tsx)
+keeps that calculation for a later dashboard card. The player page explains
+itself with titles, labels and short counts rather than help paragraphs.
+
+The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
+trophy change, end of day and Reset rank. A finished day's end of day is the
+next day's start, from any saved record of that day, even one the log leaves
+out, such as a day after the player left Legend I; it carries the day's Verified, Calculated or Uncertain dot.
+Only the latest finished day, with no next day saved yet, uses its start plus
+its trophy change plus any weekly or Season reset at its closing Reset; an
+older day without the next day's start shows Unavailable. When that sum
+disagrees with the next day's start, the end shows the next day's start and
+the whole day is Uncertain, its badges and explanation both, which says so,
+such as Battles add up to 5,050; next day started at 5,992. Trophies at last Reset follows the same rule. Under Defenses, a day with an
+automatic defense loss at Reset shows it, such as -32 automatic loss, so
+attacks minus defenses minus that loss equals the trophy change. A weekly or
+Season reset is not part of the trophy change and shows under it, such as +80
+weekly reset.
+Today's end of day and Reset rank read After Reset.
 
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final
-trophies; the current Season's leads with
-the Clash Lens rank at the latest Reset this Season (the page has no live rank),
-shown as Not ranked yet when that Reset's board has no rank for the player, and
-current trophies. Below that: hit rate, the percentage of all attacks that got
-three stars; attacks and defenses by 3, 2, 1 and 0 stars; and
-trophies per day on offense and defense, per attack and per defense. A note
-names stars of unknown battles only when there are some.
+trophies. The current Season's box leads with the Clash Lens rank at the
+latest Reset this Season, shown as Not ranked yet when that Reset's board has
+no rank for the player, and trophies at the latest Reset, the end of day of
+the day that Reset ended, with that day's dot. Before the Season's first
+finished day, trophies read No finished day yet. Below that: hit rate, the
+percentage of all attacks that got three stars; attacks and defenses by 3, 2,
+1 and 0 stars; and trophies per day on offense and defense, per attack and per
+defense. A note names stars of unknown battles only when there are some.
 The Season trophy change and total trophies gained are not shown, because the
 change is just ending trophies minus 5,000.
 
-Per-day averages on offense count only days with attacks, and on defense only
-days with defenses, so shielded or unplayed days don't lower them. A past
-Season's box uses its saved summary and, when coverage is partial, says how many
-of the 28 days are recorded; a Season known only from in-game history shows just
-the rank, which reads Not published yet until the game publishes it, and
-trophies. The current Season's box uses recorded battles and can show This
-Season, Last 7 days or Last 14 days, with one short line of dates and days saved.
-Recent windows include the current Legend day and the previous 6 or 13 days, but
-never days before the current Season; early in a Season the option says how many
-days so far, such as Last 7 days (2 so far). Per-day averages leave out the
-Legend day in progress; per-battle averages use individual recorded battles.
-Automatic Reset losses and missing or unplayed battles are excluded. Empty samples show Unavailable for rates and
-averages. Partial history and conflicting reports are flagged; retained
-past-Season totals cannot fill missing battle details.
+The current Season's box counts only finished Legend days, never the day in
+progress, and can show This Season, Last 7 days or Last 14 days: the last 7 or
+14 finished days, never days before the current Season. Early in a Season the
+option says how many finished days so far, such as Last 7 days (2 so far), and
+the box's one short line gives the dates and finished days saved. Counts,
+stars, hit rate and averages all use every recorded battle of those days,
+leaving out only days without battles that saved profiles prove were before
+the player signed up. Offense per day is trophies gained from attacks divided by the saved
+finished Legend days, battles or not, and defense per day is trophies lost on defense the same
+way; per attack and per defense divide by those days' recorded battles.
+Automatic Reset losses are not part of defense averages. Empty samples show
+Unavailable for rates and averages. Partial history and conflicting reports
+are flagged; retained past-Season totals cannot fill missing battle details. A
+past Season's box uses its saved summary, with per-day averages over every
+recorded Legend day, and when coverage is partial it says how many of the 28 days are
+recorded. A Season known only from in-game history shows just the rank, which
+reads Not published yet until the game publishes it, and trophies.
 
 With JavaScript enabled, changing the period uses battle details already loaded with
 the player page and makes no request or additional database read. It adds no stored data; the
 [saved-history limits](../docs/history-retention.md) still apply. The calculations
 are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 
-The separate Older Seasons table shows saved finishes from January 2025 up to
-the Season that ended on 7 September 2026, newest first, with three columns:
+The separate Older history table, closed until the visitor opens it, shows
+saved finishes from January 2025 up to the Season that ended on 7 September
+2026, newest first, with three columns:
 Season ended, Global rank and Final trophies. Later Seasons are not listed.
 The rank is highlighted as the standout number.
 28-day Seasons are dated by their closing Reset; older calendar-month results
