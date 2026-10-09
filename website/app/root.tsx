@@ -39,6 +39,7 @@ export interface RootLoaderData {
   accountUsername: string | null;
   logoutIdempotencyKey: string | null;
   updateStatus: UpdateStatus | null;
+  dashboardEnabled?: boolean;
 }
 
 /**
@@ -52,11 +53,22 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
   const updateStatus = import("./server/update-status.server")
     .then(({ loadUpdateStatus }) => loadUpdateStatus())
     .catch(() => null);
+  const dashboardEnabled = import("./server/config.server")
+    .then(({ isDashboardEnabled }) => isDashboardEnabled())
+    .catch(() => false);
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");
-    return { ...(await loadRootNavigation(request)), updateStatus: await updateStatus };
+    return {
+      ...(await loadRootNavigation(request)),
+      updateStatus: await updateStatus,
+      dashboardEnabled: await dashboardEnabled,
+    };
   } catch {
-    return { ...LOGGED_OUT, updateStatus: await updateStatus };
+    return {
+      ...LOGGED_OUT,
+      updateStatus: await updateStatus,
+      dashboardEnabled: await dashboardEnabled,
+    };
   }
 }
 
@@ -157,7 +169,7 @@ export default function App() {
           <NavLink to="/" end>
             Home
           </NavLink>
-          <NavLink to="/dashboard">Dashboard</NavLink>
+          {data.dashboardEnabled && <NavLink to="/dashboard">Dashboard</NavLink>}
           <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
           <NavLink to="/analytics/armies">Armies</NavLink>
           <NavLink to="/blog">Blog</NavLink>

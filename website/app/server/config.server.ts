@@ -59,6 +59,13 @@ export function isWebsiteLoginEnabled(
   return env.CLASHLENS_LOGIN_ENABLED === "true" || env.CLASHLENS_LOGIN_ENABLED === "1";
 }
 
+/** The dashboard stays hidden, as an unknown page, until this is "true". */
+export function isDashboardEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.CLASHLENS_DASHBOARD_ENABLED === "true";
+}
+
 export function loadWebsiteConfig(
   env: Record<string, string | undefined> = process.env,
 ): WebsiteConfig {

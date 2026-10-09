@@ -178,6 +178,7 @@ def create_app(
     verification_cooldown_seconds: int = 5,
     api_metrics: ApiMetrics | None = None,
     clashking_client: ClashKingClient | None = None,
+    dashboard_enabled: bool = False,
 ) -> FastAPI:
     if not 1 <= max_body_bytes <= _MAX_SUPPORTED_BODY_BYTES:
         raise ValueError("max_body_bytes exceeds the supported maximum")
@@ -407,6 +408,8 @@ def create_app(
     @app.get("/v1/players/{tag}/today")
     def player_today(tag: str, request: Request) -> JSONResponse:
         _authorize(request, "player.read", production_database)
+        if not dashboard_enabled:
+            raise ApiError(404, "dashboard_disabled")
         result = api_dashboard.get_player_today(
             production_database, dashboard_board, _safe_tag(tag), now=current_time()
         )

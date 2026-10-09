@@ -42,6 +42,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 import { LegendClock, clockMarks } from "../../app/components/LegendClock";
 import { LegendDayCard } from "../../app/components/LegendDayCard";
 import { OpponentsCard } from "../../app/components/OpponentsCard";
+import App, { loader as rootLoader } from "../../app/root";
 import type { LinkedPlayerCard } from "../../app/lib/account-contracts";
 import type { ClockBattle, OpponentRow, PlayerDay } from "../../app/lib/dashboard";
 import {
@@ -406,9 +407,11 @@ describe("dashboard route", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   beforeEach(() => {
+    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
     mocks.getWebsiteConfig.mockReturnValue(
       loadWebsiteConfig({
         NODE_ENV: "test",
@@ -779,6 +782,53 @@ describe("dashboard route", () => {
       await action(postRequest({ intent: "save-player", tag: "#8PY" })),
     );
     expect(failed).toMatchObject({ status: 503, data: { saved: false } });
+  });
+});
+
+describe("dashboard switch", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  async function renderNavigation() {
+    const handler = createStaticHandler([
+      {
+        id: "root",
+        path: "/",
+        loader: rootLoader,
+        Component: App,
+        children: [{ index: true, Component: () => null }],
+      },
+    ]);
+    const context = await handler.query(new Request(`${ORIGIN}/`));
+    if (context instanceof Response) throw new Error("unexpected response");
+    return renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+        hydrate: false,
+      }),
+    );
+  }
+
+  it("hides the page, its saves and the nav link while it is off", async () => {
+    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "");
+    for (const run of [
+      () => loader(loaderArgs(`${ORIGIN}/dashboard`)),
+      () => action(saveRequest(JSON.stringify(serializeLayout(defaultLayout())))),
+    ]) {
+      const thrown = await run().then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(unwrap(thrown).status).toBe(404);
+    }
+    expect(await renderNavigation()).not.toContain('href="/dashboard"');
+  });
+
+  it("shows the nav link while it is on", async () => {
+    vi.stubEnv("CLASHLENS_DASHBOARD_ENABLED", "true");
+    expect(await renderNavigation()).toContain('href="/dashboard"');
   });
 });
 

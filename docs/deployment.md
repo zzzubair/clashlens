@@ -463,6 +463,14 @@ Keep `CLASHLENS_GLOBAL_RANKINGS_ENABLED=false` until real collection is
 approved; with it off and no tracked players, the collector makes no
 official API calls at all.
 
+The dashboard stays hidden until `CLASHLENS_DASHBOARD_ENABLED=true` is set in
+`app.env` (`true` or `false`, default `false`). While it is off, `/dashboard`
+shows the normal page-not-found page, the navigation bar has no Dashboard
+link, saving a dashboard layout is refused, and the private API refuses the
+dashboard's own player read (`/v1/players/{tag}/today`) with
+`dashboard_disabled`. `./ops` passes the setting to the website and the private
+API, so turning it on or off takes `./ops up`.
+
 Build from the checkout to be released, review the resulting commit, then run
 the already-built release:
 

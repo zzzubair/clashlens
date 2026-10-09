@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 from test_api_db_public_ops import NOW, seed_profile
 from test_api_migration import migrated_production_database
+from test_api_security import KEY, FakeDatabase, _signed_headers
+from test_api_security import NOW as SIGNED_AT
 
 from clashlens import api_dashboard
+from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 
 
@@ -98,6 +103,31 @@ def publish_yesterday(
             (tag, state, defenses, defense_loss, Jsonb(partial_reasons)),
         )
         connection.commit()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_dashboard_today_read_refuses_while_the_dashboard_is_off(
+    monkeypatch, enabled: bool
+) -> None:
+    monkeypatch.setattr(
+        api_dashboard, "get_player_today", lambda _db, _board, tag, now: {"tag": tag}
+    )
+    app = create_app(
+        FakeDatabase(),
+        keys={("typescript-website", "current"): KEY},
+        clock=lambda: SIGNED_AT,
+        dashboard_enabled=enabled,
+    )
+    target = "/v1/players/%232PP/today"
+    with TestClient(app) as client:
+        response = client.get(target, headers=_signed_headers(target))
+    if enabled:
+        assert (response.status_code, response.json()) == (200, {"tag": "#2PP"})
+    else:
+        assert (response.status_code, response.json()["error"]) == (
+            404,
+            "dashboard_disabled",
+        )
 
 
 def test_dashboard_today_ranks_bases_and_automatic_defense(database_url: str) -> None:

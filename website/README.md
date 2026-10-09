@@ -167,8 +167,10 @@ couldn't refresh and that saved results are shown; a refused request shows only
 the refusal reason. Each Refresh gets one minute from when it is submitted; after
 that the page stops checking, says so, and ignores any later answer.
 
-The Dashboard at `/dashboard` is for signed-in users. Visitors who are not
-signed in see a blurred preview and the sign-in buttons. Signed-in users get an
+The Dashboard at `/dashboard` is for signed-in users, and only exists while
+`CLASHLENS_DASHBOARD_ENABLED=true`; otherwise it is a page-not-found page with
+no navigation link (see [deployment](../docs/deployment.md)). Visitors who are
+not signed in see a blurred preview and the sign-in buttons. Signed-in users get an
 account switcher over their linked players, Today / Season / Crew tabs ("Crew"
 is a placeholder word) and a 3-column grid. Each card has one size: Small (1
 column), Medium (2) or Large (the full row); phones stack every card full
