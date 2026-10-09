@@ -550,3 +550,32 @@ def test_the_day_befores_late_attack_credit_carries_into_the_next_day() -> None:
 
     assert during(5920) is None
     assert during(5915) is not None
+
+
+def test_a_reading_late_credits_also_explain_never_proves_the_loss_landed() -> None:
+    # The day ends at 6,080 before its 80 loss, its last +40 attack's credit
+    # late; a new-day +40 attack at 05:08 is late too. 05:20 reads 6,040:
+    # the loss, or both credits missing. 05:25 shows both credits, 6,120,
+    # and 05:29 the loss, 6,040. None of them disagrees.
+    result = verdict(
+        Reading(at(20), 6040), Reading(at(25), 6120), Reading(at(29), 6040),
+        loss=(80,), end=6080, day=(Effect("attack", 40, at(-20)),),
+        new_day=(Effect("next-attack", 40, at(8)),),
+    )
+
+    assert (result.outcome, result.loss) == ("verified", 80)
+
+
+def test_no_late_credit_carries_into_a_seasons_first_day() -> None:
+    # The previous Season's last +40 attack is not in Day 1's 5,000 start, so
+    # a 05:20 reading of 4,960 is not its late credit: it disagrees.
+    old_attack = BattleContribution(
+        "old-attack", "offense", 40,
+        battle_timestamp=test_reconciliation.DAY.start - timedelta(minutes=30))
+    result = reconcile_ranked_day(test_reconciliation._input(
+        start_trophies=5000, next_start_trophies=5000, contributions=(),
+        season_first_day=True, previous_day_contributions=(old_attack,),
+        readings=(Reading(test_reconciliation.DAY.start + timedelta(minutes=20), 4960),),
+    ))
+
+    assert "trophy_equation_mismatch" in result.failure_reasons

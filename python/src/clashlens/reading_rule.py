@@ -169,7 +169,8 @@ def judge(
     # of the day's attack gains, and 5,074 at 05:09:56. The profile catches
     # up when the player stops attacking, so a reading short of exactly the
     # latest landed attacks' gains, of either day, shows that lag, tried only
-    # when nothing else fits. A battle in flight is read both ways either way.
+    # when nothing else fits, though every way it fits counts toward the loss
+    # it shows. A battle in flight is read both ways either way.
     attacks = sorted(
         [(effect, True) for effect in day_effects]
         + [(effect, False) for effect in new_day_effects if effect.lands_from <= at],
@@ -190,8 +191,6 @@ def judge(
                     new_day_change - new_short
                     + sum(delta for delta, _, ended in chosen if not ended))
         ]
-        if found and not run:
-            break
     if found:
         run, chosen, loss = found[0]
         lagged = tuple(effect.identity for effect, _ in run)
