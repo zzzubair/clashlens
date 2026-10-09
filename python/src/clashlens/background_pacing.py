@@ -22,11 +22,11 @@ on a lock. Live work is still claimed first, and background work fills only
 what the claim has left, each kind up to its own room, the kind using less
 of its limit first, ties going at random in proportion to the limits, so a
 worker with one free background thread still runs both. A claim that found
-no live work waits up to ``PERMIT_WAIT`` for another claim's permit. On 9 Oct 2026 a claim gave up at
-once, took one background job and the older kind first, and its thread slept
-the 1 second poll: raising the limits from 2 and 4 to 6 and 6 cut background
-work from about 217 jobs a minute to 178, with rechecks averaging 0.05
-running against 2.6 other background jobs.
+no live work waits up to ``PERMIT_WAIT`` for another claim's permit. On 9 Oct
+2026 a claim gave up at once, took one background job and the older kind
+first, and its thread slept the 1 second poll: raising the limits from 2 and
+4 to 6 and 6 cut background work from about 217 jobs a minute to 178, with
+rechecks averaging 0.05 running against 2.6 other background jobs.
 
 Live work is behind, or strains, when enough of it has waited that long:
 at least ``LIVE_LAG_MIN_JOBS`` jobs and ``LIVE_LAG_SHARE`` of the live work
