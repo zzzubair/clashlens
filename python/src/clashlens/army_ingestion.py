@@ -69,6 +69,7 @@ def _upsert_army_decodes(
     reset_baseline: tuple[int, int, datetime] | None = None,
     observation_id: int | None = None,
     reset_lock_wait: str | None = None,
+    skip_busy_battles: bool = False,
 ) -> None:
     if not battle_ids:
         return
@@ -127,12 +128,25 @@ def _upsert_army_decodes(
     # rows. A battle lock keeps two jobs saving one battle's armies from
     # interleaving, so neither replaces the other's newer evidence or races
     # the one-active-per-perspective unique index. Different battles save
-    # concurrently.
+    # concurrently. A live battle log never waits on a battle another job
+    # holds (skip_busy_battles): it leaves that battle's armies to a later
+    # battle log that lists it.
+    busy: set[int] = set()
     for battle_id in sorted({row[0] for row in decoded_rows}):
+        if skip_busy_battles:
+            if not connection.execute(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"army-redecode-battle:{battle_id}",),
+            ).fetchone()[0]:
+                busy.add(battle_id)
+            continue
         connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"army-redecode-battle:{battle_id}",),
         )
+    decoded_rows = [row for row in decoded_rows if row[0] not in busy]
+    if not decoded_rows:
+        return
     players_by_day: dict[datetime, set[int]] = {}
     for day_start, attacker_id, defender_id in connection.execute(
         """

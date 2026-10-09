@@ -487,6 +487,7 @@ def complete_battle_log(
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
                 observation_id=claim.observation_id,
                 reset_lock_wait=RESET_LOCK_WAIT,
+                skip_busy_battles=True,
             )
 
             outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -899,6 +900,7 @@ def _complete_battle_log_legacy(
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
                 observation_id=claim.observation_id,
                 reset_lock_wait=RESET_LOCK_WAIT,
+                skip_busy_battles=True,
             )
 
             job_outcomes._record_parsed_payload(
