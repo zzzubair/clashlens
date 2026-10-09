@@ -809,18 +809,23 @@ def test_unreadable_new_day_battle_leaves_the_reset_reading_unused(
     assert "end_reading_unverified" in after[8]
 
 
-def test_monday_reset_reading_after_a_new_day_attack_counts_it_once(
-    database_url: str, archive_server
+@pytest.mark.parametrize("attack", [True, False])
+@pytest.mark.parametrize("read_after", [timedelta(minutes=15), timedelta(minutes=20)])
+def test_monday_reset_reading_after_a_new_day_battle_counts_it_once(
+    database_url: str, archive_server, read_after: timedelta, attack: bool
 ) -> None:
     # Saturday takes 8 defenses; Sunday one, and 7 missing at their average,
-    # ending at 4,980, raised to 5,000 on Monday. The 05:20 Monday Reset
-    # reading already shows a Monday attack its 05:21 cached log lacks; a later
-    # log brings it. Monday starts from 5,000 and counts the attack once.
+    # ending at 4,980, raised to 5,000 on Monday. The Monday Reset reading
+    # already shows a 3-star Monday battle reported at 05:08 that its cached
+    # log a minute later lacks; a later log brings it. At 05:15 the battle may
+    # or may not have reached the profile; by 05:20 an attack has. Either way
+    # Monday starts from 5,000 and counts the battle once.
+    change = WIN if attack else -WIN
     saturday, sunday = DAY_A - timedelta(days=2), DAY_A - timedelta(days=1)
     saturday_defenses = [(saturday + timedelta(hours=hour), False) for hour in range(1, 9)]
     cached = json.loads(_log(*saturday_defenses, (sunday + timedelta(hours=1), False)))
-    with_attack = json.dumps({"items": [*cached["items"], {
-        **cached["items"][0], "attack": True, "stars": 3, "destructionPercentage": 100,
+    with_battle = json.dumps({"items": [*cached["items"], {
+        **cached["items"][0], "attack": attack, "stars": 3, "destructionPercentage": 100,
         "opponentPlayerTag": "#GGPP",
         "battleTimestamp": f"{DAY_A + timedelta(minutes=8):%Y%m%dT%H%M%S.000Z}",
     }]}).encode()
@@ -831,26 +836,28 @@ def test_monday_reset_reading_after_a_new_day_attack_counts_it_once(
         jobs += _reset_work(connection_info, archive_server, sunday,
                             profile=_profile(start_sunday), log=_log(*saturday_defenses))
         jobs += _reset_work(
-            connection_info, archive_server, DAY_A, profile=_profile(5000 + WIN),
-            log=json.dumps(cached).encode(),
-            profile_at=DAY_A + timedelta(minutes=20), log_at=DAY_A + timedelta(minutes=21),
+            connection_info, archive_server, DAY_A, profile=_profile(5000 + change),
+            log=json.dumps(cached).encode(), profile_at=DAY_A + read_after,
+            log_at=DAY_A + read_after + timedelta(minutes=1),
         )
         _process(connection_info, archive_server, jobs)
         [before] = _latest_days(connection_info, (sunday,))
         jobs = [store_observation(
             connection_info, archive_server, occurrence_key="later-log",
-            endpoint="battle_log", body=with_attack,
+            endpoint="battle_log", body=with_battle,
             observed_at=DAY_A + timedelta(minutes=30), normalized_tag=TAG,
         )[1]]
         jobs += _reset_work(connection_info, archive_server, DAY_B,
-                            profile=_profile(5000 + WIN), log=with_attack)
+                            profile=_profile(5000 + change), log=with_battle)
         _process(connection_info, archive_server, jobs)
         sunday_row, monday_row = _latest_days(connection_info, (sunday, DAY_A))
 
     assert before[0] == "Inconsistent"
     assert (sunday_row[0], sunday_row[3]) == ("Complete", 4980)
-    assert sunday_row[7]["next_start_reading_correction"] == -WIN
-    assert monday_row[2:4] == (5000, 5000 + WIN)
+    assert sunday_row[7]["next_start_reading_correction"] == -change
+    assert monday_row[2] == 5000
+    if attack:
+        assert monday_row[3] == 5000 + WIN
 
 
 def test_battle_time_is_a_length_only_beside_a_battle_timestamp(

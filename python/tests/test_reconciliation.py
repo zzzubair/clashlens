@@ -115,7 +115,7 @@ def test_automatic_defense_adjustment_can_be_calculated_without_end_confirmation
     assert "missing_end_baseline" in result.failure_reasons
 
 
-def test_zero_defenses_does_not_apply_automatic_adjustment_and_has_uncertain_shield_rules() -> (
+def test_zero_defenses_does_not_apply_automatic_adjustment_and_shields_stack() -> (
     None
 ):
     first = reconcile_ranked_day(
@@ -138,8 +138,8 @@ def test_zero_defenses_does_not_apply_automatic_adjustment_and_has_uncertain_shi
     assert first.state == "Complete"
     assert first.shield_state == "inferred_shielded"
     assert first.shield_duration_days == 1
-    assert third.shield_state == "uncertain_sequence"
-    assert "shield_sequence_longer_than_two_days" in third.failure_reasons
+    assert (third.state, third.shield_state) == ("Complete", "inferred_shielded")
+    assert third.shield_duration_days == 3
 
 
 def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows() -> None:

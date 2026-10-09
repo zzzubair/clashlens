@@ -415,11 +415,13 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         if end_available and data.next_start_trophies is not None:
             residual = data.next_start_trophies - expected_next
             reset = next((item for item in _readings(data) if item.reset_reading), None)
-            if end_hidden_by_reset and residual and reset is not None and residual == sum(
-                effect.change for effect in _effects(
-                    _deduplicate_contributions(data.new_day_contributions)[0])
-                if effect.lands_until <= reset.read_at):
-                # A late Reset reading already shows the new-day battles landed by then.
+            # A late Reset reading may already show new-day battles, landed or in flight.
+            judged = reading_rule.judge(
+                reset, end_before_loss=expected_next, loss_candidates=(), loss_certain=False,
+                day_effects=(), new_day_effects=_effects(
+                    _deduplicate_contributions(data.new_day_contributions)[0]),
+            ) if end_hidden_by_reset and residual and reset is not None else None
+            if judged is not None and judged.matched:
                 reading_correction, residual, next_start_trophies = -residual, 0, expected_next
                 observed_trophy_change = next_start_trophies - start_trophies
         # Every reading from the end Reset on judges a clean, ended day
@@ -613,8 +615,6 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         end_available=end_available,
         previous=data.previous_day,
     )
-    if shield_state == "uncertain_sequence":
-        failures.append("shield_sequence_longer_than_two_days")
     if shield_state == "unknown" and coverage_complete is False:
         # The coverage reasons already carry the precise cause. This marker is
         # useful to consumers that only inspect the shield evidence state.
@@ -639,10 +639,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         state = "Complete"
 
     confidence = "exact" if state == "Complete" else "partial"
-    if state in {"Inconsistent", "Malformed"} or shield_state in {
-        "unknown",
-        "uncertain_sequence",
-    }:
+    if state in {"Inconsistent", "Malformed"} or shield_state == "unknown":
         confidence = "uncertain"
     if state == "Complete" and (
         shield_state == "inferred_shielded"
@@ -1350,11 +1347,9 @@ def _shield_state(
     if not evidence["trophies_unchanged"]:
         return "not_inferred", None, evidence
 
+    # Shields stack, so a run of such days is shielded however long it lasts.
     prior_run = previous.shield_run_length if previous is not None else 0
-    duration = prior_run + 1
-    if duration > 2:
-        return "uncertain_sequence", None, evidence
-    return "inferred_shielded", duration, evidence
+    return "inferred_shielded", prior_run + 1, evidence
 
 
 def _formula_components(

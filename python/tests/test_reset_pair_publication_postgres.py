@@ -105,9 +105,8 @@ def test_repair_rebuilds_dependent_results_in_one_job(monkeypatch, shielded, rep
     if shielded:
         assert saved[days[0]].shield_duration_days == 1
         assert saved[days[1]].shield_duration_days == (2 if repair else 1)
-        assert saved[days[2]].shield_state == (
-            "uncertain_sequence" if repair else "inferred_shielded"
-        )
+        assert saved[days[2]].shield_state == "inferred_shielded"
+        assert saved[days[2]].shield_duration_days == (3 if repair else 2)
     elif repair:
         for day in days[1:]:
             assert saved[day].state == "Complete"
