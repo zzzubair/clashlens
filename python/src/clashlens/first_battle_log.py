@@ -318,9 +318,9 @@ def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) ->
 def backfill(
     database: Database, season_id: str, *, queue: bool, max_jobs: int
 ) -> dict[str, Any]:
-    # An operator's batch: queued at backfill priority, like requeue_day_1,
-    # so a worker thread runs it only when no higher-priority work that thread
-    # can claim is due.
+    # An operator's batch: queued at backfill priority, like the Season
+    # repair, so a worker thread runs it only when no higher-priority work
+    # that thread can claim is due.
     """Find, and with ``queue`` recalculate, the days that players first
     tracked during the Season can now fill: Day 1 for each player whose first
     battle log was saved on Day 1, and, for a player first tracked later, the

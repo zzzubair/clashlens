@@ -24,8 +24,7 @@ from test_first_battle_log_postgres import (
 from test_reconciliation_postgres import _profile
 from test_reset_settlement_state_postgres import TAG, _process, _reset_work
 
-from clashlens import first_battle_log, reset_baselines
-from clashlens.db import Database
+from clashlens import reset_baselines
 from clashlens.domain import ranked_day_for
 
 DAY_3 = DAY_2 + timedelta(days=1)
@@ -165,17 +164,6 @@ def test_sign_up_day_starts_at_5000_by_the_season_rule(
         day = _sign_up_day(connection_info)
 
     assert day == ("Complete", "inferred", 5000, 5000 + WIN, "season_rule")
-
-
-def _sign_up_days(connection_info: str) -> int:
-    database = Database(connection_info)
-    try:
-        return first_battle_log.requeue_sign_up_days(
-            database, ranked_day_for(DAY_2).official_season_id,
-            queue=False, max_jobs=100,
-        )["players"]
-    finally:
-        database.close()
 
 
 def test_a_season_profile_read_before_the_reset_but_saved_last_rules_out_sign_up(
