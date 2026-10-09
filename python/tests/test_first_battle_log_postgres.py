@@ -105,17 +105,17 @@ DEFENSE = [(DAY_1 + timedelta(hours=6), False)]
 
 @pytest.mark.parametrize("first_log,battles,expected", [
     # Full 50-row log whose oldest row is from before Day 1: Day 1 is
-    # complete, from the Season rule's 5,000, so only inferred.
-    ("reaches_back", ATTACKS, ("Complete", "inferred", True)),
+    # complete and exact, from the Season rule's 5,000 and its end reading.
+    ("reaches_back", ATTACKS, ("Complete", "exact", True)),
     # A short log is the player's whole log, so it reaches back too.
-    ("short", ATTACKS, ("Complete", "inferred", True)),
+    ("short", ATTACKS, ("Complete", "exact", True)),
     # A full log that starts after Day 1's start may have lost battles, so
     # the day is uncertain, as any day with a coverage gap.
     ("full_from_day_1", ATTACKS, ("Partial", "uncertain", False)),
     # With 1 to 7 defenses the automatic defense loss averages Day 1's own
     # defenses: the day before, never tracked, is the previous Season's. On
     # Day 1, 2 attacks and 1 defense are charged for 2 - 1 missing defenses.
-    ("reaches_back", ATTACKS + DEFENSE, ("Complete", "inferred", True)),
+    ("reaches_back", ATTACKS + DEFENSE, ("Complete", "exact", True)),
 ])
 def test_player_first_seen_during_day_1_gets_a_season_rule_start(
     database_url: str, archive_server, first_log: str, battles, expected
@@ -226,11 +226,11 @@ def test_opponent_found_on_day_2_gets_day_1_and_the_backfill_finds_the_rest(
     # No Reset reading ends the opponent's Day 1, but their first log holds
     # all of it, and their first profile, read on Day 2 after its battle
     # landed, equals Day 1's end plus that battle: it proves Day 1.
-    assert opponent[:3] == ("Complete", "inferred", 5000)
+    assert opponent[:3] == ("Complete", "exact", 5000)
     assert opponent[3] == 5000 + WIN and opponent[4] is True
     assert opponent[5] == []
     assert not_in_season is None
-    assert day_1_joiner[:4] == ("Complete", "inferred", 5000, 5000 + 2 * WIN)
+    assert day_1_joiner[:4] == ("Complete", "exact", 5000, 5000 + 2 * WIN)
     # The backfill lists the Day 1 joiner and the opponent, not the crawl
     # import.
     assert preview == {
@@ -272,7 +272,7 @@ def test_opponent_whose_battle_log_is_processed_before_their_profile_gets_day_1(
         opponent = _day_1(connection_info, "#2YY")
 
     assert (waiting["waiting_for_profile"], waiting["queued"]) == (1, 0)
-    assert opponent[:4] == ("Complete", "inferred", 5000, 5000 + WIN)
+    assert opponent[:4] == ("Complete", "exact", 5000, 5000 + WIN)
     assert opponent[4] is True and opponent[6] == "season_rule"
 
 
@@ -328,7 +328,7 @@ def test_older_first_log_processed_after_a_newer_one_recalculates_day_1(
         from_older = _day_1(connection_info, "#2YY")
 
     assert from_newer[2] == 5000 and from_newer[4] is False
-    assert from_older[:4] == ("Complete", "inferred", 5000, 5000 + WIN)
+    assert from_older[:4] == ("Complete", "exact", 5000, 5000 + WIN)
     assert from_older[4] is True and from_older[6] == "season_rule"
 
 
@@ -386,7 +386,7 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
     assert (queued["phase"], queued["queued"], queued["left_to_queue"]) == ("days", 2, 0)
     assert (again["phase"], again["queued"], again["unfinished"]) == ("days", 0, 2)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
-    assert after[:4] == ("Complete", "inferred", 5000, ending)
+    assert after[:4] == ("Complete", "exact", 5000, ending)
 
 
 def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
@@ -460,7 +460,7 @@ def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
     assert failed["days"]["before"][day_1]["states"] == {"Partial": 1}
     assert "battle_log_overlap_gap" in failed["days"]["before"][day_1]["reasons"]
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
-    assert after[:4] == ("Complete", "inferred", 5000, ending)
+    assert after[:4] == ("Complete", "exact", 5000, ending)
 
 
 def test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end(

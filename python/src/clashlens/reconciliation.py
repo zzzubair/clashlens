@@ -644,9 +644,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     if state == "Complete" and (
         shield_state == "inferred_shielded"
         or end_hidden_by_reset
-        # A start from the Season rule is the game's rule, not a reading,
-        # and one from the day before's end is a calculation.
-        or season_rule_start
+        # A start from the day before's end is a calculation. One from the
+        # Season rule is the game's own rule, so it is known exactly.
         or chain_start
         # The reading predates the loss, so the day's end is calculated.
         or unsettled_loss
