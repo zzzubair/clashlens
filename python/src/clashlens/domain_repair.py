@@ -30,15 +30,15 @@ Recalculating a day that comes out the same saves nothing new.
 A dormant campaign design follows. Four fixes change results already
 published for a Season: the 2-star/55%
 payout (17, not 18, under trophy rule v2), the five-minute battle day move,
-unit catalogue v2 decodes and accepted Reset settlements. Each fix repairing
-alone would republish every Reset several times from half-fixed inputs, so a
+decodes under the pinned unit catalogue and accepted Reset settlements. Each
+fix repairing alone would republish every Reset several times from half-fixed inputs, so a
 campaign lists everything they change once, for one coordinated rebuild:
 
 - ``source``: one selected report the payout or day fix changes, listed once
   with every reason, including a needed decode. A battle day move counts
   only while a published day does not yet show it.
 - ``decode_batch``: up to 100 battles (keyed by battle id / 100) whose
-  selected reports need only a catalogue v2 decode.
+  selected reports need only a decode under the pinned catalogue.
 - ``day``: one player's saved Legend day, from the first their own reports
   change, or whose saved result does not yet show a finished fix or was
   built from an older result of the day before, through every later saved

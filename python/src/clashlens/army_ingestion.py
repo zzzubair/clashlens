@@ -1041,9 +1041,7 @@ def _build_army_fact_batch(
         "offense" if perspective == "attacker" else "defense"
         for perspective in perspective_values
     ]
-    decode_filter = (
-        "AND decoder_version = %s AND catalog_version = %s AND is_active"
-    )
+    decode_filter = "AND decoder_version = %s AND catalog_version = %s AND is_active"
     decode_params: tuple[Any, ...] = (DECODER_VERSION, CATALOG_VERSION)
     if decode_ids is not None:
         decode_filter = "AND id = ANY(%s::bigint[])"
