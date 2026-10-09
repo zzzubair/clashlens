@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 import test_reconciliation
 
-from clashlens.domain import allocate_trophies
+from clashlens.domain import allocate_trophies, ranked_day_for
 from clashlens.reading_rule import Effect, Reading, contradiction_during_day, decide
 from clashlens.reconciliation import (
     BattleContribution,
@@ -30,11 +30,12 @@ LOSS = 70
 
 
 def verdict(*readings: Reading, loss=(LOSS,), certain=True, new_day=(), day=DAY_BATTLES,
-            start_proven=True, end=END_BEFORE_LOSS, unknown_from=None):
+            start_proven=True, end=END_BEFORE_LOSS, unknown_from=None, floor=None):
     return decide(
         readings, reset_at=RESET, end_before_loss=end,
         loss_candidates=loss, loss_certain=certain, day_effects=day,
         new_day_effects=new_day, unknown_from=unknown_from, start_proven=start_proven,
+        floor=floor,
     )
 
 
@@ -552,19 +553,19 @@ def test_the_day_befores_late_attack_credit_carries_into_the_next_day() -> None:
     assert during(5915) is not None
 
 
-def test_a_reading_late_credits_also_explain_never_proves_the_loss_landed() -> None:
+def test_a_reading_late_credits_also_explain_proves_no_loss_until_they_show() -> None:
     # The day ends at 6,080 before its 80 loss, its last +40 attack's credit
     # late; a new-day +40 attack at 05:08 is late too. 05:20 reads 6,040:
     # the loss, or both credits missing. 05:25 shows both credits, 6,120,
-    # and 05:29 the loss, 6,040, or both credits late again. None of them
-    # disagrees, and none proves the loss landed.
+    # and 05:29 6,040 again: shown credits cannot hide again, so that is the
+    # loss landed. None of them disagrees.
     result = verdict(
         Reading(at(20), 6040), Reading(at(25), 6120), Reading(at(29), 6040),
         loss=(80,), end=6080, day=(Effect("attack", 40, at(-20)),),
         new_day=(Effect("next-attack", 40, at(8)),),
     )
 
-    assert (result.outcome, result.loss) == ("verified", 0)
+    assert (result.outcome, result.loss) == ("verified", 80)
 
 
 def test_no_late_credit_carries_into_a_seasons_first_day() -> None:
@@ -635,3 +636,61 @@ def test_the_weekly_raise_once_shown_never_goes_back() -> None:
 
     assert found is not None and found.reading.trophies == 4900
     assert (sunday.outcome, sunday.reading.trophies) == ("contradicted", 4900)
+
+
+def test_a_reading_no_single_way_of_the_earlier_ones_leads_to_disagrees() -> None:
+    # Sunday starts at 4,980 and gains 40, 30, 30, 40 and 40 with no defense
+    # slot used, so it ends at 5,160 before a possible 80 charge. Monday's
+    # 5,000 needs the charge or the raise; 4,980 after it needs neither
+    # (every credit late), which no way the 5,000 fits can lead to.
+    day = tuple(Effect(f"attack-{index}", gain, at(-60 + 10 * index))
+                for index, gain in enumerate((40, 30, 30, 40, 40)))
+    result = verdict(
+        Reading(at(20), 5000), Reading(at(30), 4980), Reading(at(40), 5160),
+        loss=(80,), certain=False, end=5160, day=day, floor=5000,
+    )
+
+    assert (result.outcome, result.reading.trophies) == ("contradicted", 4980)
+
+
+def test_a_raise_that_changes_nothing_still_counts_as_applied() -> None:
+    # Sunday ends at 5,220 before its 200 loss, 5,020 after, its last +40
+    # credit late. Monday's 5,000 is the raised 4,980; 5,020 once the credit
+    # shows is the raise applied to a total above 5,000. Both fit, judging
+    # Sunday and during Monday.
+    sunday_attack = Effect("sunday-attack", 40, at(-30))
+    sunday = verdict(Reading(at(20), 5000), Reading(at(40), 5020), end=5220,
+                     loss=(200,), day=(sunday_attack,), floor=5000)
+    monday_start = RESET
+    during = contradiction_during_day(
+        (Reading(monday_start + timedelta(minutes=20), 5000),
+         Reading(monday_start + timedelta(minutes=40), 5020)),
+        day_start=monday_start, reset_at=monday_start + timedelta(days=1), start=5020,
+        pending_loss=200, day_effects=(), earlier=(sunday_attack,), floor=5000,
+    )
+
+    assert sunday.outcome == "verified"
+    assert during is None
+
+
+def test_a_monday_reading_can_show_the_raise_when_sunday_ended_above_5000() -> None:
+    # As above, judged during Monday: Sunday ended at 5,020 after its 200
+    # loss, so Monday starts there. 05:20 reads the raised 5,000.
+    day = test_reconciliation.DAY
+    monday = ranked_day_for(day.start - timedelta(hours=12))
+    assert monday.start.weekday() == 0
+    result = reconcile_ranked_day(test_reconciliation._input(
+        ranked_day=monday, now=monday.end + timedelta(minutes=1),
+        coverage_observations=tuple(
+            replace(item, observed_at=item.observed_at - timedelta(days=1))
+            for item in test_reconciliation._coverage()),
+        start_trophies=5020, next_start_trophies=5020, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 200, 0, automatic_loss=200,
+                                       final_trophies=5020),
+        previous_day_contributions=(BattleContribution(
+            "sunday-attack", "offense", 40,
+            battle_timestamp=monday.start - timedelta(minutes=30)),),
+        readings=(Reading(monday.start + timedelta(minutes=20), 5000),),
+    ))
+
+    assert "trophy_equation_mismatch" not in result.failure_reasons

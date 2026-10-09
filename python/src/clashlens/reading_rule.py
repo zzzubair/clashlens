@@ -110,13 +110,13 @@ class _Judged:
     residual: int = 0
     # Landed attacks whose gains the reading lacks: the attacker's profile lag.
     lagged: tuple[str, ...] = ()
-    # Every way it fits: the automatic loss it shows applied, and whether it
-    # shows the weekly raise to ``floor``.
-    ways: frozenset[tuple[int, bool]] = frozenset()
+    # Every way it fits: the automatic loss it shows applied, whether it
+    # shows the weekly raise to ``floor``, and the battles whose credit it shows.
+    ways: frozenset[tuple[int, bool, frozenset[str]]] = frozenset()
 
     @property
     def losses(self) -> frozenset[int]:
-        return frozenset(loss for loss, _ in self.ways)
+        return frozenset(loss for loss, _, _ in self.ways)
 
 
 def judge(
@@ -141,9 +141,13 @@ def judge(
     # (ended day) or does (new day), its identity, and which day.
     maybes: list[tuple[int, str, bool]] = []
     new_day_change = 0
+    shown: list[str] = []
     # An undisputed battle worth no trophies shows the same either way.
     for effect in day_effects:
-        if effect.lands_until <= at or not (effect.change or effect.disputed):
+        if not (effect.change or effect.disputed):
+            continue
+        if effect.lands_until <= at:
+            shown.append(effect.identity)
             continue
         if effect.disputed:
             return None
@@ -159,6 +163,7 @@ def judge(
             return None
         if effect.lands_until <= at:
             new_day_change += effect.change
+            shown.append(effect.identity)
         else:
             maybes.append((effect.change, effect.identity, False))
     if len(maybes) > MAX_AMBIGUOUS_BATTLES:
@@ -166,9 +171,17 @@ def judge(
     losses = [0, *(loss for loss in loss_candidates if loss)]
 
     def fits(ended: int, new: int) -> list[bool]:
-        """Whether the reading shows the value unraised, raised, or both."""
-        values = [(ended, False)] + ([(floor, True)] if floor is not None and ended < floor else [])
+        """Whether the reading shows the value unraised, raised, or both: a
+        raise applied to a total above it changes nothing."""
+        values = [(ended, False)] + ([(max(ended, floor), True)] if floor is not None else [])
         return [raised for value, raised in values if reading.trophies == value + new]
+
+    def shows(run: list[tuple[Effect, bool]], chosen: tuple[tuple[int, str, bool], ...]
+              ) -> frozenset[str]:
+        picked = {identity for _, identity, _ in chosen}
+        return frozenset(shown + [identity for _, identity, ended in maybes
+                                  if (identity in picked) != ended]
+                         ) - {effect.identity for effect, _ in run}
 
     # The game can credit an attack to the attacker's own profile long after
     # it: on 6 October 2026 #P20G0CUJY read 4,766 at 05:02:41 without all 308
@@ -209,7 +222,9 @@ def judge(
             + tuple(effect.identity for effect, ended in run if ended),
             new_day_change - sum(effect.change for effect, ended in run if not ended)
             + sum(delta for delta, _, ended in chosen if not ended),
-            lagged=lagged, ways=frozenset(way[2:] for way in found),
+            lagged=lagged, ways=frozenset(
+                (way_loss, raised, shows(way_run, way_chosen))
+                for way_run, way_chosen, way_loss, raised in found),
         )
     # The residual is against the day's end after a certain loss, the value
     # every saved result records as the expected next start.
@@ -351,18 +366,21 @@ def contradiction_during_day(
 
 
 def _first_misfit(judged: Iterable[_Judged]) -> tuple[Verdict | None, int]:
-    """The first of these readings, in order, that fits no value, or fits
-    only without what an earlier one showed: once every way that one fits
-    has the automatic loss landed, or the weekly raise applied, so must
-    every later one, as neither undoes itself. Also the loss shown landed."""
-    loss, raised = 0, False
+    """The first of these readings, in order, that fits no value, or no way
+    that can follow a way an earlier one fits: a loss landed, the weekly
+    raise applied and a credit shown stay so. Also the loss every way still
+    possible after the last one has landed."""
+    surviving: frozenset[tuple[int, bool, frozenset[str]]] | None = None
     for item in judged:
-        ways = [(way_loss, way_raised) for way_loss, way_raised in item.ways
-                if (not loss or way_loss == loss) and (way_raised or not raised)]
+        ways = item.ways if surviving is None else frozenset(
+            (loss, raised, shown) for loss, raised, shown in item.ways
+            if any((not before_loss or loss == before_loss)
+                   and (raised or not before_raised) and before_shown <= shown
+                   for before_loss, before_raised, before_shown in surviving))
         if not ways:
-            residual = item.residual if not item.matched else (loss - item.loss) or None
-            return Verdict("contradicted", item.reading, residual=residual), loss
-        if all(way_loss for way_loss, _ in ways):
-            loss = ways[0][0]
-        raised = raised or all(way_raised for _, way_raised in ways)
-    return None, loss
+            landed = max((way[0] for way in surviving or ()), default=0)
+            residual = item.residual if not item.matched else (landed - item.loss) or None
+            return Verdict("contradicted", item.reading, residual=residual), landed
+        surviving = ways
+    losses = {way[0] for way in surviving or ()}
+    return None, losses.pop() if len(losses) == 1 else 0

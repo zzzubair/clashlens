@@ -527,12 +527,12 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     previous = None if data.season_first_day or season_rule_start else data.previous_day
     pending_loss = previous.automatic_loss if previous else 0
     raised = previous and (previous.final_trophies or 5000) < 5000 == start_trophies
-    earlier = data.previous_day_contributions if previous else ()
+    earlier = _deduplicate_contributions(data.previous_day_contributions)[0] if previous else ()
     during = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
         start=previous.final_trophies if raised else start_trophies, pending_loss=pending_loss,
-        day_effects=_effects(contributions), floor=5000 if raised else None,
-        earlier=_effects(_deduplicate_contributions(earlier)[0]),
+        day_effects=_effects(contributions), earlier=_effects(earlier),
+        floor=5000 if raised or data.ranked_day.start.weekday() == 0 else None,
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else None
     if during is not None and during.reading is not None:
