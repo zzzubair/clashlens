@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Callable
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -31,7 +31,6 @@ from . import (
     boundary,
     domain_repair,
     first_battle_log,
-    ranked_day_inputs,
     reset_baselines,
 )
 from .db import (
@@ -39,10 +38,12 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
+    PYTHON_LIVE_PRIORITY,
     Database,
     _text_value,
 )
-from .domain import SEASON_ANCHOR_RULE_VERSION
+from .domain import SEASON_ANCHOR_RULE_VERSION, SEASON_DURATION
 from .reconciliation import RECONCILIATION_RULE_VERSION
 
 
@@ -145,32 +146,47 @@ WHERE day.battles IS NOT NULL
 """
 
 
-def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
-    """Queue at most ``max_jobs`` rebuilds of players not yet done.
+def enqueue_rebuilds(
+    database: Database, *, max_jobs: int, season_id: str | None = None,
+    queue: bool = True,
+) -> dict[str, Any]:
+    """Queue at most ``max_jobs`` rebuilds of players not yet done; with
+    ``season_id``, as a Season repair, only of that Season's days, so no
+    other Season changes, whatever Season the days were saved under, at
+    backfill priority.
 
     A player with reconciliation queued or running that rebuilds one of those
     days waits for a later run. A player whose latest rebuild failed is not
     queued again but listed, at most ``max_jobs`` of them, in
-    ``failed_blockers``; deleting the failed job lets a later run queue it.
-    Returns the queued job ids in the republish command's report shape.
+    ``failed_blockers``, and every one in ``failed_job_ids``; deleting the
+    failed job lets a later run queue it.
+    Returns the queued job ids in the republish command's report shape;
+    without ``queue``, writes nothing and lists only those blockers.
     """
     from .battle_ingestion import _refresh_battle_disagreements
 
+    start = datetime.fromtimestamp(int(season_id), UTC) if season_id else None
+    season = {"start": start, "end": start + SEASON_DURATION if start else None}
     with database.pool.connection() as connection, connection.transaction():
-        # A battle that gained or lost a side's report compares them again.
-        _refresh_battle_disagreements(
-            connection,
-            [
-                int(row[0])
-                for row in connection.execute(
-                    """
-                    SELECT DISTINCT battle_id FROM battle_day_repairs,
-                        unnest(ARRAY[from_battle_id, to_battle_id]) AS battle_id
-                    ORDER BY battle_id
-                    """
-                ).fetchall()
-            ],
-        )
+        if queue:
+            # A battle that gained or lost a side's report compares them again.
+            _refresh_battle_disagreements(
+                connection,
+                [
+                    int(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT DISTINCT battle_id FROM battle_day_repairs,
+                            unnest(ARRAY[from_battle_id, to_battle_id]) AS battle_id
+                        WHERE %(start)s::timestamptz IS NULL
+                           OR from_day >= %(start)s AND from_day < %(end)s
+                           OR to_day >= %(start)s AND to_day < %(end)s
+                        ORDER BY battle_id
+                        """,
+                        season,
+                    ).fetchall()
+                ],
+            )
         rows = connection.execute(
             f"""
             WITH pending AS (
@@ -180,6 +196,9 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                        min(pending.ranked_day_start) AS first_day,
                        max(pending.ranked_day_start) AS last_day
                 FROM pending
+                WHERE %(start)s::timestamptz IS NULL
+                   OR pending.ranked_day_start >= %(start)s
+                  AND pending.ranked_day_start < %(end)s
                 GROUP BY pending.player_id
             ), candidates AS (
                 SELECT player.*, job.id AS job_id, job.failure_category,
@@ -236,14 +255,14 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                        ) AS position
                 FROM candidates
             ) AS ranked
-            WHERE position <= %s
+            WHERE position <= %(max_jobs)s OR job_id IS NOT NULL
             ORDER BY player_id
             """,
-            (max_jobs,),
+            {**season, "max_jobs": max_jobs},
         ).fetchall()
         job_ids: list[int] = []
-        for player_id, first_day, last_day, season_id, job_id, *_ in rows:
-            if job_id is not None:
+        for player_id, first_day, last_day, day_season, job_id, *_ in rows:
+            if job_id is not None or not queue:
                 continue
             day_text = first_day.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             row = connection.execute(
@@ -251,10 +270,10 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                 INSERT INTO python_processing_jobs_worker (
                     observation_id, work_type, deduplication_key, input_json,
                     state, due_at, parser_version, processing_version,
-                    domain_rule_version, analytics_rule_version
+                    domain_rule_version, analytics_rule_version, priority
                 ) VALUES (
                     NULL, 'reconcile_ranked_day', %s, %s, 'pending',
-                    clock_timestamp(), %s, %s, %s, %s
+                    clock_timestamp(), %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (deduplication_key) DO NOTHING
                 RETURNING id
@@ -268,22 +287,27 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                             "last_ranked_day_start": last_day.astimezone(
                                 UTC
                             ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "recalculate_season": _text_value(season_id),
-                            "trigger": "battle_day_repair",
+                            "recalculate_season": season_id or _text_value(day_season),
+                            "trigger": (
+                                "season_repair" if season_id else "battle_day_repair"
+                            ),
                         }
                     ),
                     DEFAULT_PARSER_VERSION,
                     PROCESSING_VERSION,
                     DOMAIN_RULE_VERSION,
                     ANALYTICS_RULE_VERSION,
+                    PYTHON_BACKFILL_PRIORITY if season_id else PYTHON_LIVE_PRIORITY,
                 ),
             ).fetchone()
             if row is not None:
                 job_ids.append(int(row[0]))
+    failed = [row for row in rows if row[4] is not None]
     return {
         "job_ids": job_ids,
         "evaluated_count": 0,
         "failure_reasons": {},
+        "failed_job_ids": [int(row[4]) for row in failed],
         "failed_blockers": [
             {
                 "job_id": int(job_id),
@@ -293,8 +317,8 @@ def enqueue_rebuilds(database: Database, *, max_jobs: int) -> dict[str, Any]:
                     _text_value(failure_category) if failure_category else None
                 ),
             }
-            for player_id, _, _, _, job_id, failure_category, job_day in rows
-            if job_id is not None
+            for player_id, _, _, _, job_id, failure_category, job_day
+            in failed[:max_jobs]
         ],
     }
 
@@ -315,36 +339,21 @@ def add_republish_command(
         type=bounded_int("republication batch size", 1, 1000),
         default=100,
     )
+    # With --repair, run one action of the Season repair, recalculating every
+    # saved day and board of the Season under the current rules with a
+    # before and after receipt; see domain_repair.season_repair.
+    republish_current_season.add_argument(
+        "--repair", choices=domain_repair.REPAIR_ACTIONS
+    )
     # With --campaign, run one action of a Season's repair campaign instead
     # of queueing a batch; see domain_repair.
     republish_current_season.add_argument("--campaign", choices=domain_repair.ACTIONS)
     # With --first-logs, preview or queue the days that players first tracked
     # during the Season can now fill; see first_battle_log.backfill.
     republish_current_season.add_argument("--first-logs", choices=("preview", "queue"))
-    # With --day-1, preview or queue the recalculation of each player's Day 1
-    # with 1 to 7 defenses; see first_battle_log.requeue_day_1.
-    republish_current_season.add_argument("--day-1", choices=("preview", "queue"))
-    # With --zero-result-slots, preview or queue the recalculation of each
-    # player's days holding "no opponent, no battle" rows; see
-    # first_battle_log.requeue_zero_result_slots.
-    republish_current_season.add_argument(
-        "--zero-result-slots", choices=("preview", "queue")
-    )
-    # With --overlap-gap, preview or queue the recalculation of each player's
-    # oldest ended day reporting battle_log_overlap_gap; see
-    # first_battle_log.requeue_overlap_gap.
-    republish_current_season.add_argument("--overlap-gap", choices=("preview", "queue"))
-    # With --mismatch, the same for each player's oldest ended day reporting
-    # trophy_equation_mismatch, or with no used defense slots and no
-    # automatic loss in its Reset reading.
-    republish_current_season.add_argument("--mismatch", choices=("preview", "queue"))
-    # With --sign-up, preview or queue the recalculation of each player's
-    # day whose start Reset reading came before they signed up; see
-    # first_battle_log.requeue_sign_up_days.
-    republish_current_season.add_argument("--sign-up", choices=("preview", "queue"))
     # With --boards, preview or queue rebuilds of the Season's Reset boards
-    # still ranking a reading the board now leaves out or missing the battles
-    # after their readings; see boundary.queue_board_rebuilds.
+    # still ranking a reading the board now leaves out or whose entries the
+    # board rule now changes; see boundary.queue_board_rebuilds.
     republish_current_season.add_argument("--boards", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
@@ -357,57 +366,28 @@ def _season_id(value: str) -> str:
 
 def run_republish_command(database_url: str, arguments: argparse.Namespace) -> int:
     """Queue one batch, or run one campaign action, and print its report."""
+    repair = getattr(arguments, "repair", None)
     first_logs = getattr(arguments, "first_logs", None)
-    day_1 = getattr(arguments, "day_1", None)
-    zero_result_slots = getattr(arguments, "zero_result_slots", None)
-    overlap_gap = getattr(arguments, "overlap_gap", None)
-    mismatch = getattr(arguments, "mismatch", None)
-    sign_up = getattr(arguments, "sign_up", None)
     boards = getattr(arguments, "boards", None)
-    modes = [mode for mode in (arguments.campaign, first_logs, day_1, zero_result_slots,
-                               overlap_gap, mismatch, sign_up, boards)
+    modes = [mode for mode in (repair, arguments.campaign, first_logs, boards)
              if mode is not None]
     if len(modes) > 1:
         raise SystemExit(
-            "--campaign, --first-logs, --day-1, --zero-result-slots, --overlap-gap,"
-            " --mismatch, --sign-up and --boards are separate runs"
+            "--repair, --campaign, --first-logs and --boards are separate runs"
         )
     if (not modes) != (arguments.season is None):
         raise SystemExit(
-            "--campaign, --first-logs, --day-1, --zero-result-slots, --overlap-gap,"
-            " --mismatch, --sign-up or --boards and --season go together"
+            "--repair, --campaign, --first-logs or --boards and --season go together"
         )
     database = Database(database_url)
     try:
-        if boards is not None:
+        if repair is not None:
+            report = domain_repair.season_repair(
+                database, arguments.season, repair, max_jobs=arguments.max_jobs
+            )
+        elif boards is not None:
             report = boundary.queue_board_rebuilds(
                 database, arguments.season, queue=boards == "queue"
-            )
-        elif zero_result_slots is not None:
-            report = first_battle_log.requeue_zero_result_slots(
-                database, arguments.season, queue=zero_result_slots == "queue",
-                max_jobs=arguments.max_jobs,
-            )
-        elif overlap_gap is not None:
-            report = first_battle_log.requeue_overlap_gap(
-                database, arguments.season, queue=overlap_gap == "queue",
-                max_jobs=arguments.max_jobs,
-            )
-        elif mismatch is not None:
-            report = first_battle_log.requeue_overlap_gap(
-                database, arguments.season, queue=mismatch == "queue",
-                max_jobs=arguments.max_jobs,
-                condition=ranked_day_inputs.LATER_READING_DAY_SQL, trigger="mismatch",
-            )
-        elif sign_up is not None:
-            report = first_battle_log.requeue_sign_up_days(
-                database, arguments.season, queue=sign_up == "queue",
-                max_jobs=arguments.max_jobs,
-            )
-        elif day_1 is not None:
-            report = first_battle_log.requeue_day_1(
-                database, arguments.season, queue=day_1 == "queue",
-                max_jobs=arguments.max_jobs,
             )
         elif first_logs is not None:
             report = first_battle_log.backfill(

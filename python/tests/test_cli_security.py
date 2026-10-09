@@ -11,7 +11,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from clashlens import ranked_day_inputs
 from clashlens.cli import (
     _archive,
     _file_value,
@@ -660,124 +659,33 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
     }
 
 
-@pytest.mark.parametrize("extra,queue", [
-    (["--day-1", "preview", "--season", "1791176400"], False),
-    (["--day-1", "queue", "--season", "1791176400"], True),
-    (["--day-1", "queue"], None),
-    (["--day-1", "queue", "--first-logs", "queue", "--season", "1791176400"], None),
-    (["--zero-result-slots", "preview", "--season", "1791176400"], False),
-    (["--zero-result-slots", "queue", "--season", "1791176400"], True),
-    (["--zero-result-slots", "queue"], None),
-    (["--zero-result-slots", "queue", "--day-1", "queue", "--season", "1791176400"], None),
+@pytest.mark.parametrize("extra,action", [
+    (["--repair", "preview", "--season", "1791176400"], "preview"),
+    (["--repair", "queue", "--season", "1791176400"], "queue"),
+    (["--repair", "receipt", "--season", "1791176400"], "receipt"),
+    (["--repair", "queue"], None),
+    (["--repair", "queue", "--boards", "queue", "--season", "1791176400"], None),
 ])
-def test_season_recalculations_need_a_season_and_run_alone(
-    monkeypatch, capsys, extra: list[str], queue: bool | None
-) -> None:
-    calls = []
-    monkeypatch.setattr("clashlens.battle_day_repair.Database",
-                        lambda url: SimpleNamespace(close=lambda: None))
-    for name in ("requeue_day_1", "requeue_zero_result_slots"):
-        monkeypatch.setattr(
-            f"clashlens.first_battle_log.{name}",
-            lambda database, season, *, queue, max_jobs, name=name: calls.append(
-                (name, season, queue, max_jobs)) or {"queued": 0},
-        )
-    arguments = ["republish-current-season", "--database-url",
-                 "postgresql://worker@postgres/clashlens", *extra]
-    if queue is None:
-        with pytest.raises(SystemExit):
-            main(arguments)
-        assert calls == []
-    else:
-        assert main(arguments) == 0
-        expected = "requeue_day_1" if extra[0] == "--day-1" else "requeue_zero_result_slots"
-        assert calls == [(expected, "1791176400", queue, 100)]
-
-
-@pytest.mark.parametrize("extra,queue", [
-    (["--overlap-gap", "preview", "--season", "1791176400"], False),
-    (["--overlap-gap", "queue", "--season", "1791176400"], True),
-    (["--overlap-gap", "queue"], None),
-    (["--overlap-gap", "queue", "--day-1", "queue", "--season", "1791176400"], None),
-])
-def test_overlap_gap_recalculation_needs_a_season_and_runs_alone(
-    monkeypatch, extra: list[str], queue: bool | None
+def test_season_repair_needs_a_season_and_runs_alone(
+    monkeypatch, extra: list[str], action: str | None
 ) -> None:
     calls = []
     monkeypatch.setattr("clashlens.battle_day_repair.Database",
                         lambda url: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(
-        "clashlens.first_battle_log.requeue_overlap_gap",
-        lambda database, season, *, queue, max_jobs: calls.append(
-            (season, queue, max_jobs)) or {"queued": 0},
+        "clashlens.domain_repair.season_repair",
+        lambda database, season, action, *, max_jobs: calls.append(
+            (season, action, max_jobs)) or {},
     )
     arguments = ["republish-current-season", "--database-url",
                  "postgresql://worker@postgres/clashlens", *extra]
-    if queue is None:
+    if action is None:
         with pytest.raises(SystemExit):
             main(arguments)
         assert calls == []
     else:
         assert main(arguments) == 0
-        assert calls == [("1791176400", queue, 100)]
-
-
-@pytest.mark.parametrize("extra,queue", [
-    (["--mismatch", "preview", "--season", "1791176400"], False),
-    (["--mismatch", "queue", "--season", "1791176400"], True),
-    (["--mismatch", "queue"], None),
-    (["--mismatch", "queue", "--overlap-gap", "queue", "--season", "1791176400"], None),
-])
-def test_mismatch_recalculation_needs_a_season_and_runs_alone(
-    monkeypatch, extra: list[str], queue: bool | None
-) -> None:
-    calls = []
-    monkeypatch.setattr("clashlens.battle_day_repair.Database",
-                        lambda url: SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(
-        "clashlens.first_battle_log.requeue_overlap_gap",
-        lambda database, season, **options: calls.append((season, options)) or {},
-    )
-    arguments = ["republish-current-season", "--database-url",
-                 "postgresql://worker@postgres/clashlens", *extra]
-    if queue is None:
-        with pytest.raises(SystemExit):
-            main(arguments)
-        assert calls == []
-    else:
-        assert main(arguments) == 0
-        assert calls == [("1791176400", {
-            "queue": queue, "max_jobs": 100,
-            "condition": ranked_day_inputs.LATER_READING_DAY_SQL, "trigger": "mismatch",
-        })]
-
-
-@pytest.mark.parametrize("extra,queue", [
-    (["--sign-up", "preview", "--season", "1791176400"], False),
-    (["--sign-up", "queue", "--season", "1791176400"], True),
-    (["--sign-up", "queue"], None),
-    (["--sign-up", "queue", "--overlap-gap", "queue", "--season", "1791176400"], None),
-])
-def test_sign_up_recalculation_needs_a_season_and_runs_alone(
-    monkeypatch, extra: list[str], queue: bool | None
-) -> None:
-    calls = []
-    monkeypatch.setattr("clashlens.battle_day_repair.Database",
-                        lambda url: SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(
-        "clashlens.first_battle_log.requeue_sign_up_days",
-        lambda database, season, *, queue, max_jobs: calls.append(
-            (season, queue, max_jobs)) or {},
-    )
-    arguments = ["republish-current-season", "--database-url",
-                 "postgresql://worker@postgres/clashlens", *extra]
-    if queue is None:
-        with pytest.raises(SystemExit):
-            main(arguments)
-        assert calls == []
-    else:
-        assert main(arguments) == 0
-        assert calls == [("1791176400", queue, 100)]
+        assert calls == [("1791176400", action, 100)]
 
 
 @pytest.mark.parametrize("value", ["0", "1001", "many"])

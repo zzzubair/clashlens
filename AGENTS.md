@@ -60,6 +60,7 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Boundary settlement**: whether a Reset's trophy count is proven to include the previous day's automatic defense loss; until then it is provisional.
 - **Promotion list**: Legend II and III players saved so the Monday re-check can find the ones promoted into Legend I.
 - **Unsettled loss**: the previous day's automatic defense loss that a Reset reading was taken before the game applied, so the next day starts from the reading less it.
+- **Season repair**: the one operator command that recalculates a Season's saved days, Daily boards and Season summaries under the current rules, with a before-and-after receipt.
 
 If you introduce a new term, add it here in the same PR. One plain sentence.
 

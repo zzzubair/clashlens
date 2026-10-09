@@ -81,10 +81,13 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     SELECT DISTINCT ranked_day_start
                     FROM api_player_daily_logs
                     WHERE player_id = %s AND ranked_day_start >= %s
-                      AND official_season_id = %s
+                      AND (official_season_id = %s
+                           OR %s AND ranked_day_start < %s)
                     ORDER BY ranked_day_start
                     """,
-                    (player_id, day_start, claim.input_json["recalculate_season"]),
+                    (player_id, day_start, claim.input_json["recalculate_season"],
+                     claim.input_json.get("trigger") == "season_repair",
+                     ranked_day_for(day_start).season_end),
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)
             if claim.input_json.get("trigger") == "day_end":
@@ -195,10 +198,7 @@ def recalculate_ranked_day(
     # Different source changes can enqueue distinct jobs for one
     # player-day. Serialize their version/publication writes while
     # allowing unrelated player-days to reconcile concurrently.
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
-    )
+    ranked_day_inputs.lock_ranked_day(connection, player_id, ranked_day)
     now_row = connection.execute("SELECT clock_timestamp()").fetchone()
     assert now_row is not None
     now = now_row[0]
@@ -308,31 +308,35 @@ def recalculate_ranked_day(
         boundary_kind = "season"
     elif ranked_day.end.weekday() == 0:
         boundary_kind = "weekly"
-    # A player dropped from Legend I at a Season's end, ranked below 10,000,
-    # has no Legend I reading at that Reset, so their last day had no end:
-    # all 1,993 such players on 5 October 2026. The game's official Season-end
-    # total in their league history, which includes the automatic defense
-    # loss, is that day's end instead; no reset to 5,000 follows it.
+    # A Season-ending Reset reading proves no Season's end: it shows a
+    # survivor reset to 5,000, and a player dropped from Legend I, ranked
+    # below 10,000, has no Legend I reading at all (1,993 players on 5 October
+    # 2026). The game's official Season-end total in the player's league
+    # history, which includes the automatic defense loss, is instead the end
+    # the last day's calculation is checked against and its saved next start;
+    # a day whose calculation differs is Inconsistent and keeps its
+    # calculated EOD: 778 of 9,593 such Complete days on 5 October 2026 did.
+    # No reset to 5,000 follows it; the next Season starts by the Season
+    # rule. It counts even when no Season-ending Reset reading was saved; the
+    # day's battle logs still decide whether its battles are all known.
     official_final = (
         _official_final(connection, player_id, ranked_day.end)
         if boundary_kind == "season"
-        and end_baseline is not None
-        and _dropped_from_legend_i(
-            connection, player_id, ranked_day.end,
-            kept_season=ranked_day_for(ranked_day.end).official_season_id,
-        )
         else None
     )
     if official_final is not None:
-        assert end_baseline is not None
         boundary_kind = None
         end_baseline = {
-            **end_baseline,
+            **(end_baseline or {"id": None}),
             "trophies": official_final,
             "eligibility_state": None,
-            "complete": bool(end_baseline["evidence"]["battle_log_valid"]),
+            "complete": True,
             "evidence": {
-                **end_baseline["evidence"], "official_final_trophies": official_final,
+                **(end_baseline["evidence"] if end_baseline else {
+                    "profile": {"observed_at": None},
+                    "battle_log_observation_id": None,
+                }),
+                "official_final_trophies": official_final,
             },
         }
     # A player ranked below 10,000 at a weekly Monday Reset drops to Legend
@@ -428,7 +432,7 @@ def recalculate_ranked_day(
         ),
         end_baseline_id=(
             int(end_baseline["id"])
-            if end_baseline is not None
+            if end_baseline is not None and end_baseline["id"] is not None
             else None
         ),
         start_trophies=(
@@ -812,21 +816,16 @@ def _dropped_after_reading(
 
 
 def _dropped_from_legend_i(
-    connection: Any, player_id: int, since: datetime,
-    until: datetime | None = None, kept_season: str | None = None,
+    connection: Any, player_id: int, since: datetime, until: datetime
 ) -> bool:
-    """Whether a profile of the player read from ``since``, and before
-    ``until`` when given, shows a league below Legend I before any Legend I
-    profile naming ``kept_season``, such as the next Season after a Season's
-    end. Each reading counts at its own time; a saved profile can be read
-    again."""
+    """Whether a profile of the player read from ``since`` and before
+    ``until`` shows a league below Legend I. Each reading counts at its own
+    time; a saved profile can be read again."""
     return bool(
         connection.execute(
             """
             WITH version AS (
-                SELECT version.id, version.observed_at, version.eligibility_state,
-                       version.source_contract_state,
-                       version.current_league_season_id
+                SELECT version.id, version.observed_at, version.eligibility_state
                 FROM players AS player
                 JOIN player_profile_versions AS version
                   ON version.normalized_tag = player.normalized_tag
@@ -849,23 +848,10 @@ def _dropped_from_legend_i(
             SELECT EXISTS (
                 SELECT 1 FROM reading AS dropped
                 WHERE dropped.eligibility_state = 'ineligible'
-                  AND (%(until)s::timestamptz IS NULL
-                       OR dropped.read_at < %(until)s)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM reading AS kept
-                      WHERE kept.read_at < dropped.read_at
-                        AND kept.eligibility_state = 'eligible'
-                        AND kept.source_contract_state = 'accepted'
-                        AND kept.current_league_season_id = %(season)s
-                  )
+                  AND dropped.read_at < %(until)s
             )
             """,
-            {
-                "player": player_id,
-                "since": since,
-                "until": until,
-                "season": kept_season,
-            },
+            {"player": player_id, "since": since, "until": until},
         ).fetchone()[0]
     )
 
