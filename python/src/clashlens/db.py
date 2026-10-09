@@ -1025,7 +1025,7 @@ class Database:
                 # Backfill always comes last; see background_pacing.
                 if len(rows) < limit and not planned and background_turn_free(
                     connection, self._jobs_relation, self._supports_denormalized_contract,
-                    supports_coordinator,
+                    supports_coordinator, self._supports_dependency_deferral,
                 ):
                     rows += connection.execute(*_claim_select_statement(
                         self._jobs_relation, backfill=True, **{**options, "limit": 1}

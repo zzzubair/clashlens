@@ -143,6 +143,43 @@ def test_background_work_waits_while_live_work_is_two_minutes_late(database_url:
             database.close()
 
 
+def test_background_work_waits_while_late_live_work_is_leased_or_waiting(
+    database_url: str,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[1], [2]])
+        now = datetime.now(UTC)
+        live = _queue_result(connection_info, "live", due_at=now - timedelta(minutes=3))
+        database = Database(connection_info)
+        try:
+            # A live lane takes the late result, hits a busy battle lock and
+            # keeps its lease with the attempt refunded, as on 9 Oct 2026.
+            [claim] = database.claim_jobs(owner="live", work_types=["reconcile_ranked_day"])
+            assert claim.job_id == live
+            database.refund_claim_attempt(claim)
+            assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
+            # Waiting for its saved response on its last try, it can still
+            # resume, so it pauses background work too.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'waiting_dependency',"
+                    " attempt_count = max_attempts, lease_owner = NULL,"
+                    " lease_token = NULL, lease_expires_at = NULL WHERE id = %s",
+                    (live,),
+                )
+            assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete' WHERE id = %s",
+                    (live,),
+                )
+            assert [claim.work_type for claim in database.claim_jobs(
+                owner="lane", work_types=["redecode_army"]
+            )] == ["redecode_army"]
+        finally:
+            database.close()
+
+
 def _seed_redecode(connection_info: str, archive_server, database, processor) -> list[int]:
     """30 saved battles on the old catalog and one re-decode job for them all."""
     _, job_id = store_observation(
