@@ -37,7 +37,9 @@ _BOARD_SQL = f"""
 WITH live AS MATERIALIZED ({_LIVE_PLAYERS_SQL})
 SELECT live.normalized_tag, live.trophies, ranked_day.start_trophies,
        day.attack_count, day.attack_gain, day.defense_count, day.defense_loss,
-       day.defense_three_star_count
+       day.defense_three_star_count,
+       COALESCE((ranked_day.input_evidence ->> 'zero_result_attack_slots')::int, 0),
+       COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0)
 FROM live
 JOIN players AS player ON player.normalized_tag = live.normalized_tag
 LEFT JOIN LATERAL (
@@ -96,15 +98,20 @@ def _read_board(connection: Any, now: datetime) -> _Board:
     ).fetchall()
     ends: dict[str, tuple[int, int]] = {}
     held = defenses = 0
-    for tag, trophies, start, attacks, gained, defended, lost, tripled in rows:
+    for (
+        tag, trophies, start, attacks, gained, defended, lost, tripled,
+        zero_attacks, zero_defenses,
+    ) in rows:
         if None in (start, attacks, gained, defended, lost):
             basis, open_attacks, open_defenses = (
                 int(trophies), MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
             )
         else:
             basis = int(start) + int(gained) - int(lost)
-            open_attacks = _open(attacks, MAX_DAILY_ATTACKS)
-            open_defenses = _open(defended, MAX_DAILY_DEFENSES)
+            open_attacks = _open(int(attacks) + int(zero_attacks), MAX_DAILY_ATTACKS)
+            open_defenses = _open(
+                int(defended) + int(zero_defenses), MAX_DAILY_DEFENSES
+            )
         ends[_text(tag)] = (
             basis + MAX_BATTLE_TROPHIES * open_attacks,
             basis - MAX_BATTLE_TROPHIES * open_defenses,

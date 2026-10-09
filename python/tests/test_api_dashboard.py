@@ -35,6 +35,7 @@ def publish_today(
     battles: list[dict[str, Any]],
     attack_gain: int | None = None,
     start_trophies: int | None = None,
+    input_evidence: dict[str, int] | None = None,
 ) -> None:
     with database.pool.connection() as connection:
         version_id = None
@@ -45,14 +46,14 @@ def publish_today(
                     player_id, ranked_day_start, ranked_day_end, official_season_id,
                     season_day_number, season_anchor_rule_version,
                     reconciliation_rule_version, result_hash, version, state,
-                    confidence, start_trophies
+                    confidence, start_trophies, input_evidence
                 ) VALUES (
                     (SELECT id FROM players WHERE normalized_tag = %s),
                     '2026-08-06T05:00:00Z', '2026-08-07T05:00:00Z', 'test-season',
-                    2, 'test-anchor', 'test-rules', %s, 1, 'Live', 'exact', %s
+                    2, 'test-anchor', 'test-rules', %s, 1, 'Live', 'exact', %s, %s
                 ) RETURNING id
                 """,
-                (tag, "a" * 64, start_trophies),
+                (tag, "a" * 64, start_trophies, Jsonb(input_evidence or {})),
             ).fetchone()[0]
         connection.execute(
             """
@@ -237,6 +238,40 @@ def test_dashboard_range_counts_battles_with_their_trophies(database_url: str) -
             # Your best is 5,040 + 7 x 40 = 5,320, so you can still pass #8PY.
             assert today is not None
             assert today["rank_range"] == {"best": 1, "worst": 2}
+        finally:
+            database.close()
+
+
+def test_dashboard_range_counts_no_opponent_slots_as_used(database_url: str) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            # Seven +40 attacks and one "no opponent, no battle" attack slot,
+            # and seven zero-loss defenses and one such defense slot: your day
+            # is over on 5,280.
+            seed_profile(database, "#2PP", 5280)
+            publish_today(
+                database, "#2PP", attacks=7, defenses=7, tripled=0, defense_loss=0,
+                battles=[], attack_gain=280, start_trophies=5000,
+                input_evidence={
+                    "zero_result_attack_slots": 1,
+                    "zero_result_defense_slots": 1,
+                },
+            )
+            seed_profile(database, "#8PY", 5300)
+            publish_today(
+                database, "#8PY", attacks=8, defenses=8, tripled=0, defense_loss=0,
+                battles=[], attack_gain=0, start_trophies=5300,
+            )
+
+            today = api_dashboard.get_player_today(
+                database, api_dashboard.DashboardBoard(), "#2PP", now=NOW
+            )
+
+            assert today is not None
+            assert today["rank_range"] == {"best": 2, "worst": 2}
         finally:
             database.close()
 
