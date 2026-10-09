@@ -488,3 +488,32 @@ def test_an_unreadable_new_day_row_leaves_the_official_season_total_standing() -
 
     assert (result.state, result.automatic_defense_loss) == ("Complete", 320)
     assert result.final_trophies_before_reset == 5680
+
+
+def test_a_battle_worth_no_trophies_in_flight_leaves_the_reading_exact() -> None:
+    # A zero-trophy attack reported at 04:59 may or may not show at 05:02:
+    # either way 5,870 is the same, so the reading proves the day.
+    day = (*DAY_BATTLES, Effect("zero-trophy", 0, at(-1)))
+    result = verdict(Reading(at(2), 5870), day=day)
+
+    assert (result.outcome, result.exact, result.clean) == ("verified", True, True)
+
+
+def test_a_reading_still_judges_a_day_with_all_16_battles_despite_a_log_gap() -> None:
+    # Eight +30 attacks and eight 30-trophy defenses leave 6,000; the logs do
+    # not overlap, yet none can be missing. A noon reading of 6,010 disagrees.
+    first, middle, last = test_reconciliation._coverage()
+    battles = tuple(
+        BattleContribution(f"{lens}-{index}", lens, 30)
+        for lens in ("offense", "defense") for index in range(8)
+    )
+    day = test_reconciliation._input(
+        start_trophies=6000, next_start_trophies=6000, contributions=battles,
+        coverage_observations=(first, replace(middle, battle_identities=("daily",)), last),
+        readings=(Reading(test_reconciliation.DAY.start + timedelta(hours=7), 6010),),
+    )
+    result = reconcile_ranked_day(day)
+
+    assert "battle_log_overlap_gap" in result.failure_reasons
+    assert result.state == "Inconsistent"
+    assert "trophy_equation_mismatch" in result.failure_reasons

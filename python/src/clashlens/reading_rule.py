@@ -136,8 +136,9 @@ def judge(
     # (ended day) or does (new day), its identity, and which day.
     maybes: list[tuple[int, str, bool]] = []
     new_day_change = 0
+    # An undisputed battle worth no trophies shows the same either way.
     for effect in day_effects:
-        if effect.lands_until <= at:
+        if effect.lands_until <= at or not (effect.change or effect.disputed):
             continue
         if effect.disputed:
             return None
@@ -147,7 +148,7 @@ def judge(
         else:
             maybes.append((-effect.change, effect.identity, True))
     for effect in new_day_effects:
-        if effect.lands_from > at:
+        if effect.lands_from > at or not (effect.change or effect.disputed):
             continue
         if effect.disputed:
             return None

@@ -335,6 +335,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     end_reading_evidence: dict[str, Any] | None = None
 
     ended = data.now >= data.ranked_day.end
+    readable = ended and day_totals_supported(coverage_complete, attack_count, defense_count, failures)
     # The Season rule can start Day 1 without a saved Reset reading, and the
     # day before's calculated end can start any other day whose reading
     # cannot; both are calculations, not readings.
@@ -436,11 +437,11 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 reset_at=data.ranked_day.end, start_proven=start_proven,
                 unknown_from=None if official_end else data.first_unshown_report, **rule,
             )
-            if ended
-            and coverage_complete
+            if readable
             and not malformed_evidence
             and not inconsistent_evidence
-            and all(reason == "missing_end_baseline" for reason in failures)
+            and all(reason == "missing_end_baseline" or reason in COVERAGE_GAP_REASONS
+                    for reason in failures)
             else None
         )
         if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
@@ -531,7 +532,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     during = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
         start=start_trophies, day_effects=_effects(contributions), pending_loss=pending_loss,
-    ) if ended and coverage_complete and start_trophies is not None and start_available and not (
+    ) if readable and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else None
     if during is not None and during.reading is not None:
         failures.append("trophy_equation_mismatch")
@@ -539,9 +540,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             "read_at": during.reading.read_at.isoformat(),
             "trophies": during.reading.trophies, "residual": during.residual}}
 
-    if not day_totals_supported(
-        coverage_complete, attack_count, defense_count, failures
-    ):
+    if not day_totals_supported(coverage_complete, attack_count, defense_count, failures):
         # The equation check above has already recorded any mismatch it found.
         final_trophies = None
         net_trophy_change = None
