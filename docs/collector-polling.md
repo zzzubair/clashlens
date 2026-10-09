@@ -636,8 +636,7 @@ The game can apply the previous day's automatic defense loss minutes after
 the Reset, so the Reset pair is only provisional
 ([boundary settlement](domain.md#8-evidence-and-confidence-states)). In the same transaction that freezes the
 sweep, the collector schedules one `reset_settlement` work row per frozen
-member, due at 05:20 UTC, and links it to that member's boundary settlement
-row. Only the sweep's first capture schedules them, so restarts, finished or
+member, due at 05:20 UTC. Only the sweep's first capture schedules them, so restarts, finished or
 failed checks and members joining later add none, and a member leaving keeps
 its check. Each check fetches a new profile, saves it, then fetches the battle
 log; it never reuses a recent profile or skips the log. It keeps its first
@@ -659,7 +658,8 @@ a check past it stops without changing its work row. From 04:55 the
 collector's scheduling loop fails unfinished checks as `settlement_expired`
 without a request, up to 1,000 rows per transaction, until a pass finds none
 left, before the next Reset. Responses already saved are still
-processed. Nothing reads the pair yet; every published result is unchanged.
+processed. The worker judges the check's profile like any other reading
+when it calculates the day.
 
 Budget at 13,263 members (October 3, 2026): 26,526 extra requests per Reset.
 Six regular keys at 25 starts per second take at least 177 seconds, but the

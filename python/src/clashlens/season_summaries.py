@@ -12,10 +12,8 @@ battle IDs or battle evidence are stored.
 Each day also keeps ``eod_change``, how far the EOD moved from the
 previous day's EOD (day 1 starts from the Season's 5,000), separately from
 the battle-result ``net_change``. A missing or non-adjacent previous day
-leaves it unknown, never zero. ``eod_state`` says whether the EOD is
-accepted (a Complete day whose Reset reading has a settled boundary) or
-still provisional, and ``eod_change_state`` whether both ends of the
-movement are accepted.
+leaves it unknown, never zero. ``eod_state`` and ``eod_change_state`` are
+``provisional`` whenever known: no Reset reading is proven settled.
 """
 
 from __future__ import annotations
@@ -207,7 +205,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
             """
             SELECT id, start_trophies, final_trophies_before_reset,
                    attack_count, defense_count, attack_gain,
-                   observed_defense_loss, next_start_trophies
+                   observed_defense_loss
             FROM ranked_day_versions
             WHERE id = ANY(%s::bigint[]) AND player_id = %s
             """,
@@ -221,20 +219,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
                 "defense_count": _int_or_none(version_row[4]),
                 "attack_gain": _int_or_none(version_row[5]),
                 "defense_loss": _int_or_none(version_row[6]),
-                "next_start_trophies": _int_or_none(version_row[7]),
             }
-    # A Reset's trophies are accepted only once its boundary is settled.
-    settled = {
-        row[0]: _int_or_none(row[1])
-        for row in connection.execute(
-            """
-            SELECT boundary_at, selected_trophies FROM reset_boundary_settlements
-            WHERE player_id = %s AND boundary_at = ANY(%s) AND state = 'settled'
-            """,
-            (player_id, [day["ranked_day_end"] for day in days if day["ranked_day_end"] is not None]),
-        ).fetchall()
-    }
-
     entries: list[dict[str, Any]] = []
     season_literals: set[str] = set()
     season_reasons: list[str] = []
@@ -308,12 +293,6 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
         if reasons_overflow:
             season_overflow = True
         end_trophies = ranked["end_trophies"] if ranked else None
-        eod_accepted = (
-            end_trophies is not None
-            and _text(day["state"]) == "Complete"
-            and day["ranked_day_end"] in settled
-            and settled[day["ranked_day_end"]] == ranked["next_start_trophies"]  # type: ignore[index]
-        )
         entries.append(
             {
                 "season_day_number": number,
@@ -325,7 +304,7 @@ def _project(player_id: int, season_id: str, connection: Any) -> dict[str, Any] 
                 ),
                 "start_trophies": ranked["start_trophies"] if ranked else None,
                 "end_trophies": end_trophies,
-                "eod_state": None if end_trophies is None else ("accepted" if eod_accepted else "provisional"),
+                "eod_state": None if end_trophies is None else "provisional",
                 "attack_gain": _int_or_none(day.get("attack_gain")),
                 "defense_loss": _int_or_none(day.get("defense_loss")),
                 "net_change": _int_or_none(day.get("net_trophy_change")),
@@ -421,19 +400,15 @@ def _add_eod_changes(entries: list[dict[str, Any]]) -> None:
     for entry in entries:
         number = entry["season_day_number"]
         previous_end: int | None = None
-        states = [entry["eod_state"]]
         if number == 1:
             previous_end = SEASON_START_TROPHIES
         elif number is not None and len(by_number.get(number - 1, [])) == 1:
             previous = by_number[number - 1][0]
             if previous["ranked_day_end"] == entry["ranked_day_start"]:
                 previous_end = previous["end_trophies"]
-                states.append(previous["eod_state"])
         known = previous_end is not None and entry["end_trophies"] is not None
         entry["eod_change"] = entry["end_trophies"] - previous_end if known else None  # type: ignore[operator]
-        entry["eod_change_state"] = (
-            None if not known else ("accepted" if all(s == "accepted" for s in states) else "provisional")
-        )
+        entry["eod_change_state"] = "provisional" if known else None
 
 
 def season_final_rank(

@@ -101,9 +101,8 @@ included, that is not published or superseded; any correction from
 Season start onwards that is not finalized with a published or superseded
 generation; and any
 [Reset settlement check](domain.md#8-evidence-and-confidence-states) that
-reads the Season's days and is unfinished, has an unprocessed response, or
-is still provisional, unless it is a judged candidate held back only
-because `CLASHLENS_ENABLE_NEW_RESET_PROOFS` is off. A missing table, failed query or check over 10 seconds blocks.
+reads the Season's days and is unfinished or has an unprocessed response.
+A missing table, failed query or check over 10 seconds blocks.
 Each blocker lists at most five example ids under `blocking_work`; missing
 tables and failed checks are listed by name instead. Until
 the expanded history above can be checked, it also always reports
@@ -202,9 +201,8 @@ detail is retained; no cleanup is authorized by this migration.
 Each daily entry keeps `eod_change` beside the battle-result `net_change`:
 the day's EOD minus the previous day's EOD, with Day 1 measured from 5,000.
 A missing, non-adjacent or unknown previous EOD leaves it unknown. Its
-`eod_state` and `eod_change_state` are `accepted` only when the EOD comes from
-a Complete day whose Reset reading has a settled boundary (both ends, for the
-change), otherwise `provisional`. This is summary format
+`eod_state` and `eod_change_state` are `provisional` whenever known: no Reset
+reading is proven settled. This is summary format
 `player-season-summary-v2`. An older summary stays listed and readable with
 those three fields unknown; the command below rebuilds it from retained detail
 where the Season's detail has not been retired. Season closure already refuses

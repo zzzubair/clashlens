@@ -1251,14 +1251,14 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
         )
         db, proc = _processor(ci, archive_server)
         pending = [limited]
-        lock_resets = army_ingestion.reset_settlement.lock_resets
+        lock_publication = army_ingestion.boundary.lock_boundary_publication_once_swept
         finish_claim = db._finish_claim
 
         def end_session(connection, setting: str) -> None:
             connection.execute(f"SET LOCAL {setting} = '50ms'")
             time.sleep(0.3)
 
-        def limited_lock_resets(database, connection, *args, **kwargs):
+        def limited_lock_publication(connection, *args, **kwargs):
             if pending and limit == "statement":
                 pending.pop()
                 connection.execute("SET LOCAL statement_timeout = '50ms'")
@@ -1267,7 +1267,7 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
                 pending.pop()
                 end_session(connection, f"{limit}_session_timeout"
                             if limit == "idle_in_transaction" else "transaction_timeout")
-            return lock_resets(database, connection, *args, **kwargs)
+            return lock_publication(connection, *args, **kwargs)
 
         def limited_finish(connection, *args, **kwargs):
             finish_claim(connection, *args, **kwargs)
@@ -1276,7 +1276,8 @@ def test_time_limits_retry_a_battle_log_and_keep_the_lane_working(
                 # The session ends before COMMIT reaches the database.
                 end_session(connection, "idle_in_transaction_session_timeout")
 
-        monkeypatch.setattr(army_ingestion.reset_settlement, "lock_resets", limited_lock_resets)
+        monkeypatch.setattr(army_ingestion.boundary, "lock_boundary_publication_once_swept",
+                            limited_lock_publication)
         monkeypatch.setattr(db, "_finish_claim", limited_finish)
         try:
             with psycopg.connect(ci) as publisher:

@@ -10,7 +10,7 @@ from typing import Any
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair, boundary, boundary_publication, reset_settlement
+from . import battle_day_repair, boundary, boundary_publication
 from .army_decoder import (
     CURRENT_DECODES,
     DECODER_VERSION,
@@ -67,7 +67,6 @@ def _upsert_army_decodes(
     battle_ids: list[int],
     *,
     reset_baseline: tuple[int, int, datetime] | None = None,
-    observation_id: int | None = None,
     reset_lock_wait: str | None = None,
     skip_busy_battles: bool = False,
 ) -> None:
@@ -124,13 +123,12 @@ def _upsert_army_decodes(
     if not decoded_rows:
         return
     # Lock order everywhere: battle locks, then a Reset baseline's work lock,
-    # then Reset publication locks, then Reset settlement locks, then army
-    # rows. A battle lock keeps two jobs saving one battle's armies from
-    # interleaving, so neither replaces the other's newer evidence or races
-    # the one-active-per-perspective unique index. Different battles save
-    # concurrently. A live battle log never waits on a battle another job
-    # holds (skip_busy_battles): it leaves that battle's armies to a later
-    # battle log that lists it.
+    # then Reset publication locks, then army rows. A battle lock keeps two
+    # jobs saving one battle's armies from interleaving, so neither replaces
+    # the other's newer evidence or races the one-active-per-perspective
+    # unique index. Different battles save concurrently. A live battle log
+    # never waits on a battle another job holds (skip_busy_battles): it
+    # leaves that battle's armies to a later battle log that lists it.
     busy: set[int] = set()
     for battle_id in sorted({row[0] for row in decoded_rows}):
         if skip_busy_battles:
@@ -158,14 +156,13 @@ def _upsert_army_decodes(
         players_by_day.setdefault(day_start.astimezone(UTC), set()).update(
             (int(attacker_id), int(defender_id))
         )
-    # A Reset battle log records its baseline and re-judges its Resets after
-    # these army writes, so it takes all of them first; otherwise it could
-    # hold an army or generation row another job needs while that job holds a
-    # lock. A Reset with no sweep yet is only shared, so battle logs for the
-    # current Legend day do not queue behind each other, and stays shared for
-    # this transaction: two jobs upgrading their shared locks would deadlock.
+    # A Reset battle log records its baseline after these army writes, so it
+    # takes all of them first; otherwise it could hold an army or generation
+    # row another job needs while that job holds a lock. A Reset with no
+    # sweep yet is only shared, so battle logs for the current Legend day do
+    # not queue behind each other, and stays shared for this transaction:
+    # two jobs upgrading their shared locks would deadlock.
     boundaries = {day_start + timedelta(days=1) for day_start in players_by_day}
-    resets: list[tuple[int, datetime]] = []
     if reset_lock_wait is not None:
         # Give up on a busy Reset after this wait; the whole transaction rolls
         # back and the job retries later rather than holding its rows.
@@ -176,18 +173,16 @@ def _upsert_army_decodes(
             "SELECT set_config('lock_timeout', %s, true)", (reset_lock_wait,)
         )
     if reset_baseline is not None:
-        work_id, player_id, boundary_at = reset_baseline
+        work_id, _, boundary_at = reset_baseline
         connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"reset-baseline:{work_id}",),
         )
         boundaries.add(boundary_at.astimezone(UTC))
-        resets.append((player_id, boundary_at))
     unswept: set[datetime] = set()
     for boundary_at in sorted(boundaries):
         if not boundary.lock_boundary_publication_once_swept(connection, boundary_at):
             unswept.add(boundary_at)
-    reset_settlement.lock_resets(database, connection, observation_id, resets)
     if reset_lock_wait is not None:
         connection.execute(
             "SELECT set_config('lock_timeout', %s, true)", (previous_wait,)

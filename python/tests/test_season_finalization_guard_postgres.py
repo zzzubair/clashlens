@@ -544,3 +544,53 @@ def test_retirement_rechecks_work_after_finalization(database_url: str, archive_
                 assert _counts(connection) == before
         finally:
             database.close()
+
+
+def test_settlement_check_holds_its_two_days_until_finished_and_processed(
+    database_url: str, archive_server
+) -> None:
+    # A Reset's 05:20 check reads the two days before it.
+    reset = DAY0 + timedelta(days=3)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        log_id, job_id = _observation(
+            connection_info, archive_server, "guard-check", reset + timedelta(minutes=25))
+        with psycopg.connect(connection_info) as connection:
+            player = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = '#2PP'").fetchone()[0]
+            sweep = connection.execute(
+                "INSERT INTO collector_reset_sweeps (boundary_at, member_ids,"
+                " membership_captured_at) VALUES (%s, %s, %s) RETURNING id",
+                (reset, [player], reset),
+            ).fetchone()[0]
+            check = connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, sweep_id, due_at,
+                    coalescing_key, profile_status, battle_log_status
+                ) VALUES ('reset_settlement', 'ordinary', 'player', %s, '#2PP', %s, %s,
+                          'guard-check', 'pending', 'pending')
+                RETURNING id
+                """,
+                (player, sweep, reset + timedelta(minutes=20)),
+            ).fetchone()[0]
+
+            def held(start, end) -> int:
+                blockers = close_blockers(connection, SEASON, start, end)
+                return len(blockers.get("reset_settlement_checks", []))
+
+            for status, count in (("pending", 1), ("waiting_retry", 1), ("complete", 0),
+                                  ("failed", 0), ("cancelled", 0)):
+                connection.execute(
+                    "UPDATE collector_work SET status = %s WHERE id = %s", (status, check))
+                assert held(reset - timedelta(days=1), reset - timedelta(days=1)) == count, status
+            # Only a window holding one of those two days.
+            connection.execute("UPDATE collector_work SET status = 'pending' WHERE id = %s", (check,))
+            assert held(reset, reset + timedelta(days=1)) == 0
+            assert held(reset - timedelta(days=3), reset - timedelta(days=2)) == 0
+            # A finished check's saved battle log holds them until processed.
+            connection.execute(
+                "UPDATE collector_work SET status = 'complete', battle_log_status = 'observed',"
+                " battle_log_observation_id = %s WHERE id = %s", (log_id, check))
+            assert held(reset - timedelta(days=1), reset) == 1
+            _processed(connection, log_id, job_id)
+            assert held(reset - timedelta(days=1), reset) == 0

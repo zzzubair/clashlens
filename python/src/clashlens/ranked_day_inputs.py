@@ -1,13 +1,7 @@
-"""What one player's Legend day is calculated from, read from saved evidence.
-
-Daily calculation and the Reset settlement check read the same battle-log
-coverage, own-side battle reports and previous saved day, so they cannot
-disagree about which battles a day holds.
-"""
+"""What one player's Legend day is calculated from, read from saved evidence."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import pairwise
 from typing import Any
@@ -528,34 +522,6 @@ def _log_ids(connection: Any, condition: str, params: tuple[Any, ...]) -> list[A
     ).fetchall()
 
 
-def load_log_reports(
-    database: Database, connection: Any, observation_id: int, parser_version: str
-) -> tuple[tuple[str, str, datetime, int], ...]:
-    """Each battle one battle log reported, as that log reported it.
-
-    Rows are (battle ID, ``offense`` or ``defense``, report time, trophies).
-    """
-    relation, _, evidence_join = _source_rows(database)
-    logs = _log_ids(connection, "observation_id = %s AND parser_version = %s",
-                    (observation_id, parser_version))
-    rows = connection.execute(
-        f"""
-        SELECT be.battle_id, be.perspective, be.battle_timestamp,
-               be.attacker_gain, be.defender_loss
-        FROM {relation} AS sr
-        JOIN battle_evidence AS be ON {evidence_join}
-        WHERE sr.battle_log_observation_id = ANY(%s)
-        """,
-        ([log[0] for log in logs],),
-    ).fetchall()
-    return tuple(
-        (str(row[0]), "offense", row[2], int(row[3]))
-        if _text_value(row[1]) == "attacker"
-        else (str(row[0]), "defense", row[2], int(row[4]))
-        for row in rows
-    )
-
-
 def load_unreadable_report_times(
     database: Database,
     connection: Any,
@@ -595,20 +561,6 @@ def load_unreadable_report_times(
     return times
 
 
-@dataclass(frozen=True, slots=True)
-class Reading:
-    """One saved response, and whether the worker accepted it."""
-
-    observation_id: int
-    request_started_at: datetime
-    response_completed_at: datetime
-    # The processing outcome, or ``None`` while it is still unprocessed.
-    outcome: str | None = None
-    parser_version: str | None = None
-    usable: bool = False
-    trophies: int | None = None
-
-
 # Each response's latest processing outcome, and the profile it produced.
 _OUTCOME = """
     LEFT JOIN LATERAL (
@@ -633,79 +585,6 @@ def _profile_join(database: Database) -> str:
           ON profile.observation_id = observed.id
          AND profile.parser_version = outcome.parser_version
         """
-
-
-def load_reading(
-    database: Database, connection: Any, player_id: int, observation_id: int | None
-) -> Reading | None:
-    """One saved profile or battle log; usable once processed into an
-    accepted, eligible profile of this player or a saved battle log. A log
-    saved with gaps that were only "no opponent, no battle" rows counts as
-    processed."""
-    if observation_id is None:
-        return None
-    row = connection.execute(
-        f"""
-        SELECT observed.request_started_at, observed.response_completed_at,
-               outcome.outcome, outcome.parser_version,
-               CASE observed.endpoint
-                   WHEN 'profile' THEN profile.player_id = %(player)s
-                       AND profile.source_contract_state = 'accepted'
-                       AND profile.eligibility_state = 'eligible'
-                   ELSE log.id IS NOT NULL
-               END,
-               profile.trophies,
-               outcome.outcome = 'processed'
-               OR (outcome.outcome = 'processed_with_gaps'
-                   AND {only_no_opponent_gaps_sql(database, "log")})
-        FROM collector_observations AS observed
-        {_OUTCOME}
-        {_profile_join(database)}
-        LEFT JOIN battle_log_observations AS log
-          ON log.observation_id = observed.id
-         AND log.parser_version = outcome.parser_version
-        WHERE observed.id = %(observation)s
-        """,
-        {"processing": PROCESSING_VERSION, "player": player_id,
-         "observation": observation_id},
-    ).fetchone()
-    if row is None:
-        return None
-    return Reading(
-        observation_id, row[0], row[1], row[2], row[3],
-        usable=bool(row[6]) and bool(row[4]), trophies=row[5],
-    )
-
-
-def load_profile_trophies(
-    database: Database, connection: Any, player_id: int, after: datetime, until: datetime,
-    *, season_id: str | None = None,
-) -> tuple[tuple[datetime, int | None], ...]:
-    """The trophies of each profile read in ``(after, until)``, or ``None``
-    for one with no processed profile or, with ``season_id``, none accepted,
-    eligible and naming that Season."""
-    rows = connection.execute(
-        f"""
-        SELECT observed.response_completed_at,
-               CASE WHEN outcome.outcome = 'processed'
-                     AND (%(season)s::text IS NULL
-                          OR (profile.source_contract_state = 'accepted'
-                              AND profile.eligibility_state = 'eligible'
-                              AND profile.current_league_season_id = %(season)s))
-                    THEN profile.trophies END
-        FROM collector_observations AS observed
-        {_OUTCOME}
-        {_profile_join(database)}
-        WHERE observed.player_id = %(player)s AND observed.endpoint = 'profile'
-          AND observed.response_completed_at > %(after)s
-          AND observed.response_completed_at < %(until)s
-          AND observed.http_status BETWEEN 200 AND 299
-        ORDER BY observed.response_completed_at
-        """,
-        {"processing": PROCESSING_VERSION, "player": player_id,
-         "after": after, "until": until, "season": season_id},
-    ).fetchall()
-    return tuple((at, None if trophies is None else int(trophies)) for at, trophies in rows)
 
 
 def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> None:

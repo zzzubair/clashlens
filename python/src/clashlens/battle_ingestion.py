@@ -486,7 +486,6 @@ def complete_battle_log(
                 connection,
                 sorted(affected_battle_ids),
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
-                observation_id=claim.observation_id,
                 reset_lock_wait=RESET_LOCK_WAIT,
                 skip_busy_battles=True,
             )
@@ -906,7 +905,6 @@ def _complete_battle_log_legacy(
                 connection,
                 sorted(affected_battle_ids),
                 reset_baseline=_battle_log_reset_baseline(connection, claim),
-                observation_id=claim.observation_id,
                 reset_lock_wait=RESET_LOCK_WAIT,
                 skip_busy_battles=True,
             )

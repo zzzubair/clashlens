@@ -118,12 +118,9 @@ def _settlement_rows(connection_info: str) -> list[tuple]:
         return connection.execute(
             """
             SELECT work.sweep_id, work.player_id, work.due_at - sweep.boundary_at,
-                   work.lane, work.league_history_status, settlement.delayed_work_id = work.id
+                   work.lane, work.league_history_status
             FROM collector_work AS work
             JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
-            LEFT JOIN reset_boundary_settlements AS settlement
-              ON settlement.player_id = work.player_id
-             AND settlement.boundary_at = sweep.boundary_at
             WHERE work.kind = 'reset_settlement'
             ORDER BY work.sweep_id, work.player_id
             """
@@ -211,7 +208,7 @@ def test_one_delayed_work_per_frozen_member_survives_restart(database_url: str) 
         sweep_id = sweeps[0]
         assert sweeps == [sweep_id, sweep_id]
         expected = [
-            (sweep_id, player, timedelta(minutes=20), "ordinary", "not_applicable", True)
+            (sweep_id, player, timedelta(minutes=20), "ordinary", "not_applicable")
             for player in (first, second)
         ]
         assert _settlement_rows(connection_info) == expected
@@ -712,12 +709,8 @@ def test_monday_and_season_checks_have_two_endpoints_and_no_acceptance(
             early_history = connection.execute(
                 "SELECT league_history_status FROM collector_work WHERE kind = 'reset_baseline'"
             ).fetchone()[0]
-            settlement = connection.execute(
-                "SELECT state, selected_trophies, proof_kind FROM reset_boundary_settlements"
-            ).fetchall()
         # The early Season pair still fetches league history; the check never does.
         assert early_history == ("pending" if boundary == SEASON_RESET else "not_applicable")
-        assert settlement == [("provisional", None, None)]
 
 
 @pytest.mark.parametrize(
