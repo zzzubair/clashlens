@@ -923,24 +923,22 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
     assert calculated == ([day2, day3, day4] if scoped else [day2, day3, october])
 
 
-@pytest.mark.parametrize("live_day", [2, 3])
 def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_again(
-    database_url: str, live_day: int,
+    database_url: str,
 ) -> None:
-    """A Reset-pair repair rebuilding the Season's Complete Day 1 and Day 2,
-    and the later saved days of the Season, failed with Day 2 or Day 3 left
-    Live: preview and receipt list it, and the repair stays at inputs. Its
-    retry then saves the Live day again, the days before coming out the same
-    and saving nothing new, and routine cleanup deletes the finished retry
-    48 hours later: the old failure no longer holds the repair, which moves
-    on to the days."""
+    """A Reset-pair repair rebuilding the Season's Complete Day 1 and Live
+    Day 2 failed: preview and receipt list it, and the repair stays at
+    inputs. Its retry then saves Day 2 again, Day 1 coming out the same and
+    saving nothing new, and routine cleanup deletes the finished retry 48
+    hours later: the old failure no longer holds the repair, which moves on
+    to the days."""
     with _campaign_database(database_url) as (connection_info, worker):
         day1, day2 = START, START + DAY
-        live = START + (live_day - 1) * DAY
+        live = day2
         with _owner(connection_info) as connection:
             player = _player(connection, "#RESET")
-            for number in range(live_day):
-                _saved_day(connection, player, START + number * DAY)
+            for day in (day1, day2):
+                _saved_day(connection, player, day)
             connection.execute(
                 "UPDATE ranked_day_versions SET state = 'Live'"
                 " WHERE player_id = %s AND ranked_day_start = %s",
@@ -1051,3 +1049,66 @@ def test_season_repair_reports_a_failed_moved_battle_rebuild_from_another_season
     assert (receipt["inputs"]["failed"], receipt["inputs"]["failed_blockers"]) == (1, blocker)
     # Nothing was queued: the failed job is the only one.
     assert jobs == 1
+
+
+@pytest.mark.parametrize("sequence", ["single_day_unretried", "pair_retried"])
+def test_season_repair_judges_a_failed_reset_repair_by_the_days_it_names(
+    database_url: str, sequence: str,
+) -> None:
+    """A failed Reset repair is judged only by the days it names. A failed
+    one-day repair of Day 2, left Partial, still holds the repair when an
+    unrelated Complete Day 4 is saved since. A failed repair of Days 1 and 2
+    whose retry saved Day 2 again as Partial no longer holds it, after its
+    finished retry is cleaned up, though an unrelated Day 4 saved as Season
+    'unknown' is still Live."""
+    with _campaign_database(database_url) as (connection_info, worker):
+        day1, day2, day4 = START, START + DAY, START + 3 * DAY
+        pair = sequence == "pair_retried"
+        with _owner(connection_info) as connection:
+            player = _player(connection, "#RESET")
+            _saved_day(connection, player, day1)
+            _saved_day(connection, player, day2)
+            if pair:
+                _saved_day(connection, player, day4, season="unknown")
+            connection.execute(
+                "UPDATE ranked_day_versions SET state = %s"
+                " WHERE player_id = %s AND ranked_day_start = ANY(%s)",
+                ("Live" if pair else "Partial", player, [day2, day4]),
+            )
+            failed_id = connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, status,
+                    failure_category, due_at
+                ) VALUES ('reconcile_ranked_day', 'reconcile:reset-baseline:1:v1',
+                          %s, 'failed', 'lease_expired_max_attempts', clock_timestamp())
+                RETURNING id
+                """,
+                (Jsonb({
+                    "player_id": player,
+                    "ranked_day_start": (day1 if pair else day2).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+                    **({"last_ranked_day_start": day2.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "recalculate_season": SEASON} if pair else {}),
+                }),),
+            ).fetchone()[0]
+            if pair:
+                # The retry saves Day 2 again, still Partial; its finished
+                # job is then cleaned up.
+                _saved_day(connection, player, day2, version=2)
+                connection.execute(
+                    "UPDATE ranked_day_versions SET state = 'Partial'"
+                    " WHERE player_id = %s AND ranked_day_start = %s AND version = 2",
+                    (player, day2),
+                )
+            else:
+                # Processing that is not the repair's saves a later day.
+                _saved_day(connection, player, day4)
+        report = domain_repair.season_repair(worker, SEASON, "queue", max_jobs=10)
+
+    if pair:
+        assert (report["phase"], report["queued"]) == ("days", 1)
+    else:
+        assert (report["phase"], report["failed"]) == ("inputs", 1)
+        assert [blocker["job_id"] for blocker in report["failed_blockers"]] == [failed_id]

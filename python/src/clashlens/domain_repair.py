@@ -359,13 +359,13 @@ def _input_jobs(
         SELECT job.id, job.state, job.failure_category,
                (job.input_json ->> 'player_id')::bigint
         FROM python_processing_jobs_worker AS job
-        -- The days a Reset repair recalculates: its first through the
-        -- later saved days of that day's Season.
+        -- The days a job names: its first through its last, or its one day.
         CROSS JOIN LATERAL (
             SELECT (job.input_json ->> 'ranked_day_start')::timestamptz AS first,
-                   CASE WHEN (job.input_json ->> 'ranked_day_start')::timestamptz
-                             >= %(start)s
-                        THEN %(end)s ELSE %(start)s END AS until
+                   coalesce(
+                       job.input_json ->> 'last_ranked_day_start',
+                       job.input_json ->> 'ranked_day_start'
+                   )::timestamptz AS last
         ) AS covered
         WHERE job.work_type = 'reconcile_ranked_day'
           AND job.state::text = ANY(%(states)s)
@@ -380,17 +380,13 @@ def _input_jobs(
           AND (
               job.id = ANY(%(moved)s)
               OR job.input_json ->> 'recalculate_season' = %(season)s
-              OR covered.first < %(end)s
-              AND coalesce(
-                  job.input_json ->> 'last_ranked_day_start',
-                  job.input_json ->> 'ranked_day_start'
-              )::timestamptz >= %(start)s
+              OR covered.first < %(end)s AND covered.last >= %(start)s
           )
           -- A failed Reset repair queued again counts as its retry; once
           -- the retry has run, and after its finished job is cleaned
-          -- up, the days it recalculated show it: one saved since the
-          -- failure and no ended one left Live, a day it did not change
-          -- kept as saved.
+          -- up, the days it names show it: one saved since the failure
+          -- and no ended one left Live, a day it did not change kept as
+          -- saved.
           AND NOT EXISTS (
               SELECT 1 FROM python_processing_jobs_worker AS retry
               WHERE retry.deduplication_key
@@ -403,7 +399,7 @@ def _input_jobs(
                   SELECT 1 FROM ranked_day_versions AS day
                   WHERE day.player_id = (job.input_json ->> 'player_id')::bigint
                     AND day.ranked_day_start >= covered.first
-                    AND day.ranked_day_start < covered.until
+                    AND day.ranked_day_start <= covered.last
                     AND day.created_at > job.updated_at
               )
               AND NOT EXISTS (
@@ -413,7 +409,7 @@ def _input_jobs(
                       FROM ranked_day_versions AS day
                       WHERE day.player_id = (job.input_json ->> 'player_id')::bigint
                         AND day.ranked_day_start >= covered.first
-                        AND day.ranked_day_start < covered.until
+                        AND day.ranked_day_start <= covered.last
                       ORDER BY day.ranked_day_start, day.version DESC, day.id DESC
                   ) AS latest
                   WHERE latest.state = 'Live'
