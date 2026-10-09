@@ -776,3 +776,16 @@ def test_a_season_zero_reading_is_read_with_what_the_days_readings_left_possible
 
     assert (result.state, result.automatic_defense_loss, result.final_trophies_before_reset) == (
         "Complete", 40, 6000)
+
+
+def test_only_a_covered_season_zero_reading_can_show_a_loss() -> None:
+    # The day ends at 6,000 before a calculated 10 loss; 05:20 reads 5,990.
+    # Covered and naming Season 0, it confirms the loss; no log covering it,
+    # or after a battle only the opponent has reported, it proves none.
+    def read(reading: Reading, unknown_from=None):
+        return verdict(reading, loss=(10,), end=6000, day=(), unknown_from=unknown_from)
+
+    covered = read(Reading(at(20), 5990, confirm_only=True))
+    assert (covered.outcome, covered.loss) == ("verified", 10)
+    assert read(Reading(at(20), 5990, uncovered=True)).outcome == "unverified"
+    assert read(Reading(at(20), 5990, confirm_only=True), unknown_from=at(8)).outcome == "unverified"
