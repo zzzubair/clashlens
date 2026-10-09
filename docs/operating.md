@@ -731,6 +731,19 @@ Reset's newest generation shows `snapshot_state` and `army_state` as
 The receipt is kept per Season and rule revision, so the same revision is
 repaired once.
 
+**Known limits of refresh triggers:** these cases queue no recalculation of
+their own. A corrected battle report whose value already appeared in an older
+report of the same battle is taken as repeated. A profile read before the
+latest Reset is not covered by a later unchanged battle-log check, so after
+failed calculations leave an older newest saved day, that reading waits. A
+second late battle after a recalculation that left the day unchanged is
+missed when its report repeats an older value. A corrected battle's own day
+for the other player is queued only through that player's saved day, not
+through their newest ended day. A refresh that needs the day's saved end
+reading is skipped while that reading is missing. In every case the 07:00
+day-end recheck of each day of the Reset and the twice-daily recheck of each
+player's last two ended days judge the day again within a day.
+
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)
 after their reading and before the Reset, takes a Complete day's EOD plus its

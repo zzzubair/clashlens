@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import timedelta
 
 import psycopg
 from domain_test_support import domain_database, store_observation
 from test_collector_db_postgres import NOW, _handoff, _hash, _player
-from test_first_battle_log_postgres import _log
+from test_first_battle_log_postgres import LOSS, WIN, _log
 from test_reconciliation_postgres import _profile
 from test_reset_reading_before_loss_postgres import DAY_B, DAY_C, DAY_D
 from test_reset_settlement_state_postgres import TAG, _process, _reset_work
 
+from clashlens import reconciliation_db
 from clashlens.collector_db import CollectorDatabase
+from clashlens.db import Database
+from clashlens.reconciliation import DISPUTED_BATTLE_REASONS
 
 
 def _queued(connection_info: str, prefix: str) -> list[tuple[str, str]]:
@@ -90,3 +95,176 @@ def test_only_new_battle_reports_queue_their_day_and_the_day_before(
         (player_id, f"{DAY_B:%Y-%m-%dT%H:%M:%SZ}"),
         (player_id, f"{DAY_C:%Y-%m-%dT%H:%M:%SZ}"),
     ]
+
+
+def _day(connection_info: str, tag: str, day_start) -> tuple:
+    with psycopg.connect(connection_info) as connection:
+        return connection.execute(
+            """
+            SELECT day.state, day.confidence, day.failure_reasons
+            FROM ranked_day_versions AS day
+            JOIN players AS player ON player.id = day.player_id
+            WHERE player.normalized_tag = %s AND day.ranked_day_start = %s
+            ORDER BY day.version DESC LIMIT 1
+            """,
+            (tag, day_start),
+        ).fetchone()
+
+
+def _calculate(connection_info: str, archive_server, tag: str, day_start) -> None:
+    database = Database(connection_info)
+    try:
+        job = reconciliation_db.enqueue_reconciliation(
+            database, player_tag=tag, day_start=day_start, now=DAY_D,
+            request_key=f"test-{tag}",
+        )
+    finally:
+        database.close()
+    _process(connection_info, archive_server, [job])
+
+
+def test_unchanged_covering_check_lets_a_later_reading_contradict_the_day(
+    database_url: str, archive_server
+) -> None:
+    # Day B's 05:20 Reset reading proves it. A 05:40 reading 10 more cannot
+    # contradict it while no battle log covers it; an unchanged 05:45 check of
+    # the Reset log, which saves no log, covers it, and the day is judged.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    reset_log = _log(*day_b)
+    digest = hashlib.sha256(reset_log).hexdigest()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(end_b),
+            log=reset_log, profile_at=DAY_C + timedelta(minutes=20),
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="later-profile",
+            endpoint="profile", body=_profile(end_b + 10),
+            observed_at=DAY_C + timedelta(minutes=40), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        _calculate(connection_info, archive_server, TAG, DAY_B)
+        before = _day(connection_info, TAG, DAY_B)
+        with psycopg.connect(connection_info) as connection:
+            player_id, log_id = connection.execute(
+                "SELECT player_id, id FROM collector_observations"
+                " WHERE endpoint = 'battle_log' AND response_completed_at = %s",
+                (DAY_C,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO collector_response_state (
+                    scope, identity_key, endpoint, player_id, normalized_tag,
+                    last_response_hash, last_content_fingerprint, last_occurrence_key,
+                    last_seen_at, last_observation_id, last_success_at
+                ) VALUES ('player', %s, 'battle_log', %s, %s, %s, %s, 'reset-log',
+                          %s, %s, %s)
+                """,
+                (TAG, player_id, TAG, digest, digest, DAY_C, log_id, DAY_C),
+            )
+        unchanged = CollectorDatabase(connection_info).record_response(_handoff(
+            occurrence_key="covering-check", response_hash=digest, player_id=player_id,
+            endpoint="battle_log", completed_at=DAY_C + timedelta(minutes=45),
+        ))
+        _process(connection_info, archive_server, [])
+        after = _day(connection_info, TAG, DAY_B)
+
+    assert unchanged.observation_id is None
+    assert before[:2] == ("Complete", "exact")
+    assert after[:2] == ("Inconsistent", "uncertain")
+    assert "trophy_equation_mismatch" in after[2]
+
+
+def test_late_opponent_report_settles_the_battles_day_for_both_players(
+    database_url: str, archive_server
+) -> None:
+    # The player's log reports a 2-star, 60% defense against #GQPP on day B;
+    # the attacker's log first reports 3 stars and 100%, so both days hold a
+    # disputed battle. The attacker's corrected log, saved after day B ended,
+    # agrees, and both players' day B is calculated again without it.
+    at = f"{DAY_B + timedelta(hours=3):%Y%m%dT%H%M%S.000Z}"
+    defense = {**json.loads(_log((DAY_B, False)))["items"][0],
+               "opponentPlayerTag": "#GQPP", "battleTimestamp": at}
+    attack = {**json.loads(_log((DAY_B, True)))["items"][0],
+              "opponentPlayerTag": TAG, "battleTimestamp": at}
+    corrected = {**attack, "stars": 2, "destructionPercentage": 60}
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="attacker-log",
+            endpoint="battle_log", body=json.dumps({"items": [attack]}).encode(),
+            observed_at=DAY_B + timedelta(hours=4), normalized_tag="#GQPP",
+        )[1])
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(6000 - LOSS),
+            log=json.dumps({"items": [defense]}).encode(),
+        )
+        _process(connection_info, archive_server, jobs)
+        _calculate(connection_info, archive_server, "#GQPP", DAY_B)
+        before = [_day(connection_info, tag, DAY_B)[2] for tag in (TAG, "#GQPP")]
+        _, log_job = store_observation(
+            connection_info, archive_server, occurrence_key="attacker-corrected",
+            endpoint="battle_log", body=json.dumps({"items": [corrected]}).encode(),
+            observed_at=DAY_C + timedelta(hours=1), normalized_tag="#GQPP",
+        )
+        _process(connection_info, archive_server, [log_job])
+        after = [_day(connection_info, tag, DAY_B)[2] for tag in (TAG, "#GQPP")]
+
+    assert all(set(reasons) & DISPUTED_BATTLE_REASONS for reasons in before)
+    assert not any(set(reasons) & DISPUTED_BATTLE_REASONS for reasons in after)
+
+
+def test_one_new_battle_in_a_full_log_queues_only_its_two_players(
+    database_url: str, archive_server
+) -> None:
+    # A 50-row log repeats day B's 8 defenses, one against #8PP, whose day B
+    # is saved, adds 41 battles of another mode and one new defense against
+    # #GQPP: only the player's and #GQPP's days are queued.
+    day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
+    full = json.loads(_log(*day_b, filler=[
+        DAY_B - timedelta(hours=9 - index / 10) for index in range(41)
+    ]))
+    full["items"].append({
+        **full["items"][0], "opponentPlayerTag": "#GQPP",
+        "battleTimestamp": f"{DAY_B + timedelta(hours=20):%Y%m%dT%H%M%S.000Z}",
+    })
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(6000 - 8 * LOSS),
+            log=_log(*day_b),
+        )
+        _process(connection_info, archive_server, jobs)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "INSERT INTO players (normalized_tag, active) VALUES ('#GQPP', true)"
+            )
+        for tag in ("#8PP", "#GQPP"):
+            _calculate(connection_info, archive_server, tag, DAY_B)
+        _, log_job = store_observation(
+            connection_info, archive_server, occurrence_key="full-log",
+            endpoint="battle_log", body=json.dumps(full).encode(),
+            observed_at=DAY_C + timedelta(hours=1), normalized_tag=TAG,
+        )
+        _process(connection_info, archive_server, [log_job])
+        with psycopg.connect(connection_info) as connection:
+            expected = {
+                str(row[0]) for row in connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag IN (%s, '#GQPP')",
+                    (TAG,),
+                )
+            }
+        queued = {player for player, _ in _queued(connection_info, "reconcile:report:")}
+
+    assert len(full["items"]) == 50
+    assert queued == expected

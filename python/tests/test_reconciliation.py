@@ -190,8 +190,8 @@ def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows()
     ))
 
     assert (quiet.state, quiet.automatic_defense_loss) == ("Complete", None)
-    assert (monday.state, monday.confidence, monday.next_start_trophies) == (
-        "Complete", "inferred", 5200)
+    assert (monday.state, monday.failure_reasons, monday.final_trophies_before_reset) == (
+        "Partial", ("end_reading_unverified",), 5200)
     assert quiet.shield_state == "inferred_shielded"
     assert other.state == day_1.state == "Inconsistent"
     assert other.automatic_defense_loss is day_1.automatic_defense_loss is None
