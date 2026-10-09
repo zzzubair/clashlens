@@ -13,6 +13,8 @@ from .analytics import (
     PROFILE_FRESHNESS_SECONDS,
     SNAPSHOT_ORDERING_RULE_VERSION,
     deterministic_tag_hash,
+    season_attack_tallies,
+    tie_order_key,
 )
 from .boundary_manifest import reset_trophies
 from .db import (
@@ -27,6 +29,7 @@ from .db import (
     ended_day_priority,
 )
 from .domain import RANKED_DAY_DURATION, ranked_day_for
+from .profile import normalize_player_tag
 
 
 def complete_snapshot(database: Database, claim: Claim) -> None:
@@ -69,7 +72,8 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     """
                     SELECT id, snapshot_state, expected_population_count,
                            expected_population_hash, snapshot_manifest_id,
-                           target_at, target_rule, snapshot_rule_version
+                           target_at, target_rule, snapshot_rule_version,
+                           ordering_rule_version
                     FROM boundary_publication_generations
                     WHERE boundary_at = %s AND generation = %s
                     FOR UPDATE
@@ -226,17 +230,36 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     """,
                     (boundary_at, ended_season_id),
                 ).fetchall()
+                season_attacks = season_attack_tallies(
+                    connection,
+                    season_start=ranked_day_for(
+                        boundary_at - RANKED_DAY_DURATION
+                    ).season_start,
+                    cutoff=boundary_at,
+                    player_ids=[int(row[0]) for row in profile_rows],
+                )
+                frozen_attacks = True
             else:
                 manifest_profiles = connection.execute(
                     """
                     SELECT player_id, input_identity->'profile_snapshot',
                            input_identity->>'profile_version_id',
                            input_identity->>'snapshot_quality',
-                           ranked_day_version_id
+                           ranked_day_version_id,
+                           input_identity->'season_attacks',
+                           input_identity ? 'season_attacks'
                     FROM boundary_publication_manifest_entries(%s)
                     """,
                     (generation_row[4],),
                 ).fetchall()
+                frozen_attacks = all(row[6] for row in manifest_profiles)
+                season_attacks = {
+                    int(row[0]): (
+                        int(row[5]["attacks"]), int(row[5]["destruction"])
+                    )
+                    for row in manifest_profiles
+                    if isinstance(row[5], dict)
+                }
                 ranked_day_versions = {
                     int(row[0]): int(row[4])
                     for row in manifest_profiles
@@ -329,6 +352,16 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     and row[3] is not None
                 }
 
+            # Inputs frozen with Season attacks order by the current rule.
+            # Inputs frozen before it hold none, so their board keeps its
+            # generation's older rule and SHA-256 tag hash order until the
+            # board rebuild check (boundary.queue_board_rebuilds) rebuilds it.
+            ordering_rule_version = (
+                SNAPSHOT_ORDERING_RULE_VERSION
+                if frozen_attacks
+                else _text_value(generation_row[8])
+            )
+            older_order = ordering_rule_version != SNAPSHOT_ORDERING_RULE_VERSION
             entries: list[dict[str, Any]] = []
             for row in profile_rows:
                 # Without proof, a reading stays as it is and is marked
@@ -355,15 +388,25 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         "age_seconds": age_seconds,
                         "freshness": freshness,
                         "confidence": "confirmed" if proven else "uncertain",
-                        "tie_hash": deterministic_tag_hash(_text_value(row[1])),
+                        "tie_hash": (
+                            hashlib.sha256(
+                                normalize_player_tag(_text_value(row[1])).encode("ascii")
+                            ).hexdigest()
+                            if older_order
+                            else deterministic_tag_hash(_text_value(row[1]))
+                        ),
                         "official": official_by_player.get(int(row[0])),
+                        "season_attacks": season_attacks.get(int(row[0]), (0, 0)),
                     }
                 )
             entries.sort(
                 key=lambda item: (
                     -int(item["trophies"]),
-                    str(item["tie_hash"]),
-                    str(item["tag"]),
+                    *(
+                        (str(item["tie_hash"]), str(item["tag"]))
+                        if older_order
+                        else tie_order_key(*item["season_attacks"], str(item["tag"]))
+                    ),
                 )
             )
 
@@ -607,7 +650,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 hash_payload = {
                     "manifest_digest": manifest_digest_value,
                     "rule_versions": {
-                        "ordering_rule_version": SNAPSHOT_ORDERING_RULE_VERSION,
+                        "ordering_rule_version": ordering_rule_version,
                         "freshness_rule_version": FRESHNESS_RULE_VERSION,
                         "analytics_rule_version": _text_value(generation_row[7]),
                     },
@@ -620,7 +663,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     "source_ranked_day_version_id": ranked_day_version_id,
                     "source_ranked_day_version": int(ranked_day[3]),
                     "source_ranked_day_input_hash": _text_value(ranked_day[2]),
-                    "ordering_rule_version": SNAPSHOT_ORDERING_RULE_VERSION,
+                    "ordering_rule_version": ordering_rule_version,
                     "freshness_rule_version": FRESHNESS_RULE_VERSION,
                     "entries": hash_entries,
                     "quality": quality,
@@ -646,6 +689,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     coverage=coverage,
                     quality=quality,
                     input_hash=input_hash,
+                    ordering_rule_version=ordering_rule_version,
                     publish=False,
                 )
             )
@@ -660,6 +704,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                 coverage=coverage,
                 quality=quality,
                 input_hash=input_hash,
+                ordering_rule_version=ordering_rule_version,
                 publish=True,
             )
             if generation_row is not None:
@@ -720,6 +765,7 @@ def _publish_snapshot_kind(
     coverage: float,
     quality: dict[str, int],
     input_hash: str,
+    ordering_rule_version: str,
     publish: bool,
 ) -> tuple[int, int]:
     """Assemble one immutable snapshot version.
@@ -803,7 +849,7 @@ def _publish_snapshot_kind(
                     boundary_at,
                     snapshot_version,
                     prior[0] if prior is not None else None,
-                    SNAPSHOT_ORDERING_RULE_VERSION,
+                    ordering_rule_version,
                     FRESHNESS_RULE_VERSION,
                     ranked_day_version_id,
                     coverage,
@@ -844,7 +890,7 @@ def _publish_snapshot_kind(
                     boundary_at,
                     snapshot_version,
                     prior[0] if prior is not None else None,
-                    SNAPSHOT_ORDERING_RULE_VERSION,
+                    ordering_rule_version,
                     FRESHNESS_RULE_VERSION,
                     ranked_day_version_id,
                     coverage,

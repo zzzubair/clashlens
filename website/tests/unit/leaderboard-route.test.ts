@@ -93,7 +93,7 @@ it("explains tracked ranks and distinguishes whole-board times from the row's co
   expect(html).toContain('id="leaderboard-title">Live Leaderboard</h1>');
   expect(html).toContain("position among players tracked by Clash Lens");
   expect(html).toContain("not the official global rank");
-  expect(html).toContain("fixed order based on player tags");
+  expect(html).toContain("higher average attack destruction this Season");
   expect(html).toContain("even if it was unchanged");
   expect(html).toMatch(/Newest player update: <time[^>]+dateTime="2026-10-02T11:59:00Z"/);
   expect(html).toMatch(/Oldest player update: <time[^>]+dateTime="2026-10-02T11:30:00Z"/);

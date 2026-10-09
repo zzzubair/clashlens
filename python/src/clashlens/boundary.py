@@ -201,6 +201,7 @@ def _create_boundary_generation(
     generation: int,
     supersedes_id: int | None,
     pending_inputs: list[dict[str, Any]] | None = None,
+    ordering_rule_version: str | None = None,
 ) -> tuple[int, int]:
     population_hash = _boundary_population_hash(player_ids)
     target_at = boundary_at + timedelta(
@@ -222,7 +223,7 @@ def _create_boundary_generation(
             boundary_at,
             generation,
             sweep_id,
-            SNAPSHOT_ORDERING_RULE_VERSION,
+            ordering_rule_version or SNAPSHOT_ORDERING_RULE_VERSION,
             FRESHNESS_RULE_VERSION,
             len(player_ids),
             population_hash,
@@ -344,20 +345,6 @@ def _inherit_deferred_army_successor_snapshot(
         return False
     if target[0] is None or target[2] is not None:
         return False
-    if (
-        connection.execute(
-            """
-        SELECT 1
-        FROM boundary_publication_corrections
-        WHERE source_generation_id = %s
-          AND state IN ('queued', 'pending_inputs', 'active')
-        LIMIT 1
-        """,
-            (generation_id,),
-        ).fetchone()
-        is not None
-    ):
-        return False
     source = connection.execute(
         """
         SELECT snapshot_state, snapshot_id, snapshot_input_hash,
@@ -395,6 +382,76 @@ def _inherit_deferred_army_successor_snapshot(
     return True
 
 
+def _supersede_generation(
+    database: Database,
+    connection: Any,
+    *,
+    boundary_at: datetime,
+    sweep_id: int,
+    generation_id: int,
+    generation: int,
+    pending_inputs: list[dict[str, Any]] | None = None,
+) -> tuple[int, int]:
+    """Replace ``generation_id`` with a generation rebuilding both artifacts
+    under the current rules, started as the Reset's active correction.
+    Corrections still waiting on the replaced generation wait on its
+    replacement."""
+    connection.execute(
+        """
+        UPDATE boundary_publication_generations
+        SET snapshot_state = 'superseded', army_state = 'superseded',
+            correction_state = 'finalized', updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (generation_id,),
+    )
+    connection.execute(
+        """
+        UPDATE boundary_publication_corrections
+        SET state = 'finalized', finalized_at = clock_timestamp()
+        WHERE generation_id = %s AND state = 'active'
+        """,
+        (generation_id,),
+    )
+    frozen_members = connection.execute(
+        """
+        SELECT player_id
+        FROM boundary_publication_generation_members
+        WHERE generation_id = %s
+        ORDER BY player_id
+        """,
+        (generation_id,),
+    ).fetchall()
+    new_id, new_generation = _create_boundary_generation(
+        database,
+        connection,
+        boundary_at=boundary_at,
+        sweep_id=sweep_id,
+        player_ids=[int(row[0]) for row in frozen_members],
+        generation=generation + 1,
+        supersedes_id=generation_id,
+        pending_inputs=pending_inputs,
+    )
+    connection.execute(
+        """
+        UPDATE boundary_publication_corrections
+        SET source_generation_id = %s
+        WHERE source_generation_id = %s AND state IN ('queued', 'pending_inputs')
+        """,
+        (new_id, generation_id),
+    )
+    connection.execute(
+        """
+        INSERT INTO boundary_publication_corrections
+            (boundary_at, source_generation_id, generation_id,
+             affected_artifacts, state, started_at)
+        VALUES (%s, %s, %s, ARRAY['snapshot', 'army'], 'active', clock_timestamp())
+        """,
+        (boundary_at, generation_id, new_id),
+    )
+    return new_id, new_generation
+
+
 def _try_enqueue_boundary_artifacts(
     database, connection: Any, *, boundary_at: datetime, generation_id: int
 ) -> None:
@@ -406,7 +463,8 @@ def _try_enqueue_boundary_artifacts(
     generation = connection.execute(
         """
         SELECT id, generation, sweep_id, snapshot_state, army_state,
-               expected_population_count, affected_artifacts, target_at, target_rule
+               expected_population_count, affected_artifacts, target_at, target_rule,
+               ordering_rule_version
         FROM boundary_publication_generations
         WHERE id = %s
         FOR UPDATE
@@ -471,6 +529,23 @@ def _try_enqueue_boundary_artifacts(
         and _text_value(snapshot[0]) == "ready"
         and (not affected_artifacts or "snapshot" in affected_artifacts)
     ):
+        # A board built under an older ordering rule, such as an army-only
+        # replacement of one that gains a board rebuild, freezes its inputs
+        # under the current rule in a replacement; a generation's rule
+        # cannot change once its membership is captured.
+        if _text_value(generation[9]) != SNAPSHOT_ORDERING_RULE_VERSION:
+            new_id, _ = _supersede_generation(
+                database,
+                connection,
+                boundary_at=boundary_at,
+                sweep_id=sweep_id,
+                generation_id=generation_id,
+                generation=generation_number,
+            )
+            _try_enqueue_boundary_artifacts(
+                database, connection, boundary_at=boundary_at, generation_id=new_id
+            )
+            return
         manifest = _freeze_boundary_manifest(database, 
             connection, generation_id=generation_id, artifact_kind="snapshot"
         )
@@ -947,31 +1022,13 @@ def _record_boundary_generation(
             and frozen_artifacts
             and fully_published
         ):
-            connection.execute(
-                """
-                UPDATE boundary_publication_generations
-                SET snapshot_state = 'superseded', army_state = 'superseded',
-                    correction_state = 'finalized', updated_at = clock_timestamp()
-                WHERE id = %s
-                """,
-                (generation_id,),
-            )
-            frozen_members = connection.execute(
-                """
-                SELECT player_id
-                FROM boundary_publication_generation_members
-                WHERE generation_id = %s
-                ORDER BY player_id
-                """,
-                (generation_id,),
-            ).fetchall()
-            generation_id, generation = _create_boundary_generation(database, 
+            generation_id, generation = _supersede_generation(
+                database,
                 connection,
                 boundary_at=boundary_at,
                 sweep_id=sweep_id,
-                player_ids=[int(row[0]) for row in frozen_members],
-                generation=generation + 1,
-                supersedes_id=int(current[0]),
+                generation_id=generation_id,
+                generation=generation,
                 pending_inputs=[
                     {
                         "player_id": player_id,
@@ -979,20 +1036,6 @@ def _record_boundary_generation(
                         "input_hash": ranked_day_input_hash,
                     }
                 ],
-            )
-            affected = frozen_artifacts or ["snapshot", "army"]
-            connection.execute(
-                "UPDATE boundary_publication_generations SET affected_artifacts = %s WHERE id = %s",
-                (affected, generation_id),
-            )
-            connection.execute(
-                """
-                INSERT INTO boundary_publication_corrections
-                    (boundary_at, source_generation_id, generation_id,
-                     affected_artifacts, state, started_at)
-                VALUES (%s, %s, %s, %s, 'active', clock_timestamp())
-                """,
-                (boundary_at, current[0], generation_id, affected),
             )
     snapshot_status = _boundary_snapshot_status(
         connection,
@@ -1055,8 +1098,9 @@ def queue_board_rebuilds(
 ) -> dict[str, Any]:
     """Find, and with ``queue`` rebuild, each of the Season's Reset boards
     whose frozen input still ranks a reading taken before the player's
-    profile answered "player not found", or whose saved entries differ from
-    the trophies at the Reset ``reset_trophies`` now gives, or its mark. On 5
+    profile answered "player not found", whose saved entries differ from
+    the trophies at the Reset ``reset_trophies`` now gives, or its mark, or
+    that an older ordering rule ordered. On 5
     to 7 October 2026 that was 24 players on Day 1 and 34 on Day 2, two of
     them first and second on Day 2, and 290 Day 2 entries missing battles
     after their readings; on 8 October, 3 Day 3 entries marked proven but
@@ -1089,14 +1133,23 @@ def queue_board_rebuilds(
         for (boundary_at,) in resets:
             with connection.transaction():
                 lock_boundary_publication(connection, boundary_at)
+                # An army-only replacement not yet holding its board ranks
+                # the board it inherits.
                 current = connection.execute(
                     """
-                    SELECT id, generation, snapshot_manifest_id, snapshot_id
-                    FROM boundary_publication_generations
-                    WHERE boundary_at = %s
-                      AND snapshot_state <> 'superseded'
-                      AND army_state <> 'superseded'
-                    ORDER BY generation DESC
+                    SELECT generation.id, generation.generation,
+                           COALESCE(generation.snapshot_manifest_id,
+                                    source.snapshot_manifest_id),
+                           COALESCE(generation.snapshot_id, source.snapshot_id)
+                    FROM boundary_publication_generations AS generation
+                    LEFT JOIN boundary_publication_generations AS source
+                      ON source.id = generation.source_generation_id
+                     AND generation.snapshot_state = 'pending'
+                     AND generation.affected_artifacts = ARRAY['army']::text[]
+                    WHERE generation.boundary_at = %s
+                      AND generation.snapshot_state <> 'superseded'
+                      AND generation.army_state <> 'superseded'
+                    ORDER BY generation.generation DESC
                     LIMIT 1
                     """,
                     (boundary_at,),
@@ -1152,7 +1205,17 @@ def queue_board_rebuilds(
                     != expected.get(int(player_id))
                     for player_id, trophies, confidence in entries
                 )
-                if not not_found and not late_battles:
+                # A board ordered by an older rule, such as equal trophies
+                # by tag hash alone before the shared tie order.
+                rule = connection.execute(
+                    "SELECT ordering_rule_version FROM leaderboard_snapshots WHERE id = %s",
+                    (snapshot_id,),
+                ).fetchone()
+                reordered = (
+                    rule is not None
+                    and _text_value(rule[0]) != SNAPSHOT_ORDERING_RULE_VERSION
+                )
+                if not not_found and not late_battles and not reordered:
                     continue
                 queued = connection.execute(
                     """
@@ -1192,6 +1255,7 @@ def queue_board_rebuilds(
                         "generation": int(generation),
                         "profile_not_found": len(not_found),
                         "late_battles": late_battles,
+                        "reordered": reordered,
                         "correction": (
                             "already_queued" if queued is not None
                             else "queued" if queue

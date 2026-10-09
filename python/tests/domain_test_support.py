@@ -224,6 +224,56 @@ def repair_season(
         database.close()
 
 
+def seed_attacks(
+    connection: psycopg.Connection[Any],
+    attacker_id: int,
+    attacks: list[tuple[datetime, int]],
+) -> None:
+    """Record each (Legend day start, destruction) as one attack the player's
+    own battle log reported, on a new untracked opponent, an hour into that
+    day. Saved without source rows or responses."""
+    with connection.transaction():
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for day, destruction in attacks:
+            connection.execute(
+                """
+                WITH defender AS (
+                    INSERT INTO players (normalized_tag, active)
+                    VALUES (%(defender)s, false) RETURNING id
+                ), battle AS (
+                    INSERT INTO legend_battles
+                        (ranked_day_start, attacker_player_id, defender_player_id)
+                    SELECT %(day)s, %(attacker)s, id FROM defender RETURNING id
+                ), evidence AS (
+                    INSERT INTO battle_evidence (
+                        battle_id, source_row_id, observation_id,
+                        reporting_player_id, perspective, battle_timestamp,
+                        stars, destruction_percentage, army_share_code,
+                        attacker_gain, defender_loss, trophy_rule_version,
+                        source_observed_at, parser_version
+                    )
+                    SELECT id, -id, -id, %(attacker)s, 'attacker',
+                           %(day)s + interval '1 hour',
+                           CASE WHEN %(destruction)s = 100 THEN 3
+                                WHEN %(destruction)s >= 50 THEN 1 ELSE 0 END,
+                           %(destruction)s, '', 0, 0, 'test',
+                           %(day)s + interval '1 hour', 'test'
+                    FROM battle RETURNING id, battle_id
+                )
+                INSERT INTO battle_perspectives
+                    (battle_id, perspective, evidence_id, source_observed_at)
+                SELECT battle_id, 'attacker', id, %(day)s + interval '1 hour'
+                FROM evidence
+                """,
+                {
+                    "defender": f"#Q{uuid4().hex[:12].upper()}",
+                    "day": day,
+                    "attacker": attacker_id,
+                    "destruction": destruction,
+                },
+            )
+
+
 @contextmanager
 def _connection_scope(connection_info: str, existing: Any | None):
     if existing is not None:

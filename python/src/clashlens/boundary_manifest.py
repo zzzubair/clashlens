@@ -22,10 +22,11 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from .analytics import season_attack_tallies
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
 from .db import Database, _text_value
-from .domain import RANKED_DAY_DURATION, season_is_current
+from .domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -466,6 +467,14 @@ def _snapshot_rows(
         if official_version_id is not None
         else {}
     )
+    # The ended day's Season attacks up to the Reset, which order equal
+    # trophies (analytics.tie_order_key).
+    season_attacks = season_attack_tallies(
+        connection,
+        season_start=ranked_day_for(boundary_at - RANKED_DAY_DURATION).season_start,
+        cutoff=boundary_at,
+        player_ids=player_ids,
+    )
     # Each player's newest accepted profile at the Reset, chosen exactly as
     # for one player, with the population in one query.
     profiles = {
@@ -569,6 +578,10 @@ def _snapshot_rows(
             official_entry[1].astimezone(UTC).isoformat()
             if official_entry
             else None
+        )
+        tally = season_attacks.get(player_id)
+        identity["season_attacks"] = (
+            {"attacks": tally[0], "destruction": tally[1]} if tally else None
         )
         profile = profiles.get(player_id)
         if profile is not None:
