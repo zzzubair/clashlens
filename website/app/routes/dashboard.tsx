@@ -73,10 +73,13 @@ export function meta() {
 
 /**
  * GET /dashboard — the signed-in user's Legend dashboard. A visitor who is
- * not signed in sees a preview of what an account adds instead.
+ * not signed in sees a preview of what an account adds instead. While
+ * CLASHLENS_DASHBOARD_ENABLED is off the page does not exist.
  */
 export async function loader({ request }: Route.LoaderArgs) {
-  const { getWebsiteConfig } = await import("../server/config.server");
+  const { getWebsiteConfig, isDashboardEnabled } =
+    await import("../server/config.server");
+  if (!isDashboardEnabled()) throw data(null, { status: 404 });
   const { readLoginIdentity, freshIdempotencyKey, isAccountNotFoundError } =
     await import("../server/actions.server");
   let config;
@@ -249,6 +252,8 @@ function playerDay(
  * keeping every other preference as it was.
  */
 export async function action({ request }: Route.ActionArgs) {
+  const { isDashboardEnabled } = await import("../server/config.server");
+  if (!isDashboardEnabled()) throw data(null, { status: 404 });
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");

@@ -184,6 +184,7 @@ load_production_config() {
     die "CLASHLENS_GLOBAL_RANKINGS_ENABLED must be true or false"
   [[ "$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY true)" =~ ^(true|false)$ ]] || \
     die "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY must be true or false"
+  [[ "$(setting CLASHLENS_DASHBOARD_ENABLED false)" =~ ^(true|false)$ ]] || die "CLASHLENS_DASHBOARD_ENABLED must be true or false"
   local previous_id previous_file
   previous_id=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)
   previous_file=$(setting CLASHLENS_HMAC_PREVIOUS_SECRET_FILE)
@@ -809,19 +810,20 @@ write_environment() {
     "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=$KEY_RATE" CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081 "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=$([[ "$MODE" == fixture ]] && printf true || printf false)"
   write_env worker.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key
-  local hmac_caller hmac_key_id
+  local hmac_caller hmac_key_id dashboard_enabled
+  dashboard_enabled=CLASHLENS_DASHBOARD_ENABLED=$(setting CLASHLENS_DASHBOARD_ENABLED false)
   hmac_caller=$(setting CLASHLENS_HMAC_CALLER typescript-website)
   hmac_key_id=$(setting CLASHLENS_HMAC_KEY_ID current)
   local api_environment=(CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url "CLASHLENS_HMAC_CALLER=$hmac_caller" "CLASHLENS_HMAC_KEY_ID=$hmac_key_id"
     CLASHLENS_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current CLASHLENS_OFFICIAL_KEY_FILE=/run/secrets/clashlens-interactive-1
-    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin")
+    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "$dashboard_enabled")
   [[ -z "$official_proxy" ]] || api_environment+=("CLASHLENS_OFFICIAL_PROXY_URL=$official_proxy")
   if [[ -n "$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" ]]; then
     api_environment+=("CLASHLENS_HMAC_PREVIOUS_KEY_ID=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" CLASHLENS_HMAC_PREVIOUS_SECRET_FILE=/run/secrets/clashlens-hmac-previous)
   fi
   write_env api.env "${api_environment[@]}"
   if [[ "$MODE" == fixture ]]; then
-    write_env website.env NODE_ENV=test PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
+    write_env website.env NODE_ENV=test PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 "$dashboard_enabled" \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
       CLASHLENS_LOGIN_ENABLED=true CLASHLENS_PUBLIC_ORIGIN=http://127.0.0.1:15174 \
       CLASHLENS_GOOGLE_ISSUER_URL=http://127.0.0.1:8011 CLASHLENS_GOOGLE_CLIENT_ID=clashlens-browser-test \
@@ -842,7 +844,7 @@ write_environment() {
     [[ -z "$trusted_proxy_ip" ]] || website_environment+=("CLASHLENS_TRUSTED_PROXY_IP=$trusted_proxy_ip")
     [[ -z "$BLOG_DIR" ]] || website_environment+=(CLASHLENS_BLOG_DIR=/blog)
     [[ -z "$(setting CLASHLENS_BLOG_OWNER)" ]] || website_environment+=("CLASHLENS_BLOG_OWNER=$(setting CLASHLENS_BLOG_OWNER)")
-    write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
+    write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 "$dashboard_enabled" \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
       "${website_environment[@]}" \
       "CLASHLENS_LOGIN_ENABLED=$login_enabled" "CLASHLENS_PUBLIC_ORIGIN=$public_origin" "CLASHLENS_GOOGLE_CLIENT_ID=$google_id" \
