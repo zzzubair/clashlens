@@ -432,7 +432,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # (reading_rule); one hidden by a reset it can only contradict.
         verdict = (
             reading_rule.decide(
-                _readings(replace(data, readings=()) if official_end else data),
+                _readings(replace(data, readings=(), unreadable_from=None) if official_end else data),
                 reset_at=data.ranked_day.end, start_proven=start_proven,
                 unknown_from=None if official_end else data.first_unshown_report, **rule,
             )

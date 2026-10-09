@@ -925,15 +925,16 @@ def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     ) == [(day_b[0][0], 120), (day_b[1][0], None), (day_b[2][0], None)]
 
 
+@pytest.mark.parametrize("row_time", ["not-a-time", f"{DAY_B + timedelta(hours=1):%Y%m%dT%H%M%S.000Z}"])
 def test_a_disagreeing_reading_during_the_day_outlasts_an_unreadable_new_day_row(
-    database_url: str, archive_server
+    database_url: str, archive_server, row_time: str
 ) -> None:
-    # A noon reading 10 off makes day B Uncertain. A 05:30 log brings a
-    # new-day row whose time cannot be read: readings from the Reset on are
-    # dropped, but the noon one still stands.
+    # A noon reading 10 off makes day B Uncertain. A 05:30 log brings a row
+    # that cannot be read, whose time is unreadable or day B's 06:00:
+    # readings from the Reset on are dropped, but the noon one still stands.
     day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
     log = json.loads(_log(*day_b))
-    unreadable = {**log["items"][0], "battleTimestamp": "not-a-time"}
+    unreadable = {**log["items"][0], "battleTimestamp": row_time}
     unreadable.pop("attack")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(

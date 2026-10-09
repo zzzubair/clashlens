@@ -474,3 +474,17 @@ def test_an_official_season_total_shows_a_possible_charge() -> None:
     assert (result.state, result.automatic_defense_loss) == ("Complete", 320)
     assert (result.final_trophies_before_reset, result.next_start_trophies) == (5680, 5680)
     assert "trophy_equation_mismatch" not in result.failure_reasons
+
+
+def test_an_unreadable_new_day_row_leaves_the_official_season_total_standing() -> None:
+    # As above, but a log saved after the Season reset holds a row whose time
+    # cannot be read: the official total still shows the 320 charge.
+    result = reconcile_ranked_day(test_reconciliation._input(
+        start_trophies=6000, next_start_trophies=5680, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 320, 0),
+        end_baseline_evidence={"official_final_trophies": 5680},
+        unreadable_from=test_reconciliation.DAY.end,
+    ))
+
+    assert (result.state, result.automatic_defense_loss) == ("Complete", 320)
+    assert result.final_trophies_before_reset == 5680
