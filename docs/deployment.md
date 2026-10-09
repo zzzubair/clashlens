@@ -1287,9 +1287,9 @@ without more connections. Season repair jobs took 0.8 seconds each on
 average on 2026-10-09 (13,390 of them, 2 at a time, about 5 hours); with
 `CLASHLENS_BACKGROUND_JOB_LIMIT=6` and 6 such threads a process, a Season's
 15,400 take at least 35 minutes, longer while live work pauses them. All processes share the container's
-memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
-worker refuses to start with more than 16 connections a process or 38 in
-all; see [the database connection budget](architecture.md#structured-data-and-evidence)
+memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit.
+`./ops`, before it stops anything, and the worker refuse more than 16
+connections a process or 38 in all; see [the database connection budget](architecture.md#structured-data-and-evidence)
 for how that fits with the other processes.
 
 The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
