@@ -160,9 +160,12 @@ Migration `0037_weekly_eligibility.sql` makes the shared
 as soon as the migration is applied, independently of the switch. First-time
 tags still enqueue immediately. Pending profile checks across older cycles are
 reused, and terminal routine attempts do not restart on every repeat sighting.
-Migration `0068_weekly_eligibility_direct_selection.sql` keeps that selection
-but finds due players with plain lookups, so a finished week costs one cheap
-lookup per inactive player instead of the per-player evidence checks.
+Migration `0090_weekly_eligibility_next_players.sql` keeps that selection but
+saves on each inactive player the week the weekly search finished with them, so
+a search reads from an index only players not yet finished that week, oldest
+finished week first and then by ID, and a finished week reads none. The search
+it replaced tested every player already checked that week: on 9 October 2026,
+with 9,510 of 13,215 checked, it took up to 58.6 seconds.
 
 Weekly and ordinary discovery work make one request per endpoint per run. A
 temporary failure (a transport failure, a rate limit or a server error) puts the
