@@ -25,8 +25,8 @@ from test_reset_settlement_state_postgres import (
     _reset_work,
 )
 
-from clashlens import ranked_day_inputs, reconciliation_db
-from clashlens.db import PYTHON_BACKFILL_PRIORITY
+from clashlens import queue_refresh, ranked_day_inputs, reconciliation_db
+from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import ranked_day_for
 
 # Three ordinary days: Monday 3 August to Thursday 6 August 2026.
@@ -152,7 +152,7 @@ def _early_reading_days(
     )[1])
     if saved_before_rule is not None:
         saved_before_rule.setattr(
-            first_battle_log, "queue_day_for_reading", lambda *args: None
+            queue_refresh, "queue_for_reading", lambda *args: None
         )
     _process(connection_info, archive_server, jobs)
     if saved_before_rule is not None:

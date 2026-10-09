@@ -39,6 +39,7 @@ from . import (
     ingestion,
     job_outcomes,
     late_battle_sweep,
+    queue_refresh,
     reconciliation_db,
     reset_settlement,
     snapshots,
@@ -344,6 +345,7 @@ class TimedMaintenance:
         self.database = database
         self.stage_metrics = stage_metrics
         self.late_battles = late_battle_sweep.LateBattleSweep(database)
+        self.daily_recheck = queue_refresh.DailyRecheck(database)
         self.next_reevaluation_at = float("-inf")
         self.next_queue_maintenance_at = float("-inf")
         self.permit = (
@@ -375,6 +377,7 @@ class TimedMaintenance:
                 self.next_reevaluation_at = current_time + 10
                 self.reevaluate()
                 self.late_battles.run_when_due()
+                self.daily_recheck.run_when_due()
                 if isinstance(self.database, Database):
                     army_rank_bands.refresh_rank_band_totals(self.database)
                     analytics.refresh_live_attack_tallies(self.database)

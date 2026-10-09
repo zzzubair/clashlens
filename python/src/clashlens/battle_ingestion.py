@@ -11,6 +11,7 @@ from . import (
     army_ingestion,
     first_battle_log,
     job_outcomes,
+    queue_refresh,
     reconciliation_db,
     reset_baselines,
 )
@@ -545,9 +546,12 @@ def complete_battle_log(
             first_battle_log.queue_earlier_days(
                 connection, reporter_id, battle_log.observed_at, valid_rows
             )
-            first_battle_log.queue_days_before_battles(
-                connection, observation_id, reporter_id, battle_log.observed_at,
-                affected_battle_ids,
+            queue_refresh.queue_for_reading(
+                connection, reporter_id, f"log:{observation_id}", battle_log.observed_at
+            )
+            queue_refresh.queue_for_battles(
+                connection, observation_id, shared_state_changed_battle_ids,
+                battle_log.observed_at,
             )
             if discoveries:
                 enqueue_discovered_players(
@@ -966,9 +970,12 @@ def _complete_battle_log_legacy(
             first_battle_log.queue_earlier_days(
                 connection, reporter_id, battle_log.observed_at, valid_rows
             )
-            first_battle_log.queue_days_before_battles(
-                connection, observation_id, reporter_id, battle_log.observed_at,
-                affected_battle_ids,
+            queue_refresh.queue_for_reading(
+                connection, reporter_id, f"log:{observation_id}", battle_log.observed_at
+            )
+            queue_refresh.queue_for_battles(
+                connection, observation_id, shared_state_changed_battle_ids,
+                battle_log.observed_at,
             )
             if discoveries:
                 enqueue_discovered_players(
