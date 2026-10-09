@@ -407,15 +407,16 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
 
         # What a reading may show from the end Reset on: the day's end before
         # its loss, or after it raised to 5,000 on a Monday; a Season reset
-        # shows only 5,000.
-        season = data.boundary_kind == "season"
+        # shows only 5,000, and the official Season-end total only the end.
+        season = data.boundary_kind == "season" or official_end
         rule: dict[str, Any] = {
             "end_before_loss": expected_next if season else final_trophies + (automatic_loss or 0),
-            "loss_candidates": () if season else _loss_candidates(
-                data, automatic_loss, automatic_state, defense_count),
-            "loss_certain": automatic_state == "calculated" and bool(automatic_loss),
+            "loss_candidates": () if season and (automatic_loss or not official_end) else
+            _loss_candidates(data, automatic_loss, automatic_state, defense_count),
+            "loss_certain": automatic_state == "calculated" and bool(automatic_loss) and not season,
             "day_effects": () if season else _effects(contributions),
-            "new_day_effects": _effects(_deduplicate_contributions(data.new_day_contributions)[0]),
+            "new_day_effects": () if official_end else _effects(
+                _deduplicate_contributions(data.new_day_contributions)[0]),
             "floor": 5000 if data.boundary_kind == "weekly" else None,
         }
         if end_available and data.next_start_trophies is not None:
@@ -431,14 +432,14 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         # (reading_rule); one hidden by a reset it can only contradict.
         verdict = (
             reading_rule.decide(
-                _readings(data), reset_at=data.ranked_day.end,
-                unknown_from=data.first_unshown_report, start_proven=start_proven, **rule,
+                _readings(replace(data, readings=()) if official_end else data),
+                reset_at=data.ranked_day.end, start_proven=start_proven,
+                unknown_from=None if official_end else data.first_unshown_report, **rule,
             )
             if ended
             and coverage_complete
             and not malformed_evidence
             and not inconsistent_evidence
-            and not official_end
             and all(reason == "missing_end_baseline" for reason in failures)
             else None
         )
@@ -463,7 +464,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 final_trophies -= zero_defense_loss
                 net_trophy_change = final_trophies - start_trophies
                 expected_next = final_trophies + boundary_adjustment
-            if automatic_loss and automatic_state == "calculated" and not verdict.loss:
+            if automatic_loss in rule["loss_candidates"] and not verdict.loss:
                 # The reading came before the loss landed: the day's end is
                 # calculated and the next day starts from the reading less it.
                 # 589, 998 and 2,889 days at the 2, 3 and 5 October 2026 Resets.

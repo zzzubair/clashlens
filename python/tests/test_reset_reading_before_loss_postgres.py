@@ -923,3 +923,39 @@ def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     assert sorted(
         (battle.battle_timestamp, battle.battle_seconds) for battle in battles
     ) == [(day_b[0][0], 120), (day_b[1][0], None), (day_b[2][0], None)]
+
+
+def test_a_disagreeing_reading_during_the_day_outlasts_an_unreadable_new_day_row(
+    database_url: str, archive_server
+) -> None:
+    # A noon reading 10 off makes day B Uncertain. A 05:30 log brings a
+    # new-day row whose time cannot be read: readings from the Reset on are
+    # dropped, but the noon one still stands.
+    day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
+    log = json.loads(_log(*day_b))
+    unreadable = {**log["items"][0], "battleTimestamp": "not-a-time"}
+    unreadable.pop("attack")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(6000 - 8 * LOSS),
+            log=_log(*day_b),
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="noon", endpoint="profile",
+            body=_profile(6000 - 6 * LOSS - 10),
+            observed_at=DAY_B + timedelta(hours=7), normalized_tag=TAG,
+        )[1])
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="unreadable-log",
+            endpoint="battle_log",
+            body=json.dumps({"items": [unreadable, *log["items"]]}).encode(),
+            observed_at=DAY_C + timedelta(minutes=30), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        [day] = _latest_days(connection_info, (DAY_B,))
+
+    assert day[0] == "Inconsistent"
+    assert "trophy_equation_mismatch" in day[8]

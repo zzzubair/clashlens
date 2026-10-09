@@ -460,3 +460,17 @@ def test_a_season_reset_removes_the_day_befores_pending_loss() -> None:
 
     assert "trophy_equation_mismatch" in day_1(5070).failure_reasons
     assert "trophy_equation_mismatch" not in day_1(5000).failure_reasons
+
+
+def test_an_official_season_total_shows_a_possible_charge() -> None:
+    # Day 28 starts at 6,000 with no battle; the day before's eight defenses
+    # lost 320. The official Season total of 5,680 shows the 320 charge.
+    result = reconcile_ranked_day(test_reconciliation._input(
+        start_trophies=6000, next_start_trophies=5680, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 320, 0),
+        end_baseline_evidence={"official_final_trophies": 5680},
+    ))
+
+    assert (result.state, result.automatic_defense_loss) == ("Complete", 320)
+    assert (result.final_trophies_before_reset, result.next_start_trophies) == (5680, 5680)
+    assert "trophy_equation_mismatch" not in result.failure_reasons

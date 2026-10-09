@@ -739,15 +739,15 @@ def load_readings(
     a battle, or after the newest, or the last successful check with its
     content, can only confirm, as a battle it shows may not be known.
     Readings from when an unreadable row of a battle log saved
-    since the Reset happened are left out, and all of them when even that
-    time is unreadable: a battle they may show cannot be placed. Also return
-    that time, or the Reset when it is unreadable, for the Reset reading."""
+    since the Reset happened are left out, and all from the Reset on when
+    even that time is unreadable: a battle they may show cannot be placed.
+    Readings during the day stay. Also return that time, or the Reset when
+    it is unreadable, for the Reset reading."""
     until = ranked_day.end + timedelta(days=1)
     unreadable = load_unreadable_report_times(
         database, connection, player_id, ranked_day.end, until
     )
-    if any(at is None for at in unreadable):
-        return (), ranked_day.end
+    cut = ranked_day.end if None in unreadable else min(unreadable, default=None)
     logs = load_coverage(
         database, connection, player_id, domain.ranked_day_for(ranked_day.end),
         end_battle_log_observation_id, None,
@@ -800,7 +800,7 @@ def load_readings(
         """,
         {"processing": PROCESSING_VERSION, "player": player_id,
          "after": ranked_day.start, "reset": reset_profile_observation_id,
-         "until": min([until, *unreadable]),
+         "until": min(until, cut or until),
          "season": ranked_day.official_season_id},
     ).fetchall()
     return tuple(
@@ -810,7 +810,7 @@ def load_readings(
         )
         for at, trophies, accepted in rows
         if trophies is not None
-    ), min(unreadable, default=None)
+    ), cut
 
 
 def load_first_unshown_report(
