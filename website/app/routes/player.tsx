@@ -952,7 +952,9 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
     perDay: per(
       trophies,
       summary.daysObserved -
-        summary.dailyEntries.filter((day) => !isLegendDay(day.flags)).length,
+        summary.dailyEntries.filter(
+          (day) => !isLegendDay(day.flags, (day.attacks ?? 0) + (day.defenses ?? 0)),
+        ).length,
     ),
     perBattle: per(trophies, count),
   });

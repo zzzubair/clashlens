@@ -305,7 +305,7 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>-30</td><td>+10</td>");
   });
 
-  it("averages over quiet days too, but not days before sign-up", async () => {
+  it("averages over quiet and unproven days, but not days before sign-up", async () => {
     const quiet = { ...DAY, attacks: 0, defenses: 0, attackGain: 0, defenseLoss: 0 };
     const html = await loadAndRender(
       {
@@ -317,9 +317,17 @@ describe("past-Season view", () => {
           dailyEntries: [
             { ...quiet, dayNumber: 23, flags: ["not_enrolled"] },
             DAY,
-            { ...DAY, dayNumber: 25 },
+            { ...DAY, dayNumber: 25, flags: ["player_not_eligible"] },
             { ...DAY, dayNumber: 26 },
-            { ...quiet, dayNumber: 27 },
+            {
+              ...quiet,
+              dayNumber: 27,
+              flags: [
+                "missing_end_baseline",
+                "missing_start_baseline",
+                "player_not_eligible",
+              ],
+            },
             { ...quiet, dayNumber: 28 },
           ],
         }),

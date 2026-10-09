@@ -14,9 +14,9 @@ export function currentSeasonStart(player: PlayerPage, now: number) {
 // Use recorded battles, never daily trophy adjustments or unplayed defenses.
 // Only finished Legend days count, never today, which is still being played.
 // Each battle counts on the saved Legend day it belongs to. Counts, stars and
-// averages all use every saved finished Legend day, leaving out days before
-// sign-up or outside Legend I; per-day averages divide by those days, battles
-// or not.
+// averages all use every saved finished Legend day, leaving out battle-free
+// days proven before sign-up or outside Legend I; per-day averages divide by
+// those days, battles or not.
 function summarize(events: RankedBattleEvent[], days: number) {
   const stars = [0, 0, 0, 0];
   let trophies = 0;
@@ -52,7 +52,9 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
       })
       .map((day) => [Date.parse(day.period.split(" – ")[0]), day]),
   );
-  const legendDays = [...days.values()].filter((day) => isLegendDay(day.uncertainty));
+  const legendDays = [...days.values()].filter((day) =>
+    isLegendDay(day.uncertainty, day.offenseEvents.length + day.defenseEvents.length),
+  );
   const events = (side: "offenseEvents" | "defenseEvents") => [
     ...new Map(
       legendDays
