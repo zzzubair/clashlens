@@ -18,7 +18,6 @@ from test_army_ingestion_postgres import _live_row, _processor
 
 from clashlens import army_ingestion
 from clashlens.background_pacing import BACKGROUND_JOB_LIMIT
-from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -205,7 +204,7 @@ def test_background_work_waits_while_late_live_work_is_leased_or_waiting(
 
 
 def _seed_redecode(connection_info: str, archive_server, database, processor) -> list[int]:
-    """30 saved battles on the old catalog and one re-decode job for them all."""
+    """30 saved battles whose armies failed to read, and one re-decode job for them all."""
     _, job_id = store_observation(
         connection_info,
         archive_server,
@@ -234,7 +233,16 @@ def _seed_redecode(connection_info: str, archive_server, database, processor) ->
             """,
             (DAY, DAY + timedelta(days=1)),
         )
-        connection.execute("UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v2'")
+        # Saved while the unit list was unavailable, as earlier code did; a
+        # re-decode reads these armies again.
+        connection.execute(
+            """
+            UPDATE battle_army_decodes
+            SET status = 'failed', failure_category = 'catalog_version_unavailable',
+                failure_detail = 'pinned unit catalog is unavailable or has the wrong hash',
+                exact_army_id = NULL, identity_hash = NULL
+            """
+        )
         battle_ids = [row[0] for row in connection.execute(
             "SELECT id FROM legend_battles ORDER BY id"
         ).fetchall()]
@@ -246,8 +254,7 @@ def _upgraded(database: Database) -> int:
     with database.pool.connection() as connection:
         return connection.execute(
             "SELECT count(DISTINCT battle_id) FROM battle_army_decodes"
-            " WHERE is_active AND catalog_version = %s",
-            (CATALOG_VERSION,),
+            " WHERE is_active AND status = 'decoded'"
         ).fetchone()[0]
 
 
