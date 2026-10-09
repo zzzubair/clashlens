@@ -73,6 +73,12 @@ const PATHS: Record<IconName | ToolIcon, ReactNode> = {
       <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
     </>
   ),
+  trophy: (
+    <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" />
+  ),
+  star: (
+    <path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1 6.2L12 17.4 6.5 20.3l1-6.2L3 9.7l6.2-.9z" />
+  ),
   plus: <path d="M12 5v14M5 12h14" />,
   x: <path d="M6 6l12 12M18 6 6 18" />,
   up: <path d="M12 19V5M6 11l6-6 6 6" />,

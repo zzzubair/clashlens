@@ -1,4 +1,8 @@
-/* Dashboard: account switcher, tabs, the S / L / XL card grid and Customise. */
+/*
+ * Dashboard: account switcher, tabs, the 3-column card grid, Customise and the
+ * built cards. Cards share the brand's outline and drop (brand.css); colours
+ * come from the --cl-* tokens so light and dark both work.
+ */
 
 .dash-page {
   width: min(100% - 2rem, 76rem);
@@ -12,54 +16,136 @@
   vertical-align: -0.18em;
 }
 
-.dash-tag {
+/* ---------- Small shared pieces ---------- */
+
+.dash-muted {
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+
+.dash-label {
+  display: block;
+  color: var(--cl-muted);
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dash-big {
+  display: block;
+  font-family: var(--cl-font-heading);
+  font-size: 2.1rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-page .positive {
+  color: var(--cl-positive);
+}
+
+.dash-page .negative {
+  color: var(--cl-negative);
+}
+
+/* Long, emoji, symbol or right-to-left names are cut with "…"; the title has the full name. */
+.dash-name {
   display: inline-block;
-  padding: 0.05rem 0.4rem;
-  color: var(--cl-action-text);
-  border: 1px dashed var(--cl-action-border);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+  unicode-bidi: isolate;
+}
+
+.dash-stars {
+  color: var(--cl-gold);
+  font-weight: 900;
+  letter-spacing: -0.05em;
+  white-space: nowrap;
+}
+
+.dash-tag,
+.dash-estimate {
+  display: inline-block;
+  padding: 0 0.35rem;
+  color: var(--cl-muted);
+  border: 1.5px dashed var(--cl-muted);
+  border-radius: 6px;
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 900;
+}
+
+.dash-tag {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
-/* Account switcher */
+.dash-chip {
+  display: inline-block;
+  justify-self: start;
+  margin: 0;
+  padding: 0.15rem 0.5rem;
+  /* The same warm chip in both themes, as in the mock. */
+  color: var(--cl-brand-night);
+  background: #ffe9c7;
+  border: 1.5px solid #c98a00;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.dash-small-button {
+  min-height: 2rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+/* ---------- Account switcher and tabs ---------- */
+
 .dash-accounts {
   display: flex;
   gap: 0.6rem;
   margin-bottom: 1rem;
   overflow-x: auto;
-  padding-bottom: 0.3rem;
+  padding: 0.2rem 0.2rem 0.5rem;
   scrollbar-width: thin;
 }
 
 .dash-account {
-  display: flex;
+  display: inline-flex;
   flex: 0 0 auto;
-  flex-direction: column;
-  justify-content: center;
-  min-height: 3.4rem;
-  padding: 0.45rem 0.85rem;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 14rem;
+  min-height: 2.6rem;
+  padding: 0.35rem 0.9rem;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 1px solid var(--cl-outline);
-  border-bottom-width: 3px;
+  border: 2px solid var(--cl-card-line);
+  border-radius: 999px;
+  box-shadow: var(--cl-raise);
+  font-weight: 800;
+}
+
+.dash-account b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dash-account[aria-current="true"] {
-  background: var(--cl-panel);
-  border-color: var(--cl-action);
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill);
 }
 
 .dash-account-add {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.4rem;
   border-style: dashed;
-  border-bottom-width: 1px;
+  box-shadow: none;
 }
 
-/* Tabs */
 .dash-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -67,7 +153,7 @@
   justify-content: space-between;
   gap: 0.6rem 1rem;
   margin-bottom: 1rem;
-  border-bottom: 1px solid var(--cl-border);
+  border-bottom: 2px solid var(--cl-border);
 }
 
 .dash-tab-list {
@@ -83,9 +169,11 @@
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.65rem 0.8rem;
+  padding: 0.6rem 0.8rem;
   color: var(--cl-muted);
-  border-bottom: 3px solid transparent;
+  border-bottom: 4px solid transparent;
+  font-family: var(--cl-font-heading);
+  font-size: 1.05rem;
   white-space: nowrap;
 }
 
@@ -95,20 +183,7 @@
 }
 
 .dash-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem 1rem;
   padding-bottom: 0.4rem;
-  color: var(--cl-muted);
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.dash-meta span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
 }
 
 .dash-customise,
@@ -116,85 +191,94 @@
   gap: 0.4rem;
 }
 
-/* Grid: 4 columns on desktop, 2 on a tablet, 1 on a phone. */
+/* ---------- Grid: 3 columns; Small 1, Medium 2, Large the full row ---------- */
+
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
+  align-items: start;
 }
 
 .dash-card {
   display: flex;
   flex-direction: column;
+  gap: 0.8rem;
   min-width: 0;
   padding: 1rem;
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-border);
-  box-shadow: var(--cl-raise);
 }
 
 .dash-card-s {
   grid-column: span 1;
 }
 
-.dash-card-l {
+.dash-card-m {
   grid-column: span 2;
 }
 
-.dash-card-xl {
-  grid-column: span 4;
+.dash-card-l {
+  grid-column: 1 / -1;
 }
 
-.dash-card-editing {
-  border: 2px dashed var(--cl-action);
+:root .dash-card-editing {
+  border-style: dashed;
+  border-color: var(--cl-action);
   box-shadow: none;
 }
 
 .dash-card-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.8rem;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.3rem 0.8rem;
 }
 
 .dash-card-head h2 {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  min-width: 0;
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 1.2rem;
 }
 
-.dash-card-head h2 .dash-icon {
-  color: var(--cl-action);
-}
-
-.dash-pin {
-  padding: 0.05rem 0.45rem;
-  background: var(--cl-panel);
-  font-size: 0.78rem;
+.dash-card-extra {
+  color: var(--cl-muted);
+  font-family: var(--cl-font);
+  font-size: 0.85rem;
   font-weight: 700;
+}
+
+.dash-card-extra .dash-name {
+  max-width: 12rem;
+}
+
+.dash-card-meta {
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+
+.dash-card-foot {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.78rem;
 }
 
 .dash-placeholder {
   display: flex;
-  flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  min-height: 9rem;
+  min-height: 8rem;
   padding: 1rem;
   color: var(--cl-muted);
   text-align: center;
-  border: 2px dashed var(--cl-outline);
+  border: 2px dashed var(--cl-border);
+  border-radius: var(--cl-radius);
 }
 
 .dash-placeholder > .dash-icon {
   width: 2rem;
   height: 2rem;
-  color: var(--cl-outline);
 }
 
 .dash-placeholder p {
@@ -204,7 +288,7 @@
 .dash-placeholder-label {
   color: var(--cl-ink);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -222,7 +306,7 @@
   margin: 0;
   padding: 1.5rem 1rem;
   color: var(--cl-muted);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .dash-banner {
@@ -232,10 +316,12 @@
   margin: 0 0 1rem;
   padding: 0.8rem 1rem;
   background: var(--cl-panel);
-  border-left: 4px solid var(--cl-action);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
 }
 
-/* Customise */
+/* ---------- Customise ---------- */
+
 .dash-editbar {
   position: sticky;
   z-index: 5;
@@ -246,8 +332,11 @@
   gap: 0.6rem;
   margin-bottom: 1rem;
   padding: 0.75rem 1rem;
-  color: #f4f4f5;
-  background: #2a211b;
+  color: #fff4e2;
+  background: var(--cl-brand-night);
+  border: 2px solid #000;
+  border-radius: var(--cl-card-radius);
+  box-shadow: 0 4px 0 var(--cl-brand-orange);
 }
 
 .dash-editbar-title {
@@ -255,26 +344,15 @@
   flex: 1 1 auto;
   align-items: center;
   gap: 0.5rem;
-  font-weight: 700;
-}
-
-.dash-editbar .button-secondary {
-  color: #f4f4f5;
-  background: transparent;
-  border-color: #6f6359;
-  box-shadow: none;
-}
-
-.dash-editbar .dash-done {
-  color: #2a211b;
-  background: #fff;
+  font-family: var(--cl-font-heading);
+  font-size: 1.1rem;
 }
 
 .dash-editbar-error {
   flex-basis: 100%;
   margin: 0;
-  color: #fca5a5;
-  font-weight: 600;
+  color: #ffb4b4;
+  font-weight: 700;
 }
 
 .dash-timezone {
@@ -293,9 +371,10 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
-  margin: -1rem -1rem 0.8rem;
-  padding: 0.45rem 0.6rem;
+  margin: -0.4rem -0.4rem 0;
+  padding: 0.4rem;
   background: var(--cl-panel);
+  border-radius: var(--cl-radius);
 }
 
 .dash-icon-button {
@@ -307,7 +386,8 @@
   padding: 0;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 1px solid var(--cl-outline);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
   cursor: pointer;
 }
 
@@ -320,55 +400,26 @@
   margin-left: auto;
 }
 
-.dash-sizes {
-  display: inline-flex;
-}
-
-.dash-sizes button {
-  min-width: 2.4rem;
-  min-height: 2.4rem;
-  padding: 0 0.55rem;
-  color: var(--cl-ink);
-  background: var(--cl-surface);
-  border: 1px solid var(--cl-outline);
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.dash-sizes button + button {
-  border-left: 0;
-}
-
-.dash-sizes button[aria-pressed="true"] {
-  color: var(--cl-paper);
-  background: var(--cl-ink);
-}
-
-.dash-sizes button:disabled {
-  color: var(--cl-muted);
-  text-decoration: line-through;
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
 .dash-card-tools select {
   min-height: 2.4rem;
   max-width: 11rem;
 }
 
-/* Card picker */
+/* ---------- Card picker ---------- */
+
 .dash-picker {
   width: min(100% - 2rem, 58rem);
   max-height: min(100% - 2rem, 52rem);
   padding: 0;
   color: var(--cl-ink);
   background: var(--cl-surface);
-  border: 1px solid var(--cl-outline);
-  box-shadow: var(--cl-shadow);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
 }
 
 .dash-picker::backdrop {
-  background: rgb(20 14 10 / 0.55);
+  background: rgb(29 20 38 / 0.55);
 }
 
 .dash-picker-head {
@@ -380,7 +431,7 @@
   justify-content: space-between;
   padding: 0.8rem 1rem;
   background: var(--cl-surface);
-  border-bottom: 1px solid var(--cl-border);
+  border-bottom: 2px solid var(--cl-border);
 }
 
 .dash-picker-head h2 {
@@ -388,7 +439,7 @@
   align-items: center;
   gap: 0.5rem;
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1.3rem;
 }
 
 .dash-picker-list {
@@ -405,7 +456,9 @@
   flex-direction: column;
   gap: 0.4rem;
   padding: 0 0.8rem 0.8rem;
-  border: 1px solid var(--cl-border);
+  overflow: hidden;
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
 }
 
 .dash-picker-preview {
@@ -414,7 +467,7 @@
   justify-content: center;
   height: 4.5rem;
   margin: 0 -0.8rem 0.3rem;
-  color: var(--cl-action);
+  color: var(--cl-accent);
   background: var(--cl-panel);
 }
 
@@ -428,7 +481,7 @@
   align-items: center;
   gap: 0.4rem;
   margin: 0;
-  font-size: 1rem;
+  font-size: 1.05rem;
 }
 
 .dash-picker-card p {
@@ -449,21 +502,24 @@
 }
 
 .dash-size-chip {
-  padding: 0 0.35rem;
-  color: var(--cl-ink);
-  border: 1px solid var(--cl-outline);
-  font-size: 0.75rem;
-  font-weight: 700;
+  padding: 0 0.4rem;
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-yellow);
+  border: 2px solid var(--cl-brand-night);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 900;
 }
 
 p.dash-picker-on {
   color: var(--cl-positive);
-  font-weight: 700;
+  font-weight: 800;
 }
 
-/* Link a player */
+/* ---------- Link a player ---------- */
+
 .dash-link-steps {
-  margin: 0 0 1rem;
+  margin: 0;
   padding-left: 1.3rem;
 }
 
@@ -475,7 +531,8 @@ p.dash-picker-on {
   align-self: flex-start;
 }
 
-/* Signed out */
+/* ---------- Signed out ---------- */
+
 .dash-teaser {
   position: relative;
   min-height: 34rem;
@@ -495,8 +552,9 @@ p.dash-picker-on {
   width: min(100%, 38rem);
   padding: 1.5rem;
   background: var(--cl-surface);
-  border: 1px solid var(--cl-outline);
-  box-shadow: var(--cl-shadow);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
   transform: translateX(-50%);
 }
 
@@ -519,15 +577,16 @@ p.dash-picker-on {
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.8rem;
-  border: 1px solid var(--cl-border);
+  border: 2px solid var(--cl-border);
+  border-radius: var(--cl-radius);
   font-size: 0.9rem;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 .dash-teaser-tiles .dash-icon {
   width: 1.5rem;
   height: 1.5rem;
-  color: var(--cl-action);
+  color: var(--cl-accent);
 }
 
 .dash-teaser-panel .button-row {
@@ -545,292 +604,505 @@ p.dash-picker-on {
   font-size: 0.85rem;
 }
 
-/* Legend clock */
-.legend-clock {
+/* ---------- Card 1: Legend day ---------- */
+
+.legend-day-card {
   display: grid;
-  grid-template-columns: minmax(10rem, 17rem) minmax(0, 1fr);
-  gap: 1rem;
-  align-items: start;
+  gap: 0.8rem;
 }
 
-.legend-clock-s {
-  grid-template-columns: minmax(0, 1fr);
+.legend-day-numbers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.75rem;
+}
+
+.legend-day-ranks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem;
+  background: var(--cl-panel);
+  border-radius: var(--cl-radius);
+}
+
+.legend-day-ranks b {
+  display: block;
+  font-family: var(--cl-font-heading);
+  font-size: 1.4rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-day-range b {
+  color: var(--cl-accent);
+}
+
+.legend-day-arrow {
+  color: var(--cl-action);
+  font-size: 1.4rem;
+  font-weight: 900;
+}
+
+.legend-day-board {
+  margin: -0.5rem 0 0;
+  font-size: 0.75rem;
+}
+
+.legend-day-battles {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.legend-day-battles > div > * {
+  display: block;
+}
+
+.dash-star-boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dash-star-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 2.8rem;
+  padding: 0.1rem 0;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.dash-star-box-defense {
+  background: var(--cl-panel);
+}
+
+.dash-star-box-empty {
+  min-height: 2.3rem;
+  border-style: dashed;
+  opacity: 0.45;
+}
+
+/* ---------- Card 2: Legend clock ---------- */
+
+.legend-clock {
+  display: grid;
+  place-items: center;
 }
 
 .legend-clock-face {
   width: 100%;
-  max-width: 17rem;
-  margin-inline: auto;
+  max-width: 16.5rem;
   overflow: visible;
 }
 
-.clock-track {
-  fill: none;
-  stroke: var(--cl-action-soft);
-  stroke-width: 16;
+.clock-dial {
+  fill: var(--cl-panel);
+  stroke: var(--cl-ink);
+  stroke-width: 3;
 }
 
-.clock-elapsed {
+.clock-left {
   fill: none;
-  stroke: var(--cl-action-border);
-  stroke-width: 16;
+  stroke: var(--cl-brand-orange);
+  stroke-linecap: round;
+  stroke-width: 10;
+  opacity: 0.9;
+}
+
+.clock-tick {
+  stroke: var(--cl-ink);
+  stroke-width: 2;
 }
 
 .clock-hour {
   fill: var(--cl-muted);
-  font-size: 13px;
-  font-weight: 600;
-  text-anchor: middle;
-}
-
-.clock-reset-tab {
-  fill: var(--cl-action);
-}
-
-.clock-reset-label,
-.clock-reset-time {
-  fill: var(--cl-on-action);
+  font-size: 12px;
   font-weight: 700;
   text-anchor: middle;
 }
 
-.clock-reset-label {
-  font-size: 9px;
-  letter-spacing: 0.08em;
+.clock-reset-tab {
+  fill: var(--cl-brand-orange);
+  stroke: var(--cl-ink);
+  stroke-width: 2;
 }
 
-.clock-reset-time {
-  font-size: 12px;
+.clock-reset-label {
+  fill: var(--cl-brand-night);
+  font-size: 11px;
+  font-weight: 900;
+  text-anchor: middle;
+}
+
+.clock-mark {
+  cursor: pointer;
+  outline: none;
+}
+
+.clock-mark:focus-visible .clock-hit {
+  stroke: var(--cl-brand-orange);
+  stroke-width: 3;
+}
+
+.clock-hit {
+  fill: transparent;
+}
+
+.clock-sword-blade {
+  fill: var(--cl-brand-orange);
+  stroke: var(--cl-ink);
+  stroke-linejoin: round;
+  stroke-width: 1.4;
+}
+
+.clock-ink {
+  fill: var(--cl-ink);
+}
+
+.clock-shield {
+  fill: #7a8fa6;
+  stroke: var(--cl-ink);
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.clock-count {
+  fill: var(--cl-ink);
+}
+
+.clock-count-text {
+  fill: var(--cl-panel);
+  font-size: 10px;
+  font-weight: 900;
+  text-anchor: middle;
 }
 
 .clock-hand {
   stroke: var(--cl-ink);
   stroke-linecap: round;
-  stroke-width: 4;
+  stroke-width: 3;
+  pointer-events: none;
+}
+
+.clock-center {
+  fill: var(--cl-surface);
+  stroke: var(--cl-ink);
+  stroke-width: 2;
+  pointer-events: none;
 }
 
 .clock-countdown {
   fill: var(--cl-ink);
   font-family: var(--cl-font-heading);
-  font-size: 34px;
-  font-weight: 800;
+  font-size: 20px;
   text-anchor: middle;
+  pointer-events: none;
 }
 
 .clock-caption {
   fill: var(--cl-muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 9px;
+  font-weight: 700;
   text-anchor: middle;
+  pointer-events: none;
 }
 
-.clock-attack {
-  fill: var(--cl-orange);
-  stroke: var(--cl-surface);
-  stroke-width: 2;
+.clock-detail {
+  z-index: 21;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  box-shadow: var(--cl-raise);
+  font-size: 0.88rem;
 }
 
-.clock-defense-lost {
-  fill: var(--cl-negative);
+.clock-popover {
+  position: fixed;
+  width: 18rem;
+  padding: 0.6rem;
+  border-radius: var(--cl-radius);
 }
 
-.clock-defense-held {
-  fill: var(--cl-surface);
-  stroke: var(--cl-positive);
-  stroke-width: 2.5;
+.clock-sheet {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 0.9rem 1rem max(1.5rem, env(safe-area-inset-bottom));
+  border-radius: 16px 16px 0 0;
 }
 
-.legend-clock-side {
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-  min-width: 0;
+.clock-sheet-back {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  background: rgb(29 20 38 / 0.45);
 }
 
-.clock-tiles {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-  margin: 0;
-}
-
-.clock-tiles > div {
-  min-width: 0;
-  padding: 0.55rem 0.6rem;
-  border: 1px solid var(--cl-border);
-}
-
-.clock-tiles dt {
+.clock-detail-head {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+  font-family: var(--cl-font-heading);
+  font-size: 1.05rem;
+}
+
+.clock-detail-head b {
+  font-weight: 400;
+}
+
+.clock-detail-head button {
+  min-width: 2.4rem;
+  min-height: 2.4rem;
+  color: var(--cl-ink);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: 1.1rem;
+}
+
+.clock-detail-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 2.6rem;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--cl-border);
+}
+
+.clock-detail-row .dash-name {
+  justify-self: start;
+}
+
+.clock-detail-row b {
+  text-align: right;
+}
+
+/* ---------- Card 3: Bases you attacked ---------- */
+
+.opponents-head,
+.opponents-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1.3fr 1.2fr 1.6fr 0.9fr;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.opponents-head {
+  padding-bottom: 0.25rem;
   color: var(--cl-muted);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 0.75rem;
+  font-weight: 900;
   text-transform: uppercase;
 }
 
-.legend-clock-s .clock-tiles {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.opponents-row {
+  margin: 0 -0.5rem;
+  padding: 0.6rem 0.5rem;
+  border-top: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  cursor: pointer;
 }
 
-.clock-tiles dd {
-  margin: 0;
-  font-family: var(--cl-font-heading);
-  font-size: 1.4rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
+.opponents-row:is(:hover, :focus-visible) {
+  background: var(--cl-panel);
+  outline: none;
 }
 
-.clock-tiles dd.clock-tile-note {
-  color: var(--cl-muted);
-  font-family: var(--cl-font);
-  font-size: 0.78rem;
-  font-weight: 600;
+.opponents-row:is(:hover, :focus-visible) .opponents-name .dash-name {
+  color: var(--cl-accent);
+  text-decoration: underline;
 }
 
-.clock-tile-estimate {
-  border-style: dashed !important;
-  border-color: var(--cl-action) !important;
-}
-
-.live-dot {
-  flex: 0 0 auto;
-  width: 0.5rem;
-  height: 0.5rem;
-  background: var(--cl-positive);
-  border-radius: 50%;
-}
-
-.clock-battles-title {
-  margin: 0 0 0.35rem;
-  font-weight: 700;
-}
-
-.clock-battles-title .positive {
-  color: var(--cl-positive);
-}
-
-.clock-battles-title .negative {
-  color: var(--cl-negative);
-}
-
-.clock-boxes {
+.opponents-name {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 2.6rem));
-  gap: 0.25rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  min-width: 0;
 }
 
-.clock-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  aspect-ratio: 1;
-  font-size: 0.72rem;
-  line-height: 1.1;
+.opponents-name .dash-name {
+  justify-self: start;
+  font-weight: 800;
 }
 
-.clock-box b {
-  font-size: 0.85rem;
-}
-
-.clock-box-empty {
-  border: 1px dashed var(--cl-outline);
-}
-
-.clock-box-attack {
-  color: var(--cl-on-action);
-  background: var(--cl-orange);
-}
-
-.clock-box-lost {
-  color: #fff;
-  background: var(--cl-negative);
-}
-
-.clock-box-held {
-  color: var(--cl-positive);
-  border: 2px solid var(--cl-positive);
-}
-
-.clock-key {
+.opponents-blocks {
   display: flex;
   flex-wrap: wrap;
-  grid-column: 1 / -1;
-  gap: 0.3rem 1rem;
+  gap: 3px;
   margin: 0;
   padding: 0;
-  color: var(--cl-muted);
-  font-size: 0.8rem;
   list-style: none;
 }
 
-.clock-key li {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
+/* Attacker's view: tripled is good for you (green), held is bad (red). */
+.opponents-block {
+  width: 16px;
+  height: 16px;
+  border: 2px solid transparent;
+  border-radius: 3px;
 }
 
-.clock-key span {
-  display: inline-block;
-  width: 0.7rem;
-  height: 0.7rem;
+.opponents-block.is-tripled {
+  background: #2fb344;
 }
 
-.key-attack {
-  background: var(--cl-orange);
-  border-radius: 50%;
+.opponents-block.is-held {
+  background: #c92a2a;
 }
 
-.key-lost {
-  background: var(--cl-negative);
+.opponents-block.is-yours {
+  border-color: var(--cl-ink);
+  box-shadow: 0 0 0 1.5px var(--cl-brand-orange);
 }
 
-.key-held {
-  border: 2px solid var(--cl-positive);
+.opponents-strength {
+  display: grid;
+  gap: 0.2rem;
+  justify-items: start;
 }
 
-@media (max-width: 64rem) {
-  .dash-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+.dash-strength {
+  padding: 0 0.45rem;
+  border: 2px solid var(--cl-card-line);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.dash-strength-hard {
+  color: #fff;
+  background: #c92a2a;
+}
+
+.dash-strength-average {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-yellow);
+}
+
+.dash-strength-easy {
+  color: var(--cl-brand-night);
+  background: #2fb344;
+}
+
+.dash-strength-early {
+  color: var(--cl-muted);
+  background: var(--cl-panel);
+  border-style: dashed;
+}
+
+.opponents-gauge {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background: var(--cl-panel);
+  border: 1.5px solid var(--cl-card-line);
+  border-radius: 4px;
+}
+
+.opponents-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgb(224 168 0 / 0.3);
+}
+
+.opponents-fill {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  border: 0;
+  border-radius: 3px;
+}
+
+.opponents-average {
+  position: absolute;
+  z-index: 2;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--cl-ink);
+}
+
+.opponents-action {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.opponents-empty {
+  margin: 0;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--cl-border);
+  opacity: 0.7;
+}
+
+/* ---------- Narrow screens ---------- */
+
+@media (max-width: 56rem) {
+  .opponents-head {
+    display: none;
   }
 
-  .dash-card-xl {
-    grid-column: span 2;
+  .opponents-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 0.5rem;
+  }
+
+  .opponents-action {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 }
 
-@media (max-width: 42rem) {
+/* On a phone every card is full width, stacked in the same order. */
+@media (max-width: 40rem) {
   .dash-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.75rem;
   }
 
   .dash-card-s,
-  .dash-card-l,
-  .dash-card-xl {
-    grid-column: span 1;
-  }
-
-  .legend-clock {
-    grid-template-columns: minmax(0, 1fr);
+  .dash-card-m,
+  .dash-card-l {
+    grid-column: 1 / -1;
   }
 
   .dash-tab {
     padding-inline: 0.5rem;
   }
 
-  /* On a phone the Customise bar sits at the bottom, in thumb reach. */
+  .legend-day-battles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dash-star-boxes {
+    flex-wrap: nowrap;
+    gap: 3px;
+  }
+
+  .dash-star-box {
+    flex: 1;
+    width: auto;
+    font-size: 0.68rem;
+  }
+
+  /* The Customise bar sits at the bottom, in thumb reach. */
   .dash-editbar {
     position: fixed;
     inset: auto 0 0;
     margin: 0;
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    border-radius: 16px 16px 0 0;
   }
 
   .dash-editbar-title,

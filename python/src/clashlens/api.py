@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import (
     api_accounts,
     api_analytics,
+    api_dashboard,
     api_groups,
     api_leaderboard,
     api_player_lookup,
@@ -201,6 +202,7 @@ def create_app(
     operating_metrics = api_metrics or ApiMetrics()
     clashking = clashking_client or ClashKingClient()
     freshness_lock = Lock()
+    dashboard_board = api_dashboard.DashboardBoard()
     freshness_refresh_after = 0.0
     leaderboard_metrics: dict[str, Any] = {}
 
@@ -401,6 +403,16 @@ def create_app(
         if result is None:
             raise ApiError(404, "player_not_found")
         return JSONResponse(status_code=200, content=_json_safe(result))
+
+    @app.get("/v1/players/{tag}/today")
+    def player_today(tag: str, request: Request) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        result = api_dashboard.get_player_today(
+            production_database, dashboard_board, _safe_tag(tag), now=current_time()
+        )
+        if result is None:
+            raise ApiError(404, "player_not_found")
+        return JSONResponse(content=_json_safe(result))
 
     @app.get("/v1/players/{tag}/lookup")
     def player_lookup(tag: str, request: Request) -> JSONResponse:

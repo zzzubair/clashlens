@@ -5,15 +5,17 @@ import type { LinkedPlayerCard } from "../lib/account-contracts";
 import type {
   CardData,
   CardId,
-  CardSize,
   DashboardLayout,
   DashboardTab,
+  LegendsHeld,
+  OpponentRow,
   PlacedCard,
   PlayerDay,
+  RankRange,
 } from "../lib/dashboard";
 import {
   CARD_IDS,
-  CARD_SIZES,
+  CARD_SIZE_LABELS,
   CARDS,
   DASHBOARD_TABS,
   serializeLayout,
@@ -21,7 +23,9 @@ import {
 import { LOOKUP_MESSAGES } from "../lib/player-lookup-text";
 import type { DashboardActionData } from "../routes/dashboard";
 import { DashboardIcon } from "./DashboardIcon";
-import { LegendClock, timeZoneLabel } from "./LegendClock";
+import { LegendClock } from "./LegendClock";
+import { LegendDayCard } from "./LegendDayCard";
+import { OpponentsCard } from "./OpponentsCard";
 
 const DATA_TAGS: Record<CardData, string | null> = {
   ready: null,
@@ -55,6 +59,15 @@ function timeZoneOptions(): string[] {
   }
 }
 
+/** "updated 3 min ago", or nothing until the browser knows the time. */
+function updatedAgo(observedAtMs: number | null, nowMs: number | null): string | null {
+  if (observedAtMs === null || nowMs === null) return null;
+  const minutes = Math.max(0, Math.floor((nowMs - observedAtMs) / 60_000));
+  if (minutes < 1) return "updated just now";
+  if (minutes < 120) return `updated ${minutes} min ago`;
+  return `updated ${Math.floor(minutes / 60)} h ago`;
+}
+
 /** A card with no content yet: its title, size and what it will show. */
 export function PlaceholderCard({
   placed,
@@ -67,11 +80,11 @@ export function PlaceholderCard({
 }) {
   const definition = CARDS[placed.card];
   return (
-    <CardFrame placed={placed} tools={tools} pinnedTo={pinnedTo}>
+    <CardFrame placed={placed} tools={tools} titleExtra={pinnedTo}>
       <div className="dash-placeholder">
         <DashboardIcon name={definition.icon} />
         <p className="dash-placeholder-label">
-          Placeholder · {placed.size.toUpperCase()}
+          Placeholder · {CARD_SIZE_LABELS[definition.size]}
         </p>
         <p className="dash-placeholder-what">{definition.what}</p>
         {DATA_TAGS[definition.data] ? (
@@ -85,33 +98,130 @@ export function PlaceholderCard({
 function CardFrame({
   placed,
   tools,
-  pinnedTo,
+  titleExtra,
+  meta,
+  footer,
   children,
 }: {
   placed: PlacedCard;
   tools?: ReactNode;
-  pinnedTo?: string | null;
+  /** Shown after the title, such as the player's name. */
+  titleExtra?: ReactNode;
+  /** Top-right corner, such as "updated 2 min ago". */
+  meta?: ReactNode;
+  footer?: ReactNode;
   children: ReactNode;
 }) {
   const definition = CARDS[placed.card];
   return (
     <section
-      className={`dash-card dash-card-${placed.size}${tools ? " dash-card-editing" : ""}`}
+      className={`dash-card dash-card-${definition.size}${tools ? " dash-card-editing" : ""}`}
       aria-label={definition.title}
       data-card={placed.card}
     >
       {tools}
       <header className="dash-card-head">
         <h2>
-          <DashboardIcon name={definition.icon} />
           {definition.title}
+          {titleExtra ? (
+            <span className="dash-card-extra">
+              {" · "}
+              <bdi className="dash-name">{titleExtra}</bdi>
+            </span>
+          ) : null}
         </h2>
-        {pinnedTo ? <span className="dash-pin">{pinnedTo}</span> : null}
+        {meta ? <span className="dash-card-meta">{meta}</span> : null}
       </header>
       {children}
+      {footer ? <p className="dash-card-foot">{footer}</p> : null}
     </section>
   );
 }
+
+/** What one placed card shows for one player. */
+interface CardContext {
+  player: LinkedPlayerCard;
+  pinned: boolean;
+  day: PlayerDay | null;
+  range: RankRange | null;
+  opponents: OpponentRow[] | null;
+  legends: LegendsHeld | null;
+  savedTags: string[];
+  nowMs: number | null;
+  timeZone: string;
+  idempotencyKey: string;
+}
+
+interface CardContent {
+  body: ReactNode;
+  titleExtra?: ReactNode;
+  meta?: ReactNode;
+  footer?: ReactNode;
+}
+
+/**
+ * The cards that have content. A card missing here shows its placeholder,
+ * so a new card is one entry here plus its component.
+ */
+const CARD_CONTENT: Partial<
+  Record<CardId, (context: CardContext) => CardContent | null>
+> = {
+  legendday: (context) => ({
+    titleExtra: playerName(context.player),
+    meta: [
+      context.day?.dayNumber
+        ? `Day ${context.day.dayNumber} of ${context.day.dayCount ?? 28}`
+        : null,
+      updatedAgo(context.day?.observedAtMs ?? null, context.nowMs),
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    body: (
+      <LegendDayCard player={context.player} day={context.day} range={context.range} />
+    ),
+  }),
+  clock: (context) => ({
+    titleExtra: context.pinned ? playerName(context.player) : null,
+    footer: `Times in your zone: ${context.timeZone}`,
+    body: (
+      <LegendClock
+        battles={context.day?.battles ?? []}
+        nowMs={context.nowMs}
+        timeZone={context.timeZone}
+      />
+    ),
+  }),
+  opponents: (context) => {
+    if (context.opponents === null) return null;
+    const oldest = context.opponents.reduce<number | null>(
+      (min, row) =>
+        row.observedAtMs === null
+          ? min
+          : min === null
+            ? row.observedAtMs
+            : Math.min(min, row.observedAtMs),
+      null,
+    );
+    return {
+      titleExtra: (
+        <>
+          {context.pinned ? `${playerName(context.player)} · ` : ""}today ·{" "}
+          {context.opponents.length} of 8
+        </>
+      ),
+      meta: updatedAgo(oldest, context.nowMs),
+      body: (
+        <OpponentsCard
+          rows={context.opponents}
+          legends={context.legends}
+          savedTags={context.savedTags}
+          idempotencyKey={context.idempotencyKey}
+          timeZone={context.timeZone}
+        />
+      ),
+    };
+  },
+};
 
 function CardTools({
   placed,
@@ -124,12 +234,7 @@ function CardTools({
   index: number;
   count: number;
   players: LinkedPlayerCard[];
-  onChange: (change: {
-    move?: -1 | 1;
-    size?: CardSize;
-    player?: string | null;
-    remove?: true;
-  }) => void;
+  onChange: (change: { move?: -1 | 1; player?: string | null; remove?: true }) => void;
 }) {
   const definition = CARDS[placed.card];
   return (
@@ -152,29 +257,16 @@ function CardTools({
       >
         <DashboardIcon name="down" />
       </button>
-      <div className="dash-sizes" role="group" aria-label={`${definition.title} size`}>
-        {CARD_SIZES.map((size) => (
-          <button
-            key={size}
-            type="button"
-            aria-pressed={placed.size === size}
-            disabled={!definition.sizes.includes(size)}
-            onClick={() => onChange({ size })}
-          >
-            {size.toUpperCase()}
-          </button>
-        ))}
-      </div>
       {definition.perPlayer && players.length > 0 ? (
         <select
-          aria-label={`Which player ${definition.title} shows`}
+          aria-label={`Pin ${definition.title} to one account`}
           value={placed.player ?? ""}
           onChange={(event) => onChange({ player: event.currentTarget.value || null })}
         >
-          <option value="">Follows switcher</option>
+          <option value="">Not pinned</option>
           {players.map((player) => (
             <option key={player.tag} value={player.tag}>
-              Always {playerName(player)}
+              Pin to {playerName(player)}
             </option>
           ))}
         </select>
@@ -242,11 +334,9 @@ function CardPicker({
               </h3>
               <p>{definition.what}</p>
               <p className="dash-picker-tags">
-                {definition.sizes.map((size) => (
-                  <span key={size} className="dash-size-chip">
-                    {size.toUpperCase()}
-                  </span>
-                ))}
+                <span className="dash-size-chip">
+                  {CARD_SIZE_LABELS[definition.size]}
+                </span>
                 {DATA_TAGS[definition.data] ? (
                   <span className="dash-tag">{DATA_TAGS[definition.data]}</span>
                 ) : null}
@@ -318,10 +408,13 @@ export function DashboardGrid({
   players,
   selected,
   days,
+  ranges,
+  opponents,
+  legends,
+  savedTags,
   dayEndsMs,
   idempotencyKey,
   renderTabs,
-  dayLabel,
   noPlayers,
 }: {
   tab: DashboardTab;
@@ -329,10 +422,13 @@ export function DashboardGrid({
   players: LinkedPlayerCard[];
   selected: LinkedPlayerCard | null;
   days: Record<string, PlayerDay>;
+  ranges: Record<string, RankRange>;
+  opponents: Record<string, OpponentRow[]>;
+  legends: LegendsHeld | null;
+  savedTags: string[];
   dayEndsMs: number;
   idempotencyKey: string;
   renderTabs: (meta: ReactNode) => ReactNode;
-  dayLabel: string | null;
   noPlayers: boolean;
 }) {
   const fetcher = useFetcher<DashboardActionData>();
@@ -374,19 +470,9 @@ export function DashboardGrid({
   const updateTab = (next: PlacedCard[]) =>
     editDraft((current) => ({ ...current, tabs: { ...current.tabs, [tab]: next } }));
 
-  const meta = (
-    <div className="dash-meta">
-      {dayLabel && !dayOver ? (
-        <span>
-          <DashboardIcon name="cal" /> {dayLabel}
-        </span>
-      ) : null}
-      {nowMs !== null ? (
-        <span>
-          <DashboardIcon name="globe" /> times in {timeZoneLabel(timeZone, nowMs)}
-        </span>
-      ) : null}
-      {!editing && !noPlayers ? (
+  const meta =
+    !editing && !noPlayers ? (
+      <div className="dash-meta">
         <button
           type="button"
           className="button button-primary dash-customise"
@@ -394,9 +480,8 @@ export function DashboardGrid({
         >
           <DashboardIcon name="grid" /> Customise
         </button>
-      ) : null}
-    </div>
-  );
+      </div>
+    ) : null;
 
   if (noPlayers) {
     return (
@@ -512,7 +597,6 @@ export function DashboardGrid({
                     at === index
                       ? {
                           ...card,
-                          ...(change.size ? { size: change.size } : {}),
                           ...("player" in change
                             ? { player: change.player ?? null }
                             : {}),
@@ -524,17 +608,32 @@ export function DashboardGrid({
             />
           ) : undefined;
           const pinnedTo = pinned ? playerName(pinned) : null;
-          if (placed.card === "clock" && player?.state === "tracking") {
+          const content =
+            player && !dayOver
+              ? CARD_CONTENT[placed.card]?.({
+                  player,
+                  pinned: pinned !== null,
+                  day: days[player.tag] ?? null,
+                  range: ranges[player.tag] ?? null,
+                  opponents: opponents[player.tag] ?? null,
+                  legends,
+                  savedTags,
+                  nowMs,
+                  timeZone,
+                  idempotencyKey,
+                })
+              : null;
+          if (content) {
             return (
-              <CardFrame key={index} placed={placed} tools={tools} pinnedTo={pinnedTo}>
-                <LegendClock
-                  player={player}
-                  day={dayOver ? null : (days[player.tag] ?? null)}
-                  today={dayOver ? null : player.today}
-                  size={placed.size}
-                  nowMs={nowMs}
-                  timeZone={timeZone}
-                />
+              <CardFrame
+                key={index}
+                placed={placed}
+                tools={tools}
+                titleExtra={content.titleExtra}
+                meta={content.meta}
+                footer={content.footer}
+              >
+                {content.body}
               </CardFrame>
             );
           }
@@ -571,9 +670,7 @@ export function DashboardGrid({
           tab={tab}
           placed={cards}
           onClose={() => setPicking(false)}
-          onAdd={(card) =>
-            updateTab([...cards, { card, size: CARDS[card].defaultSize, player: null }])
-          }
+          onAdd={(card) => updateTab([...cards, { card, player: null }])}
         />
       ) : null}
     </>

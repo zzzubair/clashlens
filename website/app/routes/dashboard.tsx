@@ -6,8 +6,19 @@ import { DashboardGrid, PlaceholderCard } from "../components/DashboardGrid";
 import { DashboardIcon } from "../components/DashboardIcon";
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { LinkedPlayerCard } from "../lib/account-contracts";
-import type { PlayerPage, WebsiteErrorResponse } from "../lib/contracts";
-import type { DashboardLayout, DashboardTab, PlayerDay } from "../lib/dashboard";
+import type {
+  PlayerPage,
+  RankedDaySummary,
+  WebsiteErrorResponse,
+} from "../lib/contracts";
+import type {
+  DashboardLayout,
+  DashboardTab,
+  LegendsHeld,
+  OpponentRow,
+  PlayerDay,
+  RankRange,
+} from "../lib/dashboard";
 import {
   DASHBOARD_TABS,
   defaultTab,
@@ -23,8 +34,10 @@ import type { Route } from "./+types/dashboard";
 import "../dashboard.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
-/** Player pages read per load: the switcher's player plus pinned Legend clocks. */
+/** Players read per load: the switcher's player plus players pinned on Today. */
 const MAX_PLAYER_DAYS = 4;
+/** Today's cards that read the player page and today's numbers. */
+const DAY_CARDS = new Set(["legendday", "clock", "opponents"]);
 
 export type DashboardLoaderData =
   | { kind: "signed-out"; loginAvailable: boolean }
@@ -36,7 +49,11 @@ export type DashboardLoaderData =
       selectedTag: string | null;
       layout: DashboardLayout;
       days: Record<string, PlayerDay>;
-      /** The Reset that ends the Legend day `days` and the players' `today` were read for. */
+      ranges: Record<string, RankRange>;
+      opponents: Record<string, OpponentRow[]>;
+      legendsHeld: LegendsHeld | null;
+      savedTags: string[];
+      /** The Reset that ends the Legend day the players' numbers were read for. */
       dayEndsMs: number;
       idempotencyKey: string;
     };
@@ -112,22 +129,34 @@ export async function loader({ request }: Route.LoaderArgs) {
     players[0] ??
     null;
 
-  const clockTags = new Set<string>();
-  if (selected?.state === "tracking") clockTags.add(selected.tag);
+  const dayTags = new Set<string>();
+  if (selected?.state === "tracking") dayTags.add(selected.tag);
   for (const card of layout.tabs.today) {
     const pinned = players.find((player) => player.tag === card.player);
-    if (card.card === "clock" && pinned?.state === "tracking") clockTags.add(pinned.tag);
+    if (DAY_CARDS.has(card.card) && pinned?.state === "tracking") dayTags.add(pinned.tag);
   }
+  const { getPlayerToday } = await import("../services/dashboard.server");
   const days: Record<string, PlayerDay> = {};
-  await Promise.all(
-    [...clockTags].slice(0, MAX_PLAYER_DAYS).map(async (tag) => {
-      try {
-        days[tag] = playerDay(await publicClient.getPlayer(tag));
-      } catch {
-        // The clock still shows the time and live trophies without battles.
-      }
+  const ranges: Record<string, RankRange> = {};
+  const opponents: Record<string, OpponentRow[]> = {};
+  let legendsHeld: LegendsHeld | null = null;
+  const [savedTags] = await Promise.all([
+    createPythonClient(identity)
+      .listSavedTags()
+      .then((saved) => saved.map((player) => player.tag))
+      .catch(() => [] as string[]),
+    ...[...dayTags].slice(0, MAX_PLAYER_DAYS).map(async (tag) => {
+      const [page, today] = await Promise.all([
+        publicClient.getPlayer(tag).catch(() => null),
+        getPlayerToday(tag).catch(() => null),
+      ]);
+      // Each card still shows what it can without the other read.
+      if (page) days[tag] = playerDay(page, today);
+      if (today?.rankRange) ranges[tag] = today.rankRange;
+      if (today) opponents[tag] = today.opponents;
+      legendsHeld ??= today?.legendsHeld ?? null;
     }),
-  );
+  ]);
 
   return data<DashboardLoaderData>(
     {
@@ -137,6 +166,10 @@ export async function loader({ request }: Route.LoaderArgs) {
       selectedTag: selected?.tag ?? null,
       layout,
       days,
+      ranges,
+      opponents,
+      legendsHeld,
+      savedTags,
       dayEndsMs,
       idempotencyKey: freshIdempotencyKey(),
     },
@@ -144,7 +177,15 @@ export async function loader({ request }: Route.LoaderArgs) {
   );
 }
 
-function playerDay(page: PlayerPage): PlayerDay {
+function dayBounds(day: RankedDaySummary): [number, number] {
+  const [start, end] = day.period.split(" – ").map(Date.parse);
+  return [start ?? Number.NaN, end ?? Number.NaN];
+}
+
+function playerDay(
+  page: PlayerPage,
+  today: { openDefenses: number | null; automaticDefenseEach: number | null } | null,
+): PlayerDay {
   const day = page.currentDay;
   const battles = day
     ? [
@@ -155,13 +196,26 @@ function playerDay(page: PlayerPage): PlayerDay {
           at: Date.parse(event.battleTimestamp),
           kind,
           stars: event.stars,
+          destruction: event.destructionPercentage,
           trophyChange: event.trophyChange,
+          opponent: event.opponent.name,
         }))
         .filter((battle) => Number.isFinite(battle.at))
     : [];
   const complete = day?.battlesComplete === true;
   const gain = day?.offense.trophyGain ?? null;
   const loss = day?.defense.trophyLoss ?? null;
+  // The finished day that ended at the Reset that started today.
+  const dayStart = day ? dayBounds(day)[0] : Number.NaN;
+  const previous = [...page.recentDays, ...page.seasonDays].find(
+    (finished) => dayBounds(finished)[1] === dayStart,
+  );
+  const observed = [
+    page.profile.freshness.observedAt,
+    page.profile.battleHistoryUpdatedAt,
+  ]
+    .map((value) => (value ? Date.parse(value) : Number.NaN))
+    .filter(Number.isFinite);
   return {
     dayNumber: page.season?.currentDayNumber ?? null,
     dayCount: page.season?.dayCount ?? null,
@@ -172,6 +226,11 @@ function playerDay(page: PlayerPage): PlayerDay {
       (complete && gain !== null && loss !== null ? gain - loss : null),
     attacks: day?.offense.attacks ?? null,
     defenses: day?.defense.defenses ?? null,
+    lastResetRank: previous?.resetRank ?? null,
+    // The older of the trophy and battle reads, so the card never looks newer than it is.
+    observedAtMs: observed.length ? Math.min(...observed) : null,
+    openDefenses: today?.openDefenses ?? null,
+    autoDefenseEach: today?.automaticDefenseEach ?? null,
   };
 }
 
@@ -197,6 +256,21 @@ export async function action({ request }: Route.ActionArgs) {
   const idempotencyKey = form?.["idempotencyKey"] ?? "";
   if (form === null || !actions.isIdempotencyKey(idempotencyKey)) {
     return fail(400, "That layout could not be read.");
+  }
+  if (form["intent"] === "save-player") {
+    const tag = normalizePlayerTag(form["tag"] ?? "");
+    if (tag === null) return fail(400, "That player tag could not be read.");
+    try {
+      const { createPythonClient } = await import("../services/python.server");
+      await createPythonClient(identity).addSavedTag(tag, idempotencyKey);
+    } catch (cause) {
+      if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
+      return fail(503, "That player could not be saved. Try again.");
+    }
+    return data<DashboardActionData>(
+      { saved: true, error: null, idempotencyKey: actions.freshIdempotencyKey() },
+      { headers: NO_STORE },
+    );
   }
   let posted: unknown;
   try {
@@ -404,7 +478,6 @@ export default function DashboardRoute() {
   }
   const selected =
     loaderData.players.find((player) => player.tag === loaderData.selectedTag) ?? null;
-  const day = selected ? (loaderData.days[selected.tag] ?? null) : null;
   return (
     <main id="main-content" tabIndex={-1} className="page-shell dash-page">
       <h1 className="sr-only">Dashboard</h1>
@@ -425,10 +498,13 @@ export default function DashboardRoute() {
         players={loaderData.players}
         selected={selected}
         days={loaderData.days}
+        ranges={loaderData.ranges}
+        opponents={loaderData.opponents}
+        legends={loaderData.legendsHeld}
+        savedTags={loaderData.savedTags}
         dayEndsMs={loaderData.dayEndsMs}
         idempotencyKey={loaderData.idempotencyKey}
         renderTabs={(meta) => <DashboardTabs tab={tab} meta={meta} />}
-        dayLabel={day?.dayNumber ? `Day ${day.dayNumber} of ${day.dayCount ?? 28}` : null}
         noPlayers={!loaderData.playersUnavailable && loaderData.players.length === 0}
       />
     </main>

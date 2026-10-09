@@ -167,22 +167,50 @@ couldn't refresh and that saved results are shown; a refused request shows only
 the refusal reason. Each Refresh gets one minute from when it is submitted; after
 that the page stops checking, says so, and ignores any later answer.
 
-The Dashboard at `/dashboard` is a skeleton for signed-in users. Visitors who
-are not signed in see a blurred preview and the sign-in buttons. Signed-in
-users get an account switcher over their linked players, Today / Season / Crew
-tabs ("Crew" is a placeholder word) and a grid of cards in three sizes: S (a
-quarter of the row on desktop), L (half) and XL (the full row). Phones show one
-card per row. Only the Legend clock has content: the 24-hour ring with the Reset
-on top, real clock times in the device's or the chosen time zone, today's
-attacks and defenses at the time they landed, and live trophies and rank. Every
-other card is a labelled placeholder. Customise adds cards to their own tab,
-removes, moves, resizes and pins them to one player, and Done saves the layout and time zone into the
-account's existing 4,096-byte preferences, so there is no database change; a
-default layout uses about 300 bytes. With no linked player the page shows how to
+The Dashboard at `/dashboard` is for signed-in users. Visitors who are not
+signed in see a blurred preview and the sign-in buttons. Signed-in users get an
+account switcher over their linked players, Today / Season / Crew tabs ("Crew"
+is a placeholder word) and a 3-column grid. Each card has one size: Small (1
+column), Medium (2) or Large (the full row); phones stack every card full
+width. One layout serves every account: the switcher changes the data, and any
+card can be pinned to one account. Customise adds cards to their own tab,
+removes, moves and pins them, and Done saves the layout and time zone into the
+account's existing 4,096-byte preferences (a default layout uses about 300
+bytes), so there is no database change. Live cards show "updated N min ago"
+instead of a live tag.
+
+Three cards have content; the rest are labelled placeholders.
+
+- **Legend day** (Medium): live trophies, net today, the rank at the last
+  Reset, the live rank among tracked players and the range the next Reset can
+  still land in, labelled as an estimate that narrows during the day. Each
+  player's best end adds 40 for every open attack and worst end takes 40 for
+  every open defense; anyone whose worst end beats your best surely finishes
+  above you, anyone whose best end reaches your worst may. Then attack and
+  defense totals with star boxes, and "N defenses remain · auto defense −X each"
+  using the worker's automatic defense loss rule, hidden while unknown.
+- **Legend clock** (Small): a 24-hour dial in your time zone with the Reset on
+  top, the time left as an orange arc and the countdown in the middle. Attacks
+  are swords and defenses shields; battles within 20 minutes share one mark
+  with a count, and tapping it lists them (popover on desktop, bottom sheet on
+  a phone).
+- **Bases you attacked** (Large): one row per attack today, hard bases first,
+  with your hit, the base's defenses today as blocks and Hard / Average / Easy
+  against today's held share across tracked Legend players (Average is within
+  15 points; under 3 defenses is too early). Green is good for the attacker,
+  red bad. A row opens the player's page; its button adds them to saved
+  players.
+
+These read `GET /v1/players/{tag}/today` on the private API. Its board of every
+tracked player's trophies and today's attack and defense counts is read in one
+query and kept for a minute, so all dashboards share one read per minute.
+Opponents' defenses come from their own published daily logs, so an untracked
+opponent shows only your hit. The page reads at most 4 players' days per load:
+the switcher's player and players pinned on Today; a fifth pinned player's
+cards show without battle details. With no linked player the page shows how to
 link one; a player outside Legends gets one "not in Legends" line instead of
-empty cards, and a player still being checked, or whose check failed or was
-inconclusive, gets one line saying so. The
-day's battles, gain and day number clear at the Reset until the page reloads.
+empty cards, and a player still being checked gets one line saying so. The
+day's numbers clear at the Reset until the page reloads.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
