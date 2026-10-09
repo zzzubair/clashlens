@@ -180,13 +180,14 @@ class ReconciliationInput:
     # slots it shows uncharged, or one settled by battles the end reading
     # missed (see ``reads_later_reading``).
     later_next_start_reading: tuple[datetime, int] | None = None
-    # Every other profile read from the end Reset to the next one that can
-    # judge the day's end (``reading_rule``), and the new day's battles,
-    # which say what each reading already showed.
+    # Every other profile read from the end Reset to the next that can judge
+    # the day's end (``reading_rule``), the new day's battles, the earliest
+    # report of one by either player, and from when an unreadable battle
+    # row leaves no reading, the Reset pair's own included, usable.
     readings: tuple[reading_rule.Reading, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
-    # The earliest report, by either player, of a new-day battle.
     first_new_day_report: datetime | None = None
+    unreadable_from: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.boundary_kind not in {None, "weekly", "season"}:
@@ -413,10 +414,15 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
 
         if end_available and data.next_start_trophies is not None:
             residual = data.next_start_trophies - expected_next
-        # Every reading from the end Reset on judges the day (reading_rule):
-        # one that equals the ledger at its time confirms it, one that cannot
-        # contradicts it. Only a clean, ended day is judged; the Reset reading
-        # alone still checks any other.
+            reset = next((item for item in _readings(data) if item.reset_reading), None)
+            if end_hidden_by_reset and residual and reset is not None and residual == sum(
+                effect.change for effect in _effects(
+                    _deduplicate_contributions(data.new_day_contributions)[0])
+                if effect.lands_until <= reset.read_at):
+                # A late Reset reading already shows the new-day battles landed by then.
+                reading_correction, residual = -residual, 0
+        # Every reading from the end Reset on judges a clean, ended day
+        # (reading_rule); the Reset reading alone still checks any other.
         verdict = (
             reading_rule.decide(
                 _readings(data),
@@ -461,11 +467,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 net_trophy_change = final_trophies - start_trophies
                 expected_next = final_trophies + boundary_adjustment
             if automatic_loss and automatic_state == "calculated" and not verdict.loss:
-                # The reading came before the game applied the loss, which
-                # lands from about 7 minutes after the Reset with no fixed
-                # end: the day's end is calculated and the next day starts
-                # from the reading less it. 589, 998 and 2,889 days at the
-                # 2, 3 and 5 October 2026 Resets.
+                # The reading came before the loss landed: the day's end is
+                # calculated and the next day starts from the reading less it.
+                # 589, 998 and 2,889 days at the 2, 3 and 5 October 2026 Resets.
                 unsettled_loss = automatic_loss
             next_start_trophies = expected_next
             observed_trophy_change = next_start_trophies - start_trophies
@@ -1186,16 +1190,12 @@ def _readings(data: ReconciliationInput) -> tuple[reading_rule.Reading, ...]:
     readings = list(data.readings)
     profile = data.end_baseline_evidence.get("profile") or {}
     observed_at = profile.get("observed_at")
-    if data.next_start_trophies is not None:
-        # A Reset reading saved without its time is read as taken at the
-        # Reset, so its value alone judges it.
-        readings.append(reading_rule.Reading(
-            datetime.fromisoformat(observed_at)
-            if isinstance(observed_at, str)
-            else data.ranked_day.end,
-            data.next_start_trophies,
-            reset_reading=True,
-        ))
+    # A Reset reading saved without its time is read as taken at the Reset.
+    read_at = (datetime.fromisoformat(observed_at) if isinstance(observed_at, str)
+               else data.ranked_day.end)
+    if data.next_start_trophies is not None and (
+            data.unreadable_from is None or read_at < data.unreadable_from):
+        readings.append(reading_rule.Reading(read_at, data.next_start_trophies, reset_reading=True))
     if data.later_next_start_reading is not None:
         readings.append(reading_rule.Reading(*data.later_next_start_reading))
     return tuple(readings)

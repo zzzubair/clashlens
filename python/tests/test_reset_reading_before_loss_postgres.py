@@ -763,6 +763,90 @@ def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
     assert day_c_row[2:4] == (end_b, end_b + WIN)
 
 
+def test_unreadable_new_day_battle_leaves_the_reset_reading_unused(
+    database_url: str, archive_server
+) -> None:
+    # Day A's one defense lost 5, so day B, with none, may be charged 40.
+    # Day B's 05:20 Reset reading shows 40 less, but the 05:30 log brings a
+    # new-day defense reported at 05:07 whose row cannot be read: it may be
+    # the 40, so the reading proves no charge and day B is not settled.
+    weak = json.loads(_log((DAY_A + timedelta(hours=1), False)))
+    weak["items"][0].update(stars=1, destructionPercentage=1)
+    unreadable = json.loads(_log((DAY_C + timedelta(minutes=7), False)))["items"][0]
+    unreadable.pop("attack")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_A, profile=_profile(6005), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000),
+            log=json.dumps(weak).encode(),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(5960),
+            log=json.dumps(weak).encode(), profile_at=DAY_C + timedelta(minutes=20),
+            log_at=DAY_C + timedelta(minutes=21),
+        )
+        _process(connection_info, archive_server, jobs)
+        [before] = _latest_days(connection_info, (DAY_B,))
+        _, log_job = store_observation(
+            connection_info, archive_server, occurrence_key="unreadable-log",
+            endpoint="battle_log",
+            body=json.dumps({"items": [unreadable, *weak["items"]]}).encode(),
+            observed_at=DAY_C + timedelta(minutes=30), normalized_tag=TAG,
+        )
+        _process(connection_info, archive_server, [log_job])
+        [after] = _latest_days(connection_info, (DAY_B,))
+
+    assert (before[0], before[5]) == ("Complete", 40)
+    assert (after[0], after[5]) == ("Partial", None)
+    assert "end_reading_unverified" in after[8]
+
+
+def test_monday_reset_reading_after_a_new_day_attack_counts_it_once(
+    database_url: str, archive_server
+) -> None:
+    # Saturday takes 8 defenses; Sunday one, and 7 missing at their average,
+    # ending at 4,980, raised to 5,000 on Monday. The 05:20 Monday Reset
+    # reading already shows a Monday attack its 05:21 cached log lacks; a later
+    # log brings it. Monday starts from 5,000 and counts the attack once.
+    saturday, sunday = DAY_A - timedelta(days=2), DAY_A - timedelta(days=1)
+    saturday_defenses = [(saturday + timedelta(hours=hour), False) for hour in range(1, 9)]
+    cached = json.loads(_log(*saturday_defenses, (sunday + timedelta(hours=1), False)))
+    with_attack = json.dumps({"items": [*cached["items"], {
+        **cached["items"][0], "attack": True, "stars": 3, "destructionPercentage": 100,
+        "opponentPlayerTag": "#GGPP",
+        "battleTimestamp": f"{DAY_A + timedelta(minutes=8):%Y%m%dT%H%M%S.000Z}",
+    }]}).encode()
+    start_sunday = 4980 + 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, saturday,
+                           profile=_profile(start_sunday + 8 * LOSS), log=_log())
+        jobs += _reset_work(connection_info, archive_server, sunday,
+                            profile=_profile(start_sunday), log=_log(*saturday_defenses))
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_A, profile=_profile(5000 + WIN),
+            log=json.dumps(cached).encode(),
+            profile_at=DAY_A + timedelta(minutes=20), log_at=DAY_A + timedelta(minutes=21),
+        )
+        _process(connection_info, archive_server, jobs)
+        [before] = _latest_days(connection_info, (sunday,))
+        jobs = [store_observation(
+            connection_info, archive_server, occurrence_key="later-log",
+            endpoint="battle_log", body=with_attack,
+            observed_at=DAY_A + timedelta(minutes=30), normalized_tag=TAG,
+        )[1]]
+        jobs += _reset_work(connection_info, archive_server, DAY_B,
+                            profile=_profile(5000 + WIN), log=with_attack)
+        _process(connection_info, archive_server, jobs)
+        sunday_row, monday_row = _latest_days(connection_info, (sunday, DAY_A))
+
+    assert before[0] == "Inconsistent"
+    assert (sunday_row[0], sunday_row[3]) == ("Complete", 4980)
+    assert sunday_row[7]["next_start_reading_correction"] == -WIN
+    assert monday_row[2:4] == (5000, 5000 + WIN)
+
+
 def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     database_url: str, archive_server
 ) -> None:
