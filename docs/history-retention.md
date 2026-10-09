@@ -32,7 +32,7 @@ for deadlines and the full product map.
   must wait for the window, required summaries, verified coverage and existing
   safety checks. Failed or unfinished work blocks cleanup. Keeping raw bytes
   does not make a finalized season reopenable in the current code.
-- Keep raw responses available for every restore promised by the seven-day
+- Keep raw responses available for every restore promised by the ten-day
   backup window, including time to perform the restore. This is separate from
   the seven-day season-correction window. See
   [raw expiry and recovery protection](#implemented-raw-expiry-and-required-recovery-protection)
@@ -144,7 +144,7 @@ active schema (heap plus indexes/TOAST), row counts, compact-summary size
 distribution, relation-kind inclusions/exclusions, and the explicitly labeled
 migration metadata exclusion. Partition parents are cataloged with zero
 allocation so their children are not double-counted. The unmeasured list is:
-generated WAL, retained WAL and base backups (seven-day recovery
+generated WAL, retained WAL and base backups (ten-day recovery
 window), spool occupancy, and remote raw bytes/request tariffs. The
 projection covers six calendar months (about 6.5 twenty-eight-day
 seasons) against measured usable capacity with headroom. Live detail and
@@ -275,6 +275,35 @@ copies are gone from the database; the raw responses they were calculated
 from stay under the raw-response rules. `./ops ranked-day-compaction` runs one
 pass by hand and `./ops logs ranked-day-compaction` shows each run's totals.
 
+## Reused manifest rows
+
+Each correction of a Reset's board freezes new manifests, the frozen inputs
+kept as proof of what the board was built from. On 7 October 2026, 35
+generations froze 911,900 manifest rows, about 2.15 GB, though about 97% of
+each player's rows repeated an earlier generation's. Since migration 0081 a
+manifest names the Reset's newest full manifest of its kind as its base and
+stores only the players whose row differs from it; a differing row that an
+earlier manifest already stores keeps its plain columns and names that manifest
+for its identity. An army manifest also stores its Season input lists as the
+IDs removed from and added to the base's, unless that would change more than
+half the IDs. A manifest is frozen in full again only when there is no earlier
+manifest or the membership changes, however many rows differ, so rebuilding any
+manifest reads only its own rows, one full manifest, and for a reused identity
+the one row storing it in full. `boundary_publication_manifest_entries(id)`
+returns any manifest's complete rows exactly as a full manifest stores them,
+and the digest still covers those rows. Database triggers refuse a base that is
+not a sealed full manifest of the same Reset and kind, and a reused identity
+not stored in full. Every freeze logs a `boundary_manifest_frozen` line with
+rows and identity bytes stored and reused. Measured on a 13,000-player test
+board, a correction manifest stored 0.3-0.4 MB of rows instead of 12 MB.
+Replaying the same rule on production's 4-8 October manifests stores about 91%
+fewer row bytes. Manifests frozen before migration 0081 stay full and unchanged.
+
+How often the newest Reset's board is rebuilt is unchanged and is held as an
+owner decision: each late correction still freezes a new generation, and each
+one still copies the generation's member list and board entries in full; only
+the manifest rows are reused.
+
 ## What remains
 
 - Battle reports are shared across changing rolling logs. Every returned row is
@@ -351,11 +380,11 @@ relation files or imply that retained WAL/backups have expired. Do not run
 ## Implemented raw expiry and required recovery protection
 
 Do **not** configure an upload-age lifecycle on the evidence namespace. A raw
-response becomes due **86 days after its latest sighting**. A body returned
-again later moves its deadline later; an earlier sighting never shortens it.
-An unchanged poll within 10 minutes of the previous sighting does not move it,
-so deletion can come up to 10 minutes before the exact latest sighting plus 86
-days.
+response becomes due **86 days after the end of its latest sighting's UTC
+day**: never less than 86 days after the sighting, at most one day more. A body
+returned again on a later day moves its deadline later; an earlier sighting
+never shortens it. Every sighting on the same day gives the same deadline, so
+only a body's first sighting each day rewrites it (migration 0087).
 Uploading late does not start another retention clock.
 
 Migration 0046 recalculates existing stored responses from the later of their
@@ -368,7 +397,7 @@ with neither time have no deadline and are never automatically deleted.
 
 - **Retiring**: the state cleanup gives a due response, which blocks every new
   use of it while its bytes still exist.
-- **Recovery hold**: the nine days a retiring response waits before cleanup
+- **Recovery hold**: the twelve days a retiring response waits before cleanup
   deletes its bytes.
 - **Marked or held response**: a response that is retiring and still inside its
   recovery hold.
@@ -378,19 +407,20 @@ starts its recovery hold at its recalculated deadline, or at upgrade time if
 that is later.
 
 A due response is not deleted straight away. Cleanup first marks it `retiring`,
-which blocks every new use, then deletes its bytes only **nine days later**: the
-seven-day recovery window chosen on September 25 plus a two-day allowance to
-carry out a restore. A restore can target any point from the last seven days.
+which blocks every new use, then deletes its bytes only **twelve days later**: the
+ten-day recovery window chosen on October 8 (seven days until then) plus a
+two-day allowance to carry out a restore. A restore can target any point from
+the last ten days.
 Anything still usable at that point was marked after it, so its bytes survive at
 least two more days after the restore starts. For longer restores while
 production keeps running, follow the
 [restore procedure](deployment.md#restore-into-a-separate-database).
 
 A response therefore stays usable for at least 86 days after its latest
-sighting, less at most 10 minutes. With no unfinished work and cleanup keeping
-up, its bytes stay about 95 days, plus the wait for the next cleanup batch. The
-measured 21.83 GB/day of new raw responses (October 2) means about 2.07 TB
-stored, roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
+sighting. With no unfinished work and cleanup keeping
+up, its bytes stay about 98 days, plus the wait for the next cleanup batch. The
+measured 21.83 GB/day of new raw responses (October 2) means about 2.14 TB
+stored, roughly EUR 34/month at EUR 0.01606/GB-month. This is a projection, not a bill.
 
 Any unfinished upload of the same bytes and unfinished/failed processing or
 replay keep a response usable. Marking commits before any
@@ -407,9 +437,11 @@ cleanup does not compact them. Bucket versioning, noncurrent versions, backup re
 orphan objects need separately verified provider policies; deleting a current
 key does not prove all provider storage was reclaimed.
 
-Do not enable production expiry until #122/#129 prove that no still-promised
-restore can reference deleted bytes: restore a genuine seven-day-old point and
-read the raw references it needs. The code stays off by default until then.
+The owner approved production expiry on 2026-10-08 after the real-size restore
+rehearsal described in [deployment.md](deployment.md#restore-into-a-separate-database).
+That rehearsal restored a 4.4-day-old point and did not read raw references, so
+#122/#129 still owe a genuine ten-day-old restore that reads the raw references
+it needs. The code stays off by default; production turns it on in `app.env`.
 [`deployment.md`](deployment.md#raw-response-cleanup) owns the scheduled job,
 its credentials and the dry-run-first enablement steps. The command it runs is:
 
@@ -418,7 +450,7 @@ python -m clashlens prune-archive --max-objects 1000          # preview
 python -m clashlens prune-archive --max-objects 1000 --apply  # mark and delete
 ```
 
-Each run deletes up to the batch size of held responses whose nine days have
+Each run deletes up to the batch size of held responses whose twelve days have
 passed, then marks up to the batch size of due ones. The preview changes nothing
 and reports how many objects and bytes that one batch would delete and mark.
 It must run on the collector host with the **exact same spool**, because a wrong
@@ -538,10 +570,10 @@ Player trophy summaries and current/live analytics are unchanged.
 The implemented v3 reads do not offer destruction, combinations, day ranges or
 population cohorts. Missing or legacy summaries without unit/quantity evidence
 return unavailable; there is no website fallback to partial battle detail.
-Unknown units have deterministic labels such as `Unknown spell (ID 900)`.
+Unknown units have deterministic labels such as `Unknown spell #900`.
 Unclassified troop IDs appear in both troop and siege views as
-`Unknown troop or siege (ID 900)` and keep coverage partial. These are the same
-retained uses, not two separate units. Once the catalogue establishes their
+`Unknown troop or siege #900`. These are the same retained uses, not two
+separate units. Once the catalogue establishes their
 category, they appear only in that category with the current catalogue name.
 Other unknown namespaces likewise resolve their names at read time. Separate player trophy-history records remain unchanged.
 The API pages unit results in groups of 200.

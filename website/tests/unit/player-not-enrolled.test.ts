@@ -48,7 +48,7 @@ describe("days before a late joiner signed up", () => {
 
   it("leave other incomplete days unchanged", () => {
     expect(presentDay({ ...DAY, codes: ["missing_start_baseline"] }, false).status).toBe(
-      "Result unknown",
+      "Uncertain",
     );
   });
 

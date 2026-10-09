@@ -63,7 +63,6 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
             LEFT JOIN battle_army_decodes AS decode
               ON decode.battle_id = battle.id AND decode.is_active
              AND decode.decoder_version = 'army-decoder-v2'
-             AND decode.catalog_version = 'unit-catalog-v2'
             WHERE battle.ranked_day_start = %s
             """,
             (ranked_day_start,),
@@ -142,27 +141,136 @@ def as_api_role(connection_info: str) -> str:
     )
 
 
+DOMAIN_SCHEMA = "python_domain"
+_templates: dict[str, str] = {}
+
+
+def _domain_template(database_url: str) -> str:
+    """Migrate one template database per migration set and server.
+
+    Copying it takes a fraction of the time that applying every migration
+    again for each test takes.
+    """
+    if database_url in _templates:
+        return _templates[database_url]
+    migrations = sorted(
+        (Path(__file__).parents[2] / "deploy" / "migrations").glob("*.sql")
+    )
+    sources = [path.read_text(encoding="utf-8") for path in migrations]
+    grants = production_worker_grants()
+    digest = hashlib.sha256("\0".join([*sources, *grants]).encode()).hexdigest()
+    template = f"python_domain_template_{digest[:16]}"
+    with psycopg.connect(
+        make_conninfo(database_url, dbname="postgres"), autocommit=True
+    ) as admin:
+        # Another pytest process on this server may be building it too.
+        admin.execute("SELECT pg_advisory_lock(hashtext('clashlens domain template'))")
+        if not admin.execute(
+            "SELECT 1 FROM pg_database WHERE datname = %s", (template,)
+        ).fetchone():
+            building = f"{template}_building"
+            admin.execute(f'DROP DATABASE IF EXISTS "{building}" WITH (FORCE)')
+            admin.execute(f'CREATE DATABASE "{building}"')
+            with psycopg.connect(
+                make_conninfo(database_url, dbname=building), autocommit=True
+            ) as connection:
+                connection.execute(f'CREATE SCHEMA "{DOMAIN_SCHEMA}"')
+                connection.execute(f'SET search_path = "{DOMAIN_SCHEMA}"')
+                for sql in sources:
+                    apply_migration(connection, sql)
+                for statement in grants:
+                    connection.execute(statement)
+            admin.execute(f'ALTER DATABASE "{building}" RENAME TO "{template}"')
+    _templates[database_url] = template
+    return template
+
+
 @contextmanager
 def domain_database(
     database_url: str, *, include_coordinator: bool = False
 ) -> Iterator[str]:
-    schema = f"python_domain_{uuid4().hex}"
+    template = _domain_template(database_url)
+    database = f"python_domain_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
-        admin.execute(f'CREATE SCHEMA "{schema}"')
-    connection_info = make_conninfo(database_url, options=f"-c search_path={schema}")
+        admin.execute(f'CREATE DATABASE "{database}" TEMPLATE "{template}"')
+    connection_info = make_conninfo(
+        database_url, dbname=database, options=f"-c search_path={DOMAIN_SCHEMA}"
+    )
     try:
-        root = Path(__file__).parents[2]
-        migrations_dir = root / "deploy" / "migrations"
-        sql_files = sorted(migrations_dir.glob("*.sql"))
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            for path in sql_files:
-                apply_migration(connection, path.read_text(encoding="utf-8"))
-            for statement in production_worker_grants():
-                connection.execute(statement)
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
-            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+def repair_season(
+    connection_info: str, season: str, *, max_jobs: int = 100
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The Season repair's preview, then its queue run past the evidence
+    repairs it does first: (preview, the first report queueing days)."""
+    from clashlens.db import Database
+    from clashlens.domain_repair import season_repair
+
+    database = Database(connection_info)
+    try:
+        preview = season_repair(database, season, "preview", max_jobs=max_jobs)
+        for _ in range(10):
+            queued = season_repair(database, season, "queue", max_jobs=max_jobs)
+            if queued.get("phase") != "inputs":
+                return preview, queued
+        raise AssertionError("the evidence repairs did not finish")
+    finally:
+        database.close()
+
+
+def seed_attacks(
+    connection: psycopg.Connection[Any],
+    attacker_id: int,
+    attacks: list[tuple[datetime, int]],
+) -> None:
+    """Record each (Legend day start, destruction) as one attack the player's
+    own battle log reported, on a new untracked opponent, an hour into that
+    day. Saved without source rows or responses."""
+    with connection.transaction():
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for day, destruction in attacks:
+            connection.execute(
+                """
+                WITH defender AS (
+                    INSERT INTO players (normalized_tag, active)
+                    VALUES (%(defender)s, false) RETURNING id
+                ), battle AS (
+                    INSERT INTO legend_battles
+                        (ranked_day_start, attacker_player_id, defender_player_id)
+                    SELECT %(day)s, %(attacker)s, id FROM defender RETURNING id
+                ), evidence AS (
+                    INSERT INTO battle_evidence (
+                        battle_id, source_row_id, observation_id,
+                        reporting_player_id, perspective, battle_timestamp,
+                        stars, destruction_percentage, army_share_code,
+                        attacker_gain, defender_loss, trophy_rule_version,
+                        source_observed_at, parser_version
+                    )
+                    SELECT id, -id, -id, %(attacker)s, 'attacker',
+                           %(day)s + interval '1 hour',
+                           CASE WHEN %(destruction)s = 100 THEN 3
+                                WHEN %(destruction)s >= 50 THEN 1 ELSE 0 END,
+                           %(destruction)s, '', 0, 0, 'test',
+                           %(day)s + interval '1 hour', 'test'
+                    FROM battle RETURNING id, battle_id
+                )
+                INSERT INTO battle_perspectives
+                    (battle_id, perspective, evidence_id, source_observed_at)
+                SELECT battle_id, 'attacker', id, %(day)s + interval '1 hour'
+                FROM evidence
+                """,
+                {
+                    "defender": f"#Q{uuid4().hex[:12].upper()}",
+                    "day": day,
+                    "attacker": attacker_id,
+                    "destruction": destruction,
+                },
+            )
 
 
 @contextmanager

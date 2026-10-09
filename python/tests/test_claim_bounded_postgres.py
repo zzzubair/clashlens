@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 import psycopg
+import pytest
 from test_claim_jobs_postgres import (
     _insert_job,
     _insert_observation,
@@ -827,8 +828,17 @@ def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str)
             ), "0004 reapply must be non-destructive"
 
 
+@pytest.mark.parametrize(
+    ("reset_first", "order"),
+    [
+        (None, (PYTHON_RESET_PRIORITY, PYTHON_LIVE_PRIORITY)),
+        (True, (PYTHON_RESET_PRIORITY, PYTHON_LIVE_PRIORITY)),
+        # A lane's other turn takes live work first; backfill stays last.
+        (False, (PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY)),
+    ],
+)
 def test_reset_live_and_backfill_priorities_are_claimed_in_order(
-    database_url: str,
+    database_url: str, reset_first: bool | None, order: tuple[int, int]
 ) -> None:
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
@@ -853,13 +863,63 @@ def test_reset_live_and_backfill_priorities_are_claimed_in_order(
         database = Database(connection_info)
         try:
             claimed = [
-                database.claim_job(owner=f"declared-{index}") for index in range(4)
+                database.claim_job(owner=f"declared-{index}", reset_first=reset_first)
+                for index in range(4)
             ]
         finally:
             database.close()
         assert [claim.job_id if claim else None for claim in claimed] == [
-            jobs[PYTHON_RESET_PRIORITY],
-            jobs[PYTHON_LIVE_PRIORITY],
+            *(jobs[priority] for priority in order),
             jobs[PYTHON_BACKFILL_PRIORITY],
             None,
         ]
+
+
+def test_claims_at_a_reset_backlog_skip_reset_work_they_cannot_take(
+    database_url: str,
+) -> None:
+    # At 05:47 on 8 Oct 2026 a planned claim's check for waiting Reset work
+    # read every finished Reset job first, 0.45 s, and every claim's catch-all
+    # probe read every waiting Reset job, 6,404 of them at 05:50.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            _seed_production_depth(connection)
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    observation_id, work_type, deduplication_key, input_json,
+                    status, due_at, priority, created_at, completed_at,
+                    parser_version, processing_version, domain_rule_version,
+                    analytics_rule_version
+                )
+                SELECT id, 'process_observation', 'reset-backlog:' || id, '{}',
+                       CASE WHEN id <= 89220 THEN 'pending' ELSE 'complete' END,
+                       clock_timestamp() - interval '10 minutes', %s,
+                       clock_timestamp() - interval '10 minutes',
+                       CASE WHEN id > 89220 THEN clock_timestamp() END,
+                       'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
+                       'clashlens-domain-rules-v1', 'legend-analytics-v1'
+                FROM collector_observations WHERE id > 69220
+                """,
+                (PYTHON_RESET_PRIORITY,),
+            )
+            connection.execute("ANALYZE python_processing_jobs")
+            live_job = connection.execute(
+                "SELECT min(id) FROM python_processing_jobs WHERE priority = %s"
+                " AND status = 'pending' AND due_at <= clock_timestamp()",
+                (PYTHON_LIVE_PRIORITY,),
+            ).fetchone()[0]
+            for options in ({}, {"planned": True}, {"planned": True, "job_id": live_job}):
+                statement, params = _claim_select_statement(
+                    "python_processing_jobs_worker", reset_first=True, **options
+                )
+                plan_text = "\n".join(
+                    _database_text(row[0])
+                    for row in connection.execute(
+                        f"EXPLAIN (ANALYZE, COSTS OFF) {statement}", params
+                    ).fetchall()
+                )
+                removed = re.findall(r"Rows Removed by Filter: (\d+)", plan_text)
+                assert max(map(int, removed), default=0) < 1000, (
+                    f"claim {options} read Reset work it cannot take:\n{plan_text}"
+                )

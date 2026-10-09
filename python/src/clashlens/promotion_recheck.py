@@ -1,23 +1,30 @@
 """Re-check the promotion list after each Monday Reset.
 
-Legend II's top finishers move into Legend I at the Monday 05:00 UTC Reset.
-After the Reset sweep (05:00-05:10), settlement (from 05:20) and the
-late-battle check (from 05:30), from 06:00 the collector asks for the profile
-of every listed Legend II player (migration 0076) not checked since the
-Reset, at most ``CLASHLENS_PROMOTION_RECHECK_PER_SECOND`` requests a second
-(20 by default, 0 turns it off) on the regular keys, at most two at once. Just before each
-request, after its pacing wait, it is sent only while that Reset's collection
-and settlement checks have finished, no tracked player is more than two
-minutes late, and one key's worth of regular request slots is idle; otherwise
-the player stays due. A request admitted just before a key wait or an API
-outage can still start late, so at most two promotion requests ever start
-together. Two in flight at about 120 ms each gives roughly 16 requests a
-second, about an hour for 59,000 Legend II players. These answers are not
-saved: a profile showing Legend I queues the ordinary discovery check, which
-saves the profile and starts tracking; any other answer only refreshes the
-list row. A request that fails, or an answer that cannot be read or shows an
-uncertain tier, leaves the player due; it is asked again once the rest of the
-list has been asked.
+Legend II's top finishers move into Legend I at the Monday 05:00 UTC Reset,
+and Legend III's into Legend II. After the Reset sweep (05:00-05:10),
+settlement (from 05:20) and the late-battle check (from 05:30), from 06:00 the
+collector asks for the profile of every listed Legend II player (migration
+0076) not checked since 06:00, then every listed Legend III player, at
+most ``CLASHLENS_PROMOTION_RECHECK_PER_SECOND`` requests a second (20 by
+default, 0 turns it off) on the regular keys, at most two at once. Just before
+each request, after its pacing wait, it is sent only while that Reset's
+collection and settlement checks have finished, no tracked player is more than
+two minutes late, and one key's worth of regular request slots is idle;
+otherwise the player stays due. A request admitted just before a key wait or
+an API outage can still start late, so at most two promotion requests ever
+start together. Two in flight at about 120 ms each gives roughly 16 requests a
+second, about an hour for 59,000 Legend II players and about three more hours
+for 192,000 Legend III players. These answers are not saved: a profile showing
+Legend I saves the player as due a discovery check newer than that answer
+(migration 0084), which saves the profile and starts tracking; any other
+answer only refreshes the list row, so a Legend III player promoted to Legend
+II is asked with Legend II next Monday. A request that fails, or an answer that
+cannot be read or shows an uncertain tier, leaves the player due; it is asked
+again once the rest of its tier has been asked. Legend III players are asked
+only once no Legend II player is due, so a Legend II player left due is asked
+again before any Legend III player. A lower-league answer saved between the
+Reset and 06:00, such as the weekly check's, may predate the game applying a
+promotion, so it does not stand in for that Monday's request.
 """
 
 from __future__ import annotations
@@ -35,7 +42,6 @@ from typing import TYPE_CHECKING
 from . import weekly_eligibility
 from .collector_db import CollectorDatabase
 from .collector_http import ProviderFailure
-from .db import DISCOVERY_QUEUE_CAP, lock_wait
 from .profile import (
     LEGEND_I_TIER_ID,
     PROFILE_PARSER_VERSION,
@@ -54,6 +60,7 @@ IDLE_SECONDS = 60.0
 # How long a reading of the database's spare-time checks is reused.
 GUARD_SECONDS = 1.0
 LEGEND_II_TIER_ID = 105000035
+LEGEND_III_TIER_ID = 105000034
 _WEEK = timedelta(days=7)
 _WEEK_ANCHOR = datetime(2000, 1, 3, 5, tzinfo=UTC)  # a Monday Reset
 
@@ -89,59 +96,43 @@ def has_spare_time(database: CollectorDatabase, now: datetime) -> bool:
 
 
 def due_tags(database: CollectorDatabase, now: datetime, skip: list[str]) -> list[str]:
-    """The next listed Legend II players not checked since the Monday Reset."""
+    """The next listed players not checked since 06:00 on Monday, outside ``skip``.
+
+    Legend III players come only once no Legend II player is due; while only
+    skipped Legend II players are due, nothing is returned.
+    """
     with database._connection() as connection:
-        return [
-            str(row[0])
-            for row in connection.execute(
+        for tier in (LEGEND_II_TIER_ID, LEGEND_III_TIER_ID):
+            due = connection.execute(
                 """
-                SELECT normalized_tag FROM promotion_candidates
+                SELECT normalized_tag, normalized_tag = ANY(%s::text[])
+                FROM promotion_candidates
                 WHERE league_tier_id = %s AND checked_at < %s
-                  AND NOT (normalized_tag = ANY(%s::text[]))
-                ORDER BY checked_at, normalized_tag
+                ORDER BY normalized_tag = ANY(%s::text[]), checked_at, normalized_tag
                 LIMIT %s
                 """,
-                (LEGEND_II_TIER_ID, week_start(now), skip, BATCH_SIZE),
-            )
-        ]
+                (skip, tier, week_start(now) + START_DELAY, skip, BATCH_SIZE),
+            ).fetchall()
+            if due:
+                return [str(tag) for tag, skipped in due if not skipped]
+    return []
 
 
 def record_answers(database: CollectorDatabase, answers: list[Answer]) -> set[str]:
     """Save one batch's answers; returns the promoted players left due.
 
-    A promoted player is handed on once tracked or given waiting work that
-    still has to fetch the profile. Checks they add share the discovery
-    queue's limit of DISCOVERY_QUEUE_CAP waiting checks; once that is full,
-    the rest, like any player not handed on, keep their old rows, so they
-    stay due and are asked again later.
+    A promoted player is handed on once tracked or saved as due a discovery
+    check newer than this answer; one another job holds is left out, keeps
+    its old row, stays due and is asked again later.
     """
     left_out: set[str] = set()
-    promoted = [answer[0] for answer in answers if answer[1] == "promoted"]
     with database._connection() as connection, connection.transaction():
-        if promoted:
-            with lock_wait(connection, "1s"):
-                connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended('discovery-queue', 0))"
-                )
-            waiting = connection.execute(
-                """
-                SELECT count(*) FROM collector_work
-                WHERE lane = 'ordinary' AND status IN ('pending', 'waiting_retry')
-                  AND kind = 'discovery_profile' AND NOT eligibility_recheck
-                """
-            ).fetchone()[0]
-            room = DISCOVERY_QUEUE_CAP - int(waiting)
-            for tag in promoted:
-                if room <= 0:
-                    left_out.add(tag)
-                    continue
-                handed, added = connection.execute(
-                    "SELECT handed, added FROM clashlens_queue_promoted_player(%s)", (tag,)
-                ).fetchone()
-                room -= added
-                if not handed:
-                    left_out.add(tag)
-            answers = [answer for answer in answers if answer[0] not in left_out]
+        for tag in (answer[0] for answer in answers if answer[1] == "promoted"):
+            if not connection.execute(
+                "SELECT handed FROM clashlens_queue_promoted_player(%s)", (tag,)
+            ).fetchone()[0]:
+                left_out.add(tag)
+        answers = [answer for answer in answers if answer[0] not in left_out]
         kept = [answer for answer in answers if answer[1] != "removed"]
         # A newer answer saved by profile processing meanwhile is kept.
         connection.execute(
@@ -263,9 +254,9 @@ async def check_batch(
 ) -> Counter[str] | None:
     """Ask for one batch of listed players; None when nothing could be asked.
 
-    Players asked this pass and left due are skipped until no other player is
-    due; that ends the pass, so ``attempted`` is cleared and None returned, and
-    the next pass asks them again.
+    Players asked this pass and left due are skipped until no other player of
+    their tier is due; that ends the pass, so ``attempted`` is cleared and None
+    returned, and the next pass asks them again.
     """
     if not await admit.open():
         return None

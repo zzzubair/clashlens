@@ -1,4 +1,10 @@
-"""How often a past Reset may rebuild its publication after corrections.
+"""When population builds may start.
+
+However many worker processes run, one population build runs at a time:
+its transaction holds a permit lock, and a build claimed but not yet started
+holds a live lease, so claims skip builds while either is true.
+
+A past Reset is also paced in how often it rebuilds after corrections.
 
 Each correction generation rebuilds a Reset's whole leaderboard and army
 records and freezes new manifests, so corrections to Resets before the
@@ -11,8 +17,11 @@ finish and publish. The newest swept Reset is live and never waits.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
+
+from psycopg.types.json import Jsonb
 
 # A past Reset starts at most one correction generation per interval,
 # counted from its newest generation.
@@ -21,6 +30,12 @@ PAST_RESET_CORRECTION_INTERVAL = timedelta(hours=6)
 # window, which keeps the worker free for the live Reset's publication.
 PAST_RESET_QUIET_START = time(4, 30)
 PAST_RESET_QUIET_END = time(7, 0)
+# An operator correction (boundary.queue_army_corrections), marked by this
+# pending input, neither starts nor has its leaderboard, statistics or army
+# build claimed in this wider UTC window, for any Reset; those builds run at
+# background priority.
+OPERATOR_CORRECTION = {"kind": "operator"}
+OPERATOR_QUIET_START = time(4, 0)
 
 
 def _now(connection: Any) -> datetime:
@@ -40,6 +55,29 @@ def _is_past_reset(connection: Any, boundary_at: datetime) -> bool:
 
 def _in_quiet_window(now: datetime) -> bool:
     return PAST_RESET_QUIET_START <= now.astimezone(UTC).time() < PAST_RESET_QUIET_END
+
+
+def operator_generation(connection: Any, boundary_at: datetime, generation: Any) -> bool:
+    """Whether this Reset generation is an operator correction's rebuild."""
+    return connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM boundary_publication_corrections AS correction
+            JOIN boundary_publication_generations AS rebuilt
+              ON rebuilt.id = correction.generation_id
+            WHERE rebuilt.boundary_at = %s AND rebuilt.generation = %s
+              AND correction.pending_inputs @> %s::jsonb
+        )
+        """,
+        (boundary_at, generation, Jsonb([OPERATOR_CORRECTION])),
+    ).fetchone()[0]
+
+
+def operator_correction_waits(connection: Any) -> bool:
+    """Whether an operator correction, or its builds, must wait now."""
+    now = _now(connection).astimezone(UTC).time()
+    return OPERATOR_QUIET_START <= now < PAST_RESET_QUIET_END
 
 
 def past_reset_build_waits(connection: Any, boundary_at: datetime) -> bool:
@@ -78,3 +116,36 @@ def past_reset_correction_waits(connection: Any, boundary_at: datetime) -> bool:
         last_generation_at is not None
         and now - last_generation_at < PAST_RESET_CORRECTION_INTERVAL
     )
+
+
+BUILD_PERMIT_KEY = "population-build-permit"
+
+
+def take_build_permit(connection: Any) -> None:
+    """Hold the one-build permit until this build's transaction ends."""
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (BUILD_PERMIT_KEY,)
+    )
+
+
+def build_permit_busy(
+    connection: Any, jobs_relation: str, build_work_types: Collection[str]
+) -> bool:
+    """Whether a build runs or waits to start; else this claim holds the permit.
+
+    The lease check is its own statement, so it reads every build claim
+    committed before this one took the permit.
+    """
+    if not connection.execute(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))", (BUILD_PERMIT_KEY,)
+    ).fetchone()[0]:
+        return True
+    return connection.execute(
+        f"""
+        SELECT EXISTS (
+            SELECT FROM {jobs_relation}
+            WHERE state = 'leased' AND lease_expires_at > clock_timestamp()
+              AND work_type = ANY(%s::text[]))
+        """,
+        (sorted(build_work_types),),
+    ).fetchone()[0]

@@ -43,8 +43,9 @@ DEPLOY = r"""
 source "$1" help >/dev/null
 MODE=production PREFIX=clashlens
 RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
-RESTART_COLLECTOR=$RESTART
+RESTART_COLLECTOR=$RESTART KEEP_COLLECTOR=$KEEP
 UP_IN_PROGRESS=$FAILS
+render_units() { printf 'rendered collector=%s\n' "${RELEASE[COLLECTOR_IMAGE]}"; }
 keep_running_plan
 stop_units
 keep_running_check
@@ -58,10 +59,11 @@ UP = r"""
 source "$1" help >/dev/null
 for check in require_host load_release load_production_config validate_runtime_values \
   guard_generated_units guard_existing_resources guard_trusted_proxy_ip guard_network_subnet \
-  cleanup_stale_admin_state ensure_linger migrate_legacy_units guard_systemd_units; do
+  cleanup_stale_admin_state ensure_linger migrate_legacy_units guard_systemd_units \
+  write_environment prepare_secrets render_units; do
   eval "$check() { :; }"
 done
-MODE=production PREFIX=clashlens MAIN_PID=$$
+MODE=production PREFIX=clashlens MAIN_PID=$$ POSTGRES_USER=clashlens POSTGRES_DB=clashlens
 export MAIN_PID
 RELEASE=([COLLECTOR_IMAGE]=$NEW_COLLECTOR [POSTGRES_IMAGE]=$POSTGRES)
 up_stack
@@ -110,6 +112,7 @@ def stack(tmp_path):
             "NEW_COLLECTOR": NEW_COLLECTOR,
             "POSTGRES": POSTGRES,
             "RESTART": "false",
+            "KEEP": "false",
             "FAILS": "false",
             "IMAGES": json.dumps(
                 {OLD_COLLECTOR: SAME_CONTENTS, NEW_COLLECTOR: SAME_CONTENTS, POSTGRES: "pg"}
@@ -185,6 +188,45 @@ def test_changed_secret_restarts_without_printing_it(stack):
     for text in (result.stdout, result.stderr, record):
         assert "key-value" not in text
         assert "password" not in text
+
+
+def test_worker_only_change_keeps_the_running_collector(stack):
+    # The collector image holds all Python source, so a worker-only change
+    # differs from the running one; the person deploying chooses the manual
+    # --keep-collector for it. Choosing automatically is a follow-up.
+    images = json.loads(stack["env"]["IMAGES"])
+    images[NEW_COLLECTOR] = SAME_CONTENTS.replace("aa", "bb")
+    result = deploy(stack, IMAGES=json.dumps(images), KEEP="true")
+    assert "--keep-collector keeps the running collector image" in result.stdout
+    assert f"keep=true collector={OLD_COLLECTOR}" in result.stdout
+    assert not KEPT & result.stopped
+    assert {"clashlens-api", "clashlens-worker", "clashlens-website"} <= result.stopped
+    # A plain up restarts all four for any Python change.
+    assert_restarted(deploy(stack, IMAGES=json.dumps(images)), "the collector image changed")
+
+
+def test_keep_collector_still_restarts_for_a_collector_setting_change(stack):
+    images = json.loads(stack["env"]["IMAGES"])
+    images[NEW_COLLECTOR] = SAME_CONTENTS.replace("aa", "bb")
+    collector_env = stack["tmp_path"] / "state" / "clashlens" / "env" / "collector.env"
+    collector_env.write_text("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=35\n")
+    result = deploy(stack, IMAGES=json.dumps(images), KEEP="true")
+    assert_restarted(result, "changed collector settings")
+    # The restart runs the release's own collector image, not the kept one.
+    assert f"rendered collector={NEW_COLLECTOR}" in result.stdout
+    assert f"collector={NEW_COLLECTOR}" in result.stdout.splitlines()[-1]
+
+
+def test_keep_collector_still_restarts_for_a_database_image_change(stack):
+    old_postgres = "sha256:" + "4" * 64
+    images = json.loads(stack["env"]["IMAGES"])
+    images |= {NEW_COLLECTOR: SAME_CONTENTS.replace("aa", "bb"), old_postgres: "pg-old"}
+    running = {"clashlens-collector": OLD_COLLECTOR, "clashlens-postgres": old_postgres}
+    result = deploy(
+        stack, IMAGES=json.dumps(images), RUNNING=json.dumps(running), KEEP="true"
+    )
+    assert_restarted(result, "the postgres image changed")
+    assert f"keep=false collector={NEW_COLLECTOR}" in result.stdout
 
 
 def test_restart_collector_flag_restarts(stack):

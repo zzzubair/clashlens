@@ -95,7 +95,7 @@ describe("player link previews", () => {
         { title: "Nova (#2PP) · Clash Lens" },
         { property: "og:title", content: "Nova (#2PP)" },
         { property: "og:url", content: URL_FOR_TAG },
-        { property: "og:image", content: `${ORIGIN}/images/legend-league.webp` },
+        { property: "og:image", content: `${ORIGIN}/images/og-clashlens.png` },
         { tagName: "link", rel: "canonical", href: URL_FOR_TAG },
       ]),
     );

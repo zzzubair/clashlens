@@ -110,6 +110,38 @@ def test_4837_to_4804_requires_adjustment_and_independent_catchup() -> None:
     )) == ("unresolved", ("later_profile_unprocessed",), None)
 
 
+def settles_on(inputs: ProofInputs, loss: int, target: int) -> ProofInputs:
+    return replace(inputs, early=replace(inputs.early, trophies=target + loss),
+                   profile=replace(inputs.profile, trophies=target))
+
+
+def test_no_opponent_rows_are_used_slots_for_the_automatic_loss() -> None:
+    # 6 defenses for 180 plus one "no opponent, no battle" defense row, and
+    # one such row the day before: the loss is floor((298 + 180) / (9 + 7))
+    # for one missing defense, 29, not floor(478 / 14) * 2 = 68.
+    inputs = settles_on(replace(check(defenses=[30] * 6), zero_result_slots=frozenset({
+        (RESET - DAY + 300 * MINUTE, False), (RESET - 2 * DAY + 300 * MINUTE, False),
+    })), 29, 4746 + 300 - 180 - 29)
+    verdict = evaluate_boundary(inputs)
+
+    assert (verdict.state, verdict.trophies) == ("settled", 4837)
+    assert verdict.proof["automatic_loss_basis"] == {
+        "prior_defenses": 8, "prior_defense_loss": 298, "defenses": 6,
+        "defense_loss": 180, "automatic_loss": 29, "zero_result_defenses": 1,
+        "zero_result_prior_defenses": 1,
+    }
+    assert judged(replace(inputs, zero_result_slots=frozenset()))[0] == "unresolved"
+
+
+def test_season_day_1_reset_leaves_out_the_previous_season() -> None:
+    # Day 1 ended at this Reset: 7 defenses for 209 and 8 attacks lose
+    # floor(209 / 7) once, 29, not the previous Season's pooled 33.
+    day_2 = datetime(2026, 10, 6, 5, tzinfo=UTC)
+    inputs = settles_on(check(boundary=day_2), 29, 4746 + 300 - 209 - 29)
+
+    assert judged(inputs) == ("settled", (), 4808)
+
+
 def test_40_trophy_lag_rejects_stale_target_and_fixed_quiet_margin() -> None:
     """Both days had eight defenses; 5,135 stood until 05:21:55, then 5,095."""
     eight = [30] * 8

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<title>Clash Lens app icon (CL)</title>
+<defs>
+  <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe45c"/><stop offset="1" stop-color="#ff8a1f"/></linearGradient>
+  <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff1a8"/><stop offset="1" stop-color="#f2c641"/></linearGradient>
+  <radialGradient id="glass" cx="0.35" cy="0.3" r="0.8"><stop offset="0" stop-color="#ffffff"/><stop offset="0.6" stop-color="#cfeaff"/><stop offset="1" stop-color="#7fb6e0"/></radialGradient>
+  <linearGradient id="night" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2e2238"/><stop offset="1" stop-color="#1d1426"/></linearGradient>
+</defs>
+<rect x="1.5" y="1.5" width="61" height="61" rx="14" fill="url(#night)" stroke="#1d1426" stroke-width="3"/><g transform="translate(9.6 9.6) scale(0.7)"><g fill="#1d1426" stroke="#1d1426" stroke-width="12" stroke-linejoin="round"><g transform="translate(4.5 11.0) scale(0.375) rotate(-4 37 50)"><path d="M10 0H74V27H33V73H74V100H10L0 90V10Z" transform="translate(0 6)"/><path d="M10 0H74V27H33V73H74V100H10L0 90V10Z"/></g><g transform="translate(34.5 11.0) scale(0.375) rotate(4 37 50)"><path d="M0 0H31V70H70V100H0Z" transform="translate(0 6)"/><path d="M0 0H31V70H70V100H0Z"/></g></g><g fill="#b3261e"><path d="M10 0H74V27H33V73H74V100H10L0 90V10Z" transform="translate(4.5 11.0) scale(0.375) rotate(-4 37 50) translate(0 6)"/><path d="M0 0H31V70H70V100H0Z" transform="translate(34.5 11.0) scale(0.375) rotate(4 37 50) translate(0 6)"/></g><g fill="url(#fill)" stroke="#1d1426" stroke-width="3" stroke-linejoin="round"><path d="M10 0H74V27H33V73H74V100H10L0 90V10Z" transform="translate(4.5 11.0) scale(0.375) rotate(-4 37 50)"/><path d="M0 0H31V70H70V100H0Z" transform="translate(34.5 11.0) scale(0.375) rotate(4 37 50)"/></g></g>
+</svg>

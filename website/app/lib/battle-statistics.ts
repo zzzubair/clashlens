@@ -1,5 +1,6 @@
 import { seasonStartAt } from "../components/SeasonReread";
 import type { PlayerPage, RankedBattleEvent } from "./contracts";
+import { isLegendDay } from "./player-lookup-text";
 
 export type BattlePeriod = "7" | "14" | "season";
 const DAY_MS = 86_400_000;
@@ -11,62 +12,57 @@ export function currentSeasonStart(player: PlayerPage, now: number) {
 }
 
 // Use recorded battles, never daily trophy adjustments or unplayed defenses.
-// Daily totals leave out today, which is still being played, and count each
-// battle on the saved Legend day it belongs to. Per-day averages divide by
-// finished days with a battle on that side, so shielded or unplayed days
-// don't pull them down.
-function summarize(events: (readonly [RankedBattleEvent, number])[], today: number) {
+// Only finished Legend days count, never today, which is still being played.
+// Each battle counts on the saved Legend day it belongs to. Counts, stars and
+// averages all use every saved finished Legend day, leaving out battle-free
+// days before sign-up; per-day averages divide by those days, battles or not.
+function summarize(events: RankedBattleEvent[], days: number) {
   const stars = [0, 0, 0, 0];
   let trophies = 0;
-  let finishedTrophies = 0;
-  const activeDays = new Set<number>();
-  for (const [event, day] of events) {
+  for (const event of events) {
     stars[event.stars]++;
     trophies += Math.abs(event.trophyChange);
-    if (day < today) {
-      finishedTrophies += Math.abs(event.trophyChange);
-      activeDays.add(day);
-    }
   }
+  const per = (by: number) => (by === 0 ? null : trophies / by);
   return {
     count: events.length,
     stars,
     trophies,
-    finishedTrophies,
-    activeDays: activeDays.size,
-    disputed: events.some(([event]) => event.perspectiveDisagreement),
+    perDay: per(days),
+    perBattle: per(events.length),
+    disputed: events.some((event) => event.perspectiveDisagreement),
   };
 }
 
-// Recent windows stay inside the current Season; early on they are shorter.
+// Recent windows are the last finished days of the current Season; early on
+// they are shorter, and on the Season's first day there are none.
 export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: number) {
   const today = Math.floor((now - RESET_MS) / DAY_MS) * DAY_MS + RESET_MS;
   const seasonStart = currentSeasonStart(player, now);
   const start =
     period === "season"
       ? seasonStart
-      : Math.max(seasonStart, today - (Number(period) - 1) * DAY_MS);
+      : Math.max(seasonStart, today - Number(period) * DAY_MS);
   const days = new Map(
-    [
-      ...player.recentDays,
-      ...player.seasonDays,
-      ...(player.currentDay ? [player.currentDay] : []),
-    ]
+    [...player.recentDays, ...player.seasonDays]
       .filter((day) => {
         const time = Date.parse(day.period.split(" – ")[0]);
-        return time >= start && time <= today;
+        return time >= start && time < today;
       })
       .map((day) => [Date.parse(day.period.split(" – ")[0]), day]),
   );
+  const legendDays = [...days.values()].filter((day) =>
+    isLegendDay(day.uncertainty, day.offenseEvents.length + day.defenseEvents.length),
+  );
   const events = (side: "offenseEvents" | "defenseEvents") => [
     ...new Map(
-      [...days]
-        .flatMap(([day, saved]) => saved[side].map((event) => [event, day] as const))
-        .filter(([event]) => {
+      legendDays
+        .flatMap((saved) => saved[side])
+        .filter((event) => {
           const time = Date.parse(event.battleTimestamp);
           return time >= start && time <= now;
         })
-        .map(([event, day]) => [event.battleId, [event, day] as const]),
+        .map((event) => [event.battleId, event] as const),
     ).values(),
   ];
   return {
@@ -74,9 +70,9 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
     today,
     seasonStart,
     daysSaved: days.size,
-    daysExpected: Math.round((today - start) / DAY_MS) + 1,
+    daysExpected: Math.round((today - start) / DAY_MS),
     incomplete: [...days.values()].some((day) => !day.battlesComplete),
-    attack: summarize(events("offenseEvents"), today),
-    defense: summarize(events("defenseEvents"), today),
+    attack: summarize(events("offenseEvents"), legendDays.length),
+    defense: summarize(events("defenseEvents"), legendDays.length),
   };
 }

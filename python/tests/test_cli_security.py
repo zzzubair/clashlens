@@ -185,7 +185,7 @@ def test_collector_threads_stay_under_the_container_limit(
     with pytest.raises(Started) as started:
         _run_collector(arguments)
     assert started.value.args == threads
-    # 64 of the container's 512 processes and threads stay for everything else.
+    # 32 upload threads and 64 spare fill the rest of the container's 544.
     assert sum(started.value.args) <= 448
 
 
@@ -216,6 +216,7 @@ def test_ops_rejects_a_bad_check_limit_before_stopping_and_forwards_a_good_one(
 source "$1" help >/dev/null
 STATE_DIR="$2"
 MODE=fixture
+RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)
 [[ -z "$3" ]] || CONFIG[CLASHLENS_REGULAR_PARALLELISM]=$3
 [[ -z "$4" ]] || CONFIG[CLASHLENS_PROMOTION_RECHECK_PER_SECOND]=$4
 for step in require_host load_release guard_generated_units guard_existing_resources \
@@ -267,6 +268,7 @@ def test_ops_rejects_a_bad_promotion_rate_before_stopping(
 source "$1" help >/dev/null
 STATE_DIR="$2"
 MODE=fixture
+RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)
 CONFIG[CLASHLENS_PROMOTION_RECHECK_PER_SECOND]=$3
 for step in require_host load_release guard_generated_units guard_existing_resources \
     guard_trusted_proxy_ip guard_network_subnet cleanup_stale_admin_state ensure_linger \
@@ -294,13 +296,15 @@ up_stack
 @pytest.mark.parametrize(
     ("pids", "setting", "keys", "accepted"),
     [
-        # Six keys at 25 a second: 300 save and 42 request threads, plus 64.
+        # Six keys at 25 a second: 300 save, 42 request and 32 upload
+        # threads, plus 64.
         ("512", None, 6, True),
-        ("400", None, 6, False),
-        ("400", "256", 6, True),
-        # Nine keys at 28 a second: 384 save and 60 request threads, plus 64.
-        ("512", None, 9, True),
-        ("507", None, 9, False),
+        ("437", None, 6, False),
+        ("394", "256", 6, True),
+        # Nine keys at 28 a second: 384 save, 60 request and 32 upload
+        # threads, plus 64.
+        ("540", None, 9, True),
+        ("539", None, 9, False),
     ],
 )
 def test_ops_refuses_collector_threads_beyond_its_process_limit(
@@ -655,32 +659,52 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
     }
 
 
-@pytest.mark.parametrize("extra,queue", [
-    (["--day-1", "preview", "--season", "1791176400"], False),
-    (["--day-1", "queue", "--season", "1791176400"], True),
-    (["--day-1", "queue"], None),
-    (["--day-1", "queue", "--first-logs", "queue", "--season", "1791176400"], None),
+@pytest.mark.parametrize("extra,action", [
+    (["--repair", "preview", "--season", "1791176400"], "preview"),
+    (["--repair", "queue", "--season", "1791176400"], "queue"),
+    (["--repair", "receipt", "--season", "1791176400"], "receipt"),
+    (["--repair", "queue"], None),
+    (["--repair", "queue", "--boards", "queue", "--season", "1791176400"], None),
+    (["--repair", "queue", "--armies", "queue", "--season", "1791176400"], None),
 ])
-def test_day_1_recalculation_needs_a_season_and_runs_alone(
-    monkeypatch, capsys, extra: list[str], queue: bool | None
+def test_season_repair_needs_a_season_and_runs_alone(
+    monkeypatch, extra: list[str], action: str | None
 ) -> None:
     calls = []
     monkeypatch.setattr("clashlens.battle_day_repair.Database",
                         lambda url: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(
-        "clashlens.first_battle_log.requeue_day_1",
-        lambda database, season, *, queue, max_jobs: calls.append(
-            (season, queue, max_jobs)) or {"queued": 0},
+        "clashlens.domain_repair.season_repair",
+        lambda database, season, action, *, max_jobs: calls.append(
+            (season, action, max_jobs)) or {},
     )
     arguments = ["republish-current-season", "--database-url",
                  "postgresql://worker@postgres/clashlens", *extra]
-    if queue is None:
+    if action is None:
         with pytest.raises(SystemExit):
             main(arguments)
         assert calls == []
     else:
         assert main(arguments) == 0
-        assert calls == [("1791176400", queue, 100)]
+        assert calls == [("1791176400", action, 100)]
+
+
+@pytest.mark.parametrize("report,status", [({"resets": []}, 0), ({"refused": "window"}, 1)])
+def test_army_corrections_command_passes_its_cap_and_fails_when_refused(
+    monkeypatch, report: dict[str, object], status: int
+) -> None:
+    calls = []
+    monkeypatch.setattr("clashlens.battle_day_repair.Database",
+                        lambda url: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(
+        "clashlens.boundary.queue_army_corrections",
+        lambda database, season, *, queue, max_jobs: calls.append(
+            (season, queue, max_jobs)) or report,
+    )
+    assert main(["republish-current-season", "--database-url",
+                 "postgresql://worker@postgres/clashlens", "--armies", "queue",
+                 "--max-jobs", "2", "--season", "1791176400"]) == status
+    assert calls == [("1791176400", True, 2)]
 
 
 @pytest.mark.parametrize("value", ["0", "1001", "many"])

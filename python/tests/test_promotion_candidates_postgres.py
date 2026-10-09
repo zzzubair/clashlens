@@ -68,7 +68,8 @@ def test_lab_list_loads_once_keeps_newer_checks_and_skips_tracked_players(
             + f"#9QQ,105000034,,{older}\n"
             + f"#0PP,105000035,4800,{older}\n"  # saved profile checked later: left out
         ) == 0
-        assert json.loads(capsys.readouterr().out) == {"added_or_updated": 2, "read": 4}
+        loaded = json.loads(capsys.readouterr().out)
+        assert (loaded["added_or_updated"], loaded["read"]) == (2, 4)
         assert _rows(connection_info) == [
             ("#8QQ", 105000035, 4950, datetime.fromisoformat(newer)),
             ("#9QQ", 105000034, None, datetime.fromisoformat(older)),

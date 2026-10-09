@@ -32,8 +32,8 @@ caps at 20,000 tags and rejects duplicate input and later new imports. Launch
 lists will use the [verified manual operator procedure](manual-list-import-validation.md),
 which preserves existing identities and queues checks through existing functions.
 No reusable import feature is needed. Live import remains pending. Weekly
-scheduling and reuse are implemented behind the
-[default-off switch](collector-polling.md#weekly-eligibility-switch); production
+scheduling and reuse are implemented behind a
+[switch](collector-polling.md#weekly-eligibility-switch); production
 verification remains pending. For trial sizes and commands, see
 [local development](../README.md#local-development).
 For production key allocation and expansion, see
@@ -79,6 +79,39 @@ image. `build` records the exact image IDs and a fingerprint of every source,
 migration, and unit input; `up` refuses to mix those images with changed init
 files. A new build is only staged: operator and recovery commands keep using
 the last successfully started release until `up` promotes the new one.
+
+Before it stops anything, `up` checks the release's images and secret files,
+writes its settings and unit files into a scratch folder in the state
+directory and deletes it again, so a value they reject stops `up` while the
+old release runs with its own files. It then checks that the release
+includes every migration the running database has already applied (otherwise
+it refuses with `the database has migrations N that this release lacks`), and
+tries the release's pending migrations on the running database in one
+transaction that is rolled back, refusing with `a pending migration failed
+when tried on the running database; nothing was stopped or changed` if one
+fails. The trial waits at most 5 seconds for each lock, but once it has one it
+holds it until the rollback, so a migration that rewrites a large table slows
+the old release for as long as it takes. A migration that builds an index
+concurrently cannot run inside a transaction and is only run for real. Only
+after services stop does `up` write the settings, secrets and unit files in
+place and apply the migrations, as before. A database that is not running yet
+gets only the release check, after it starts. If `up` fails after it has
+stopped services, it
+leaves them stopped, records the deploy as failed and starts the alert
+schedule again, so the alert check sends `A deploy failed and left Clash Lens
+stopped` within a minute and retries delivery every minute; the next `up` that
+succeeds clears it.
+Each successful `up` keeps the release it replaced in `previous-release.env`
+in the state directory, with that release's images and source revision.
+
+To roll back, do not reverse a migration. Revert the code change on `main`
+while keeping every migration file, then `./ops build` and `./ops up` that
+revert. The previous release can read the database only if no migration since
+it changed a table it reads; check the migrations listed between the two
+revisions before choosing this. A worker-only or API-only change deploys with
+`./ops up --keep-collector`, which restarts only the worker, API and website
+and leaves the collector, database, pod and network running, as described
+below.
 
 ## Clean Fedora fixture
 
@@ -216,11 +249,62 @@ The private relay address is **100.122.10.22**, named
 The server runs Ubuntu 24.04, Docker and Tailscale. The relay code is in
 `/opt/clashlens/egress-proxy`; generated configuration is in
 `/root/.local/share/clashlens-egress-proxy`. `deploy/egress-proxy/deploy.sh`
-runs Tinyproxy without root privileges, with a read-only filesystem, a 64 MiB
-memory limit, at most 50 connections, and warning logs capped at three 10 MB
-files. It holds no API keys or response archive. With six regular keys and one
-interactive key, the collector's default connection limit is 42, leaving eight
-of the proxy's 50 connections for separate token-verification traffic.
+runs Tinyproxy without root privileges, with a read-only filesystem, a 128 MiB
+memory limit, 128 processes and threads, at most 96 connections, and warning
+logs capped at three 10 MB files. It holds no API keys or response archive.
+On 8 October 2026 it held 48 connections against a limit of 50 then, so a
+slower API could have run it out.
+
+The 96 connections are shared out:
+
+| Caller | At most | Why |
+| --- | ---: | --- |
+| Collector | 64 | Six per key: up to nine regular keys and the interactive key. It refuses to start with settings above 64. Eight regular keys use 54. |
+| Player verification in the API | 20 | Its calls run on the API's worker threads: 20 on rogue's 16 processor threads. |
+| Operator commands (`probe`, `recover-discord`) | 1 each | Run by hand, one request at a time. |
+
+That leaves at least 10 spare while a connection closes and another opens.
+`python/tests/test_collector_proxy.py` sends this full load at once, 54
+collector and 20 verification connections, through a stand-in relay that
+enforces `MaxClients` from the configuration `deploy.sh` writes. The stand-in
+is not Tinyproxy, so Tinyproxy's own process and memory limits are not tested.
+Tinyproxy runs a thread per connection, hence 128 processes and threads.
+A changed limit takes effect only when `deploy.sh up` is run again on the relay
+(below).
+
+The collector's `/metrics` shows its side. `clashlens_collector_api_connection_limit`
+is the most connections it keeps open, so the most relay tunnels it holds, and
+`clashlens_collector_api_requests_in_flight` how many of them a request is using.
+`clashlens_collector_relay_tunnels_open` counts the tunnels it holds now: those
+a request is using and idle ones kept open for the next request. A tunnel
+counts from when its connection is fully set up (connected to the relay, the
+relay's tunnel accepted and the encrypted handshake with the official API
+done) until the collector closes it; an idle one the relay has closed stops
+counting when next checked.
+`clashlens_collector_relay_requests_total` counts requests sent through the
+relay; `clashlens_collector_relay_admission_failures_total` those the relay
+refused, closed unanswered as it does at its connection limit, or could not be
+reached for, and `clashlens_collector_relay_timeouts_total`
+those that ran out of time, including ones queued at a full relay. A
+connection to the relay that runs out of time counts in both. Timeouts divided
+by requests, using growth between two reads, is the timeout share.
+`clashlens_collector_relay_reachable` is 1 after a request got through the relay
+and 0 after one could not reach it; it appears after the first request.
+In `clashlens_collector_requests_total`, the same failures show as
+`outcome="proxy_failure"`, `outcome="proxy_timeout"` (the relay connection ran
+out of time) and `outcome="timeout"` per endpoint.
+
+The API's `/operatorz` shows player verification's side under
+`player_verification_relay`: `tunnels_open` (each verification opens its own
+tunnel, counted from when its connection is fully set up in the same way until
+the verification call returns), `requests`, `timeouts`, `admission_failures` and
+`reachable` (`null` before the first verification). Counts on both sides reset
+when the process restarts.
+
+Both tunnel counts approximate the relay's own connection count. The relay
+counts a connection from when it is accepted, so while a connection is being
+set up, or one that stalls during setup is waiting to time out, the relay holds
+a slot these counts do not show yet.
 
 The filter allows only `CONNECT api.clashofclans.com:443`, an encrypted tunnel
 whose API certificate the caller still checks. Ordinary HTTP requests, other
@@ -420,6 +504,20 @@ They keep running only when all of these hold since the last successful `up`:
   printed;
 - all four are running and the collector and PostgreSQL containers are healthy.
 
+The collector's image holds all of `python/src`, so a release that changes
+only worker or API code still has a different collector image, and a plain
+`./ops up` restarts all four on any Python change. The narrow path for a
+worker-only or API-only change is the manual `./ops up --keep-collector`,
+which the person deploying chooses: it keeps the running collector image
+instead of the new one. Every other condition above must still hold, so a
+release that also changes the collector's or PostgreSQL's settings, service
+files or secrets, the PostgreSQL image, or any migration still restarts all
+four, on the new collector image. `up` cannot tell collector code from worker
+code, so use it only when the release changes no collector code; the next
+`up` without it starts the new collector image. Choosing the collector image
+automatically is a recorded follow-up. `--keep-collector` and
+`--restart-collector` cannot be combined.
+
 Otherwise, or with `./ops up --restart-collector`, `up` restarts all four as
 before. It prints which happened and why, for example `Restarting the collector
 with the database, pod and network: changed collector settings.` The API,
@@ -559,15 +657,23 @@ protected copy off rogue so losing the host does not also lose recovery access.
 Rotate credentials by replacing the file, running the approved `ops up`,
 verifying backup and restore, then revoking the old key in Cloudflare.
 
-The timer starts a full backup Sundays at 03:00 UTC. Missed calendar runs are
+The timer starts a full backup every 12 hours, at 00:00 and 12:00 UTC, well
+away from the 04:00–07:00 UTC Reset work. Missed calendar runs are
 caught up; restarting the stack does not add another full backup. Run
 `./ops backup` once during the approved initial rollout. PostgreSQL continuously uploads
-its change log, called WAL, with `archive_timeout=300`. A successful full backup
-then prunes backups older than the full backup completed before seven days and
-one hour ago. It retains that backup and all newer backups and WAL. Until such
-a backup exists, pruning deletes nothing. Extra manual backups cannot shorten
-the recovery window. The one-hour margin covers scheduling and backup duration;
-this typically retains two or three weekly full backups, rather than exactly two.
+its change log, called WAL, with `archive_timeout=300`. A restore can target any
+point in the last ten days, chosen on 2026-10-08 so a weekly tournament's
+promotions and demotions leave about three spare days to notice and fix a
+problem. A successful full backup
+then prunes backups older than the newest backup completed before ten days and
+one hour ago. It retains that backup, all newer backups and WAL, and, when that
+backup is a WAL-G delta backup (only the pages changed since an earlier backup),
+the full backup its chain starts from (`wal-g delete before FIND_FULL`). Only
+full and delta backup names are accepted. Delta backups are not switched on.
+Until such a backup exists, pruning deletes nothing. Extra manual backups cannot
+shorten the recovery window. The one-hour margin covers scheduling and backup
+duration; right after each prune this keeps about 21–22 full backups and about
+10.5–11 days of WAL.
 
 ```sh
 ./ops backup                  # upload now, then apply age-based retention
@@ -587,9 +693,11 @@ Release fingerprints use byte-ordered filenames so terminal and scheduled-servic
 language settings cannot make unchanged code appear different. Rebuild and deploy
 after upgrading this check; do not edit a saved fingerprint or bypass the guard.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
-missing/unreachable remote backups, a full backup older than eight days, disabled
+missing/unreachable remote backups, a newest full backup older than 24 hours, disabled
 archiving, or completed WAL files waiting over ten minutes. No WAL activity during
-an idle period is not itself failure. `./ops alert-check` alerts on this command
+an idle period is not itself failure. It also prints how many GB of WAL a restore
+to now would replay after the newest backup, the part of a restore that grows
+between backups; it does not fail on that number. `./ops alert-check` alerts on this command
 and disk space: PostgreSQL retains unarchived WAL locally during a storage outage
 and that queue is not capped by `max_wal_size`. Never delete unarchived WAL to
 free space.
@@ -614,10 +722,22 @@ Commit flushing, full-page writes, checksums and archiving are unchanged. A
 Crash recovery replays the change log written since the last checkpoint.
 `max_wal_size` is a soft limit that heavy load or stalled archiving can exceed,
 so 2 GB is the usual size, not a ceiling: on rogue 845 MB took 90 seconds plus
-14 seconds to save, so 2 GB takes about four minutes. The health check ignores
-failures for its first five minutes, but the unit still waits for a healthy
-check within its five-minute start limit (`TimeoutStartSec`), so a replay that
-runs longer is stopped and started again.
+14 seconds to save, so 2 GB takes about four minutes. From 30 Sep to 8 Oct
+2026 the most written between two of its 3,008 checkpoints was 1.1 GB, so a
+crash just before a checkpoint finishes replays up to about 2.2 GB. A stopped
+replay only starts again from the beginning, so no fixed time limit stops one:
+the unit waits for the database as long as it takes (`TimeoutStartSec=infinity`),
+and the regular health check, which kills the container after twelve failures
+in a row, starts only once a startup check (`HealthStartupCmd`) finds the
+database ready. Every 10 seconds until then, the startup check reads which
+16 MB change-log file PostgreSQL's startup process is replaying, by its full
+24-character name in that process's name, and stops the
+database (an immediate shutdown, which systemd restarts) only when that file
+has not changed for 10 minutes; at the measured speed a file takes about two
+seconds. If it cannot see a replay at all, it waits rather than stop one.
+`./ops up` waits with the unit. The alert check warns once the database has
+been starting for five minutes; `./ops logs postgres` shows the replay's
+progress.
 
 The collector remembers, in memory, the used fields it last committed for each
 player and endpoint. An ordinary response that matches them is recorded in the
@@ -654,10 +774,12 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
 `/run/secrets/walg.json` with uid/gid 70 and mode 0400.
 
 1. Run `wal-g --config /run/secrets/walg.json backup-list --detail --json`.
-   Choose a full backup whose **finish time precedes the desired recovery time**.
-   `LATEST` is unsuitable when recovering an older point.
+   Choose the newest backup whose **finish time precedes the desired recovery
+   time**; a delta backup fetches its chain itself. `LATEST` is unsuitable when
+   recovering an older point. Note its `start_lsn`.
 2. Run `wal-g --config /run/secrets/walg.json backup-fetch /var/lib/postgresql/data/pgdata BACKUP_NAME`
-   against the new volume. Create `recovery.signal` in that directory.
+   against the new volume, timing it: that is the download time. Create
+   `recovery.signal` in that directory.
 3. Start PostgreSQL with that volume and `PGDATA`, the read-only secret,
    `hba_file=/etc/clashlens/pg_hba.conf`, `archive_mode=off`, an empty
    `archive_command`,
@@ -666,27 +788,50 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
 4. Confirm `SHOW hba_file` returns `/etc/clashlens/pg_hba.conf`, and both
    `pg_is_in_recovery()` and `pg_is_wal_replay_paused()` are true,
    and the log says recovery reached the chosen time. Merely accepting queries
-   does not prove the target was reached. Compare expected accounts, saved-player
-   links, player history, battle links and army summaries. Read every retained raw
-   object referenced by the sample and verify its hash. Missing required evidence
+   does not prove the target was reached. The time from starting PostgreSQL to
+   that log line is the replay time; `pg_last_wal_replay_lsn()` minus the
+   backup's `start_lsn` is the WAL it replayed, and the two give the replay rate
+   that decides how much WAL fits in the restore target. Compare expected
+   accounts, saved-player links, player history, battle links and army
+   summaries. Read every retained raw object referenced by the sample and
+   verify its hash, timing it as the raw-check time. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
-5. Repeat for the seven-day-old boundary, using a full backup from before it.
+5. Repeat for the ten-day-old boundary, using a full backup from before it.
    If the restore could take more than two days while production keeps
    running, first run `systemctl --user stop clashlens-archive-retention.timer`.
    Repeat affected checks after the season history and cleanup work in #140
    changes stored data or maintenance.
 
+Expected timings, from the 8 October 2026 real-size rehearsal (2 processor
+cores at the lowest scheduling priority, beside live production): fetching a
+15.55 GB compressed full backup took 268 seconds, about 58 MB/s, and replay ran
+at about 51 GB of change log an hour. With a full backup every 12 hours, a
+restore replays at most about 12 hours of change log after its full backup:
+about 53 GB before upload compression (about 45 GB as stored, from 105 GB/day
+before compression and 89.36 GB/day stored), so about 1 hour of replay plus
+5–8 minutes to fetch a 16–27 GB compressed full backup, and about half that on
+average. The rehearsal did not measure
+an unthrottled replay or the raw-object check time.
+
 ### Targets, cost and remaining rollout checks
 
 The intended maximum data loss is **5 minutes plus upload delay**, not a hard
-five-minute guarantee. A provider outage can exceed it. The initial operational
-restore target is **60 minutes**, pending measurement at production size.
-Seven-day recovery starts only after seven days of uninterrupted archived history.
+five-minute guarantee. A provider outage can exceed it. The worst-case restore
+time target is about **1 hour** at today's change-log rate, with a full backup
+every 12 hours, chosen by the owner on 2026-10-08 over daily full backups with
+a 2-hour worst case (see
+[expected timings](#restore-into-a-separate-database)).
+Ten-day recovery starts only after ten days of uninterrupted archived history.
 
-The approved pricing model assumed 100 GB per full backup and 30 GB of WAL per
-seven days. Keeping two to three full backups plus up to roughly 14 days of WAL
-models **260–360 GB**, about **$3.75–$5.25/month** at the #120 R2 rate and free
-allowance, rather than its original roughly $3 estimate. This is a model, not
+On 8 October 2026 R2 held 707.87 GB of WAL, uploaded at 89.36 GB/day after
+compression, and the newest full backup was 15.55 GB compressed (37.47 GB
+before compression); the 64.77 GB database implies about 26.8 GB per full.
+Keeping 21–22 fulls of 16–27 GB (about 330–590 GB) plus 10.5–11 days of WAL
+(about 940–985 GB) models about **1.27–1.57 TB**, about **$19–24/month** at R2
+Standard's $0.015/GB-month, against 1.25–1.88 TB of WAL alone with weekly
+fulls. Each extra full adds its size, so the cost grows with the database. The
+owner accepted roughly 3–6 GBP/month of added storage for the 12-hour
+schedule. This is a model, not
 measured production growth. Manual backups add up to another full backup each
 until they age out; failed uploads can leave partial objects requiring separately
 reviewed cleanup. Real traffic must be measured before accepting the €60 total
@@ -712,9 +857,11 @@ data loss. The earlier target was minutes old, **not seven days old**.
 The backup sorting fix #134 was merged and deployed; its scheduled service was
 also invoked successfully, as recorded in #122. The September 27 03:00 UTC backup
 fired naturally, as recorded in [#140](https://github.com/zzzubair/clashlens/issues/140).
-Before closing #122, measure data loss and restore time at the revised size,
+The 8 October rehearsal measured restore time at production size by restoring
+a point 4.4 days old and reading its player count; it did not read raw objects.
+Before closing #122, measure data loss,
 verify restored raw references across protected expiry, restore a genuine
-seven-day-old point, and verify host reboot. Earlier small restores and service
+ten-day-old point, and verify host reboot. Earlier small restores and service
 checks do not prove those remaining gates. Keep real collection disabled until
 backups and #124 alerts are proven. This documentation update does not deploy
 or close #122.
@@ -763,8 +910,9 @@ Enable it in two approved steps:
 
 1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its per-batch
    counts and bytes for responses to delete and mark in the deployment report.
-2. Only after #122/#129 prove the seven-day-old restore above and that report
-   is approved, set `apply` and run `./ops up`.
+2. After that report is approved, set `apply` and run `./ops up`. The owner
+   approved `apply` on 2026-10-08, after the real-size restore rehearsal above,
+   with the 12-day recovery hold.
 
 Throughput is unmeasured. At an assumed 50 ms per deletion, deleting 1,000
 objects takes 50 seconds. With the 30-second gap, that is a theoretical
@@ -804,11 +952,47 @@ any required container is absent, stopped, or unhealthy. Logs come from the user
 journal, which includes both container output and systemd lifecycle failures
 without printing configuration files.
 
+Podman checks each container every 30 seconds and kills it after six failed
+checks in a row, about three minutes. The collector's check is `/livez` on
+port 8081. It fails only when the collector needs a restart: one of its three
+main loops (player checks, queued requests, spool cleanup) has not come
+round for 20 minutes, its spool or a saved-response handoff failed, or every
+regular or interactive key is quarantined. It never waits on the database, a
+spool lock or a thread. A database call made by the loop itself, or by work it
+started, holds that verdict off for up to 20 minutes from when the call began,
+so a slow database slows collection without getting the collector killed; on
+7 Oct 2026 it was killed 13 times for that. Another loop's call never holds it
+off: until 8 Oct 2026 any running call did, and player checks keep one running
+almost all the time, so a stuck Reset or upload loop could pass for ever. Every
+collector statement also stops after 60 seconds (5 minutes for the Reset
+sweep's), five times the slowest seen from 1 to 8 Oct 2026, so no database wait
+lasts indefinitely; a stopped statement is retried, then its loop stops and the
+collector restarts. The collector restarts its uploads process by itself when
+that exits or stops reporting, so a stuck upload never restarts collection; a
+spool read failure there still fails `/livez` as `spool_io_failure`. The port opens
+before startup recovery, which answers `starting`, and failures in the first
+five minutes are ignored; the five-minute start limit still applies. `/readyz`
+still reports the database, spool capacity and keys for a person to read.
+
+The worker's check is `clashlens.cli ready`. Each worker thread and the
+maintenance timer write when they last came round, and the check fails when one
+of them has not for 20 minutes, whether or not the others keep going, or for an
+hour for the thread that runs board builds and for the timer. Only a progress
+file that cannot be read falls back to its own age: not written for 20 minutes. The longest finished job
+from 1 to 8 Oct 2026 took 465 seconds, or 844 seconds for an army build.
+
+PostgreSQL logs statements slower than 5 seconds, waits for a lock longer than
+1 second, and every automatic vacuum and statistics refresh, without query
+values. On 6 Oct 2026 its log was 3.3 MB; at the 2,100 automatic runs a day
+seen since 18 Sep, these add roughly 2–3 MB a day, more on a slow day.
+`./ops` turns the slow-statement log off for its password changes.
+
 ## Private Discord alerts
 
-`./ops alert-check` checks the fourteen conditions below and posts changes to the
-private operator channel through an incoming webhook. Create the service-owned
-mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
+`./ops alert-check` checks the eighteen [alert conditions](alerts.md) and posts
+changes to the private operator channel through an incoming webhook. Create the
+service-owned mode-600 file
+`/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
 `CLASHLENS_DISCORD_ALERT_WEBHOOK_FILE` overrides the full path. Store only the URL
 in that file. Never put it in `app.env`, command arguments, logs or documentation.
@@ -822,247 +1006,15 @@ Both units use `PartOf=clashlens.target`. The service has no dependency on a
 healthy collector or API, so failed processes cannot prevent the check starting.
 Fixture mode does not install or start Discord alerts. `./ops down` records an
 intentional stop and stops the timer; manual checks also stay quiet until a
-successful `./ops up`. Checks also stay quiet while `up` starts the stack.
+successful `./ops up`. Checks also stay quiet while `up` starts the stack,
+unless it fails after stopping services: then it starts the timer again and
+the checks report the failed deploy.
 Time deliberately stopped does not count as a fetch gap.
 
 ### Alert conditions
 
-The thresholds below define when alerts fire. For investigation and recovery,
-use the [operating notes](operating.md#respond-to-alerts).
-
-- No successful official API fetch for **600 seconds**, excluding time within
-  **04:55–05:00 UTC**. This uses the collector's persisted last-success age.
-  With no success yet, the clock starts at the first check. Missing metrics
-  continue that clock and fail the check. Reset collection after 05:00 must
-  still progress; an unfinished Reset sweep does not suppress alerts forever.
-- Spool bytes above **80% of `CLASHLENS_SPOOL_MAX_BYTES`**, spool objects above
-  **80% of `CLASHLENS_SPOOL_MAX_OBJECTS`**, or either filesystem holding the spool
-  or PostgreSQL volume above **80% used**. Exactly 80% does not trigger.
-- **More than three automatic restarts of any one production Clash Lens service
-  in the preceding hour**, counted from systemd's structured restart journal
-  events. Preview units (`clashlens-preview-*`) are not counted.
-  Counter resets and checker restarts do not erase this history. Keep at least
-  one hour of user journal history.
-- **Any completed `./ops backup-status` run with a non-zero exit alerts
-  immediately**. The alert check invokes the command with a 25-second limit;
-  [backup operations](#postgresql-backups-and-recovery) documents its failure
-  conditions and freshness limits. Only timeouts and errors running the command
-  get a 15-minute grace period, because a service restart can briefly stall Podman.
-  Every failed check makes `alert-check` exit unsuccessfully and logs a fixed
-  diagnostic to the alert service journal, including during the grace period.
-  Command output and exception details stay private. A completed successful
-  run clears the grace clock and any active alert. Delayed alerts and their
-  recoveries report when the timeouts or errors first began, or the last
-  intentional resume if later.
-- **A failed private player-data read**, including when process readiness says
-  healthy. The check enters the private API container, checks `/readyz`, and
-  signs a `/v1/players/search` read limited to one result. Keys stay inside the
-  container and response data is discarded. An empty search result is valid.
-- **A player check at least 600 seconds overdue**, from the collector's
-  `oldest_due_age_seconds`. This catches collection that slows down without
-  stopping, such as a slow official API.
-  It is neither raised nor cleared while Reset work is unfinished, measured by
-  `clashlens_collector_reset_total > clashlens_collector_reset_terminal`, or while
-  those metrics or the overdue age are missing. Checks resume as soon as Reset
-  work finishes, with no fixed clock window.
-- **A widely or badly stale Live Leaderboard for five minutes**: more than
-  **5%** of entries last updated over ten minutes ago, or any one entry over
-  **20 minutes** ago, on every check for **300 seconds** (six checks in a
-  row; an unavailable check restarts the count but keeps an open alert open).
-  Exactly 5% or exactly 20 minutes does not count. It is neither raised nor
-  cleared during the **04:55–05:00 UTC** Reset pause or while Reset work is
-  unfinished or unknown, measured as for the overdue-check alert, because both
-  leave most players over ten minutes old for a while; the five minutes start
-  again afterwards. Staleness uses the
-  [Live Leaderboard membership and freshness rules](domain.md#live-leaderboard-ordering). The check
-  enters the private API container and runs the Live Leaderboard's own query,
-  printing only the stale count, the entry count and the oldest entry's age in
-  seconds, with the same not-found exclusion.
-  [Migration 0043](../deploy/migrations/0043_api_profile_not_found_read.sql) adds
-  the durable not-found time to the existing response state, fills it from
-  retained responses, and grants the private API read access. It adds no index
-  or per-response rows.
-  If the query fails, the check fails and preserves
-  the existing alert state. The displayed time follows the
-  [player page confirmation rule](domain.md#player-page-freshness), including
-  across restarts. Migration 0040
-  backfills existing confirmations from accepted profiles and successful saved
-  responses. It copies a content identifier only when the latest saved response
-  is a successful profile already applied to the shown profile; otherwise the
-  identifier stays unknown until the next profile is applied.
-  It retains one time and one content identifier per player, about
-  1 MiB for 13,000 players, with no growing check history. A valid empty
-  leaderboard reports `0 0 0`, has no freshness breach, and permits an existing
-  freshness alert to recover. The thresholds come from Oct 3, 2026, when
-  production used about 130 of its 150 official API requests per second. The
-  old any-stale-entry rule alerted at 18:30, 20:04, 20:10 and 21:10 UTC, the
-  first three recovering within 3 to 10 minutes. Read-only samples of the
-  11,870-entry board every 30 to 60 seconds found none over ten minutes old
-  from 20:41 to 20:56 UTC, with the oldest under eight minutes. After the
-  21:20 UTC deploy restarted the stack, 100 to 380 entries (0.9% to 3.2%) were
-  over ten minutes old in every sample from 21:25 to 21:36, and the oldest
-  peaked at 15 minutes. That is normal near the request limit, so 5% and
-  20 minutes leave room above it. A collector that stops fetching but still
-  reports its measurements passes 20 minutes about 8 minutes after it stops,
-  so it alerts about 13 minutes after. One that stops reporting them leaves
-  Reset progress unknown, so the fetch-gap alert reports it instead.
-  Use the [collection and processing measurements](operating.md#collection-or-processing-behind)
-  to distinguish delayed collection from delayed processing.
-- **A new permanent failure of a processing job or raw-response upload in
-  the last 24 hours**, from the collector's
-  `newest_failed_processing_age_seconds` and `newest_failed_upload_age_seconds`.
-  Failed jobs stay failed, so this reports new failures. Its recovery means no
-  new permanent failure for 24 hours, not that anything was repaired: the failed
-  work stays failed until someone fixes it. Failures older than that, such as
-  those present at deployment, do not alert. A missing age counts as unknown
-  unless the matching `failed_processing` or `failed_uploads` count is zero.
-  Seeing a failed upload's bytes again does not restart its 24 hours.
-  A manual retry of a failed item clears the alert early; a repeat failure
-  raises a fresh alert.
-- **Saved work waiting too long**, as two separate alerts:
-  - ordinary processing work waiting too long: daily result calculations
-    waiting at least **15 minutes**, from the collector's
-    `oldest_job_reconcile_ranked_day_age_seconds`, or any ordinary work
-    (saved responses, daily calculations and army re-decoding) waiting at
-    least **30 minutes**, from `oldest_pending_processing_age_seconds`. Both
-    share one alert, so daily work reaching 30 minutes sends no second
-    message, and it recovers only when both are below their limits. A missing
-    daily age on an otherwise complete measurement means no daily work is
-    waiting. There is no Reset exemption, and after an intentional resume
-    work that is already old alerts straight away. Leaderboard, analytics and
-    export builds are left out because on Oct 3–4 they routinely ran 24–63
-    minutes, which would have kept this alert open and hidden a real backlog.
-    The alert names the oldest kind of waiting work and its age, from the
-    collector's per-type `oldest_job_<work_type>_age_seconds`;
-  - a raw response waiting at least **one hour** to be uploaded to the
-    archive, from `oldest_pending_upload_age_seconds`. An upload's wait
-    starts when it is first saved, or when retired bytes come back for a
-    fresh upload. Retries, including an operator retry of a failed upload,
-    keep the original wait.
-
-  Since the Oct 1 worker fixes, the longest ordinary processing wait was 18
-  minutes and the longest upload wait under two minutes; Oct 1's stalls of up
-  to 3.7 hours would have alerted. Daily calculations normally finish within
-  11–13 minutes outside Reset, so the 15-minute limit has little margin and
-  measures old work, not proof that the worker stopped. On Oct 4 it would have
-  warned at 10:33, 11:07 and 11:46 UTC, during three near-stalls that the
-  30-minute limit missed. Expect the 30-minute alert on Reset
-  mornings whose processing takes longer than that: on Oct 3 ordinary work
-  passed 30 minutes at 05:43 and 06:38, and on Oct 4 it would have warned at
-  03:15 instead of 03:46.
-- **An early warning before a health-check kill**: the collector or worker
-  failed **2 health checks in a row**, from `podman inspect`'s failing
-  streak. Podman kills a container at 6, about three minutes, and its own
-  status stays `healthy` until then. The alert check reads this before its
-  slower checks and again after each one, and sends it as soon as it appears.
-  It is its own alert so an open backlog warning never hides it.
-- **An early warning when work falls behind**, one alert naming every reason
-  that holds:
-  - the oldest overdue job has waited **10 minutes**, or **45 minutes** between
-    05:00 and 07:00 UTC, from `oldest_pending_processing_age_seconds`. The
-    normal Reset on 6 Oct 2026 left work overdue for up to 35 minutes;
-  - fewer than **100 responses a minute** saved between 05:00 and 06:00 UTC,
-    from the collector's `responses_saved_last_minute`, counted from saved
-    rows (up to 1,000) in the minute before its sample. Normal Reset hours
-    save 420–2,700 a minute.
-
-  For either warning, a container that cannot be inspected, missing
-  measurements, or a sampled minute that starts before 05:00 leave it
-  unknown, so an open warning stays open. On 7 Oct 2026 Podman killed the
-  collector 13 times and the worker 4 times in 34 minutes with no alert.
-- **A Reset publication over an hour past its target time**: no publication
-  record for that Reset has published both its frozen leaderboard and its army
-  results an hour after the existing target, five minutes after Reset or ten
-  on Mondays. A Reset with no publication record at all counts 70 minutes
-  after it, for every Reset since the first record. The check enters the
-  private API container and prints only the count. It recovers only when
-  every counted Reset is published; a fresh Live Leaderboard does not clear it.
-  The one-hour grace is provisional: no Reset has published normally on
-  production yet. On Oct 2 collection took about 8 minutes and the Live
-  Leaderboard was fully fresh about 13 minutes after Reset. Tighten it once
-  real publication times can be measured.
-- **More than 10 untracked recent Legend I battlers**: players in a saved
-  Legend I battle of the current or previous Legend day who are not tracked
-  although their first such battle was saved over an hour ago. Players with a
-  saved profile showing a lower tier, observed after the time their latest
-  such battle was fought, such as Monday demotions, are left out, because they
-  are correctly no longer tracked. Opponent discovery checks a newly seen player within seconds, so a count above 10
-  means discovery is stalled or skipping players. On production on Oct 6, 2026
-  one of 11,756 Season battlers was untracked. The check enters the private
-  worker container, whose database role reads battles, and prints only the
-  count; it reads the battles of two Legend days (about 44,000 rows) through
-  their existing day lookup, and each battle's saved time through its existing
-  battle lookup.
-
-Missing collector measurements or a failed publication check never clear these
-alerts, and each recovers only when its own measurement does.
-
-- **A disk, restart-history, Live Leaderboard, Reset publication or untracked
-  battler check unreadable for 10 minutes** (600 seconds). These five checks otherwise
-  only log a diagnostic and stay unknown, which can hide their own problem
-  indefinitely. Each keeps its own first-failure time, so a check that
-  becomes readable and later fails again starts a new ten minutes, and one
-  check's failure never inherits another's. Several unreadable checks send
-  one alert. A readable check that reports a problem is not unreadable; its
-  own alert covers it. A valid Live Leaderboard result ignored during the
-  Reset pause or an unfinished Reset sweep is not unreadable either. The
-  fetch-gap, backup and private-read alerts already cover their own failed
-  checks and are left out, but an unreachable collector also makes spool
-  usage unknown, so it can raise this alert alongside the fetch-gap alert.
-  It recovers after the usual 15 clear minutes with none of the five
-  unreadable, so a different check failing during that time keeps it open.
-  Time deliberately stopped does not count towards the ten minutes. This
-  alert only works while `alert-check` itself runs, saves its state and
-  reaches Discord; it cannot report a dead timer, a crashed checker or a
-  broken webhook.
-
-Messages give the condition, its first observed UTC time and one next step.
-There is one alert and one recovery per condition; unchanged checks stay quiet.
-A recovery is sent only after **15 minutes** (900 seconds) of checks that all
-show the condition clear, and it reports when the condition first cleared.
-The 15 minutes count only from when Discord accepted the alert, so an alert
-delivered late on retry is never followed straight away by its recovery.
-If the problem returns sooner, the open incident continues with no new
-message, so several short incidents become one alert and one recovery.
-An unavailable measurement or an intentional stop restarts the 15 minutes,
-and an intentional stop also restarts the Live Leaderboard's five minutes.
-A problem that never alerted never sends a recovery.
-Missing disk measurements or restart history never clear an existing alert.
-`alerts.json` and `alerts.lock` live under the existing private ops state
-folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
-replaced with mode 600 and contains twelve condition records with at most one
-pending transition, one first-clear time and one last alert delivery time
-each, plus when backup check timeouts or errors and Live Leaderboard staleness
-began, and when each of at most four currently unreadable checks first failed.
-It keeps no growing event history, keys, URLs, player lists or account data.
-
-Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
-responses fail the command and leave the transition pending for the next run.
-A saved alert is retried even if the condition has since recovered, followed by
-its recovery. A lost HTTP acknowledgement or a crash after Discord accepts a
-message but before state is saved can cause one duplicate on retry. During
-extended delivery failure the bounded state preserves pending transitions and
-the latest condition, rather than accumulating every intervening change.
-
-Use these commands to discover problems with the alert mechanism itself:
-
-```sh
-systemctl --user status clashlens-alert.timer clashlens-alert.service
-journalctl --user -u clashlens-alert.service --since today
-./ops alert-check
-```
-
-The journal reports failed delivery or unavailable measurements without printing
-HTTP response bodies or exception details. Slow failed probes may delay the next
-check; the service times out after four minutes. This local checker cannot notify
-Discord while the host, user service manager or network is unavailable, when
-its disk is full, or after an out-of-band stop of `clashlens.target`. The
-[outside check](#outside-availability-check) covers an unreachable website.
-A real test alert was delivered and Zubair confirmed channel visibility; see
-[the delivery evidence](discord-alert-validation.md#owner-requested-live-delivery-test).
-Real recovery delivery, channel privacy and reboot behaviour still require a
-separately approved rehearsal.
-Capacity budgets remain deferred under #140.
+The [alert conditions](alerts.md) page lists each check's thresholds,
+recovery rules and delivery behaviour.
 
 ### Outside availability check
 
@@ -1198,29 +1150,56 @@ readings, results for the Legend day that just ended, and the board's snapshot
 and analytics builds are queued at priority 300 instead of 100
 (`PYTHON_RESET_PRIORITY` in [`db.py`](../python/src/clashlens/db.py)). A claim
 adds 10 for each minute live work has waited, while Reset-priority work keeps
-its fixed score, so they go first unless live work has waited 20 minutes,
-however long they have waited themselves. That only holds for live jobs among
-the 32 a claim looks at, picked by when each became due: a retried live job is
-due again from its retry time, so it can still wait behind Reset work longer
-than 20 minutes. On 2026-10-07 the collector's outage delayed about 19,000
+its fixed score, so by waiting time they go first unless live work has waited
+20 minutes, however long they have waited themselves. Each worker thread
+alternates (`RESET_FIRST_CLAIM_EVERY` in
+[`worker.py`](../python/src/clashlens/worker.py)): every other job it claims
+takes Reset-priority work first, and the rest take other due work first, with
+backfill still last. So while both wait, the board's Reset work and live work,
+such as new responses and the new day's results, each get at least half of the
+jobs every thread claims, however recently the live work arrived. On
+2026-10-08 the rest still went by waiting time, so live responses that arrived
+after 05:09 waited 21 minutes behind the Reset backlog. Build claims always
+take Reset-priority work first, so the board's build and checks never wait
+behind an army build. Among live work, a claim looks only at the 32 jobs that
+became due first, so a retried live job, due again from its retry time, can
+wait behind older live work. On 2026-10-07 the collector's outage delayed about 19,000
 Reset readings by 35 minutes; while they also earned the waiting bonus, no live
 reading was processed until they were all done, 40 minutes later, and live
 pages fell up to 59 minutes behind. Operator batches
-(`republish-current-season --first-logs` and `--day-1`) are queued at
-backfill priority, 25, which a worker thread only runs when no higher-priority
-work that thread can claim is due; a thread that does not process saved
-responses can run one while responses still wait. A claim from the newest-job
-plan takes its planned job only if, in the same database statement, no
-Reset-priority work it could take is waiting: due, waiting on its saved
-response, or with an expired lease. If there is any, the same claim uses that
-order instead. Asking for one particular job by number still takes that job.
+(`republish-current-season --first-logs` and `--repair`)
+are queued at backfill priority, 25, which a worker thread only runs when no
+higher-priority work that thread can claim is due; a thread that does not process saved
+responses can run one while responses still wait. All worker processes together
+run at most two backfill jobs at once, one claim never takes more than one, and
+none starts while a live response or day result has been due 2 minutes or more
+and is still unfinished: waiting, waiting on its saved response, or leased,
+including one that keeps its lease after a lock conflict. A leased job counts
+until it leaves its lease, even after the lease runs out, because its work can
+still be running; queue maintenance clears dead ones
+([`background_pacing.py`](../python/src/clashlens/background_pacing.py)). On
+2026-10-09 six army re-decodes ran at once, 568 jobs were leased beside Season
+repair, and live responses fell to about 8,000 players over 2 minutes late. An
+army re-decode saves 10 battles per transaction and waits at most a
+millisecond for any lock: when a live job holds one, it rolls those 10 back and
+tries again a quarter second later, up to 20 times, so a live job waits at most
+for one group of 10. A live battle log never waits for a battle's lock: it
+skips a battle another job holds and leaves its armies to a later battle log
+that lists it. The
+website's delayed-updates notice counts live work and the latest finished
+Legend day's day-end calculation, not other backfill. On a thread's Reset-first
+turn, a claim from the newest-job plan takes its planned job only if, in the
+same database statement, no Reset-priority work it could take is waiting: due,
+waiting on its saved response, or with an expired lease. If there is any, the
+same claim uses that order instead. On the other turn it takes its planned
+job. Asking for one particular job by number still takes that job.
 The board maintenance pass waits at most 50 milliseconds for a Reset's lock
 and otherwise tries again on its next pass.
 
-Production runs one worker process, whose queue maintenance runs between
-batches. If maintenance in another worker process reaches an expired job on
-its last allowed attempt before restoration succeeds, it still fails the job
-as `lease_expired_max_attempts`. See
+Production runs `CLASHLENS_WORKER_PROCESSES` worker processes, 1 unless set,
+each with its own queue maintenance. If maintenance in another worker process
+reaches an expired job on its last allowed attempt before restoration
+succeeds, it still fails the job as `lease_expired_max_attempts`. See
 [`ObservationProcessor._process_claim`](../python/src/clashlens/worker.py) and
 the recovery cases in
 [`test_claim_jobs_postgres.py`](../python/tests/test_claim_jobs_postgres.py).
@@ -1234,6 +1213,9 @@ Listing and previewing are the default; a retry needs both one exact item and
 ./ops failed-items --work-id 123 --apply
 ./ops failed-items --upload-hash SHA256
 ./ops failed-items --upload-hash SHA256 --apply
+./ops failed-items --accept-job-id 123 --reason 'profile shape cannot be parsed'
+./ops failed-items --accept-job-id 123 --reason 'profile shape cannot be parsed' --apply
+./ops failed-items --replay-job-id 123 --replay-job-id 124 --reason 'parser v3 replay' --apply
 ```
 
 This command starts an ephemeral copy of the pinned Python image with an
@@ -1243,10 +1225,80 @@ authentication before restarting the collector and retrying archive
 configuration failures. Archive checksum or catalogue contradictions return
 `archive_integrity_repair_required` and are never requeued automatically.
 Failed profile and battle-log observation processing is replayed only through
-the existing audited `deploy/replay-request --observation-id ID --reason REASON`
-path. League-history, global, and derived processing failures require
-investigation. Transport failures are evidence governed by the normal work
-policy and are not manually requeued.
+the audited `clashlens_request_python_replay_v2` database function:
+`--replay-job-id` (repeatable, with a `--reason` of 8 to 500 characters) asks
+it for each failed job's saved response under that job's own parser and rules,
+switching the admin login to the `clashlens_replay_request` role for that one
+transaction, and queues all the jobs or none. The host-only
+`deploy/replay-request --observation-id ID --reason REASON` wrapper calls the
+same function, with `--parser-version` set to the failed job's parser
+(`supercell-battle-parser-v3` is accepted for battle logs only).
+League-history, global, and derived processing failures require
+investigation. A failed processing job that cannot be repaired can be
+accepted with `--accept-job-id` and a `--reason` of 8 to 500 characters: it
+keeps its failed state and evidence, the acceptance records `ops:` and the host
+account, the time and the reason, and the failed-work alerts stop counting it.
+A job can be accepted once; nothing undoes an acceptance. Transport failures
+are evidence governed by the normal work policy and are not manually requeued.
+
+## Worker processes
+
+In `app.env`, `CLASHLENS_WORKER_PROCESSES` (1 or 2, default 1) sets how many
+worker processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
+12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default about
+two thirds of them, 8 of 12) how many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
+(default 12, at most 16) each process's connections. All processes share the container's
+memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
+worker refuses to start with more than 16 connections a process or 38 in
+all; see [the database connection budget](architecture.md#structured-data-and-evidence)
+for how that fits with the other processes.
+
+The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
+is 2 processes of 16 threads, 12 for responses, and 16 connections each, 38
+database connections in all. Production keeps one worker process until both
+of these are true:
+
+- The owner has decided to run the second worker process.
+- A `./dev` trial of this setup has shown the combined resources and recovery:
+  both processes together under 3 GB of memory with one build running, swap
+  barely used, at most 38 worker database connections, and an interrupted
+  20,000-job backlog finished with every job done once.
+
+Only then, outside 04:00-07:00 UTC, turn it on by setting in `app.env`:
+
+```sh
+CLASHLENS_WORKER_PROCESSES=2
+CLASHLENS_WORKER_CONCURRENCY=16
+CLASHLENS_WORKER_RESPONSE_LANES=12
+CLASHLENS_WORKER_DATABASE_POOL_SIZE=16
+```
+
+then run `./ops up`. It restarts the worker, API and website, and leaves the
+collector and database running when their images and settings are unchanged.
+To undo it, remove those four lines and run `./ops up` again.
+
+Memory is expected, not yet measured, to stay well inside the 4 GB limit. At
+09:32 UTC on 8 October 2026 one process used 325 MB, with a peak of 887 MB in
+the 26 minutes since it started; earlier peaks were near 1 GB. A population
+build is the biggest use, and only one runs at a time across processes, so
+two processes are expected to peak at about 1.3 to 1.7 GB, adding roughly 0.3
+to 0.8 GB on the host, which then had 9.0 GB available.
+
+At the first Reset with two processes, check:
+
+- `./ops logs worker`: no `worker_process` lines, which mean a process exited
+  and the container restarted both. Each `worker_health` line belongs to one
+  process; the change in its `python_process_observation` and
+  `python_reconcile_ranked_day` stage counts between lines is its responses
+  and daily results per minute. Their `queue.kinds` show the overdue backlog
+  of each kind of work and how long the oldest has waited.
+- The board's first frozen publication time against 05:25 for the frozen
+  inputs and 05:30 for the published board.
+- `systemctl --user show clashlens-worker.service -p MemoryCurrent -p
+  MemoryPeak`, plus `free -m` showing at least 2 GB available and `vmstat 1 5`
+  showing little swapping.
+- At most 38 database connections for `clashlens_python_worker` in
+  `pg_stat_activity`.
 
 ## Support recovery
 

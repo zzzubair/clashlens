@@ -2,32 +2,85 @@
 
 from typing import Any
 
+from .past_reset_pacing import past_reset_build_hold
+
 
 def health_metrics(connection: Any) -> dict[str, int | float]:
     row = connection.execute(
         """WITH active_reset AS (SELECT sweep.id FROM collector_reset_sweeps AS sweep JOIN collector_work AS work ON work.sweep_id = sweep.id WHERE work.kind = 'reset_baseline' AND work.status IN ('pending', 'waiting_retry') ORDER BY sweep.boundary_at DESC, sweep.id DESC LIMIT 1),
         processing AS (
             SELECT job.work_type, count(*) AS pending_count,
+                   -- Reset readings, ended-day results and board builds since the latest Reset.
+                   count(*) FILTER (WHERE job.priority >= 300 AND job.created_at >= date_bin(
+                       interval '1 day', statement_timestamp(), timestamptz '2000-01-01 05:00:00+00')) AS reset_count,
                    greatest(0, extract(epoch FROM clock_timestamp()
                        - min(CASE WHEN job.status = 'pending'
                                   THEN greatest(COALESCE(observation.created_at, job.created_at), job.due_at)
                                   ELSE COALESCE(observation.created_at, job.created_at) END)
-                         FILTER (WHERE job.status <> 'pending' OR job.due_at <= clock_timestamp()))) AS age
+                         FILTER (WHERE job.status <> 'pending' OR job.due_at <= clock_timestamp()))) AS age,
+                   -- Unfinished due work, running or not: the wait counts from when it
+                   -- was saved, so claims, retries and an operator's retry never restart
+                   -- it. Builds the worker holds back for a past Reset
+                   -- (past_reset_pacing) are not waiting.
+                   greatest(0, extract(epoch FROM clock_timestamp()
+                       - min(COALESCE(observation.created_at, job.created_at))
+                         FILTER (WHERE (job.status <> 'pending' OR job.due_at <= clock_timestamp())
+                                   AND NOT COALESCE(
+                                       job.work_type IN ('build_snapshot', 'build_army_analytics')
+                                       AND job.input_json->>'boundary_at' < %(hold)s::text,
+                                       false)))) AS waiting_age
             FROM python_processing_jobs AS job
             LEFT JOIN collector_observations AS observation
               ON observation.id = job.observation_id
             WHERE job.status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
             GROUP BY job.work_type
         ), failed_jobs AS (
-            SELECT count(*) AS failed_count, max(updated_at) AS newest_at
-            FROM python_processing_jobs WHERE status = 'failed'
+            -- A failed job stays failed, but no longer counts once a replay has
+            -- processed the same response: its processing result, kept after
+            -- finished jobs are cleaned up, then shows success at the failed
+            -- job's versions (the replay overwrote the failure) or since it failed.
+            -- A failed daily result no longer counts once its replacement from
+            -- the current-Season republish finished, or, after that job is
+            -- cleaned up, once the day has a result saved since the failure.
+            -- A job an operator accepted as beyond repair no longer counts.
+            SELECT count(*) AS failed_count, max(updated_at) AS newest_at, min(updated_at) AS oldest_at
+            FROM python_processing_jobs AS failed
+            WHERE status = 'failed'
+              AND NOT EXISTS (
+                  SELECT FROM python_failed_job_acceptances AS accepted
+                  WHERE accepted.job_id = failed.id)
+              AND NOT EXISTS (
+                  SELECT FROM observation_processing_outcomes AS repaired
+                  WHERE repaired.observation_id
+                        = COALESCE(failed.observation_id, failed.replay_observation_id)
+                    AND repaired.outcome IN ('processed', 'processed_with_gaps', 'non_success')
+                    AND ((repaired.parser_version = failed.parser_version
+                          AND repaired.processing_version = failed.processing_version)
+                         OR repaired.created_at > failed.updated_at))
+              AND NOT (failed.work_type = 'reconcile_ranked_day' AND (
+                  EXISTS (
+                      SELECT FROM python_processing_jobs AS replacement
+                      WHERE replacement.deduplication_key
+                            = 'reconcile:reset-recovery:' || failed.id
+                        AND replacement.status = 'complete')
+                  OR EXISTS (
+                      SELECT FROM ranked_day_versions AS day
+                      WHERE day.player_id = (failed.input_json->>'player_id')::bigint
+                        AND day.ranked_day_start
+                            = (failed.input_json->>'ranked_day_start')::timestamptz
+                        AND day.created_at > failed.updated_at)))
+        ), completed AS (
+            -- Through the finished-job cleanup lookup: about 1,100 rows on 8 Oct 2026, 11 ms.
+            SELECT work_type, count(*) AS completed_count FROM python_processing_jobs
+            WHERE status = 'complete' AND updated_at > statement_timestamp() - interval '2 minutes'
+            GROUP BY work_type
         ), uploads AS (
             SELECT count(*) AS pending_count, min(created_at) AS oldest_at
             FROM collector_response_uploads
             WHERE state IN ('pending', 'leased')
                OR (state = 'failed' AND next_attempt_at < 'infinity'::timestamptz)
         ), failed_uploads AS (
-            SELECT count(*) AS failed_count, max(updated_at) AS newest_at
+            SELECT count(*) AS failed_count, max(updated_at) AS newest_at, min(updated_at) AS oldest_at
             FROM collector_response_uploads
             WHERE state = 'failed' AND next_attempt_at = 'infinity'::timestamptz
         ), check_ages AS (
@@ -76,11 +129,18 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
                (SELECT count(*) FROM (SELECT created_at FROM collector_observations ORDER BY id DESC LIMIT 1000) AS newest
                 WHERE created_at > statement_timestamp() - interval '1 minute'),
                checks.samples, checks.missing, checks.p50, checks.p95, checks.maximum,
-               (SELECT json_object_agg(work_type, age) FROM processing)
-        FROM checks"""
+               (SELECT COALESCE(sum(reset_count), 0) FROM processing),
+               (SELECT CASE WHEN oldest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - oldest_at)) END FROM failed_jobs),
+               (SELECT CASE WHEN oldest_at IS NOT NULL THEN greatest(0, extract(epoch FROM clock_timestamp() - oldest_at)) END FROM failed_uploads),
+               (SELECT COALESCE(sum(completed_count), 0) FROM completed),
+               (SELECT json_object_agg(work_type, age) FROM processing),
+               (SELECT json_object_agg(work_type, waiting_age) FROM processing),
+               (SELECT json_object_agg(work_type, completed_count) FROM completed)
+        FROM checks""",
+        {"hold": past_reset_build_hold(connection)},
     ).fetchone()
     assert row is not None
-    *row, ages = row
+    *row, ages, waiting, completed = row
     names = (
         "active_players",
         "due_queue_depth",
@@ -103,6 +163,10 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
         "check_age_p50_seconds",
         "check_age_p95_seconds",
         "check_age_max_seconds",
+        "reset_work_remaining",
+        "oldest_failed_processing_age_seconds",
+        "oldest_failed_upload_age_seconds",
+        "completed_jobs_2m",
     )
     metrics: dict[str, int | float] = {}
     for name, value in zip(names, row, strict=True):
@@ -110,4 +174,8 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
             metrics[name] = float(value) if name.endswith("_seconds") else int(value)
     for work_type, age in (ages or {}).items():
         metrics[f"oldest_job_{work_type}_age_seconds"] = float(age)
+    for work_type, age in (waiting or {}).items():
+        metrics[f"waiting_job_{work_type}_age_seconds"] = float(age)
+    for work_type, count in (completed or {}).items():
+        metrics[f"completed_job_{work_type}_2m"] = int(count)
     return metrics

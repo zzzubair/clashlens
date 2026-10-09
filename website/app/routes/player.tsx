@@ -16,14 +16,15 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { SavePlayer } from "../components/SavePlayer";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
-import { PlayerTrends } from "../components/PlayerTrends";
 import { SeasonSummary, per, type SummarySide } from "../components/SeasonSummary";
 import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
 import {
   LOOKUP_MESSAGES,
+  dayEnd,
   dayEvidence,
   dayReasons,
+  isLegendDay,
   liveDay,
   legendDayKey,
   liveDayNotice,
@@ -239,8 +240,8 @@ export function meta({ loaderData }: { loaderData?: PlayerLoaderData }) {
     url: `${loaderData.origin}${canonicalPlayerPath(tag)}`,
     origin: loaderData.origin,
     type: "website",
-    image: "/images/legend-league.webp",
-    imageAlt: "The Legend League badge",
+    image: "/images/og-clashlens.png",
+    imageAlt: "The Clash Lens logo",
   });
 }
 
@@ -645,19 +646,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           />
         ) : null}
         {data.selectedSeason === null && player ? (
-          <BattleStatistics
-            player={player}
-            now={statisticsTime}
-            trophies={formatCount(lookup?.profile?.trophies ?? null)}
-          />
+          <BattleStatistics player={player} now={statisticsTime} />
         ) : null}
-        {data.selectedSeason === null && history.length > 0 ? (
+        {data.selectedSeason === null && player && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
             {history.map(({ day, seasonDay }) => (
               <LegendDay
                 key={legendDayKey(day.period)}
                 day={day}
+                player={player}
+                now={statisticsTime}
                 seasonDay={seasonDay}
                 isCurrentDay={isCurrentDay(today, day)}
                 openDay={openDay}
@@ -748,10 +747,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       {visibleStatus ? (
         <RefreshProgress status={visibleStatus} failed={visibleRefreshError !== null} />
       ) : null}
-      <p role="status">Now tracking in Legend I.</p>
-      {data.selectedSeason === null ? (
-        <PlayerTrends player={trackedPlayer} now={statisticsTime} />
-      ) : null}
+      <p role="status">
+        {trackedPlayer.profile.notFoundAt
+          ? "Player not found. Clash of Clans did not find this tag at its latest check."
+          : "Now tracking in Legend I."}
+      </p>
       <SeasonNav
         tag={trackedPlayer.tag}
         seasons={data.seasons}
@@ -768,15 +768,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       ) : null}
 
       {data.selectedSeason === null ? (
-        <BattleStatistics
-          player={trackedPlayer}
-          now={statisticsTime}
-          trophies={
-            seasonExpired || trackedPlayer.profile.seasonResetPending
-              ? "Waiting for Reset"
-              : formatCount(trackedPlayer.profile.trophies)
-          }
-        />
+        <BattleStatistics player={trackedPlayer} now={statisticsTime} />
       ) : null}
       {data.selectedSeason !== null ? null : (
         <section className="data-section" aria-labelledby="season-days-title">
@@ -815,6 +807,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               <LegendDay
                 key={legendDayKey(day.period)}
                 day={day}
+                player={trackedPlayer}
+                now={statisticsTime}
                 seasonDay={seasonDay}
                 isCurrentDay={isCurrentDay(today, day)}
                 openDay={openDay}
@@ -867,7 +861,7 @@ function SeasonNav({
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
-  // Only Seasons with Clash Lens days; older finishes are in the separate Older Seasons table.
+  // Only Seasons with Clash Lens days; older finishes are in the separate Older history table.
   seasons = seasons.filter((season) => season.source === "tracked_summary");
   // A selected past Season always keeps its way back, even if the list failed.
   if (seasons.length === 0 && selectedSeason === null && !error) return null;
@@ -951,18 +945,18 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
     stars: Record<string, number | null>,
     unknown: number | null,
     trophies: number | null,
-    played: "attacks" | "defenses",
   ): SummarySide => ({
     count,
     stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
     unknown,
-    trophies,
-    // Days without a battle on this side, such as shielded days, don't count.
     perDay: per(
       trophies,
       summary.daysObserved -
-        summary.dailyEntries.filter((day) => day[played] === 0).length,
+        summary.dailyEntries.filter(
+          (day) => !isLegendDay(day.flags, (day.attacks ?? 0) + (day.defenses ?? 0)),
+        ).length,
     ),
+    perBattle: per(trophies, count),
   });
   return (
     <SeasonSummary
@@ -983,14 +977,12 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
           summary.attackStars,
           summary.attackStarsUnknown,
           summary.attackGain,
-          "attacks",
         ),
         defense: side(
           summary.defenseCount,
           summary.defenseStars,
           summary.defenseStarsUnknown,
           summary.defenseLoss,
-          "defenses",
         ),
       })}
     />
@@ -1041,6 +1033,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
                 {
                   net: day.netChange,
                   state: day.state,
+                  confidence: day.confidence,
                   coverage: day.coverage,
                   codes: day.flags,
                   attackGain: day.attackGain,
@@ -1183,18 +1176,25 @@ function isCurrentDay(today: RankedDaySummary | null, day: RankedDaySummary): bo
 
 function LegendDay({
   day,
+  player,
+  now,
   seasonDay,
   isCurrentDay,
   openDay,
 }: {
   day: RankedDaySummary;
+  player: PlayerPage;
+  now: number;
   seasonDay: string;
   isCurrentDay: boolean;
   openDay: string | null;
 }) {
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
-  const { status, reasons, battleNet } = presentDay(dayEvidence(day), isCurrentDay);
+  const shown = presentDay(dayEvidence(day), isCurrentDay);
+  const end = dayEnd(day, player, now);
+  const { status, reasons } = isCurrentDay ? shown : end;
+  const { battleNet } = shown;
   return (
     <details className="legend-day" id={`legend-day-${dayKey}`} open={openDay === dayKey}>
       <summary>
@@ -1225,7 +1225,9 @@ function LegendDay({
               title={
                 day.startTrophiesSource === "Season rule"
                   ? "Every Legend I player starts a Season on 5,000"
-                  : undefined
+                  : day.startTrophiesCalculation
+                    ? undefined
+                    : "The previous day's calculated end. No reading from the game has confirmed it yet."
               }
             >
               {day.startTrophiesSource}
@@ -1251,6 +1253,11 @@ function LegendDay({
             )}
           </strong>
           <span>{recordedCount(day.defense.defenses)}</span>
+          {day.automaticDefenseLoss ? (
+            <span title="Taken by the game at Reset for defenses not played">
+              {formatSigned(-day.automaticDefenseLoss)} automatic loss
+            </span>
+          ) : null}
         </span>
         <span className="legend-day-stat legend-day-net">
           <small>Trophy change</small>
@@ -1267,8 +1274,28 @@ function LegendDay({
               {day.trophyChange === null && battleNet !== null ? (
                 <span>{formatSigned(battleNet)} from battles</span>
               ) : null}
+              {day.resetAdjustment ? (
+                <span>
+                  {formatSigned(day.resetAdjustment.amount)} {day.resetAdjustment.kind}{" "}
+                  reset
+                </span>
+              ) : null}
             </>
           )}
+        </span>
+        <span className="legend-day-stat legend-day-end">
+          <small>End of day</small>
+          <strong className={end.trophies === null ? "stat-unavailable" : undefined}>
+            {isCurrentDay
+              ? "After Reset"
+              : end.trophies === null
+                ? "Unavailable"
+                : end.trophies.toLocaleString("en-GB")}
+            {isCurrentDay || end.trophies === null ? null : <DayMark status={status} />}
+          </strong>
+          {!isCurrentDay && end.conflict ? (
+            <span className="legend-day-end-conflict">{end.conflict}</span>
+          ) : null}
         </span>
         <span className="legend-day-stat legend-day-rank">
           <small>Reset rank</small>

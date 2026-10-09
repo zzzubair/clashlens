@@ -5,6 +5,11 @@ one or more queries per player, and every manifest row is written in one
 insert. A Reset's publication lock is held for the whole freeze, so this is
 what shortens how long other work waits for it. The rows and digest are the
 same as reading each player's inputs one at a time.
+
+A correction's manifest repeats almost every row of the Reset's earlier ones,
+so it stores only the rows that differ from the Reset's newest full manifest
+and reads the rest from it; boundary_publication_manifest_entries rebuilds
+the complete rows the digest covers.
 """
 
 from __future__ import annotations
@@ -12,15 +17,16 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Collection, Mapping
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
+from .analytics import season_attack_tallies
+from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import Database, _text_value
-from .domain import RANKED_DAY_DURATION, season_is_current
+from .domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
+from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
     "complete": "Complete",
@@ -103,55 +109,100 @@ def freeze_boundary_manifest(
         ),
         **({"season_inputs": season_inputs} if season_inputs is not None else {}),
     }
-    digest = hashlib.sha256(
-        json.dumps(
-            {
-                "generation": int(generation[1]),
-                "artifact_kind": artifact_kind,
-                "rule_versions": rule_versions,
-                "rows": manifest_rows,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    digest = manifest_digest(
+        {
+            "generation": int(generation[1]),
+            "artifact_kind": artifact_kind,
+            "rule_versions": rule_versions,
+            "rows": manifest_rows,
+        }
+    )
+    columns = _row_columns(manifest_rows)
+    base_id, sources = _reuse_plan(connection, generation[0], artifact_kind, columns)
+    stored_rule_versions = rule_versions
+    season_changes = (
+        _season_input_changes(connection, base_id, season_inputs)
+        if base_id is not None and season_inputs is not None
+        else None
+    )
+    if season_changes is not None:
+        stored_rule_versions = {
+            **{key: value for key, value in rule_versions.items() if key != "season_inputs"},
+            "season_input_changes": season_changes,
+        }
     manifest = connection.execute(
         """
         INSERT INTO boundary_publication_manifests
-            (generation_id, artifact_kind, rule_versions, digest)
-        VALUES (%s, %s, %s, %s)
+            (generation_id, artifact_kind, rule_versions, digest,
+             base_manifest_id, newest_ranked_day_version_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
-        (generation_id, artifact_kind, Jsonb(rule_versions), digest),
+        (
+            generation_id,
+            artifact_kind,
+            Jsonb(stored_rule_versions),
+            digest,
+            base_id,
+            max((value for value in columns[2] if value is not None), default=None),
+        ),
     ).fetchone()
     assert manifest is not None
     manifest_id = int(manifest[0])
+    # With a base, only rows that differ from it are stored; a row whose
+    # identity an earlier manifest stores names that manifest, not a copy.
+    stored = [
+        index
+        for index in range(len(manifest_rows))
+        if base_id is None or sources[index] != base_id
+    ]
     connection.execute(
         """
         INSERT INTO boundary_publication_manifest_rows
             (manifest_id, ordinal, player_id, ranked_day_version_id,
-             input_hash, classification, unavailable_reason, input_identity)
+             input_hash, classification, unavailable_reason, input_identity,
+             identity_manifest_id)
         SELECT %s, manifest_row.*
         FROM unnest(
             %s::integer[], %s::bigint[], %s::bigint[], %s::text[],
-            %s::text[], %s::text[], %s::jsonb[]
+            %s::text[], %s::text[], %s::jsonb[], %s::bigint[]
         ) AS manifest_row
         """,
         (
             manifest_id,
-            list(range(1, len(manifest_rows) + 1)),
-            [identity["player_id"] for identity in manifest_rows],
-            [identity["ranked_day_version_id"] for identity in manifest_rows],
-            [identity["input_hash"] for identity in manifest_rows],
-            [identity["classification"] for identity in manifest_rows],
+            *([column[index] for index in stored] for column in columns[:6]),
             [
-                "reset_baseline_failed"
-                if identity["classification"] == "Unavailable"
-                else None
-                for identity in manifest_rows
+                None if base_id is not None and sources[index] else columns[6][index]
+                for index in stored
             ],
-            [Jsonb(identity) for identity in manifest_rows],
+            [sources[index] if base_id is not None else None for index in stored],
         ),
+    )
+    identities = [
+        len(json.dumps(identity, separators=(",", ":"))) for identity in manifest_rows
+    ]
+    print(
+        json.dumps(
+            {
+                "event": "boundary_manifest_frozen",
+                "manifest_id": manifest_id,
+                "artifact_kind": artifact_kind,
+                "base_manifest_id": base_id,
+                "rows": len(manifest_rows),
+                "rows_stored": len(stored),
+                "identities_stored": sum(
+                    base_id is None or not sources[index] for index in stored
+                ),
+                "identity_bytes": sum(identities),
+                "identity_bytes_stored": sum(
+                    identities[index]
+                    for index in stored
+                    if base_id is None or not sources[index]
+                ),
+                "season_inputs_reused": season_changes is not None,
+            }
+        ),
+        flush=True,
     )
     connection.execute(
         """
@@ -172,6 +223,190 @@ def freeze_boundary_manifest(
         (manifest_id, generation_id),
     )
     return manifest_id, digest
+
+
+def manifest_digest(contents: Mapping[str, Any]) -> str:
+    """The digest of a manifest's generation, kind, rule versions and rows."""
+    return hashlib.sha256(
+        json.dumps(contents, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def manifest_contents(connection: Any, manifest_id: int) -> tuple[str, dict[str, Any]]:
+    """A manifest's stored digest and the contents it covers, rebuilt from
+    whatever it and its base store, for checking one against the other."""
+    row = connection.execute(
+        """
+        SELECT manifest.digest, generation.generation, manifest.artifact_kind,
+               manifest.rule_versions, base.rule_versions -> 'season_inputs'
+        FROM boundary_publication_manifests AS manifest
+        JOIN boundary_publication_generations AS generation
+          ON generation.id = manifest.generation_id
+        LEFT JOIN boundary_publication_manifests AS base
+          ON base.id = manifest.base_manifest_id
+        WHERE manifest.id = %s
+        """,
+        (manifest_id,),
+    ).fetchone()
+    rule_versions = dict(row[3])
+    changes = rule_versions.pop("season_input_changes", None)
+    if changes is not None:
+        rule_versions["season_inputs"] = {
+            key: _apply_list_changes(row[4][key], change)
+            for key, change in changes.items()
+        }
+    rows = connection.execute(
+        """
+        SELECT input_identity FROM boundary_publication_manifest_entries(%s)
+        ORDER BY ordinal
+        """,
+        (manifest_id,),
+    ).fetchall()
+    return _text_value(row[0]), {
+        "generation": int(row[1]),
+        "artifact_kind": _text_value(row[2]),
+        "rule_versions": rule_versions,
+        "rows": [identity for (identity,) in rows],
+    }
+
+
+def _row_columns(manifest_rows: list[dict[str, Any]]) -> list[list[Any]]:
+    """The stored columns of each row, in order."""
+    return [
+        list(range(1, len(manifest_rows) + 1)),
+        [identity["player_id"] for identity in manifest_rows],
+        [identity["ranked_day_version_id"] for identity in manifest_rows],
+        [identity["input_hash"] for identity in manifest_rows],
+        [identity["classification"] for identity in manifest_rows],
+        [
+            "reset_baseline_failed"
+            if identity["classification"] == "Unavailable"
+            else None
+            for identity in manifest_rows
+        ],
+        [Jsonb(identity) for identity in manifest_rows],
+    ]
+
+
+def _same_row(stored: str) -> str:
+    """Whether ``stored`` holds the ``new`` row, generation aside. Identities
+    compare as stored text, so a reused one reads back exactly as sent."""
+    return f"""
+        {stored}.ranked_day_version_id IS NOT DISTINCT FROM new.ranked_day_version_id
+        AND {stored}.input_hash IS NOT DISTINCT FROM new.input_hash
+        AND {stored}.classification = new.classification
+        AND {stored}.unavailable_reason IS NOT DISTINCT FROM new.unavailable_reason
+        AND ({stored}.input_identity - 'generation')::text
+            = (new.input_identity - 'generation')::text
+    """
+
+
+def _reuse_plan(
+    connection: Any, boundary_at: datetime, artifact_kind: str, columns: list[list[Any]]
+) -> tuple[int | None, list[int | None]]:
+    """The full manifest a new one can build on, and for each row the
+    manifest whose identical row it reuses, or None to store it in full.
+
+    The base is the newest full manifest of this Reset and kind, so no
+    manifest is ever more than one step from its rows. A row equal to the
+    base's is the base's; a row equal to the newest manifest's names the
+    manifest storing that identity. A changed membership freezes a new full
+    manifest instead.
+    """
+    previous = connection.execute(
+        """
+        SELECT manifest.id, COALESCE(manifest.base_manifest_id, manifest.id)
+        FROM boundary_publication_manifests AS manifest
+        JOIN boundary_publication_generations AS generation
+          ON generation.id = manifest.generation_id
+        WHERE generation.boundary_at = %s AND manifest.artifact_kind = %s
+          AND manifest.rows_sealed
+        ORDER BY manifest.id DESC
+        LIMIT 1
+        """,
+        (boundary_at, artifact_kind),
+    ).fetchone()
+    if previous is None:
+        return None, []
+    previous_id, base_id = int(previous[0]), int(previous[1])
+    members = connection.execute(
+        "SELECT count(*) FROM boundary_publication_manifest_rows WHERE manifest_id = %s",
+        (base_id,),
+    ).fetchone()[0]
+    if int(members) != len(columns[0]):
+        return None, []
+    plan = connection.execute(
+        f"""
+        SELECT base.player_id IS NOT NULL, COALESCE({_same_row("base")}, false),
+               CASE WHEN {_same_row("previous")}
+                    THEN previous.identity_manifest_id END
+        FROM unnest(
+            %s::integer[], %s::bigint[], %s::bigint[], %s::text[],
+            %s::text[], %s::text[], %s::jsonb[]
+        ) AS new (ordinal, player_id, ranked_day_version_id, input_hash,
+                  classification, unavailable_reason, input_identity)
+        LEFT JOIN boundary_publication_manifest_rows AS base
+          ON base.manifest_id = %s AND base.ordinal = new.ordinal
+         AND base.player_id = new.player_id
+        LEFT JOIN boundary_publication_manifest_entries(%s) AS previous
+          ON previous.ordinal = new.ordinal AND previous.player_id = new.player_id
+        ORDER BY new.ordinal
+        """,
+        (*columns, base_id, previous_id),
+    ).fetchall()
+    if not all(member for member, _, _ in plan):
+        return None, []
+    sources = [
+        base_id if same else int(holder) if holder is not None else None
+        for _, same, holder in plan
+    ]
+    return base_id, sources
+
+
+def _season_input_changes(
+    connection: Any, base_id: int, season_inputs: Mapping[str, list[int]]
+) -> dict[str, dict[str, list[int]]] | None:
+    """Each Season input list's changes from the base manifest's, or None when
+    they change more than half the IDs and the full lists are stored."""
+    base = connection.execute(
+        "SELECT rule_versions -> 'season_inputs' FROM boundary_publication_manifests WHERE id = %s",
+        (base_id,),
+    ).fetchone()[0]
+    if not isinstance(base, dict) or set(base) != set(season_inputs):
+        return None
+    changes = {}
+    for key, values in season_inputs.items():
+        change = _list_changes(base[key], values)
+        if change is None:
+            return None
+        changes[key] = change
+    changed = sum(len(change["removed"]) + len(change["added"]) for change in changes.values())
+    if 2 * changed > sum(len(values) for values in season_inputs.values()):
+        return None
+    return changes
+
+
+def _list_changes(base: list[int], values: list[int]) -> dict[str, list[int]] | None:
+    """The IDs ``values`` drops from ``base`` and the ones it adds, with
+    where each lands, or None when applying them would not give ``values``
+    back exactly."""
+    kept, present = set(values), set(base)
+    added = [(index, value) for index, value in enumerate(values) if value not in present]
+    change = {
+        "removed": [value for value in base if value not in kept],
+        "at": [index for index, _ in added],
+        "added": [value for _, value in added],
+    }
+    return change if _apply_list_changes(base, change) == values else None
+
+
+def _apply_list_changes(base: list[int], change: Mapping[str, list[int]]) -> list[int] | None:
+    removed = set(change["removed"])
+    kept = iter(value for value in base if value not in removed)
+    added = dict(zip(change["at"], change["added"], strict=True))
+    length = len(base) - len(removed) + len(added)
+    values = [added[index] if index in added else next(kept, None) for index in range(length)]
+    return values if None not in values and next(kept, None) is None else None
 
 
 def _member(row: Any, artifact_kind: str) -> tuple[int, int | None, str | None, str]:
@@ -231,6 +466,14 @@ def _snapshot_rows(
         if official_version_id is not None
         else {}
     )
+    # The ended day's Season attacks up to the Reset, which order equal
+    # trophies (analytics.tie_order_key).
+    season_attacks = season_attack_tallies(
+        connection,
+        season_start=ranked_day_for(boundary_at - RANKED_DAY_DURATION).season_start,
+        cutoff=boundary_at,
+        player_ids=player_ids,
+    )
     # Each player's newest accepted profile at the Reset, chosen exactly as
     # for one player, with the population in one query.
     profiles = {
@@ -263,6 +506,9 @@ def _snapshot_rows(
     # Why a player with no accepted profile has none: their newest profile's
     # source state and their newest profile response's failure.
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
+    not_found = profiles_not_found(
+        connection, boundary_at, {player_id: row[2] for player_id, row in profiles.items()}
+    )
     failures = {
         int(row[0]): row[1:]
         for row in connection.execute(
@@ -332,6 +578,10 @@ def _snapshot_rows(
             if official_entry
             else None
         )
+        tally = season_attacks.get(player_id)
+        identity["season_attacks"] = (
+            {"attacks": tally[0], "destruction": tally[1]} if tally else None
+        )
         profile = profiles.get(player_id)
         if profile is not None:
             identity["profile_version_id"] = int(profile[0])
@@ -351,14 +601,18 @@ def _snapshot_rows(
             }
             if _text_value(profile[7]) != "eligible":
                 identity["snapshot_quality"] = "invalid"
-            elif season_is_current(
+            elif not season_is_current(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
             ):
-                identity["snapshot_quality"] = "eligible"
-            else:
                 # Trophies from before this player's Season reset never
                 # stand for the ended day's Season.
                 identity["snapshot_quality"] = "season_reset_pending"
+            elif player_id in not_found:
+                # The player went missing after this reading, so its
+                # trophies no longer stand for them at the Reset.
+                identity["snapshot_quality"] = "profile_not_found"
+            else:
+                identity["snapshot_quality"] = "eligible"
         else:
             identity["profile_version_id"] = None
             identity["profile_input_hash"] = None
@@ -385,6 +639,193 @@ def _snapshot_rows(
             identity["snapshot_quality"] = snapshot_quality
         manifest_rows.append(identity)
     return manifest_rows
+
+
+def profiles_not_found(
+    connection: Any, boundary_at: datetime, readings: Mapping[int, datetime]
+) -> set[int]:
+    """Players whose profile answered "player not found" after their reading.
+
+    The newest successful or not-found profile response after each player's
+    reading, up to the Reset, decides, as the Live Leaderboard's latest
+    response does: a later success brings the player back, and a timeout or
+    server error changes nothing. A response that changes the answer is
+    always saved, so saved responses show when the player went missing.
+    """
+    if not readings:
+        return set()
+    return {
+        int(row[0])
+        for row in connection.execute(
+            """
+            SELECT reading.player_id
+            FROM unnest(%s::bigint[], %s::timestamptz[])
+                AS reading (player_id, observed_at)
+            CROSS JOIN LATERAL (
+                SELECT observation.http_status
+                FROM collector_observations AS observation
+                WHERE observation.player_id = reading.player_id
+                  AND observation.endpoint = 'profile'
+                  AND observation.response_completed_at > reading.observed_at
+                  AND observation.response_completed_at <= %s
+                  AND (observation.http_status = 404
+                       OR observation.http_status BETWEEN 200 AND 299)
+                ORDER BY observation.response_completed_at DESC,
+                         observation.id DESC
+                LIMIT 1
+            ) AS latest
+            WHERE latest.http_status = 404
+            """,
+            (list(readings), list(readings.values()), boundary_at),
+        ).fetchall()
+    }
+
+
+def reset_trophies(
+    connection: Any,
+    boundary_at: datetime,
+    readings: Mapping[int, tuple[int, int, datetime, int]],
+) -> dict[int, tuple[int, bool]]:
+    """Each player's trophies at the Reset before the automatic defense
+    loss, and whether they are proven.
+
+    ``readings`` maps a player to the version of their day ending at
+    ``boundary_at``, their reading's saved response, its time and its
+    trophies. A Complete day already proves the total: its Reset readings at
+    both ends and every battle between agree, so its end plus its automatic
+    loss is the total whatever the reading shows. An attacker's profile can
+    show an attack minutes after its report time: on 7 October 2026
+    #2QCYU8C2G read 4,703 at 04:37:05 without its attack stamped 04:34:08,
+    and the board showed 4,902, not 4,931. A Reset that resets trophies
+    proves only the start, so there the reading must agree too.
+
+    Otherwise the total is the reading plus the day's battles stamped after
+    it, which needs the day's continuous battle logs with no trophy
+    mismatch, a reading taken at least 15 minutes into that day, after the
+    previous day's last reports and automatic defense loss, a time on every
+    battle the day counts, none stamped between the reading's request and its
+    response, no defense stamped in the 4 minutes before that request, since
+    its attack can end up to 4 minutes after the defender's report, and no
+    battle amount the two players' logs disagree on. A reading proves no
+    battle stamped before it, so that total is proven only when the day's
+    start reading plus all its battles, or without a start its end Reset
+    reading, with or without its known automatic loss, comes to it too.
+    Without the battles' proof the total is the reading alone; any total not
+    proven is marked uncertain.
+    """
+    if not readings:
+        return {}
+    days = {
+        int(row[0]): row[1:]
+        for row in connection.execute(
+            """
+            SELECT reading.player_id, ranked.state,
+                   ranked.final_trophies_before_reset,
+                   ranked.automatic_defense_loss,
+                   ranked.automatic_defense_evidence_state,
+                   ranked.input_evidence->>'boundary_kind',
+                   CASE WHEN NOT ranked.failure_reasons
+                                 ?| ARRAY['missing_start_baseline',
+                                          'start_baseline_incomplete']
+                        THEN ranked.start_trophies
+                   END,
+                   CASE WHEN NOT ranked.failure_reasons
+                                 ?| ARRAY['missing_end_baseline',
+                                          'end_baseline_incomplete']
+                        THEN (ranked.input_evidence->>'next_start_trophies')::integer
+                   END,
+                   ranked.coverage_complete
+                   AND reading.observed_at
+                       >= ranked.ranked_day_start + interval '15 minutes'
+                   AND ranked.state <> 'Inconsistent'
+                   AND NOT ranked.failure_reasons ?| %s::text[]
+                   AND battles.every_battle_proven IS NOT FALSE,
+                   battles.after_reading, battles.whole_day
+            FROM unnest(
+                %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
+            ) AS reading (player_id, version_id, observation_id, observed_at)
+            JOIN ranked_day_versions AS ranked
+              ON ranked.id = reading.version_id
+             AND ranked.player_id = reading.player_id
+             AND ranked.ranked_day_end = %s
+            JOIN collector_observations AS observation
+              ON observation.id = reading.observation_id
+            CROSS JOIN LATERAL (
+                SELECT COALESCE(sum(battle.change) FILTER (
+                           WHERE battle.stamped_at > reading.observed_at
+                       ), 0),
+                       COALESCE(sum(battle.change), 0),
+                       bool_and(
+                           battle.stamped_at IS NOT NULL
+                           AND battle.stamped_at
+                               NOT BETWEEN observation.request_started_at
+                                           - CASE WHEN battle.lens = 'defense'
+                                                  THEN interval '4 minutes'
+                                                  ELSE interval '0' END
+                                       AND reading.observed_at
+                           AND battle.disputed IS DISTINCT FROM 'true'
+                       )
+                FROM jsonb_array_elements(ranked.input_evidence->'contributions')
+                    AS contribution
+                CROSS JOIN LATERAL (
+                    SELECT CASE WHEN contribution.value->>'lens' = 'offense'
+                                THEN 1 ELSE -1 END
+                           * (contribution.value->>'amount_used')::integer,
+                           (contribution.value->>'battle_timestamp')::timestamptz,
+                           contribution.value->>'lens',
+                           contribution.value->>'disagreement'
+                ) AS battle (change, stamped_at, lens, disputed)
+                WHERE contribution.value->>'included' = 'true'
+            ) AS battles (after_reading, whole_day, every_battle_proven)
+            """,
+            (
+                sorted(DISPUTED_BATTLE_REASONS),
+                list(readings),
+                [reading[0] for reading in readings.values()],
+                [reading[1] for reading in readings.values()],
+                [reading[2] for reading in readings.values()],
+                boundary_at,
+            ),
+        ).fetchall()
+    }
+    return {
+        player_id: _reset_total(reading[3], days.get(player_id))
+        for player_id, reading in readings.items()
+    }
+
+
+def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
+    """A player's trophies at the Reset and whether they are proven, from
+    their reading and their day as ``reset_trophies`` reads it."""
+    if day is None:
+        return reading, False
+    (
+        state, final, automatic_loss, automatic_state, boundary_kind,
+        start, end, battles_proven, after_reading, whole_day,
+    ) = day
+    total = reading + int(after_reading) if battles_proven else None
+    # The game resets trophies at a Season's end, and raises a total at or
+    # below 5,000 at a weekly one, so that Reset's reading proves nothing.
+    end_reset = _text_value(boundary_kind) == "season" or (
+        _text_value(boundary_kind) == "weekly"
+        and (final if final is not None else end if end is not None else 0) <= 5000
+    )
+    if _text_value(state) == "Complete" and final is not None:
+        settled = int(final) + int(automatic_loss or 0)
+        if not end_reset or total == settled:
+            return settled, True
+    if total is None:
+        return reading, False
+    if start is not None:
+        return total, int(start) + int(whole_day) == total
+    known_loss = (
+        int(automatic_loss or 0)
+        if _text_value(automatic_state) in {"calculated", "confirmed"}
+        else 0
+    )
+    return total, end is not None and not end_reset and int(end) in {
+        total, total - known_loss
+    }
 
 
 def _army_rows(
@@ -524,29 +965,23 @@ def _army_selections(
     )
     decodes: dict[int, list[int]] = {}
     for battle_id, decode_id in connection.execute(
-        """
-        SELECT battle_id, id FROM battle_army_decodes
-        WHERE battle_id = ANY(%s::bigint[]) AND is_active
-          AND decoder_version = %s AND catalog_version = %s
-        """,
-        (listed, DECODER_VERSION, CATALOG_VERSION),
+        f"SELECT battle_id, id FROM {CURRENT_DECODES} AS decode",
+        (DECODER_VERSION, listed),
     ).fetchall():
         decodes.setdefault(int(battle_id), []).append(int(decode_id))
     moved_decodes: dict[tuple[int, str], list[int]] = {}
     for battle_id, perspective, decode_id in connection.execute(
-        """
+        f"""
         SELECT decode.battle_id, decode.perspective, decode.id
-        FROM battle_army_decodes AS decode
+        FROM {CURRENT_DECODES} AS decode
         JOIN unnest(%s::bigint[], %s::text[]) AS side (battle_id, perspective)
           USING (battle_id, perspective)
-        WHERE decode.is_active
-          AND decode.decoder_version = %s AND decode.catalog_version = %s
         """,
         (
+            DECODER_VERSION,
+            [to_id for to_id, _ in moved_sides],
             [to_id for to_id, _ in moved_sides],
             [perspective for _, perspective in moved_sides],
-            DECODER_VERSION,
-            CATALOG_VERSION,
         ),
     ).fetchall():
         moved_decodes.setdefault(
@@ -742,14 +1177,8 @@ def _season_inputs(connection: Any, members: list[Any]) -> dict[str, Any] | None
             *(
                 int(row[0])
                 for row in connection.execute(
-                    """
-                    SELECT id
-                    FROM battle_army_decodes
-                    WHERE battle_id = ANY(%s::bigint[])
-                      AND decoder_version = %s AND catalog_version = %s
-                      AND is_active
-                    """,
-                    (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                    f"SELECT id FROM {CURRENT_DECODES} AS decode",
+                    (DECODER_VERSION, season_battle_ids),
                 ).fetchall()
             ),
             *_moved_decode_ids(connection, season_moved),
@@ -800,14 +1229,12 @@ def _moved_decode_ids(
     return [
         int(row[0])
         for row in connection.execute(
-            """
+            f"""
             SELECT decode.id
-            FROM battle_army_decodes AS decode
+            FROM {CURRENT_DECODES} AS decode
             JOIN unnest(%s::bigint[], %s::text[]) AS side (battle_id, perspective)
               USING (battle_id, perspective)
-            WHERE decode.is_active
-              AND decode.decoder_version = %s AND decode.catalog_version = %s
             """,
-            (*_moved_side_arrays(moved), DECODER_VERSION, CATALOG_VERSION),
+            (DECODER_VERSION, list(moved.values()), *_moved_side_arrays(moved)),
         ).fetchall()
     ]

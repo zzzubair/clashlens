@@ -242,9 +242,12 @@ export default function TrackedLeaderboardRoute() {
           <p className="rankings-context">
             Legend season {formatDate(daily.seasonStartAt)} –{" "}
             {formatDate(daily.seasonEndAt)} · Day reset{" "}
-            <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s last
-            value saved before this Reset, so they may not include every change the game
-            made at the end of the day.
+            <LocalTimestamp value={daily.resetAt} />. Trophies are each player&apos;s
+            total at this Reset, before the game&apos;s automatic defense loss: their last
+            value saved before the Reset plus the battles recorded after it. Boards
+            published before we started adding those battles, and not rebuilt since, show
+            the saved value alone, as do players whose later battles we can&apos;t
+            confirm.
           </p>
         ) : newestObservedAt ? (
           <p className="rankings-context">
@@ -274,8 +277,10 @@ export default function TrackedLeaderboardRoute() {
               <strong>These standings are incomplete.</strong> No player updates were
               saved in the {formatAge(secondsBeforeReset(newestInput))} before this
               day&apos;s Reset; the newest is from <LocalTimestamp value={newestInput} />.
-              Trophies are each player&apos;s last saved value before then, not their
-              end-of-day result.
+              Trophies start from each player&apos;s last saved value before then. Battles
+              recorded after it are added where we can confirm them, except on boards
+              published before we started adding them, so trophies may still miss changes
+              made before the Reset.
             </p>
           </div>
         ) : null}
@@ -391,6 +396,20 @@ export default function TrackedLeaderboardRoute() {
               </span>
             ) : null}
           </div>
+          {daily && (daily.previousSnapshot || daily.nextSnapshot) ? (
+            <nav aria-label="Other days" className="snapshot-pagination">
+              {daily.previousSnapshot ? (
+                <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>
+                  Go to Day {daily.previousSnapshot.dayNumber}
+                </Link>
+              ) : null}
+              {daily.nextSnapshot ? (
+                <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>
+                  Go to Day {daily.nextSnapshot.dayNumber}
+                </Link>
+              ) : null}
+            </nav>
+          ) : null}
           {entries.length === 0 ? (
             <div className="empty-state">
               <h3>No standings available yet</h3>
@@ -400,8 +419,9 @@ export default function TrackedLeaderboardRoute() {
             <>
               <p className="standings-explanation" id="rank-explanation">
                 Rank is your position among players tracked by Clash Lens, not the
-                official global rank. Equal trophies use a fixed order based on player
-                tags.
+                official global rank. Equal trophies go to the higher average attack
+                destruction this Season, then more attacks, then a fixed order based on
+                player tags.
                 {view === "live"
                   ? " Last updated is when we last confirmed each player's profile, even if it was unchanged."
                   : null}
@@ -522,21 +542,6 @@ export default function TrackedLeaderboardRoute() {
               </nav>
             </>
           )}
-          {daily ? (
-            <nav aria-label="Daily snapshots" className="snapshot-pagination">
-              <span>Saved day snapshots</span>
-              <div>
-                {daily.previousSnapshot ? (
-                  <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>
-                    Older
-                  </Link>
-                ) : null}
-                {daily.nextSnapshot ? (
-                  <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>Newer</Link>
-                ) : null}
-              </div>
-            </nav>
-          ) : null}
         </section>
       ) : (
         <div className="empty-state">

@@ -32,7 +32,6 @@ from .domain import SEASON_START_TROPHIES, RankedDay
 from .ranked_day_inputs import _source_rows
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
-    MAX_DAILY_DEFENSES,
     RECONCILIATION_RULE_VERSION,
 )
 
@@ -114,12 +113,13 @@ def _queue(
     connection: Any, player_id: int, day_start: datetime, observation_id: int | None,
     *, key: str | None = None, trigger: str = "first_battle_log",
     later_days: bool = True, priority: int | None = None,
+    due_at: datetime | None = None,
 ) -> int | None:
     """Queue the recalculation of one day and, with ``later_days``, every
     saved later day of its Season, by default from the player's earliest
     saved battle log, ``observation_id``; ``None`` when it was already
     queued. Without ``priority``, the day's own: Reset priority while its
-    Reset is the latest, else live."""
+    Reset is the latest, else live. Due now, or at ``due_at`` if later."""
     day = domain.ranked_day_for(day_start)
     day_text = day.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     row = connection.execute(
@@ -129,8 +129,8 @@ def _queue(
             state, due_at, parser_version, processing_version,
             domain_rule_version, analytics_rule_version, priority
         ) VALUES (
-            NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
-            %s, %s, %s, %s, %s
+            NULL, 'reconcile_ranked_day', %s, %s, 'pending',
+            GREATEST(clock_timestamp(), %s::timestamptz), %s, %s, %s, %s, %s
         )
         ON CONFLICT (deduplication_key) DO NOTHING
         RETURNING id
@@ -146,6 +146,7 @@ def _queue(
                 } if later_days else {}),
                 "trigger": trigger,
             }),
+            due_at,
             DEFAULT_PARSER_VERSION,
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
@@ -285,12 +286,41 @@ def queue_not_enrolled(connection: Any, player_id: int, observed_at: datetime) -
         day_start += timedelta(days=1)
 
 
+def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) -> None:
+    """Once a profile read on a weekly Monday's Legend day shows a league
+    below Legend I, recalculate the day before that Reset and each saved day
+    after it, which then show the drop (see
+    ``reconciliation_db._dropped_after_reading``), for a player with a Reset
+    reading there. Runs once per player and Monday, when no other work
+    waits, no earlier than ``DAY_END_RECALCULATION_DELAY`` after that Reset,
+    once any calculation running when the profile arrived has saved."""
+    from .reconciliation_db import DAY_END_RECALCULATION_DELAY
+
+    day = domain.ranked_day_for(observed_at)
+    ended = day.start - timedelta(days=1)
+    if day.start.weekday() != 0 or day.start == day.season_start or connection.execute(
+        """
+        SELECT 1 FROM reset_baseline_evidence
+        WHERE player_id = %s AND boundary_at = %s LIMIT 1
+        """,
+        (player_id, day.start),
+    ).fetchone() is None:
+        return
+    _queue(
+        connection, player_id, ended, None,
+        key=(f"reconcile:weekly-drop:{player_id}:"
+             f"{ended:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}"),
+        trigger="weekly_drop", priority=PYTHON_BACKFILL_PRIORITY,
+        due_at=day.start + DAY_END_RECALCULATION_DELAY,
+    )
+
+
 def backfill(
     database: Database, season_id: str, *, queue: bool, max_jobs: int
 ) -> dict[str, Any]:
-    # An operator's batch: queued at backfill priority, like requeue_day_1,
-    # so a worker thread runs it only when no higher-priority work that thread
-    # can claim is due.
+    # An operator's batch: queued at backfill priority, like the Season
+    # repair, so a worker thread runs it only when no higher-priority work
+    # that thread can claim is due.
     """Find, and with ``queue`` recalculate, the days that players first
     tracked during the Season can now fill: Day 1 for each player whose first
     battle log was saved on Day 1, and, for a player first tracked later, the
@@ -381,69 +411,4 @@ def backfill(
         "waiting_for_profile": len(waiting) - len(ready),
         "queued": len(job_ids),
         "left_to_queue": len(ready) - len(job_ids),
-    }
-
-
-def requeue_day_1(
-    database: Database, season_id: str, *, queue: bool, max_jobs: int
-) -> dict[str, Any]:
-    """Find, and with ``queue`` recalculate, every player's saved Day 1 with
-    1 to 7 defenses, and their later saved days, once: Day 1's automatic
-    defense loss averages Day 1's own defenses only, is charged for
-    (attacks - defenses) missing defenses when attacks are at least the
-    defenses, and a Reset reading taken before it is read less it. Repeating
-    it skips players already queued; players queued by the run before those
-    last two changes are queued again. The batch is queued at backfill
-    priority: a worker thread runs it only when no higher-priority work that
-    thread can claim is due. Batch 1 of 775 players on 2026-10-07 was
-    queued live, in the busy hour after Reset."""
-    season_start = datetime.fromtimestamp(int(season_id), UTC)
-    if not domain.is_season_boundary(season_start):
-        raise ValueError(f"{season_id} is not a Season's start")
-    day_text = season_start.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    def key(player_id: Any) -> str:
-        return f"reconcile:season-day-1-unsettled-loss:{player_id}:{day_text}:{RECONCILIATION_RULE_VERSION}"
-
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            rows = connection.execute(
-                """
-                WITH day_1 AS (
-                    SELECT DISTINCT ON (player_id) player_id, defense_count
-                    FROM ranked_day_versions
-                    WHERE ranked_day_start = %(start)s
-                      AND reconciliation_rule_version = %(rule)s
-                    ORDER BY player_id, version DESC, id DESC
-                )
-                SELECT player_id FROM day_1
-                WHERE defense_count BETWEEN 1 AND %(most)s
-                ORDER BY player_id
-                """,
-                {"start": season_start, "rule": RECONCILIATION_RULE_VERSION,
-                 "most": MAX_DAILY_DEFENSES - 1},
-            ).fetchall()
-            queued = {
-                row[0] for row in connection.execute(
-                    "SELECT deduplication_key FROM python_processing_jobs_worker"
-                    " WHERE deduplication_key = ANY(%s)",
-                    ([key(row[0]) for row in rows],),
-                ).fetchall()
-            }
-            waiting = [int(row[0]) for row in rows if key(row[0]) not in queued]
-            job_ids = [
-                job_id
-                for player_id in (waiting[:max_jobs] if queue else [])
-                if (job_id := _queue(
-                    connection, player_id, season_start, None,
-                    key=key(player_id), trigger="season_day_1",
-                    priority=PYTHON_BACKFILL_PRIORITY,
-                )) is not None
-            ]
-    return {
-        "season": season_id,
-        "players": len(rows),
-        "already_queued": len(rows) - len(waiting),
-        "queued": len(job_ids),
-        "left_to_queue": len(waiting) - len(job_ids),
     }

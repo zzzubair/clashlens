@@ -14,11 +14,13 @@ import psycopg
 from domain_test_support import domain_database, store_observation, text
 
 from clashlens import battle_day_repair, boundary
-from clashlens.army_decoder import DECODER_VERSION
+from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, season_attack_tallies
+from clashlens.army_decoder import CURRENT_DECODES, DECODER_VERSION
 from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database, _text_value
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
+from clashlens.worker import ObservationProcessor
 
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
 DAY = BOUNDARY - RANKED_DAY_DURATION
@@ -99,6 +101,7 @@ def seed_population(connection_info: str, players: int) -> int:
             "boundary": BOUNDARY,
             "day": DAY,
             "season": season,
+            "catalog": CATALOG_VERSION,
         }
         for statement in _SEED:
             connection.execute(statement, parameters)
@@ -291,13 +294,13 @@ _SEED = [
         catalog_hash, status, failure_category, is_active, perspective
     ) OVERRIDING SYSTEM VALUE
     SELECT evidence.id, evidence.battle_id, evidence.id, 'army-decoder-v2',
-           'unit-catalog-v2', repeat('c', 64), 'failed', 'fixture',
+           %(catalog)s, repeat('c', 64), 'failed', 'fixture',
            NOT (evidence.perspective = 'defender' AND evidence.battle_id %% 3 = 0),
            evidence.perspective
     FROM battle_evidence AS evidence
     UNION ALL
     SELECT 100000000 + evidence.id, evidence.battle_id, evidence.id,
-           'army-decoder-v1', 'unit-catalog-v2', repeat('c', 64), 'failed',
+           'army-decoder-v1', %(catalog)s, repeat('c', 64), 'failed',
            'fixture', true, evidence.perspective
     FROM battle_evidence AS evidence
     WHERE evidence.battle_id %% 4 = 0
@@ -447,6 +450,15 @@ def per_player_inputs(
                 official_entry[1].astimezone(UTC).isoformat()
                 if official_entry
                 else None
+            )
+            tally = season_attack_tallies(
+                connection,
+                season_start=ranked_day_for(generation[0] - RANKED_DAY_DURATION).season_start,
+                cutoff=generation[0],
+                player_ids=[player_id],
+            ).get(player_id)
+            identity["season_attacks"] = (
+                {"attacks": tally[0], "destruction": tally[1]} if tally else None
             )
             profile = connection.execute(
                 """
@@ -667,14 +679,8 @@ def per_player_inputs(
                     *(
                         int(row[0])
                         for row in connection.execute(
-                            """
-                            SELECT id
-                            FROM battle_army_decodes
-                            WHERE battle_id = ANY(%s::bigint[])
-                              AND decoder_version = %s AND catalog_version = %s
-                              AND is_active
-                            """,
-                            (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                            f"SELECT id FROM {CURRENT_DECODES} AS decode",
+                            (DECODER_VERSION, season_battle_ids),
                         ).fetchall()
                     ),
                     *_moved_decode_ids(connection, season_moved),
@@ -833,3 +839,634 @@ def _assert_every_case_seeded(
     assert any(
         (9000000 + row["player_id"]) * 2 in row.get("decode_ids", []) for row in rows
     )
+
+
+# Day 2 of the Season that began on 5 October 2026, as Astra's report of
+# 7 October found it: two players whose profiles went "not found" on 5 October
+# ranked first and second on their last trophies, above ZOOS Yatta.
+DAY_2_RESET = datetime(2026, 10, 7, 5, tzinfo=UTC)
+_ARCHIVE = (None, None, None, SimpleNamespace(objects={}))
+
+
+def _october(day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=UTC)
+
+
+def _seed_board(connection_info: str, readings: list[tuple[str, int, datetime]]) -> int:
+    """One Day 2 generation whose members each have one accepted profile."""
+    season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+    with psycopg.connect(connection_info) as connection:
+        for index, (tag, trophies, observed_at) in enumerate(readings, start=1):
+            connection.execute(
+                "INSERT INTO players (id, normalized_tag, active)"
+                " OVERRIDING SYSTEM VALUE VALUES (%s, %s, true)",
+                (index, tag),
+            )
+        sweep = connection.execute(
+            """
+            INSERT INTO collector_reset_sweeps
+                (boundary_at, member_ids, membership_captured_at)
+            VALUES (%s, %s, clock_timestamp())
+            RETURNING id
+            """,
+            (DAY_2_RESET, list(range(1, len(readings) + 1))),
+        ).fetchone()[0]
+        generation_id, _ = boundary._create_boundary_generation(
+            None,
+            connection,
+            boundary_at=DAY_2_RESET,
+            sweep_id=sweep,
+            player_ids=list(range(1, len(readings) + 1)),
+            generation=1,
+            supersedes_id=None,
+        )
+        # The profiles' own responses are not needed.
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for index, (tag, trophies, observed_at) in enumerate(readings, start=1):
+            connection.execute(
+                """
+                INSERT INTO player_profile_versions (
+                    player_id, observation_id, normalized_tag, endpoint_version,
+                    schema_version, parser_version, observed_at,
+                    source_http_status, name, trophies, league_tier_id,
+                    league_tier_name, eligibility_state, profile_json,
+                    source_contract_state, current_league_season_id
+                ) VALUES (%s, %s, %s, 'v1', 'v1', 'parser', %s, 200, %s, %s,
+                          105000034, 'Legend League', 'eligible', %s,
+                          'accepted', %s)
+                """,
+                (
+                    index, 900000 + index, tag, observed_at, tag, trophies,
+                    json.dumps({"tag": tag, "trophies": trophies}), season,
+                ),
+            )
+    return generation_id
+
+
+def test_board_leaves_out_players_whose_profile_went_missing_before_the_reset(
+    database_url: str,
+) -> None:
+    readings = [
+        ("#PJ22PJPQJ", 5280, _october(5, 7, 51)),  # KURDiSTAN, 404 at 08:35
+        ("#8LLLG2V99", 5277, _october(6, 6, 19)),  # Eason, 404 later that day
+        ("#PPVYC88R", 5274, _october(6, 22, 31)),  # ZOOS Yatta
+        ("#RECOVERED", 5250, _october(6, 6)),  # 404, then a success
+        ("#AFTERRESET", 5240, _october(6, 8)),  # 404 only after the Reset
+        ("#SERVERERROR", 5230, _october(6, 8)),  # a timeout says nothing
+        ("#OLDREADING", 5220, _october(6, 4)),  # then only server errors
+    ]
+    responses = [
+        ("#PJ22PJPQJ", 404, _october(5, 8, 35)),
+        ("#8LLLG2V99", 404, _october(6, 8, 6)),
+        ("#RECOVERED", 404, _october(6, 7)),
+        ("#RECOVERED", 200, _october(6, 9)),
+        ("#AFTERRESET", 404, _october(7, 6)),
+        ("#SERVERERROR", 503, _october(6, 10)),
+        ("#OLDREADING", 500, _october(6, 12)),
+    ]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        for tag, status, at in responses:
+            store_observation(
+                connection_info, _ARCHIVE, occurrence_key=f"{tag}-{at.isoformat()}",
+                endpoint="profile", body=f"{status} {tag}".encode(),
+                observed_at=at, normalized_tag=tag, http_status=status,
+            )
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                manifest_id, _ = boundary._freeze_boundary_manifest(
+                    database, connection, generation_id=generation_id,
+                    artifact_kind="snapshot",
+                )
+                rows = connection.execute(
+                    """
+                    SELECT input_identity->'profile_snapshot'->>'tag',
+                           input_identity->>'snapshot_quality'
+                    FROM boundary_publication_manifest_rows
+                    WHERE manifest_id = %s
+                    ORDER BY (input_identity->'profile_snapshot'->>'trophies')::int DESC
+                    """,
+                    (manifest_id,),
+                ).fetchall()
+        finally:
+            database.close()
+    assert [(text(tag), text(quality)) for tag, quality in rows] == [
+        ("#PJ22PJPQJ", "profile_not_found"),
+        ("#8LLLG2V99", "profile_not_found"),
+        ("#PPVYC88R", "eligible"),
+        ("#RECOVERED", "eligible"),
+        ("#AFTERRESET", "eligible"),
+        ("#SERVERERROR", "eligible"),
+        ("#OLDREADING", "eligible"),
+    ]
+    # The board ranks only eligible rows, by trophies, so Yatta is first.
+
+
+def test_board_rebuild_queues_one_correction_per_board_still_ranking_a_missing_player(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(
+            connection_info,
+            [
+                ("#8LLLG2V99", 5277, _october(6, 6, 19)),
+                ("#PPVYC88R", 5274, _october(6, 22, 31)),
+            ],
+        )
+        database = Database(connection_info)
+        try:
+            # Frozen before its "not found" response was saved, as boards
+            # built before this rule were.
+            with database.pool.connection() as connection:
+                boundary._freeze_boundary_manifest(
+                    database, connection, generation_id=generation_id,
+                    artifact_kind="snapshot",
+                )
+            store_observation(
+                connection_info, _ARCHIVE, occurrence_key="eason-404",
+                endpoint="profile", body=b"404", observed_at=_october(6, 8, 6),
+                normalized_tag="#8LLLG2V99", http_status=404,
+            )
+            season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+            board = {
+                "boundary_at": DAY_2_RESET.isoformat(),
+                "generation": 1,
+                "profile_not_found": 1,
+                "late_battles": 0,
+                "reordered": False,
+            }
+            reports = [
+                boundary.queue_board_rebuilds(database, season, queue=queue)
+                for queue in (False, True, True)
+            ]
+            assert [report["boards"] for report in reports] == [
+                [{**board, "correction": "not_queued"}],
+                [{**board, "correction": "queued"}],
+                [{**board, "correction": "already_queued"}],
+            ]
+            # The Season before is never read.
+            earlier = str(int(season) - 28 * 86400)
+            assert boundary.queue_board_rebuilds(database, earlier, queue=True)[
+                "boards"
+            ] == []
+            with database.pool.connection() as connection:
+                corrections = connection.execute(
+                    """
+                    SELECT boundary_at, source_generation_id, affected_artifacts,
+                           pending_inputs, state
+                    FROM boundary_publication_corrections
+                    """
+                ).fetchall()
+        finally:
+            database.close()
+    assert [
+        (row[0], row[1], sorted(text(value) for value in row[2]), row[3], text(row[4]))
+        for row in corrections
+    ] == [(DAY_2_RESET, generation_id, ["army", "snapshot"], [], "queued")]
+
+
+def _seed_days(
+    connection_info: str,
+    generation_id: int,
+    days: dict[int, tuple[bool, list[tuple[str, int, datetime, bool]]]],
+    results: dict[int, dict[str, Any]] | None = None,
+) -> None:
+    """Each member's Day 2: whether its battle logs are continuous, and its
+    battles as (lens, trophies, report time, counted). Each reading gets the
+    saved response a board entry points to. A day is Partial, without its
+    end Reset reading, and starts where its reading less its counted battles
+    stamped by then puts it, unless ``results`` gives its state, failure
+    reasons, end, automatic loss and its state, start and end Reset readings
+    and Reset kind instead."""
+    season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+    with psycopg.connect(connection_info) as connection:
+        observations = {
+            player_id: store_observation(
+                connection_info, _ARCHIVE, occurrence_key=f"reading-{player_id}",
+                endpoint="profile", body=f"reading {player_id}".encode(),
+                observed_at=observed_at, normalized_tag=text(tag),
+                existing_connection=connection, commit=False,
+            )[0]
+            for player_id, tag, observed_at in connection.execute(
+                "SELECT player_id, normalized_tag, observed_at"
+                " FROM player_profile_versions WHERE player_id = ANY(%s)",
+                (list(days),),
+            ).fetchall()
+        }
+        readings = {
+            player_id: (trophies, observed_at)
+            for player_id, trophies, observed_at in connection.execute(
+                "SELECT player_id, trophies, observed_at"
+                " FROM player_profile_versions WHERE player_id = ANY(%s)",
+                (list(days),),
+            ).fetchall()
+        }
+        connection.execute("SET LOCAL session_replication_role = replica")
+        for player_id, (coverage_complete, battles) in days.items():
+            reading, read_at = readings[player_id]
+            result = {
+                "state": "Partial",
+                "failure_reasons": ["missing_end_baseline"],
+                "final": None,
+                "automatic_loss": None,
+                "automatic_state": None,
+                "start": reading - sum(
+                    trophies if lens == "offense" else -trophies
+                    for lens, trophies, at, counted in battles
+                    if counted and at <= read_at
+                ),
+                "end": None,
+                "boundary_kind": None,
+                **(results or {}).get(player_id, {}),
+            }
+            connection.execute(
+                "UPDATE player_profile_versions SET observation_id = %s"
+                " WHERE player_id = %s",
+                (observations[player_id], player_id),
+            )
+            contributions = [
+                {
+                    "battle_identity": str(player_id * 100 + index),
+                    "lens": lens,
+                    "amount_used": trophies,
+                    "battle_timestamp": at.isoformat(),
+                    "included": counted,
+                    "valid": True,
+                }
+                for index, (lens, trophies, at, counted) in enumerate(battles)
+            ]
+            connection.execute(
+                """
+                INSERT INTO ranked_day_versions (
+                    id, player_id, ranked_day_start, ranked_day_end,
+                    official_season_id, season_day_number,
+                    season_anchor_rule_version, reconciliation_rule_version,
+                    result_hash, version, state, confidence, input_hash,
+                    coverage_complete, failure_reasons, start_trophies,
+                    final_trophies_before_reset, automatic_defense_loss,
+                    automatic_defense_evidence_state, input_evidence
+                ) OVERRIDING SYSTEM VALUE
+                VALUES (%s, %s, %s, %s, %s, 2, 'anchor', 'rules', repeat('a', 64),
+                        1, %s, 'exact', repeat('b', 64), %s, %s, %s, %s, %s,
+                        %s, %s)
+                """,
+                (
+                    player_id, player_id, DAY_2_RESET - RANKED_DAY_DURATION,
+                    DAY_2_RESET, season, result["state"], coverage_complete,
+                    json.dumps(result["failure_reasons"]), result["start"],
+                    result["final"], result["automatic_loss"],
+                    result["automatic_state"]
+                    or (
+                        "not_applicable"
+                        if result["automatic_loss"] is None
+                        else "calculated"
+                    ),
+                    json.dumps(
+                        {
+                            "contributions": contributions,
+                            "next_start_trophies": result["end"],
+                            "boundary_kind": result["boundary_kind"],
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE boundary_publication_generation_members
+                SET ranked_day_version_id = %s, ranked_day_input_hash = repeat('b', 64)
+                WHERE generation_id = %s AND player_id = %s
+                """,
+                (player_id, generation_id, player_id),
+            )
+
+
+def _build_board(connection_info: str, database: Database, generation_id: int) -> list:
+    """Freeze the generation's input, build its board, and return each
+    entry's tag, trophies and confidence in rank order."""
+    with database.pool.connection() as connection:
+        manifest_id, digest = boundary._freeze_boundary_manifest(
+            database, connection, generation_id=generation_id, artifact_kind="snapshot"
+        )
+        connection.execute(
+            "UPDATE boundary_publication_generations SET snapshot_state = 'ready'"
+            " WHERE id = %s",
+            (generation_id,),
+        )
+        job_id = connection.execute(
+            """
+            INSERT INTO python_processing_jobs (
+                observation_id, work_type, deduplication_key, input_json,
+                status, due_at, max_attempts
+            ) VALUES (NULL, 'build_snapshot', 'build_snapshot:day-2', %s,
+                      'pending', clock_timestamp(), 10)
+            RETURNING id
+            """,
+            (
+                json.dumps(
+                    {
+                        # As the coordinator writes it, so the 04:30-07:00
+                        # past-Reset build hold doesn't hold this newest Reset.
+                        "boundary_at": DAY_2_RESET.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "generation": 1,
+                        "manifest_id": manifest_id,
+                        "manifest_digest": digest,
+                    }
+                ),
+            ),
+        ).fetchone()[0]
+    result = ObservationProcessor(database, None).process_job(job_id, owner="board")
+    assert result is not None and result.outcome == "processed", database.scalar(
+        "SELECT failure_detail FROM python_processing_jobs"
+    )
+    with database.pool.connection() as connection:
+        return [
+            (text(tag), trophies, text(confidence))
+            for tag, trophies, confidence in connection.execute(
+                """
+                SELECT player.normalized_tag, entry.trophies, entry.confidence
+                FROM leaderboard_snapshot_entries AS entry
+                JOIN leaderboard_snapshots AS snapshot ON snapshot.id = entry.snapshot_id
+                JOIN players AS player ON player.id = entry.player_id
+                WHERE snapshot.snapshot_kind = 'frozen'
+                ORDER BY entry.position
+                """
+            ).fetchall()
+        ]
+
+
+def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
+    """Clash Spot's Day 2 board of 7 October 2026 shows trophies at the Reset
+    before the automatic defense loss. Ours missed battles after each player's
+    last reading: RAIN showed 5,088, not 5,168, and SnowBBcreaM 5,160, not
+    5,128."""
+    readings = [
+        ("#29QUQC8QL", 5088, _october(7, 4, 40)),  # RAIN
+        ("#YYPUCVJUP", 5160, _october(6, 22, 22)),  # SnowBBcreaM
+        ("#QVCU9PJCR", 5155, _october(7, 4, 50)),  # SUPRA
+        ("#2222222", 5150, _october(7, 4, 40)),  # battle logs have a gap
+        ("#8888888", 5140, _october(6, 4, 50)),  # read before Day 2 began
+    ]
+    days = {
+        1: (True, [
+            ("offense", 40, _october(7, 4, 33), True),
+            ("offense", 40, _october(7, 4, 37), True),  # already in the reading
+            ("offense", 40, _october(7, 4, 53), True),
+            ("offense", 40, _october(7, 4, 57), True),
+            ("offense", 40, _october(7, 4, 57), False),  # a second report of it
+        ]),
+        2: (True, [("defense", 32, _october(7, 4, 57), True)]),
+        # Stamped after the Reset, but it finished on Day 2.
+        3: (True, [("defense", 40, datetime(2026, 10, 7, 5, 0, 2, tzinfo=UTC), True)]),
+        4: (False, [("offense", 40, _october(7, 4, 50), True)]),
+        5: (True, [("offense", 40, _october(7, 4, 50), True)]),
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(connection_info, generation_id, days)
+        database = Database(connection_info)
+        try:
+            assert _build_board(connection_info, database, generation_id) == [
+                ("#29QUQC8QL", 5168, "confirmed"),
+                ("#2222222", 5150, "uncertain"),
+                ("#8888888", 5140, "uncertain"),
+                ("#YYPUCVJUP", 5128, "confirmed"),
+                ("#QVCU9PJCR", 5115, "confirmed"),
+            ]
+            season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+            # A board built under this rule is not rebuilt; one frozen before
+            # it, ranking RAIN's reading alone, is.
+            assert boundary.queue_board_rebuilds(database, season, queue=False)[
+                "boards"
+            ] == []
+            with database.pool.connection() as connection:
+                connection.execute("SET LOCAL session_replication_role = replica")
+                connection.execute(
+                    "UPDATE leaderboard_snapshot_entries SET trophies = 5088"
+                    " WHERE player_id = 1"
+                )
+            assert boundary.queue_board_rebuilds(database, season, queue=True)[
+                "boards"
+            ] == [
+                {
+                    "boundary_at": DAY_2_RESET.isoformat(),
+                    "generation": 1,
+                    "profile_not_found": 0,
+                    "late_battles": 1,
+                    "reordered": False,
+                    "correction": "queued",
+                }
+            ]
+        finally:
+            database.close()
+
+
+def test_board_keeps_a_reading_its_later_battles_cannot_prove(
+    database_url: str,
+) -> None:
+    """A reading answered at 04:54:59 for a request sent a second earlier may
+    or may not hold an attack stamped 04:54:58, and a battle whose trophies
+    the two players' logs disagree on proves nothing; each such entry keeps
+    its reading and is marked uncertain."""
+    readings = [
+        ("#PYLQ0", 5088, datetime(2026, 10, 7, 4, 54, 59, tzinfo=UTC)),  # inflight
+        ("#PYLQ2", 5100, _october(7, 4, 40)),  # disputed
+        ("#PYLQ8", 5090, _october(7, 4, 40)),  # disputedday
+    ]
+    days = {
+        1: (True, [
+            ("offense", 40, datetime(2026, 10, 7, 4, 54, 58, tzinfo=UTC), True),
+            ("offense", 40, _october(7, 4, 57), True),
+        ]),
+        2: (True, [("offense", 40, _october(7, 4, 57), True)]),
+        3: (True, [("offense", 40, _october(7, 4, 57), True)]),
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(connection_info, generation_id, days)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            # One player's log says +40, the other's +0.
+            connection.execute(
+                """
+                UPDATE ranked_day_versions
+                SET input_evidence = jsonb_set(
+                    input_evidence, '{contributions,0,disagreement}', 'true'
+                )
+                WHERE id = 2
+                """
+            )
+            connection.execute(
+                "UPDATE ranked_day_versions"
+                " SET failure_reasons = '[\"duplicate_contribution_disagreement\"]'"
+                " WHERE id = 3"
+            )
+        database = Database(connection_info)
+        try:
+            assert _build_board(connection_info, database, generation_id) == [
+                ("#PYLQ2", 5100, "uncertain"),  # disputed
+                ("#PYLQ8", 5090, "uncertain"),  # disputedday
+                ("#PYLQ0", 5088, "uncertain"),  # inflight
+            ]
+            season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+            assert boundary.queue_board_rebuilds(database, season, queue=False)[
+                "boards"
+            ] == []
+        finally:
+            database.close()
+
+
+def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
+    database_url: str,
+) -> None:
+    """A defender's report can come up to 4 minutes before the attack ends, so
+    a reading requested at 04:54:59 may or may not hold a defense stamped
+    04:52. Within 15 minutes of the day's Reset, the previous day's last
+    reports and automatic defense loss can still land after a reading taken
+    at 05:02 or 05:06. A day whose trophies don't add up proves nothing.
+    Each keeps its reading and is marked uncertain; an attack stamped 04:52,
+    and a reading taken at 05:16, still prove their battles."""
+    readings = [
+        ("#GRJC0", 5160, _october(7, 4, 55)),  # defended
+        ("#GRJC2", 5150, _october(7, 4, 55)),  # attacked
+        ("#GRJC8", 5200, _october(6, 5, 2)),  # early
+        ("#GRJC9", 5210, _october(6, 5, 6)),  # refreshed
+        ("#GRJCU", 5100, _october(6, 5, 16)),  # settled
+        ("#GRJCV", 5120, _october(7, 4, 40)),  # mismatch
+    ]
+    days = {
+        1: (True, [("defense", 32, _october(7, 4, 52), True)]),
+        2: (True, [
+            ("offense", 40, _october(7, 4, 52), True),
+            ("offense", 40, _october(7, 4, 58), True),
+        ]),
+        3: (True, [("offense", 40, _october(6, 6), True)]),
+        4: (True, [("offense", 40, _october(6, 6), True)]),
+        5: (True, [("offense", 40, _october(6, 6), True)]),
+        6: (True, [("offense", 40, _october(7, 4, 50), True)]),
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(connection_info, generation_id, days)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            connection.execute(
+                "UPDATE ranked_day_versions"
+                " SET state = 'Inconsistent', confidence = 'partial',"
+                " failure_reasons = '[\"trophy_equation_mismatch\"]'"
+                " WHERE id = 6"
+            )
+        database = Database(connection_info)
+        try:
+            assert _build_board(connection_info, database, generation_id) == [
+                ("#GRJC9", 5210, "uncertain"),  # refreshed
+                ("#GRJC8", 5200, "uncertain"),  # early
+                ("#GRJC2", 5190, "confirmed"),  # attacked
+                ("#GRJC0", 5160, "uncertain"),  # defended
+                ("#GRJCU", 5140, "confirmed"),  # settled
+                ("#GRJCV", 5120, "uncertain"),  # mismatch
+            ]
+            season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+            assert boundary.queue_board_rebuilds(database, season, queue=False)[
+                "boards"
+            ] == []
+        finally:
+            database.close()
+
+
+def test_board_proves_a_reading_only_by_the_days_reset_readings(
+    database_url: str,
+) -> None:
+    """#2QCYU8C2G read 4,703 at 04:37:05 on 7 October 2026 without its attack
+    stamped 04:34:08 for 29, and the board showed 4,902 as proven: a reading
+    proves no battle stamped before it. Its Complete day ends at 4,931 from
+    its Reset readings at both ends. Without that, a reading plus the
+    battles after it is proven only when the day's start reading plus all
+    its battles, or without a start its end Reset reading, less any known
+    automatic loss, comes to it too; a Reset that resets trophies proves
+    nothing."""
+    readings = [
+        ("#2QCYU8C2G", 4703, datetime(2026, 10, 7, 4, 37, 5, tzinfo=UTC)),
+        ("#GURYYP99", 4923, _october(7, 4, 54)),  # no end reading
+        ("#PL0Q0UVLC", 5100, _october(7, 4, 40)),  # end reading agrees
+        ("#P0VPRVPJJ", 5090, _october(7, 4, 40)),  # less the known loss
+        ("#P2CC9URVR", 5080, _october(7, 4, 40)),  # less an unknown loss
+        ("#Y8V9YYP9C", 5151, _october(7, 4, 40)),  # Season reset, disagrees
+        ("#YPG0UY9LU", 5047, _october(7, 4, 40)),  # Season reset, agrees
+    ]
+    days = {
+        1: (True, [
+            ("defense", 209, _october(7, 3), True),
+            ("offense", 29, datetime(2026, 10, 7, 4, 34, 8, tzinfo=UTC), True),
+            ("offense", 199, _october(7, 4, 50), True),
+        ]),
+        2: (True, [
+            ("offense", 40, datetime(2026, 10, 7, 4, 52, 3, tzinfo=UTC), True),
+            ("offense", 69, _october(7, 4, 58), True),
+        ]),
+        **{player: (True, [("offense", 40, _october(7, 4, 50), True)])
+           for player in range(3, 8)},
+    }
+    no_start = {"failure_reasons": ["missing_start_baseline"], "start": None}
+    complete = {"state": "Complete", "failure_reasons": []}
+    results = {
+        1: {**complete, "final": 4931, "start": 4912, "end": 4931},
+        2: {"start": 4923},
+        3: {**no_start, "end": 5140},
+        4: {**no_start, "end": 5100, "automatic_loss": 30},
+        5: {**no_start, "end": 5090, "automatic_state": "unknown"},
+        6: {
+            **complete, "final": 5185, "start": 5145, "boundary_kind": "season",
+            "end": 5000,
+        },
+        7: {**complete, "final": 5087, "boundary_kind": "season", "end": 5000},
+    }
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        generation_id = _seed_board(connection_info, readings)
+        _seed_days(connection_info, generation_id, days, results)
+        database = Database(connection_info)
+        try:
+            assert _build_board(connection_info, database, generation_id) == [
+                ("#Y8V9YYP9C", 5191, "uncertain"),
+                ("#PL0Q0UVLC", 5140, "confirmed"),
+                ("#P0VPRVPJJ", 5130, "confirmed"),
+                ("#P2CC9URVR", 5120, "uncertain"),
+                ("#YPG0UY9LU", 5087, "confirmed"),
+                ("#GURYYP99", 4992, "uncertain"),
+                ("#2QCYU8C2G", 4931, "confirmed"),
+            ]
+            season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
+            assert boundary.queue_board_rebuilds(database, season, queue=False)[
+                "boards"
+            ] == []
+            # A board ordered by an older ordering rule is rebuilt too.
+            for rule, reordered in (("old", [True]), (SNAPSHOT_ORDERING_RULE_VERSION, [])):
+                with database.pool.connection() as connection:
+                    connection.execute("SET LOCAL session_replication_role = replica")
+                    connection.execute(
+                        "UPDATE leaderboard_snapshots SET ordering_rule_version = %s", (rule,)
+                    )
+                assert [board["reordered"] for board in boundary.queue_board_rebuilds(
+                    database, season, queue=False)["boards"]] == reordered
+            # A board built before this rule showed the reading plus the
+            # battles after it as proven.
+            with database.pool.connection() as connection:
+                connection.execute("SET LOCAL session_replication_role = replica")
+                connection.execute(
+                    "UPDATE leaderboard_snapshot_entries SET trophies = 4902"
+                    " WHERE player_id = 1"
+                )
+            assert boundary.queue_board_rebuilds(database, season, queue=False)[
+                "boards"
+            ] == [
+                {
+                    "boundary_at": DAY_2_RESET.isoformat(),
+                    "generation": 1,
+                    "profile_not_found": 0,
+                    "late_battles": 1,
+                    "reordered": False,
+                    "correction": "not_queued",
+                }
+            ]
+        finally:
+            database.close()

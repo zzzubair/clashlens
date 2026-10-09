@@ -208,6 +208,14 @@ export function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
       attacks: value.attack_count as number | null,
       defenses: value.defense_count as number | null,
       state: value.state as string,
+      confidence: isOneOf(value.confidence, [
+        "exact",
+        "inferred",
+        "partial",
+        "uncertain",
+      ] as const)
+        ? value.confidence
+        : null,
       coverage: value.coverage as string,
       hasAdjustment: value.has_adjustment as boolean,
       adjustmentTotal: value.adjustment_total as number | null,
@@ -307,9 +315,21 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         (isInteger(value.start_trophies) && value.start_trophies >= 0)
       ) ||
       !Array.isArray(value.offense_events) ||
-      !Array.isArray(value.defense_events)
+      !Array.isArray(value.defense_events) ||
+      !(
+        value.adjustments === undefined ||
+        (Array.isArray(value.adjustments) &&
+          value.adjustments.every(
+            (item) => isRecord(item) && isString(item.type) && isInteger(item.amount),
+          ))
+      )
     )
       malformed();
+    const adjustments = (value.adjustments ?? []) as { type: string; amount: number }[];
+    const automatic = adjustments.find((item) => item.type === "automatic_defense");
+    const reset = adjustments.find(
+      (item) => item.type === "weekly_reset" || item.type === "season_reset",
+    );
     const valid = [
       value.attack_count,
       value.attack_three_star_count,
@@ -327,12 +347,19 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         ? `${value.ranked_day_start} – ${value.ranked_day_end}`
         : value.ranked_day_start,
       state: value.state,
+      confidence: (value.confidence as RankedDaySummary["confidence"]) ?? null,
+      logCoverage: isOneOf(value.coverage, ["complete", "partial"] as const)
+        ? value.coverage
+        : undefined,
       startTrophies: (value.start_trophies as number | null | undefined) ?? null,
-      // The Season rule's 5,000 is the game's rule, not a reading.
+      // The Season rule's 5,000 is the game's rule, not a reading, and the
+      // previous day's calculated end is a calculation.
       startTrophiesSource:
         value.start_trophies_source === "season_rule"
           ? ("Season rule" as const)
-          : undefined,
+          : value.start_trophies_source === "previous_day_end"
+            ? ("Calculated" as const)
+            : undefined,
       offense: {
         attacks: value.attack_count as number | null,
         threeStars: value.attack_three_star_count as number | null,
@@ -344,6 +371,14 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         trophyLoss: value.defense_loss as number | null,
       },
       trophyChange: value.net_trophy_change as number | null,
+      automaticDefenseLoss: automatic ? -automatic.amount : null,
+      resetAdjustment: reset
+        ? {
+            kind:
+              reset.type === "weekly_reset" ? ("weekly" as const) : ("Season" as const),
+            amount: reset.amount,
+          }
+        : null,
       resetRank: mapResetRank(value.reset_rank),
       battlesComplete: value.battles_complete === true,
       offenseEvents: value.offense_events.map((event) => mapEvent(event, "offense")),
@@ -400,6 +435,9 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       },
       battleHistoryUpdatedAt: isUtcTimestamp(payload.battle_history_updated_at)
         ? payload.battle_history_updated_at
+        : null,
+      notFoundAt: isUtcTimestamp(payload.profile_not_found_at)
+        ? payload.profile_not_found_at
         : null,
       confidence: isOneOf(payload.public_confidence, [
         "high",

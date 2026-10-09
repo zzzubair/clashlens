@@ -60,51 +60,68 @@ only instead of a season day number. This adds no weekly recheck or clan discove
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
-Tracked players' current pages show a Trophy trend for the last 7 and 14 finished
-Legend days of the current Season. Each window ends at the latest Reset at 05:00
-UTC and excludes today. Early in a Season a window holds only the finished days
-so far and its title says so, such as Last 7 days (3 so far); before the
-Season's first finished day the trend is hidden. The cards sum complete saved
-daily trophy changes. Missing, partial or uncertain days and unknown changes are
-omitted. Days counted shows the coverage, such as 5 of 7; no counted days shows
-Unavailable, while a known zero displays 0. Selecting a past Season hides these
-cards. The player page explains itself with titles, labels and short counts
-rather than help paragraphs.
+On a tracked player's current page only two things are live: the current
+trophies next to the name and the Daily Legend log. Everything else uses
+finished Legend days, the ones that ended at a 05:00 UTC Reset. The page has
+no Trophy trend section; [`PlayerTrends.tsx`](app/components/PlayerTrends.tsx)
+keeps that calculation for a later dashboard card. The player page explains
+itself with titles, labels and short counts rather than help paragraphs.
+
+The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
+trophy change, end of day and Reset rank. A finished day's end of day is the
+next day's start, from any saved record of that day, even one the log leaves
+out, such as a day after the player left Legend I; it carries the day's Verified, Calculated or Uncertain dot.
+Only the latest finished day, with no next day saved yet, uses its start plus
+its trophy change plus any weekly or Season reset at its closing Reset; an
+older day without the next day's start shows Unavailable. When that sum
+disagrees with the next day's start, the end shows the next day's start and
+the whole day is Uncertain, its badges and explanation both, which says so,
+such as Battles add up to 5,050; next day started at 5,992. Trophies at last Reset follows the same rule. Under Defenses, a day with an
+automatic defense loss at Reset shows it, such as -32 automatic loss, so
+attacks minus defenses minus that loss equals the trophy change. A weekly or
+Season reset is not part of the trophy change and shows under it, such as +80
+weekly reset.
+Today's end of day and Reset rank read After Reset.
 
 Each Season shows one Season summary box. A past Season's box leads with its
 official in-game final rank, highlighted as the standout number, and final
-trophies; the current Season's leads with
-the Clash Lens rank at the latest Reset this Season (the page has no live rank),
-shown as Not ranked yet when that Reset's board has no rank for the player, and
-current trophies. Below that: hit rate, the percentage of all attacks that got
-three stars; attacks and defenses by 3, 2, 1 and 0 stars; and
-trophies per day on offense and defense, per attack and per defense. A note
-names stars of unknown battles only when there are some.
+trophies. The current Season's box leads with the Clash Lens rank at the
+latest Reset this Season, shown as Not ranked yet when that Reset's board has
+no rank for the player, and trophies at the latest Reset, the end of day of
+the day that Reset ended, with that day's dot. Before the Season's first
+finished day, trophies read No finished day yet. Below that: hit rate, the
+percentage of all attacks that got three stars; attacks and defenses by 3, 2,
+1 and 0 stars; and trophies per day on offense and defense, per attack and per
+defense. A note names stars of unknown battles only when there are some.
 The Season trophy change and total trophies gained are not shown, because the
 change is just ending trophies minus 5,000.
 
-Per-day averages on offense count only days with attacks, and on defense only
-days with defenses, so shielded or unplayed days don't lower them. A past
-Season's box uses its saved summary and, when coverage is partial, says how many
-of the 28 days are recorded; a Season known only from in-game history shows just
-the rank, which reads Not published yet until the game publishes it, and
-trophies. The current Season's box uses recorded battles and can show This
-Season, Last 7 days or Last 14 days, with one short line of dates and days saved.
-Recent windows include the current Legend day and the previous 6 or 13 days, but
-never days before the current Season; early in a Season the option says how many
-days so far, such as Last 7 days (2 so far). Per-day averages leave out the
-Legend day in progress; per-battle averages use individual recorded battles.
-Automatic Reset losses and missing or unplayed battles are excluded. Empty samples show Unavailable for rates and
-averages. Partial history and conflicting reports are flagged; retained
-past-Season totals cannot fill missing battle details.
+The current Season's box counts only finished Legend days, never the day in
+progress, and can show This Season, Last 7 days or Last 14 days: the last 7 or
+14 finished days, never days before the current Season. Early in a Season the
+option says how many finished days so far, such as Last 7 days (2 so far), and
+the box's one short line gives the dates and finished days saved. Counts,
+stars, hit rate and averages all use every recorded battle of those days,
+leaving out only days without battles that saved profiles prove were before
+the player signed up. Offense per day is trophies gained from attacks divided by the saved
+finished Legend days, battles or not, and defense per day is trophies lost on defense the same
+way; per attack and per defense divide by those days' recorded battles.
+Automatic Reset losses are not part of defense averages. Empty samples show
+Unavailable for rates and averages. Partial history and conflicting reports
+are flagged; retained past-Season totals cannot fill missing battle details. A
+past Season's box uses its saved summary, with per-day averages over every
+recorded Legend day, and when coverage is partial it says how many of the 28 days are
+recorded. A Season known only from in-game history shows just the rank, which
+reads Not published yet until the game publishes it, and trophies.
 
 With JavaScript enabled, changing the period uses battle details already loaded with
 the player page and makes no request or additional database read. It adds no stored data; the
 [saved-history limits](../docs/history-retention.md) still apply. The calculations
 are in [`battle-statistics.ts`](app/lib/battle-statistics.ts).
 
-The separate Older Seasons table shows saved finishes from January 2025 up to
-the Season that ended on 7 September 2026, newest first, with three columns:
+The separate Older history table, closed until the visitor opens it, shows
+saved finishes from January 2025 up to the Season that ended on 7 September
+2026, newest first, with three columns:
 Season ended, Global rank and Final trophies. Later Seasons are not listed.
 The rank is highlighted as the standout number.
 28-day Seasons are dated by their closing Reset; older calendar-month results
@@ -450,25 +467,29 @@ The root repository `Containerfile` builds the Python asyncio collector; this
 
 ## Font assets
 
-The browser loads the three Barlow weights as WOFF2, with the original TTF files
-retained as fallbacks. The WOFF2 files were converted from those exact originals
-with fontTools 4.66.0, without removing characters or changing glyphs. Their SIL
-Open Font License remains in `public/fonts/OFL.txt`. Font conversion is a one-time
-asset step and adds no application or build dependency.
+Headings and big numbers use Lilita One; everything else uses Nunito, as decided
+in [`../brand/README.md`](../brand/README.md). Both are WOFF2 files as published
+by Google Fonts, split into Latin and Latin Extended so a browser only downloads
+the part a page needs: 12 KB for Lilita One and 75 KB for Nunito, which is one
+variable file covering weights 400 to 900. Other scripts fall back to the system
+font. Their SIL Open Font Licences are in `public/fonts/OFL-LilitaOne.txt` and
+`public/fonts/OFL-Nunito.txt`. The fonts are served by the site itself and add no
+application or build dependency.
 
-Headings use Bricolage Grotesque ExtraBold (800), one 21.7 KB WOFF2 file
-limited to Latin characters as published by Google Fonts. Other scripts fall
-back to Barlow or the system font. Its SIL Open Font License is in
-`public/fonts/OFL-BricolageGrotesque.txt`.
+## Game art and brand icons
 
-## Game art
-
-The site icons reuse the existing `../assets/icon.png` artwork. No new mark was
-generated. `public/favicon.ico` is 32 × 32; `public/apple-touch-icon.png` and
-`public/apple-touch-icon-precomposed.png` are 180 × 180;
-`public/apple-touch-icon-120x120-precomposed.png` is 120 × 120. These were resized
-with FFmpeg's Lanczos filter and are served by the existing static-file handler,
-with no API calls or database queries.
+The browser tab icon, home-screen icons and web app icons use the Clash Lens CL
+mark from [`../assets/`](../assets/). `public/favicon.ico` holds 32, 16 and 48
+pixel images of `mark-cl-block.svg`, in that order. `public/apple-touch-icon.png`
+and `public/apple-touch-icon-precomposed.png` are 180 × 180,
+`public/apple-touch-icon-120x120-precomposed.png` is 120 × 120, and
+`public/icon-192.png` and `public/icon-512.png` are listed in
+`public/site.webmanifest`; all of these are `mark-cl-block-square.svg`, which fills
+the whole square so phones can round the corners themselves. They were rendered
+from the SVGs with headless Chrome. `public/images/og-clashlens.png` is the
+1200 × 630 link preview image used by player pages, built from the wordmark.
+All are served by the existing static-file handler, with no API calls or database
+queries.
 
 `public/images/legend-league.webp` is the Legend I tier badge from the official
 API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved
@@ -482,9 +503,10 @@ the same notice. Its browser test checks the complete rendered text, link, and
 and wrapping remain unchanged.
 
 Shared orange accent colours use `--cl-accent` and `--cl-accent-contrast` in
-`theme.css` and the dark overrides in `appearance.css`. The contrast variant is
-darker in light mode and lighter in dark mode. All four values and every use
-were preserved when renaming the former blue-named settings.
+`theme.css` and the dark overrides in `appearance.css`. Both now hold the
+brand's link and accent text colour for each theme, listed in
+[`../brand/README.md`](../brand/README.md). All four values and every use were
+preserved when renaming the former blue-named settings.
 
 For that rename, full-page Chrome screenshots before and after changing only
 the colour names showed zero changed pixels on both Home in light mode

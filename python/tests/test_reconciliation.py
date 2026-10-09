@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from clashlens.api_db import _screen_events
@@ -11,6 +12,7 @@ from clashlens.reconciliation import (
     CoverageObservation,
     PreviousRankedDay,
     ReconciliationInput,
+    reads_later_reading,
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
@@ -141,6 +143,389 @@ def test_zero_defenses_does_not_apply_automatic_adjustment_and_has_uncertain_shi
     assert "shield_sequence_longer_than_two_days" in third.failure_reasons
 
 
+def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows() -> None:
+    # 6 October 2026: no defenses, previous day 8 defenses; the next Reset
+    # reading is exactly 8 times the previous day's average below the end.
+    cases = (
+        # tag, previous loss, attack gains, start, next Reset reading
+        ("#9R2LRYY8V", 305, (), 4695, 4391),
+        ("#L998PVYV0", 275, (), 4725, 4453),
+        ("#Q0RUJC9J2", 249, (31, 31, 31, 31, 31, 31, 32, 32), 4751, 4753),
+    )
+    for tag, previous_loss, gains, start, reading in cases:
+        result = reconcile_ranked_day(
+            _input(
+                start_trophies=start,
+                next_start_trophies=reading,
+                contributions=tuple(
+                    BattleContribution(f"{tag}-attack-{index}", "offense", gain)
+                    for index, gain in enumerate(gains)
+                ),
+                previous_day=PreviousRankedDay(True, 8, previous_loss, 0),
+            )
+        )
+
+        assert result.state == "Complete", tag
+        assert result.confidence == "exact"
+        assert result.automatic_defense_loss == start + sum(gains) - reading
+        assert result.automatic_defense_evidence_state == "confirmed"
+        assert result.final_trophies_before_reset == reading
+        assert result.unexplained_residual == 0
+        assert result.shield_state == "not_inferred"
+
+    # One of the 86 quiet days kept its trophies, so it is still uncharged.
+    quiet = reconcile_ranked_day(
+        _input(
+            start_trophies=4991,
+            next_start_trophies=4991,
+            contributions=(),
+            previous_day=PreviousRankedDay(True, 7, 232, 0),
+        )
+    )
+    # Any other drop is still a mismatch, and Day 1 has no previous day.
+    other = reconcile_ranked_day(
+        _input(
+            start_trophies=4695, next_start_trophies=4392, contributions=(),
+            previous_day=PreviousRankedDay(True, 8, 305, 0),
+        )
+    )
+    day_1 = reconcile_ranked_day(
+        _input(
+            start_trophies=4695, next_start_trophies=4391, contributions=(),
+            previous_day=PreviousRankedDay(True, 8, 305, 0), season_first_day=True,
+        )
+    )
+
+    assert (quiet.state, quiet.automatic_defense_loss) == ("Complete", None)
+    assert quiet.shield_state == "inferred_shielded"
+    assert other.state == day_1.state == "Inconsistent"
+    assert other.automatic_defense_loss is day_1.automatic_defense_loss is None
+
+
+def test_zero_defense_day_read_before_its_loss_takes_it_from_a_later_reading() -> None:
+    # As #9R2LRYY8V on 6 October 2026, but with the Reset reading at 05:02
+    # before the game charged 8 times the previous day's average (305 / 8),
+    # and a reading at 05:10, before any new-day battle, after it.
+    day = _input(
+        start_trophies=4695, next_start_trophies=4695, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 305, 0),
+    )
+    later_at = DAY.end + timedelta(minutes=10)
+    charged = reconcile_ranked_day(
+        replace(day, later_next_start_reading=(later_at, 4391))
+    )
+    # A quiet day's later reading still shows its start: it stays uncharged.
+    quiet = reconcile_ranked_day(
+        replace(day, later_next_start_reading=(later_at, 4695))
+    )
+
+    assert (charged.state, charged.confidence) == ("Complete", "inferred")
+    assert charged.automatic_defense_loss == 304
+    assert charged.automatic_defense_evidence_state == "calculated"
+    assert charged.final_trophies_before_reset == 4391
+    assert charged.next_start_trophies == 4391
+    assert charged.unsettled_automatic_loss == 304
+    assert charged.failure_reasons == ()
+    assert (quiet.state, quiet.automatic_defense_loss) == ("Complete", None)
+    assert quiet.next_start_trophies == 4695
+
+    # As #Q0RUJC9J2, but its Reset reading also missed the day's 250 attack
+    # gain: only the later reading shows both the gain and the 248 loss.
+    gains = (31, 31, 31, 31, 31, 31, 32, 32)
+    both = _input(
+        start_trophies=4751, next_start_trophies=4751,
+        contributions=tuple(
+            BattleContribution(f"#Q0RUJC9J2-attack-{index}", "offense", gain)
+            for index, gain in enumerate(gains)
+        ),
+        previous_day=PreviousRankedDay(True, 8, 249, 0),
+    )
+    unread = reconcile_ranked_day(both)
+    settled = reconcile_ranked_day(
+        replace(both, later_next_start_reading=(later_at, 4753))
+    )
+
+    assert unread.state == "Inconsistent"
+    assert (settled.state, settled.confidence) == ("Complete", "inferred")
+    assert settled.automatic_defense_loss == 248
+    assert settled.final_trophies_before_reset == settled.next_start_trophies == 4753
+    assert settled.formula_components["next_start_reading_correction"] == 2
+
+    # The next day starts from the Reset reading less the loss.
+    next_day = reconcile_ranked_day(
+        _input(
+            ranked_day=ranked_day_for(DAY.end + timedelta(hours=1)),
+            now=DAY.end + timedelta(days=1, minutes=1),
+            start_baseline_id=11,
+            end_baseline_id=12,
+            start_trophies=4695,
+            next_start_trophies=4391 + 40,
+            coverage_observations=tuple(
+                replace(item, observed_at=item.observed_at + timedelta(days=1))
+                for item in _coverage()
+            ),
+            contributions=(
+                *_battles("#9R2LRYY8V-2", "offense", 8, 280),
+                *_battles("#9R2LRYY8V-2", "defense", 8, 240),
+            ),
+            previous_day=PreviousRankedDay(
+                True, 0, 0, 0, end_baseline_id=11, unsettled_automatic_loss=304,
+            ),
+        )
+    )
+
+    assert (next_day.state, next_day.start_trophies) == ("Complete", 4391)
+
+
+def test_dropped_zero_defense_day_stays_partial() -> None:
+    # Dropped from Legend I at a weekly Reset: later profiles show Legend II,
+    # and a Reset reading below the day's end can be the automatic loss or a
+    # credit the game had not added yet, so no reading proves the loss.
+    later_at = DAY.end + timedelta(minutes=9)
+    day = _input(
+        start_trophies=4900, next_start_trophies=4940,
+        contributions=(BattleContribution("attack-1", "offense", 40),),
+        previous_day=PreviousRankedDay(True, 8, 240, 0),
+        end_baseline_evidence={"dropped_from_legend_i": True},
+    )
+    # The Reset reading misses the 240 credit, the size of the loss; a later
+    # Legend I reading shows the credit and no loss.
+    delayed = replace(
+        day, start_trophies=4700, next_start_trophies=4700,
+        contributions=(BattleContribution("attack-1", "offense", 240),),
+    )
+    cases = (
+        day, replace(day, later_next_start_reading=(later_at, 4700)),
+        replace(day, previous_day=None),
+        replace(day, previous_day=PreviousRankedDay(False, 8, 240, 0)),
+        delayed, replace(delayed, later_next_start_reading=(later_at, 4940)),
+    )
+    for case in cases:
+        result = reconcile_ranked_day(case)
+        assert result.state == "Partial"
+        assert "automatic_defense_basis_unavailable" in result.failure_reasons
+        assert result.automatic_defense_loss is None
+    assert reconcile_ranked_day(replace(day, end_baseline_evidence={})).state == (
+        "Complete"
+    )
+
+
+def _battles(tag: str, lens: str, count: int, total: int) -> tuple[BattleContribution, ...]:
+    amounts = [total // count] * (count - 1) + [total - total // count * (count - 1)]
+    return tuple(
+        BattleContribution(f"{tag}-{lens}-{index}", lens, amount)
+        for index, amount in enumerate(amounts)
+    )
+
+
+def test_later_reading_settles_a_reset_reading_missing_the_days_credit() -> None:
+    # 5 October 2026, Season Day 1, then 6 October. The Reset reading left
+    # out attack gains the battles prove; a reading after it, before any new
+    # day battle, is exactly the calculated next start.
+    cases = (
+        # tag, attacks gain, defenses, defense loss, reading, later reading,
+        # next day's gain, loss and end reading
+        ("#P20G0CUJY", 308, 8, 234, 4766, 5074, 267, 273, 5068),
+        ("#8Q20CULJP", 281, 8, 299, 4701, 4982, 277, 216, 5043),
+        # 7 defenses: the later reading also includes the automatic loss.
+        ("#L9L82J90J", 274, 7, 204, 4841, 5041, 245, 276, 5010),
+    )
+    later_at = DAY.end + timedelta(minutes=10)
+    for tag, gain, defenses, loss, reading, later, gain_2, loss_2, end_2 in cases:
+        day_1 = _input(
+            start_trophies=5000,
+            next_start_trophies=reading,
+            contributions=(
+                *_battles(tag, "offense", 8, gain),
+                *_battles(tag, "defense", defenses, loss),
+            ),
+            season_first_day=True,
+        )
+        unsettled = reconcile_ranked_day(day_1)
+        wrong_later = reconcile_ranked_day(
+            replace(day_1, later_next_start_reading=(later_at, later + 1))
+        )
+        first = reconcile_ranked_day(
+            replace(day_1, later_next_start_reading=(later_at, later))
+        )
+
+        assert unsettled.state == wrong_later.state == "Inconsistent", tag
+        assert (first.state, first.confidence) == ("Complete", "inferred")
+        assert first.final_trophies_before_reset == later
+        assert first.next_start_trophies == later
+        assert first.unexplained_residual == 0
+        assert first.formula_components["next_start_reading_trophies"] == reading
+        assert first.formula_components["next_start_reading_correction"] == later - reading
+
+        second = reconcile_ranked_day(
+            _input(
+                ranked_day=ranked_day_for(DAY.end + timedelta(hours=1)),
+                now=DAY.end + timedelta(days=1, minutes=1),
+                start_baseline_id=11,
+                end_baseline_id=12,
+                start_trophies=reading,
+                next_start_trophies=end_2,
+                coverage_observations=tuple(
+                    replace(item, observed_at=item.observed_at + timedelta(days=1))
+                    for item in _coverage()
+                ),
+                contributions=(
+                    *_battles(f"{tag}-2", "offense", 8, gain_2),
+                    *_battles(f"{tag}-2", "defense", 8, loss_2),
+                ),
+                previous_day=PreviousRankedDay(
+                    True, defenses, loss, 0, end_baseline_id=11,
+                    reset_reading_correction=later - reading,
+                ),
+            )
+        )
+
+        assert (second.state, second.confidence) == ("Complete", "exact"), tag
+        assert second.start_trophies == later
+        assert second.final_trophies_before_reset == end_2
+        assert second.formula_components["start_reading_trophies"] == reading
+        assert second.formula_components["start_reading_correction"] == later - reading
+
+
+def test_battles_landing_after_the_reset_reading_settle_the_day() -> None:
+    # 7 October 2026 Reset readings taken before the ended day's last battle
+    # reached the profile, with no later reading before the next battle.
+    reading_at = DAY.end + timedelta(seconds=31)
+
+    def day(late: BattleContribution, start: int, reading: int, *others, **overrides):
+        values = {
+            "start_trophies": start,
+            "next_start_trophies": reading,
+            "end_baseline_evidence": {"profile": {"observed_at": reading_at.isoformat()}},
+            "contributions": (*others, late),
+            "previous_day": PreviousRankedDay(True, 2, 20, 0, end_baseline_id=10),
+        }
+        return reconcile_ranked_day(_input(**(values | overrides)))
+
+    defenses = tuple(
+        BattleContribution(f"defense-{index}", "defense", 10,
+                           battle_timestamp=DAY.start + timedelta(hours=index + 1))
+        for index in range(7)
+    )
+    # #2GL8CJL: read 4,839 at 05:00:31; its attack reported at 05:02:15 adds 40.
+    attack = BattleContribution(
+        "attack-late", "offense", 40, battle_timestamp=DAY.end + timedelta(seconds=135)
+    )
+    noon_attack = BattleContribution(
+        "attack-noon", "offense", 70, battle_timestamp=DAY.start + timedelta(hours=7)
+    )
+    defense_8 = BattleContribution(
+        "defense-7", "defense", 10, battle_timestamp=DAY.start + timedelta(hours=9)
+    )
+    late_attack = day(attack, 4849, 4839, noon_attack, *defenses, defense_8)
+    # #82RV9CV8C: read 5,113 at 05:01:00; its 155-second defense from 04:57:32
+    # cost 32 and had not reached the profile.
+    defense = BattleContribution(
+        "defense-late", "defense", 32, battle_timestamp=DAY.end - timedelta(seconds=148),
+        battle_seconds=155,
+    )
+    late_defense = day(defense, 5183, 5113, *defenses)
+    # A battle that landed 15 minutes before the reading was in it.
+    early = replace(attack, battle_timestamp=DAY.end - timedelta(minutes=15))
+    too_early = day(early, 4849, 4839, noon_attack, *defenses, defense_8)
+
+    assert (late_attack.state, late_attack.confidence) == ("Complete", "inferred")
+    assert late_attack.next_start_trophies == 4879
+    assert late_attack.formula_components["next_start_reading_correction"] == 40
+    assert late_attack.formula_components["next_start_battles_after_reading"] == [
+        "attack-late"
+    ]
+    assert (late_defense.state, late_defense.next_start_trophies) == ("Complete", 5081)
+    assert late_defense.formula_components["next_start_reading_correction"] == -32
+    assert too_early.state == "Inconsistent"
+
+    # Start 5,000, 8 attacks for 280, 7 defenses for 280 after 8 for 320 the
+    # day before: an automatic loss of 40. Read 5,040 at 05:00:31, before the
+    # last defense's 40, landing at 05:01:00, and the automatic 40.
+    attacks = tuple(
+        BattleContribution(f"attack-{hour}", "offense", 35,
+                           battle_timestamp=DAY.start + timedelta(hours=hour, minutes=15))
+        for hour in range(8)
+    )
+    defenses_40 = tuple(replace(item, trophy_amount=40) for item in defenses)
+    last_defense = replace(
+        defense, trophy_amount=40, battle_timestamp=DAY.end - timedelta(seconds=60),
+        battle_seconds=120,
+    )
+    pending = day(
+        last_defense, 5000, 5040, *attacks, *defenses_40[:6],
+        previous_day=PreviousRankedDay(True, 8, 320, 0, end_baseline_id=10),
+    )
+    assert (pending.state, pending.confidence) == ("Complete", "inferred")
+    assert (pending.automatic_defense_loss, pending.unsettled_automatic_loss) == (40, 40)
+    assert pending.next_start_trophies == pending.final_trophies_before_reset == 4960
+    assert pending.formula_components["next_start_reading_correction"] == -40
+    assert pending.formula_components["next_start_battles_after_reading"] == ["defense-late"]
+    next_day = reconcile_ranked_day(_input(
+        ranked_day=ranked_day_for(DAY.end + timedelta(hours=1)),
+        start_baseline_id=11,
+        start_trophies=5040,
+        previous_day=PreviousRankedDay(
+            True, 7, 280, 0, end_baseline_id=11, unsettled_automatic_loss=40,
+            reset_reading_correction=-40,
+        ),
+    ))
+    assert next_day.start_trophies == 4960
+
+    # A start its Inconsistent previous day left 40 gains short of 6,040: this
+    # day, 8 attacks for 280 and 8 defenses for 320, really ends at 6,000, as
+    # read. A last 40 defense landing at 04:58 only looks missed by it.
+    unproven_day = (
+        replace(last_defense, battle_timestamp=DAY.end - timedelta(minutes=4)),
+        6000, 6000, *attacks, *defenses_40,
+    )
+    proven = day(*unproven_day)
+    unproven = day(
+        *unproven_day,
+        previous_day=PreviousRankedDay(
+            False, 8, 320, 0, state="Inconsistent", end_baseline_id=10
+        ),
+    )
+    assert (proven.state, proven.next_start_trophies) == ("Complete", 5960)
+    assert unproven.state == "Inconsistent"
+    assert unproven.unexplained_residual == 40
+    assert "next_start_battles_after_reading" not in unproven.formula_components
+
+
+def test_a_later_reading_other_than_the_end_disproves_missed_battles() -> None:
+    # Season Day 1 from a proven 5,000: 7 attacks for 224 and 7 defenses for
+    # 224 calculate an end of 5,000, but the game charged 32 for the missing
+    # defense. The last attack, +32, reported at 05:02, after the 05:00:31
+    # reading of 4,968; readings at 05:10 and 05:20 show 4,968 too.
+    reading_at = DAY.end + timedelta(seconds=31)
+    day = _input(
+        start_trophies=5000,
+        next_start_trophies=4968,
+        season_first_day=True,
+        end_baseline_evidence={"profile": {"observed_at": reading_at.isoformat()}},
+        contributions=(
+            *(BattleContribution(f"attack-{hour}", "offense", 32,
+                                 battle_timestamp=DAY.start + timedelta(hours=hour))
+              for hour in range(6)),
+            BattleContribution("attack-late", "offense", 32,
+                               battle_timestamp=DAY.end + timedelta(minutes=2)),
+            *(BattleContribution(f"defense-{hour}", "defense", 32,
+                                 battle_timestamp=DAY.start + timedelta(hours=hour, minutes=30))
+              for hour in range(7)),
+        ),
+    )
+    guessed = reconcile_ranked_day(day)
+    disproved = reconcile_ranked_day(
+        replace(day, later_next_start_reading=(DAY.end + timedelta(minutes=20), 4968))
+    )
+
+    assert (guessed.state, guessed.next_start_trophies) == ("Complete", 5000)
+    assert reads_later_reading(day, guessed)
+    assert disproved.state == "Inconsistent"
+    assert disproved.unexplained_residual == -32
+    assert "next_start_battles_after_reading" not in disproved.formula_components
+
+
 def test_coverage_gap_or_missing_overlap_makes_ended_day_partial() -> None:
     no_overlap = list(_coverage())
     no_overlap[1] = CoverageObservation(
@@ -159,6 +544,41 @@ def test_coverage_gap_or_missing_overlap_makes_ended_day_partial() -> None:
     assert "battle_log_row_gap" in gap_result.failure_reasons
     assert overlap_result.state == "Partial"
     assert "battle_log_overlap_gap" in overlap_result.failure_reasons
+
+
+def test_shared_non_legend_rows_prove_full_logs_overlap() -> None:
+    # Player 24106 on 6 October 2026: two full logs of non-Legend battles,
+    # no Legend battle in either, 48 of 50 saved rows the same.
+    first, _, last = _coverage()
+    full_logs = (
+        CoverageObservation(
+            observed_at=first.observed_at, row_count=50, battle_identities=(),
+            has_row_gap=False, observation_id=101,
+            source_row_ids=tuple(range(1, 51)),
+        ),
+        CoverageObservation(
+            observed_at=first.observed_at + timedelta(minutes=18), row_count=50,
+            battle_identities=(), has_row_gap=False, observation_id=102,
+            source_row_ids=(51, 52, *range(1, 49)),
+        ),
+        last,
+    )
+    turned_over = (
+        *full_logs[:1],
+        CoverageObservation(
+            observed_at=full_logs[1].observed_at, row_count=50,
+            battle_identities=(), has_row_gap=False, observation_id=102,
+            source_row_ids=tuple(range(51, 101)),
+        ),
+        last,
+    )
+
+    overlapping = reconcile_ranked_day(_input(coverage_observations=full_logs))
+    gap = reconcile_ranked_day(_input(coverage_observations=turned_over))
+
+    assert overlapping.state == "Complete"
+    assert gap.state == "Partial"
+    assert "battle_log_overlap_gap" in gap.failure_reasons
 
 
 def test_weekly_and_season_reset_adjustments_reconcile_against_5000_baseline() -> None:
@@ -260,7 +680,7 @@ def test_automatic_defense_uses_previous_and_current_observed_losses() -> None:
     assert result.state == "Complete"
 
 
-def _season_day_1(attacks, defenses, previous_day, next_start_trophies):
+def _season_day_1(attacks, defenses, previous_day, next_start_trophies, **overrides):
     day_1 = ranked_day_for(datetime(2026, 10, 5, 12, tzinfo=UTC))
     return reconcile_ranked_day(
         _input(
@@ -274,6 +694,7 @@ def _season_day_1(attacks, defenses, previous_day, next_start_trophies):
             ),
             previous_day=previous_day,
             season_first_day=True,
+            **overrides,
         )
     )
 
@@ -929,6 +1350,32 @@ def test_a_monday_reading_above_5000_taken_before_the_loss_is_accepted_too() -> 
     assert (raised.state, raised.unsettled_automatic_loss) == ("Complete", 0)
 
 
+def test_an_official_season_total_above_the_end_by_the_loss_is_a_mismatch() -> None:
+    # 6,000 + 40 - 30, less 210 for 7 missing defenses at 30 each, ends on
+    # 5,800. The game's official total already includes that loss.
+    day = {
+        "contributions": (*_attacks(40), *_defenses(30)),
+        "previous_day": PreviousRankedDay(True, 8, 240, 0),
+    }
+    reading = reconcile_ranked_day(_input(next_start_trophies=6010, **day))
+    official = reconcile_ranked_day(_input(
+        next_start_trophies=6010,
+        end_baseline_evidence={"official_final_trophies": 6010}, **day,
+    ))
+    matching = reconcile_ranked_day(_input(
+        next_start_trophies=5800,
+        end_baseline_evidence={"official_final_trophies": 5800}, **day,
+    ))
+
+    assert reading.unsettled_automatic_loss == 210
+    assert reading.state == "Complete"
+    assert official.state == "Inconsistent"
+    assert official.unsettled_automatic_loss == 0
+    assert official.unexplained_residual == 210
+    assert (matching.state, matching.confidence) == ("Complete", "exact")
+    assert matching.final_trophies_before_reset == 5800
+
+
 def test_season_day_1_charges_attacks_minus_defenses_unless_attacks_are_fewer() -> None:
     # Production, 5 October 2026 (Day 1), profiles read on 6 October after
     # the loss landed and before any Day 2 battle. #P9VPRRJU: 3 attacks for
@@ -960,6 +1407,83 @@ def test_season_day_1_charges_attacks_minus_defenses_unless_attacks_are_fewer() 
     )
     assert ordinary.automatic_defense_loss == 60
     assert ordinary.state == "Complete"
+
+
+def test_no_opponent_rows_are_used_slots_for_the_automatic_loss_only() -> None:
+    # Production, 5 October 2026 (Day 1), each log holding a "no opponent, no
+    # battle" row; profiles read on 6 October after the loss and before any
+    # Day 2 battle. #C8UUYRYP: 8 attacks, 6 defenses for 211 and one such
+    # defense row; 5,070 at 05:06, then 5,040: floor(211 / 7) for one
+    # missing defense, not floor(211 / 6) * 2 = 70.
+    extra_defense = _season_day_1(
+        (40,) * 7 + (1,), (40, 40, 40, 40, 40, 11), None, 5070,
+        zero_result_defense_slots=1,
+    )
+    # #2VCCCJG9: 7 attacks, one such attack row, 7 defenses for 186; 5,086,
+    # then 5,060: 8 used attacks charge floor(186 / 7) once, not nothing.
+    extra_attack = _season_day_1(
+        (40,) * 6 + (32,), (40, 40, 40, 30, 20, 10, 6), None, 5086,
+        zero_result_attack_slots=1,
+    )
+    # #P2P80LVVJ: 6 attacks, one such attack row, 7 defenses for 194; the
+    # 4,991 reading stood: 7 used attacks for 7 defenses lose nothing, not
+    # floor(194 / 7) = 27.
+    equal = _season_day_1(
+        (40, 40, 40, 40, 20, 5), (40, 40, 40, 40, 20, 10, 4), None, 4991,
+        zero_result_attack_slots=1,
+    )
+
+    assert extra_defense.automatic_defense_loss == 30
+    assert extra_defense.final_trophies_before_reset == 5040
+    assert extra_defense.unsettled_automatic_loss == 30
+    assert extra_attack.automatic_defense_loss == 26
+    assert extra_attack.final_trophies_before_reset == 5060
+    assert extra_attack.unsettled_automatic_loss == 26
+    assert equal.automatic_defense_loss == 0
+    assert equal.final_trophies_before_reset == 4991
+    assert (equal.state, equal.confidence) == ("Complete", "exact")
+    # They are not battles.
+    assert (extra_defense.attack_count, extra_defense.defense_count) == (8, 6)
+    assert (extra_attack.attack_count, extra_attack.defense_count) == (7, 7)
+    assert extra_defense.input_evidence["zero_result_defense_slots"] == 1
+    assert "zero_result_attack_slots" not in extra_defense.input_evidence
+    assert "zero_result_defense_slots" not in reconcile_ranked_day(
+        _input()
+    ).input_evidence
+
+
+def test_no_opponent_defense_rows_join_both_days_of_the_average() -> None:
+    # Any other day pools yesterday's and today's used defense slots, such
+    # rows counting with no loss: floor((180 + 150) / (7 + 6)) * 2 = 50.
+    pooled = reconcile_ranked_day(
+        _input(
+            start_trophies=6000,
+            next_start_trophies=5800,
+            contributions=_defenses(40, 30, 30, 30, 20),
+            previous_day=PreviousRankedDay(
+                True, 6, 180, 0, zero_result_defense_slots=1
+            ),
+            zero_result_defense_slots=1,
+        )
+    )
+    # 7 defenses and one such row fill all 8 slots: no loss to calculate.
+    full = reconcile_ranked_day(
+        _input(
+            next_start_trophies=5930,
+            contributions=_defenses(10, 10, 10, 10, 10, 10, 10),
+            previous_day=None,
+            zero_result_defense_slots=1,
+        )
+    )
+
+    assert pooled.automatic_defense_loss == 50
+    assert pooled.final_trophies_before_reset == 5800
+    assert pooled.state == "Complete"
+    assert pooled.input_evidence["previous_day"]["zero_result_defense_slots"] == 1
+    assert full.automatic_defense_loss is None
+    assert full.automatic_defense_evidence_state == "not_applicable"
+    assert full.final_trophies_before_reset == 5930
+    assert full.state == "Complete"
 
 
 def test_a_disputed_day_never_takes_the_loss_off_its_reading() -> None:

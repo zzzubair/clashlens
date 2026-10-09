@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -277,6 +277,7 @@ def complete_league_history(
                         Jsonb(entry.source_json),
                     ),
                 )
+            _recalculate_season_ends(connection, player_id, history, observed_at)
             _record_processing_outcome(
                 database,
                 connection,
@@ -293,3 +294,85 @@ def complete_league_history(
                 state="complete",
                 outcome=history.outcome,
             )
+
+
+def _recalculate_season_ends(
+    connection: Any, player_id: int, history: ParsedLeagueHistory,
+    observed_at: datetime,
+) -> None:
+    """Queue the last day of each Season this response names an official
+    Legend I total for (see ``reconciliation_db._official_final``)."""
+    from .profile import LEGEND_I_TIER_ID
+
+    for entry in history.entries:
+        if entry.league_tier_id != LEGEND_I_TIER_ID or entry.league_trophies is None:
+            continue
+        ended = int(entry.league_season_id)
+        if ended <= observed_at.timestamp():
+            queue_season_end(connection, player_id, datetime.fromtimestamp(ended, UTC))
+
+
+def queue_season_end(connection: Any, player_id: int, season_end: datetime) -> None:
+    """Queue the last day of the Season ending at ``season_end`` when the
+    player's saved official Legend I total for it, whichever response saved
+    it, is not yet the end the day is checked against, and the day is kept,
+    not retired with its Season's details. It is queued whatever a Season
+    repair already did for the player, once per total and saved result of
+    the day: a job that ran without checking the day against it, as when the
+    saved total changed since, leaves another to queue. A day last saved
+    under older calculation rules is queued under the current ones; a last
+    day before the previous Season, which the day's calculation does not
+    accept, is left as saved. The
+    day's calculation lock makes the two meet: a calculation either reads
+    this total or has saved before this reads it."""
+    from . import first_battle_log
+    from .db import PYTHON_BACKFILL_PRIORITY
+    from .domain import ranked_day_for
+    from .profile import LEGEND_I_TIER_ID
+    from .ranked_day_inputs import lock_ranked_day
+    from .reconciliation import RECONCILIATION_RULE_VERSION
+    from .reconciliation_db import _anchored_day
+
+    day_start = season_end - timedelta(days=1)
+    anchor, season_day = _anchored_day(connection, day_start)
+    if season_day is None or day_start < anchor[3]:
+        return
+    lock_ranked_day(connection, int(player_id), ranked_day_for(day_start))
+    stale = connection.execute(
+        """
+        SELECT version.id, official.league_trophies
+        FROM ranked_day_versions AS version
+        JOIN player_league_history_entries AS official
+          ON official.player_id = version.player_id
+         AND official.league_season_id = %s AND official.league_tier_id = %s
+         AND official.league_trophies IS NOT NULL
+        WHERE version.player_id = %s AND version.ranked_day_start = %s
+          AND NOT EXISTS (
+              SELECT 1 FROM season_detail_retirements AS retired
+              WHERE retired.official_season_id = version.official_season_id
+          )
+          AND (
+              version.reconciliation_rule_version <> %s
+              OR (version.input_evidence -> 'end_baseline_evidence'
+                  ->> 'official_final_trophies')::integer
+                 IS DISTINCT FROM official.league_trophies
+          )
+          AND version.id = (
+              SELECT max(latest.id) FROM ranked_day_versions AS latest
+              WHERE latest.player_id = version.player_id
+                AND latest.ranked_day_start = version.ranked_day_start
+          )
+        """,
+        (str(int(season_end.timestamp())), LEGEND_I_TIER_ID, player_id, day_start,
+         RECONCILIATION_RULE_VERSION),
+    ).fetchone()
+    if stale is None:
+        return
+    first_battle_log._queue(
+        connection, int(player_id), day_start, None,
+        key=(f"reconcile:official-final:{player_id}:"
+             f"{day_start:%Y-%m-%dT%H:%M:%SZ}:{RECONCILIATION_RULE_VERSION}:"
+             f"{stale[1]}:{stale[0]}"),
+        trigger="official_final", later_days=False,
+        priority=PYTHON_BACKFILL_PRIORITY,
+    )

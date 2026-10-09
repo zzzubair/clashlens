@@ -21,6 +21,14 @@ from .reconciliation import (
     PreviousRankedDay,
 )
 
+# Reasons after which a day's end cannot start the next day: a 9th attack or
+# defense means the game returned more than its own cap, and a day the player
+# was not enrolled or not in Legend I is not a Legend day at all.
+CHAIN_BREAK_REASONS = frozenset({
+    "attack_count_exceeds_eight", "defense_count_exceeds_eight",
+    "not_enrolled", "player_not_eligible",
+})
+
 
 def _source_rows(database: Database) -> tuple[str, str, str]:
     """Where a battle log's rows live, their ID column, and how rows join their report."""
@@ -258,6 +266,11 @@ def load_contributions(
                 WHEN 'supercell-source-parser-v1'
                     THEN source_row.source_json -> 'opponent' ->> 'name'
                 ELSE source_row.source_json ->> 'opponentName'
+            END,
+            CASE
+                WHEN e.parser_version <> 'supercell-source-parser-v1'
+                     AND source_row.source_json ->> 'battleTimestamp' IS NOT NULL
+                    THEN source_row.source_json ->> 'battleTime'
             END
         FROM legend_battles AS b
         JOIN battle_perspectives AS p ON p.battle_id = b.id
@@ -311,6 +324,9 @@ def load_contributions(
             opponent_name=(
                 _text_value(row[17]) if row[17] is not None else None
             ),
+            battle_seconds=(
+                int(row[18]) if row[18] is not None and str(row[18]).isdigit() else None
+            ),
         )
         for row in contribution_rows
     )
@@ -333,7 +349,11 @@ def load_previous_day(
             shield_duration_days,
             input_hash,
             end_baseline_id,
-            COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0)
+            COALESCE((formula_components ->> 'unsettled_automatic_loss')::int, 0),
+            COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
+            COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0),
+            expected_next_start_trophies,
+            failure_reasons
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -346,6 +366,23 @@ def load_previous_day(
             RECONCILIATION_RULE_VERSION,
         ),
     ).fetchone()
+    if previous_row is None:
+        return None
+    reasons = previous_row[14] if isinstance(previous_row[14], list) else []
+    # Continuous logs, a saved Legend day and no 9th attack or defense: every
+    # battle of that day is known, whether or not its readings were usable.
+    battles_known = bool(previous_row[5]) and _text_value(
+        previous_row[1]
+    ) in {"Complete", "Partial"} and not any(
+        reason in CHAIN_BREAK_REASONS for reason in reasons
+    )
+    # With no defense slot used, only a reading shows the automatic loss for
+    # all 8 (see ``reconciliation._zero_defense_loss``), so an end no
+    # reading settled cannot start the next day.
+    end_known = battles_known and (
+        _text_value(previous_row[1]) == "Complete"
+        or int(previous_row[3]) + int(previous_row[11]) > 0
+    )
     return (
         PreviousRankedDay(
             complete=(
@@ -374,10 +411,112 @@ def load_previous_day(
                 int(previous_row[9]) if previous_row[9] is not None else None
             ),
             unsettled_automatic_loss=int(previous_row[10]),
+            zero_result_defense_slots=int(previous_row[11]),
+            reset_reading_correction=int(previous_row[12]),
+            expected_next_start=(
+                int(previous_row[13])
+                if end_known and previous_row[13] is not None
+                else None
+            ),
+            battles_known=battles_known,
         )
-        if previous_row is not None
-        else None
     )
+
+
+def previous_end_start(
+    baseline: dict[str, Any] | None, previous: PreviousRankedDay, *, complete: bool
+) -> dict[str, Any]:
+    """The day before's calculated end as a day's start, in the shape of a
+    Reset reading that could not give one. The saved Reset evidence, if any,
+    stays in place; ``complete`` is whether a battle log proves the day's
+    battles from the Reset."""
+    evidence = (
+        dict(baseline["evidence"])
+        if baseline is not None
+        else {"reset_reading": None, "battle_log_observation_id": None}
+    )
+    evidence["start_trophies_source"] = "previous_day_end"
+    evidence["previous_day_version_id"] = previous.version_id
+    return {
+        "id": baseline["id"] if baseline is not None else None,
+        "version": baseline["version"] if baseline is not None else None,
+        "state": baseline["state"] if baseline is not None else "previous_day_end",
+        "complete": complete,
+        "trophies": previous.expected_next_start,
+        "eligibility_state": "eligible",
+        "evidence": evidence,
+    }
+
+
+def load_zero_result_slots(
+    connection: Any, coverage: tuple[CoverageObservation, ...]
+) -> frozenset[tuple[datetime, bool]]:
+    """Each "no opponent, no battle" row these battle logs hold, as (report
+    time, is an attack). A live log keeps the row for days, so each later
+    log repeating it adds nothing. None is a battle; the automatic defense
+    loss alone counts them as used attack and defense slots."""
+    parsers = {
+        row_id: observation.parser_version
+        for observation in coverage
+        if observation.parser_version is not None
+        for row_id in observation.source_row_ids
+    }
+    rows = connection.execute(
+        """
+        SELECT id, source_json FROM battle_source_rows
+        WHERE id = ANY(%s) AND (source_json -> 'battleTime')::text = '0'
+        """,
+        (list(parsers),),
+    ).fetchall() if parsers else []
+    return _slots((parsers[int(row_id)], source) for row_id, source in rows)
+
+
+def load_late_zero_result_slots(
+    database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
+    after: datetime,
+) -> frozenset[tuple[datetime, bool]]:
+    """``load_zero_result_slots`` of the player's battle logs saved after
+    ``after``, the end Reset log, until 10 minutes past the day's battle
+    window: a row can first be returned after that log."""
+    relation, _, _ = _source_rows(database)
+    until = domain.battle_window(ranked_day.start)[1] + timedelta(minutes=10)
+    parsers = dict(_log_ids(
+        connection, "player_id = %s AND observed_at > %s AND observed_at <= %s",
+        (player_id, after, until),
+    ))
+    rows = connection.execute(
+        f"""
+        SELECT sr.battle_log_observation_id, sr.source_json FROM {relation} AS sr
+        WHERE sr.battle_log_observation_id = ANY(%s)
+          AND (sr.source_json -> 'battleTime')::text = '0'
+        """,
+        (list(parsers),),
+    ).fetchall() if parsers else []
+    return _slots((parsers[log_id], source) for log_id, source in rows)
+
+
+def _slots(rows: Any) -> frozenset[tuple[datetime, bool]]:
+    slots = set()
+    for parser, source in rows:
+        if not battle.is_no_opponent_row(source, parser) or not isinstance(
+            source.get("attack"), bool
+        ):
+            continue
+        try:
+            slots.add((battle._parse_battle_timestamp(
+                battle._battle_timestamp_value(source, parser), parser
+            ), source["attack"]))
+        except battle.BattleLogParseError:
+            continue
+    return frozenset(slots)
+
+
+def slot_counts(
+    slots: frozenset[tuple[datetime, bool]], since: datetime, until: datetime
+) -> tuple[int, int]:
+    """The attack and defense slots reported in ``[since, until)``."""
+    attacks = [attack for at, attack in slots if since <= at < until]
+    return sum(attacks), len(attacks) - sum(attacks)
 
 
 def _log_ids(connection: Any, condition: str, params: tuple[Any, ...]) -> list[Any]:
@@ -537,14 +676,21 @@ def load_reading(
 
 
 def load_profile_trophies(
-    database: Database, connection: Any, player_id: int, after: datetime, until: datetime
+    database: Database, connection: Any, player_id: int, after: datetime, until: datetime,
+    *, season_id: str | None = None,
 ) -> tuple[tuple[datetime, int | None], ...]:
     """The trophies of each profile read in ``(after, until)``, or ``None``
-    for one with no processed profile."""
+    for one with no processed profile or, with ``season_id``, none accepted,
+    eligible and naming that Season."""
     rows = connection.execute(
         f"""
         SELECT observed.response_completed_at,
-               CASE WHEN outcome.outcome = 'processed' THEN profile.trophies END
+               CASE WHEN outcome.outcome = 'processed'
+                     AND (%(season)s::text IS NULL
+                          OR (profile.source_contract_state = 'accepted'
+                              AND profile.eligibility_state = 'eligible'
+                              AND profile.current_league_season_id = %(season)s))
+                    THEN profile.trophies END
         FROM collector_observations AS observed
         {_OUTCOME}
         {_profile_join(database)}
@@ -555,9 +701,66 @@ def load_profile_trophies(
         ORDER BY observed.response_completed_at
         """,
         {"processing": PROCESSING_VERSION, "player": player_id,
-         "after": after, "until": until},
+         "after": after, "until": until, "season": season_id},
     ).fetchall()
     return tuple((at, None if trophies is None else int(trophies)) for at, trophies in rows)
+
+
+# A saved result a profile read after its end Reset reading may still
+# settle: one ending in a trophy mismatch, or a complete day after Day 1 with
+# no used defense slots whose Reset reading showed no automatic loss; or
+# disprove: one settled by battles its Reset reading missed (see
+# ``reconciliation.reads_later_reading``).
+LATER_READING_DAY_SQL = """(
+    failure_reasons ? 'trophy_equation_mismatch'
+    OR formula_components ? 'next_start_battles_after_reading'
+    OR (state = 'Complete' AND defense_count = 0 AND season_day_number > 1
+        AND automatic_defense_evidence_state = 'not_applicable'
+        AND unexplained_residual = 0
+        AND NOT input_evidence ? 'zero_result_defense_slots')
+)"""
+
+
+def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> None:
+    """Serialize work deciding or saving one player's Legend day result."""
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
+    )
+
+def load_later_reading(
+    database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
+    reading_at: datetime,
+) -> tuple[datetime, int] | None:
+    """The last accepted, eligible profile naming the day's Season read after
+    its end Reset reading at ``reading_at`` and before the player's first
+    battle of the next day, by either player's report or an unreadable row
+    of a battle log saved since the Reset, within a day; ``None`` without
+    one, or when such a row's time is unreadable too."""
+    boundary_at = ranked_day.end
+    until = boundary_at + timedelta(days=1)
+    new_day_from = domain.battle_window(boundary_at)[0]
+    first_new_day = load_first_reports(
+        connection, player_id, reading_at, new_day_from, until
+    )[1]
+    unreadable = load_unreadable_report_times(
+        database, connection, player_id, boundary_at, until
+    )
+    if any(at is None for at in unreadable):
+        return None
+    cutoffs = [
+        at for at in (first_new_day, *unreadable)
+        if at is not None and at >= new_day_from
+    ]
+    readings = [
+        (at, trophies)
+        for at, trophies in load_profile_trophies(
+            database, connection, player_id, reading_at, min([until, *cutoffs]),
+            season_id=ranked_day.official_season_id,
+        )
+        if trophies is not None
+    ]
+    return readings[-1] if readings else None
 
 
 def load_first_reports(

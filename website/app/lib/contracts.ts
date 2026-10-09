@@ -137,6 +137,8 @@ export interface PlayerProfile {
   currentLeagueSeasonId?: string | null;
   freshness: Freshness;
   battleHistoryUpdatedAt?: string | null;
+  /** When Clash of Clans last did not find this player, if after its last successful check. */
+  notFoundAt?: string | null;
   confidence: ConfidenceState;
   coverage: CoverageState;
   eligibility: "legend-i" | "uncertain";
@@ -229,6 +231,12 @@ export interface RankedDaySummary {
   label: string;
   period: string;
   state: "Live" | "Complete" | "Partial" | "Uncertain";
+  // How the saved day was proven: "exact" when its Reset reading matched
+  // every part of its calculation, "inferred" when a part is calculated.
+  confidence?: "exact" | "inferred" | "partial" | "uncertain" | null;
+  // Whether the day's battle logs form an unbroken chain, so no battle can
+  // be missing; separate from completeness, which also needs the readings.
+  logCoverage?: "complete" | "partial";
   startTrophies?: number | null;
   startTrophiesCalculation?: { trophies: number; netChange: number };
   startTrophiesSource?: "Calculated" | "Season rule";
@@ -243,6 +251,12 @@ export interface RankedDaySummary {
     trophyLoss: number | null;
   };
   trophyChange: number | null;
+  // Trophies the game took at this day's closing Reset for unplayed
+  // defenses, which the trophy change includes; null when there was none.
+  automaticDefenseLoss?: number | null;
+  // The weekly or Season reset's raise or cut at this day's closing Reset,
+  // which the trophy change leaves out; null when there was none.
+  resetAdjustment?: { kind: "weekly" | "Season"; amount: number } | null;
   // Clash Lens rank on the frozen board saved at this day's closing Reset.
   resetRank?: number | null;
   // Python found every battle of the day among the recorded ones: so far for
@@ -346,6 +360,7 @@ export interface HistoricalSeasonDayEntry {
   attacks: number | null;
   defenses: number | null;
   state: string;
+  confidence?: RankedDaySummary["confidence"];
   coverage: string;
   hasAdjustment: boolean;
   adjustmentTotal: number | null;

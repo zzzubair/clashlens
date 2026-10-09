@@ -8,16 +8,23 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 
 from clashlens import cli, worker_liveness
 from clashlens.spool import Spool
-from clashlens.worker import ObservationProcessor, ProcessResult, process_until_stopped
+from clashlens.worker import (
+    ObservationProcessor,
+    ProcessResult,
+    process_until_stopped,
+    run_processes,
+)
 
 
 class _SlowDatabase:
@@ -151,9 +158,85 @@ def test_starting_worker_fails_when_saved_responses_cannot_be_read(
     assert payload["spool"]["ready"] is False
 
 
-def test_idle_lanes_report_progress_and_stuck_lanes_stop_even_while_maintenance_ticks() -> (
-    None
-):
+def _mark_as(progress: worker_liveness.ProgressMark, thread_name: str) -> None:
+    thread = threading.Thread(target=progress, name=thread_name)
+    thread.start()
+    thread.join()
+
+
+def test_one_stuck_lane_fails_the_check_while_the_other_lanes_keep_working(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    # Until 8 Oct 2026 the check read one file that any lane touched, so 11
+    # working lanes hid a 12th that had stopped.
+    root = tmp_path / "spool"
+    Spool(root, max_body_bytes=1024)
+    monkeypatch.setattr(cli, "Database", _SlowDatabase)
+    monkeypatch.setattr(worker_liveness, "PROGRESS_FILE", str(tmp_path / "progress"))
+    monkeypatch.setattr(worker_liveness, "MARK_INTERVAL_SECONDS", 0.0)
+    now = [time.time()]
+    monkeypatch.setattr(
+        worker_liveness,
+        "time",
+        SimpleNamespace(time=lambda: now[0], monotonic=time.monotonic),
+    )
+    builds = "clashlens-worker-lane-9"
+    progress = worker_liveness.ProgressMark(long_running=[builds])
+    arguments = _arguments(tmp_path, spool_root=root)
+
+    # Lane 3 and the build lane last came round 21 minutes ago; the rest now.
+    now[0] -= 21 * 60
+    _mark_as(progress, "clashlens-worker-lane-3")
+    _mark_as(progress, builds)
+    now[0] += 21 * 60
+    for lane in (1, 2, 4):
+        _mark_as(progress, f"clashlens-worker-lane-{lane}")
+    exit_code, payload = _ready(arguments, capsys)
+    assert (exit_code, payload["reason"]) == (1, "worker_stuck")
+    assert payload["stuck_thread"] == "clashlens-worker-lane-3"
+
+    # A build may run longer, but not past an hour.
+    _mark_as(progress, "clashlens-worker-lane-3")
+    assert _ready(arguments, capsys)[0] == 0
+    now[0] += 39 * 60
+    for lane in (1, 2, 3, 4):
+        _mark_as(progress, f"clashlens-worker-lane-{lane}")
+    exit_code, payload = _ready(arguments, capsys)
+    assert (exit_code, payload.get("stuck_thread")) == (1, builds)
+
+
+def test_a_lone_thread_running_a_long_build_keeps_its_hour(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    # With one worker thread, nothing else writes the progress file while it
+    # runs a build, so the file's own age must not overrule the thread's hour.
+    root = tmp_path / "spool"
+    Spool(root, max_body_bytes=1024)
+    monkeypatch.setattr(cli, "Database", _SlowDatabase)
+    progress_file = tmp_path / "progress"
+    monkeypatch.setattr(worker_liveness, "PROGRESS_FILE", str(progress_file))
+    monkeypatch.setattr(worker_liveness, "MARK_INTERVAL_SECONDS", 0.0)
+    now = [time.time()]
+    monkeypatch.setattr(
+        worker_liveness,
+        "time",
+        SimpleNamespace(time=lambda: now[0], monotonic=time.monotonic),
+    )
+    progress = worker_liveness.ProgressMark(long_running=["MainThread"])
+    arguments = _arguments(tmp_path, spool_root=root)
+
+    _mark_as(progress, "MainThread")
+    now[0] += 25 * 60
+    os.utime(progress_file, (now[0] - 25 * 60, now[0] - 25 * 60))
+    exit_code, payload = _ready(arguments, capsys)
+    assert (exit_code, payload["reason"]) == (0, "worker_progressing")
+
+    now[0] += 36 * 60
+    exit_code, payload = _ready(arguments, capsys)
+    assert (exit_code, payload.get("stuck_thread")) == (1, "MainThread")
+
+
+def test_lanes_and_the_timer_each_report_their_own_progress() -> None:
     stop = Event()
     lanes_stuck = Event()
     marks = []
@@ -179,22 +262,24 @@ def test_idle_lanes_report_progress_and_stuck_lanes_stop_even_while_maintenance_
             "claims_ready": lambda: True,
             "maintain": lambda _turns: maintenance_ticks.append(1),
             "on_result": lambda _result: None,
-            "progress": lambda: marks.append(1),
+            "progress": lambda: marks.append(threading.current_thread().name),
         },
         daemon=True,
     )
     worker.start()
+    lanes = {"clashlens-worker-lane-1", "clashlens-worker-lane-2"}
     try:
         deadline = time.monotonic() + 2
         while len(marks) < 20 and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert len(marks) >= 20, "idle lanes must keep reporting progress"
+        assert lanes <= set(marks), "idle lanes must keep reporting progress"
         lanes_stuck.set()
         assert jobs_started.acquire(timeout=2) and jobs_started.acquire(timeout=2)
         stuck_marks, stuck_ticks = len(marks), len(maintenance_ticks)
         time.sleep(0.2)
         assert len(maintenance_ticks) > stuck_ticks
-        assert len(marks) == stuck_marks
+        # Only the timer still reports; the stuck lanes do not.
+        assert set(marks[stuck_marks:]) == {"clashlens-worker-maintenance"}
     finally:
         stop.set()
         worker.join(timeout=5)
@@ -217,3 +302,37 @@ def test_one_lane_reports_progress_before_every_job_in_a_batch() -> None:
         owner="test-worker", max_jobs=3, progress=lambda: events.append("progress")
     )
     assert events == ["progress", "job"] * 3
+
+
+def test_one_stuck_worker_process_fails_the_health_check_while_another_works(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    root = tmp_path / "spool"
+    Spool(root, max_body_bytes=1024)
+    monkeypatch.setattr(cli, "Database", _SlowDatabase)
+    worker_liveness.ProgressMark(worker_liveness.progress_file(1))()
+    stuck = Path(worker_liveness.progress_file(2))
+    stuck.touch()
+    twenty_minutes_ago = time.time() - 20 * 60
+    os.utime(stuck, (twenty_minutes_ago, twenty_minutes_ago))
+    exit_code, payload = _ready(_arguments(tmp_path, spool_root=root), capsys)
+    assert exit_code == 1
+    assert payload["reason"] == "worker_stuck"
+
+
+def test_a_worker_process_stuck_before_its_first_job_still_fails_the_health_check(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    root = tmp_path / "spool"
+    Spool(root, max_body_bytes=1024)
+    monkeypatch.setattr(cli, "Database", _SlowDatabase)
+    # Neither process ever reaches a job, so neither touches its own file.
+    assert run_processes([[sys.executable, "-c", "pass"]] * 2, Event()) == 1
+    capsys.readouterr()
+    worker_liveness.ProgressMark(worker_liveness.progress_file(1))()
+    stuck = Path(worker_liveness.progress_file(2))
+    twenty_minutes_ago = time.time() - 20 * 60
+    os.utime(stuck, (twenty_minutes_ago, twenty_minutes_ago))
+    exit_code, payload = _ready(_arguments(tmp_path, spool_root=root), capsys)
+    assert exit_code == 1
+    assert payload["reason"] == "worker_stuck"

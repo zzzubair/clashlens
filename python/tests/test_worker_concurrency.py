@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from threading import Event
@@ -8,15 +9,24 @@ from types import SimpleNamespace
 import pytest
 from psycopg_pool import PoolTimeout
 
-from clashlens import reconciliation_db
-from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
+from clashlens import cli, reconciliation_db
+from clashlens.db import (
+    DOMAIN_RULE_VERSION,
+    POPULATION_BUILD_WORK_TYPES,
+    PROCESSING_VERSION,
+    RESPONSE_WORK_TYPES,
+)
 from clashlens.worker import (
+    DERIVED_WITHOUT_BUILDS,
     MAX_CONCURRENCY,
     ObservationProcessor,
     ProcessResult,
+    check_connection_budget,
     lane_owner,
     process_concurrently,
     process_until_stopped,
+    run_processes,
+    worker_process_commands,
 )
 
 
@@ -617,3 +627,233 @@ def test_no_job_or_maintenance_starts_after_stop_during_a_slow_ready_check() -> 
     assert not thread.is_alive()
     assert processor.calls == []
     assert maintained == []
+
+
+WORKER_ARGV = ["worker", "--database-url", "postgresql://prototype@postgres/db",
+               "--owner", "production-python-1", "--run-forever", "--processes", "2",
+               "--concurrency", "16", "--response-lanes", "12"]
+
+
+def test_each_worker_process_runs_the_same_worker_under_its_own_owner() -> None:
+    arguments = cli.build_parser().parse_args(WORKER_ARGV)
+    arguments.argv = WORKER_ARGV
+    commands = worker_process_commands(arguments)
+    assert [command[:3] for command in commands] == [[sys.executable, "-m", "clashlens.cli"]] * 2
+    parsed = [cli.build_parser().parse_args(command[3:]) for command in commands]
+    assert [(each.processes, each.process_index, each.owner) for each in parsed] == [
+        (2, 1, "production-python-1.process-1"),
+        (2, 2, "production-python-1.process-2"),
+    ]
+    assert {(each.concurrency, each.response_lanes, each.run_forever) for each in parsed} == {
+        (16, 12, True)
+    }
+
+
+def test_worker_processes_over_the_connection_budget_never_start(capsys) -> None:
+    # Two processes of 32 connections each would leave the collector short.
+    with pytest.raises(SystemExit) as refused:
+        cli.main([*WORKER_ARGV, "--database-pool-size", "32"])
+    assert refused.value.code == 2
+    assert "database pool size" in capsys.readouterr().err
+    assert cli.main([*WORKER_ARGV[:-2], "--response-lanes", "16"]) == 1
+
+
+def test_when_one_worker_process_exits_the_others_stop_and_the_worker_fails() -> None:
+    commands = [[sys.executable, "-c", "import time; time.sleep(60)"],
+                [sys.executable, "-c", "raise SystemExit(3)"]]
+    started = time.monotonic()
+    assert run_processes(commands, Event()) == 1
+    assert time.monotonic() - started < 10
+
+
+def test_a_requested_stop_reaches_every_worker_process() -> None:
+    graceful = ("import signal, sys, time;"
+                " signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); time.sleep(60)")
+    stop = Event()
+    threading.Timer(1.0, stop.set).start()
+    started = time.monotonic()
+    assert run_processes([[sys.executable, "-c", graceful]] * 2, stop) == 0
+    assert time.monotonic() - started < 10
+
+
+class _BatchQueue:
+    """Claims up to ``limit`` of the jobs waiting, and records what it is asked."""
+
+    def __init__(self, waiting: int, only: tuple[str, ...] | None = None) -> None:
+        self.waiting = waiting
+        self.only = only
+        self.limits: list[int] = []
+        self.released: list[int] = []
+        self.next_id = 0
+
+    builds = 0
+
+    def claim_job(self, **_options) -> SimpleNamespace | None:
+        if not self.builds:
+            return None
+        self.builds -= 1
+        return SimpleNamespace(job_id="build")
+
+    def claim_jobs(
+        self, *, limit: int, work_types=None, **_options
+    ) -> list[SimpleNamespace]:
+        if self.only is not None and work_types != self.only:
+            return []
+        self.limits.append(limit)
+        count = min(limit, self.waiting)
+        self.waiting -= count
+        self.next_id += count
+        return [SimpleNamespace(job_id=job_id)
+                for job_id in range(self.next_id - count, self.next_id)]
+
+    def renew_claim(self, _claim, *, lease_seconds: int, **_kwargs) -> None:
+        raise PoolTimeout("no connection to renew with")
+
+    def release_claims(self, claims) -> int:
+        self.released += [claim.job_id for claim in claims]
+        return len(claims)
+
+
+def test_a_batch_claims_no_more_jobs_than_lanes_free_to_start_them() -> None:
+    queue = _BatchQueue(waiting=3)
+    processor = ObservationProcessor(queue, archive=None, claim_batch=8)
+    processor.batch_lanes[DERIVED_WITHOUT_BUILDS] = 4
+    started, finish = [], Event()
+
+    def long_job(claim, *, lease_seconds: int):
+        started.append(claim.job_id)
+        assert finish.wait(10)
+        return claim
+
+    processor._process_claim = long_job
+    lanes = []
+    try:
+        for lane in range(4):
+            if lane == 3:
+                queue.waiting = 8  # more work arrives while three lanes are busy
+            lanes.append(threading.Thread(target=processor.process_once, kwargs={
+                "owner": f"lane-{lane}", "lease_seconds": 60,
+                "work_types": DERIVED_WITHOUT_BUILDS}))
+            lanes[-1].start()
+            deadline = time.monotonic() + 5
+            while len(started) <= lane and time.monotonic() < deadline:
+                time.sleep(0.01)
+    finally:
+        finish.set()
+        for thread in lanes:
+            thread.join(10)
+    # Four free lanes took three jobs; then the one free lane took one, so no
+    # claim waited behind jobs longer than its lease.
+    assert queue.limits == [4, 1]
+    assert sorted(started) == [0, 1, 2, 3]
+    assert processor.release_batched_claims() == 0
+
+
+def test_a_batched_claim_whose_renewal_fails_is_still_given_back() -> None:
+    queue = _BatchQueue(waiting=2)
+    processor = ObservationProcessor(queue, archive=None, claim_batch=2)
+    processor.batch_lanes[RESPONSE_WORK_TYPES] = 2
+    processor._process_claim = lambda claim, *, lease_seconds: claim
+    first = processor.process_once(owner="lane", lease_seconds=1, work_types=RESPONSE_WORK_TYPES)
+    assert first is not None and first.job_id == 0
+    time.sleep(0.6)  # the waiting claim used more than half its lease
+    with pytest.raises(PoolTimeout):
+        processor.process_once(owner="lane", lease_seconds=1, work_types=RESPONSE_WORK_TYPES)
+    assert processor.release_batched_claims() == 1
+    assert queue.released == [1]
+
+
+def test_a_derived_batch_leaves_out_the_lane_whose_turn_maintenance_holds() -> None:
+    queue = _BatchQueue(waiting=0, only=DERIVED_WITHOUT_BUILDS)
+    processor = ObservationProcessor(queue, archive=None, claim_batch=8)
+    started, finish, stop, holding = [], Event(), Event(), []
+
+    def long_job(claim, *, lease_seconds: int):
+        started.append(claim.job_id)
+        assert finish.wait(10)
+        return claim
+
+    def slow_maintenance(turns) -> None:
+        if not holding and turns.acquire(blocking=False):
+            holding.append(True)
+            queue.waiting = 8  # work arrives while maintenance holds a turn
+
+    processor._process_claim = long_job
+    worker = threading.Thread(target=process_until_stopped, args=(processor,), kwargs={
+        "concurrency": 5, "response_lanes": 1, "owner": "worker", "lease_seconds": 60,
+        "stop_requested": stop, "idle_seconds": 0.01, "claims_ready": lambda: True,
+        "maintain": slow_maintenance, "on_result": lambda _result: None})
+    worker.start()
+    try:
+        deadline = time.monotonic() + 5
+        while len(started) < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.3)
+        claimed, running = queue.next_id, len(started)
+    finally:
+        finish.set()
+        stop.set()
+        worker.join(10)
+    # Three of the four derived lanes can run while maintenance holds the
+    # fourth's turn, so a fourth claim would wait out its lease unstarted.
+    assert (claimed, running) == (3, 3)
+
+
+def test_each_worker_process_gets_at_most_16_connections() -> None:
+    check_connection_budget(2, 16)
+    for processes in (1, 2):
+        with pytest.raises(ValueError, match="at most 16 database connections each"):
+            check_connection_budget(processes, 17)
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(
+                [*WORKER_ARGV, "--processes", str(processes), "--database-pool-size", "17"]
+            )
+
+
+@pytest.mark.parametrize("processes", ["3", "4"])
+def test_a_third_or_fourth_worker_process_is_refused(processes, capsys) -> None:
+    with pytest.raises(SystemExit) as refused:
+        cli.build_parser().parse_args([*WORKER_ARGV, "--processes", processes])
+    assert refused.value.code == 2
+    assert "between 1 and 2" in capsys.readouterr().err
+
+
+def test_the_build_lane_takes_a_waiting_batched_claim_before_a_build() -> None:
+    queue = _BatchQueue(waiting=3)
+    queue.builds = 1
+    processor = ObservationProcessor(queue, archive=None, claim_batch=8)
+    processor.batch_lanes[DERIVED_WITHOUT_BUILDS] = 3
+    started, finish = [], Event()
+
+    def job(claim, *, lease_seconds: int):
+        started.append(claim.job_id)
+        assert finish.wait(10)
+        return claim
+
+    processor._process_claim = job
+    lanes = [threading.Thread(target=processor.process_once, kwargs={
+        "owner": f"lane-{lane}", "lease_seconds": 60, "work_types": DERIVED_WITHOUT_BUILDS})
+        for lane in range(2)]
+    build_lane = threading.Thread(target=lambda: [
+        processor.process_once(owner="build-lane", lease_seconds=60, work_types=kinds)
+        for kinds in (POPULATION_BUILD_WORK_TYPES, DERIVED_WITHOUT_BUILDS)])
+    try:
+        for count, lane in enumerate(lanes, start=1):
+            lane.start()
+            deadline = time.monotonic() + 5
+            while len(started) < count and time.monotonic() < deadline:
+                time.sleep(0.01)
+        # Three claims leased for three lanes, two started: the build lane's
+        # next turn belongs to the third, which would otherwise wait unstarted.
+        build_lane.start()
+        deadline = time.monotonic() + 5
+        while len(started) < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        running = sorted(started, key=str)
+    finally:
+        finish.set()
+        for thread in [*lanes, build_lane]:
+            if thread.is_alive():
+                thread.join(10)
+    assert running == [0, 1, 2]
+    assert queue.builds == 1

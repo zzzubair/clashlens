@@ -296,7 +296,7 @@ def test_corrected_unknown_history_survives_retirement_retry_and_later_naming(
                     for row in unknown_rows:
                         namespace, numeric_id = row["unit_id"].split(":")
                         kind = "troop or siege" if namespace == "troop" else namespace
-                        assert row["label"] == f"Unknown {kind} (ID {numeric_id})"
+                        assert row["label"] == f"Unknown {kind} #{numeric_id}"
                 # Resolve names only after proving the HTTP response survives
                 # retirement with no catalogue entry or raw response available.
                 for namespace in ("troop", "spell", "hero", "pet", "equipment"):
@@ -307,7 +307,7 @@ def test_corrected_unknown_history_survives_retirement_retry_and_later_naming(
                     response = client.get(target, headers=signed_headers(target))
                     assert response.status_code == 200
                     result = response.json()
-                    assert result["unknown_affected_attacks"] == 1  # At collection.
+                    assert result["unknown_affected_attacks"] == 0  # Unnamed ids counted at collection.
                     assert result["total_attacks"] == 2
                     assert result["versions"]["analytics"] == "army-unit-usage-v3"
                     assert result["rows"]

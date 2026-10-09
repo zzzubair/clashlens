@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { battleStatistics, type BattlePeriod } from "../lib/battle-statistics";
 import type { PlayerPage } from "../lib/contracts";
-import { SeasonSummary, per } from "./SeasonSummary";
+import { dayEnd } from "../lib/player-lookup-text";
+import { DayMark } from "./DayStatus";
+import { SeasonSummary } from "./SeasonSummary";
 
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
@@ -10,39 +12,28 @@ const dateFormatter = new Intl.DateTimeFormat("en-GB", {
 });
 const date = (time: number) => dateFormatter.format(time).replace("Sept", "Sep");
 
-// The current Season's summary. Rank is Clash Lens's board at the latest Reset
-// this Season, from the day that Reset ended, because the page has no live rank.
-export function BattleStatistics({
-  player,
-  now,
-  trophies,
-}: {
-  player: PlayerPage;
-  now: number;
-  trophies: string;
-}) {
+// The current Season's summary, from finished Legend days only. Rank is Clash
+// Lens's board at the latest Reset this Season and trophies are that day's
+// end, both from the day that Reset ended; nothing here is live.
+export function BattleStatistics({ player, now }: { player: PlayerPage; now: number }) {
   const [period, setPeriod] = useState<BattlePeriod>("season");
   const stats = battleStatistics(player, period, now);
-  const elapsed = Math.round((stats.today - stats.seasonStart) / 86_400_000) + 1;
+  const finished = Math.round((stats.today - stats.seasonStart) / 86_400_000);
   const lastDay = stats.today - 86_400_000;
-  const rank =
+  const last =
     lastDay >= stats.seasonStart
       ? [...player.seasonDays, ...player.recentDays].find(
           (day) => Date.parse(day.period.split(" – ")[0]) === lastDay,
-        )?.resetRank
-      : null;
-  const side = ({
-    count,
-    stars,
-    trophies,
-    finishedTrophies,
-    activeDays,
-  }: typeof stats.attack) => ({
+        )
+      : undefined;
+  // The same end of day as the Daily Legend log shows for that day.
+  const end = last ? dayEnd(last, player, now) : null;
+  const side = ({ count, stars, perDay, perBattle }: typeof stats.attack) => ({
     count,
     stars,
     unknown: 0,
-    trophies,
-    perDay: per(finishedTrophies, activeDays),
+    perDay,
+    perBattle,
   });
   const flags = [
     stats.incomplete || stats.daysSaved < stats.daysExpected
@@ -53,13 +44,17 @@ export function BattleStatistics({
   return (
     <SeasonSummary
       title="Season summary"
-      meta={[
-        date(stats.start) === date(stats.today)
-          ? date(stats.today)
-          : `${date(stats.start)} – ${date(stats.today)}`,
-        `${stats.daysSaved} of ${stats.daysExpected} days saved`,
-        ...flags,
-      ].join(" · ")}
+      meta={
+        stats.daysExpected === 0
+          ? "No finished Legend days yet this Season"
+          : [
+              stats.start === lastDay
+                ? date(lastDay)
+                : `${date(stats.start)} – ${date(lastDay)}`,
+              `${stats.daysSaved} of ${stats.daysExpected} finished days saved`,
+              ...flags,
+            ].join(" · ")
+      }
       controls={
         <label>
           Showing{" "}
@@ -70,7 +65,7 @@ export function BattleStatistics({
             <option value="season">This Season</option>
             {[7, 14].map((days) => (
               <option key={days} value={days}>
-                {`Last ${days} days${elapsed < days ? ` (${elapsed} so far)` : ""}`}
+                {`Last ${days} days${finished < days ? ` (${finished} so far)` : ""}`}
               </option>
             ))}
           </select>
@@ -78,9 +73,19 @@ export function BattleStatistics({
       }
       rank={[
         "Rank at last Reset",
-        rank == null ? "Not ranked yet" : rank.toLocaleString("en-GB"),
+        last?.resetRank == null
+          ? "Not ranked yet"
+          : last.resetRank.toLocaleString("en-GB"),
       ]}
-      trophies={["Trophies now", trophies]}
+      trophies={[
+        "Trophies at last Reset",
+        lastDay < stats.seasonStart
+          ? "No finished day yet"
+          : end?.trophies == null
+            ? "Unavailable"
+            : end.trophies.toLocaleString("en-GB"),
+        end?.trophies == null ? null : <DayMark status={end.status} />,
+      ]}
       attack={side(stats.attack)}
       defense={side(stats.defense)}
     />

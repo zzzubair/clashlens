@@ -67,20 +67,13 @@ jobs:
         run: |
           PYTHONPATH=.. uv run pytest -q ../development/test_fixtures.py
 
-  python:
-    name: Python lint, compile, and PostgreSQL tests
-    if: always()
-    needs: python-tests
+  website-tests:
+    name: Website checks and browser tests, shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    steps:
-      - name: Require all four Python test groups to pass
-        env:
-          RESULT: ${{ needs.python-tests.result }}
-        run: test "$RESULT" = success
-
-  website:
-    name: Website Node 24 checks and Chromium E2E
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -92,13 +85,16 @@ jobs:
         working-directory: website
         run: npm ci
       - name: Runtime dependency audit (blocking)
+        if: matrix.shard == 1
         working-directory: website
         run: npm audit --omit=dev
       - name: Full dependency audit (reported)
+        if: matrix.shard == 1
         working-directory: website
         continue-on-error: true
         run: npm audit
       - name: Test
+        if: matrix.shard == 1
         working-directory: website
         run: npm test
       - name: Install rootless Podman
@@ -110,7 +106,11 @@ jobs:
         run: npx playwright install --with-deps chromium webkit
       - name: Production build and development stack browser tests
         working-directory: website
-        run: npm run test:e2e
+        # Each shard starts its own development stack, so the halves never
+        # share a database.
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npm run test:e2e -- --shard="$SHARD/2"
       - name: Clean up browser test stack
         if: always()
         # Playwright normally sends SIGTERM to dev e2e-server. Also remove
@@ -184,17 +184,6 @@ jobs:
             --env CLASHLENS_TEST_GROUP='${{ matrix.group }}' \
             clashlens-python-check:ci uv run pytest -q --durations=30
 
-  packaged-python:
-    name: Packaged Python tests
-    if: always() && github.event_name != 'pull_request'
-    needs: packaged-python-tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require all four packaged Python test groups to pass
-        env:
-          RESULT: ${{ needs.packaged-python-tests.result }}
-        run: test "$RESULT" = success
-
   container-runtime:
     name: Full development container checks
     if: github.event_name != 'pull_request'
@@ -205,3 +194,36 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y podman
       - name: Full development container checks
         run: ./dev check
+
+  # The one status to require. GitHub creates a job that waits on others only
+  # after they finish, and on October 7, 2026 it failed to create three such
+  # jobs, failing runs whose every job passed. One waiting job instead of three
+  # leaves one such chance per run. Pull requests skip the two main-only jobs.
+  required:
+    name: Required checks
+    if: always()
+    needs:
+      - python-tests
+      - website-tests
+      - containers
+      - packaged-python-tests
+      - container-runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every check to pass
+        env:
+          EVENT: ${{ github.event_name }}
+          PYTHON: ${{ needs.python-tests.result }}
+          WEBSITE: ${{ needs.website-tests.result }}
+          CONTAINERS: ${{ needs.containers.result }}
+          PACKAGED: ${{ needs.packaged-python-tests.result }}
+          RUNTIME: ${{ needs.container-runtime.result }}
+        run: |
+          main_only=success
+          [ "$EVENT" = pull_request ] && main_only=skipped
+          for result in "$PYTHON" "$WEBSITE" "$CONTAINERS"; do
+            test "$result" = success
+          done
+          for result in "$PACKAGED" "$RUNTIME"; do
+            test "$result" = "$main_only"
+          done

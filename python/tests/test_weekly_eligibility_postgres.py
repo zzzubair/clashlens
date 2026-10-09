@@ -643,6 +643,92 @@ def test_queue_is_bounded_and_ordinary_loop_does_not_bypass_weekly_pacing(databa
             database.close()
 
 
+def _untracked_players(connection, count):
+    return sorted(row[0] for row in connection.execute(
+        """INSERT INTO players (normalized_tag, active, eligibility_state)
+           SELECT '#' || translate(lpad(i::text, 9, '0'), '0123456789', '0289PYLQGR'),
+                  false, 'ineligible'
+           FROM generate_series(1, %s) AS i RETURNING id""", (count,)))
+
+
+def _weekly_search(connection, at):
+    """The players one weekly search queued, and how many player rows it read.
+
+    Like the collector, each search commits; the batch finishes before the next.
+    """
+    def rows_read():
+        # Rows a scan returned from the table, plus entries read from its indexes.
+        return connection.execute(
+            """SELECT sum(pg_stat_get_xact_tuples_returned(relation))::bigint
+               FROM (SELECT 'players'::regclass::oid AS relation
+                     UNION ALL SELECT indexrelid FROM pg_index
+                     WHERE indrelid = 'players'::regclass) AS relations""",
+        ).fetchone()[0]
+    with connection.transaction():
+        last = connection.execute("SELECT coalesce(max(id), 0) FROM collector_work").fetchone()[0]
+        before = rows_read()
+        connection.execute("SELECT clashlens_enqueue_weekly_eligibility(%s)", (at,))
+        read = rows_read() - before
+    queued = [row[0] for row in connection.execute(
+        "SELECT player_id FROM collector_work WHERE id > %s ORDER BY id", (last,))]
+    connection.execute(
+        "UPDATE collector_work SET status = 'complete' WHERE eligibility_recheck AND status = 'pending'")
+    return queued, read
+
+
+@pytest.mark.parametrize("checked", [0, 1_000, 2_000])
+def test_weekly_search_reads_only_players_not_yet_checked_this_week(database_url, checked):
+    # On 9 October 2026 each search tested every player already checked that
+    # week: with 9,510 of 13,215 checked, a search took up to 58.6 seconds.
+    with domain_database(database_url) as info, psycopg.connect(info, autocommit=True) as connection:
+        players = _untracked_players(connection, 2_000)
+        connection.execute(
+            """INSERT INTO collector_work (kind, lane, scope, player_id, normalized_tag, due_at,
+                   coalescing_key, status, profile_status, battle_log_status,
+                   league_history_status, eligibility_recheck)
+               SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag, %s,
+                      'discovery-profile:' || id || ':2026-10-12T05:00:00Z', 'complete',
+                      'observed', 'not_applicable', 'not_applicable', true
+               FROM players WHERE id = ANY(%s)""",
+            (MONDAY + timedelta(hours=1), players[:checked]),
+        )
+        # The first search notes the players checked before this change, and the
+        # second reads past their replaced rows once more, as each later search
+        # does for the few players the search before it noted.
+        for batch in range(5):
+            queued, read = _weekly_search(connection, MONDAY + timedelta(days=1, minutes=batch))
+            assert queued == players[checked + 30 * batch:checked + 30 * (batch + 1)]
+            if batch >= 2:
+                # A few rows for each player queued; none once everyone is checked.
+                assert read <= 20 * len(queued)
+
+
+def test_next_week_makes_every_untracked_player_due_again(database_url):
+    with domain_database(database_url) as info, psycopg.connect(info, autocommit=True) as connection:
+        players = _untracked_players(connection, 40)
+        assert _weekly_search(connection, MONDAY)[0] == players[:30]
+        assert _weekly_search(connection, MONDAY + timedelta(minutes=1))[0] == players[30:]
+        assert _weekly_search(connection, MONDAY + timedelta(days=7) - timedelta(seconds=1))[0] == []
+        assert _weekly_search(connection, MONDAY + timedelta(days=7))[0] == players[:30]
+
+
+def test_weekly_search_looks_again_at_a_player_whose_check_was_waiting(database_url):
+    with domain_database(database_url) as info, psycopg.connect(info, autocommit=True) as connection:
+        waiting, *others = _untracked_players(connection, 32)
+        connection.execute(
+            """INSERT INTO collector_work (kind, lane, scope, player_id, normalized_tag, due_at,
+                   coalescing_key, status, battle_log_status, league_history_status)
+               SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag, %s,
+                      'discovery-profile:' || id || ':2026-10-05T05:00:00Z', 'pending',
+                      'not_applicable', 'not_applicable'
+               FROM players WHERE id = %s""", (MONDAY - timedelta(days=1), waiting),
+        )
+        assert _weekly_search(connection, MONDAY)[0] == others[:30]
+        # Last week's check failed without an answer, so this week's is still needed.
+        connection.execute("UPDATE collector_work SET status = 'failed' WHERE player_id = %s", (waiting,))
+        assert _weekly_search(connection, MONDAY + timedelta(minutes=1))[0] == [waiting, others[30]]
+
+
 def test_pruning_keeps_this_weeks_attempt_until_the_next_monday(database_url):
     with domain_database(database_url) as info:
         player = _player(info)

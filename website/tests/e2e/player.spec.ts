@@ -287,23 +287,29 @@ test("a battle processed shortly after a completed Refresh reaches the open page
   browser,
   baseURL,
 }) => {
-  const savedContext = await browser.newContext({ javaScriptEnabled: false, baseURL });
-  let html: string;
-  let observedAt: string;
-  let savedData: string;
-  let dataType: string;
-  try {
-    const savedPage = await savedContext.newPage();
-    const response = await savedPage.goto("/players/%232PP");
-    html = await response!.text();
-    observedAt = (await savedPage.locator(".player-updated").getAttribute("datetime"))!;
-    const dataResponse = await savedContext.request.get("/players/%232PP.data");
-    savedData = await dataResponse.text();
-    dataType = dataResponse.headers()["content-type"];
-  } finally {
-    await savedContext.close();
-  }
-  expect(savedData).toContain(observedAt);
+  test.setTimeout(120_000);
+  let html = "";
+  let observedAt = "";
+  let savedData = "";
+  let dataType = "";
+  // On a fresh stack the worker may not have saved this player's current
+  // Legend day yet; it waits its turn behind other Reset and live work.
+  await expect(async () => {
+    const savedContext = await browser.newContext({ javaScriptEnabled: false, baseURL });
+    try {
+      const savedPage = await savedContext.newPage();
+      const response = await savedPage.goto("/players/%232PP");
+      html = await response!.text();
+      observedAt = (await savedPage.locator(".player-updated").getAttribute("datetime"))!;
+      const dataResponse = await savedContext.request.get("/players/%232PP.data");
+      savedData = await dataResponse.text();
+      dataType = dataResponse.headers()["content-type"];
+    } finally {
+      await savedContext.close();
+    }
+    expect(savedData).toContain(observedAt);
+    pagePlayer(decodePageData(savedData));
+  }).toPass({ timeout: 90_000, intervals: [1000] });
   const earlierAt = new Date(Date.parse(observedAt) - 1).toISOString();
 
   // The fake Clash API dates its battles to the previous Legend day, so publish
@@ -426,8 +432,10 @@ test("battle stats switch periods without requests at iPhone width", async ({ pa
   page.on("request", (request) => requests.push(request.url()));
   for (const period of ["7", "14"]) {
     await stats.getByLabel("Showing").selectOption(period);
-    // Early in a Season the window holds only the days so far.
-    await expect(stats).toContainText(/of \d+ days saved/);
+    // Early in a Season the window holds only the finished days so far.
+    await expect(stats).toContainText(
+      /of \d+ finished days saved|No finished Legend days yet/,
+    );
     await expect(stats.getByText("Per defense", { exact: true })).toBeVisible();
   }
   await stats.getByLabel("Showing").selectOption("season");

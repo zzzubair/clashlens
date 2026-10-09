@@ -9,9 +9,12 @@ from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
 from . import battle, boundary, reset_baselines
-from .analytics import CLASSIFICATION_CONFIDENCE, CLASSIFICATION_VERSION
+from .analytics import (
+    CLASSIFICATION_CONFIDENCE,
+    CLASSIFICATION_VERSION,
+    SNAPSHOT_ORDERING_RULE_VERSION,
+)
 from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
 from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -19,15 +22,52 @@ from .db import (
     PROCESSING_VERSION,
     Claim,
     Database,
-    _hash_input,
-    _parse_utc,
-    _positive_int_input,
-    _snapshot_freshness,
     _text_value,
 )
 from .domain import DomainRuleError, battle_window
 from .domain_repair import boundary_held
-from .past_reset_pacing import past_reset_correction_waits
+from .past_reset_pacing import (
+    OPERATOR_CORRECTION,
+    operator_correction_waits,
+    past_reset_correction_waits,
+)
+
+
+def _positive_int_input(values: dict[str, Any], name: str) -> int:
+    value = values.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def _hash_input(value: Any, name: str) -> str:
+    value = _text_value(value)
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{name} must be a lowercase SHA-256 hash")
+    return value
+
+
+def _parse_utc(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise TypeError("analytics timestamps must be text")
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("analytics timestamps must include an offset")
+    return parsed.astimezone(UTC)
+
+
+def _snapshot_freshness(
+    *, included_count: int, fresh_count: int, stale_count: int
+) -> str:
+    if included_count == 0 or stale_count == 0:
+        return "fresh"
+    if fresh_count == 0:
+        return "stale"
+    return "mixed"
 
 
 def reevaluate_boundary_publications(database) -> int:
@@ -257,11 +297,12 @@ def _maybe_emit_boundary_signal(
             SELECT id, affected_artifacts, pending_inputs
             FROM boundary_publication_corrections
             WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
+              AND NOT (%s AND pending_inputs @> %s::jsonb)
             ORDER BY requested_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """,
-            (row[0],),
+            (row[0], operator_correction_waits(connection), Jsonb([OPERATOR_CORRECTION])),
         ).fetchone()
         if queued is not None:
             source = connection.execute(
@@ -313,6 +354,7 @@ def _maybe_emit_boundary_signal(
                 "UPDATE boundary_publication_corrections SET state = 'activation' WHERE id = %s",
                 (queued[0],),
             )
+            affected = [_text_value(value) for value in (queued[1] or [])]
             new = connection.execute(
                 """
                 INSERT INTO boundary_publication_generations (
@@ -329,7 +371,7 @@ def _maybe_emit_boundary_signal(
                     row[0],
                     int(source[5]),
                     source[0],
-                    source[3],
+                    SNAPSHOT_ORDERING_RULE_VERSION if "snapshot" in affected else source[3],
                     source[4],
                     source[1],
                     source[2],
@@ -405,7 +447,6 @@ def _maybe_emit_boundary_signal(
                 "UPDATE boundary_publication_generations SET membership_captured_at = clock_timestamp() WHERE id = %s",
                 (new_id,),
             )
-            affected = [_text_value(value) for value in (queued[1] or [])]
             if "snapshot" not in affected:
                 connection.execute(
                     """
@@ -509,7 +550,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
         """
     with database.pool.connection() as connection:
         with connection.transaction():
-            job = database._lock_live_claim(connection, claim)
+            job = database._lock_live_claim(connection, claim, build=True)
             # The Reset lock comes before this snapshot's and its
             # generation's row locks; see boundary.lock_boundary_publication.
             snapshot_boundary = connection.execute(
@@ -1007,12 +1048,14 @@ def complete_analytics(database: Database, claim: Claim) -> None:
 
 
 # An army reading's contents: what the army build reads from it, without the
-# row's own identity, the report it was read from or when it was saved.
+# row's own identity, the report it was read from, when it was saved or which
+# unit list was current then (saved armies hold ids, not names).
 _DECODE_CONTENTS = """
     SELECT coalesce(array_agg(contents ORDER BY contents), '{}')
     FROM (
         SELECT to_jsonb(decode)
-               - ARRAY['id', 'evidence_id', 'is_active', 'created_at', 'supersedes_id']
+               - ARRAY['id', 'evidence_id', 'is_active', 'created_at', 'supersedes_id',
+                       'catalog_version', 'catalog_hash']
                AS contents
         FROM battle_army_decodes AS decode
         WHERE decode.id = ANY(%s::bigint[])
@@ -1038,9 +1081,8 @@ def _boundary_army_manifest_needs_correction(
     rows = connection.execute(
         """
         SELECT input_identity
-        FROM boundary_publication_manifest_rows
-        WHERE manifest_id = %s
-          AND (%s::bigint[] IS NULL OR player_id = ANY(%s::bigint[]))
+        FROM boundary_publication_manifest_entries(%s)
+        WHERE %s::bigint[] IS NULL OR player_id = ANY(%s::bigint[])
         ORDER BY ordinal
         """,
         (manifest_id, player_ids, player_ids),
@@ -1111,7 +1153,8 @@ def _queue_boundary_army_correction(
         return
     current = connection.execute(
         """
-        SELECT snapshot_state, army_state, army_manifest_id, generation
+        SELECT snapshot_state, army_state, army_manifest_id, generation,
+               ordering_rule_version
         FROM boundary_publication_generations
         WHERE id = %s
         FOR UPDATE
@@ -1162,6 +1205,7 @@ def _queue_boundary_army_correction(
             player_ids=player_ids,
             generation=int(current[3]) + 1,
             supersedes_id=generation_id,
+            ordering_rule_version=_text_value(current[4]),
         )
         connection.execute(
             "UPDATE boundary_publication_generations SET affected_artifacts = %s WHERE id = %s",
@@ -1368,10 +1412,9 @@ def _enqueue_army_analytics(
           ON decode.battle_id = battle.id
          AND decode.is_active
          AND decode.decoder_version = %s
-         AND decode.catalog_version = %s
         WHERE battle.ranked_day_start = %s
         """,
-        (DECODER_VERSION, CATALOG_VERSION, ranked_day_start),
+        (DECODER_VERSION, ranked_day_start),
     ).fetchone()
     decode_generation = int(latest_decode[0]) if latest_decode else 0
     day_text = ranked_day_start.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1389,7 +1432,7 @@ def _enqueue_army_analytics(
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
         (
-            f"build_army_analytics:{day_text}:{generation}:{ARMY_ANALYTICS_RULE_VERSION}:{DECODER_VERSION}:{CATALOG_VERSION}",
+            f"build_army_analytics:{day_text}:{generation}:{ARMY_ANALYTICS_RULE_VERSION}:{DECODER_VERSION}",
             Jsonb(
                 {
                     "ranked_day_start": day_text,

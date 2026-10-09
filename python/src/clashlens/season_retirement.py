@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .archive_retention import RECOVERY_WINDOW_DAYS
 from .season_finalization_guard import close_blockers
 
 RETIREMENT_VERSION = "season-detail-retirement-v1"
@@ -1065,7 +1066,7 @@ def measure_season_storage(
         },
         "unmeasured": [
             "generated WAL (use pg_current_wal_lsn delta around a bounded run)",
-            "retained WAL and base backups (7-day recovery window, host procedure)",
+            f"retained WAL and base backups ({RECOVERY_WINDOW_DAYS}-day recovery window, host procedure)",
             "bounded spool occupancy (filesystem, not NVMe proof on tmpfs)",
             "remote raw bytes and request tariffs (representative novelty + provider tariff)",
         ],

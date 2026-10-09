@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import domain_database, repair_season, store_observation
 from test_reconciliation_postgres import BATTLE_FIXTURE, _profile
 from test_reset_settlement_state_postgres import (
     BOUNDARIES,
@@ -25,7 +25,7 @@ from test_reset_settlement_state_postgres import (
     _season_profile,
 )
 
-from clashlens import first_battle_log, reconciliation_db
+from clashlens import domain_repair, first_battle_log, reconciliation_db
 from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import allocate_trophies
 from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
@@ -75,6 +75,10 @@ def _first_seen(connection_info, archive_server, at, *, profile, log, tag=TAG):
 
 
 def _day_1(connection_info: str, tag: str = TAG):
+    return _day(connection_info, DAY_1, tag)
+
+
+def _day(connection_info: str, day_start: datetime, tag: str = TAG):
     with psycopg.connect(connection_info) as connection:
         return connection.execute(
             """
@@ -89,7 +93,7 @@ def _day_1(connection_info: str, tag: str = TAG):
             WHERE player.normalized_tag = %s AND day.ranked_day_start = %s
             ORDER BY day.ranked_day_start, day.version DESC
             """,
-            (tag, DAY_1),
+            (tag, day_start),
         ).fetchone()
 
 
@@ -367,33 +371,176 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
         unchanged = _day_1(connection_info)
         monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
 
-        database = Database(connection_info)
-        try:
-            preview = first_battle_log.requeue_day_1(
-                database, str(NEW_SEASON), queue=False, max_jobs=100
-            )
-            queued = first_battle_log.requeue_day_1(
-                database, str(NEW_SEASON), queue=True, max_jobs=100
-            )
-            again = first_battle_log.requeue_day_1(
-                database, str(NEW_SEASON), queue=True, max_jobs=100
-            )
-        finally:
-            database.close()
+        preview, queued = repair_season(connection_info, str(NEW_SEASON))
+        again = repair_season(connection_info, str(NEW_SEASON))[1]
         # The batch yields to any higher-priority work its thread can claim.
-        priorities = _queued_priorities(
-            connection_info, "reconcile:season-day-1-unsettled-loss:"
-        )
+        priorities = _queued_priorities(connection_info, "reconcile:season-repair:")
         _process(connection_info, archive_server, [])
         after = _day_1(connection_info)
 
     assert before[0] == "Partial" and before[3] is None
     assert (unchanged[0], unchanged[3]) == ("Partial", None)
     assert "automatic_defense_basis_unavailable" in before[5]
-    # Only the player with 1 to 7 defenses is listed.
-    assert preview == {"season": str(NEW_SEASON), "players": 1,
-                       "already_queued": 0, "queued": 0, "left_to_queue": 1}
-    assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
-    assert (again["queued"], again["already_queued"]) == (0, 1)
+    # Each player with a saved day of the Season is recalculated once.
+    assert (preview["players"], preview["left_to_queue"]) == (2, 2)
+    assert (queued["phase"], queued["queued"], queued["left_to_queue"]) == ("days", 2, 0)
+    assert (again["phase"], again["queued"], again["unfinished"]) == ("days", 0, 2)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
     assert after[:4] == ("Complete", "inferred", 5000, ending)
+
+
+def test_day_flagged_by_logs_sharing_only_other_battles_is_recalculated_once(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Two Day 1 attacks, then a full log of multiplayer battles only: it
+    # shares 48 multiplayer rows with the first log and no Legend battle.
+    older = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(48)]
+    later = [DAY_1 + timedelta(hours=8), DAY_1 + timedelta(hours=8, minutes=30)]
+    only_multiplayer = _log(filler=later + older)
+    ending = 5000 + 2 * WIN
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _first_seen(connection_info, archive_server, DAY_1 + timedelta(hours=7),
+                           profile=_new_season_profile(ending),
+                           log=_log(*ATTACKS, filler=older))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="multiplayer-log",
+            endpoint="battle_log", body=only_multiplayer,
+            observed_at=DAY_1 + timedelta(hours=9), normalized_tag=TAG,
+        )[1])
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=_new_season_profile(ending), log=only_multiplayer)
+        # Saved before the fix, only shared Legend battles showed overlap.
+        original = reconciliation_db.reconcile_ranked_day
+        monkeypatch.setattr(
+            reconciliation_db, "reconcile_ranked_day",
+            lambda data: original(replace(data, coverage_observations=tuple(
+                replace(log, source_row_ids=()) for log in data.coverage_observations
+            ))),
+        )
+        _process(connection_info, archive_server, jobs)
+        before = _day_1(connection_info)
+        monkeypatch.setattr(reconciliation_db, "reconcile_ranked_day", original)
+
+        preview, queued = repair_season(connection_info, str(NEW_SEASON))
+        with psycopg.connect(connection_info) as connection:
+            job_id, player_id = connection.execute(
+                "UPDATE python_processing_jobs SET status = 'failed',"
+                " failure_category = 'invalid_work_input'"
+                " WHERE deduplication_key LIKE 'reconcile:season-repair:%'"
+                " RETURNING id, (input_json ->> 'player_id')::bigint"
+            ).fetchone()
+        database = Database(connection_info)
+        try:
+            failed = domain_repair.season_repair(
+                database, str(NEW_SEASON), "receipt", max_jobs=100
+            )
+        finally:
+            database.close()
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE python_processing_jobs SET status = 'pending',"
+                " failure_category = NULL WHERE id = %s", (job_id,),
+            )
+        priorities = _queued_priorities(connection_info, "reconcile:season-repair:")
+        _process(connection_info, archive_server, [])
+        after = _day_1(connection_info)
+
+    assert (before[0], before[3]) == ("Partial", None)
+    assert "battle_log_overlap_gap" in before[5]
+    assert (preview["players"], preview["left_to_queue"], preview["failed"]) == (1, 1, 0)
+    assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
+    # A failed recalculation is kept and listed, not queued again.
+    assert (failed["left_to_queue"], failed["unfinished"], failed["failed"]) == (0, 0, 1)
+    assert failed["failed_blockers"] == [{
+        "job_id": job_id, "player_id": player_id,
+        "failure_category": "invalid_work_input",
+    }]
+    # The receipt keeps the day as it was before the repair.
+    day_1 = DAY_1.isoformat()
+    assert failed["days"]["before"][day_1]["states"] == {"Partial": 1}
+    assert "battle_log_overlap_gap" in failed["days"]["before"][day_1]["reasons"]
+    assert priorities == {PYTHON_BACKFILL_PRIORITY}
+    assert after[:4] == ("Complete", "inferred", 5000, ending)
+
+
+def test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end(
+    database_url: str, archive_server
+) -> None:
+    """On 7 October 2026, 3,574 days held every battle and no start because
+    their Reset reading was rejected. The day before's calculated end starts
+    such a day, and that day's defenses still average the automatic loss."""
+    day_3 = DAY_2 + timedelta(days=1)
+    filler = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(44)]
+    day_2_battles = [
+        (DAY_2 + timedelta(hours=2), True), (DAY_2 + timedelta(hours=5), False),
+    ]
+    # Day 1: 2 wins and 1 loss, charged (2 - 1) missing defenses at the loss.
+    end_1 = 5000 + 2 * WIN - LOSS - LOSS
+    # Day 2: 1 win and 1 loss, charged 7 missing defenses at the two days'
+    # average loss, which needs Day 1's defenses even though Day 1 has no
+    # usable end reading.
+    end_2 = end_1 + WIN - LOSS - 7 * ((LOSS + LOSS) // 2)
+    log_1 = _log(*ATTACKS, *DEFENSE, filler=filler)
+    log_2 = _log(*ATTACKS, *DEFENSE, *day_2_battles, filler=filler)
+    # The game sends Season 0 to some signed-up players, so this Reset
+    # reading is rejected; its battle log is fine.
+    season_zero = json.loads(_profile(end_1))
+    season_zero["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _first_seen(
+            connection_info, archive_server, DAY_1 + timedelta(hours=8),
+            profile=_new_season_profile(5000 + 2 * WIN - LOSS), log=log_1,
+        )
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=json.dumps(season_zero).encode(), log=log_1)
+        jobs += _reset_work(connection_info, archive_server, day_3,
+                            profile=_new_season_profile(end_2), log=log_2)
+        _process(connection_info, archive_server, jobs)
+        day_1 = _day_1(connection_info)
+        day_2 = _day(connection_info, DAY_2)
+    assert day_1[0] == "Partial"
+    assert day_1[3] == end_1 and day_1[5] == ["missing_end_baseline"]
+    assert day_2[:2] == ("Complete", "inferred")
+    assert day_2[2] == end_1 and day_2[6] == "previous_day_end"
+    assert day_2[3] == end_2
+
+
+def test_day_with_no_defense_and_no_end_reading_starts_nothing(
+    database_url: str, archive_server
+) -> None:
+    """A day with no defense slot used can lose the automatic loss for all 8
+    at the Reset, which only a reading shows: with that reading rejected, the
+    next day has no start rather than one up to 8 losses too high."""
+    day_3 = DAY_2 + timedelta(days=1)
+    filler = [DAY_1 - timedelta(hours=9 - i / 10) for i in range(44)]
+    end_1 = 5000 + 2 * WIN - LOSS - LOSS
+    log_1 = _log(*ATTACKS, *DEFENSE, filler=filler)
+    # Day 2: one attack and no defense.
+    log_2 = _log(*ATTACKS, *DEFENSE, (DAY_2 + timedelta(hours=2), True), filler=filler)
+    season_zero = json.loads(_profile(end_1 + WIN))
+    season_zero["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _first_seen(
+            connection_info, archive_server, DAY_1 + timedelta(hours=8),
+            profile=_new_season_profile(5000 + 2 * WIN - LOSS), log=log_1,
+        )
+        jobs += _reset_work(connection_info, archive_server, DAY_2,
+                            profile=_new_season_profile(end_1), log=log_1)
+        jobs += _reset_work(connection_info, archive_server, day_3,
+                            profile=json.dumps(season_zero).encode(), log=log_2)
+        _process(connection_info, archive_server, jobs)
+        # No later Reset saves Day 3, so calculate it once it has ended.
+        database = Database(connection_info)
+        try:
+            jobs = [reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=day_3,
+                now=day_3 + timedelta(days=1), request_key="day-3",
+            )]
+        finally:
+            database.close()
+        _process(connection_info, archive_server, jobs)
+        day_2 = _day(connection_info, DAY_2)
+        day_3_row = _day(connection_info, day_3)
+    assert day_2[0] == "Partial" and day_2[2] == end_1
+    assert "missing_end_baseline" in day_2[5]
+    assert day_3_row[2] is None and day_3_row[6] is None

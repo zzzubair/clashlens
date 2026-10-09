@@ -378,7 +378,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 (attacker_vs_defender, "defense"),
             }
             assert facts[(attacker_vs_defender, "offense")][2] == "decoded"
-            assert facts[(attacker_vs_other, "offense")][2] == "partial"
+            assert facts[(attacker_vs_other, "offense")][2] == "decoded"
             assert facts[(attacker_vs_defender, "defense")][2] == "decoded"
             assert facts[(attacker_vs_defender, "offense")][3] == 6000
             assert facts[(attacker_vs_other, "offense")][3] == 6035
@@ -404,7 +404,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
 
             api.pool.connection = traced_connection
             try:
-                # Offense lens: partial known component counts individually.
+                # Offense lens: the unnamed troop 9999 counts like any other.
                 selection = _selection()
                 first = api_analytics.get_army_analytics(api, selection)
                 assert first is not None
@@ -425,16 +425,16 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert "FILTER" not in missing_trophy_query
                 assert first["total_attacks"] == 2
                 assert first["usable_army_sample"] == 2
-                assert first["army_states"]["fully_decoded"] == 1
-                assert first["army_states"]["partial"] == 1
+                assert first["army_states"]["fully_decoded"] == 2
+                assert "partial" not in first["army_states"]
                 assert first["army_states_sum_confirmed"] is True
-                assert first["unknown_affected_attacks"] == 1
-                assert first["unknown_component_occurrences"] == 1
-                troop_row = next(
-                    row for row in first["rows"] if row["key"] == "troop:58"
-                )
-                assert troop_row["usage_count"] == 2
-                assert troop_row["usage_denominator"] == 2
+                assert first["unknown_affected_attacks"] == 0
+                assert first["unknown_component_occurrences"] == 0
+                rows = {row["key"]: row for row in first["rows"]}
+                troop_row, unnamed = rows["troop:58"], rows["troop:9999"]
+                assert (unnamed["label"], unnamed["usage_count"]) == (
+                    "Unknown troop or siege #9999", 1)
+                assert (troop_row["usage_count"], troop_row["usage_denominator"]) == (2, 2)
                 identity = first["publication_identity"]
                 assert identity.startswith("army-publication-")
                 assert first["reproducibility"]["official_season_id"] == SEASON_ID
@@ -611,7 +611,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     row for row in malformed["rows"] if row["key"] == "badtyped"
                 )
                 assert malformed_row["usage_count"] == 1
-                assert malformed_row["label"] == "Unknown ID badtyped"
+                assert malformed_row["label"] == "Unknown badtyped"
                 with database.pool.connection() as connection:
                     connection.execute(
                         """

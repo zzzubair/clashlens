@@ -515,7 +515,7 @@ Unfinished checks are still reused, but a pre-Reset profile completed after Rese
 does not satisfy that week. Repeat step 5 after those checks finish to queue any
 still due, then step 7, retaining `$POOL_TAGS` as `monday-pool.txt`. In a new
 operator session, restore that path before resuming. Automatic Monday scheduling
-is implemented behind a switch that defaults to off. Production approval and
+is implemented behind a switch. Production approval and
 validation remain separate work due by October 12; see the
 [weekly eligibility switch](collector-polling.md#weekly-eligibility-switch).
 
@@ -543,7 +543,7 @@ date -u +%FT%TZ
 If the first check fails, restore the API immediately before investigating. The
 service must be active before clearing the trap. If startup is not ready yet,
 repeat the recovery check once it is. The recovered message follows only after
-[15 minutes of clear checks](deployment.md#alert-conditions), so expect it from
+[15 minutes of clear checks](alerts.md), so expect it from
 the alert timer about 15 minutes later. Delivery prints no message receipt: record
 one problem message and its recovered message, timestamps and message links in
 the private Discord channel. The old September 27 test message does not count.

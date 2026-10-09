@@ -17,10 +17,18 @@ from test_worker_lifecycle import _worker_namespace
 
 from clashlens import cli
 from clashlens import spool as spool_module
-from clashlens.archive import SpoolFirstReader
+from clashlens.archive import S3ArchiveReader, SpoolFirstReader
 from clashlens.collector import _CLEANUP_LOOKUP_SIZE, Collector
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
-from clashlens.collector_uploads import claim_upload, complete_upload
+from clashlens.collector_uploads import (
+    UNRESOLVED_WRITE_ATTEMPTS,
+    archived_copy,
+    claim_upload,
+    complete_upload,
+    fail_upload,
+    release_expired_uploads,
+    unresolved_write_detail,
+)
 from clashlens.spool import Spool, SpoolError
 
 NOW = datetime.now(UTC).replace(microsecond=0)
@@ -86,7 +94,9 @@ def test_full_spool_drains_once_the_archive_returns(
         assert spool.readiness() == (False, "degraded_capacity")
         with pytest.raises(SpoolError, match="degraded_capacity"):
             spool.reserve()
-        collector = SimpleNamespace(database=database, spool=spool)
+        collector = SimpleNamespace(
+            database=database, spool=spool, loop_passes={}, database_waits={}
+        )
         assert Collector.cleanup_uploaded(collector) == (0, 0)
 
         # The archive comes back and takes a copy of both responses.
@@ -294,3 +304,410 @@ def test_cleanup_lookup_reads_kept_uploads_from_the_index_in_order(
         "collector_response_uploads_cleanup_order"
     ]
     assert all(node["Node Type"] != "Sort" for node in nodes(plans[0]))
+
+
+def _lost_copy_reader(root, endpoint: str, **instance: str) -> SpoolFirstReader:
+    return SpoolFirstReader(
+        S3ArchiveReader(
+            endpoint=endpoint,
+            bucket="evidence",
+            access_key="test",
+            secret_key="test",
+            secure=False,
+            allow_insecure_test_origin=True,
+            max_retries=0,
+            **instance,
+        ),
+        spool_root=str(root),
+        max_body_bytes=64 << 10,
+        validate_database=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("history", "archived_at", "outcome"),
+    [
+        # The upload finished and was recorded before the saved copy was lost.
+        ("recorded", "original", ("complete", None)),
+        # The database was restored to before the upload finished: it still
+        # lists the upload as pending, though the bytes reached the archive.
+        ("restored", "original", ("complete", None)),
+        # The bytes never reached the archive: real missing proof, on the
+        # job's last attempt.
+        ("restored", None, ("failed", "spool_missing")),
+        # The first location was retired, and the bytes were uploaded again
+        # under a new one this database knows.
+        ("retired", "generation", ("complete", None)),
+        # A retired location is never read back, even if it still exists.
+        ("retired", "original", ("failed", "spool_missing")),
+        # An upload still in flight may yet deliver the bytes. Like an archive
+        # outage, this waits without spending an attempt; once that upload
+        # gives up on the missing copy, the next try fails as missing proof.
+        ("uploading", None, ("waiting_dependency", "archive_missing")),
+        # An upload whose write could not be confirmed may still land, even
+        # after a later attempt found no copy.
+        ("write_unresolved", None, ("waiting_dependency", "archive_missing")),
+        ("missing_after_unresolved", None, ("waiting_dependency", "archive_missing")),
+        # Only for so many attempts after that write, however many attempts
+        # failed before it.
+        ("unresolved_exhausted", None, ("failed", "spool_missing")),
+        ("written_after_many_failures", None, ("waiting_dependency", "archive_missing")),
+        # The archive cannot be reached: try again later.
+        ("unreachable", "original", ("waiting_dependency", "archive_unavailable")),
+    ],
+)
+def test_a_lost_saved_copy_is_read_back_from_the_archive(
+    database_url: str,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    archive_server,
+    history: str,
+    archived_at: str | None,
+    outcome: tuple[str, str | None],
+) -> None:
+    root = tmp_path / "spool"
+    generation = "b" * 32
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(root, max_body_bytes=64 << 10)
+        digest = _save(connection_info, database, spool, TAGS[0])
+        body = spool.verify(digest)
+        original = f"sha256/{digest[:2]}/{digest}"
+        if history == "recorded":
+            claim = claim_upload(database, owner="uploader")
+            assert claim is not None
+            complete_upload(
+                database,
+                claim,
+                archive_reference=f"s3://evidence/{original}",
+                archive_instance_id="fixture-instance",
+            )
+        if history == "uploading":
+            assert claim_upload(database, owner="uploader") is not None
+        if history in {
+            "write_unresolved",
+            "missing_after_unresolved",
+            "unresolved_exhausted",
+            "written_after_many_failures",
+        }:
+            claim = claim_upload(database, owner="uploader")
+            assert claim is not None
+            fail_upload(
+                database,
+                claim,
+                category="archive_unavailable",
+                detail="archive write outcome could not be verified",
+            )
+        if history == "missing_after_unresolved":
+            claim = claim_upload(
+                database, owner="uploader", now=datetime.now(UTC) + timedelta(minutes=1)
+            )
+            assert claim is not None
+            fail_upload(database, claim, category="archive_missing")
+        if history == "unresolved_exhausted":
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_response_uploads SET attempt_count = %s,"
+                    " last_error_category = 'archive_missing',"
+                    " last_error_detail = %s",
+                    (
+                        1 + UNRESOLVED_WRITE_ATTEMPTS,
+                        unresolved_write_detail(1, "no such object"),
+                    ),
+                )
+        if history == "written_after_many_failures":
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_response_uploads SET attempt_count = %s",
+                    (10 * UNRESOLVED_WRITE_ATTEMPTS,),
+                )
+        if history == "retired":
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "INSERT INTO archive_catalogue (response_hash, archive_reference,"
+                    " byte_size, archive_instance_id, availability)"
+                    " VALUES (%s, %s, %s, 'fixture-instance', 'expired')",
+                    (digest, f"s3://evidence/{original}", len(body)),
+                )
+                connection.execute(
+                    "UPDATE collector_response_uploads SET upload_generation = %s"
+                    " WHERE response_hash = %s",
+                    (generation, digest),
+                )
+        objects = archive_server[3].objects
+        objects.clear()
+        if archived_at == "original":
+            objects[original] = body
+        elif archived_at == "generation":
+            objects[f"{original}/generation/{generation}"] = body
+        spool.delete_if_unreferenced(digest)
+        assert spool.verify(digest) is None
+        endpoint = "127.0.0.1:9" if history == "unreachable" else archive_server[0]
+        reader = _lost_copy_reader(root, endpoint)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("UPDATE python_processing_jobs_worker SET max_attempts = 1")
+        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+
+        assert (
+            cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
+            == 0
+        )
+        capsys.readouterr()
+        with psycopg.connect(connection_info) as connection:
+            job = connection.execute(
+                "SELECT state, failure_category FROM python_processing_jobs_worker"
+            ).fetchone()
+
+        assert job == outcome
+        # Bytes read back are saved locally again; nothing else is.
+        assert (spool.verify(digest) == body) is (outcome[0] == "complete")
+        if history == "retired" and archived_at == "original":
+            assert archive_server[3].get_count == 0
+
+
+@pytest.mark.parametrize(
+    ("marker", "outcome"),
+    [
+        # Not the job's last attempt: the next one looks again.
+        ("matches", ("waiting_retry", "spool_missing")),
+        # Another archive answers at the configured address: its missing
+        # object says nothing about this one.
+        ("differs", ("waiting_retry", "archive_marker_mismatch")),
+        ("unreadable", ("waiting_dependency", "archive_unavailable")),
+    ],
+)
+def test_missing_proof_needs_the_archive_marker_to_match(
+    database_url: str,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    archive_server,
+    marker: str,
+    outcome: tuple[str, str],
+) -> None:
+    root = tmp_path / "spool"
+    payload = b"fixture archive marker"
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(root, max_body_bytes=64 << 10)
+        # A restored database lists the upload as pending; the saved copy is
+        # gone and the archive has no object at the upload's location.
+        digest = _save(connection_info, database, spool, TAGS[0])
+        spool.delete_if_unreferenced(digest)
+        objects = archive_server[3].objects
+        objects.clear()
+        if marker != "unreadable":
+            objects["markers/instance"] = (
+                payload if marker == "matches" else b"another archive's marker"
+            )
+        reader = _lost_copy_reader(
+            root,
+            archive_server[0],
+            instance_id="fixture-instance",
+            marker_key="markers/instance",
+            marker_hash=hashlib.sha256(payload).hexdigest(),
+            marker_payload_version="1",
+        )
+        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+
+        assert (
+            cli._run_worker(_worker_namespace(database_url=connection_info, max_jobs=1))
+            == 0
+        )
+        capsys.readouterr()
+        with psycopg.connect(connection_info) as connection:
+            job = connection.execute(
+                "SELECT state, failure_category FROM python_processing_jobs_worker"
+            ).fetchone()
+
+    assert job == outcome
+
+
+def test_a_write_that_may_yet_land_is_checked_again_before_missing_proof(
+    database_url: str, tmp_path
+) -> None:
+    later = datetime.now(UTC) + timedelta(minutes=1)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
+        _save(connection_info, database, spool, TAGS[0])
+        at = later
+        claim = claim_upload(database, owner="uploader", now=at)
+        # Thirty attempts that only found the archive marker unreadable, as
+        # the uploads process records them.
+        while claim is not None and claim.attempt_count <= UNRESOLVED_WRITE_ATTEMPTS:
+            detail = "archive marker could not be checked"
+            if claim.unresolved_write is not None:
+                detail = unresolved_write_detail(claim.unresolved_write, detail)
+            fail_upload(database, claim, category="archive_unavailable", detail=detail)
+            at += timedelta(minutes=2)
+            claim = claim_upload(database, owner="uploader", now=at)
+        # The next attempt writes, and the write times out.
+        assert claim is not None
+        write = claim.attempt_count
+        fail_upload(
+            database,
+            claim,
+            category="archive_unavailable",
+            detail="archive write outcome could not be verified",
+        )
+        at += timedelta(minutes=2)
+        claim = claim_upload(database, owner="uploader", now=at)
+        # Attempts finding no archived copy do not settle it until that write
+        # has had its full allowance of later attempts.
+        while claim is not None and claim.attempt_count <= write + UNRESOLVED_WRITE_ATTEMPTS:
+            assert claim.unresolved_write == write
+            fail_upload(
+                database,
+                claim,
+                category="archive_missing",
+                detail=unresolved_write_detail(write, "no such object"),
+            )
+            at += timedelta(minutes=2)
+            claim = claim_upload(database, owner="uploader", now=at)
+        assert claim is not None and claim.unresolved_write is None
+        # An attempt whose lease ran out may have written too.
+        at += timedelta(minutes=2)
+        assert release_expired_uploads(database, now=at) == 1
+        expired = claim.attempt_count
+        claim = claim_upload(database, owner="uploader", now=at)
+        assert claim is not None and claim.unresolved_write == expired
+
+
+class _FinishesAfterFirstRead:
+    """A database whose upload finishes between archived_copy's two reads."""
+
+    def __init__(self, database: CollectorDatabase, finish) -> None:
+        self._database = database
+        self._finish = finish
+        self.pool = self
+
+    @contextmanager
+    def connection(self):
+        finish = self._finish
+
+        class Connection:
+            def __init__(self, connection) -> None:
+                self._connection = connection
+
+            def execute(self, *args, **kwargs):
+                nonlocal finish
+                result = self._connection.execute(*args, **kwargs)
+                if finish is not None:
+                    finish, done = None, finish
+                    done()
+                return result
+
+        with self._database.pool.connection() as connection:
+            yield Connection(connection)
+
+
+def test_an_upload_finishing_during_the_lookup_still_counts_as_archived(
+    database_url: str, tmp_path
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(tmp_path / "spool", max_body_bytes=64 << 10)
+        digest = _save(connection_info, database, spool, TAGS[0])
+        claim = claim_upload(database, owner="uploader")
+        assert claim is not None
+        reference = f"s3://evidence/sha256/{digest[:2]}/{digest}"
+
+        copy = archived_copy(
+            _FinishesAfterFirstRead(
+                database,
+                lambda: complete_upload(
+                    database,
+                    claim,
+                    archive_reference=reference,
+                    archive_instance_id="fixture-instance",
+                ),
+            ),
+            digest,
+            bucket="evidence",
+        )
+
+    assert copy is not None
+    assert (copy.reference, copy.recorded) == (reference, True)
+
+
+@pytest.mark.parametrize("generation", ["", "b" * 32])
+@pytest.mark.parametrize(
+    ("change", "outcome"),
+    [
+        ("saved_again", ("complete", None)),
+        ("upload_started", ("waiting_dependency", "archive_missing")),
+    ],
+)
+def test_a_copy_that_appears_after_a_missing_read_is_found_by_the_next_attempt(
+    database_url: str,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    archive_server,
+    generation: str,
+    change: str,
+    outcome: tuple[str, str | None],
+) -> None:
+    # A missing copy spends one of the job's attempts. Before the next, the
+    # collector saves the same bytes again, or an upload of them starts.
+    root = tmp_path / "spool"
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(root, max_body_bytes=64 << 10)
+        digest = _save(connection_info, database, spool, TAGS[0])
+        body = spool.verify(digest)
+        if generation:
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_response_uploads SET upload_generation = %s",
+                    (generation,),
+                )
+        spool.delete_if_unreferenced(digest)
+        archive_server[3].objects.clear()
+        reader = _lost_copy_reader(root, archive_server[0])
+        read = reader.archive.read_verified
+        reads: list[str] = []
+
+        def recorded_read(reference, expected_hash, **kwargs):
+            reads.append(reference)
+            return read(reference, expected_hash, **kwargs)
+
+        monkeypatch.setattr(reader.archive, "read_verified", recorded_read)
+        monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
+
+        def run_and_read() -> tuple[str, str | None]:
+            assert (
+                cli._run_worker(
+                    _worker_namespace(database_url=connection_info, max_jobs=1)
+                )
+                == 0
+            )
+            capsys.readouterr()
+            with psycopg.connect(connection_info) as connection:
+                return connection.execute(
+                    "SELECT state, failure_category FROM python_processing_jobs_worker"
+                ).fetchone()
+
+        assert run_and_read() == ("waiting_retry", "spool_missing")
+        if change == "saved_again":
+            spool.publish(body, digest)
+        else:
+            assert claim_upload(database, owner="uploader") is not None
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE python_processing_jobs_worker SET due_at = clock_timestamp()"
+            )
+        job = run_and_read()
+
+    location = f"s3://evidence/sha256/{digest[:2]}/{digest}" + (
+        f"/generation/{generation}" if generation else ""
+    )
+    assert reads == [location] * (1 if change == "saved_again" else 2)
+    assert job == outcome

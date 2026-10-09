@@ -1,0 +1,369 @@
+/*
+ * The Clash Lens brand layer: fonts and the shared look of headings, the top
+ * bar, buttons, tabs, cards, tables and badges. Colours are the --cl-* tokens
+ * in theme.css (light) and appearance.css (dark). See brand/README.md.
+ *
+ * Rules start with :root so they win over the older per-page styles, which
+ * load later with the route.
+ */
+
+@font-face {
+  font-family: "Lilita One";
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/lilita-one-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Lilita One";
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/lilita-one-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: Nunito;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url("/fonts/nunito-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: Nunito;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url("/fonts/nunito-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ---------- Type ---------- */
+
+:root :is(h1, h2, h3, .site-brand) {
+  font-family: var(--cl-font-heading);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+:root h1 {
+  text-shadow: 0 3px 0 rgb(255 138 31 / 0.35);
+}
+:root[data-theme="dark"] h1 {
+  text-shadow: 0 3px 0 rgb(179 38 30 / 0.8);
+}
+:root .eyebrow {
+  color: var(--cl-action-text);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+:root :is(table, .player-trophy-card, .metric-card, .season-summary) {
+  font-variant-numeric: tabular-nums;
+}
+/* Big numbers read like the in-game counters. */
+:root
+  :is(.player-trophy-card strong, .metric-card strong, .season-summary-headline strong) {
+  font-family: var(--cl-font-heading);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Top bar: dark in both themes ---------- */
+
+:root .site-header {
+  background: var(--cl-header-bg);
+  border-bottom: 0;
+}
+:root .primary-nav a {
+  color: var(--cl-header-ink);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  font-weight: 800;
+}
+:root .primary-nav a:hover {
+  color: var(--cl-header-ink);
+  background: var(--cl-header-soft);
+}
+:root .primary-nav a[aria-current="page"] {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill);
+  border-color: var(--cl-brand-night);
+  box-shadow: 0 3px 0 #000000;
+}
+:root .site-nav :is(.nav-link:not(.nav-link-primary), .nav-button),
+:root .site-header :is(.theme-toggle, .header-search-toggle) {
+  color: var(--cl-header-ink);
+  background: transparent;
+  border: 2px solid rgb(255 244 226 / 0.22);
+  border-radius: 999px;
+  box-shadow: none;
+}
+:root
+  .site-nav
+  :is(.nav-link:not(.nav-link-primary), .nav-button):is(:hover, :focus-visible),
+:root .site-header :is(.theme-toggle, .header-search-toggle):is(:hover, :active) {
+  color: var(--cl-header-ink);
+  background: var(--cl-header-soft);
+  border-color: rgb(255 244 226 / 0.4);
+}
+
+/* ---------- Buttons ---------- */
+
+:root
+  :is(
+    .button:not(.secondary, .button-secondary, [aria-current]),
+    .button-primary,
+    .nav-link-primary,
+    .search-controls button,
+    .saved-data-panel button
+  ) {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill);
+  border: 2px solid var(--cl-brand-night);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-button-shadow);
+  font-weight: 900;
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.45);
+}
+:root
+  :is(
+    .button:not(.secondary, .button-secondary, [aria-current]),
+    .button-primary,
+    .nav-link-primary,
+    .search-controls button,
+    .saved-data-panel button
+  ):is(:hover, :focus-visible) {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill-hover);
+  border-color: var(--cl-brand-night);
+}
+:root
+  :is(
+    .button.secondary,
+    .button-secondary,
+    .section-link,
+    .player-refresh-form button,
+    .snapshot-pagination a,
+    .page-position
+  ) {
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-raise);
+  font-weight: 800;
+}
+:root
+  :is(
+    .button.secondary,
+    .button-secondary,
+    .section-link,
+    .player-refresh-form button,
+    .snapshot-pagination a
+  ):is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-card-line);
+}
+:root .danger-button {
+  color: #ffffff;
+  background: #c92a2a;
+  border: 2px solid var(--cl-brand-night);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-raise);
+  font-weight: 800;
+}
+
+/* ---------- Tabs: a tray with the current tab raised in the brand fill ---------- */
+
+:root :is(.leaderboard-view-switch, .segmented-control) {
+  background: var(--cl-panel);
+  border: 2px solid var(--cl-card-line);
+  border-radius: calc(var(--cl-radius) + 4px);
+  box-shadow: var(--cl-raise);
+}
+:root :is(.leaderboard-view-switch .button, .segmented-control span) {
+  color: var(--cl-ink);
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: var(--cl-radius);
+  box-shadow: none;
+  text-shadow: none;
+  font-weight: 800;
+}
+:root
+  :is(
+    .leaderboard-view-switch .button[aria-current="page"],
+    .segmented-control input:checked + span,
+    .season-list [aria-current="page"]
+  ) {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill);
+  border-color: var(--cl-brand-night);
+  box-shadow: 0 2px 0 var(--cl-brand-night);
+  font-weight: 900;
+}
+:root .season-list :is(a, strong) {
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-raise);
+  font-weight: 800;
+}
+:root .season-list a:not([aria-current="page"]) {
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+}
+:root .season-list a:not([aria-current="page"]):hover {
+  background: var(--cl-action-soft);
+}
+
+/* ---------- Cards: one outline, one hard drop, one corner size ---------- */
+
+:root
+  :is(
+    .home-leaderboard,
+    .standings-board,
+    .player-header,
+    .season-summary,
+    .legend-day,
+    .metric-card,
+    .search-panel,
+    .saved-summary,
+    .refresh-panel,
+    .notice,
+    .quality-section,
+    .empty-state,
+    .saved-data-panel,
+    .quality-panel,
+    .login-panel,
+    .form-panel,
+    .group-card,
+    .compare-board,
+    .linked-player-card,
+    .blog-list article,
+    .analytics-filters,
+    .analytics-kpis,
+    .analytics-empty,
+    .leading-players,
+    .search-results,
+    .table-wrap,
+    .search-dropdown,
+    .header-search-panel,
+    .home-page .search-controls
+  ) {
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+:root :is(.home-leaderboard, .standings-board, .season-summary, .legend-day) {
+  overflow: hidden;
+}
+/* A card inside a card is just a section of it. */
+:root
+  :is(
+    .home-leaderboard,
+    .standings-board,
+    .player-header,
+    .season-summary,
+    .legend-day,
+    .search-panel,
+    .saved-data-panel,
+    .quality-panel,
+    .login-panel,
+    .form-panel,
+    .group-card,
+    .compare-board,
+    .analytics-kpis,
+    .search-results
+  )
+  :is(
+    .metric-card,
+    .notice,
+    .empty-state,
+    .table-wrap,
+    .quality-section,
+    .saved-summary,
+    .refresh-panel,
+    .player-trophy-card,
+    .search-results,
+    .search-controls
+  ) {
+  border-width: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* Small items in a list are cards too, with the lighter button-sized drop. */
+:root
+  :is(.search-result, .player-link-list li, .group-name-list li, .player-action-list li) {
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-raise);
+}
+
+/* ---------- Tables ---------- */
+
+:root :is(.leaderboard-table, .data-table) thead th {
+  color: var(--cl-ink);
+  background: var(--cl-panel);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+:root :is(.leaderboard-table, .data-table) tbody tr:hover {
+  background: var(--cl-action-soft);
+}
+:root .leaderboard-table .player-name {
+  font-weight: 800;
+}
+:root .rank-mark {
+  font-weight: 900;
+}
+:root .leaderboard-row[data-podium-rank] .rank-mark {
+  color: var(--cl-brand-night);
+  border: 2px solid var(--cl-brand-night);
+  box-shadow: 0 2px 0 var(--cl-brand-night);
+}
+
+/* ---------- Badges ---------- */
+
+:root :is(.state-badge, .profile-badge) {
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  font-weight: 800;
+}
+
+/* ---------- Form fields ---------- */
+
+:root :is(input:not([type="checkbox"], [type="radio"]), select, textarea) {
+  border-radius: var(--cl-radius);
+}
+:root .home-page .search-controls input {
+  border-radius: var(--cl-card-radius);
+}
+/* A black outline vanishes on the dark fill, so the search box keeps its input border. */
+:root[data-theme="dark"] .home-page .search-controls {
+  border-color: var(--cl-input-border);
+}
+
+/* A button never shrinks past its own text. Narrow phones let short buttons wrap
+   instead of spilling out of their card. */
+:root .section-link {
+  min-width: min-content;
+}
+@media (max-width: 24rem) {
+  :root .section-link {
+    white-space: normal;
+    text-align: center;
+  }
+}

@@ -29,7 +29,9 @@ from . import (
     api_accounts,
     api_verification,
     battle_day_repair,
+    collector_http,
     league_history_refresh,
+    population,
     promotion_candidates,
 )
 from . import db as _db
@@ -39,7 +41,7 @@ from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
 from .collector import Collector
 from .collector_db import CollectorDatabase
 from .collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
-from .db import CONTRACT_VERSION, MAX_POOL_SIZE, Database
+from .db import CONTRACT_VERSION, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
 from .operating import (
     WORKER_SNAPSHOT_INTERVAL_SECONDS,
@@ -47,6 +49,7 @@ from .operating import (
     write_private_snapshot,
 )
 from .profile import normalize_player_tag
+from .uploader import UploaderProcess
 from .verification import (
     OfficialVerificationClient,
     VerificationOutcome,
@@ -56,17 +59,21 @@ from .verification import (
 from .worker import (
     MAINTENANCE_POOL_SIZE,
     MAX_CONCURRENCY,
+    MAX_PROCESSES,
+    MAX_WORKER_POOL_SIZE,
     ObservationProcessor,
     ProcessResult,
     StageMetrics,
     TimedMaintenance,
     process_concurrently,
     process_until_stopped,
+    response_lane_count,
+    start_processes,
 )
-from .worker_liveness import ProgressMark, worker_readiness
+from .worker_liveness import ProgressMark, progress_file, worker_readiness
 
 MAX_REPORTED_RESULTS = 100
-# Save plus request threads leave 64 of the collector container's 512 for the rest.
+# Save plus request threads leave 96 of the collector's 544: 32 for uploads, 64 spare.
 _SAVE_THREADS, _THREAD_BUDGET = 384, 448
 UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -170,39 +177,36 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--run-forever", action="store_true")
     worker.add_argument("--poll-interval-seconds", type=float, default=1.0)
     worker.add_argument(
-        "--concurrency",
-        type=_bounded_int("concurrency", 1, MAX_CONCURRENCY),
-        default=1,
-        help=(
-            "number of bounded in-process execution lanes (1 to 32; "
-            "default 1 preserves sequential behavior)"
-        ),
+        "--processes", type=_bounded_int("processes", 1, MAX_PROCESSES), default=1,
+        help="worker processes, each with its own owner, lanes and pools (default 1)",
     )
+    worker.add_argument(
+        "--concurrency", type=_bounded_int("concurrency", 1, MAX_CONCURRENCY), default=1,
+        help="in-process execution lanes per process, 1 to 32 (default 1: sequential)",
+    )
+    worker.add_argument(
+        "--response-lanes", type=_bounded_int("response lanes", 1, MAX_CONCURRENCY - 1),
+        default=None, help="lanes that only process responses (default: two thirds)",
+    )
+    worker.add_argument(
+        "--claim-batch-size", type=_bounded_int("claim batch size", 1, 32), default=8,
+        help="jobs one claim leases for the lanes of one kind of work (default 8)",
+    )
+    worker.add_argument("--process-index", type=int, default=0, help=argparse.SUPPRESS)
     worker.add_argument(
         "--database-pool-size",
-        type=_bounded_int("database pool size", 1, MAX_POOL_SIZE),
-        default=None,
-        help=(
-            "PostgreSQL connection pool size (default: 8 with concurrency, "
-            "4 for the sequential worker)"
-        ),
+        type=_bounded_int("database pool size", 1, MAX_WORKER_POOL_SIZE),
+        default=None, help="PostgreSQL pool size per process (default: 8, or 4 sequential)",
     )
     worker.add_argument(
-        "--archive-pool-size",
-        type=_bounded_int("archive pool size", 1, MAX_ARCHIVE_POOL_SIZE),
-        default=None,
-        help=("archive HTTP connection pool size (default: max(4, concurrency))"),
+        "--archive-pool-size", type=_bounded_int("archive pool size", 1, MAX_ARCHIVE_POOL_SIZE),
+        default=None, help="archive HTTP pool size (default: max(4, concurrency))",
     )
     worker.add_argument("--operating-snapshot-file", default="")
     worker.add_argument(
-        "--terminal-snapshot-file",
-        default="",
-        help=(
-            "distinct persistent per-replica terminal snapshot, written "
-            "once after the heartbeat joins and archive work quiesces; "
-            "a write failure is a worker failure, never silent "
-            "completeness"
-        ),
+        "--terminal-snapshot-file", default="",
+        help="per-process final snapshot, written once all work has stopped; "
+        "a write failure fails the worker",
     )
     worker.add_argument(
         "--disable-player-discovery",
@@ -224,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     failed_items = subparsers.add_parser(
         "failed-items",
-        help="list collector failures or explicitly retry collection/upload work",
+        help="list failures, retry collection/upload work, replay or accept a failed job",
     )
     _database_argument(failed_items)
     failed_items.add_argument(
@@ -235,6 +239,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--work-id", type=_bounded_int("collector work ID", 1, 9223372036854775807)
     )
     failed_selector.add_argument("--upload-hash")
+    failed_selector.add_argument(
+        "--accept-job-id", type=_bounded_int("processing job ID", 1, 9223372036854775807)
+    )
+    failed_selector.add_argument(
+        "--replay-job-id",
+        action="append",
+        type=_bounded_int("processing job ID", 1, 9223372036854775807),
+    )
+    failed_items.add_argument("--reason")
+    # ./ops passes the host account; acceptances and replays record it.
+    failed_items.add_argument("--operator")
     failed_items.add_argument("--apply", action="store_true")
 
     prune_history = subparsers.add_parser(
@@ -285,6 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     league_history_refresh.add_command(subparsers, _database_argument)
     promotion_candidates.add_command(subparsers, _database_argument)
+    population.add_command(subparsers, _database_argument)
 
     materialize_seasons = subparsers.add_parser(
         "materialize-season-summaries",
@@ -431,6 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
+    arguments.argv = list(sys.argv[1:] if argv is None else argv)
     try:
         if arguments.command == "collector":
             return _run_collector(arguments)
@@ -446,30 +463,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 database.close()
             return 0
         if arguments.command == "failed-items":
-            import psycopg
+            from .operator_recovery import failed_items_command
 
-            from .operator_recovery import inspect_failed_items, retry_failed_item
-
-            if (
-                arguments.apply
-                and arguments.work_id is None
-                and arguments.upload_hash is None
-            ):
-                raise ValueError("--apply requires --work-id or --upload-hash")
-            if arguments.upload_hash is not None and not re.fullmatch(
-                r"[0-9a-f]{64}", arguments.upload_hash
-            ):
-                raise ValueError("upload hash must be a lowercase SHA-256 digest")
-            with psycopg.connect(_database_url(arguments)) as connection:
-                if arguments.work_id is None and arguments.upload_hash is None:
-                    report = inspect_failed_items(connection, limit=arguments.limit)
-                else:
-                    report = retry_failed_item(
-                        connection,
-                        work_id=arguments.work_id,
-                        upload_hash=arguments.upload_hash,
-                        apply=arguments.apply,
-                    )
+            report = failed_items_command(arguments, _database_url(arguments))
             print(json.dumps(report, sort_keys=True, default=str))
             return 1 if report.get("outcome") == "refused" else 0
         if arguments.command == "prune-archive":
@@ -544,6 +540,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return league_history_refresh.run_command(_database_url(arguments))
         if arguments.command == "load-promotion-candidates":
             return promotion_candidates.run_command(_database_url(arguments))
+        if arguments.command == "population-status":
+            return population.run_command(_database_url(arguments), repair=arguments.repair)
         if arguments.command == "materialize-season-summaries":
             import psycopg
 
@@ -708,6 +706,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         raise ValueError("collector requires 4 to 9 regular keys and one interactive key")
     if not regular_keys or len(interactive_keys) != 1:
         raise ValueError("collector requires regular keys and one interactive key")
+    connections = collector_http.collector_connections(arguments, len(regular_keys))
     host, separator, port_text = arguments.health_listen.rpartition(":")
     if separator != ":" or not host:
         raise ValueError("collector health listen must be host:port")
@@ -742,12 +741,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
                 raise ProviderFailure(permit.reason, retryable=False)
             await asyncio.sleep(0.01)
 
-    archive_reader = _archive(
-        arguments,
-        pool_size=32,
-        database=database,
-        validate_archive_instance=False,
-    )
+    archive_reader = _archive(arguments, database=database, validate_archive_instance=False)
     if not isinstance(archive_reader, SpoolFirstReader):
         raise TypeError("collector requires a local spool root")
     concurrency = arguments.concurrency_per_key
@@ -764,8 +758,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
             proxy_url=arguments.official_proxy_url,
             allow_insecure_test_origin=arguments.allow_insecure_official_origin,
             max_body_bytes=arguments.archive_max_body_bytes,
-            max_connections=min((len(regular_keys) + 1) * concurrency,
-                                _THREAD_BUDGET - save_threads),
+            max_connections=min(connections, _THREAD_BUDGET - save_threads),
         ),
         regular_keys=KeyPool(
             regular_keys,
@@ -784,12 +777,13 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         interactive_fingerprint=interactive_fingerprint,
         weekly_eligibility_enabled=arguments.enable_weekly_eligibility,
         regular_parallelism=parallelism,
+        uploads=UploaderProcess(arguments),
     )
 
     async def serve() -> None:
         stop_requested = asyncio.Event()
         loop = asyncio.get_running_loop()
-        # A save thread per regular check, up to the cap; intent and uploads share them.
+        # A save thread per regular check, up to the cap; intent work shares them.
         loop.set_default_executor(ThreadPoolExecutor(
             max_workers=save_threads, thread_name_prefix="collector-io"
         ))
@@ -812,11 +806,16 @@ def _run_collector(arguments: argparse.Namespace) -> int:
 
 def _run_worker(arguments: argparse.Namespace) -> int:
     concurrency = arguments.concurrency
+    response_lanes = getattr(arguments, "response_lanes", None)
     database_pool_size = (
         arguments.database_pool_size
         if arguments.database_pool_size is not None
         else (8 if concurrency > 1 else 4)
     )
+    process_index = getattr(arguments, "process_index", 0)
+    exit_code = start_processes(arguments, database_pool_size, _install_shutdown_handlers)
+    if exit_code is not None:
+        return exit_code
     archive_pool_size = (
         arguments.archive_pool_size
         if arguments.archive_pool_size is not None
@@ -840,6 +839,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         assert_contract_version(CONTRACT_VERSION)
     stop_requested = Event()
     _install_shutdown_handlers(stop_requested)
+    maintenance = None
     try:
         stage_metrics = StageMetrics()
         worker_metrics = WorkerMetrics()
@@ -862,12 +862,22 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         if arguments.run_forever and concurrency > 1:
             maintenance_database = open_database(MAINTENANCE_POOL_SIZE)
         maintenance = TimedMaintenance(maintenance_database, stage_metrics)
-        if maintenance_database is database:  # else the timer's first tick does
+        # Else the timer's first tick does; either way only with the permit.
+        if maintenance_database is database and (
+            maintenance.permit is None or maintenance.permit.acquire()
+        ):
             maintenance.reevaluate()
         if isinstance(processor, ObservationProcessor):
             processor.stage_metrics = database.stage_metrics = stage_metrics
+            processor.claim_batch = getattr(arguments, "claim_batch_size", 1)
+            if process_index:
+                processor.plan_share = (process_index, arguments.processes)
 
-        progress = ProgressMark()
+        # Only these threads may run a population build or the timer's checks.
+        build_lane = response_lane_count(concurrency, response_lanes) + 1
+        progress = ProgressMark(progress_file(process_index), long_running=(
+            "MainThread", "clashlens-worker-maintenance",
+            f"clashlens-worker-lane-{build_lane}"))
 
         def process_batch() -> list[ProcessResult]:
             # Local spool and PostgreSQL own claim readiness. Remote marker
@@ -999,6 +1009,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     maintain=maintenance.run_due,
                     on_result=report_result,
                     progress=progress,
+                    response_lanes=response_lanes,
                 )
             while not stop_requested.is_set():
                 results = process_batch()
@@ -1061,6 +1072,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             return 1
         return 0
     finally:
+        if maintenance is not None:
+            maintenance.close()
         database.close()
         if maintenance_database is not database:
             maintenance_database.close()

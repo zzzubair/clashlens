@@ -49,6 +49,9 @@ def runtime(tmp_path, monkeypatch):
         reads_failed=False,
         leaderboard="0 13000 0",
         publication="0",
+        served=None,
+        reset=None,
+        database="healthy 0",
         completeness="0",
         health_streaks={},
         site_status=200,
@@ -56,6 +59,9 @@ def runtime(tmp_path, monkeypatch):
         volume_failed=False,
         read_requests=[],
         probe_status=200,
+        website_status=302,
+        board_page='<h1 id="leaderboard-title">Day 7 standings</h1>',
+        calls=[],
     )
     key = b"a" * 32
     secret = tmp_path / "hmac"
@@ -89,6 +95,11 @@ def runtime(tmp_path, monkeypatch):
                 body, status = b'{"ready":true}', 200
             elif self.path == "/healthz":
                 body, status = b'{"status":"ok"}', rt.site_status
+            elif self.path.startswith("/leaderboards/tracked?view=daily&page=1"):
+                # The public page sends a visitor on to the board it accepted.
+                body, status = b"", rt.website_status
+            elif self.path.startswith("/leaderboards/tracked?"):
+                body, status = rt.board_page.encode(), 200
             else:
                 proof = verify_proof(
                     headers=[
@@ -104,6 +115,10 @@ def runtime(tmp_path, monkeypatch):
                 rt.read_requests.append((self.path, proof))
                 body, status = b'{"users":[],"results":[]}', rt.probe_status
             self.send_response(status)
+            if status == 302:
+                self.send_header(
+                    "Location", "/leaderboards/tracked?view=daily&season=2026-10&day=7&page=1"
+                )
             self.end_headers()
             self.wfile.write(body)
 
@@ -138,7 +153,8 @@ def runtime(tmp_path, monkeypatch):
     # The early warning's overdue-work limits sit under the processing alert's.
     # Other alerts' tests leave them out; the warning's own tests restore them.
     rt.warning_limits = {
-        name: getattr(alerts, name) for name in ("WARNING_OVERDUE", "WARNING_RESET_OVERDUE")
+        name: getattr(alerts, name)
+        for name in ("WARNING_OVERDUE", "WARNING_RESET_OVERDUE", "WARNING_UPLOAD_WAIT")
     }
     for name in rt.warning_limits:
         monkeypatch.setattr(alerts, name, float("inf"))
@@ -149,6 +165,7 @@ def runtime(tmp_path, monkeypatch):
     )
 
     def command(args, timeout=15):
+        rt.calls.append(args)
         if "volume" in args:
             code, output = int(rt.volume_failed), str(tmp_path)
         elif "backup-status" in args:
@@ -160,7 +177,13 @@ def runtime(tmp_path, monkeypatch):
         elif "--leaderboard" in args:
             code, output = 0, rt.leaderboard
         elif "--publication" in args:
-            code, output = 0, rt.publication
+            code, output = 0, f"{rt.publication} {rt.served or reset_at(rt.now)}"
+        elif "--reset" in args:
+            # A healthy Reset: all 13,000 collected, frozen 05:10, readable 05:15.
+            at = reset_at(rt.now)
+            code, output = 0, rt.reset or f"{at} 13000 13000 {at + 600} {at + 900}"
+        elif args[-1] == "clashlens-postgres":
+            code, output = 0, rt.database
         elif "--completeness" in args:
             code, output = 0, rt.completeness
         elif "inspect" in args:
@@ -183,6 +206,7 @@ def runtime(tmp_path, monkeypatch):
         "spool_root": str(tmp_path),
         "max_bytes": 100,
         "max_objects": 100,
+        "public_origin": f"http://127.0.0.1:{server.server_port}",
     }
     rt.state_dir = tmp_path / "state"
     rt.run = lambda: alerts.run(rt.config, rt.state_dir, ROOT)
@@ -192,6 +216,11 @@ def runtime(tmp_path, monkeypatch):
         server.shutdown()
         thread.join(timeout=2)
         server.server_close()
+
+
+def reset_at(now: float) -> int:
+    """The latest 05:00 UTC Reset at or before ``now``."""
+    return int(now - (now - 5 * 3600) % 86400)
 
 
 def trigger(rt, condition, value=True):
@@ -219,7 +248,7 @@ def trigger(rt, condition, value=True):
         )
     elif condition in ("processing", "upload"):
         name = f"clashlens_collector_oldest_pending_{condition}_age_seconds"
-        limit = 1800 if condition == "processing" else 3600
+        limit = 1800 if condition == "processing" else 900
         rt.metrics[name] = limit if value else limit - 1
     elif condition == "publication":
         rt.publication = "1" if value else "0"
@@ -330,6 +359,7 @@ def test_missing_or_public_webhook_fails_loudly(runtime, monkeypatch, capsys, mo
             rt.config["spool_root"],
             "100",
             "100",
+            rt.config["public_origin"],
         ],
     )
     assert alerts.main() == 1
@@ -471,16 +501,15 @@ def test_stale_leaderboard_alerts_only_when_widespread_or_long_for_five_minutes(
         minutes(16, "0 13000 300")
         assert "recovered" in rt.posts[-1]["content"]
     assert len(rt.posts) == 4
-    # The Reset pause, then unfinished Reset work, are not counted.
+    # 04:55-05:15 the Reset sweep refreshes every player, so widespread
+    # staleness under 20 minutes is expected. From 05:15 it counts again,
+    # even while Reset collection is unfinished (8 Oct 2026).
     rt.now = datetime(2026, 9, 28, 4, 55, tzinfo=UTC).timestamp()
-    minutes(6, "9000 13000 1500")
     rt.metrics["clashlens_collector_reset_total"] = 200
     rt.metrics["clashlens_collector_reset_terminal"] = 199
-    minutes(15, "9000 13000 1801")
-    rt.metrics["clashlens_collector_reset_terminal"] = 200
-    minutes(5, "9000 13000 1801")
+    minutes(25, "9000 13000 1200")
     assert len(rt.posts) == 4
-    minutes(1, "9000 13000 1801")
+    minutes(1, "9000 13000 1200")
     assert len(rt.posts) == 5
 
 
@@ -616,29 +645,23 @@ def test_unavailable_leaderboard_check_restarts_the_five_minutes(
     "missing",
     ["clashlens_collector_reset_total", "clashlens_collector_reset_terminal", None],
 )
-def test_unknown_reset_progress_neither_raises_nor_clears_the_leaderboard(
+def test_the_leaderboard_check_does_not_wait_on_collector_reset_progress(
     runtime, missing
 ):
+    # Until 8 Oct 2026 unknown or unfinished Reset collection paused this
+    # check, so a Reset that never finished hid stale live pages.
     rt = runtime
-    known = dict(rt.metrics)
-
-    def hide_reset_progress():
-        if missing is None:
-            rt.metrics_status = 503
-        else:
-            del rt.metrics[missing]
-
-    hide_reset_progress()
+    if missing is None:
+        rt.metrics_status = 503
+    else:
+        del rt.metrics[missing]
     rt.leaderboard = "9000 13000 1801"
     rt.run()
-    assert not rt.posts
-    rt.metrics, rt.metrics_status = dict(known), 200
-    assert rt.run() == 0
     assert len(rt.posts) == 1
-    hide_reset_progress()
+    assert "Live Leaderboard" in rt.posts[0]["content"]
     rt.leaderboard = "0 13000 0"
     rt.run()
-    assert len(rt.posts) == 1
+    assert "recovered" in rt.posts[-1]["content"]
 
 
 def test_saved_work_alerts_clear_only_when_their_own_problem_clears(runtime):
@@ -686,22 +709,26 @@ def test_processing_alert_ignores_builds_and_names_the_oldest_work(runtime):
 
 def test_missing_failure_age_is_unknown_unless_nothing_has_failed(runtime):
     rt = runtime
+
+    def new_failures():
+        return [p["content"] for p in rt.posts if "A new permanent failure" in p["content"]]
+
     trigger(rt, "failures")
     assert rt.run() == 0
-    assert len(rt.posts) == 1
+    assert len(new_failures()) == 1
     # An older collector reports failed counts but no newest-failure ages.
     del rt.metrics["clashlens_collector_newest_failed_upload_age_seconds"]
     rt.metrics["clashlens_collector_failed_processing"] = 1
     assert rt.run() == 0
-    assert len(rt.posts) == 1
+    assert len(new_failures()) == 1
     rt.metrics["clashlens_collector_failed_processing"] = 0
     del rt.metrics["clashlens_collector_failed_uploads"]
     assert rt.run() == 0
-    assert len(rt.posts) == 1
+    assert len(new_failures()) == 1
     rt.metrics["clashlens_collector_failed_uploads"] = 0
     assert rt.run() == 0
-    assert len(rt.posts) == 2
-    assert "recovered" in rt.posts[-1]["content"]
+    assert len(new_failures()) == 2
+    assert "recovered" in new_failures()[-1]
 
 
 def test_outside_check_alerts_after_two_minutes_down_and_again_on_recovery(runtime):
@@ -752,6 +779,9 @@ def test_publication_probe_counts_resets_missing_their_publication(
         url_file = tmp_path / "database-url"
         url_file.write_text(as_api_role(connection_info))
         monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
+        monkeypatch.setattr(
+            alerts, "signed_read", lambda *_: {"boundary_at": latest.isoformat()}
+        )
 
         def unpublished(*generations):
             with psycopg.connect(connection_info) as connection:
@@ -771,8 +801,10 @@ def test_publication_probe_counts_resets_missing_their_publication(
                          boundary + timedelta(minutes=5)),
                     )
             capsys.readouterr()
-            alerts.publication_probe()
-            return int(capsys.readouterr().out)
+            alerts.publication_probe(["2026-10", "7"])
+            count, served = map(int, capsys.readouterr().out.split())
+            assert served == int(latest.timestamp())
+            return count
 
         assert unpublished() == 0
         published = [(2, 1, "published", "published"), (1, 1, "superseded", "superseded"),

@@ -69,77 +69,75 @@ function player(days: RankedDaySummary[] = []): PlayerPage {
   };
 }
 
+const YESTERDAY = TODAY - DAY;
+const render = (saved: PlayerPage, now = NOW) =>
+  renderToStaticMarkup(createElement(BattleStatistics, { player: saved, now }));
+
 describe("recorded battle period statistics", () => {
-  it("weights averages by battles and counts actual holds, including zero-star defenses", () => {
-    const yesterday = TODAY - DAY;
+  it("counts finished days only, never today's battles", () => {
     const stats = battleStatistics(
       player([
         day(0, [event("a1", 3, 100, 40)], [event("d1", 0, 0, 0), event("d2", 1, 40, -5)]),
         day(
           1,
-          [event("a2", 2, 80, 20, yesterday), event("a3", 1, 40, 10, yesterday)],
-          [event("d3", 2, 80, -20, yesterday), event("d4", 3, 100, -40, yesterday)],
+          [event("a2", 2, 80, 20, YESTERDAY), event("a3", 1, 40, 10, YESTERDAY)],
+          [event("d3", 2, 80, -20, YESTERDAY), event("d4", 0, 0, 0, YESTERDAY)],
         ),
       ]),
       "7",
       NOW,
     );
     expect(stats.attack).toMatchObject({
-      count: 3,
-      stars: [0, 1, 1, 1],
-      trophies: 70,
-      finishedTrophies: 30,
+      count: 2,
+      stars: [0, 1, 1, 0],
+      trophies: 30,
+      perDay: 30,
+      perBattle: 15,
     });
-    expect(stats.defense).toMatchObject({
-      count: 4,
-      stars: [1, 1, 1, 1],
-      trophies: 65,
-      finishedTrophies: 60,
-    });
-    expect(stats.daysSaved).toBe(2);
-    expect(stats.attack.activeDays).toBe(1);
+    // A zero-star defense is a hold and still counts.
+    expect(stats.defense).toMatchObject({ count: 2, stars: [1, 0, 1, 0], trophies: 20 });
+    expect(stats.daysSaved).toBe(1);
     expect(stats.daysExpected).toBe(7);
   });
 
   it("counts a battle reported just after Reset on the finished day it belongs to", () => {
-    const yesterday = TODAY - DAY;
     const stats = battleStatistics(
       player([
         day(0),
         day(
           1,
-          [event("a1", 3, 100, 40, yesterday), event("late", 3, 100, 40, TODAY + 60_000)],
+          [event("a1", 3, 100, 40, YESTERDAY), event("late", 3, 100, 40, TODAY + 60_000)],
           [event("d1", 3, 100, -40, TODAY + 60_000)],
         ),
       ]),
       "7",
       NOW,
     );
-    expect(stats.attack).toMatchObject({ trophies: 80, finishedTrophies: 80 });
-    expect(stats.defense).toMatchObject({ trophies: 40, finishedTrophies: 40 });
-    expect(stats.attack.activeDays).toBe(1);
+    expect(stats.attack).toMatchObject({ count: 2, trophies: 80, perDay: 80 });
+    expect(stats.defense).toMatchObject({ count: 1, trophies: 40, perDay: 40 });
   });
 
   it.each([
     ["7", 7],
     ["14", 14],
-    ["season", 28],
-  ] as const)("selects %s Legend days, not the latest saved days", (period, count) => {
+    // 7 Sep to 3 Oct: the Season's 27 finished days.
+    ["season", 27],
+  ] as const)("selects the last %s finished Legend days", (period, count) => {
     const days = Array.from({ length: 30 }, (_, offset) =>
       day(offset, [event(`a${offset}`, 3, 100, 40, TODAY - offset * DAY)]),
     );
     const stats = battleStatistics(player(days), period, NOW);
     expect(stats.attack.count).toBe(count);
-    expect(stats.start).toBe(TODAY - (count - 1) * DAY);
+    expect(stats.start).toBe(TODAY - count * DAY);
     expect(stats.daysExpected).toBe(count);
     expect(stats.daysSaved).toBe(count);
   });
 
   it("does not fill gaps with old days or count a repeated battle twice", () => {
-    const repeated = event("same", 3, 100, 40);
+    const repeated = event("same", 3, 100, 40, YESTERDAY);
     const stats = battleStatistics(
       player([
-        day(0, [repeated, repeated]),
+        day(1, [repeated, repeated]),
         day(20, [event("old", 3, 100, 40, TODAY - 20 * DAY)]),
       ]),
       "7",
@@ -150,23 +148,29 @@ describe("recorded battle period statistics", () => {
     expect(stats.daysExpected).toBe(7);
   });
 
-  it("counts nothing for zero battles", () => {
-    const stats = battleStatistics(player([day(0)]), "season", NOW);
+  it("counts nothing for zero battles but still averages over the finished day", () => {
+    const stats = battleStatistics(player([day(1)]), "season", NOW);
     for (const side of [stats.attack, stats.defense]) {
-      expect(side).toMatchObject({ count: 0, stars: [0, 0, 0, 0], trophies: 0 });
+      expect(side).toMatchObject({
+        count: 0,
+        stars: [0, 0, 0, 0],
+        trophies: 0,
+        perDay: 0,
+        perBattle: null,
+      });
     }
   });
 
-  it("moves windows at 05:00 UTC and keeps recent windows inside the new Season", () => {
+  it("starts a new Season with no finished days and keeps the last Season out", () => {
     const saved = player([day(0, [event("last-season", 3, 100, 40)])]);
     const reset = TODAY + DAY;
-    expect(battleStatistics(saved, "season", reset - 1).attack.count).toBe(1);
+    expect(battleStatistics(saved, "season", reset - 1).attack.count).toBe(0);
     expect(battleStatistics(saved, "season", reset)).toMatchObject({
       start: reset,
-      daysExpected: 1,
+      daysExpected: 0,
       attack: { count: 0 },
     });
-    expect(battleStatistics(saved, "7", reset)).toMatchObject({
+    expect(battleStatistics(saved, "7", reset + DAY)).toMatchObject({
       start: reset,
       daysExpected: 1,
       attack: { count: 0 },
@@ -174,10 +178,10 @@ describe("recorded battle period statistics", () => {
   });
 
   it("excludes out-of-window and future timestamps and flags incomplete or disputed records", () => {
-    const saved = day(0, [
-      event("before", 3, 100, 40, TODAY - 7 * DAY),
+    const saved = day(1, [
+      event("before", 3, 100, 40, TODAY - 8 * DAY),
       event("future", 3, 100, 40, NOW + 1),
-      { ...event("disputed", 2, 90, 30), perspectiveDisagreement: true },
+      { ...event("disputed", 2, 90, 30, YESTERDAY), perspectiveDisagreement: true },
     ]);
     saved.battlesComplete = false;
     const stats = battleStatistics(player([saved]), "7", NOW);
@@ -186,88 +190,116 @@ describe("recorded battle period statistics", () => {
     expect(stats.incomplete).toBe(true);
   });
 
-  it("renders one summary with dates and unavailable rates and averages", () => {
-    const html = renderToStaticMarkup(
-      createElement(BattleStatistics, { player: player(), now: NOW, trophies: "6,000" }),
+  it("leaves only battle-free days before sign-up out of every figure", () => {
+    const stats = battleStatistics(
+      player([
+        day(1, [event("a1", 3, 100, 320, YESTERDAY)]),
+        day(2),
+        { ...day(3), uncertainty: ["not_enrolled"] },
+        // Battles keep a day, whatever its eligibility says.
+        {
+          ...day(4, [event("a4", 3, 100, 40, TODAY - 4 * DAY)]),
+          uncertainty: ["player_not_eligible"],
+        },
+        // A quiet day ended by the official total, with no start reading: not
+        // eligible, but nothing proves the player outside Legend I.
+        { ...day(5), uncertainty: ["missing_start_baseline", "player_not_eligible"] },
+        { ...day(6), uncertainty: ["player_not_eligible"] },
+      ]),
+      "7",
+      NOW,
     );
+    expect(stats.daysSaved).toBe(6);
+    expect(stats.attack).toMatchObject({ count: 2, trophies: 360, perDay: 72 });
+  });
+
+  it("averages every finished day's battles, Uncertain days included", () => {
+    const saved = player([
+      day(1, [event("a1", 3, 100, 40, YESTERDAY)]),
+      { ...day(2, [event("a2", 1, 50, 10, TODAY - 2 * DAY)]), trophyChange: null },
+      day(3),
+    ]);
+    const stats = battleStatistics(saved, "7", NOW);
+    expect(stats.attack).toMatchObject({ count: 2, trophies: 50, perBattle: 25 });
+    expect(stats.attack.perDay).toBeCloseTo(50 / 3);
+  });
+
+  it("renders one summary with dates and unavailable rates and averages", () => {
+    const html = render(player());
     expect(html).toContain(
-      "7 Sep – 4 Oct · 0 of 28 days saved · Some battles may be missing",
+      "7 Sep – 3 Oct · 0 of 27 finished days saved · Some battles may be missing",
     );
     expect(html).toContain(
       '<dt>Rank at last Reset</dt><dd class="summary-words">Not ranked yet</dd>',
     );
-    expect(html).toContain("<dt>Trophies now</dt><dd>6,000</dd>");
+    expect(html).toContain(
+      '<dt>Trophies at last Reset</dt><dd class="summary-words">Unavailable</dd>',
+    );
     expect(html).toContain('<dt>Hit rate</dt><dd class="summary-words">Unavailable</dd>');
     expect(html).toContain("<dt>Per attack</dt><dd>Unavailable</dd>");
-    expect(html).not.toContain("Trophies lost");
+    expect(html).not.toContain("Trophies now");
     expect(html).not.toContain("Stars unknown");
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Infinity");
   });
 
-  it("shows hit rate, stars, averages and the latest Reset rank this Season", () => {
-    const yesterday = TODAY - DAY;
-    const html = renderToStaticMarkup(
-      createElement(BattleStatistics, {
-        player: player([
-          day(0, [event("a1", 3, 100, 40)], [event("d1", 1, 40, -5)]),
-          {
-            ...day(
-              1,
-              [event("a2", 3, 100, 40, yesterday), event("a3", 2, 80, 20, yesterday)],
-              [event("d2", 3, 100, -40, yesterday)],
-            ),
-            resetRank: 1042,
-          },
-          { ...day(2), resetRank: 2000 },
-          // Last Season's rank never counts.
-          { ...day(40), resetRank: 1 },
-        ]),
-        now: NOW,
-        trophies: "6,100",
-      }),
+  it("shows the latest Reset's rank and trophies, hit rate, stars and averages", () => {
+    const html = render(
+      player([
+        // Today's battles never count.
+        day(0, [event("a1", 3, 100, 40)], [event("d1", 1, 40, -5)]),
+        {
+          ...day(
+            1,
+            [event("a2", 3, 100, 40, YESTERDAY), event("a3", 2, 80, 20, YESTERDAY)],
+            [event("d2", 3, 100, -40, YESTERDAY)],
+          ),
+          // Sunday: 4,900 + 20, raised 80 to 5,000 by the weekly reset.
+          startTrophies: 4900,
+          trophyChange: 20,
+          resetAdjustment: { kind: "weekly", amount: 80 },
+          resetRank: 1042,
+        },
+        { ...day(2), resetRank: 2000 },
+        // Last Season's rank never counts.
+        { ...day(40), resetRank: 1 },
+      ]),
     );
     expect(html).toContain("<dt>Rank at last Reset</dt><dd>1,042</dd>");
-    expect(html).toContain("66.7%<small>2 of 3 attacks</small>");
     expect(html).toMatch(
-      /Attacks<\/th><td>3<\/td><td>2<\/td><td>1<\/td><td>0<\/td><td>0</,
+      /<dt>Trophies at last Reset<\/dt><dd>5,000<span class="day-mark" title="Calculated">/,
+    );
+    expect(html).toContain("50.0%<small>1 of 2 attacks</small>");
+    expect(html).toMatch(
+      /Attacks<\/th><td>2<\/td><td>1<\/td><td>1<\/td><td>0<\/td><td>0</,
     );
     expect(html).toMatch(
-      /Defenses<\/th><td>2<\/td><td>1<\/td><td>0<\/td><td>1<\/td><td>0</,
+      /Defenses<\/th><td>1<\/td><td>1<\/td><td>0<\/td><td>0<\/td><td>0</,
     );
-    // Per day uses finished days with battles: day 2, with none, doesn't count.
-    expect(html).toMatch(/Offense per day<\/dt><dd>\+60</);
-    expect(html).toMatch(/Defense per day<\/dt><dd>-40</);
-    expect(html).toContain("<dt>Per attack</dt><dd>+33.3</dd>");
-    expect(html).toContain("<dt>Per defense</dt><dd>-22.5</dd>");
+    // Per day divides by every finished day: day 2, with none, counts too.
+    expect(html).toMatch(/Offense per day<\/dt><dd>\+30</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>-20</);
+    expect(html).toContain("<dt>Per attack</dt><dd>+30.0</dd>");
+    expect(html).toContain("<dt>Per defense</dt><dd>-40.0</dd>");
   });
 
   it("labels recent windows that the Season hasn't filled yet", () => {
-    const html = (now: number) =>
-      renderToStaticMarkup(
-        createElement(BattleStatistics, {
-          player: player(),
-          now,
-          trophies: "5,000",
-        }),
-      );
-    const early = html(Date.parse("2026-10-06T12:00:00Z"));
-    expect(early).toContain("Last 7 days (2 so far)");
-    expect(early).toContain("Last 14 days (2 so far)");
-    expect(html(NOW)).toContain(">Last 7 days</option>");
+    const early = render(player(), Date.parse("2026-10-06T12:00:00Z"));
+    expect(early).toContain("Last 7 days (1 so far)");
+    expect(early).toContain("Last 14 days (1 so far)");
+    expect(render(player())).toContain(">Last 7 days</option>");
+    const first = render(player(), Date.parse("2026-10-05T12:00:00Z"));
+    expect(first).toContain("No finished Legend days yet this Season");
+    expect(first).toContain("No finished day yet");
   });
 
   it("shows a missing latest Reset rank instead of an older one", () => {
-    const html = renderToStaticMarkup(
-      createElement(BattleStatistics, {
-        player: player([
-          day(0),
-          { ...day(1), resetRank: null },
-          { ...day(2), resetRank: 1042 },
-        ]),
-        now: NOW,
-        trophies: "6,100",
-      }),
+    const html = render(
+      player([
+        day(0),
+        { ...day(1), resetRank: null },
+        { ...day(2), resetRank: 1042, startTrophies: 5000 },
+      ]),
     );
     expect(html).toContain(
       '<dt>Rank at last Reset</dt><dd class="summary-words">Not ranked yet</dd>',
@@ -275,8 +307,30 @@ describe("recorded battle period statistics", () => {
     expect(html).not.toContain("1,042");
   });
 
+  it("takes trophies at last Reset from today's start, Uncertain when battles disagree", () => {
+    const html = render(
+      player([
+        { ...day(0), startTrophies: 5100 },
+        {
+          ...day(1),
+          startTrophies: 4900,
+          trophyChange: 20,
+          resetAdjustment: { kind: "weekly", amount: 80 },
+        },
+      ]),
+    );
+    expect(html).toMatch(
+      /<dt>Trophies at last Reset<\/dt><dd>5,100<span class="day-mark day-mark-gap" title="Uncertain">/,
+    );
+  });
+
   it("names unknown stars only when some are unknown", () => {
-    const side = { count: 4, stars: [0, 1, 1, 1], trophies: 60, perDay: 60 };
+    const side = {
+      count: 4,
+      stars: [0, 1, 1, 1],
+      perDay: 60,
+      perBattle: 15,
+    };
     const render = (unknown: number | null) =>
       renderToStaticMarkup(
         createElement(SeasonSummary, {

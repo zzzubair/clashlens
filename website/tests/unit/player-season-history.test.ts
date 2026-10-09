@@ -305,7 +305,7 @@ describe("past-Season view", () => {
     expect(html).toContain("<td>-30</td><td>+10</td>");
   });
 
-  it("leaves days without battles, such as shielded days, out of per-day averages", async () => {
+  it("averages over quiet and unproven days, but not days before sign-up", async () => {
     const quiet = { ...DAY, attacks: 0, defenses: 0, attackGain: 0, defenseLoss: 0 };
     const html = await loadAndRender(
       {
@@ -313,14 +313,26 @@ describe("past-Season view", () => {
         getPlayerSeasons: vi.fn().mockResolvedValue([]),
         getPlayerSeason: vi.fn().mockResolvedValue({
           ...SUMMARY,
-          dailyEntries: [DAY, { ...quiet, dayNumber: 27 }, { ...quiet, dayNumber: 28 }],
+          daysObserved: 6,
+          dailyEntries: [
+            { ...quiet, dayNumber: 23, flags: ["not_enrolled"] },
+            DAY,
+            { ...DAY, dayNumber: 25, flags: ["player_not_eligible"] },
+            { ...DAY, dayNumber: 26 },
+            {
+              ...quiet,
+              dayNumber: 27,
+              flags: ["missing_start_baseline", "player_not_eligible"],
+            },
+            { ...quiet, dayNumber: 28 },
+          ],
         }),
       },
       SEASON,
     );
-    // 1,600 attack trophies and 1,300 defense trophies over 3 days with battles.
-    expect(html).toMatch(/Offense per day<\/dt><dd>\+533</);
-    expect(html).toMatch(/Defense per day<\/dt><dd>-433</);
+    // 1,600 attack trophies and 1,300 defense trophies over 5 Legend days, 2 quiet.
+    expect(html).toMatch(/Offense per day<\/dt><dd>\+320</);
+    expect(html).toMatch(/Defense per day<\/dt><dd>-260</);
     expect(html).toContain("<dt>Per attack</dt><dd>+40.0</dd>");
   });
 
@@ -343,6 +355,23 @@ describe("past-Season view", () => {
     // EOD change, then Reset rank, then attacks recorded.
     expect(html).toContain("<td>Unknown</td><td>1,042</td><td>8</td>");
     expect(html).toContain("<td>Unknown</td><td>Unknown</td><td>8</td>");
+  });
+
+  it("keeps a saved day Verified when its Reset reading matched exactly", async () => {
+    const html = await loadAndRender(
+      {
+        getPlayer: vi.fn().mockResolvedValue(PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+        getPlayerSeason: vi.fn().mockResolvedValue({
+          ...SUMMARY,
+          dailyEntries: [{ ...DAY, confidence: "exact" }],
+        }),
+      },
+      SEASON,
+    );
+    expect(html).toContain('title="Verified"');
+    expect(html).toContain("<strong>Verified.</strong> A reading from the game matched");
+    expect(html).not.toContain('title="Calculated"');
   });
 
   it("shows an unknown total as Unknown without a separate note", async () => {

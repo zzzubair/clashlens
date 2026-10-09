@@ -350,7 +350,7 @@ describe("army analytics route historical reads", () => {
     );
     expect(filled).toContain("players in the top 100 on every selected day.");
     expect(filled).toContain(
-      "66 players were in the top 100 on every selected day. Top 100 on a day means the top 100 of the leaderboard saved just before that day’s Reset (05:00 UTC), ranked by the last trophy count we saw for each player. 66 of these players had a trophy count over 10 minutes old at Reset on at least one day. Comparison with settled end-of-day ranks: not available yet.",
+      "66 players were in the top 100 on every selected day. Top 100 on a day means the top 100 of the leaderboard saved just before that day’s Reset (05:00 UTC), ranked by each player’s total at that Reset, before the game’s automatic defense loss: their last value saved before the Reset plus the battles recorded after it. Boards published before we started adding those battles, and not rebuilt since, use the saved value alone, as do players whose later battles we can’t confirm. 66 of these players had a trophy count over 10 minutes old at Reset on at least one day. Comparison with settled end-of-day ranks: not available yet.",
     );
     const empty = renderedText(
       await renderArmyRoute(

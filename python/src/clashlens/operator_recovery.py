@@ -1,9 +1,12 @@
-"""Bounded operator visibility and explicit retry for collector failures."""
+"""Bounded operator visibility, explicit retry, replay and acceptance of failures."""
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from typing import Any
 
+import psycopg
 from psycopg.errors import LockNotAvailable, QueryCanceled, UniqueViolation
 
 _INTEGRITY_FAILURES = {
@@ -19,6 +22,76 @@ _RESTART_AFTER_REPAIR_FAILURES = {
     "archive_reference_mismatch",
     "archive_unsupported",
 }
+
+_PROCESSING_JOB = """
+    SELECT job.id, job.work_type, job.endpoint, job.status, job.observation_id,
+           job.replay_observation_id, job.attempt_count, job.max_attempts,
+           job.outcome, job.failure_category, job.due_at, job.updated_at,
+           accepted.operator_identity, accepted.reason, accepted.accepted_at,
+           job.parser_version, job.processing_version, job.domain_rule_version,
+           job.analytics_rule_version
+    FROM python_processing_jobs AS job
+    LEFT JOIN python_failed_job_acceptances AS accepted ON accepted.job_id = job.id
+"""
+_OPERATOR = re.compile(r"[A-Za-z0-9._:@-]{1,128}")
+# What clashlens_request_python_replay_v2 refuses one job for, by SQLSTATE.
+_REQUEST_REFUSALS = {
+    "22023": "replay_not_allowed",
+    "P0002": "observation_not_found",
+    "23505": "replay_requested_with_a_different_reason",
+    "42501": "replay_role_unavailable",
+}
+# What stops the whole batch.
+_BATCH_REFUSALS = {
+    "42501": "replay_role_unavailable",
+    "55P03": "replay_lock_timeout",
+    "57014": "replay_statement_timeout",
+}
+
+
+def failed_items_command(arguments: Any, database_url: str) -> dict[str, Any]:
+    """Run `failed-items`: list, or preview/apply a retry, replay or acceptance."""
+    selected = (
+        arguments.work_id,
+        arguments.upload_hash,
+        arguments.accept_job_id,
+        arguments.replay_job_id,
+    )
+    if arguments.apply and selected == (None, None, None, None):
+        raise ValueError(
+            "--apply requires --work-id, --upload-hash, --accept-job-id or --replay-job-id"
+        )
+    if arguments.upload_hash is not None and not re.fullmatch(
+        r"[0-9a-f]{64}", arguments.upload_hash
+    ):
+        raise ValueError("upload hash must be a lowercase SHA-256 digest")
+    if (arguments.reason is None) != (selected[2:] == (None, None)):
+        raise ValueError("--reason goes with --accept-job-id or --replay-job-id")
+    with psycopg.connect(database_url) as connection:
+        if arguments.replay_job_id is not None:
+            return replay_failed_jobs(
+                connection,
+                job_ids=arguments.replay_job_id,
+                operator=arguments.operator or "",
+                reason=arguments.reason,
+                apply=arguments.apply,
+            )
+        if arguments.accept_job_id is not None:
+            return accept_failed_job(
+                connection,
+                job_id=arguments.accept_job_id,
+                operator=arguments.operator or "",
+                reason=arguments.reason,
+                apply=arguments.apply,
+            )
+        if selected == (None, None, None, None):
+            return inspect_failed_items(connection, limit=arguments.limit)
+        return retry_failed_item(
+            connection,
+            work_id=arguments.work_id,
+            upload_hash=arguments.upload_hash,
+            apply=arguments.apply,
+        )
 
 
 def inspect_failed_items(connection: Any, *, limit: int) -> dict[str, Any]:
@@ -54,13 +127,10 @@ def inspect_failed_items(connection: Any, *, limit: int) -> dict[str, Any]:
             (limit + 1,),
         ).fetchall()
         processing_rows = connection.execute(
-            """
-            SELECT id, work_type, endpoint, status, observation_id,
-                   replay_observation_id, attempt_count, max_attempts,
-                   outcome, failure_category, due_at, updated_at
-            FROM python_processing_jobs
-            WHERE status = 'failed'
-            ORDER BY updated_at DESC, id DESC
+            f"""
+            {_PROCESSING_JOB}
+            WHERE job.status = 'failed'
+            ORDER BY job.updated_at DESC, job.id DESC
             LIMIT %s
             """,
             (limit + 1,),
@@ -124,6 +194,158 @@ def retry_failed_item(
         return _refused("retry_lock_timeout")
     except QueryCanceled:
         return _refused("retry_statement_timeout")
+
+
+def accept_failed_job(
+    connection: Any, *, job_id: int, operator: str, reason: str, apply: bool = False
+) -> dict[str, Any]:
+    """Preview or record that one failed processing job is beyond repair.
+
+    The job keeps its failed state, attempts and saved response; only the
+    failed-work count stops counting it.
+    """
+    _check_audit(operator, reason)
+    try:
+        with connection.transaction():
+            connection.execute("SET LOCAL lock_timeout = '1s'")
+            connection.execute("SET LOCAL statement_timeout = '30s'")
+            row = connection.execute(
+                f"{_PROCESSING_JOB} WHERE job.id = %s FOR UPDATE OF job", (job_id,)
+            ).fetchone()
+            if row is None:
+                return _refused("processing_job_not_found")
+            item = _processing_item(row)
+            if _text(row[3]) != "failed":
+                return _refused(f"processing_job_is_{_text(row[3])}", item)
+            if row[12] is not None:
+                return _refused("processing_job_already_accepted", item)
+            report = {
+                "applied": apply,
+                "outcome": "accepted" if apply else "preview",
+                "accepted_count": int(apply),
+                "refused_count": 0,
+                "item": item,
+            }
+            if apply:
+                connection.execute(
+                    """
+                    INSERT INTO python_failed_job_acceptances (
+                        job_id, operator_identity, reason
+                    ) VALUES (%s, %s, %s)
+                    """,
+                    (job_id, operator, reason),
+                )
+            return report
+    except UniqueViolation:
+        return _refused("processing_job_already_accepted")
+    except LockNotAvailable:
+        return _refused("accept_lock_timeout")
+    except QueryCanceled:
+        return _refused("accept_statement_timeout")
+
+
+def replay_failed_jobs(
+    connection: Any,
+    *,
+    job_ids: Sequence[int],
+    operator: str,
+    reason: str,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Preview or queue a replay of failed processing jobs, all or none.
+
+    Each job's saved response is replayed under the job's own parser and
+    rules through clashlens_request_python_replay_v2, which records who asked
+    and why, exactly as deploy/replay-request does. That function only runs
+    for its replay role, so the admin login switches to it for this one
+    transaction. A preview asks the function and rolls back, so it refuses
+    whatever --apply would.
+    """
+    _check_audit(operator, reason)
+    ids = list(dict.fromkeys(job_ids))
+    entries: dict[int, dict[str, Any]] = {}
+    try:
+        with connection.transaction() as transaction:
+            connection.execute("SET LOCAL lock_timeout = '1s'")
+            connection.execute("SET LOCAL statement_timeout = '30s'")
+            rows = connection.execute(
+                f"""
+                {_PROCESSING_JOB} WHERE job.id = ANY(%s)
+                ORDER BY job.id FOR UPDATE OF job
+                """,
+                (ids,),
+            ).fetchall()
+            found = {int(row[0]): row for row in rows}
+            for job_id in ids:
+                row = found.get(job_id)
+                entry = entries[job_id] = {"processing_job_id": job_id}
+                if row is None:
+                    entry.update(outcome="refused", reason="processing_job_not_found")
+                    continue
+                entry["item"] = _processing_item(row)
+                if _text(row[3]) != "failed":
+                    entry.update(outcome="refused", reason=f"processing_job_is_{_text(row[3])}")
+                elif row[12] is not None:
+                    entry.update(outcome="refused", reason="processing_job_already_accepted")
+            if all("outcome" not in entry for entry in entries.values()):
+                connection.execute("SET LOCAL SESSION AUTHORIZATION clashlens_replay_request")
+                for job_id in ids:
+                    _request_replay(connection, found[job_id], entries[job_id], operator, reason)
+            if not apply or any(entry.get("outcome") == "refused" for entry in entries.values()):
+                raise psycopg.Rollback(transaction)
+    except psycopg.Error as error:
+        refusal = _BATCH_REFUSALS.get(error.sqlstate or "")
+        if refusal is None:
+            raise
+        return _refused(refusal)
+    refused = sum(entry.get("outcome") == "refused" for entry in entries.values())
+    applied = apply and not refused
+    for entry in entries.values():
+        entry.setdefault("outcome", "not_checked")
+        if entry["outcome"] == "replay_enqueued" and not applied:
+            # Rolled back: these request and job ids were never kept.
+            entry["outcome"] = "would_enqueue"
+            del entry["replay_request_id"], entry["replay_job_id"]
+    return {
+        "applied": applied,
+        "outcome": "refused" if refused else "replay_enqueued" if applied else "preview",
+        "replayed_count": len(ids) if applied else 0,
+        "refused_count": refused,
+        "items": list(entries.values()),
+    }
+
+
+def _request_replay(
+    connection: Any, row: Any, entry: dict[str, Any], operator: str, reason: str
+) -> None:
+    try:
+        with connection.transaction():
+            request_id, job_id, status = connection.execute(
+                """
+                SELECT request_id, job_id, request_status
+                FROM clashlens_request_python_replay_v2(%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (row[4] if row[4] is not None else row[5], operator, reason, *row[15:19]),
+            ).fetchone()
+    except psycopg.Error as error:
+        refusal = _REQUEST_REFUSALS.get(error.sqlstate or "")
+        if refusal is None:
+            raise
+        entry.update(outcome="refused", reason=refusal)
+        return
+    entry.update(replay_request_id=int(request_id), replay_job_id=int(job_id))
+    # The same request already made returns its own status; only "enqueued" is live.
+    if _text(status) == "enqueued":
+        entry["outcome"] = "replay_enqueued"
+    else:
+        entry.update(outcome="refused", reason=f"replay_request_{_text(status)}")
+
+
+def _check_audit(operator: str, reason: str) -> None:
+    if not _OPERATOR.fullmatch(operator):
+        raise ValueError("operator must be 1-128 letters, digits or ._:@-")
+    if not 8 <= len(reason) <= 500 or not reason.isprintable():
+        raise ValueError("reason must be 8-500 printable characters on one line")
 
 
 def _retry_work(connection: Any, *, work_id: int, apply: bool) -> dict[str, Any]:
@@ -279,10 +501,17 @@ def _processing_item(row: Any) -> dict[str, Any]:
         "updated_at": row[11],
         "recovery": "investigate_only",
     }
-    if _text(row[1]) in {"process_observation", "replay_observation"} and _text(
+    if row[12] is not None:
+        item["recovery"] = "accepted"
+        item["accepted"] = {
+            "operator": _text(row[12]),
+            "reason": _text(row[13]),
+            "accepted_at": row[14],
+        }
+    elif _text(row[1]) in {"process_observation", "replay_observation"} and _text(
         row[2]
     ) in {"profile", "battle_log"}:
-        item["recovery"] = "deploy/replay-request"
+        item["recovery"] = "replay"
     return item
 
 

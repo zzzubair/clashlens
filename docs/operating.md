@@ -76,17 +76,19 @@ Healthy looks like this:
   not prove player data can be read.
 - During active tracking, successful fetches keep advancing. Compare fetch age,
   spool bytes, object count and filesystem usage with the
-  [alert conditions](deployment.md#alert-conditions).
+  [alert conditions](alerts.md).
 - Queue `failed` is zero, or every existing failure has an investigated cause.
   `oldest_due_seconds` is the age of the oldest overdue job, or `null` if none.
   `overdue` counts jobs past their due time; `scheduled_later` counts jobs
   not due yet, such as recalculations queued a day ahead, which are not a backlog.
+  `kinds` splits the overdue jobs into `responses`, `results` (daily results),
+  `builds` and `other`, each with its own `overdue` count and `oldest_due_seconds`.
   If the queue grows, repeat the check after a minute: counts and age should
   show work progressing. One snapshot or an empty queue does not prove collection.
 - `backup-status` succeeds and its timer has a next run matching the
   [backup schedule](deployment.md#postgresql-backups-and-recovery).
   A historical `failed_count` alone does not prove a current failure.
-  A warming-up seven-day window is not full recovery coverage.
+  A warming-up ten-day window is not full recovery coverage.
 - `clashlens-history-retention.timer` is active with a next run under a
   minute away. It deletes finished processing jobs 48 hours after they finish;
   see [finished-job cleanup failed](#finished-job-cleanup-failed).
@@ -100,7 +102,7 @@ journalctl --user -u clashlens-alert.service --since '10 minutes ago' -n 30 --no
 ```
 
 The private probe should exit successfully; its
-[private-read condition](deployment.md#alert-conditions) explains what it checks.
+[private-read condition](alerts.md) explains what it checks.
 The alert timer should be active with recent successful runs matching the
 [configured schedule](deployment.md#private-discord-alerts).
 The alert, backup, raw-response cleanup, ranked-day copy cleanup and finished-job cleanup services run once per timer firing, so `inactive (dead)`
@@ -247,9 +249,12 @@ it again, and confirm the PostgreSQL and collector start times are unchanged
 use the database. `./ops down` stops the whole stack. `./ops up` restarts it,
 but leaves the collector, PostgreSQL, pod and network running when none of them
 changed ([rule](deployment.md#when-up-restarts-the-collector));
-`./ops up --restart-collector` restarts them anyway.
+`./ops up --restart-collector` restarts them anyway. Any Python change makes a
+plain `./ops up` restart them; for a worker-only or API-only change, run `./ops
+up --keep-collector` by hand to keep them running (choosing this automatically
+is a follow-up).
 
-Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
+Use the [alert conditions and delivery rules](alerts.md)
 to interpret messages. Confirm both the measurements below and the recovery
 message in the private operator channel. `./ops alert-check` can run the check
 immediately, but **sends real Discord messages** and saves alert state.
@@ -258,14 +263,14 @@ conditions are healthy. The website-unreachable alert comes from the
 [outside check](deployment.md#outside-availability-check) on the Paris relay.
 
 The Live Leaderboard alert and every recovery wait on purpose, as set out in
-the [alert conditions](deployment.md#alert-conditions). Expect a recovery up to
+the [alert conditions](alerts.md). Expect a recovery up to
 15 minutes after the fix. A few percent of players a little past ten minutes,
 such as after a deploy, is normal near the official API request limit and does
 not alert.
 
 ### Tracker stopped
 
-Use the [fetch-gap condition](deployment.md#alert-conditions), which accounts
+Use the [fetch-gap condition](alerts.md), which accounts
 for the Reset pause and a tracker that has never fetched successfully.
 
 **First checks:** `./ops logs collector --since '15 minutes ago' --no-pager`,
@@ -282,7 +287,7 @@ Discord recovery message. Interpret fetch age using the linked Reset rule.
 ### Disk or spool over 80%
 
 Compare all four measurements with the
-[capacity condition](deployment.md#alert-conditions).
+[capacity condition](alerts.md).
 
 **First checks:** repeat the daily metrics, `df` and `./ops queue-status`;
 read `./ops logs collector --since '1 hour ago' --no-pager` and
@@ -300,7 +305,7 @@ stable or fall, followed by the Discord recovery message.
 ### Service restart loop
 
 Find the restarting unit and check it against the
-[restart condition](deployment.md#alert-conditions):
+[restart condition](alerts.md):
 
 ```sh
 journalctl --user --since '1 hour ago' --no-pager \
@@ -320,7 +325,7 @@ old events to leave that window even after the cause is fixed.
 
 ### Backup failed or stale
 
-Use the [backup alert condition](deployment.md#alert-conditions) for immediate
+Use the [backup alert condition](alerts.md) for immediate
 failures, the grace period for unavailable checks, journal diagnostics and incident
 times. Use the
 [backup failure conditions](deployment.md#postgresql-backups-and-recovery)
@@ -328,7 +333,7 @@ to interpret `backup-status` errors. WAL is PostgreSQL's change log.
 
 **First checks:** `./ops backup-status`,
 `journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager`,
-`./ops logs backup --since '8 days ago' --no-pager`, and
+`./ops logs backup --since '2 days ago' --no-pager`, and
 `./ops logs postgres --since '1 hour ago' --no-pager`.
 
 **Fix or escalate:** repair the reported timer, storage, network or credential
@@ -343,7 +348,7 @@ A backup listing does not prove restore.
 
 ### Data reads failing
 
-Use the [private-read condition](deployment.md#alert-conditions). This check
+Use the [private-read condition](alerts.md). This check
 does not cover every player page or army analytics query.
 
 **First checks:** repeat the daily private probe, then
@@ -359,7 +364,7 @@ Discord recovery arrives. Website `/healthz` alone is insufficient.
 
 ### Collection or processing behind
 
-Use the [overdue-check and Live Leaderboard conditions](deployment.md#alert-conditions).
+Use the [overdue-check and Live Leaderboard conditions](alerts.md).
 Check collection and leaderboard freshness separately; a processing backlog
 alone does not prove the leaderboard is stale.
 
@@ -391,15 +396,61 @@ the worker logs a `late_battle_sweep` line with status `complete` once every
 player's correction for a Reset has succeeded, `retrying` after a
 `player_failed` line, or `failed` if the check itself errored; after either
 of those it tries again 10 minutes later.
+Every five minutes the worker also recounts each player's attacks and attack
+destruction this Season into `live_attack_tallies`, which orders equal trophies
+on the Live Leaderboard, and logs a `live_attack_tallies` line with status
+`complete` and how many players' counts changed, or `failed`; the board keeps
+the last counts until the next one succeeds.
 
-A waiting upload with `oldest_pending_upload_age_seconds` over an hour points
-at the archive: look for upload errors in `./ops logs collector`.
+A waiting upload with `oldest_pending_upload_age_seconds` over 15 minutes
+points at the archive or the uploads process: see
+[uploads waiting](#uploads-waiting). Until it is archived, a raw response
+exists only on the server's disk.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
 
 **Recovered:** the measurements satisfy the linked alert conditions and each
 condition's Discord recovery message arrives.
+
+### Uploads waiting
+
+Archive uploads run in their own process inside the collector container; see
+[spool and archive](collector-polling.md#spool-archive-and-rate-enforcement).
+
+**First checks:** read the collector's uploads lines, twice a few minutes apart:
+
+```sh
+curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8081/metrics \
+  | grep -E '^clashlens_(uploader_|collector_(oldest_pending_upload_age_seconds|pending_uploads|archive_health))'
+./ops logs collector --since '15 minutes ago' --no-pager | grep -E 'uploader_(health|restart)'
+```
+
+`clashlens_uploader_running` is 1 while the process runs, and
+`clashlens_uploader_restarts_total` counts restarts since the collector started;
+each restart logs an `uploader_restart` line with the exit code.
+`clashlens_uploader_report_age_seconds` stays under about 10 seconds while it
+reports. `clashlens_uploader_uploads_total` counts finished uploads by outcome:
+`uploaded`, `upload_lease_lost`, a failure category such as
+`archive_unavailable`, or `archived_copy_found` when a lost saved copy was
+already in the archive. For each step, `clashlens_uploader_step_seconds_sum`
+divided by `clashlens_uploader_step_seconds_count`, using growth between the
+two reads, is its average time: `database_wait` waiting for one of the four
+database connections, `claim`, `spool_read`, `archive_write`, `complete`,
+`renew`, `release`, and `total` from claim to completion.
+`clashlens_uploader_step_p95_upper_ms` bounds the slowest 5%. The
+`uploader_health` log line repeats all of these each minute. Counts reset
+when the process restarts.
+
+A long `database_wait` or `claim` points at the database, a long
+`archive_write` at the archive or the home connection, and a high
+`clashlens_collector_api_requests_in_flight` beside it at shared bandwidth.
+
+**Fix or escalate:** repair the reported cause through an approved change.
+Never delete saved responses or upload rows to shrink the wait.
+
+**Recovered:** `oldest_pending_upload_age_seconds` is back under two minutes and
+the uploads alert's Discord recovery message arrives.
 
 ### Armies page empty
 
@@ -555,9 +606,9 @@ Check the Armies page against the
 fixes change, held back from republishing until a single coordinated rebuild
 finishes. `--campaign preview --season <Season ID>` lists, without
 writing anything, every report, decode, player day and Reset publication of
-that Season that the 2-star/55% payout, five-minute day move, catalogue v2
-decodes and accepted Reset settlements change, plus each affected player's
-first saved day of the next Season, to recalculate, and which are excluded
+that Season that the 2-star/55% payout, five-minute day move, reports with no
+saved army and accepted Reset settlements change, plus each
+affected player's first saved day of the next Season, to recalculate, and which are excluded
 (raw response gone, Season finalized, correction window closed). Later
 next-Season days are left to the repair itself. `--campaign register` saves
 that list as a dormant campaign that holds nothing and queues nothing;
@@ -590,22 +641,159 @@ player first tracked later with no Legend battles on Day 1 gets no Day 1:
 they may not have joined the Season until later, and Clash Lens must not
 invent a Day 1 for them.
 
-**Day 1's automatic defense loss:** Day 1 now averages its own defenses only,
-leaving out the previous Season's last day, and charges a player with at
-least as many attacks as defenses for `attacks - defenses` missing defenses;
-a Reset reading taken before the loss is read less it
-([automatic defense adjustment](domain.md#automatic-defense-adjustment)). A
-Day 1 saved before that keeps its old result until recalculated.
-`--day-1 preview --season <Season ID>` counts, without writing anything, the
-players whose saved Day 1 has 1 to 7 defenses; `--day-1 queue --season
-<Season ID>` queues up to `--max-jobs` of them, each recalculating Day 1 and
-every later saved day of the Season, at backfill priority: a worker thread
-runs them only when no higher-priority work that thread can claim is due, so a
-thread that does not process saved responses can still run them while
-responses wait. Run it again until `left_to_queue` is 0;
-each player is queued once, and players queued by the earlier run that only
-averaged Day 1's own defenses are queued once more. On 2026-10-06 the October
-2026 Season (`1791176400`) had about 3,100 such players.
+**Season repair after a rule change:** saved days and Daily boards keep the
+result they were calculated with until something recalculates them. After
+deploying any release that changes how a day or board comes out (it raises
+`DAY_RULES_REVISION` in `python/src/clashlens/domain_repair.py`), repair the
+Season once, outside 04:00–07:00 UTC. A day's calculation accepts only days
+of the current and previous Season, so repair only one of those two: repairing
+an older Season would save each of its days again as Partial
+(`season_anchor_conflict`):
+
+```sh
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair preview --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair queue --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --repair receipt --season 1791176400
+```
+
+`preview` writes nothing: each ended day's latest saved results by state and
+by reason (`days`), each Reset's published Daily board with its rule and how
+many entries are proven (`boards`), the boards the board rules would now
+change, how many players have saved days (`players`), and the Season's
+evidence repairs still unfinished or failed (`inputs`, as `receipt` shows them
+too). The first `queue`
+saves those counts as the repair's receipt, then each run does one step, at
+most `--max-jobs` (default 100) jobs at backfill priority, and says which in
+`phase`: `inputs`, repairs of the evidence days are built from (the
+Season's battles moved day, one job per player, and its Reset pairs left
+partial, at most `--max-jobs` pairs each queuing at most one job; no other
+Season's days change), until every such repair reaching a day of the
+Season, including one that started on the previous Season's last day, has
+finished and none has failed (`unfinished` and `failed` count every one
+while it is at `inputs`, and `failed_blockers` lists at most `--max-jobs`
+failed ones; a failed one is not retried
+automatically, so investigate it and retry it by hand; a failed Reset-pair
+repair stops counting once a day it names (its one day, or its first through
+its last) has a result saved since the failure and no ended one of those days
+is left Live, as after its retry, even after
+the finished retry job is cleaned up 48 hours later; `preview` and `receipt`
+list the same failures, including a player's failed moved-battle rebuild from
+another Season that holds back this Season's); `days`, one job
+per player recalculating every saved day in the Season's 28 days, oldest
+first, even one saved before its Season was known, so each
+day starts where the day before now ends; once every such job has finished,
+`boards`, one rebuild of each Reset board whose entries the rules now change,
+every such board in one run, at most one per Reset (28 per Season), at the
+normal publication priority, not backfill, until every board correction of
+the Season has finished (`boards_rebuilding`); then `summaries`, storing each saved Season summary
+again from its days, since a summary's final rank reads the Season's last
+board, then each one that still differs from its days, as when a board
+correction since moved an earlier player's final rank, reading every summary
+of the Season each run; it is `done` only when none differs. Run `queue`
+again until `phase` is `done`; `left_to_queue` and
+`unfinished` count the day jobs still to queue and still to run. A day that
+comes out the same saves nothing new. A recalculation that failed is kept and
+not queued again: `failed` counts them and `failed_blockers` lists at most
+`--max-jobs` (job, player, failure reason). While any has failed, the repair
+stays at `days` and rebuilds no board or summary from unrepaired days;
+investigate each and retry it by hand. Normal processing can still rebuild a
+board while the repair runs, since a recalculated day whose result changes
+can start a new board for its Reset; the `boards` step re-checks every
+board of the Season after all day jobs finish. `receipt` writes nothing and
+shows the saved before beside the same counts now, and checks that every
+published view agrees with the days: `boards_disagreeing` lists boards whose
+entries the rules would still change, and `summaries_disagreeing` counts
+saved summaries that differ from their days, as the Season's closure checks
+them, which reads every summary of a finished Season. Rebuilt boards record
+the board rule that built them (`rule`). A board rebuild is finished once its
+Reset's newest generation shows `snapshot_state` and `army_state` as
+`published` (see [Reset publication missing](#reset-publication-missing)).
+The receipt is kept per Season and rule revision, so the same revision is
+repaired once.
+
+**Boards that rank a missing player or miss late battles:** a Reset's Daily
+board leaves out a player whose profile check returned 404 (player not found)
+after their reading and before the Reset, takes a Complete day's EOD plus its
+automatic loss, and adds each other player's battles stamped after their
+reading; see
+[frozen snapshots](domain.md#6-ranked-day-and-leaderboard-snapshots). Boards
+frozen before those rules still rank such players and miss those battles: on
+2026-10-07 the October 2026 Season's Day 1 board ranked 24 missing players
+and Day 2 34, with two of them first and second on Day 2 above ZOOS Yatta,
+and Day 2 missed late battles for 290 players. On 2026-10-08 the Day 3 board
+showed 3 players as proven but 29, 40 and 70 trophies low. The Season repair
+above rebuilds them with every other view; the Complete-day rule's remaining
+limits are in
+[frozen snapshots](domain.md#6-ranked-day-and-leaderboard-snapshots). To
+rebuild only the boards, run:
+
+```sh
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --boards preview --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --boards queue --season 1791176400
+```
+
+`preview` writes nothing and lists each of that Season's Reset boards whose
+frozen input still ranks such a player, with how many went missing
+(`profile_not_found`), or whose saved entries differ from those rules in
+trophies or in being marked proven, with how many (`late_battles`), or that
+orders equal trophies by an older rule than the
+[shared tie order](domain.md#live-leaderboard-ordering) (`reordered`). `queue` adds one correction for
+each, rebuilding its leaderboard and army records; `correction` reads `queued`, or
+`already_queued` when one was waiting. The worker starts each correction as
+any other: the newest Reset at once, an older one after the 04:30–07:00 UTC
+quiet window and 6 hours after its last rebuild. The corrected board then
+replaces the published one, which stays saved as superseded. Run `preview`
+again later: a board is listed until its rebuild starts, so an empty `boards`
+means only that nothing is left to queue. The old board is still served until
+the rebuild publishes, and a failed rebuild leaves it served. The run is
+finished only when each listed Reset's newest `generation` shows
+`snapshot_state` and `army_state` as `published`, using the query under
+[Reset publication missing](#reset-publication-missing). A board frozen after
+the deploy needs nothing. Only Resets inside the given Season are read, so the
+Season before is never touched.
+
+**Army rebuild after the unit catalogue v3 re-read:** while unit catalogue v3
+re-read the October 2026 Season's armies (migration 0089, stopped by 0091), a
+Reset could freeze a battle side whose only saved army was under v2 before
+frozen builds read any saved army. Its army records show that side as unread
+(`decode_missing`), leaving it out of the Armies page and Season army
+summaries. A rebuild of the Reset now reads that side's newest saved army.
+Deploy order: migration 0091 can go before or after the background-job cap
+change; this correction runs only once that cap is live, and never from 04:00
+to 07:00 UTC (`queue` refuses in that window):
+
+```sh
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --armies preview --season 1791176400
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --armies queue --max-jobs 2 --season 1791176400
+```
+
+`preview` writes nothing and lists each of that Season's Resets with such
+sides, with how many (`sides`), counting a side only when its newest saved
+army was read (a failed reading restores nothing); their total is the size of
+the correction, and the number of listed Resets is how many rebuild. It was
+not measured before release, so read it from `preview`. `queue` adds one
+army-only operator correction for each listed Reset while fewer than
+`--max-jobs` corrections of the Season wait or rebuild (`in_flight`);
+`correction` reads `queued`, `already_queued`, `rebuilding` (a newer build
+not yet published) or `not_queued` (a preview, or the cap reached). The
+worker starts each as any other correction, an older Reset also 6 hours after
+its last rebuild, except that no operator correction starts, and no worker
+claims its builds, from 04:00 to 07:00 UTC, for any Reset including the
+newest; one queued at 03:55 waits until 07:00. The same holds for its
+leaderboard and statistics builds when a revised day result joins it. Those
+builds and its army build run at background priority; corrections not
+queued here keep their usual priority and hours. The army build takes no
+battle lock and, like every army day build, holds the one army-build lock
+for about 80 seconds. Run `queue` again after
+those finish until `resets` is empty; a second run while one is waiting
+queues nothing more.
 
 ### Raw-response cleanup failed
 
@@ -657,37 +845,93 @@ jobs remain, batches report `deleted_python_processing_jobs` above zero.
 and uploads with their failure category.
 
 **Fix or escalate:** retry a failed upload with `--upload-hash` and `--apply`
-once its cause is fixed. Failed processing jobs have no retry command; see
-[failed work](deployment.md#failed-work) and escalate.
+once its cause is fixed. Failed processing jobs have no retry command: replay a
+failed profile or battle-log job (listed with recovery `replay`) under its own
+parser and rules with
+`./ops failed-items --replay-job-id ID --reason 'why it can be processed now'`,
+repeating `--replay-job-id` for several jobs. That previews; the same with
+`--apply` queues the replays and prints each `replay_job_id`. It queues all or
+none: if any job is refused, such as one that is not failed or that the replay
+function will not take, nothing is queued. The replay request records who asked
+(`ops:` and the host account), when and why, as `deploy/replay-request` does
+([failed work](deployment.md#failed-work)). Once a replay processes the saved
+response, the failed job stops counting. If its saved response truly cannot
+be processed, accept the job with the owner's agreement:
+`./ops failed-items --accept-job-id ID --reason 'why it cannot be processed'`
+previews, and the same with `--apply` records it. The job, its attempts and its
+saved response stay; the record keeps who accepted it, when and why, and
+`./ops failed-items` shows it as `accepted`. Otherwise escalate.
 
 **Recovered:** 24 hours and 15 minutes after the newest permanent failure. The
 alert means a new permanent failure in the last 24 hours; its recovery means no new one for
 24 hours, not that anything was repaired. A manual retry of a failed item
 clears the alert early; a repeat failure raises a fresh alert.
 
+The separate **failed work waiting for a person** alert stays open while any
+failed job or upload is left, however old, and says how many there are. It
+recovers 15 minutes after the last one is retried, replayed or accepted, or, for a daily
+result calculation, after its replacement from the current-Season republish
+finishes. The failed job itself stays failed as a record. A replacement that
+found the same result can count as failed again after the 48-hour finished-job
+cleanup ([details](alerts.md)).
+
 ### Reset publication missing
 
-**First checks:** `./ops logs worker --since '2 hours ago' --no-pager`, then:
+This alert fires when the website's public Daily leaderboard page does not
+show the latest Reset's frozen leaderboard by 05:30 UTC, including when that
+page cannot be read then, and when an earlier Reset is still unpublished. The **Reset
+behind its 05:30 target** early warning comes first and names the stage:
+collection not ended at 05:10, Reset work projected past 05:25 at 05:15, or
+inputs not frozen at 05:25.
+
+**First checks:** `./ops queue-status` for Reset work left, `./ops logs worker
+--since '2 hours ago' --no-pager`, `./ops logs website` if the alert says the
+website check could not read the board, then:
 
 ```sh
 podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
   "SELECT boundary_at, generation, snapshot_state, army_state FROM boundary_publication_generations ORDER BY 1, 2"
+podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
+  "SELECT * FROM reset_acceptance_records ORDER BY boundary_at DESC LIMIT 2"
 ```
+
+The second shows, for the latest Resets, when collection ended, when the Reset
+readings were processed, when the board's inputs froze, when it was saved as
+published and when the website first showed it, with the board's input states
+and how many of the Reset's boundaries were settled.
 
 **Fix or escalate:** escalate; repairing a publication needs an approved change.
 
-**Recovered:** every Reset since the first one has published its frozen
-leaderboard and army results.
+**Recovered:** the latest board is readable and every Reset since the first
+one has published its frozen leaderboard and army results.
+
+### Deploy failed
+
+**First checks:** `./ops status`, then `./ops logs` for the step that failed.
+`./ops up` printed it when it stopped. The alert schedule keeps running while
+the stack is stopped, so the other alerts a stopped stack raises follow.
+
+**Fix or escalate:** fix the cause and run `./ops up` again, or escalate. To go
+back to the earlier code, follow the
+[rollback](deployment.md#existing-service-lifecycle) steps; never reverse a
+migration.
+
+**Recovered:** 15 minutes after an `./ops up` succeeds.
 
 ### Untracked Legend I battlers
 
 **First checks:** `./ops logs worker --since '2 hours ago' --no-pager` for
 processing failures, then `./ops queue-status` and
-`./ops failed-items --limit 20`: opponent discovery queues one profile check
-per newly seen player, so a stalled collector or worker leaves them untracked.
+`./ops failed-items --limit 20`: opponent discovery saves each newly seen
+player as due a profile check, so a stalled collector or worker leaves them
+untracked. `podman exec clashlens-collector python -m clashlens.cli
+population-status --database-url-file /run/secrets/database-url` counts due
+players, this week's answers and players never answered
+([collector polling](collector-polling.md)).
 
-**Fix or escalate:** escalate; a player missed by discovery is checked again
-the next time a changed battle log names them.
+**Fix or escalate:** escalate; a due player is checked again 5 minutes after
+its check started, doubling to 6 hours, until answered. `population-status
+--repair` saves every never-answered untracked player as due again.
 
 **Recovered:** at most 10 players from the current or previous Legend day's
 battles have stayed untracked for over an hour, not counting players whose
@@ -709,7 +953,11 @@ podman exec clashlens-collector \
 It reports how many it `scheduled` for the latest ended Season; a second run
 schedules 0 while the first run's requests are still waiting, and a fresh set
 once they finished. The collector sends them on the ordinary lane within the
-normal key budget, about 13,000 requests at October 2026 membership.
+normal key budget, about 13,000 requests at October 2026 membership. Each
+official Season-end total saved recalculates the player's kept last day of
+that Season at backfill priority, only for the current or previous Season,
+the two Seasons a day's calculation accepts; an older Season's kept last day
+is not recalculated and stays as saved.
 
 ### Website unreachable from outside
 

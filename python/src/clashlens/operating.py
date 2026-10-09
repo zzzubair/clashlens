@@ -353,6 +353,7 @@ class WorkerMetrics:
                 "oldest_due_seconds",
                 "overdue",
                 "scheduled_later",
+                "kinds",
             )
         }
         raw_reason = spool.get("reason")

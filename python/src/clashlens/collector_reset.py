@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .collector_liveness import BULK_STATEMENT_TIMEOUT
 from .domain import is_season_boundary
 from .league_history_refresh import REFRESH_DELAY, schedule_refresh
 
@@ -38,6 +39,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
     )
     with connection.transaction():
         connection.execute("SET LOCAL lock_timeout = '3s'")
+        connection.execute(f"SET LOCAL statement_timeout = '{BULK_STATEMENT_TIMEOUT}'")
         older_boundary = connection.execute(
             """
             SELECT sweep.boundary_at

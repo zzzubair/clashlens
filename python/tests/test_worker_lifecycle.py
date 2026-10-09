@@ -15,7 +15,12 @@ import pytest
 from psycopg.errors import DeadlockDetected, QueryCanceled, SerializationFailure
 
 from clashlens import cli, ingestion, job_outcomes, reconciliation_db, worker
-from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION, LeaseLost
+from clashlens.db import (
+    DOMAIN_RULE_VERSION,
+    POPULATION_BUILD_WORK_TYPES,
+    PROCESSING_VERSION,
+    LeaseLost,
+)
 from clashlens.domain import DomainRuleError
 from clashlens.league_history import (
     LEAGUE_HISTORY_ENDPOINT_VERSION,
@@ -25,6 +30,7 @@ from clashlens.league_history import (
 )
 from clashlens.operating import WorkerMetrics
 from clashlens.worker import (
+    DERIVED_WITHOUT_BUILDS,
     ObservationProcessor,
     ProcessResult,
     StageMetrics,
@@ -168,7 +174,7 @@ def test_worker_finishes_a_claim_call_despite_rejected_newest_jobs(
         def newest_job_plan(self, *, limit):
             return list(planned_jobs[:limit])
 
-        def claim_job(self, *, owner, lease_seconds, job_id=None, planned=False):
+        def claim_job(self, *, owner, lease_seconds, job_id=None, planned=False, reset_first=False):
             if job_id is None:
                 if not fallback_available:
                     return None
@@ -186,7 +192,7 @@ def test_worker_finishes_a_claim_call_despite_rejected_newest_jobs(
                 domain_rule_version=DOMAIN_RULE_VERSION,
             )
 
-        def renew_claim(self, claim, *, lease_seconds):
+        def renew_claim(self, claim, *, lease_seconds, **_kwargs):
             pass
 
     monkeypatch.setattr("clashlens.worker.monotonic", lambda: clock.now)
@@ -209,7 +215,7 @@ def test_worker_keeps_every_fourth_claim_oldest_first(monkeypatch) -> None:
         def newest_job_plan(self, *, limit):
             return [8, 9, 10, 11][:limit]
 
-        def claim_job(self, *, owner, lease_seconds, job_id=None, planned=False):
+        def claim_job(self, *, owner, lease_seconds, job_id=None, planned=False, reset_first=False):
             job_id = queued[0] if job_id is None else job_id
             if job_id not in queued:
                 return None
@@ -221,7 +227,7 @@ def test_worker_keeps_every_fourth_claim_oldest_first(monkeypatch) -> None:
                 domain_rule_version=DOMAIN_RULE_VERSION,
             )
 
-        def renew_claim(self, claim, *, lease_seconds):
+        def renew_claim(self, claim, *, lease_seconds, **_kwargs):
             pass
 
     monkeypatch.setattr(
@@ -234,6 +240,27 @@ def test_worker_keeps_every_fourth_claim_oldest_first(monkeypatch) -> None:
     assert results == [ProcessResult(job_id, "processed") for job_id in (8, 9, 10, 7)]
     assert completed == [8, 9, 10, 7]
     assert queued == [11]
+
+
+def test_build_claims_take_reset_work_first_on_every_turn() -> None:
+    # The board's build and checks run at Reset priority and army builds at
+    # live priority, so only the build lane's other claims take turns.
+    calls = []
+
+    class Database:
+        def claim_job(self, *, owner, lease_seconds, work_types, reset_first):
+            calls.append((work_types, reset_first))
+            return SimpleNamespace(job_id=len(calls))
+
+    processor = ObservationProcessor(Database(), archive=object())
+    for work_types in (POPULATION_BUILD_WORK_TYPES,) * 2 + (DERIVED_WITHOUT_BUILDS,) * 2:
+        processor._claim_next(owner="builds", lease_seconds=60, work_types=work_types)
+    assert calls == [
+        (POPULATION_BUILD_WORK_TYPES, True),
+        (POPULATION_BUILD_WORK_TYPES, True),
+        (DERIVED_WITHOUT_BUILDS, True),
+        (DERIVED_WITHOUT_BUILDS, False),
+    ]
 
 
 def test_stage_metrics_report_bounded_histogram_percentiles() -> None:
@@ -253,7 +280,7 @@ def test_worker_terminalizes_race_to_retired_season() -> None:
     finished: list[tuple[int, str]] = []
 
     class RetiredDatabase:
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             del lease_seconds
 
     def complete_reconciliation(_database: object, _claim: object) -> None:
@@ -316,7 +343,7 @@ def test_new_observation_reads_only_the_local_spool() -> None:
         def __init__(self) -> None:
             self.profile = None
 
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             assert lease_seconds == 30
 
     def complete_profile(_database: object, _claim: object, profile: object) -> None:
@@ -360,7 +387,7 @@ def test_league_history_processing_produces_a_bounded_worker_snapshot() -> None:
     digest = hashlib.sha256(body).hexdigest()
 
     class Database:
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             assert lease_seconds == 30
 
     class Archive:
@@ -410,7 +437,7 @@ def test_league_history_processing_produces_a_bounded_worker_snapshot() -> None:
     assert snapshot["stages"]["python_domain_league_history"]["count"] == 1
 
 
-def test_missing_new_observation_is_not_repaired_from_archive() -> None:
+def test_missing_new_observation_without_an_archived_copy_fails_as_missing_proof() -> None:
     from clashlens.archive import ArchiveReadResult
 
     class LocalSpool:
@@ -419,20 +446,22 @@ def test_missing_new_observation_is_not_repaired_from_archive() -> None:
 
     class Archive:
         spool = LocalSpool()
+        archive = SimpleNamespace(bucket="evidence")
         remote_calls = 0
 
         def read_verified(self, *_args: object, **_kwargs: object) -> ArchiveReadResult:
             self.remote_calls += 1
-            raise AssertionError("new observations must not use archive fallback")
+            raise AssertionError("no archived copy exists to read back")
 
     class Database:
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             assert lease_seconds == 30
 
     def fail_claim(_database: object, _claim: object, *, category: str, detail: str, retryable: bool) -> str:
         assert category == "spool_missing"
         assert detail.startswith("spool_missing:")
-        assert retryable is False
+        # Spends an attempt; only the job's last one fails for good.
+        assert retryable is True
         return "failed"
 
     claim = SimpleNamespace(
@@ -453,7 +482,10 @@ def test_missing_new_observation_is_not_repaired_from_archive() -> None:
     )
     archive = Archive()
 
-    with patch.object(job_outcomes, "fail_claim", fail_claim):
+    with (
+        patch.object(job_outcomes, "fail_claim", fail_claim),
+        patch.object(worker.collector_uploads, "archived_copy", lambda *_a, **_k: None),
+    ):
         result = ObservationProcessor(Database(), archive)._process_claim(
             claim, lease_seconds=30
         )
@@ -482,7 +514,7 @@ def test_replay_observation_can_use_archive_fallback() -> None:
             return ArchiveReadResult(body, "s3://evidence/source", digest)
 
     class Database:
-        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+        def renew_claim(self, _claim: object, *, lease_seconds: int, **_kwargs: object) -> None:
             assert lease_seconds == 30
 
     def complete_profile(_database: object, _claim: object, _profile: object) -> None:

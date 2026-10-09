@@ -93,7 +93,7 @@ it("explains tracked ranks and distinguishes whole-board times from the row's co
   expect(html).toContain('id="leaderboard-title">Live Leaderboard</h1>');
   expect(html).toContain("position among players tracked by Clash Lens");
   expect(html).toContain("not the official global rank");
-  expect(html).toContain("fixed order based on player tags");
+  expect(html).toContain("higher average attack destruction this Season");
   expect(html).toContain("even if it was unchanged");
   expect(html).toMatch(/Newest player update: <time[^>]+dateTime="2026-10-02T11:59:00Z"/);
   expect(html).toMatch(/Oldest player update: <time[^>]+dateTime="2026-10-02T11:30:00Z"/);
@@ -229,6 +229,7 @@ it.each([
     expect(html.includes("These standings are incomplete.")).toBe(incomplete);
     if (incomplete) {
       expect(html).toContain("No player updates were saved in the 4 hours before");
+      expect(html).toContain("Battles recorded after it are added where we can confirm");
       expect(html).toMatch(
         /the newest is from <time[^>]+dateTime="2026-10-03T00:00:19Z"/,
       );
@@ -277,7 +278,8 @@ it("describes Daily trophies as values saved before the Reset, even with recent 
   mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
   const { html } = await render("view=daily&season=1788757200&day=28&page=1");
   expect(html).toContain('id="leaderboard-title">Day 28 standings</h1>');
-  expect(html).toContain("last value saved before this Reset");
+  expect(html).toContain("saved before the Reset plus the battles recorded after it");
+  expect(html).toContain("and not rebuilt since, show the saved");
   expect(html).toContain("7,211");
   expect(html).not.toContain("These standings are incomplete.");
   // The Live board's Season-reset rule never applies to a frozen day.
@@ -299,5 +301,39 @@ it.each([
     expect(html).toContain(text);
     expect(html).toContain(next);
     expect(html).not.toContain("Try another name or an exact tag");
+  },
+);
+
+it.each([
+  [{ dayNumber: 1 }, null, ["Go to Day 1"]],
+  [null, { dayNumber: 3 }, ["Go to Day 3"]],
+  [{ dayNumber: 1 }, { dayNumber: 3 }, ["Go to Day 1", "Go to Day 3"]],
+  [null, null, []],
+] as const)(
+  "names the Season day each day button opens, above the table: %o %o",
+  async (previous, next, labels) => {
+    const fixture = structuredClone(board);
+    fixture.view = "daily";
+    fixture.daily = {
+      officialSeasonId: "1788757200",
+      dayNumber: 2,
+      resetAt: "2026-09-09T05:00:00Z",
+      seasonStartAt: "2026-09-07T05:00:00Z",
+      seasonEndAt: "2026-10-05T05:00:00Z",
+      previousSnapshot: previous && { officialSeasonId: "1788757200", ...previous },
+      nextSnapshot: next && { officialSeasonId: "1788757200", ...next },
+    };
+    fixture.provenance.observedAt = "2026-09-09T04:59:00Z";
+    mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+    const { html } = await render("view=daily&season=1788757200&day=2&page=1");
+    const links = [...html.matchAll(/<a href="([^"]+)"[^>]*>Go to Day (\d+)/g)];
+    expect(links.map(([, , day]) => `Go to Day ${day}`)).toEqual(labels);
+    for (const [, href, day] of links) expect(href).toContain(`day=${day}`);
+    expect(html).not.toMatch(/>(Older|Newer)</);
+    if (labels.length) {
+      expect(html.indexOf('aria-label="Other days"')).toBeLessThan(
+        html.indexOf("<table"),
+      );
+    } else expect(html).not.toContain('aria-label="Other days"');
   },
 );

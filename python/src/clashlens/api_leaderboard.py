@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .analytics import tie_order_sql
 from .api_db import (
     ApiDatabase,
     _public_confidence,
@@ -34,7 +35,8 @@ SELECT player.normalized_tag, profile.name, profile.trophies,
        player.eligibility_state,
        profile.profile_json -> 'clan' ->> 'name' AS clan,
        COALESCE(profile.current_league_season_id = %(season_id)s, false)
-           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
+           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current,
+       tally.attacks, tally.destruction
 FROM players AS player
 JOIN LATERAL (
     SELECT name, trophies, profile_json, source_contract_state,
@@ -44,6 +46,8 @@ JOIN LATERAL (
     -- Keep one indexed current-profile lookup per player as history grows.
     OFFSET 0
 ) AS profile ON true
+LEFT JOIN live_attack_tallies AS tally
+  ON tally.player_id = player.id AND tally.official_season_id = %(season_id)s
 WHERE player.active = true
   AND profile.source_contract_state = 'accepted'
   AND NOT EXISTS (
@@ -60,7 +64,13 @@ _LIVE_PLAYERS_SQL = f"""
 SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
 """
 
-_LIVE_ORDER_SQL = "trophies DESC, md5(normalized_tag), normalized_tag"
+# Equal trophies in the Daily board's order (analytics.tie_order_key), from
+# the counts the worker last saved (analytics.refresh_live_attack_tallies).
+# v1 ordered them by MD5 of the tag alone.
+_LIVE_ORDER_VERSION = "tracked-trophies-attack-destruction-v2"
+_LIVE_ORDER_SQL = (
+    f"trophies DESC, {tie_order_sql('attacks', 'destruction', 'normalized_tag')}"
+)
 _LIVE_RANKED_SQL = f"""
 SELECT *, row_number() OVER (ORDER BY {_LIVE_ORDER_SQL}) AS position
 FROM ({_LIVE_PLAYERS_SQL}) AS live
@@ -271,7 +281,7 @@ def get_live_leaderboard(
         page = offset // limit + 1
         return {
             "kind": "live",
-            "ordering_rule_version": "tracked-trophies-md5-v1",
+            "ordering_rule_version": _LIVE_ORDER_VERSION,
             "generated_at": now.astimezone(UTC).isoformat(),
             "tracked_population": tracked_population,
             "total_entries": total_entries,
@@ -302,7 +312,7 @@ def get_live_leaderboard(
                 "freshness": "stale" if stale_count else "fresh",
                 "confidence": "partial",
                 "coverage": "partial",
-                "version": "tracked-trophies-md5-v1",
+                "version": _LIVE_ORDER_VERSION,
             },
             "source_observations": {
                 "oldest_observed_at": (
@@ -369,12 +379,19 @@ def get_frozen_leaderboard(
                 LEFT JOIN boundary_publication_generations AS generation
                   ON generation.snapshot_id = snapshot.id
                 LEFT JOIN LATERAL (
+                    -- A proof frozen since 0081 records its newest ranked day;
+                    -- an older one stores all its rows, so they give it.
                     SELECT ranked.official_season_id, ranked.season_day_number
-                    FROM boundary_publication_manifest_rows AS member
+                    FROM boundary_publication_manifests AS manifest
                     JOIN ranked_day_versions AS ranked
-                      ON ranked.id = member.ranked_day_version_id
-                    WHERE member.manifest_id = generation.snapshot_manifest_id
-                    ORDER BY ranked.id DESC LIMIT 1
+                      ON ranked.id = COALESCE(
+                          manifest.newest_ranked_day_version_id,
+                          (SELECT member.ranked_day_version_id
+                           FROM boundary_publication_manifest_rows AS member
+                           WHERE member.manifest_id = manifest.id
+                             AND member.ranked_day_version_id IS NOT NULL
+                           ORDER BY member.ranked_day_version_id DESC LIMIT 1))
+                    WHERE manifest.id = generation.snapshot_manifest_id
                 ) AS generation_day ON true
                 WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
                   AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
@@ -449,12 +466,19 @@ def get_frozen_leaderboard(
                     LEFT JOIN boundary_publication_generations AS generation
                       ON generation.snapshot_id = snapshot.id
                     LEFT JOIN LATERAL (
+                        -- A proof frozen since 0081 records its newest ranked day;
+                        -- an older one stores all its rows, so they give it.
                         SELECT ranked.official_season_id, ranked.season_day_number
-                        FROM boundary_publication_manifest_rows AS member
+                        FROM boundary_publication_manifests AS manifest
                         JOIN ranked_day_versions AS ranked
-                          ON ranked.id = member.ranked_day_version_id
-                        WHERE member.manifest_id = generation.snapshot_manifest_id
-                        ORDER BY ranked.id DESC LIMIT 1
+                          ON ranked.id = COALESCE(
+                              manifest.newest_ranked_day_version_id,
+                              (SELECT member.ranked_day_version_id
+                               FROM boundary_publication_manifest_rows AS member
+                               WHERE member.manifest_id = manifest.id
+                                 AND member.ranked_day_version_id IS NOT NULL
+                               ORDER BY member.ranked_day_version_id DESC LIMIT 1))
+                        WHERE manifest.id = generation.snapshot_manifest_id
                     ) AS generation_day ON true
                     WHERE snapshot.id = %s
                       AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')

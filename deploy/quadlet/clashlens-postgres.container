@@ -24,21 +24,36 @@ HealthInterval=10s
 HealthTimeout=5s
 HealthRetries=12
 HealthOnFailure=kill
-# Crash recovery replays the log since the last checkpoint, usually up to
-# max_wal_size (a soft limit): 845 MB took 90 s on rogue, so 2 GB is about
-# 3.5 minutes. Failed checks are ignored meanwhile, but TimeoutStartSec below
-# still stops a replay that outlasts five minutes.
-HealthStartPeriod=5m
+# Crash recovery replays the change log since the last finished checkpoint.
+# From 30 Sep to 8 Oct 2026 the most written between two checkpoints was
+# 1.1 GB (3,008 checkpoints), so a crash just before one finishes replays up to
+# about 2.2 GB: four minutes at the 9.4 MB/s rogue replayed (845 MB in 90 s).
+# Stopping a replay only starts it again from the beginning, so no fixed limit
+# stops one: the regular check above starts only once this startup check finds
+# the database ready, and the start may take as long as it needs. While not
+# ready, the startup check reads which change-log file PostgreSQL's startup
+# process is replaying, by its full 24-character name, and stops the database
+# (an immediate shutdown, which systemd restarts) only when that file has not
+# changed for 10 minutes; a 16 MB file takes about 2 s. When it cannot see a
+# replay at all it waits rather than stop one. The alert check
+# warns from minute five, and ./ops logs postgres shows the replay's progress.
+HealthStartupCmd=pg_isready -q -U @@POSTGRES_USER@@ -d @@POSTGRES_DB@@ || { ps -o args | grep -oE 'postgres: startup recovering [0-9A-F]{24}' > /tmp/replay.now && if cmp -s /tmp/replay.now /tmp/replay; then find /tmp/replay -mmin +10 | grep -q . && kill -QUIT 1; else mv /tmp/replay.now /tmp/replay; fi; exit 1; }
+HealthStartupInterval=10s
+HealthStartupTimeout=5s
 Notify=healthy
 # Write volume: data checksums log a full 8 KB page the first time each page
 # changes after a checkpoint, so checkpoints are spaced out and those copies
 # compressed. The larger cache writes a changed page once per checkpoint
 # instead of on every eviction. hba_file requires a password on every network
-# connection; see deploy/postgres/pg_hba.conf.
-Exec=postgres -c hba_file=/etc/clashlens/pg_hba.conf -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on -c shared_buffers=@@POSTGRES_SHARED_BUFFERS@@ -c wal_compression=zstd -c checkpoint_timeout=10min -c max_wal_size=2GB @@POSTGRES_ARCHIVE_ARGS@@
+# connection; see deploy/postgres/pg_hba.conf. The log records statements
+# over 5 s, lock waits over 1 s (deadlock_timeout) and every automatic vacuum
+# and statistics refresh, so a slowdown like 7 Oct 2026's is in the log. Query
+# values are left out: they can hold emails or session data, and ./ops turns
+# the slow-statement log off for its password changes.
+Exec=postgres -c hba_file=/etc/clashlens/pg_hba.conf -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on -c shared_buffers=@@POSTGRES_SHARED_BUFFERS@@ -c wal_compression=zstd -c checkpoint_timeout=10min -c max_wal_size=2GB -c log_min_duration_statement=5s -c log_lock_waits=on -c log_autovacuum_min_duration=0 -c log_parameter_max_length=0 @@POSTGRES_ARCHIVE_ARGS@@
 
 [Service]
 Restart=always
 RestartMode=direct
-TimeoutStartSec=5min
+TimeoutStartSec=infinity
 TimeoutStopSec=90

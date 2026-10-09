@@ -26,7 +26,7 @@ source "$ROOT/ops-keep-running.sh"
 usage() {
   cat <<'EOF'
 Usage: ./ops build [--fixture]
-       ./ops up [--fixture] [--restart-collector]
+       ./ops up [--fixture] [--restart-collector|--keep-collector]
        ./ops down
        ./ops status
        ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention|ranked-day-compaction|history-retention]
@@ -37,13 +37,14 @@ Usage: ./ops build [--fixture]
        ./ops backup-prune [--apply]
        ./ops archive-prune [--apply]
        ./ops history-prune
-       ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256] [--apply]
+       ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256|--accept-job-id N --reason TEXT|--replay-job-id N... --reason TEXT] [--apply]
        ./ops support-recovery-exec <arguments>
 
 build creates a pinned release. up installs and starts that release; it never
 builds or pulls an image. --fixture is an isolated stack with no live keys.
 up leaves the collector, database, pod and network running when their images
-and configuration are unchanged; --restart-collector restarts them anyway.
+and configuration are unchanged; --restart-collector restarts them anyway, and
+--keep-collector keeps the running collector image for a worker/API-only change.
 down disables the stack across reboot and keeps all database, spool and archive data.
 EOF
 }
@@ -70,6 +71,7 @@ finish() {
   cleanup_admin_secret || result=1
   if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
     (stop_units) || true
+    deploy_failed_alert
   fi
   exit "$result"
 }
@@ -180,7 +182,7 @@ load_production_config() {
     die "CLASHLENS_PLAYER_DISCOVERY_ENABLED must be true or false"
   [[ "$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" =~ ^(true|false)$ ]] || \
     die "CLASHLENS_GLOBAL_RANKINGS_ENABLED must be true or false"
-  [[ "$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY false)" =~ ^(true|false)$ ]] || \
+  [[ "$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY true)" =~ ^(true|false)$ ]] || \
     die "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY must be true or false"
   local previous_id previous_file
   previous_id=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)
@@ -246,8 +248,8 @@ load_production_config() {
   [[ -z "$BLOG_DIR" || "$BLOG_DIR" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "CLASHLENS_BLOG_DIR must be an absolute path without spaces"
   WEBSITE_PORT=$(setting CLASHLENS_WEBSITE_PORT 3000)
   HEALTH_PORT=$(setting CLASHLENS_HEALTH_PORT 8081)
-  WORKER_LEASE=$(setting CLASHLENS_WORKER_LEASE_SECONDS 60)
-  WORKER_CONCURRENCY=$(setting CLASHLENS_WORKER_CONCURRENCY 12)
+  WORKER_LEASE=$(setting CLASHLENS_WORKER_LEASE_SECONDS 60) WORKER_PROCESSES=$(setting CLASHLENS_WORKER_PROCESSES 1)
+  WORKER_CONCURRENCY=$(setting CLASHLENS_WORKER_CONCURRENCY 12) WORKER_RESPONSE_LANES=$(setting CLASHLENS_WORKER_RESPONSE_LANES)
   WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE 12)
   WORKER_ARCHIVE_POOL=$(setting CLASHLENS_WORKER_ARCHIVE_POOL_SIZE 12)
   POSTGRES_MEMORY=$(setting CLASHLENS_POSTGRES_MEMORY 6g)
@@ -257,7 +259,7 @@ load_production_config() {
   POSTGRES_PIDS=$(setting CLASHLENS_POSTGRES_PIDS 512)
   COLLECTOR_MEMORY=$(setting CLASHLENS_COLLECTOR_MEMORY 2g)
   COLLECTOR_CPUS=$(setting CLASHLENS_COLLECTOR_CPUS 4)
-  COLLECTOR_PIDS=$(setting CLASHLENS_COLLECTOR_PIDS 512)
+  COLLECTOR_PIDS=$(setting CLASHLENS_COLLECTOR_PIDS 544)
   API_MEMORY=$(setting CLASHLENS_API_MEMORY 1g)
   API_CPUS=$(setting CLASHLENS_API_CPUS 2)
   API_PIDS=$(setting CLASHLENS_API_PIDS 256)
@@ -271,6 +273,7 @@ load_production_config() {
   API_ARGS=
   WORKER_ARGS=
   [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED true)" == true ]] || WORKER_ARGS=--disable-player-discovery
+  [[ -z "$WORKER_RESPONSE_LANES" ]] || WORKER_ARGS+=" --response-lanes $WORKER_RESPONSE_LANES"
 }
 
 load_fixture_config() {
@@ -293,9 +296,9 @@ load_fixture_config() {
   CONFIG[CLASHLENS_WORKER_DB_PASSWORD]=fixture_worker_password_00000000001
   CONFIG[CLASHLENS_API_DB_PASSWORD]=fixture_api_password_00000000000001
   CONFIG[CLASHLENS_GLOBAL_RANKINGS_ENABLED]=true
-  WORKER_LEASE=60 WORKER_CONCURRENCY=4 WORKER_DB_POOL=4 WORKER_ARCHIVE_POOL=4
+  WORKER_LEASE=60 WORKER_PROCESSES=1 WORKER_CONCURRENCY=4 WORKER_DB_POOL=4 WORKER_ARCHIVE_POOL=4
   POSTGRES_MEMORY=640m POSTGRES_SHARED_BUFFERS=128MB POSTGRES_SHM=128m POSTGRES_CPUS=2 POSTGRES_PIDS=256
-  COLLECTOR_MEMORY=384m COLLECTOR_CPUS=2 COLLECTOR_PIDS=512
+  COLLECTOR_MEMORY=384m COLLECTOR_CPUS=2 COLLECTOR_PIDS=544
   API_MEMORY=256m API_CPUS=1 API_PIDS=128
   WORKER_MEMORY=384m WORKER_CPUS=2 WORKER_PIDS=256
   WEBSITE_MEMORY=256m WEBSITE_CPUS=1 WEBSITE_PIDS=128
@@ -306,14 +309,14 @@ load_fixture_config() {
 
 validate_runtime_values() {
   local item keys save
-  for item in WEBSITE_PORT HEALTH_PORT WORKER_LEASE WORKER_CONCURRENCY WORKER_DB_POOL WORKER_ARCHIVE_POOL POSTGRES_PIDS COLLECTOR_PIDS API_PIDS WORKER_PIDS WEBSITE_PIDS; do
+  for item in WEBSITE_PORT HEALTH_PORT WORKER_LEASE WORKER_PROCESSES WORKER_CONCURRENCY ${WORKER_RESPONSE_LANES:+WORKER_RESPONSE_LANES} WORKER_DB_POOL WORKER_ARCHIVE_POOL POSTGRES_PIDS COLLECTOR_PIDS API_PIDS WORKER_PIDS WEBSITE_PIDS; do
     validate_number "$item" "${!item}" integer
   done
   (( WEBSITE_PORT <= 65535 && HEALTH_PORT <= 65535 )) || die "published port is invalid"
   [[ "$WEBSITE_PORT" != "$HEALTH_PORT" ]] || die "website and health ports must differ"
   item=$(setting CLASHLENS_REGULAR_PARALLELISM ''); keys=$(( $(tr -cd , <<<"$REGULAR_KEY_NAMES" | wc -c) + 1 ))
   [[ -z "$item" || ( "$item" =~ ^[1-9][0-9]{0,2}$ && "$item" -le 384 ) ]] || die "CLASHLENS_REGULAR_PARALLELISM must be a whole number from 1 to 384"
-  (( save = ${item:-2 * keys * KEY_RATE}, save = save < 256 ? 256 : save > 384 ? 384 : save, save + ((keys + 1) * 6 < 448 - save ? (keys + 1) * 6 : 448 - save) + 64 <= COLLECTOR_PIDS )) || die "collector save and request threads plus 64 spare exceed CLASHLENS_COLLECTOR_PIDS=$COLLECTOR_PIDS"
+  (( save = ${item:-2 * keys * KEY_RATE}, save = save < 256 ? 256 : save > 384 ? 384 : save, save + ((keys + 1) * 6 < 448 - save ? (keys + 1) * 6 : 448 - save) + 32 + 64 <= COLLECTOR_PIDS )) || die "collector save, request and 32 upload threads plus 64 spare exceed CLASHLENS_COLLECTOR_PIDS=$COLLECTOR_PIDS"
   item=$(setting CLASHLENS_PROMOTION_RECHECK_PER_SECOND ''); [[ -z "$item" || "$item" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "CLASHLENS_PROMOTION_RECHECK_PER_SECOND must be a number of requests a second, 0 or more"
   for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
   for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done
@@ -669,6 +672,7 @@ promote_active_release() {
   local temporary
   temporary=$(mktemp "$STATE_DIR/active-release.env.XXXXXX")
   chmod 600 "$temporary"
+  [[ ! -f "$ACTIVE_RELEASE_FILE" ]] || cp -p -- "$ACTIVE_RELEASE_FILE" "$STATE_DIR/previous-release.env"
   { grep -v -e '^COLLECTOR_IMAGE=' -e '^POSTGRES_IMAGE=' -- "$RELEASE_FILE"; printf 'COLLECTOR_IMAGE=%s\nPOSTGRES_IMAGE=%s\n' "${RELEASE[COLLECTOR_IMAGE]}" "${RELEASE[POSTGRES_IMAGE]}"; } > "$temporary"
   mv -f "$temporary" "$ACTIVE_RELEASE_FILE"
 }
@@ -724,7 +728,7 @@ render_units() {
       WORKER_MEMORY "$WORKER_MEMORY" WORKER_CPUS "$WORKER_CPUS" WORKER_PIDS "$WORKER_PIDS" \
       WEBSITE_MEMORY "$WEBSITE_MEMORY" WEBSITE_CPUS "$WEBSITE_CPUS" WEBSITE_PIDS "$WEBSITE_PIDS" \
       WEBSITE_PORT "$WEBSITE_PORT" HEALTH_PORT "$HEALTH_PORT" COLLECTOR_ARGS "$COLLECTOR_ARGS" API_ARGS "$API_ARGS" \
-      WORKER_ARGS "$WORKER_ARGS" WORKER_LEASE "$WORKER_LEASE" WORKER_CONCURRENCY "$WORKER_CONCURRENCY" \
+      WORKER_ARGS "$WORKER_ARGS" WORKER_LEASE "$WORKER_LEASE" WORKER_CONCURRENCY "$WORKER_CONCURRENCY" WORKER_PROCESSES "$WORKER_PROCESSES" \
       WORKER_DB_POOL "$WORKER_DB_POOL" WORKER_ARCHIVE_POOL "$WORKER_ARCHIVE_POOL" \
       WORKER_PODMAN_STOP "$((WORKER_LEASE + 10))" WORKER_STOP "$((WORKER_LEASE + 15))"
   done
@@ -801,7 +805,7 @@ write_environment() {
   write_env collector.env "${common[@]}" "${collector_optional[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key \
     "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" \
-    "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY false)" \
+    "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY true)" \
     "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=$KEY_RATE" CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081 "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=$([[ "$MODE" == fixture ]] && printf true || printf false)"
   write_env worker.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key
@@ -995,7 +999,7 @@ psql_exec() {
 }
 
 psql_exec_sensitive() {
-  local options='-c log_statement=none -c log_min_error_statement=panic -c pg_stat_statements.track_utility=off'
+  local options='-c log_statement=none -c log_min_error_statement=panic -c log_min_duration_statement=-1 -c pg_stat_statements.track_utility=off'
   "$PODMAN_BIN" exec --interactive --env "PGOPTIONS=$options" "$PREFIX-postgres" \
     psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" "$@"
 }
@@ -1009,6 +1013,7 @@ apply_migrations() {
   local migration base prefix version exists
   exists=$(psql_exec --tuples-only --no-align --command "SELECT to_regclass('public.clash_lens_schema_migrations') IS NOT NULL")
   if [[ "$(trim "$exists")" != t ]]; then psql_exec < "$ROOT/deploy/migrations/0001_collector.sql"; fi
+  check_migrations
   for migration in "$ROOT"/deploy/migrations/*.sql; do
     [[ "${migration##*/}" == 0001_collector.sql ]] && continue
     base=${migration##*/}; prefix=${base%%_*}; version=$((10#$prefix))
@@ -1163,10 +1168,12 @@ up_stack() {
   migrate_legacy_units
   guard_systemd_units
   keep_running_plan
+  try_pending_migrations
+  mkdir -p "$STATE_DIR"
+  stage_configuration
   write_alert_intent stopped
   UP_IN_PROGRESS=true
   stop_units
-  mkdir -p "$STATE_DIR"
   local mode_file
   mode_file=$(mktemp "$STATE_DIR/mode.XXXXXX")
   chmod 600 "$mode_file"
@@ -1280,7 +1287,7 @@ failed_items() {
   require_host
   prepare_managed_runtime worker
   if [[ "$MODE" == fixture ]]; then load_fixture_config; else load_production_config; fi
-  run_with_admin_database "${RELEASE[PYTHON_IMAGE]}" failed-items --database-url-file /run/secrets/database-url "$@"
+  run_with_admin_database "${RELEASE[PYTHON_IMAGE]}" failed-items --database-url-file /run/secrets/database-url "$@" --operator "ops:${SUDO_USER:-$(id -un)}"
 }
 
 backup_enabled() {
@@ -1336,7 +1343,7 @@ backup() {
   prepare_backup
   wal_g backup-push /var/lib/postgresql/data/pgdata
   backup_prune --apply
-  printf 'Base backup uploaded and seven-day retention applied.\n'
+  printf 'Base backup uploaded and ten-day retention applied.\n'
 }
 
 backup_status() {
@@ -1351,13 +1358,16 @@ if not rows:
 times = [dt.datetime.fromisoformat(r["finish_time"].replace("Z", "+00:00")) for r in rows]
 now = dt.datetime.now(dt.timezone.utc)
 age = (now - max(times)).total_seconds()
-print(f"Remote base backups: {len(rows)}; newest age: {age:.0f} seconds")
-print(f"Oldest completed base backup: {min(times).isoformat()}")
-if min(times) > now - dt.timedelta(days=7):
-    print("Seven-day window is still warming up")
-if not 0 <= age <= 691200:
+print(f"Remote base backups: {len(rows)}; newest age: {age:.0f} seconds\nOldest completed base backup: {min(times).isoformat()}")
+if min(times) > now - dt.timedelta(days=10):
+    print("Ten-day window is still warming up")
+if "/" in sys.argv[1]:
+    high, low = (int(part, 16) for part in sys.argv[1].split("/"))
+    replay = (high << 32 | low) - rows[times.index(max(times))]["start_lsn"]
+    print(f"A restore to now replays {replay / 1e9:.1f} GB of change log after the newest backup")
+if not 0 <= age <= 86400:
     sys.exit("Latest remote base backup is stale or has an invalid time")
-'
+' "$("$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" psql -X -At -c "SELECT pg_current_wal_lsn()" 2>/dev/null || true)"
   "$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" sh -ec '
     test "$(psql -X -At -v ON_ERROR_STOP=1 -c "SHOW archive_mode")" = on
     stale=$(find "$PGDATA/pg_wal/archive_status" -name "*.ready" -mmin +10 -print)
@@ -1373,29 +1383,26 @@ backup_prune() {
     apply=--confirm
   fi
   prepare_backup
-  # Keep the full backup completed before the recovery boundary and every
-  # later backup/WAL. Extra manual backups must not shorten the promised window.
+  # Keep the newest backup completed before the recovery boundary, the full
+  # backup a delta backup builds on (FIND_FULL), and every later backup/WAL.
+  # Extra manual backups must not shorten the promised window.
   anchor=$(wal_g backup-list --detail --json | python3 -c '
 import datetime as dt, json, re, sys
 now = dt.datetime.now(dt.timezone.utc)
-cutoff = now - dt.timedelta(days=7, hours=1)
-rows = json.load(sys.stdin)
-candidates = []
-for row in rows:
-    name = row["backup_name"]
-    if not re.fullmatch(r"base_[0-9A-F]{24}", name):
-        sys.exit("Retention refuses unexpected or incremental backup names")
-    start = dt.datetime.fromisoformat(row["start_time"].replace("Z", "+00:00"))
-    finish = dt.datetime.fromisoformat(row["finish_time"].replace("Z", "+00:00"))
+cutoff, candidates = now - dt.timedelta(days=10, hours=1), []
+for row in json.load(sys.stdin):
+    if not re.fullmatch(r"base_[0-9A-F]{24}(_D_[0-9A-F]{24})?", row["backup_name"]):
+        sys.exit("Retention refuses unexpected backup names")
+    start, finish = (dt.datetime.fromisoformat(row[key].replace("Z", "+00:00")) for key in ("start_time", "finish_time"))
     if not start.tzinfo or not finish.tzinfo or not dt.datetime(2020,1,1,tzinfo=dt.timezone.utc) < start <= finish <= now:
         sys.exit("Retention refuses invalid backup times")
     if finish <= cutoff:
-        candidates.append((start, name))
+        candidates.append((start, row["backup_name"]))
 if candidates:
     print(max(candidates)[1])
 ') || die "could not choose a safe retention boundary"
-  [[ -n "$anchor" ]] || { printf 'No backup predates the seven-day window; nothing will be deleted.\n'; return; }
-  wal_g delete before "$anchor" --use-sentinel-time ${apply:+"$apply"}
+  [[ -n "$anchor" ]] || { printf 'No backup predates the ten-day window; nothing will be deleted.\n'; return; }
+  wal_g delete before FIND_FULL "$anchor" --use-sentinel-time ${apply:+"$apply"}
 }
 
 archive_retention_enabled() { [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]; }
@@ -1432,22 +1439,13 @@ history_prune() {
     "${RELEASE[PYTHON_IMAGE]}" prune-history --jobs-only --retention-hours 48 --max-jobs 1000 --apply
 }
 
-write_alert_intent() {
-  local temporary
-  temporary=$(mktemp "$STATE_DIR/alert-intent.XXXXXX")
-  chmod 600 "$temporary"
-  printf '%s\n' "$1" > "$temporary"
-  mv -f "$temporary" "$STATE_DIR/alert-intent"
-}
-
 alert_check() {
   [[ "$(current_prefix)" == clashlens ]] || die "alert-check is unavailable in fixture mode"
   validate_directory_ancestry "$STATE_DIR"
   load_kv_file "$ENV_FILE" CONFIG
-  python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" \
-    "$(setting CLASHLENS_DISCORD_ALERT_WEBHOOK_FILE "$(setting CLASHLENS_API_KEY_HOST_DIR /srv/clashlens-secrets)/clashlens-discord-alert-webhook")" \
+  python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" "$(alert_webhook_file)" \
     "$(setting CLASHLENS_HEALTH_PORT 8081)" "$(setting CLASHLENS_SPOOL_ROOT /srv/clashlens-data/spool)" \
-    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
+    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)" "$(setting CLASHLENS_PUBLIC_ORIGIN)"
 }
 
 command=${1:-}
@@ -1457,7 +1455,7 @@ case "$command" in
   build) acquire_mutation_lock; parse_mode "$@"; build_release ;;
   up)
     acquire_mutation_lock; up_args=()
-    for arg; do if [[ "$arg" == --restart-collector ]]; then RESTART_COLLECTOR=true; else up_args+=("$arg"); fi; done
+    for arg; do case "$arg" in --restart-collector) RESTART_COLLECTOR=true ;; --keep-collector) KEEP_COLLECTOR=true ;; *) up_args+=("$arg") ;; esac; done
     parse_mode "${up_args[@]}"; up_stack
     ;;
   down)

@@ -14,6 +14,7 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
     Claim,
     Database,
     _text_value,
@@ -56,10 +57,27 @@ def _refresh_reset_baseline_evidence(
     reset_settlement.refresh_for_observation(database, connection, claim.observation_id)
 
 
+# The Season whose Reset pairs a repair re-checks: the one named, or else the
+# latest confirmed one.
+_REPAIR_SEASON_SQL = """
+    SELECT to_timestamp(season_id::bigint) AS current_start,
+           season_id AS current_league_season_id
+    FROM (SELECT %s::text) AS selected (season_id)
+    WHERE season_id IS NOT NULL
+    UNION ALL
+    (SELECT current_start, current_league_season_id
+     FROM legend_season_anchors
+     WHERE %s::text IS NULL AND state = 'confirmed' AND anchor_rule_version = %s
+     ORDER BY current_start DESC
+     LIMIT 1)
+"""
+
+
 def repair_current_season_reset_baselines(
-    database: Database, *, max_works: int
+    database: Database, *, max_works: int, season_id: str | None = None
 ) -> dict[str, Any]:
-    """Re-check current-season Reset pairs left partial with both results saved.
+    """Re-check current-season Reset pairs left partial with both results saved,
+    or with ``season_id`` that Season's.
 
     Until profiles and battle logs were read under their own parser versions,
     every such pair stayed partial, so its Legend day was never finished.
@@ -77,6 +95,9 @@ def repair_current_season_reset_baselines(
     have been finished without it. Within the same batch limit, repairs of
     complete pairs that failed and left an ended day Live are queued again
     (counted as checked); ``failed_blockers`` lists those it cannot retry.
+    With ``season_id``, as a Season repair, every job runs at backfill
+    priority and a pair queues at most one, of that Season's days only;
+    failed repairs are left for an operator to retry.
     """
 
     only_no_opponent = ranked_day_inputs.only_no_opponent_gaps_sql(
@@ -86,13 +107,7 @@ def repair_current_season_reset_baselines(
         with connection.transaction():
             candidates = connection.execute(
                 f"""
-                WITH current_anchor AS (
-                    SELECT current_start, current_league_season_id
-                    FROM legend_season_anchors
-                    WHERE state = 'confirmed' AND anchor_rule_version = %s
-                    ORDER BY current_start DESC
-                    LIMIT 1
-                )
+                WITH current_anchor AS ({_REPAIR_SEASON_SQL})
                 SELECT work.profile_observation_id, (
                     SELECT outcome.parser_version
                     FROM observation_processing_outcomes AS outcome
@@ -167,6 +182,8 @@ def repair_current_season_reset_baselines(
                 LIMIT %s
                 """,
                 (
+                    season_id,
+                    season_id,
                     SEASON_ANCHOR_RULE_VERSION,
                     PROCESSING_VERSION,
                     PROCESSING_VERSION,
@@ -201,13 +218,17 @@ def repair_current_season_reset_baselines(
                     ends_day=bool(ends_day),
                     starts_ended_day=bool(starts_ended_day),
                     recalculate_season=_text_value(official_season_id),
+                    season_repair=season_id is not None,
                 )
             job_ids.extend(pair_job_ids)
             failure_reasons.update(reasons)
-        with connection.transaction():
-            recovered, failed_blockers = _recover_failed_reset_repairs(
-                connection, limit=max_works - len(candidates)
-            )
+        recovered: list[int] = []
+        failed_blockers: list[dict[str, Any]] = []
+        if season_id is None:
+            with connection.transaction():
+                recovered, failed_blockers = _recover_failed_reset_repairs(
+                    connection, limit=max_works - len(candidates)
+                )
     return {
         "job_ids": job_ids + recovered,
         "evaluated_count": len(candidates) + len(recovered),
@@ -513,6 +534,7 @@ def _evaluate_reset_baseline(
     starts_ended_day: bool = False,
     recalculate_season: str | None = None,
     work_id: int | None = None,
+    season_repair: bool = False,
 ) -> tuple[list[int], list[str]]:
     """Record Reset pair evidence and return queued job IDs and failure reasons.
 
@@ -708,6 +730,7 @@ def _evaluate_reset_baseline(
         ranked_day_start=day_starts[0],
         last_ranked_day_start=day_starts[-1],
         recalculate_season=recalculate_season,
+        season_repair=season_repair,
     )
     job_ids = [job_id] if job_id is not None else []
     # The ended Season's last day and the new Season's first were built at
@@ -716,9 +739,10 @@ def _evaluate_reset_baseline(
     # Season that finds the rule holds rebuilds them and every saved day
     # since, once per player: the newest saved results, always kept, then
     # show Day 1 starting by the Season rule and built on the ended day's
-    # newest result, which ends by it.
+    # newest result, which ends by it. A Season repair leaves the ended
+    # Season as it is and recalculates every day of its own Season anyway.
     opening = ranked_day_for(boundary_at - timedelta(days=1)).season_start
-    if ends_day:
+    if ends_day and not season_repair:
         opening_baseline = _load_reset_baseline(
             database, connection, int(player_id), opening, processing_version
         )
@@ -1052,21 +1076,12 @@ def _load_reset_endpoint_evidence(
                 reasons.append("profile_invalid")
                 hard_failure = True
             else:
-                first_event = connection.execute(
-                    """
-                    SELECT min(evidence.battle_timestamp)
-                    FROM battle_evidence AS evidence
-                    JOIN legend_battles AS battle
-                      ON battle.id = evidence.battle_id
-                    WHERE (
-                        battle.attacker_player_id = %s
-                        OR battle.defender_player_id = %s
-                    )
-                      AND evidence.battle_timestamp >= %s
-                      AND evidence.battle_timestamp < %s
-                    """,
-                    (player_id, player_id, *battle_window(boundary_at)),
-                ).fetchone()[0]
+                # Bounded by Legend day like the day's results, so it reads this
+                # player's battles, not every battle: 105 ms to 11 ms on 8 Oct.
+                window_start, window_end = battle_window(boundary_at)
+                first_event = ranked_day_inputs.load_first_reports(
+                    connection, player_id, window_start, window_start, window_end
+                )[1]
                 if first_event is not None and row[4] >= first_event:
                     reasons.append("profile_after_first_event")
                     hard_failure = True
@@ -1193,12 +1208,24 @@ def _load_reset_baseline(
     failure_reasons = row[11] if isinstance(row[11], list) else []
     # A Season's first Reset whose reading cannot give the start itself,
     # whatever the reason, starts the Season at 5,000 by the Season rule once
-    # the player has a Legend I profile for the new Season. The reading's
-    # trophies stay unused; the Reset is complete only once its battle log
-    # proves the day's battles from the Reset.
+    # the player has a Legend I profile for the new Season. So does any
+    # Reset read before the player signed up for the Season: a Legend I
+    # profile at 5,000 naming Season 0, as #YPG2LRYQ's at 05:00 on 6 October
+    # 2026 before it signed up at 05:19, when no profile read before it named
+    # the Season and no Legend battle of the Season came before it: the game
+    # also sends Season 0 to players already signed up. The
+    # reading's trophies stay unused; the Reset is complete only once its
+    # battle log proves the day's battles from the Reset.
+    before_sign_up = bool(
+        _text_value(row[25]) == "0"
+        and profile_eligible
+        and row[16] == SEASON_START_TROPHIES
+        and row[19] is not None
+        and not _season_rule_holds(connection, player_id, row[14], before=row[19])
+    )
     season_rule = bool(
         not reading_starts
-        and is_season_boundary(row[14])
+        and (is_season_boundary(row[14]) or before_sign_up)
         and _season_rule_holds(connection, player_id, row[14])
     )
     complete = complete or bool(
@@ -1277,10 +1304,14 @@ def _load_reset_baseline(
 
 
 def _season_rule_holds(
-    connection: Any, player_id: int, boundary_at: datetime
+    connection: Any, player_id: int, boundary_at: datetime,
+    *, before: datetime | None = None,
 ) -> bool:
     """Whether the player has an accepted Legend I profile naming the Season
-    that opens at ``boundary_at``."""
+    of the Legend day starting at ``boundary_at``. With ``before``, only a
+    profile read before it counts, or a Legend battle of that Season fought
+    before it."""
+    day = ranked_day_for(boundary_at)
     return bool(
         connection.execute(
             """
@@ -1289,13 +1320,26 @@ def _season_rule_holds(
                 FROM player_profile_versions AS profile
                 JOIN players AS player
                   ON player.normalized_tag = profile.normalized_tag
-                WHERE player.id = %s
-                  AND profile.current_league_season_id = %s
+                LEFT JOIN player_profile_effects AS effect
+                  ON effect.profile_version_id = profile.id
+                WHERE player.id = %(player)s
+                  AND profile.current_league_season_id = %(season)s
                   AND profile.eligibility_state = 'eligible'
                   AND profile.source_contract_state = 'accepted'
-            )
+                  AND (%(before)s::timestamptz IS NULL
+                       OR COALESCE(effect.observed_at, profile.observed_at)
+                          < %(before)s)
+            ) OR (%(before)s::timestamptz IS NOT NULL AND EXISTS (
+                SELECT 1 FROM battle_evidence AS evidence
+                JOIN legend_battles AS battle ON battle.id = evidence.battle_id
+                WHERE (battle.attacker_player_id = %(player)s
+                       OR battle.defender_player_id = %(player)s)
+                  AND battle.ranked_day_start >= %(season_start)s
+                  AND evidence.battle_timestamp < %(before)s
+            ))
             """,
-            (player_id, ranked_day_for(boundary_at).official_season_id),
+            {"player": player_id, "season": day.official_season_id,
+             "before": before, "season_start": day.season_start},
         ).fetchone()[0]
     )
 
@@ -1311,6 +1355,7 @@ def _enqueue_reset_reconciliation(
     last_ranked_day_start: datetime,
     recalculate_season: str | None,
     deduplication_key: str | None = None,
+    season_repair: bool = False,
 ) -> int | None:
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
@@ -1356,13 +1401,15 @@ def _enqueue_reset_reconciliation(
                         if recalculate_season is not None
                         else {}
                     ),
+                    **({"trigger": "season_repair"} if season_repair else {}),
                 }
             ),
             DEFAULT_PARSER_VERSION,
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
-            ended_day_priority(ranked_day_start),
+            PYTHON_BACKFILL_PRIORITY if season_repair
+            else ended_day_priority(ranked_day_start),
         ),
     ).fetchone()
     return int(row[0]) if row is not None else None

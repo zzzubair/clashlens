@@ -18,10 +18,12 @@ from clashlens.collector_db import (
 )
 from clashlens.collector_uploads import (
     NEXT_DUE_UPLOAD_SQL,
+    RELEASE_EXPIRED_UPLOADS_SQL,
     UploadLeaseLost,
     claim_upload,
     complete_upload,
     fail_upload,
+    release_expired_uploads,
     renew_upload,
 )
 
@@ -42,6 +44,11 @@ def upload_database(database_url: str) -> Iterator[str]:
                 ).format(sql.Literal(NOW))
             )
         yield connection_info
+
+
+def _kept_until(seen: datetime) -> datetime:
+    """A raw response is kept to the end of its sighting's UTC day, plus 86 days."""
+    return seen.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=87)
 
 
 def _hash(byte: str) -> str:
@@ -508,7 +515,7 @@ def test_late_upload_counts_86_days_from_its_latest_sighting(
                 """,
                 (response_hash,),
             ).fetchone()
-        assert row == (response_at + timedelta(days=86), uploaded_later)
+        assert row == (_kept_until(response_at), uploaded_later)
 
 
 def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
@@ -581,7 +588,7 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
                 (seen_next_season, upload_at, response_hash),
             ).fetchone()
         assert row is not None
-        assert row[0] == row[1] == seen_next_season + timedelta(days=86)
+        assert row[0] == row[1] == _kept_until(seen_next_season)
         assert row[0] != row[2]
 
 
@@ -853,11 +860,11 @@ def test_upload_never_reuses_a_tombstoned_legacy_location(
             ).fetchone()[0]
         if destination != reference:
             assert bound == destination
-            assert retire_after == NOW + timedelta(days=86)
+            assert retire_after == _kept_until(NOW)
             return
         if at_completion == "verified":
             assert bound == destination
-            assert retire_after == NOW + timedelta(days=86)
+            assert retire_after == _kept_until(NOW)
             return
         # Marked between claim and completion: never attached, uploaded again.
         assert bound is None
@@ -1081,6 +1088,97 @@ def test_claim_reads_only_the_next_due_row_in_a_production_sized_backlog(
         assert second.spool_key == "sha256/199992"
 
 
+def test_expired_leases_return_to_the_queue_without_reading_the_table(
+    database_url: str,
+) -> None:
+    # Production on 8 October 2026 held 2.93 million upload rows, and returning
+    # expired leases read all of them, about 1.1 GB, every 30 seconds.
+    with upload_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state,
+                    archive_reference, archive_instance_id, completed_at,
+                    lease_owner, lease_token, lease_expires_at
+                )
+                SELECT encode(sha256(n::text::bytea), 'hex'), 'sha256/' || n, 1,
+                       kind.state,
+                       CASE WHEN NOT kind.leased THEN 's3://evidence/' || n END,
+                       CASE WHEN NOT kind.leased THEN 'fixture-instance' END,
+                       CASE WHEN NOT kind.leased THEN %(now)s::timestamptz END,
+                       CASE WHEN kind.leased THEN 'uploader-a' END,
+                       CASE WHEN kind.leased THEN 'token-' || n END,
+                       CASE WHEN kind.leased
+                            THEN %(now)s::timestamptz
+                                 + (n %% 2 * 2 - 1) * interval '1 minute'
+                       END
+                FROM generate_series(1, 200000) AS n
+                CROSS JOIN LATERAL (
+                    SELECT n %% 5000 < 3 AS leased,
+                           CASE WHEN n %% 5000 < 3 THEN 'leased'
+                                ELSE 'complete' END AS state
+                ) AS kind
+                """,
+                {"now": NOW},
+            )
+            connection.execute("ANALYZE collector_response_uploads")
+            leased = connection.execute(
+                "SELECT count(*) FILTER (WHERE lease_expires_at <= %s), count(*)"
+                " FROM collector_response_uploads WHERE state = 'leased'",
+                (NOW,),
+            ).fetchone()
+        # 120 leases among 200,000 rows; 80 have run out.
+        assert leased == (80, 120)
+        with psycopg.connect(connection_info) as connection:
+            with connection.transaction(force_rollback=True):
+                plan = connection.execute(
+                    "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "
+                    + RELEASE_EXPIRED_UPLOADS_SQL,
+                    (NOW, 1000),
+                ).fetchone()[0][0]["Plan"]
+
+        def nodes(node: dict) -> list[dict]:
+            return [node, *(n for child in node.get("Plans", []) for n in nodes(child))]
+
+        uploads = [
+            node
+            for node in nodes(plan)
+            if node.get("Relation Name") == "collector_response_uploads"
+            and node["Node Type"] != "ModifyTable"
+        ]
+        # Leased rows are found through their own index, never by reading
+        # the table; only the expired rows' pages are read.
+        lookup = next(
+            node
+            for node in uploads
+            if node.get("Index Name") == "collector_response_uploads_lease_expiry"
+        )
+        assert all(node["Node Type"] != "Seq Scan" for node in uploads), plan
+        assert lookup["Shared Hit Blocks"] + lookup["Shared Read Blocks"] < 200
+
+        database = CollectorDatabase(connection_info)
+        # A pass returns a bounded batch; the next pass takes the rest.
+        assert release_expired_uploads(database, limit=50, now=NOW) == 50
+        assert release_expired_uploads(database, limit=50, now=NOW) == 30
+        assert release_expired_uploads(database, limit=50, now=NOW) == 0
+        released = claim_upload(database, owner="uploader-b", now=NOW)
+        assert released is not None
+        with psycopg.connect(connection_info) as connection:
+            states = connection.execute(
+                "SELECT state, lease_owner, count(*) FROM collector_response_uploads"
+                " WHERE lease_token IS NOT NULL OR state = 'pending'"
+                " GROUP BY state, lease_owner ORDER BY state, lease_owner"
+            ).fetchall()
+        # Leases still running are untouched.
+        assert states == [
+            ("leased", "uploader-a", 40),
+            ("leased", "uploader-b", 1),
+            ("pending", None, 79),
+        ]
+
+
 def _rescans_a_table(plan: dict) -> bool:
     children = plan.get("Plans", [])
     if plan["Node Type"] == "Nested Loop" and _scans_a_table(children[1]):
@@ -1170,6 +1268,52 @@ def test_spool_reference_read_ignores_stale_statistics(database_url: str) -> Non
 
     assert not _rescans_a_table(plan), plan
     assert referenced == kept
+
+
+def test_spool_reference_read_reads_kept_copies_not_the_whole_table(
+    database_url: str,
+) -> None:
+    # 7 October 2026: production's upload table held 2.64 million rows (1 GB)
+    # and the read scanned all of them to find the few thousand kept copies.
+    with upload_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state,
+                    archive_reference, archive_instance_id, completed_at,
+                    local_deleted_at
+                )
+                SELECT encode(sha256(n::text::bytea), 'hex'), 'sha256/' || n, 1,
+                       'complete', 's3://evidence/' || n, 'fixture-instance',
+                       %(now)s, CASE WHEN n <= 198000 THEN %(now)s::timestamptz END
+                FROM generate_series(1, 200000) AS n
+                """,
+                {"now": NOW},
+            )
+            connection.execute("ANALYZE collector_response_uploads")
+            table_pages = connection.execute(
+                "SELECT relpages FROM pg_class"
+                " WHERE relname = 'collector_response_uploads'"
+            ).fetchone()[0]
+            plan = connection.execute(
+                "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + REFERENCED_SPOOL_HASHES_SQL
+            ).fetchone()[0][0]["Plan"]
+
+    scan = _upload_table_scan(plan)
+    assert scan is not None, plan
+    assert scan["Actual Rows"] == 2000, scan
+    assert scan["Shared Hit Blocks"] + scan["Shared Read Blocks"] < table_pages / 20
+
+
+def _upload_table_scan(plan: dict) -> dict | None:
+    if plan.get("Relation Name") == "collector_response_uploads":
+        return plan
+    for child in plan.get("Plans", []):
+        if (found := _upload_table_scan(child)) is not None:
+            return found
+    return None
 
 
 def test_cleanup_batch_flushes_its_removals_together(database_url: str) -> None:
