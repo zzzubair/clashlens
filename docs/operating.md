@@ -732,17 +732,19 @@ The receipt is kept per Season and rule revision, so the same revision is
 repaired once.
 
 **Known limits of refresh triggers:** these cases queue no recalculation of
-their own. A corrected battle report whose value already appeared in an older
-report of the same battle is taken as repeated. A profile read before the
-latest Reset is not covered by a later unchanged battle-log check, so after
-failed calculations leave an older newest saved day, that reading waits. A
-second late battle after a recalculation that left the day unchanged is
-missed when its report repeats an older value. A corrected battle's own day
-for the other player is queued only through that player's saved day, not
-through their newest ended day. A refresh that needs the day's saved end
-reading is skipped while that reading is missing. In every case the 07:00
-day-end recheck of each day of the Reset and the twice-daily recheck of each
-player's last two ended days judge the day again within a day.
+their own. A battle report is compared with that side's report before it, in
+time, length, stars, destruction and trophies, so one repeating it exactly
+queues nothing. A profile read before the latest Reset is not covered by a
+later unchanged battle-log check, so after failed calculations leave an older
+newest saved day, that reading waits. A corrected battle's own day for the
+other player is queued only through that player's saved day, not through
+their newest ended day. A refresh that needs the day's saved end reading is
+skipped while that reading is missing. A report or reading of the previous
+Season's days queues them only until 7 days after that Season ended, when it
+stops taking corrections. The 07:00 day-end recheck of each day of the Reset
+and the twice-daily recheck of each player's last two ended days judge those
+days again within a day; an older day waits for the 05:30 late-battle check,
+which looks back 7 days, or a Season repair.
 
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)

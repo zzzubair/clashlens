@@ -22,11 +22,6 @@ MAX_DAILY_DEFENSES = 8
 BATTLE_LOG_MAX_ROWS = 50
 # Trophy values are integer source values. There is no rounding allowance.
 TROPHY_RECONCILIATION_TOLERANCE = 0
-# A defense reaches the profile about 2 minutes after it starts (90% within
-# 3.4) and an attacker's own attack about 4 minutes after its report time,
-# measured on 7 October 2026, so a Reset reading can miss a battle that
-# landed shortly before it.
-RESET_READING_BATTLE_LAG = timedelta(minutes=10)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,8 +110,10 @@ class PreviousRankedDay:
     # ``ReconciliationInput``).
     zero_result_defense_slots: int = 0
     # How far a later reading settled that day's end Reset reading, which
-    # the game had not finished crediting (see ``later_next_start_reading``).
+    # the game had not finished crediting, and that day's automatic loss,
+    # which may land after this day's first readings.
     reset_reading_correction: int = 0
+    automatic_loss: int = 0
     # That day's calculated end, after any weekly or Season reset, when its
     # battles and automatic loss are known: the next day's start when its
     # Reset reading cannot give one (see ``recalculate_ranked_day``).
@@ -173,20 +170,14 @@ class ReconciliationInput:
     # charges the automatic defense loss.
     zero_result_attack_slots: int = 0
     zero_result_defense_slots: int = 0
-    # The last accepted, eligible profile naming the day's Season read after
-    # the end Reset reading and before the player's first battle of the next
-    # day, by either player's report, as (read at, trophies). Loaded only for
-    # a day the end reading does not reconcile, one with no used defense
-    # slots it shows uncharged, or one settled by battles the end reading
-    # missed (see ``reads_later_reading``).
-    later_next_start_reading: tuple[datetime, int] | None = None
-    # Every other profile read from the end Reset to the next that can judge
-    # the day's end (``reading_rule``), the new day's battles, the earliest
-    # report of one by either player, and from when an unreadable battle
-    # row leaves no reading, the Reset pair's own included, usable.
+    # Every other profile read from the day's start Reset to the next Reset
+    # after its end that can judge it (``reading_rule``), the new day's
+    # battles, the earliest report of a new-day battle only the opponent has
+    # reported, and from when an unreadable battle row leaves no reading,
+    # the Reset pair's own included, usable.
     readings: tuple[reading_rule.Reading, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
-    first_new_day_report: datetime | None = None
+    first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
 
     def __post_init__(self) -> None:
@@ -439,7 +430,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 new_day_effects=_effects(
                     _deduplicate_contributions(data.new_day_contributions)[0]
                 ),
-                new_day_from=data.first_new_day_report,
+                unknown_from=data.first_unshown_report,
                 start_proven=start_proven,
             )
             if ended
@@ -511,8 +502,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 "outcome": verdict.outcome,
                 "exact": verdict.exact,
                 "new_day_change": verdict.new_day_change,
-                "earlier_contradictions": verdict.earlier_contradictions,
+                "clean": verdict.clean,
                 **({"residual": verdict.residual} if verdict.residual is not None else {}),
+                **({"lagged_credits": list(verdict.lagged)} if verdict.lagged else {}),
             }
         if next_start_trophies is not None:
             observed_boundary_adjustment = next_start_trophies - final_trophies
@@ -525,6 +517,18 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         ):
             # The readings isolate the calculated settlement loss.
             automatic_state = "confirmed"
+    # A reading during the day must show its start plus the battles landed by then.
+    during = reading_rule.contradiction_during_day(
+        data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
+        start=start_trophies, day_effects=_effects(contributions),
+        pending_loss=data.previous_day.automatic_loss if data.previous_day else 0,
+    ) if ended and coverage_complete and start_trophies is not None and start_available and not (
+        malformed_evidence or inconsistent_evidence) else None
+    if during is not None and during.reading is not None:
+        failures.append("trophy_equation_mismatch")
+        end_reading_evidence = {**(end_reading_evidence or {}), "during_day": {
+            "read_at": during.reading.read_at.isoformat(),
+            "trophies": during.reading.trophies, "residual": during.residual}}
 
     if not day_totals_supported(
         coverage_complete, attack_count, defense_count, failures
@@ -642,8 +646,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     if state in {"Inconsistent", "Malformed"} or shield_state == "unknown":
         confidence = "uncertain"
     if state == "Complete" and (
-        shield_state == "inferred_shielded"
-        or end_hidden_by_reset
+        end_hidden_by_reset
         # A start from the day before's end is a calculation. One from the
         # Season rule is the game's own rule, so it is known exactly.
         or chain_start
@@ -1194,8 +1197,6 @@ def _readings(data: ReconciliationInput) -> tuple[reading_rule.Reading, ...]:
     if data.next_start_trophies is not None and (
             data.unreadable_from is None or read_at < data.unreadable_from):
         readings.append(reading_rule.Reading(read_at, data.next_start_trophies, reset_reading=True))
-    if data.later_next_start_reading is not None:
-        readings.append(reading_rule.Reading(*data.later_next_start_reading))
     return tuple(readings)
 
 
@@ -1207,9 +1208,9 @@ def _effects(
     report plus its length. A battle with no report time is taken as shown."""
     effects = []
     for battle in contributions:
-        if battle.battle_timestamp is None or battle.amount is None:
+        if battle.amount is None:
             continue
-        lands_from = battle.battle_timestamp
+        lands_from = battle.battle_timestamp or datetime.min.replace(tzinfo=UTC)
         if battle.lens == "defense":
             lands_from += timedelta(seconds=battle.battle_seconds or 0)
         effects.append(reading_rule.Effect(
@@ -1436,11 +1437,8 @@ def _input_evidence(
            if data.zero_result_attack_slots else {}),
         **({"zero_result_defense_slots": data.zero_result_defense_slots}
            if data.zero_result_defense_slots else {}),
-        **({"later_next_start_reading": {
-            "read_at": data.later_next_start_reading[0].isoformat(),
-            "trophies": data.later_next_start_reading[1],
-        }} if data.later_next_start_reading is not None else {}),
-        # The reading that judged the day's end, only when one did.
+        # The reading that judged the day's end, or one during the day that
+        # contradicted it, only when one did.
         **({"end_reading": end_reading} if end_reading is not None else {}),
         "perspective_disagreement": data.perspective_disagreement,
         "malformed_evidence": data.malformed_evidence,

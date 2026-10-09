@@ -357,7 +357,8 @@ def load_previous_day(
             COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
             COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0),
             expected_next_start_trophies,
-            failure_reasons
+            failure_reasons,
+            COALESCE(automatic_defense_loss, 0)
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -417,6 +418,7 @@ def load_previous_day(
             unsettled_automatic_loss=int(previous_row[10]),
             zero_result_defense_slots=int(previous_row[11]),
             reset_reading_correction=int(previous_row[12]),
+            automatic_loss=int(previous_row[15]),
             expected_next_start=(
                 int(previous_row[13])
                 if end_known and previous_row[13] is not None
@@ -722,10 +724,10 @@ def load_readings(
     *, reset_profile_observation_id: int | None,
     end_battle_log_observation_id: int | None,
 ) -> tuple[tuple[reading_rule.Reading, ...], datetime | None]:
-    """Every profile of this player read between the day's end Reset and the
-    next, other than the Reset pair's own, ``reset_profile_observation_id``,
-    which the day reads as its Reset reading, that can judge the day's end
-    (``reading_rule``): one accepted,
+    """Every profile of this player read between the day's start Reset and
+    the next Reset after its end, other than the end Reset pair's own,
+    ``reset_profile_observation_id``, which the day reads as its Reset
+    reading, that can judge the day (``reading_rule``): one accepted,
     eligible and naming the day's Season, or a Legend I profile naming
     Season 0, which can only confirm. A reading can contradict only while
     the player's battle logs from the day's end Reset log on are continuous
@@ -793,7 +795,7 @@ def load_readings(
         ORDER BY observed.response_completed_at
         """,
         {"processing": PROCESSING_VERSION, "player": player_id,
-         "after": ranked_day.end, "reset": reset_profile_observation_id,
+         "after": ranked_day.start, "reset": reset_profile_observation_id,
          "until": min([until, *unreadable]),
          "season": ranked_day.official_season_id},
     ).fetchall()
@@ -805,6 +807,29 @@ def load_readings(
         for at, trophies, accepted in rows
         if trophies is not None
     ), min(unreadable, default=None)
+
+
+def load_first_unshown_report(
+    connection: Any, player_id: int, since: datetime, until: datetime
+) -> datetime | None:
+    """The earliest report from ``since`` to ``until`` of a battle of this
+    player that only the opponent has reported so far: a profile read after
+    it may show a battle the player's own logs do not hold yet."""
+    return connection.execute(
+        """
+        SELECT min(evidence.battle_timestamp)
+        FROM legend_battles AS battle
+        JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
+        WHERE (battle.attacker_player_id = %(player)s OR battle.defender_player_id = %(player)s)
+          AND battle.ranked_day_start > %(since)s - interval '2 days'
+          AND battle.ranked_day_start < %(until)s
+          AND evidence.battle_timestamp >= %(since)s
+          AND evidence.battle_timestamp < %(until)s
+          AND NOT EXISTS (SELECT 1 FROM battle_evidence AS own
+              WHERE own.battle_id = battle.id AND own.reporting_player_id = %(player)s)
+        """,
+        {"since": since, "player": player_id, "until": until},
+    ).fetchone()[0]
 
 
 def load_first_reports(

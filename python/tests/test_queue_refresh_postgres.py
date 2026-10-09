@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 from domain_test_support import domain_database, store_observation
@@ -14,10 +14,14 @@ from test_reconciliation_postgres import _profile
 from test_reset_reading_before_loss_postgres import DAY_B, DAY_C, DAY_D
 from test_reset_settlement_state_postgres import TAG, _process, _reset_work
 
-from clashlens import reconciliation_db
+from clashlens import queue_refresh, reconciliation_db
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
-from clashlens.reconciliation import DISPUTED_BATTLE_REASONS
+from clashlens.domain import ranked_day_for
+from clashlens.reconciliation import (
+    DISPUTED_BATTLE_REASONS,
+    RECONCILIATION_RULE_VERSION,
+)
 
 
 def _queued(connection_info: str, prefix: str) -> list[tuple[str, str]]:
@@ -272,9 +276,10 @@ def test_one_new_battle_in_a_full_log_queues_only_its_two_players(
 
 
 def test_unchanged_full_log_check_covers_nothing(database_url: str, archive_server) -> None:
-    # Day B's Reset reading is rejected. A later full 50-row log of another
-    # mode has the short Reset log's fingerprint, so it is recorded unchanged,
-    # yet it can hide a new-day battle: a 05:40 reading 40 more stays unjudged.
+    # Day B's Reset reading names Season 0: it confirms day B but cannot
+    # start day C. A later full 50-row log of another mode has the short Reset
+    # log's fingerprint, so it is recorded unchanged, yet it can hide a
+    # new-day battle: a 05:40 reading 40 more cannot contradict day B.
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
@@ -328,4 +333,102 @@ def test_unchanged_full_log_check_covers_nothing(database_url: str, archive_serv
 
     assert unchanged.observation_id is None
     assert queued == [(str(player_id), f"{DAY_B:%Y-%m-%dT%H:%M:%SZ}")]
-    assert day[0] == "Partial" and "trophy_equation_mismatch" not in day[2]
+    assert day[0] == "Complete" and "trophy_equation_mismatch" not in day[2]
+
+
+def test_a_report_changed_back_queues_its_days_again(
+    database_url: str, archive_server
+) -> None:
+    # Day C's attack is reported at 3 stars and 100%, then 2 stars and 60%,
+    # then 3 stars and 100% again: each change from the report before it
+    # queues day C and day B, the change back included.
+    day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
+    attack = json.loads(_log((DAY_C + timedelta(hours=1), True)))["items"][0]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(5680),
+            log=_log(*day_b),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D, profile=_profile(5720),
+            log=json.dumps({"items": [attack]}).encode(),
+        )
+        _process(connection_info, archive_server, jobs)
+        queued = []
+        for minutes, stars, destruction in ((60, 2, 60), (70, 3, 100)):
+            observation_id, log_job = store_observation(
+                connection_info, archive_server, occurrence_key=f"log-{minutes}",
+                endpoint="battle_log", body=json.dumps({"items": [
+                    {**attack, "stars": stars, "destructionPercentage": destruction}
+                ]}).encode(),
+                observed_at=DAY_D + timedelta(minutes=minutes), normalized_tag=TAG,
+            )
+            _process(connection_info, archive_server, [log_job])
+            queued.append(len(_queued(connection_info, f"reconcile:report:{observation_id}:")))
+
+    assert queued == [2, 2]
+
+
+def test_a_late_report_queues_the_previous_seasons_days_for_a_week(
+    database_url: str,
+) -> None:
+    # A report of the previous Season's last day, saved 2 days into the new
+    # Season, queues that day; saved 8 days in, when the previous Season no
+    # longer takes corrections, it queues nothing.
+    season_start = datetime(2026, 8, 10, 5, tzinfo=UTC)
+    last_day = season_start - timedelta(days=1)
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            player, opponent = [row[0] for row in connection.execute(
+                "INSERT INTO players (normalized_tag) VALUES ('#2PP'), ('#8QV') RETURNING id"
+            ).fetchall()]
+            connection.execute(
+                """
+                INSERT INTO ranked_day_versions (
+                    player_id, ranked_day_start, ranked_day_end, official_season_id,
+                    season_day_number, season_anchor_rule_version,
+                    reconciliation_rule_version, input_hash, result_hash, version,
+                    state, confidence
+                ) VALUES (%s, %s, %s, %s, 28, 'test', %s, repeat('a', 64),
+                          repeat('b', 64), 1, 'Complete', 'exact')
+                """,
+                (player, last_day, season_start,
+                 ranked_day_for(last_day).official_season_id, RECONCILIATION_RULE_VERSION),
+            )
+            for observation_id in (101, 102):
+                connection.execute(
+                    """
+                    WITH battle AS (
+                        INSERT INTO legend_battles (ranked_day_start, attacker_player_id,
+                                                    defender_player_id)
+                        VALUES (%(day)s, %(player)s, %(opponent)s)
+                        ON CONFLICT (ranked_day_start, attacker_player_id, defender_player_id)
+                        DO UPDATE SET updated_at = clock_timestamp()
+                        RETURNING id
+                    )
+                    INSERT INTO battle_evidence (
+                        battle_id, source_row_id, observation_id, reporting_player_id,
+                        perspective, battle_timestamp, stars, destruction_percentage,
+                        army_share_code, attacker_gain, defender_loss,
+                        trophy_rule_version, source_observed_at, parser_version
+                    )
+                    SELECT id, -%(observation)s, %(observation)s, %(player)s, 'attacker',
+                           %(at)s, 3, 100 - %(observation)s + 101, '', 40, 40, 'test',
+                           %(at)s, 'test'
+                    FROM battle
+                    """,
+                    {"day": last_day, "player": player, "opponent": opponent,
+                     "observation": observation_id, "at": last_day + timedelta(hours=3)},
+                )
+            for observation_id, days_in in ((101, 2), (102, 8)):
+                queue_refresh.queue_for_battles(
+                    connection, observation_id, (), season_start + timedelta(days=days_in)
+                )
+        queued = [len(_queued(connection_info, f"reconcile:report:{observation_id}:"))
+                  for observation_id in (101, 102)]
+
+    assert queued == [1, 0]

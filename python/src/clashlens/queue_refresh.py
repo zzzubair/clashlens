@@ -1,7 +1,9 @@
-"""New evidence for a player queues each ended day of the current Season it
-can change, keyed by the evidence and the day: a pending repeat is merged, a
-finished one never holds it back. A recheck of every active player's last two
-ended days twice a day catches anything else."""
+"""New evidence for a player queues each ended day it can change, of the
+current Season or, for a week after its end while it still takes
+corrections, the Season before, keyed by the evidence and the day: a
+pending repeat is merged, a finished one never holds it back. A recheck of
+every active player's last two ended days twice a day catches anything
+else."""
 
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from psycopg.types.json import Jsonb
 from . import db, domain
 from .first_battle_log import _queue
 from .reconciliation import RECONCILIATION_RULE_VERSION
+from .season_retirement import SEASON_CLOSE_WAIT
 
 EVIDENCE_REFRESH_WINDOW = timedelta(days=7)
 CHECK_INTERVAL_SECONDS = 600
@@ -24,6 +27,16 @@ _VERSIONS = {
     "domain": db.DOMAIN_RULE_VERSION, "analytics": db.ANALYTICS_RULE_VERSION,
     "priority": db.PYTHON_BACKFILL_PRIORITY, "rule": RECONCILIATION_RULE_VERSION,
 }
+
+
+def _seasons(at: datetime) -> dict[str, str | None]:
+    """The Seasons whose days evidence seen at ``at`` may change: the current
+    one, and the one before until ``SEASON_CLOSE_WAIT`` after it ended, when
+    its corrections stop."""
+    season_start = domain.ranked_day_for(at).season_start
+    previous = domain.ranked_day_for(season_start - timedelta(days=1)).official_season_id
+    return {"season": domain.ranked_day_for(at).official_season_id,
+            "previous": previous if at < season_start + SEASON_CLOSE_WAIT else None}
 
 
 def _day_text(day_start: datetime) -> str:
@@ -41,12 +54,12 @@ def queue_for_reading(connection: Any, player_id: int, evidence: str, at: dateti
         """
         SELECT ranked_day_start FROM ranked_day_versions
         WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
-          AND official_season_id = %(season)s
+          AND official_season_id IN (%(season)s, %(previous)s)
           AND ranked_day_end <= %(at)s AND ranked_day_end > %(at)s - %(window)s
         ORDER BY ranked_day_start DESC LIMIT 1
         """,
         {**_VERSIONS, "player": player_id, "at": at, "window": EVIDENCE_REFRESH_WINDOW,
-         "season": domain.ranked_day_for(at).official_season_id},
+         **_seasons(at)},
     ).fetchone()
     if row is not None:
         _queue_day(connection, player_id, row[0], f"reconcile:{evidence}:{player_id}")
@@ -87,21 +100,35 @@ def queue_for_check(connection: Any, check: Any) -> None:
 
 def queue_for_battles(connection: Any, observation_id: int, corrected_ids: Iterable[int],
                       at: datetime) -> None:
-    """Each battle whose report log ``observation_id`` added or changed, not
-    repeated, or whose agreement it corrected: recalculate its ended day and
+    """Each battle whose report log ``observation_id`` added, or changed from
+    that side's report before it, in time, length, stars, destruction or
+    trophies, or whose agreement it corrected: recalculate its ended day and
     the day before, which reads its battles, for both players."""
     rows = connection.execute(
         """
         WITH changed AS (
             SELECT evidence.battle_id FROM battle_evidence AS evidence
+            LEFT JOIN battle_source_rows AS source ON source.id = evidence.source_row_id
+            LEFT JOIN LATERAL (
+                SELECT earlier.battle_timestamp, earlier.stars, earlier.destruction_percentage,
+                       earlier.attacker_gain, earlier.defender_loss,
+                       earlier_source.source_json ->> 'battleTime' AS battle_time
+                FROM battle_evidence AS earlier
+                LEFT JOIN battle_source_rows AS earlier_source
+                  ON earlier_source.id = earlier.source_row_id
+                WHERE earlier.battle_id = evidence.battle_id
+                  AND earlier.perspective = evidence.perspective
+                  AND earlier.id < evidence.id
+                ORDER BY earlier.id DESC LIMIT 1
+            ) AS before ON true
             WHERE evidence.observation_id = %(observation)s AND evidence.battle_id IS NOT NULL
-              AND NOT EXISTS (SELECT 1 FROM battle_evidence AS earlier
-                  WHERE earlier.battle_id = evidence.battle_id
-                    AND earlier.perspective = evidence.perspective
-                    AND earlier.id < evidence.id
-                    AND earlier.battle_timestamp = evidence.battle_timestamp
-                    AND (earlier.stars, earlier.destruction_percentage)
-                        = (evidence.stars, evidence.destruction_percentage))
+              AND (before.stars IS NULL
+                   OR (before.battle_timestamp, before.stars, before.destruction_percentage,
+                       before.attacker_gain, before.defender_loss)
+                      <> (evidence.battle_timestamp, evidence.stars,
+                          evidence.destruction_percentage, evidence.attacker_gain,
+                          evidence.defender_loss)
+                   OR before.battle_time IS DISTINCT FROM source.source_json ->> 'battleTime')
             UNION SELECT unnest(%(corrected)s::bigint[])
         )
         SELECT DISTINCT day.player_id, day.ranked_day_start FROM changed
@@ -111,10 +138,11 @@ def queue_for_battles(connection: Any, observation_id: int, corrected_ids: Itera
          AND day.ranked_day_start IN (battle.ranked_day_start,
                                       battle.ranked_day_start - interval '1 day')
         WHERE day.reconciliation_rule_version = %(rule)s
-          AND day.official_season_id = %(season)s AND day.ranked_day_end <= %(at)s
+          AND day.official_season_id IN (%(season)s, %(previous)s)
+          AND day.ranked_day_end <= %(at)s
         """,
         {**_VERSIONS, "observation": observation_id, "corrected": sorted(corrected_ids),
-         "season": domain.ranked_day_for(at).official_season_id, "at": at},
+         "at": at, **_seasons(at)},
     ).fetchall()
     for player_id, day_start in rows:
         _queue_day(connection, int(player_id), day_start,

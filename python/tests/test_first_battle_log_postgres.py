@@ -341,8 +341,9 @@ def test_day_1_saved_with_the_previous_season_average_is_recalculated_once(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         # Day 1 joiners: one with a single defense, one with none.
         ending = 5000 + 2 * WIN - LOSS - automatic
+        # Read at 13:00, before the Reset's automatic loss.
         jobs = _first_seen(connection_info, archive_server, DAY_1 + timedelta(hours=8),
-                           profile=_new_season_profile(ending),
+                           profile=_new_season_profile(ending + automatic),
                            log=_log(*ATTACKS, *DEFENSE, filler=older))
         jobs += _reset_work(connection_info, archive_server, DAY_2,
                             profile=_new_season_profile(ending),
@@ -477,8 +478,8 @@ def test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end(
     # Day 1: 2 wins and 1 loss, charged (2 - 1) missing defenses at the loss.
     end_1 = 5000 + 2 * WIN - LOSS - LOSS
     # Day 2: 1 win and 1 loss, charged 7 missing defenses at the two days'
-    # average loss, which needs Day 1's defenses even though Day 1 has no
-    # usable end reading.
+    # average loss, which needs Day 1's defenses. Day 1's Reset reading names
+    # Season 0: it cannot start Day 2, but its trophies confirm Day 1's end.
     end_2 = end_1 + WIN - LOSS - 7 * ((LOSS + LOSS) // 2)
     log_1 = _log(*ATTACKS, *DEFENSE, filler=filler)
     log_2 = _log(*ATTACKS, *DEFENSE, *day_2_battles, filler=filler)
@@ -498,8 +499,8 @@ def test_day_whose_reset_reading_is_rejected_starts_from_the_previous_days_end(
         _process(connection_info, archive_server, jobs)
         day_1 = _day_1(connection_info)
         day_2 = _day(connection_info, DAY_2)
-    assert day_1[0] == "Partial"
-    assert day_1[3] == end_1 and day_1[5] == ["missing_end_baseline"]
+    assert day_1[:2] == ("Complete", "exact")
+    assert day_1[3] == end_1 and day_1[5] == []
     assert day_2[:2] == ("Complete", "inferred")
     assert day_2[2] == end_1 and day_2[6] == "previous_day_end"
     assert day_2[3] == end_2

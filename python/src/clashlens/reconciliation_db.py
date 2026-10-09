@@ -416,12 +416,11 @@ def recalculate_ranked_day(
     perspective_disagreement = any(
         contribution.disagreement for contribution in contributions
     )
-    # Once the day has ended, every reading from its end Reset on judges it
-    # (reading_rule), and the new day's battles say what each reading
-    # already showed.
+    # Once the day has ended, every reading of it judges it (reading_rule),
+    # and the new day's battles say what each reading already showed.
     readings: tuple[reading_rule.Reading, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
-    first_new_day_report: datetime | None = None
+    first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
     if now >= ranked_day.end:
         readings, unreadable_from = ranked_day_inputs.load_readings(
@@ -436,10 +435,9 @@ def recalculate_ranked_day(
         new_day_contributions = ranked_day_inputs.load_contributions(
             connection, player_id, ranked_day_for(ranked_day.end)
         )
-        new_day_start, new_day_end = domain.battle_window(ranked_day.end)
-        first_new_day_report = ranked_day_inputs.load_first_reports(
-            connection, player_id, new_day_start, new_day_start, new_day_end
-        )[1]
+        first_unshown_report = ranked_day_inputs.load_first_unshown_report(
+            connection, player_id, *domain.battle_window(ranked_day.end)
+        )
     data = ReconciliationInput(
         ranked_day=ranked_day,
         now=now,
@@ -510,7 +508,7 @@ def recalculate_ranked_day(
         zero_result_defense_slots=zero_result_defenses,
         readings=readings,
         new_day_contributions=new_day_contributions,
-        first_new_day_report=first_new_day_report,
+        first_unshown_report=first_unshown_report,
         unreadable_from=unreadable_from,
     )
     result = reconcile_ranked_day(data)

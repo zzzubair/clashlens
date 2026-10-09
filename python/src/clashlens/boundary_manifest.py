@@ -694,9 +694,12 @@ def reset_trophies(
     ``boundary_at``, their reading's saved response, its time and its
     trophies. A Complete day already gives the total: its Reset readings at
     both ends and every battle between agree, so its end plus its automatic
-    loss is the total whatever the reading shows. It proves it only with
-    exact confidence: a day started by the day before's calculated end, or
-    read before its loss, has a part no reading matched. An attacker's profile can
+    loss is the total whatever the reading shows. It proves it with exact
+    confidence, or when a reading from its end Reset on matched it with
+    every battle landed and none in flight, even before the automatic loss
+    landed: that reading shows the total itself. A day started by the day
+    before's calculated end, or read before its loss, otherwise has a part
+    no reading matched. An attacker's profile can
     show an attack minutes after its report time: on 7 October 2026
     #2QCYU8C2G read 4,703 at 04:37:05 without its attack stamped 04:34:08,
     and the board showed 4,902, not 4,931. A Reset that resets trophies
@@ -722,6 +725,7 @@ def reset_trophies(
         for row in connection.execute(
             """
             SELECT reading.player_id, ranked.state, ranked.confidence,
+                   ranked.input_evidence -> 'end_reading' ->> 'clean' = 'true',
                    ranked.final_trophies_before_reset,
                    ranked.automatic_defense_loss,
                    ranked.input_evidence->>'boundary_kind',
@@ -790,8 +794,8 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
     if day is None:
         return reading, False
     (
-        state, confidence, final, automatic_loss, boundary_kind, battles_proven,
-        after_reading,
+        state, confidence, read_clean, final, automatic_loss, boundary_kind,
+        battles_proven, after_reading,
     ) = day
     total = reading + int(after_reading) if battles_proven else None
     if _text_value(state) == "Complete" and final is not None:
@@ -803,7 +807,7 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
             _text_value(boundary_kind) == "weekly" and int(final) <= 5000
         )
         if not end_reset or total == settled:
-            return settled, _text_value(confidence) == "exact"
+            return settled, _text_value(confidence) == "exact" or bool(read_clean)
     return (reading if total is None else total), False
 
 
