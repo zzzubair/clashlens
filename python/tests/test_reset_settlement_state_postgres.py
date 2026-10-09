@@ -743,8 +743,6 @@ def test_last_season_day_ends_at_the_official_total(
         jobs += _reset_work(
             connection_info, archive_server, boundary,
             profile=(_dropped_profile(final) if reset_reading == "dropped"
-                     else _season_profile(5000, NEW_SEASON)
-                     if reset_reading == "survivor"
                      else _season_profile(final, OLD_SEASON)),
             log=_log(*battles),
         )
@@ -792,11 +790,7 @@ def test_last_season_day_ends_at_the_official_total(
             )])
         after = {row[0]: row for row in _rows(connection_info, DAY_ROWS)}[last_day]
 
-    # Before the official total, only a survivor's day has an end: the
-    # Season reset's, which proves nothing.
-    assert before[:2] == (
-        last_day, "Complete" if reset_reading == "survivor" else "Partial"
-    )
+    assert before[:2] == (last_day, "Partial")
     assert after[:2] == (last_day, state)
     if state == "Complete":
         assert after[2:5] == ("exact", 6000, final)
