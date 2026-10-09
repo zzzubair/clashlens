@@ -272,10 +272,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 // The log keeps only the current Season's days at the server time, numbered
 // from its start; an ended Season's days are under that Season in Seasons.
-// A finished day's end-of-day trophies: its start plus its trophy change and
-// any weekly or Season reset at its closing Reset, which is the next day's
-// start. Without its own change the next day's start stands in; a next start
-// that disagrees makes the end Uncertain.
+// A finished day's end-of-day trophies: the next day's start. Without one,
+// the day's start plus its trophy change and any weekly or Season reset at
+// its closing Reset stands in. When both exist and disagree the end is
+// Uncertain and the conflict names both.
 export function dayEnd(day: RankedDaySummary, next?: RankedDaySummary | null) {
   const own =
     day.startTrophies != null && day.trophyChange !== null
@@ -286,11 +286,14 @@ export function dayEnd(day: RankedDaySummary, next?: RankedDaySummary | null) {
     Date.parse(next.period.split(" – ")[0]) === Date.parse(day.period.split(" – ")[1])
       ? (next.startTrophies ?? null)
       : null;
-  const status = presentDay(dayEvidence(day), false).status;
+  const conflict =
+    own !== null && following !== null && own !== following
+      ? { calculated: own, next: following }
+      : null;
   return {
-    trophies: own ?? following,
-    status:
-      own !== null && following !== null && own !== following ? "Uncertain" : status,
+    trophies: following ?? own,
+    status: conflict ? "Uncertain" : presentDay(dayEvidence(day), false).status,
+    conflict,
   };
 }
 

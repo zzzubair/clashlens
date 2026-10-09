@@ -1278,6 +1278,12 @@ function LegendDay({
               <DayMark status={end.status} />
             )}
           </strong>
+          {!isCurrentDay && end.conflict ? (
+            <span>
+              Battles add up to {formatCount(end.conflict.calculated)}; next day started
+              at {formatCount(end.conflict.next)}
+            </span>
+          ) : null}
         </span>
         <span className="legend-day-stat legend-day-rank">
           <small>Reset rank</small>

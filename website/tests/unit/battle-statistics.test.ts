@@ -284,6 +284,23 @@ describe("recorded battle period statistics", () => {
     expect(html).not.toContain("1,042");
   });
 
+  it("takes trophies at last Reset from today's start, Uncertain when battles disagree", () => {
+    const html = render(
+      player([
+        { ...day(0), startTrophies: 5100 },
+        {
+          ...day(1),
+          startTrophies: 4900,
+          trophyChange: 20,
+          resetAdjustment: { kind: "weekly", amount: 80 },
+        },
+      ]),
+    );
+    expect(html).toMatch(
+      /<dt>Trophies at last Reset<\/dt><dd>5,100<span class="day-mark day-mark-gap" title="Uncertain">/,
+    );
+  });
+
   it("names unknown stars only when some are unknown", () => {
     const side = {
       count: 4,

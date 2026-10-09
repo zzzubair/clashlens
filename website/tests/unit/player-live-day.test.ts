@@ -223,7 +223,7 @@ describe("today's Legend day wording", () => {
         trophyChange: 8,
         automaticDefenseLoss: 32,
       }),
-      // Its own end, 5,050, disagrees with the next day's 5,992 start.
+      // Its battles add up to 5,050, but the next day started at 5,992.
       ended(6, { startTrophies: 5000, trophyChange: 50 }),
       // 4,900 + 20, raised 80 by the weekly reset to the next day's 5,000.
       ended(5, {
@@ -241,7 +241,7 @@ describe("today's Legend day wording", () => {
       '<span title="Taken by the game at Reset for defenses not played">-32 automatic loss</span>',
     );
     expect(cell("2026-10-06", "End of day")).toMatch(
-      /^<strong>5,050<span class="day-mark day-mark-gap" title="Uncertain">/,
+      /^<strong>5,992<span class="day-mark day-mark-gap" title="Uncertain">.*<\/strong><span>Battles add up to 5,050; next day started at 5,992<\/span>/,
     );
     expect(cell("2026-10-05", "Trophy change")).toContain(
       "<span>+80 weekly reset</span>",
