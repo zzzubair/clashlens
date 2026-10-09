@@ -9,7 +9,8 @@ taken while a battle may or may not have landed yet is read both ways and
 can only confirm. The last trustworthy reading before the player's first
 new-day battle that is not read both ways decides, even against an earlier
 one that showed a loss; a later reading can only confirm, and only when none
-of those decided, never undoing a loss another later one showed.
+of those decided, or, if confirm-only and taken before that battle, after the
+last of them contradicted, never undoing a loss another one showed.
 
 This one rule replaces four: a Reset reading taken before the automatic
 loss landed, a later reading settling a Reset reading taken too early, a
@@ -188,7 +189,8 @@ def decide(
     match a loss by missing credits that had not landed. Only when none of
     them decided, a later or confirm-only reading can confirm the day, never
     contradict it, a new-day battle it shows may not be known yet, nor undo a
-    loss an earlier such reading showed. A reading
+    loss an earlier such reading showed; a confirm-only one taken before that
+    battle also outranks a contradiction before it. A reading
     the ledger reads both ways settles nothing on its own, except the Reset
     reading, which contradicts when no way fits. A reading that fits only
     with a battle not yet shown, or read one way, is a guess: taken when the
@@ -219,8 +221,11 @@ def decide(
         default=None,
     )
 
+    def before_new_day(item: _Judged) -> bool:
+        return cutoff is None or item.reading.read_at < cutoff
+
     def deciding(item: _Judged) -> bool:
-        return not item.reading.confirm_only and (cutoff is None or item.reading.read_at < cutoff)
+        return not item.reading.confirm_only and before_new_day(item)
 
     def contradicts(item: _Judged) -> bool:
         return (
@@ -229,23 +234,22 @@ def decide(
             and (not item.ambiguous or item.reading.reset_reading)
         )
 
-    def last_clean(items: Iterable[_Judged], *, keep_loss: bool) -> _Judged | None:
-        decider = None
-        loss_landed = False
-        for item in items:
-            if item.matched and not item.ambiguous and not item.missed:
-                if keep_loss and loss_landed and not item.loss:
-                    continue
-                loss_landed = loss_landed or bool(item.loss)
-                decider = item
-            elif contradicts(item):
-                decider = item
-        return decider
-
-    decider = (
-        last_clean((item for item in judged if deciding(item)), keep_loss=False)
-        or last_clean((item for item in judged if not deciding(item)), keep_loss=True)
-    )
+    decider: _Judged | None = None
+    loss_landed = False
+    for item in judged:
+        clean = item.matched and not item.ambiguous and not item.missed
+        if deciding(item) and (clean or contradicts(item)):
+            decider = item
+        elif clean and not (loss_landed and not item.loss) and not (
+            decider is not None and deciding(decider)
+            and (decider.matched or not before_new_day(item))
+        ):
+            # A later or confirm-only match confirms when none decided; a
+            # confirm-only one before any new-day battle also outranks a
+            # contradiction before it. Neither undoes a loss shown landed.
+            decider = item
+        if decider is item and item.matched:
+            loss_landed = bool(item.loss)
     if decider is not None and decider.matched:
         return Verdict(
             "verified", decider.reading, decider.loss, exactness(decider),
