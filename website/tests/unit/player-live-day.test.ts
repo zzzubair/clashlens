@@ -274,4 +274,20 @@ describe("today's Legend day wording", () => {
     );
     expect(cell(html, "2026-10-07", "End of day")).toMatch(/^<strong>6,000</);
   });
+
+  it("ends a day on the next day's start even when the log leaves that day out", async () => {
+    const html = await page(WAITING, undefined, [
+      // Demoted at the weekly Reset: saved, but not shown without battles.
+      ended(7, {
+        startTrophies: 5200,
+        trophyChange: 0,
+        uncertainty: ["player_not_eligible"],
+      }),
+      ended(6, { startTrophies: 5150, trophyChange: 50 }),
+    ]);
+    expect(html).not.toContain('id="legend-day-2026-10-07"');
+    expect(cell(html, "2026-10-06", "End of day")).toMatch(
+      /^<strong>5,200<span class="day-mark day-mark-verified" title="Verified">/,
+    );
+  });
 });

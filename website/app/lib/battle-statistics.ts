@@ -1,5 +1,6 @@
 import { seasonStartAt } from "../components/SeasonReread";
 import type { PlayerPage, RankedBattleEvent } from "./contracts";
+import { isLegendDay } from "./player-lookup-text";
 
 export type BattlePeriod = "7" | "14" | "season";
 const DAY_MS = 86_400_000;
@@ -13,8 +14,9 @@ export function currentSeasonStart(player: PlayerPage, now: number) {
 // Use recorded battles, never daily trophy adjustments or unplayed defenses.
 // Only finished Legend days count, never today, which is still being played.
 // Each battle counts on the saved Legend day it belongs to. Counts, stars and
-// averages all use every saved finished day; per-day averages divide by those
-// days, battles or not.
+// averages all use every saved finished Legend day, leaving out days before
+// sign-up or outside Legend I; per-day averages divide by those days, battles
+// or not.
 function summarize(events: RankedBattleEvent[], days: number) {
   const stars = [0, 0, 0, 0];
   let trophies = 0;
@@ -50,9 +52,10 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
       })
       .map((day) => [Date.parse(day.period.split(" – ")[0]), day]),
   );
+  const legendDays = [...days.values()].filter((day) => isLegendDay(day.uncertainty));
   const events = (side: "offenseEvents" | "defenseEvents") => [
     ...new Map(
-      [...days.values()]
+      legendDays
         .flatMap((saved) => saved[side])
         .filter((event) => {
           const time = Date.parse(event.battleTimestamp);
@@ -68,7 +71,7 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
     daysSaved: days.size,
     daysExpected: Math.round((today - start) / DAY_MS),
     incomplete: [...days.values()].some((day) => !day.battlesComplete),
-    attack: summarize(events("offenseEvents"), days.size),
-    defense: summarize(events("defenseEvents"), days.size),
+    attack: summarize(events("offenseEvents"), legendDays.length),
+    defense: summarize(events("defenseEvents"), legendDays.length),
   };
 }

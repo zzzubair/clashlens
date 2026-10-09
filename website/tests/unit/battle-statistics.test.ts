@@ -190,6 +190,24 @@ describe("recorded battle period statistics", () => {
     expect(stats.incomplete).toBe(true);
   });
 
+  it("leaves days before sign-up or outside Legend I out of every figure", () => {
+    const stats = battleStatistics(
+      player([
+        day(1, [event("a1", 3, 100, 320, YESTERDAY)]),
+        day(2),
+        { ...day(3), uncertainty: ["not_enrolled"] },
+        {
+          ...day(4, [event("a4", 3, 100, 40, TODAY - 4 * DAY)]),
+          uncertainty: ["player_not_eligible"],
+        },
+      ]),
+      "7",
+      NOW,
+    );
+    expect(stats.daysSaved).toBe(4);
+    expect(stats.attack).toMatchObject({ count: 1, trophies: 320, perDay: 160 });
+  });
+
   it("averages every finished day's battles, Uncertain days included", () => {
     const saved = player([
       day(1, [event("a1", 3, 100, 40, YESTERDAY)]),

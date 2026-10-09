@@ -69,7 +69,8 @@ itself with titles, labels and short counts rather than help paragraphs.
 
 The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
 trophy change, end of day and Reset rank. A finished day's end of day is the
-next day's start; it carries the day's Verified, Calculated or Uncertain dot.
+next day's start, from any saved record of that day, even one the log leaves
+out, such as a day after the player left Legend I; it carries the day's Verified, Calculated or Uncertain dot.
 Only the latest finished day, with no next day saved yet, uses its start plus
 its trophy change plus any weekly or Season reset at its closing Reset; an
 older day without the next day's start shows Unavailable. When that sum
@@ -100,15 +101,16 @@ progress, and can show This Season, Last 7 days or Last 14 days: the last 7 or
 14 finished days, never days before the current Season. Early in a Season the
 option says how many finished days so far, such as Last 7 days (2 so far), and
 the box's one short line gives the dates and finished days saved. Counts,
-stars, hit rate and averages all use every recorded battle of those days:
-offense per day is trophies gained from attacks divided by the saved finished
+stars, hit rate and averages all use every recorded battle of those days,
+leaving out days before the player signed up or while not in Legend I: offense
+per day is trophies gained from attacks divided by the saved finished Legend
 days, battles or not, and defense per day is trophies lost on defense the same
 way; per attack and per defense divide by those days' recorded battles.
 Automatic Reset losses are not part of defense averages. Empty samples show
 Unavailable for rates and averages. Partial history and conflicting reports
 are flagged; retained past-Season totals cannot fill missing battle details. A
 past Season's box uses its saved summary, with per-day averages over every
-recorded day, and when coverage is partial it says how many of the 28 days are
+recorded Legend day, and when coverage is partial it says how many of the 28 days are
 recorded. A Season known only from in-game history shows just the rank, which
 reads Not published yet until the game publishes it, and trophies.
 

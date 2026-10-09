@@ -24,6 +24,7 @@ import {
   dayEnd,
   dayEvidence,
   dayReasons,
+  isLegendDay,
   liveDay,
   legendDayKey,
   liveDayNotice,
@@ -647,14 +648,14 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         {data.selectedSeason === null && player ? (
           <BattleStatistics player={player} now={statisticsTime} />
         ) : null}
-        {data.selectedSeason === null && history.length > 0 ? (
+        {data.selectedSeason === null && player && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
             <h2>Saved Legend history</h2>
-            {history.map(({ day, seasonDay }, index) => (
+            {history.map(({ day, seasonDay }) => (
               <LegendDay
                 key={legendDayKey(day.period)}
                 day={day}
-                next={history[index - 1]?.day}
+                player={player}
                 now={statisticsTime}
                 seasonDay={seasonDay}
                 isCurrentDay={isCurrentDay(today, day)}
@@ -802,11 +803,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             <p className="section-note">No Legend days are saved for this player yet.</p>
           ) : null}
           <div className="legend-days">
-            {history.map(({ day, seasonDay }, index) => (
+            {history.map(({ day, seasonDay }) => (
               <LegendDay
                 key={legendDayKey(day.period)}
                 day={day}
-                next={history[index - 1]?.day}
+                player={trackedPlayer}
                 now={statisticsTime}
                 seasonDay={seasonDay}
                 isCurrentDay={isCurrentDay(today, day)}
@@ -948,7 +949,11 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
     count,
     stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
     unknown,
-    perDay: per(trophies, summary.daysObserved),
+    perDay: per(
+      trophies,
+      summary.daysObserved -
+        summary.dailyEntries.filter((day) => !isLegendDay(day.flags)).length,
+    ),
     perBattle: per(trophies, count),
   });
   return (
@@ -1169,14 +1174,14 @@ function isCurrentDay(today: RankedDaySummary | null, day: RankedDaySummary): bo
 
 function LegendDay({
   day,
-  next,
+  player,
   now,
   seasonDay,
   isCurrentDay,
   openDay,
 }: {
   day: RankedDaySummary;
-  next?: RankedDaySummary;
+  player: PlayerPage;
   now: number;
   seasonDay: string;
   isCurrentDay: boolean;
@@ -1185,7 +1190,7 @@ function LegendDay({
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
   const shown = presentDay(dayEvidence(day), isCurrentDay);
-  const end = dayEnd(day, next, now);
+  const end = dayEnd(day, player, now);
   const { status, reasons } = isCurrentDay ? shown : end;
   const { battleNet } = shown;
   return (
