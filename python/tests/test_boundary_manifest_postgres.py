@@ -15,7 +15,7 @@ from domain_test_support import domain_database, store_observation, text
 
 from clashlens import battle_day_repair, boundary
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, season_attack_tallies
-from clashlens.army_decoder import DECODER_VERSION
+from clashlens.army_decoder import CURRENT_DECODES, DECODER_VERSION
 from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
 from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database, _text_value
@@ -679,14 +679,8 @@ def per_player_inputs(
                     *(
                         int(row[0])
                         for row in connection.execute(
-                            """
-                            SELECT id
-                            FROM battle_army_decodes
-                            WHERE battle_id = ANY(%s::bigint[])
-                              AND decoder_version = %s AND catalog_version = %s
-                              AND is_active
-                            """,
-                            (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                            f"SELECT id FROM {CURRENT_DECODES} AS decode",
+                            (DECODER_VERSION, season_battle_ids),
                         ).fetchall()
                     ),
                     *_moved_decode_ids(connection, season_moved),

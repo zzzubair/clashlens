@@ -620,8 +620,14 @@ def test_army_fact_statements_are_bounded_and_pinned_failed_decodes_survive(
     assert large_postgres <= small_postgres + 1
 
 
+# A Reset frozen during the catalogue v3 re-read could select no army for a
+# side whose only saved army was under v2; its build reads that army.
+@pytest.mark.parametrize("frozen_none", [False, True])
 def test_frozen_build_counts_a_decode_saved_under_an_older_catalog(
-    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+    database_url: str,
+    archive_server,
+    monkeypatch: pytest.MonkeyPatch,
+    frozen_none: bool,
 ) -> None:
     with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server, monkeypatch)
@@ -705,7 +711,7 @@ def test_frozen_build_counts_a_decode_saved_under_an_older_catalog(
                     connection,
                     DAY_START.isoformat(),
                     battle_ids=[battle_id],
-                    decode_ids=[decode_id],
+                    decode_ids=[] if frozen_none else [decode_id],
                 )
                 connection.commit()
                 fact = connection.execute(

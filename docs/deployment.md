@@ -1183,7 +1183,9 @@ repair, and live responses fell to about 8,000 players over 2 minutes late. An
 army re-decode saves 10 battles per transaction and waits at most a
 millisecond for any lock: when a live job holds one, it rolls those 10 back and
 tries again a quarter second later, up to 20 times, so a live job waits at most
-for one group of 10. The
+for one group of 10. A live battle log never waits for a battle's lock: it
+skips a battle another job holds and leaves its armies to a later battle log
+that lists it. The
 website's delayed-updates notice counts live work and the latest finished
 Legend day's day-end calculation, not other backfill. On a thread's Reset-first
 turn, a claim from the newest-job plan takes its planned job only if, in the

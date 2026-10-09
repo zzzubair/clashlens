@@ -18,7 +18,6 @@ from test_army_ingestion_postgres import _live_row, _processor
 
 from clashlens import army_ingestion
 from clashlens.background_pacing import BACKGROUND_JOB_LIMIT
-from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -204,8 +203,11 @@ def test_background_work_waits_while_late_live_work_is_leased_or_waiting(
             database.close()
 
 
-def _seed_redecode(connection_info: str, archive_server, database, processor) -> list[int]:
-    """30 saved battles on the old catalog and one re-decode job for them all."""
+def _seed_redecode(
+    connection_info: str, archive_server, database, processor, *, readable: bool = False
+) -> list[int]:
+    """30 saved battles whose armies failed to read, or (readable) were read
+    under the old unit list, and one re-decode job for them all."""
     _, job_id = store_observation(
         connection_info,
         archive_server,
@@ -234,7 +236,21 @@ def _seed_redecode(connection_info: str, archive_server, database, processor) ->
             """,
             (DAY, DAY + timedelta(days=1)),
         )
-        connection.execute("UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v2'")
+        if readable:
+            connection.execute(
+                "UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v2'"
+            )
+        else:
+            # Saved while the unit list was unavailable, as earlier code did; a
+            # re-decode reads these armies again.
+            connection.execute(
+                """
+                UPDATE battle_army_decodes
+                SET status = 'failed', failure_category = 'catalog_version_unavailable',
+                    failure_detail = 'pinned unit catalog is unavailable or has the wrong hash',
+                    exact_army_id = NULL, identity_hash = NULL
+                """
+            )
         battle_ids = [row[0] for row in connection.execute(
             "SELECT id FROM legend_battles ORDER BY id"
         ).fetchall()]
@@ -246,8 +262,7 @@ def _upgraded(database: Database) -> int:
     with database.pool.connection() as connection:
         return connection.execute(
             "SELECT count(DISTINCT battle_id) FROM battle_army_decodes"
-            " WHERE is_active AND catalog_version = %s",
-            (CATALOG_VERSION,),
+            " WHERE is_active AND status = 'decoded'"
         ).fetchone()[0]
 
 
@@ -368,43 +383,82 @@ def test_a_redecode_gives_way_to_a_live_job_holding_its_battle(
             database.close()
 
 
+def _live_job_beside_held_battles(
+    connection_info: str, archive_server, processor, battle_ids: list[int]
+) -> list[str]:
+    """Run a live battle log repeating the newest battle while another
+    connection holds every battle's lock; return its outcome if it finished
+    within 10 seconds."""
+    _, live = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key="live",
+        endpoint="battle_log",
+        body=json.dumps({"items": [_live_row(
+            True, OPPONENTS[-1], f"u{len(OPPONENTS)}x0",
+            DAY + timedelta(minutes=len(OPPONENTS) - 1),
+        )]}).encode(),
+        observed_at=DAY + timedelta(hours=2),
+        normalized_tag="#2PP",
+    )
+    results: list[str] = []
+    thread = threading.Thread(target=lambda: results.append(
+        processor.process_job(live, owner="live").outcome))
+    with psycopg.connect(connection_info) as other_live:
+        # Other live battle logs are saving these battles.
+        other_live.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended("
+            "'army-redecode-battle:' || id, 0)) FROM unnest(%s::bigint[]) AS id",
+            (battle_ids,),
+        )
+        thread.start()
+        thread.join(10)
+        finished = list(results)
+        other_live.commit()
+    thread.join(20)
+    return finished
+
+
+def _saved_armies(database: Database) -> list[tuple[str, str]]:
+    with database.pool.connection() as connection:
+        return [(text(row[0]), text(row[1])) for row in connection.execute(
+            "SELECT status, catalog_version FROM battle_army_decodes ORDER BY id"
+        ).fetchall()]
+
+
 def test_a_live_battle_log_reuses_an_older_catalog_decode(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
-            battle_ids = _seed_redecode(connection_info, archive_server, database, processor)
-            _, live = store_observation(
-                connection_info,
-                archive_server,
-                occurrence_key="live",
-                endpoint="battle_log",
-                body=json.dumps({"items": [_live_row(
-                    True, OPPONENTS[-1], f"u{len(OPPONENTS)}x0",
-                    DAY + timedelta(minutes=len(OPPONENTS) - 1),
-                )]}).encode(),
-                observed_at=DAY + timedelta(hours=2),
-                normalized_tag="#2PP",
+            battle_ids = _seed_redecode(
+                connection_info, archive_server, database, processor, readable=True
             )
-            results: list[str] = []
-            thread = threading.Thread(target=lambda: results.append(
-                processor.process_job(live, owner="live").outcome))
-            with psycopg.connect(connection_info) as other_live:
-                # Other live battle logs are saving these battles.
-                other_live.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended("
-                    "'army-redecode-battle:' || id, 0)) FROM unnest(%s::bigint[]) AS id",
-                    (battle_ids,),
-                )
-                thread.start()
-                thread.join(10)
-                assert results == ["processed"]
-                other_live.commit()
+            before = _saved_armies(database)
+            assert _live_job_beside_held_battles(
+                connection_info, archive_server, processor, battle_ids
+            ) == ["processed"]
+            # Nothing was read again: the armies saved under the old list stand.
+            assert _saved_armies(database) == before
+            assert {row[1] for row in before} == {"unit-catalog-v2"}
+        finally:
+            database.close()
+
+
+def test_a_live_battle_log_skips_a_busy_battle_it_would_save_again(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            battle_ids = _seed_redecode(connection_info, archive_server, database, processor)
+            # The repeated battle's failed army now reads, so the live job
+            # would save it again, but another job holds that battle.
+            assert _live_job_beside_held_battles(
+                connection_info, archive_server, processor, battle_ids
+            ) == ["processed"]
             assert _upgraded(database) == 0
-            with database.pool.connection() as connection:
-                assert connection.execute(
-                    "SELECT count(*) FROM battle_army_decodes"
-                ).fetchone()[0] == len(battle_ids)
+            assert len(_saved_armies(database)) == len(battle_ids)
         finally:
             database.close()

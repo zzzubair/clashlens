@@ -23,8 +23,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from .analytics import season_attack_tallies
-from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
+from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import Database, _text_value
 from .domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
 from .reconciliation import DISPUTED_BATTLE_REASONS
@@ -966,29 +965,23 @@ def _army_selections(
     )
     decodes: dict[int, list[int]] = {}
     for battle_id, decode_id in connection.execute(
-        """
-        SELECT battle_id, id FROM battle_army_decodes
-        WHERE battle_id = ANY(%s::bigint[]) AND is_active
-          AND decoder_version = %s AND catalog_version = %s
-        """,
-        (listed, DECODER_VERSION, CATALOG_VERSION),
+        f"SELECT battle_id, id FROM {CURRENT_DECODES} AS decode",
+        (DECODER_VERSION, listed),
     ).fetchall():
         decodes.setdefault(int(battle_id), []).append(int(decode_id))
     moved_decodes: dict[tuple[int, str], list[int]] = {}
     for battle_id, perspective, decode_id in connection.execute(
-        """
+        f"""
         SELECT decode.battle_id, decode.perspective, decode.id
-        FROM battle_army_decodes AS decode
+        FROM {CURRENT_DECODES} AS decode
         JOIN unnest(%s::bigint[], %s::text[]) AS side (battle_id, perspective)
           USING (battle_id, perspective)
-        WHERE decode.is_active
-          AND decode.decoder_version = %s AND decode.catalog_version = %s
         """,
         (
+            DECODER_VERSION,
+            [to_id for to_id, _ in moved_sides],
             [to_id for to_id, _ in moved_sides],
             [perspective for _, perspective in moved_sides],
-            DECODER_VERSION,
-            CATALOG_VERSION,
         ),
     ).fetchall():
         moved_decodes.setdefault(
@@ -1184,14 +1177,8 @@ def _season_inputs(connection: Any, members: list[Any]) -> dict[str, Any] | None
             *(
                 int(row[0])
                 for row in connection.execute(
-                    """
-                    SELECT id
-                    FROM battle_army_decodes
-                    WHERE battle_id = ANY(%s::bigint[])
-                      AND decoder_version = %s AND catalog_version = %s
-                      AND is_active
-                    """,
-                    (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                    f"SELECT id FROM {CURRENT_DECODES} AS decode",
+                    (DECODER_VERSION, season_battle_ids),
                 ).fetchall()
             ),
             *_moved_decode_ids(connection, season_moved),
@@ -1242,14 +1229,12 @@ def _moved_decode_ids(
     return [
         int(row[0])
         for row in connection.execute(
-            """
+            f"""
             SELECT decode.id
-            FROM battle_army_decodes AS decode
+            FROM {CURRENT_DECODES} AS decode
             JOIN unnest(%s::bigint[], %s::text[]) AS side (battle_id, perspective)
               USING (battle_id, perspective)
-            WHERE decode.is_active
-              AND decode.decoder_version = %s AND decode.catalog_version = %s
             """,
-            (*_moved_side_arrays(moved), DECODER_VERSION, CATALOG_VERSION),
+            (DECODER_VERSION, list(moved.values()), *_moved_side_arrays(moved)),
         ).fetchall()
     ]

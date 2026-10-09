@@ -375,9 +375,9 @@ def _unpublished_correction(connection_info: str, boundary_at: datetime, pending
         )
 
 
-def test_campaign_counts_a_catalogue_v2_decode_as_done(database_url: str) -> None:
-    # September decodes stay on catalogue v2: v3's Portal Pendant came later.
-    assert domain_repair.target_versions()["unit_catalog"] == "unit-catalog-v2"
+def test_campaign_counts_a_decode_under_any_unit_list_as_done(database_url: str) -> None:
+    # Saved armies hold ids, so one saved under an older unit list needs no
+    # decoding again.
     with _campaign_database(database_url) as (connection_info, worker):
         with _owner(connection_info) as connection:
             player, opponent = _player(connection, "#V2"), _player(connection, "#OTHER")
@@ -399,7 +399,7 @@ def _decoded(connection_info: str, evidence_id: int) -> None:
             ) SELECT battle_id, id, 'attacker', %s, %s, %s, 'failed', 'undecodable'
             FROM battle_evidence WHERE id = %s
             """,
-            (DECODER_VERSION, "unit-catalog-v2", "a" * 64, evidence_id),
+            (DECODER_VERSION, "unit-catalog-v1", "a" * 64, evidence_id),
         )
 
 

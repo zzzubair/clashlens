@@ -10,7 +10,7 @@ from psycopg.types.json import Jsonb
 
 from . import battle_day_repair
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
-from .army_decoder import DECODER_VERSION
+from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_manifest import (
     _moved_decode_ids,
     profiles_not_found,
@@ -19,13 +19,14 @@ from .boundary_manifest import (
 from .boundary_manifest import (
     freeze_boundary_manifest as _freeze_boundary_manifest,
 )
-from .catalog import CATALOG_VERSION
 from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
+    PYTHON_LIVE_PRIORITY,
     Database,
     _text_value,
     ended_day_priority,
@@ -33,7 +34,13 @@ from .db import (
 )
 from .domain import SEASON_DURATION, is_season_boundary
 from .domain_repair import boundary_held
-from .past_reset_pacing import past_reset_build_waits, past_reset_correction_waits
+from .past_reset_pacing import (
+    OPERATOR_CORRECTION,
+    operator_correction_waits,
+    operator_generation,
+    past_reset_build_waits,
+    past_reset_correction_waits,
+)
 
 
 def lock_boundary_publication(
@@ -575,7 +582,9 @@ def _try_enqueue_boundary_artifacts(
                 DOMAIN_RULE_VERSION,
                 ANALYTICS_RULE_VERSION,
                 # The board goes before the slower army build.
-                ended_day_priority(boundary_at - timedelta(days=1)),
+                PYTHON_BACKFILL_PRIORITY
+                if operator_generation(connection, boundary_at, generation_number)
+                else ended_day_priority(boundary_at - timedelta(days=1)),
             ),
         )
     army = connection.execute(
@@ -597,8 +606,8 @@ def _try_enqueue_boundary_artifacts(
             INSERT INTO python_processing_jobs_worker (
                 observation_id, work_type, deduplication_key, input_json,
                 state, due_at, parser_version, processing_version,
-                domain_rule_version, analytics_rule_version
-            ) VALUES (NULL, 'build_army_analytics', %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)
+                domain_rule_version, analytics_rule_version, priority
+            ) VALUES (NULL, 'build_army_analytics', %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s, %s)
             ON CONFLICT (deduplication_key) DO NOTHING
             """,
             (
@@ -615,6 +624,9 @@ def _try_enqueue_boundary_artifacts(
                 PROCESSING_VERSION,
                 DOMAIN_RULE_VERSION,
                 ARMY_ANALYTICS_RULE_VERSION,
+                PYTHON_BACKFILL_PRIORITY
+                if operator_generation(connection, boundary_at, generation_number)
+                else PYTHON_LIVE_PRIORITY,
             ),
         )
 
@@ -662,8 +674,8 @@ def _army_decode_selection(
     """A daily log's listed battles, the decodes its army inputs freeze and
     the listed sides 0057 moved.
 
-    The decodes are every listed battle's active ones, both sides, plus each
-    moved side's on the battle it is on now.
+    The decodes are the newest saved army of both sides of every listed
+    battle, plus each moved side's on the battle it is on now.
     """
     sides = [
         (int(event["battle_id"]), event.get("lens"))
@@ -679,12 +691,8 @@ def _army_decode_selection(
             *(
                 int(row[0])
                 for row in connection.execute(
-                    """
-                    SELECT id FROM battle_army_decodes
-                    WHERE battle_id = ANY(%s::bigint[]) AND is_active
-                      AND decoder_version = %s AND catalog_version = %s
-                    """,
-                    (battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                    f"SELECT id FROM {CURRENT_DECODES} AS decode",
+                    (DECODER_VERSION, battle_ids),
                 ).fetchall()
             ),
             *_moved_decode_ids(connection, moved),
@@ -766,10 +774,9 @@ def _boundary_army_status(
         """
         SELECT count(DISTINCT battle_id)
         FROM battle_army_decodes
-        WHERE battle_id = ANY(%s::bigint[]) AND is_active
-          AND decoder_version = %s AND catalog_version = %s
+        WHERE battle_id = ANY(%s::bigint[]) AND is_active AND decoder_version = %s
         """,
-        (battle_ids, DECODER_VERSION, CATALOG_VERSION),
+        (battle_ids, DECODER_VERSION),
     ).fetchone()
     return (
         snapshot_status
@@ -1264,6 +1271,134 @@ def queue_board_rebuilds(
                     }
                 )
     return {"season_id": season_id, "queue": queue, "boards": boards}
+
+
+def queue_army_corrections(
+    database: Database, season_id: str, *, queue: bool, max_jobs: int
+) -> dict[str, Any]:
+    """Find, and with ``queue`` rebuild the army records of, each of the
+    Season's Resets that published a battle side as unread
+    (``decode_missing``) although an army is now saved for that side.
+
+    While unit catalogue v3 re-read the Season's armies, a Reset could freeze
+    a side whose only saved army was under v2 before frozen builds read any
+    saved army. ``sides`` counts such battle sides per Reset whose newest
+    saved army was read; a failed reading restores nothing.
+
+    Each Reset gets one army-only operator correction (OPERATOR_CORRECTION),
+    started as any other: once its build is published, outside a repair
+    campaign and past-Reset pacing. It is not queued or started, nor any of
+    its leaderboard, statistics or army builds claimed, from 04:00 to 07:00
+    UTC, the newest Reset's included; those builds run at background
+    priority, and the army build takes no battle lock. At most
+    ``max_jobs`` corrections of the Season wait or build at once. A rebuilt Reset
+    lists no such side, so a later run lists nothing for it; one still
+    queued or rebuilding is listed again and not queued twice.
+    """
+    season_start = datetime.fromtimestamp(int(season_id), UTC)
+    if not is_season_boundary(season_start):
+        raise ValueError(f"{season_id} is not a Season's start")
+    resets: list[dict[str, Any]] = []
+    with database.pool.connection() as connection:
+        with connection.transaction():
+            if queue and operator_correction_waits(connection):
+                return {
+                    "season_id": season_id,
+                    "queue": queue,
+                    "refused": "no correction is queued from 04:00 to 07:00 UTC",
+                }
+            unread = """
+                fact.is_current AND fact.army_state = 'decode_missing'
+                AND fact.ranked_day_start >= %s AND fact.ranked_day_start < %s
+            """
+            days = (season_start, season_start + SEASON_DURATION)
+            battle_ids = [
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT fact.battle_id"
+                    f" FROM army_analytics_battle_facts AS fact WHERE {unread}",
+                    days,
+                ).fetchall()
+            ]
+            # A side counts only if its newest saved army is readable.
+            affected = connection.execute(
+                f"""
+                SELECT fact.ranked_day_start + interval '1 day', count(*)
+                FROM {CURRENT_DECODES} AS decode
+                JOIN army_analytics_battle_facts AS fact
+                  ON fact.battle_id = decode.battle_id
+                 AND fact.lens = CASE decode.perspective
+                     WHEN 'attacker' THEN 'offense' ELSE 'defense' END
+                WHERE decode.status IN ('decoded', 'partial')
+                  AND {unread}
+                GROUP BY 1 ORDER BY 1
+                """,
+                (DECODER_VERSION, battle_ids, *days),
+            ).fetchall()
+            in_flight = connection.execute(
+                """
+                SELECT count(*) FROM boundary_publication_corrections
+                WHERE boundary_at > %s AND boundary_at <= %s
+                  AND state NOT IN ('finalized', 'terminal')
+                """,
+                (season_start, season_start + SEASON_DURATION),
+            ).fetchone()[0]
+        for boundary_at, sides in affected:
+            with connection.transaction():
+                lock_boundary_publication(connection, boundary_at)
+                current = connection.execute(
+                    """
+                    SELECT id, generation, army_state
+                    FROM boundary_publication_generations
+                    WHERE boundary_at = %s AND army_state <> 'superseded'
+                    ORDER BY generation DESC
+                    LIMIT 1
+                    """,
+                    (boundary_at,),
+                ).fetchone()
+                if current is None:
+                    continue
+                generation_id, generation, army_state = current
+                queued = connection.execute(
+                    """
+                    SELECT id FROM boundary_publication_corrections
+                    WHERE boundary_at = %s AND source_generation_id = %s
+                      AND state IN ('queued', 'pending_inputs')
+                    """,
+                    (boundary_at, generation_id),
+                ).fetchone()
+                # A build not yet published reads the saved armies itself.
+                correction = (
+                    "rebuilding" if _text_value(army_state) != "published"
+                    else "already_queued" if queued is not None
+                    else "not_queued"
+                )
+                if queue and correction == "not_queued" and in_flight < max_jobs:
+                    connection.execute(
+                        """
+                        INSERT INTO boundary_publication_corrections
+                            (boundary_at, source_generation_id,
+                             affected_artifacts, pending_inputs)
+                        VALUES (%s, %s, ARRAY['army'], %s)
+                        """,
+                        (boundary_at, generation_id, Jsonb([OPERATOR_CORRECTION])),
+                    )
+                    in_flight += 1
+                    correction = "queued"
+                resets.append(
+                    {
+                        "boundary_at": boundary_at.astimezone(UTC).isoformat(),
+                        "generation": int(generation),
+                        "sides": int(sides),
+                        "correction": correction,
+                    }
+                )
+    return {
+        "season_id": season_id,
+        "queue": queue,
+        "in_flight": int(in_flight),
+        "resets": resets,
+    }
 
 
 def _boundary_population_hash(player_ids: list[int]) -> str:

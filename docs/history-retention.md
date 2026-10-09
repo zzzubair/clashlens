@@ -570,10 +570,10 @@ Player trophy summaries and current/live analytics are unchanged.
 The implemented v3 reads do not offer destruction, combinations, day ranges or
 population cohorts. Missing or legacy summaries without unit/quantity evidence
 return unavailable; there is no website fallback to partial battle detail.
-Unknown units have deterministic labels such as `Unknown spell (ID 900)`.
+Unknown units have deterministic labels such as `Unknown spell #900`.
 Unclassified troop IDs appear in both troop and siege views as
-`Unknown troop or siege (ID 900)` and keep coverage partial. These are the same
-retained uses, not two separate units. Once the catalogue establishes their
+`Unknown troop or siege #900`. These are the same retained uses, not two
+separate units. Once the catalogue establishes their
 category, they appear only in that category with the current catalogue name.
 Other unknown namespaces likewise resolve their names at read time. Separate player trophy-history records remain unchanged.
 The API pages unit results in groups of 200.

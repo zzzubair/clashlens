@@ -355,6 +355,10 @@ def add_republish_command(
     # still ranking a reading the board now leaves out or whose entries the
     # board rule now changes; see boundary.queue_board_rebuilds.
     republish_current_season.add_argument("--boards", choices=("preview", "queue"))
+    # With --armies, preview or queue army rebuilds of the Season's Resets
+    # that published a side as unread although an army is now saved for it,
+    # at most --max-jobs at once; see boundary.queue_army_corrections.
+    republish_current_season.add_argument("--armies", choices=("preview", "queue"))
     republish_current_season.add_argument("--season", type=_season_id)
 
 
@@ -369,15 +373,18 @@ def run_republish_command(database_url: str, arguments: argparse.Namespace) -> i
     repair = getattr(arguments, "repair", None)
     first_logs = getattr(arguments, "first_logs", None)
     boards = getattr(arguments, "boards", None)
-    modes = [mode for mode in (repair, arguments.campaign, first_logs, boards)
+    armies = getattr(arguments, "armies", None)
+    modes = [mode for mode in (repair, arguments.campaign, first_logs, boards, armies)
              if mode is not None]
     if len(modes) > 1:
         raise SystemExit(
-            "--repair, --campaign, --first-logs and --boards are separate runs"
+            "--repair, --campaign, --first-logs, --boards and --armies"
+            " are separate runs"
         )
     if (not modes) != (arguments.season is None):
         raise SystemExit(
-            "--repair, --campaign, --first-logs or --boards and --season go together"
+            "--repair, --campaign, --first-logs, --boards or --armies and --season"
+            " go together"
         )
     database = Database(database_url)
     try:
@@ -388,6 +395,11 @@ def run_republish_command(database_url: str, arguments: argparse.Namespace) -> i
         elif boards is not None:
             report = boundary.queue_board_rebuilds(
                 database, arguments.season, queue=boards == "queue"
+            )
+        elif armies is not None:
+            report = boundary.queue_army_corrections(
+                database, arguments.season, queue=armies == "queue",
+                max_jobs=arguments.max_jobs,
             )
         elif first_logs is not None:
             report = first_battle_log.backfill(

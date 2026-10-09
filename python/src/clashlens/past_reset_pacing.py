@@ -21,6 +21,8 @@ from collections.abc import Collection
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 # A past Reset starts at most one correction generation per interval,
 # counted from its newest generation.
 PAST_RESET_CORRECTION_INTERVAL = timedelta(hours=6)
@@ -28,6 +30,12 @@ PAST_RESET_CORRECTION_INTERVAL = timedelta(hours=6)
 # window, which keeps the worker free for the live Reset's publication.
 PAST_RESET_QUIET_START = time(4, 30)
 PAST_RESET_QUIET_END = time(7, 0)
+# An operator correction (boundary.queue_army_corrections), marked by this
+# pending input, neither starts nor has its leaderboard, statistics or army
+# build claimed in this wider UTC window, for any Reset; those builds run at
+# background priority.
+OPERATOR_CORRECTION = {"kind": "operator"}
+OPERATOR_QUIET_START = time(4, 0)
 
 
 def _now(connection: Any) -> datetime:
@@ -47,6 +55,29 @@ def _is_past_reset(connection: Any, boundary_at: datetime) -> bool:
 
 def _in_quiet_window(now: datetime) -> bool:
     return PAST_RESET_QUIET_START <= now.astimezone(UTC).time() < PAST_RESET_QUIET_END
+
+
+def operator_generation(connection: Any, boundary_at: datetime, generation: Any) -> bool:
+    """Whether this Reset generation is an operator correction's rebuild."""
+    return connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM boundary_publication_corrections AS correction
+            JOIN boundary_publication_generations AS rebuilt
+              ON rebuilt.id = correction.generation_id
+            WHERE rebuilt.boundary_at = %s AND rebuilt.generation = %s
+              AND correction.pending_inputs @> %s::jsonb
+        )
+        """,
+        (boundary_at, generation, Jsonb([OPERATOR_CORRECTION])),
+    ).fetchone()[0]
+
+
+def operator_correction_waits(connection: Any) -> bool:
+    """Whether an operator correction, or its builds, must wait now."""
+    now = _now(connection).astimezone(UTC).time()
+    return OPERATOR_QUIET_START <= now < PAST_RESET_QUIET_END
 
 
 def past_reset_build_waits(connection: Any, boundary_at: datetime) -> bool:

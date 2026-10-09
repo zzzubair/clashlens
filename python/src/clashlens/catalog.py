@@ -295,6 +295,22 @@ def catalog_name(typed_id: str) -> str | None:
     return str(entry["name"]) if entry else None
 
 
+def unit_label(typed_id: str) -> str:
+    """The unit's name, or a placeholder until the list names its id.
+
+    Saved armies keep ids only, so a name added here shows everywhere,
+    earlier battles included. Siege machines share the troop ids, so an
+    unnamed troop id may be either.
+    """
+    name = catalog_name(typed_id)
+    if name is not None:
+        return name
+    kind, _, number = typed_id.partition(":")
+    if not number:
+        return f"Unknown {typed_id}"
+    return f"Unknown {'troop or siege' if kind == 'troop' else kind} #{number}"
+
+
 def is_siege_troop(typed_id: str) -> bool:
     entry = _CATALOG_ENTRIES.get(typed_id)
     return bool(entry and entry["is_siege"])

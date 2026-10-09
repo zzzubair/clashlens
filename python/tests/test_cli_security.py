@@ -665,6 +665,7 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
     (["--repair", "receipt", "--season", "1791176400"], "receipt"),
     (["--repair", "queue"], None),
     (["--repair", "queue", "--boards", "queue", "--season", "1791176400"], None),
+    (["--repair", "queue", "--armies", "queue", "--season", "1791176400"], None),
 ])
 def test_season_repair_needs_a_season_and_runs_alone(
     monkeypatch, extra: list[str], action: str | None
@@ -686,6 +687,24 @@ def test_season_repair_needs_a_season_and_runs_alone(
     else:
         assert main(arguments) == 0
         assert calls == [("1791176400", action, 100)]
+
+
+@pytest.mark.parametrize("report,status", [({"resets": []}, 0), ({"refused": "window"}, 1)])
+def test_army_corrections_command_passes_its_cap_and_fails_when_refused(
+    monkeypatch, report: dict[str, object], status: int
+) -> None:
+    calls = []
+    monkeypatch.setattr("clashlens.battle_day_repair.Database",
+                        lambda url: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(
+        "clashlens.boundary.queue_army_corrections",
+        lambda database, season, *, queue, max_jobs: calls.append(
+            (season, queue, max_jobs)) or report,
+    )
+    assert main(["republish-current-season", "--database-url",
+                 "postgresql://worker@postgres/clashlens", "--armies", "queue",
+                 "--max-jobs", "2", "--season", "1791176400"]) == status
+    assert calls == [("1791176400", True, 2)]
 
 
 @pytest.mark.parametrize("value", ["0", "1001", "many"])

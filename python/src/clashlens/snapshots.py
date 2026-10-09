@@ -22,6 +22,7 @@ from .db import (
     DEFAULT_PARSER_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
+    PYTHON_BACKFILL_PRIORITY,
     PYTHON_LIVE_PRIORITY,
     Claim,
     Database,
@@ -29,6 +30,7 @@ from .db import (
     ended_day_priority,
 )
 from .domain import RANKED_DAY_DURATION, ranked_day_for
+from .past_reset_pacing import operator_generation
 from .profile import normalize_player_tag
 
 
@@ -1084,6 +1086,8 @@ def _enqueue_snapshot_analytics(
             # A Reset board's analytics go before the slower army build.
             PYTHON_LIVE_PRIORITY
             if boundary_at is None
+            else PYTHON_BACKFILL_PRIORITY
+            if operator_generation(connection, boundary_at, generation_number)
             else ended_day_priority(boundary_at - RANKED_DAY_DURATION),
         ),
     )

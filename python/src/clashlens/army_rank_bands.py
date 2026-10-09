@@ -39,6 +39,11 @@ _LAST_POSITION = BANDS[-1][1]
 # late in a Season, so a failed one waits before trying again.
 RETRY_SECONDS = 600
 _retry_at = float("-inf")
+# Totals saved before unnamed ids counted like any other unit carry these
+# tallies and leave those ids out; they are counted again, never served.
+_CURRENT_FORMAT = (
+    "NOT totals ?| ARRAY['cc_unknown', 'hero_unknown', 'unknown', 'unknown_present']"
+)
 
 
 def _text(value: Any) -> str:
@@ -122,10 +127,10 @@ def _refresh(database: Any) -> int | None:
         saved = {
             (int(row[0]), _text(row[1]), int(row[2]))
             for row in connection.execute(
-                """
+                f"""
                 SELECT DISTINCT season_day_number, fact_input_hash, first_position
                 FROM army_analytics_rank_band_totals
-                WHERE snapshot_id = %s
+                WHERE snapshot_id = %s AND {_CURRENT_FORMAT}
                 """,
                 (snapshot_id,),
             ).fetchall()
@@ -244,18 +249,19 @@ def read_rank_band_totals(
     """Add up saved totals for a Top N or rank-band view, if all are current.
 
     Returns the totals and their ``rank_band_digest``, or None when any
-    selected day's totals are missing or were counted from an older build of
-    that day.
+    selected day's totals are missing, were counted from an older build of
+    that day or were saved in the format before unnamed ids counted.
     """
     bands = _bands(population)
     if bands is None:
         return None
     rows = connection.execute(
-        """
+        f"""
         SELECT season_day_number, first_position, fact_input_hash,
                source_digest, totals
         FROM army_analytics_rank_band_totals
         WHERE snapshot_id = %s AND lens = %s AND category = %s
+          AND {_CURRENT_FORMAT}
           AND season_day_number = ANY(%s::integer[])
           AND first_position = ANY(%s::integer[])
         ORDER BY season_day_number, first_position
