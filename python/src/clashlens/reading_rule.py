@@ -99,6 +99,9 @@ class Verdict:
     lagged: tuple[str, ...] = ()
 
 
+Way = tuple[int, bool, frozenset[str]]
+
+
 @dataclass(frozen=True, slots=True)
 class _Judged:
     reading: Reading
@@ -112,7 +115,7 @@ class _Judged:
     lagged: tuple[str, ...] = ()
     # Every way it fits: the automatic loss it shows applied, whether it
     # shows the weekly raise to ``floor``, and the battles whose credit it shows.
-    ways: frozenset[tuple[int, bool, frozenset[str]]] = frozenset()
+    ways: frozenset[Way] = frozenset()
 
     @property
     def losses(self) -> frozenset[int]:
@@ -245,6 +248,7 @@ def decide(
     unknown_from: datetime | None = None,
     start_proven: bool,
     floor: int | None = None,
+    history: frozenset[Way] | None = None,
 ) -> Verdict:
     """The day's verdict from every reading taken from its end Reset on.
 
@@ -266,7 +270,8 @@ def decide(
     reading taken from ``unknown_from`` shows a possible loss did not land,
     nor the latter that it did. A reading that fits
     only with a battle not yet shown, or read one way, is a guess: taken
-    when the day's start is proven and no clean reading decided.
+    when the day's start is proven and no clean reading decided. ``history``
+    is what the readings during the day left possible.
     """
     judged = [
         judged for judged in (
@@ -298,7 +303,11 @@ def decide(
         return item.loss if len(item.losses) == 1 else 0
 
     lagged = tuple(dict.fromkeys(name for item in judged for name in item.lagged))
-    misfit, shown = _first_misfit(item for item in judged if trusted(item))
+    # Of the credits the readings during the day showed, those of battles it judges stay shown.
+    judged_ids = {effect.identity for effect in (*day_effects, *new_day_effects)}
+    history = None if history is None else frozenset(
+        (loss, raised, shown & judged_ids) for loss, raised, shown in history)
+    misfit, shown, _ = _first_misfit((item for item in judged if trusted(item)), history)
     if misfit is not None:
         return replace(misfit, lagged=lagged)
     matches = [item for item in judged if trusted(item) and clean(item)]
@@ -341,7 +350,7 @@ def contradiction_during_day(
     day_effects: tuple[Effect, ...],
     earlier: tuple[Effect, ...] = (),
     floor: int | None = None,
-) -> Verdict | None:
+) -> tuple[Verdict | None, frozenset[Way] | None]:
     """The first trustworthy reading taken during the day, from
     ``DAY_READINGS_FROM`` after its start, that fits no value the ledger
     allows at its time: the day before's end, ``start`` before any weekly
@@ -350,7 +359,9 @@ def contradiction_during_day(
     battle of the day landed by then. Once every way a reading fits has the
     loss landed, or the raise applied, every later one must too. A battle in flight is read both
     ways, and the latest attacks' late credits, ``earlier`` the day before's
-    battles already in its end, may be missing."""
+    battles already in its end, may be missing. Also every way the day's
+    battles may have shown by then, from which the readings from its end
+    Reset on go on (``decide``'s ``history``)."""
     judged = (
         judge(
             reading, end_before_loss=start + pending_loss,
@@ -362,15 +373,20 @@ def contradiction_during_day(
         if not reading.confirm_only
         and day_start + DAY_READINGS_FROM <= reading.read_at < reset_at
     )
-    return _first_misfit(item for item in judged if item is not None)[0]
+    misfit, _, surviving = _first_misfit(item for item in judged if item is not None)
+    before = {effect.identity for effect in earlier}
+    return misfit, None if surviving is None else frozenset(
+        (0, False, shown - before) for _, _, shown in surviving)
 
 
-def _first_misfit(judged: Iterable[_Judged]) -> tuple[Verdict | None, int]:
+def _first_misfit(
+    judged: Iterable[_Judged], surviving: frozenset[Way] | None = None,
+) -> tuple[Verdict | None, int, frozenset[Way] | None]:
     """The first of these readings, in order, that fits no value, or no way
-    that can follow a way an earlier one fits: a loss landed, the weekly
-    raise applied and a credit shown stay so. Also the loss every way still
-    possible after the last one has landed."""
-    surviving: frozenset[tuple[int, bool, frozenset[str]]] | None = None
+    that can follow a way an earlier one fits, or one of ``surviving``: a
+    loss landed, the weekly raise applied and a credit shown stay so. Also
+    the loss every way still possible after the last one has landed, and
+    those ways."""
     for item in judged:
         ways = item.ways if surviving is None else frozenset(
             (loss, raised, shown) for loss, raised, shown in item.ways
@@ -380,7 +396,7 @@ def _first_misfit(judged: Iterable[_Judged]) -> tuple[Verdict | None, int]:
         if not ways:
             landed = max((way[0] for way in surviving or ()), default=0)
             residual = item.residual if not item.matched else (landed - item.loss) or None
-            return Verdict("contradicted", item.reading, residual=residual), landed
+            return Verdict("contradicted", item.reading, residual=residual), landed, surviving
         surviving = ways
     losses = {way[0] for way in surviving or ()}
-    return None, losses.pop() if len(losses) == 1 else 0
+    return None, losses.pop() if len(losses) == 1 else 0, surviving

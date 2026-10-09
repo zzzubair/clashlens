@@ -733,9 +733,10 @@ def load_readings(
     ``reset_profile_observation_id``, which the day reads as its Reset
     reading, that can judge the day (``reading_rule``): one accepted,
     eligible and naming the day's Season, or a Legend I profile naming
-    Season 0, which can only confirm. A reading can contradict only while
-    the player's battle logs from the day's end Reset log on are continuous
-    up to it: one taken after the last log before one that may have missed
+    Season 0, which can only confirm. A reading during the day is judged on
+    the day's own battle logs; one from its end Reset on can contradict only
+    while the player's battle logs from the day's end Reset log on are
+    continuous up to it: one taken after the last log before one that may have missed
     a battle, or after the newest, or the last successful check with its
     content, can only confirm, as a battle it shows may not be known.
     Readings from when an unreadable row of a battle log saved
@@ -807,7 +808,8 @@ def load_readings(
     return tuple(
         reading_rule.Reading(
             at, int(trophies),
-            confirm_only=not accepted or known_until is None or at > known_until,
+            confirm_only=not accepted or at >= ranked_day.end and (
+                known_until is None or at > known_until),
         )
         for at, trophies, accepted in rows
         if trophies is not None

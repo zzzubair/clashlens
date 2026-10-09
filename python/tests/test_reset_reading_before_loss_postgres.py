@@ -998,3 +998,34 @@ def test_a_log_not_joined_to_the_reset_log_makes_no_reading_trustworthy(
 
     later = [reading for reading in readings if reading.trophies == 6040]
     assert later and all(reading.confirm_only for reading in later)
+
+
+def test_a_reading_during_the_day_is_trusted_without_a_log_after_its_end(
+    database_url: str, archive_server
+) -> None:
+    # Day B's end Reset saved no battle log and none came later. Its noon
+    # reading is judged on day B's own logs, so it can still disagree.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="noon", endpoint="profile",
+            body=_profile(6010), observed_at=DAY_B + timedelta(hours=7), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                ).fetchone()[0]
+                readings, _ = ranked_day_inputs.load_readings(
+                    database, connection, player_id, ranked_day_for(DAY_B),
+                    reset_profile_observation_id=None, end_battle_log_observation_id=None,
+                )
+        finally:
+            database.close()
+
+    noon = [reading for reading in readings if reading.trophies == 6010]
+    assert noon and not any(reading.confirm_only for reading in noon)

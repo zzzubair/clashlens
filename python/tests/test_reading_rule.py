@@ -306,7 +306,7 @@ def test_a_reading_during_the_day_must_show_the_battles_landed_by_then() -> None
         return contradiction_during_day(
             readings, day_start=day_start, reset_at=RESET, start=6000,
             pending_loss=pending_loss, day_effects=DAY_BATTLES,
-        )
+        )[0]
 
     noon = day_start + timedelta(hours=7)
     assert during(Reading(noon, 6010)) is None
@@ -380,7 +380,7 @@ def test_a_loss_every_reading_of_it_shows_landed_never_un_lands() -> None:
          Reading(day_start + timedelta(hours=1), 6110)),
         day_start=day_start, reset_at=RESET, start=6000, pending_loss=80,
         day_effects=attack,
-    )
+    )[0]
     assert found is not None and (found.reading.trophies, found.residual) == (6110, 80)
 
 
@@ -547,7 +547,7 @@ def test_the_day_befores_late_attack_credit_carries_into_the_next_day() -> None:
         return contradiction_during_day(
             (Reading(day_start + timedelta(minutes=20), trophies),), day_start=day_start,
             reset_at=RESET, start=6000, pending_loss=0, day_effects=day, earlier=earlier,
-        )
+        )[0]
 
     assert during(5920) is None
     assert during(5915) is not None
@@ -627,7 +627,7 @@ def test_the_weekly_raise_once_shown_never_goes_back() -> None:
          Reading(day_start + timedelta(minutes=30), 4900)),
         day_start=day_start, reset_at=RESET, start=4900, pending_loss=200,
         day_effects=(), floor=5000,
-    )
+    )[0]
     sunday = decide(
         (Reading(at(20), 5000), Reading(at(30), 4900)), reset_at=RESET,
         end_before_loss=5100, loss_candidates=(200,), loss_certain=True,
@@ -667,7 +667,7 @@ def test_a_raise_that_changes_nothing_still_counts_as_applied() -> None:
          Reading(monday_start + timedelta(minutes=40), 5020)),
         day_start=monday_start, reset_at=monday_start + timedelta(days=1), start=5020,
         pending_loss=200, day_effects=(), earlier=(sunday_attack,), floor=5000,
-    )
+    )[0]
 
     assert sunday.outcome == "verified"
     assert during is None
@@ -694,3 +694,24 @@ def test_a_monday_reading_can_show_the_raise_when_sunday_ended_above_5000() -> N
     ))
 
     assert "trophy_equation_mismatch" not in result.failure_reasons
+
+
+def test_a_credit_shown_during_the_day_stays_shown_after_its_end() -> None:
+    # Tuesday starts at 6,000, gains 40 at 09:00 (read at 09:20 as 6,040),
+    # then loses eight defenses of 40: it ends at 5,720. Wednesday's 05:20
+    # 5,680 would be that +40 credit missing again, which cannot be.
+    day = test_reconciliation.DAY
+    battles = (BattleContribution("attack", "offense", 40,
+                                  battle_timestamp=day.start + timedelta(hours=4)),
+               *(BattleContribution(f"defense-{index}", "defense", 40,
+                                    battle_timestamp=day.start + timedelta(hours=5 + index))
+                 for index in range(8)))
+    result = reconcile_ranked_day(test_reconciliation._input(
+        start_trophies=6000, next_start_trophies=None, contributions=battles,
+        readings=(Reading(day.start + timedelta(hours=4, minutes=20), 6040),
+                  Reading(day.end + timedelta(minutes=20), 5680),
+                  Reading(day.end + timedelta(minutes=40), 5720)),
+    ))
+
+    assert result.state == "Inconsistent"
+    assert "trophy_equation_mismatch" in result.failure_reasons
