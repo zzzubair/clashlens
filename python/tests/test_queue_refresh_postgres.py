@@ -162,9 +162,10 @@ def test_unchanged_covering_check_lets_a_later_reading_contradict_the_day(
                 INSERT INTO collector_response_state (
                     scope, identity_key, endpoint, player_id, normalized_tag,
                     last_response_hash, last_content_fingerprint, last_occurrence_key,
-                    last_seen_at, last_observation_id, last_success_at
+                    last_applied_occurrence_key, last_seen_at, last_observation_id,
+                    last_success_at
                 ) VALUES ('player', %s, 'battle_log', %s, %s, %s, %s, 'reset-log',
-                          %s, %s, %s)
+                          'reset-log', %s, %s, %s)
                 """,
                 (TAG, player_id, TAG, digest, digest, DAY_C, log_id, DAY_C),
             )
