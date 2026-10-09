@@ -242,7 +242,7 @@ describe("today's Legend day wording", () => {
     );
     const gap = "Battles add up to 5,050; next day started at 5,992.";
     expect(cell(html, "2026-10-06", "End of day")).toMatch(
-      /^<strong>5,992<span class="day-mark day-mark-gap" title="Uncertain">.*<\/strong><span>Battles add up to 5,050; next day started at 5,992.<\/span>/,
+      /^<strong>5,992<span class="day-mark day-mark-gap" title="Uncertain">.*<\/strong><span class="legend-day-end-conflict">Battles add up to 5,050; next day started at 5,992.<\/span>/,
     );
     // The whole day is Uncertain: its heading and its explanation too.
     const conflicted = html.split('id="legend-day-2026-10-06"')[1].split("</details>")[0];

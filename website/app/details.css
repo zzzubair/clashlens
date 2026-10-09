@@ -254,6 +254,11 @@
   align-self: end;
   white-space: nowrap;
 }
+/* The disagreement note is a sentence, so it wraps inside its column. */
+.player-page .legend-day-stat > .legend-day-end-conflict {
+  flex-basis: 100%;
+  white-space: normal;
+}
 .player-page .legend-day-start {
   grid-area: start;
 }

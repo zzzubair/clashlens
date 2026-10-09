@@ -1293,7 +1293,9 @@ function LegendDay({
                 : end.trophies.toLocaleString("en-GB")}
             {isCurrentDay || end.trophies === null ? null : <DayMark status={status} />}
           </strong>
-          {!isCurrentDay && end.conflict ? <span>{end.conflict}</span> : null}
+          {!isCurrentDay && end.conflict ? (
+            <span className="legend-day-end-conflict">{end.conflict}</span>
+          ) : null}
         </span>
         <span className="legend-day-stat legend-day-rank">
           <small>Reset rank</small>
