@@ -18,8 +18,15 @@ Both limits are settings, so more can run while live work keeps up, and each
 halves, rounded up, as soon as live work strains: live jobs waiting
 ``LIVE_STRAIN_SECONDS``, about twice the 14 seconds 9 in 10 live responses
 waited on 9 Oct 2026, or a worker statement waiting ``LOCK_STRAIN_SECONDS``
-on a lock. Live work is still claimed first, and a claim takes at most one
-background job.
+on a lock. Live work is still claimed first, and background work fills only
+what the claim has left, each kind up to its own room, the kind using less
+of its limit first, ties going at random in proportion to the limits, so a
+worker with one free background thread still runs both. A claim that found
+no live work waits up to ``PERMIT_WAIT`` for another claim's permit. On 9 Oct
+2026 a claim gave up at once, took one background job and the older kind
+first, and its thread slept the 1 second poll: raising the limits from 2 and
+4 to 6 and 6 cut background work from about 217 jobs a minute to 178, with
+rechecks averaging 0.05 running against 2.6 other background jobs.
 
 Live work is behind, or strains, when enough of it has waited that long:
 at least ``LIVE_LAG_MIN_JOBS`` jobs and ``LIVE_LAG_SHARE`` of the live work
@@ -35,9 +42,16 @@ stops it 39% of 05:00 to 06:20, when up to 21,800 live jobs waited.
 from __future__ import annotations
 
 import os
+import random
 from typing import Any
 
+from psycopg import ClientCursor
+from psycopg.errors import LockNotAvailable
+
 BACKGROUND_PERMIT_KEY = "background-work-permit"
+# Under the second a worker statement may wait on a lock before live work
+# counts as strained, so waiting for the permit never halves the limits.
+PERMIT_WAIT = "500ms"
 BACKGROUND_JOB_LIMIT = int(os.environ.get("CLASHLENS_BACKGROUND_JOB_LIMIT", "2"))
 DAY_RECHECK_PRIORITY = 26
 DAY_RECHECK_JOB_LIMIT = int(os.environ.get("CLASHLENS_DAY_RECHECK_JOB_LIMIT", "4"))
@@ -54,10 +68,12 @@ LIVE_WORK_TYPES = ("process_observation", "replay_observation", "reconcile_ranke
 
 def background_lanes(
     connection: Any, jobs_relation: str, denormalized_contract: bool,
-    supports_coordinator: bool, supports_dependency: bool,
-) -> tuple[int, ...]:
-    """The background priorities with room for this claim to lease one job;
-    with any, it then holds the permit.
+    supports_coordinator: bool, supports_dependency: bool, *, wait: bool = False,
+) -> list[tuple[int, int]]:
+    """Each background priority with room, and how many more jobs it may
+    lease, the one using less of its limit first, ties at random in proportion
+    to the limits; with any, this claim holds the permit. With ``wait`` it
+    waits up to ``PERMIT_WAIT`` for the permit.
 
     Only live work this worker can claim counts, so a newer contract's never
     pauses background work for good. Late live work counts while it waits,
@@ -94,17 +110,17 @@ def background_lanes(
             "job.state = 'waiting_dependency'" + ("" if supports_dependency else f" AND {tries}"),
             "job.state = 'leased'",
         ))
-    if not connection.execute(
-        "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
-        (BACKGROUND_PERMIT_KEY,),
-    ).fetchone()[0]:
-        return ()
+    if not _take_permit(connection, wait):
+        return []
     # Only the worker's own sessions show what they wait on. The lock table,
     # which says when each wait began, is read only once one of them has run
     # that long and is waiting on a lock.
     since = "statement_timestamp() - %(lock_strain)s * interval '1 second'"
-    bulk, rechecks, waiting, strained, late, lock_wait = connection.execute(
-        f"""
+    # Its values never change, so they are written into it: from its sixth
+    # run on a connection psycopg prepares it and PostgreSQL keeps its plan,
+    # 0.4 ms a run instead of about 15 ms planning it with the permit held.
+    bulk, rechecks, waiting, strained, late, lock_wait = connection.execute(ClientCursor(
+        connection).mogrify(f"""
         SELECT count(*) FILTER (WHERE priority = %(backfill_priority)s),
                count(*) FILTER (WHERE priority = %(recheck_priority)s),
                {live_waiting("live_due")}, {live_waiting("live_strain")},
@@ -134,12 +150,31 @@ def background_lanes(
             "lock_strain": LOCK_STRAIN_SECONDS,
             "live_work_types": list(LIVE_WORK_TYPES),
         },
-    ).fetchone()
+    )).fetchone()
     threshold = max(LIVE_LAG_MIN_JOBS, LIVE_LAG_SHARE * waiting)
     strained = strained >= threshold or lock_wait
-    return () if late >= threshold else tuple(
-        priority for priority, leased, limit in (
-            (PYTHON_BACKFILL_PRIORITY, bulk, BACKGROUND_JOB_LIMIT),
-            (DAY_RECHECK_PRIORITY, rechecks, DAY_RECHECK_JOB_LIMIT),
-        ) if leased < ((limit + 1) // 2 if strained else limit)
-    )
+    lanes = sorted((leased / cap, -random.random() ** (1 / cap), priority, cap - leased)
+                   for priority, leased, limit in (
+        (PYTHON_BACKFILL_PRIORITY, bulk, BACKGROUND_JOB_LIMIT),
+        (DAY_RECHECK_PRIORITY, rechecks, DAY_RECHECK_JOB_LIMIT),
+    ) for cap in [(limit + 1) // 2 if strained else limit] if leased < cap)
+    return [] if late >= threshold else [(priority, room) for *_, priority, room in lanes]
+
+
+def _take_permit(connection: Any, wait: bool) -> bool:
+    """Take the permit for this transaction; with ``wait``, wait up to
+    ``PERMIT_WAIT`` for the claim that holds it to commit."""
+    from .db import lock_wait
+
+    take = "SELECT pg_{}advisory_xact_lock(hashtextextended(%s, 0))"
+    if connection.execute(take.format("try_"), (BACKGROUND_PERMIT_KEY,)).fetchone()[0]:
+        return True
+    if not wait:
+        return False
+    try:
+        # The savepoint keeps a timed-out wait from ending the claim.
+        with connection.transaction(), lock_wait(connection, PERMIT_WAIT):
+            connection.execute(take.format(""), (BACKGROUND_PERMIT_KEY,))
+    except LockNotAvailable:
+        return False
+    return True

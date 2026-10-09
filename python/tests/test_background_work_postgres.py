@@ -105,14 +105,14 @@ def test_at_most_two_background_jobs_run_across_worker_processes(database_url: s
         _queue_redecodes(connection_info, [[index] for index in range(1, 6)])
         first, second = Database(connection_info), Database(connection_info)
         try:
-            # One claim of up to 8 jobs takes one background job, never a batch
-            # of them; on 9 Oct 2026 568 jobs were leased at once.
+            # One claim of up to 8 jobs fills the free background turns, never
+            # more; on 9 Oct 2026 568 jobs were leased at once.
             claimed = [
                 first.claim_jobs(owner="process-1", limit=8),
                 second.claim_jobs(owner="process-2", limit=8),
             ]
             assert [[claim.work_type for claim in claims] for claims in claimed] == [
-                ["redecode_army"], ["redecode_army"]
+                ["redecode_army", "redecode_army"], []
             ]
             assert BACKGROUND_JOB_LIMIT == 2
             assert first.claim_jobs(owner="process-1", limit=8) == []
@@ -136,7 +136,7 @@ def test_at_most_two_background_jobs_run_across_worker_processes(database_url: s
             assert first.claim_jobs(owner="process-1", limit=8) == []
             # Still running past their leases, their transactions holding the
             # rows, they keep both turns.
-            running = [claimed[1][0].job_id, claims[1].job_id]
+            running = [claimed[0][1].job_id, claims[1].job_id]
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     "UPDATE python_processing_jobs SET lease_expires_at ="
@@ -348,6 +348,82 @@ def test_background_limits_from_settings_halve_while_live_work_strains(
     assert just_blocked == (4, 8)
     assert lock_strained == (2, 4)
     assert recovered == (2, 4)
+
+
+def test_each_background_kind_fills_its_own_limit_after_live_work(
+    database_url: str, monkeypatch
+) -> None:
+    # On 9 Oct 2026, with limits of 6 and 6, a claim took one background job,
+    # the older kind first: rechecks averaged 0.05 running against 2.6 other
+    # background jobs, fewer than with limits of 2 and 4.
+    monkeypatch.setattr(background_pacing, "BACKGROUND_JOB_LIMIT", 6)
+    monkeypatch.setattr(background_pacing, "DAY_RECHECK_JOB_LIMIT", 6)
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        repair = {_queue_result(connection_info, f"repair:{index}", priority=25,
+                                due_at=now - timedelta(hours=1)) for index in range(8)}
+        rechecks = {_queue_result(connection_info, f"recheck:{index}",
+                                  priority=DAY_RECHECK_PRIORITY) for index in range(8)}
+        live = {_queue_result(connection_info, f"live:{index}") for index in range(2)}
+        database = Database(connection_info)
+
+        def claim(limit: int) -> tuple[int, int, int]:
+            """How many live jobs, other background jobs and rechecks one claim takes."""
+            claimed = {claim.job_id for claim in database.claim_jobs(owner="lane", limit=limit)}
+            return len(claimed & live), len(claimed & repair), len(claimed & rechecks)
+
+        try:
+            # Live work first, then background work fills the rest of the claim.
+            live_taken, *background = claim(4)
+            assert live_taken == 2 and sorted(background) == [0, 2]
+
+            def first_won(taken: tuple[int, int, int]) -> tuple[int, int, int]:
+                return taken if background[0] else (taken[0], taken[2], taken[1])
+
+            # The kind using less of its limit goes first, whichever's jobs
+            # have waited longer.
+            assert claim(1) == first_won((0, 0, 1))
+            assert claim(8) == first_won((0, 3, 5))
+            # Each stops at its own limit.
+            assert claim(8) == first_won((0, 1, 0))
+            assert claim(8) == (0, 0, 0)
+        finally:
+            database.close()
+
+
+def test_a_claim_with_no_live_work_waits_briefly_for_the_background_permit(
+    database_url: str,
+) -> None:
+    # On 9 Oct 2026 a claim that found another claim holding the permit took
+    # no background job, and its thread slept the 1 second poll.
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[1], [2]])
+        database = Database(connection_info)
+
+        def claim_while_permit_held(seconds: float, **kwargs) -> tuple[list[int], float]:
+            with psycopg.connect(connection_info) as holder:
+                holder.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                               (background_pacing.BACKGROUND_PERMIT_KEY,))
+                release = threading.Timer(seconds, holder.commit)
+                release.start()
+                started = time.monotonic()
+                claims = database.claim_jobs(owner="lane", **kwargs)
+                elapsed = time.monotonic() - started
+                release.join()
+            return [claim.job_id for claim in claims], elapsed
+
+        try:
+            claimed, waited = claim_while_permit_held(0.2, work_types=["redecode_army"])
+            assert len(claimed) == 1 and waited >= 0.15
+            # Held past the wait, the claim gives up without failing.
+            claimed, waited = claim_while_permit_held(2, work_types=["redecode_army"])
+            assert claimed == [] and waited < 1.5
+            # A claim that took live work never holds it back to wait.
+            live = _queue_result(connection_info, "live")
+            claimed, waited = claim_while_permit_held(2, limit=8)
+            assert claimed == [live] and waited < 0.4
+        finally:
+            database.close()
 
 
 def test_a_few_straggling_live_jobs_never_stop_background_work(database_url: str) -> None:
