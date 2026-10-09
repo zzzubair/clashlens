@@ -102,7 +102,7 @@ CONDITIONS = {
     "battle_day": (
         (
             "A Legend day today or yesterday has 9 attacks or 9 defenses, or a battle"
-            " report is stamped 05:03:30-05:07:00 UTC: the game's no-attack window"
+            " report is stamped 05:03:40-05:07:00 UTC: the game's no-attack window"
             " after the Reset may have changed, so battles may be in the wrong day"
         ),
         "./ops logs worker",
@@ -490,7 +490,8 @@ def battle_day_probe() -> None:
     (``domain.BATTLE_DAY_GRACE``): the game lets no new-day attack start until
     about 05:07:20 and every ended-day attack had ended by 05:03:38 at all 11
     Resets to 8 October 2026. A day with a 9th attack or defense, or a report
-    stamped 05:03:30-05:07:00, means that window moved.
+    stamped 05:03:40-05:07:00 after either day's Reset, means that window
+    moved.
     """
     import psycopg
 
@@ -515,10 +516,11 @@ def battle_day_probe() -> None:
                     JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
                     WHERE battle.ranked_day_start >= (SELECT day_start FROM since)
                           - interval '1 day'
+                      AND evidence.battle_timestamp >= (SELECT day_start FROM since)
                       AND evidence.battle_timestamp - date_bin(
                               interval '1 day', evidence.battle_timestamp,
                               timestamptz '2000-01-01 05:00:00+00')
-                          BETWEEN interval '3 minutes 30 seconds' AND interval '7 minutes'
+                          BETWEEN interval '3 minutes 40 seconds' AND interval '7 minutes'
                 )
                 """
             ).fetchone()[0]

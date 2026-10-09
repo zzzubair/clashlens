@@ -251,7 +251,7 @@ use the [operating notes](operating.md#respond-to-alerts).
   battle lookup.
 - **Battles may be in the wrong day**: a saved result for the current or
   previous Legend day with a 9th attack or defense, or a battle report
-  stamped 05:03:30 to 05:07:00 UTC after either of their Resets. A report
+  stamped 05:03:40 to 05:07:00 UTC after either of their Resets. A report
   belongs to the day of its stamp less five minutes because, at all 11
   Resets from 29 September to 8 October 2026, every ended-day battle ended by
   05:03:38 and no new-day battle started before 05:07:20; the Reset sweep

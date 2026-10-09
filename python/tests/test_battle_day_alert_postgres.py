@@ -32,14 +32,16 @@ def test_battle_day_probe_counts_reports_stamped_in_the_no_attack_window(
             attacker, *defenders = [
                 row[0] for row in connection.execute(
                     "INSERT INTO players (normalized_tag)"
-                    " SELECT '#Q' || n FROM generate_series(0, 5) AS n ORDER BY n RETURNING id"
+                    " SELECT '#Q' || n FROM generate_series(0, 7) AS n ORDER BY n RETURNING id"
                 ).fetchall()
             ]
             for defender, (day, stamped) in zip(defenders, (
-                (today - timedelta(days=1), today + timedelta(minutes=3, seconds=20)),  # ended day
-                (today - timedelta(days=1), today + timedelta(minutes=4)),  # counted
+                (today - timedelta(days=1), today + timedelta(minutes=3, seconds=38)),  # ended day
+                (today - timedelta(days=1), today + timedelta(minutes=3, seconds=40)),  # counted
                 (today, today + timedelta(minutes=6, seconds=59)),  # counted
                 (today, today + timedelta(minutes=7, seconds=20)),  # first new-day attacks
+                (today - timedelta(days=2), today - timedelta(days=1, minutes=-4)),  # counted
+                (today - timedelta(days=2), today - timedelta(days=2, minutes=-4)),  # two Resets ago
                 (today - timedelta(days=3), today - timedelta(days=2, minutes=-4)),  # too old
             ), strict=True):
                 connection.execute(
@@ -83,4 +85,4 @@ def test_battle_day_probe_counts_reports_stamped_in_the_no_attack_window(
                 )
         capsys.readouterr()
         alerts.battle_day_probe()
-        assert int(capsys.readouterr().out) == 4
+        assert int(capsys.readouterr().out) == 5

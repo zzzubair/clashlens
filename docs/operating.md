@@ -981,8 +981,8 @@ less five minutes. That holds because the game lets no new-day attack start
 until about 05:07:20 and every ended-day attack had ended by 05:03:38 at all
 11 Resets to 8 October 2026; the Reset sweep also reads every profile in that
 gap. A saved day of the current or previous Legend day with 9 attacks or 9
-defenses, or a report stamped 05:03:30 to 05:07:00 after a Reset, means that
-gap moved.
+defenses, or a report stamped 05:03:40 to 05:07:00 after either day's Reset,
+means that gap moved.
 
 **First checks:** `./ops logs worker --since '2 hours ago' --no-pager`, then
 look at the days and reports the alert counts.
