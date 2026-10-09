@@ -549,7 +549,8 @@ def test_day_after_a_reading_before_the_loss_takes_the_loss_off_once(
             _process(connection_info, archive_server, jobs)
         day_1 = _day_1(connection_info)
         day_2 = _day(connection_info, DAY_2)
-    assert day_1[0] == "Complete" and day_1[3] == end_1
+    # Read before the loss, Day 1's end is calculated: the loss is unsettled.
+    assert day_1[:2] == ("Complete", "inferred") and day_1[3] == end_1
     assert day_2[2] == end_1 and day_2[6] == "previous_day_end"
     assert day_2[:2] == ("Complete", "inferred") and day_2[3] == end_2
 

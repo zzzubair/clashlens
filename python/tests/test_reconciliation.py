@@ -152,17 +152,14 @@ def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows()
         ("#Q0RUJC9J2", 249, (31, 31, 31, 31, 31, 31, 32, 32), 4751, 4753),
     )
     for tag, previous_loss, gains, start, reading in cases:
-        result = reconcile_ranked_day(
-            _input(
-                start_trophies=start,
-                next_start_trophies=reading,
-                contributions=tuple(
-                    BattleContribution(f"{tag}-attack-{index}", "offense", gain)
-                    for index, gain in enumerate(gains)
-                ),
-                previous_day=PreviousRankedDay(True, 8, previous_loss, 0),
-            )
-        )
+        result = reconcile_ranked_day(_input(
+            start_trophies=start, next_start_trophies=reading,
+            contributions=tuple(
+                BattleContribution(f"{tag}-attack-{index}", "offense", gain)
+                for index, gain in enumerate(gains)
+            ),
+            previous_day=PreviousRankedDay(True, 8, previous_loss, 0),
+        ))
 
         assert result.state == "Complete", tag
         assert result.confidence == "exact"
@@ -173,29 +170,28 @@ def test_zero_defense_day_takes_the_full_automatic_loss_its_next_reading_shows()
         assert result.shield_state == "not_inferred"
 
     # One of the 86 quiet days kept its trophies, so it is still uncharged.
-    quiet = reconcile_ranked_day(
-        _input(
-            start_trophies=4991,
-            next_start_trophies=4991,
-            contributions=(),
-            previous_day=PreviousRankedDay(True, 7, 232, 0),
-        )
-    )
+    quiet = reconcile_ranked_day(_input(
+        start_trophies=4991, next_start_trophies=4991, contributions=(),
+        previous_day=PreviousRankedDay(True, 7, 232, 0),
+    ))
+    # Before the weekly raise to 5,000 the charge would cross it, which hides it.
+    monday = reconcile_ranked_day(_input(
+        start_trophies=5200, next_start_trophies=4960, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 240, 0), boundary_kind="weekly",
+    ))
     # Any other drop is still a mismatch, and Day 1 has no previous day.
-    other = reconcile_ranked_day(
-        _input(
-            start_trophies=4695, next_start_trophies=4392, contributions=(),
-            previous_day=PreviousRankedDay(True, 8, 305, 0),
-        )
-    )
-    day_1 = reconcile_ranked_day(
-        _input(
-            start_trophies=4695, next_start_trophies=4391, contributions=(),
-            previous_day=PreviousRankedDay(True, 8, 305, 0), season_first_day=True,
-        )
-    )
+    other = reconcile_ranked_day(_input(
+        start_trophies=4695, next_start_trophies=4392, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 305, 0),
+    ))
+    day_1 = reconcile_ranked_day(_input(
+        start_trophies=4695, next_start_trophies=4391, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 305, 0), season_first_day=True,
+    ))
 
     assert (quiet.state, quiet.automatic_defense_loss) == ("Complete", None)
+    assert (monday.state, monday.confidence, monday.next_start_trophies) == (
+        "Complete", "inferred", 5200)
     assert quiet.shield_state == "inferred_shielded"
     assert other.state == day_1.state == "Inconsistent"
     assert other.automatic_defense_loss is day_1.automatic_defense_loss is None

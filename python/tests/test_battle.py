@@ -509,13 +509,17 @@ def test_battle_reported_just_after_reset_belongs_to_the_day_before(
     assert battle.battle_timestamp.strftime("%Y%m%dT%H%M%S.000Z") == battle_timestamp
 
 
-def test_a_live_row_without_a_timestamp_is_malformed_not_a_battle_in_1970() -> None:
+@pytest.mark.parametrize("length", [180, "180"])
+def test_a_live_row_without_a_timestamp_is_malformed_not_a_battle_in_1970(
+    length: int | str,
+) -> None:
     """Live battleTime is the battle's length in seconds; a row missing its
-    battleTimestamp must not become a battle dated 1970 (lab finding F4)."""
+    battleTimestamp must not become a battle dated 1970 (lab finding F4),
+    even with the length written as text."""
     payload = json.loads(FIXTURE.read_bytes())
     row = payload["items"][0]
     del row["battleTimestamp"]
-    row["battleTime"] = 180
+    row["battleTime"] = length
     parsed = parse_battle_log(
         json.dumps(payload).encode(),
         expected_tag="#2PP",

@@ -344,15 +344,20 @@ def _battle_timestamp_value(source: dict[str, Any], parser_version: str) -> Any:
             # Live battleTime is the battle's length in seconds, never a
             # date: a row without battleTimestamp is malformed, not a battle
             # fought in 1970. Only an archived date still stands in, as text
-            # or as a plausible number of seconds since 1970.
+            # or as a plausible number of seconds since 1970, in digits or not.
             fallback = source.get("battleTime")
+            number = (
+                int(fallback)
+                if isinstance(fallback, str) and fallback.isascii() and fallback.isdigit()
+                else fallback
+            )
             value = (
                 fallback
-                if isinstance(fallback, str)
+                if isinstance(number, str)
                 or (
-                    isinstance(fallback, (int, float))
-                    and not isinstance(fallback, bool)
-                    and fallback >= _LEGACY_EPOCH_MINIMUM
+                    isinstance(number, (int, float))
+                    and not isinstance(number, bool)
+                    and number >= _LEGACY_EPOCH_MINIMUM
                 )
                 else None
             )
