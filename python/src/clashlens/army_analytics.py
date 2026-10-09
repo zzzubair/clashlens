@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from .catalog import CATALOG_VERSION, catalog_name
+from .catalog import CATALOG_VERSION, unit_label
 
 ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
 LENSES = frozenset({"offense", "defense"})
@@ -137,9 +137,72 @@ _RELATIONSHIP_CATEGORIES = frozenset(
 )
 _COUNTS = (
     "facts", "usable", "unknown_affected", "unknown_occurrences", "disagreements",
-    "cc_unknown",
 )
-_TALLIES = ("states", "hero_facts", "hero_unknown", "unknown", "unknown_present")
+_TALLIES = ("states", "hero_facts")
+# Where an old partial army kept each unnamed id, by army code section.
+_UNNAMED_SECTIONS = {
+    "u": ("home_troops", "troop"), "i": ("cc_troops", "troop"),
+    "s": ("spells", "spell"), "d": ("spells", "spell"),
+}
+
+
+def with_unnamed_ids(fact: dict[str, Any]) -> dict[str, Any]:
+    """The army with every saved id in place, named or not.
+
+    Armies saved before saving stopped depending on the unit list kept ids
+    it did not name apart, in ``unresolved_components``, and were marked
+    partial. Reading puts those ids back beside the others, so they count
+    like any other unit and no saved army needs saving again.
+    """
+    unnamed = [
+        item for item in fact.get("unresolved_components") or []
+        if isinstance(item, dict) and item.get("numeric_id") is not None
+    ]
+    if not unnamed and fact.get("army_state", fact.get("status")) != "partial":
+        return fact
+    fact = {**fact, "unresolved_components": []}
+    for key in ("army_state", "status"):
+        if fact.get(key) == "partial":
+            fact[key] = "decoded"
+    heroes = {
+        str(hero["hero"]): {**hero, "equipment": list(hero.get("equipment") or [])}
+        for hero in fact.get("heroes") or []
+        if isinstance(hero, dict) and hero.get("hero")
+    }
+    for item in unnamed:
+        number, origin = item["numeric_id"], str(item.get("origin", ""))
+        if item.get("section") in _UNNAMED_SECTIONS:
+            field, kind = _UNNAMED_SECTIONS[item["section"]]
+            entry = [f"{kind}:{number}", int(item.get("quantity", 1)), origin]
+            fact[field] = [*(fact.get(field) or []), entry]
+            continue
+        # Hero section origins read "hero:<id>:pet" or "hero:<id>:equipment";
+        # an unnamed hero itself ("hero") already has its own entry.
+        if not origin.startswith("hero:"):
+            continue
+        hero_id, _, part = origin.removeprefix("hero:").partition(":")
+        hero = heroes.setdefault(
+            f"hero:{hero_id}", {"hero": f"hero:{hero_id}", "pet": None, "equipment": []}
+        )
+        if part == "pet":
+            hero["pet"] = f"pet:{number}"
+        elif part == "equipment":
+            hero["equipment"] = sorted([*hero["equipment"], f"equipment:{number}"])
+    fact["heroes"] = list(heroes.values())
+    return fact
+
+
+def public_army_states(states: dict[str, int]) -> dict[str, int]:
+    """Army read results by state; an old partial army counts as read."""
+    states = Counter(states)
+    return {
+        "fully_decoded": states.pop("decoded", 0) + states.pop("partial", 0),
+        "missing_code": states.pop("missing_army_share_code", 0),
+        "empty_code": states.pop("empty_army_share_code", 0),
+        "malformed": states.pop("malformed", 0),
+        "structurally_unsupported": states.pop("structurally_unsupported", 0),
+        **dict(sorted(states.items())),
+    }
 
 
 def new_army_totals() -> dict[str, Any]:
@@ -186,11 +249,6 @@ def _individual_items(fact: dict[str, Any], category: str) -> set[str]:
 def _relationships(fact: dict[str, Any], category: str) -> set[str]:
     result: set[str] = set()
     if category == "cc-composition":
-        if fact["army_state"] == "partial" and any(
-            item.get("section") == "i"
-            for item in fact["unresolved_components"]
-        ):
-            return result
         composition = sorted(
             (str(item[0]), int(item[1]))
             for item in fact["cc_troops"]
@@ -216,17 +274,6 @@ def _relationships(fact: dict[str, Any], category: str) -> set[str]:
     return result
 
 
-def _unknown_heroes(fact: dict[str, Any], category: str) -> set[str]:
-    if fact["army_state"] == "decoded":
-        return set()
-    suffix = "pet" if category == "hero-pet" else "equipment"
-    return {
-        str(item.get("origin"))[: -len(suffix) - 1]
-        for item in fact["unresolved_components"]
-        if str(item.get("origin", "")).endswith(f":{suffix}")
-    }
-
-
 def add_army_fact(
     totals: dict[str, Any], fact: dict[str, Any], category: str
 ) -> None:
@@ -240,6 +287,7 @@ def add_army_fact(
     totals["disagreements"] += bool(fact["perspective_disagreement"])
     if state not in {"decoded", "partial"}:
         return
+    fact = with_unnamed_ids(fact)
     totals["usable"] += 1
     values = (
         _relationships(fact, category)
@@ -253,28 +301,15 @@ def add_army_fact(
         row[1 + stars] += 1
         row[5] += stars
         row[6] += int(fact["destruction_percentage"])
-    if not relationship_category:
-        return
-    if category == "cc-composition":
-        if state == "partial" and any(
-            item.get("section") == "i" for item in unresolved
-        ):
-            totals["cc_unknown"] += 1
-        return
-    hero_ids = {
-        str(hero["hero"])
-        for hero in fact["heroes"]
-        if isinstance(hero, dict) and hero.get("hero")
-    }
     if category == "equipment-for-hero":
-        _tally(totals["hero_facts"], hero_ids)
-    scoped_unknown = _unknown_heroes(fact, category)
-    _tally(totals["unknown"], scoped_unknown)
-    _tally(totals["hero_unknown"], scoped_unknown & hero_ids)
-    _tally(
-        totals["unknown_present"],
-        (key for key in values if key.split("|", 1)[0] in scoped_unknown),
-    )
+        _tally(
+            totals["hero_facts"],
+            {
+                str(hero["hero"])
+                for hero in fact["heroes"]
+                if isinstance(hero, dict) and hero.get("hero")
+            },
+        )
 
 
 def merge_army_totals(totals: dict[str, Any], other: dict[str, Any]) -> None:
@@ -294,49 +329,26 @@ def finish_army_result(
     totals: dict[str, Any], selection: ArmyAnalyticsSelection
 ) -> dict[str, Any]:
     category = selection.category
-    relationship_category = category in _RELATIONSHIP_CATEGORIES
     usable_count = totals["usable"]
     rows = []
     for key in sorted(totals["rows"]):
         sample, *star_counts, stars, destruction = totals["rows"][key]
-        excluded_unknown = 0
-        if category == "cc-composition":
-            excluded_unknown = totals["cc_unknown"]
-            denominator = usable_count - excluded_unknown
-        elif relationship_category:
-            hero_id = key.split("|", 1)[0]
-            unknown = totals[
-                "hero_unknown" if category == "equipment-for-hero" else "unknown"
-            ]
-            excluded_unknown = unknown.get(hero_id, 0) - totals[
-                "unknown_present"
-            ].get(key, 0)
-            if category == "equipment-for-hero":
-                denominator = totals["hero_facts"].get(hero_id, 0) - excluded_unknown
-            else:
-                denominator = usable_count - excluded_unknown
-        else:
-            denominator = usable_count
+        denominator = (
+            totals["hero_facts"].get(key.split("|", 1)[0], 0)
+            if category == "equipment-for-hero"
+            else usable_count
+        )
         star_rates = [count / sample if sample else 0 for count in star_counts]
-        typed_ids = key.replace("cc:", "").replace("|", ",").split(",")
-
-        def item_label(item: str) -> str:
-            typed_id = item.split("x", 1)[0]
-            name = catalog_name(typed_id)
-            if name is not None:
-                return name
-            suffix = typed_id.split(":", 1)[1] if ":" in typed_id else typed_id
-            return f"Unknown ID {suffix}"
-
         rows.append({
-            "key": key, "label": " + ".join(item_label(item) for item in typed_ids),
+            "key": key, "label": row_label(key),
             "usage_count": sample, "usage_denominator": denominator,
             "usage_rate": sample / denominator if denominator else 0,
             "star_counts": star_counts, "star_rates": star_rates,
             "three_star_rate": star_rates[3],
             "average_stars": stars / sample if sample else 0,
             "average_destruction": destruction / sample if sample else 0,
-            "unknown_excluded_attacks": excluded_unknown,
+            # Unnamed ids count like any other unit, so nothing is excluded.
+            "unknown_excluded_attacks": 0,
         })
     sort_field = {
         "usage-rate": "usage_rate", "usage-count": "usage_count",
@@ -344,15 +356,7 @@ def finish_army_result(
         "average-destruction": "average_destruction",
     }[selection.sort]
     rows.sort(key=lambda row: (-float(row[sort_field]), row["key"]))
-    states = Counter(totals["states"])
-    army_states = {
-        "fully_decoded": states.pop("decoded", 0), "partial": states.pop("partial", 0),
-        "missing_code": states.pop("missing_army_share_code", 0),
-        "empty_code": states.pop("empty_army_share_code", 0),
-        "malformed": states.pop("malformed", 0),
-        "structurally_unsupported": states.pop("structurally_unsupported", 0),
-        **dict(sorted(states.items())),
-    }
+    army_states = public_army_states(totals["states"])
     return {
         "kind": "army-analytics", "total_attacks": totals["facts"],
         "usable_army_sample": usable_count, "army_states": army_states,
@@ -366,6 +370,12 @@ def finish_army_result(
         "versions": {"decoder": "army-decoder-v2", "catalog": CATALOG_VERSION, "analytics": ARMY_ANALYTICS_RULE_VERSION},
         "rows": rows,
     }
+
+
+def row_label(key: str) -> str:
+    """Names for a row key such as "hero:6|equipment:61" or "cc:troop:0x5"."""
+    typed_ids = key.replace("cc:", "").replace("|", ",").split(",")
+    return " + ".join(unit_label(item.split("x", 1)[0]) for item in typed_ids)
 
 
 def build_army_result(

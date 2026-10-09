@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -32,8 +31,10 @@ from .army_analytics import (
     CurrentSeasonEmpty,
     build_army_result,
     finish_army_result,
+    public_army_states,
+    row_label,
 )
-from .army_decoder import DECODER_VERSION
+from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
 from .army_rank_bands import (
     band_of,
@@ -42,7 +43,7 @@ from .army_rank_bands import (
     read_rank_band_totals,
 )
 from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
-from .catalog import CATALOG_VERSION, catalog_name
+from .catalog import CATALOG_VERSION
 from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
@@ -92,17 +93,22 @@ def get_army_season_summary(
             return None
         if row[14] is None or _text(row[12]) != ARMY_HISTORY_VERSION:
             return None
-        rows, unresolved = usage_rows(_json_array(row[14]), category, int(row[5]))
+        rows = usage_rows(_json_array(row[14]), category, int(row[5]))
         sort_field = "usage_rate" if sort == "usage-rate" else "usage_count"
         rows.sort(key=lambda item: (-float(item[sort_field]), item["key"]))
         numeric_rows = [{key: value for key, value in item.items() if key != "label"}
                         for item in rows]
         read_digest = hashlib.sha256(json.dumps(
-            [numeric_rows, unresolved], sort_keys=True, separators=(",", ":")
+            numeric_rows, sort_keys=True, separators=(",", ":")
         ).encode()).hexdigest()
         army_states = {
             _text(state): int(count) for state, count in dict(row[6] or {}).items()
         }
+        # Summaries saved before unnamed ids counted kept old partial armies
+        # apart; they count as read (army_analytics.with_unnamed_ids).
+        army_states["fully_decoded"] = army_states.get(
+            "fully_decoded", 0
+        ) + army_states.pop("partial", 0)
         total_attacks = int(row[4])
         requested = {
             "lens": lens,
@@ -137,7 +143,7 @@ def get_army_season_summary(
                 "shielded_player_days": 0,
             },
             "collection_coverage": {
-                "state": "partial" if unresolved or int(row[10]) else _text(row[3]),
+                "state": "partial" if int(row[10]) else _text(row[3]),
                 "completed_days": int(row[0]),
             },
             "freshness": {"state": "frozen"},
@@ -760,15 +766,13 @@ def get_battle_army(
 ) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         row = connection.execute(
-            """
+            f"""
             SELECT battle_id, perspective, status, failure_category,
                    home_troops, spells, siege, cc_troops, heroes,
                    unresolved_components, decoder_version, catalog_version
-            FROM battle_army_decodes
-            WHERE battle_id = %s AND perspective = %s AND is_active
-              AND decoder_version = %s AND catalog_version = %s
+            FROM {CURRENT_DECODES} AS decode WHERE perspective = %s
             """,
-            (battle_id, perspective, DECODER_VERSION, CATALOG_VERSION),
+            (DECODER_VERSION, [battle_id], perspective),
         ).fetchone()
         return None if row is None else _public_army(row)
 
@@ -860,18 +864,9 @@ def _build_troops_result_from_sql(
         state_counts,
         aggregate_rows,
     ) = summary
-    states: Counter[str] = Counter(
+    army_states = public_army_states(
         {_text(key): int(value) for key, value in (state_counts or {}).items()}
     )
-    army_states = {
-        "fully_decoded": states.pop("decoded", 0),
-        "partial": states.pop("partial", 0),
-        "missing_code": states.pop("missing_army_share_code", 0),
-        "empty_code": states.pop("empty_army_share_code", 0),
-        "malformed": states.pop("malformed", 0),
-        "structurally_unsupported": states.pop("structurally_unsupported", 0),
-        **dict(sorted(states.items())),
-    }
 
     rows = []
     for aggregate in aggregate_rows or []:
@@ -881,20 +876,10 @@ def _build_troops_result_from_sql(
         star_rates = [count / sample if sample else 0 for count in star_counts]
         stars = int(aggregate["stars"])
         destruction = int(aggregate["destruction"])
-        typed_ids = key.replace("cc:", "").replace("|", ",").split(",")
-
-        def item_label(item: str) -> str:
-            typed_id = item.split("x", 1)[0]
-            name = catalog_name(typed_id)
-            if name is not None:
-                return name
-            suffix = typed_id.split(":", 1)[1] if ":" in typed_id else typed_id
-            return f"Unknown ID {suffix}"
-
         rows.append(
             {
                 "key": key,
-                "label": " + ".join(item_label(item) for item in typed_ids),
+                "label": row_label(key),
                 "usage_count": sample,
                 "usage_denominator": int(usable_count),
                 "usage_rate": sample / usable_count if usable_count else 0,
@@ -1066,6 +1051,16 @@ def _query_troops_aggregates(
             WHERE CASE WHEN jsonb_typeof(value) = 'array'
                        THEN jsonb_array_length(value) > 0
                        ELSE false END
+            UNION
+            -- Old partial armies kept unnamed home troop ids apart; they
+            -- count like any other (army_analytics.with_unnamed_ids).
+            SELECT 'troop:' || (value ->> 'numeric_id')
+            FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(selected.unresolved_components) = 'array'
+                     THEN selected.unresolved_components ELSE '[]'::jsonb END
+            ) AS item(value)
+            WHERE jsonb_typeof(value) = 'object' AND value ->> 'section' = 'u'
+              AND value ->> 'numeric_id' IS NOT NULL
         ) AS component
         WHERE {fact_where}
           AND selected.army_state IN ('decoded', 'partial')

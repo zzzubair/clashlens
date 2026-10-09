@@ -453,7 +453,7 @@ def test_correction_replaces_stale_facts(database_url: str, archive_server) -> N
             db.close()
 
 
-def test_partial_decode_persists_known_and_unknown_facts_per_perspective(
+def test_unnamed_id_is_saved_with_the_army_and_its_identity(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url) as connection_info:
@@ -461,7 +461,7 @@ def test_partial_decode_persists_known_and_unknown_facts_per_perspective(
         _, job_id = store_observation(
             connection_info,
             archive_server,
-            occurrence_key="partial-perspective",
+            occurrence_key="unnamed-id",
             endpoint="battle_log",
             body=json.dumps(
                 {"items": [_live_row(True, "#8PP", "u2x58-3x9999s1x2", timestamp)]}
@@ -471,7 +471,7 @@ def test_partial_decode_persists_known_and_unknown_facts_per_perspective(
         )
         database, processor = _processor(connection_info, archive_server)
         try:
-            assert processor.process_job(job_id, owner="partial").outcome == "processed"
+            assert processor.process_job(job_id, owner="unnamed").outcome == "processed"
             with database.pool.connection() as connection:
                 row = connection.execute(
                     """
@@ -481,17 +481,10 @@ def test_partial_decode_persists_known_and_unknown_facts_per_perspective(
                     """
                 ).fetchone()
             assert text(row[0]) == "attacker"
-            assert text(row[1]) == "partial"
-            assert row[2] is None
-            assert row[3] == [["troop:58", 2, "home"]]
-            assert row[4] == [
-                {
-                    "numeric_id": 9999,
-                    "quantity": 3,
-                    "section": "u",
-                    "origin": "home",
-                }
-            ]
+            assert text(row[1]) == "decoded"
+            assert row[2] is not None
+            assert row[3] == [["troop:58", 2, "home"], ["troop:9999", 3, "home"]]
+            assert row[4] == []
         finally:
             database.close()
 
@@ -850,7 +843,7 @@ def test_battle_log_started_before_a_reset_records_its_member(
     ("old_code", "new_code", "expected_status"),
     [
         ("u1x58", "u2x58", "decoded"),
-        ("u1x58-1x9999", "u2x58-2x9999", "partial"),
+        ("u1x58-1x9999", "u2x58-2x9999", "decoded"),
         ("invalid-old", "invalid-new", "failed"),
         ("u1x58", "u1x58", "decoded"),
     ],
@@ -1115,120 +1108,110 @@ def test_deadlocked_battle_log_is_retried_without_using_an_attempt(
     assert (text(job[0]), job[1]) == ("complete", 1)
 
 
-def test_catalog_v3_migration_redecodes_current_season_armies_once(
-    database_url: str, archive_server
+def test_unit_list_change_writes_nothing_to_saved_battles(
+    database_url: str, archive_server, monkeypatch
 ) -> None:
-    migration = (
-        Path(__file__).parents[2] / "deploy/migrations/0089_unit_catalog_v3.sql"
-    ).read_text(encoding="utf-8")
-    earlier_season_at = datetime(2026, 10, 4, 12, tzinfo=UTC)
-    untracked_at = datetime(2026, 10, 6, 12, tzinfo=UTC)
-    unpublished_at = datetime(2026, 10, 7, 12, tzinfo=UTC)
-    tracked_at = datetime(2026, 10, 8, 12, tzinfo=UTC)
-    finalized_at = datetime(2026, 10, 9, 12, tzinfo=UTC)
+    # On 2026-10-09 live battle logs re-decoded every battle saved under the
+    # previous unit list, two jobs racing on each. Saved armies hold ids, so a
+    # later poll of the same battles saves nothing, whichever unit list saved
+    # them and even if it kept the then-unnamed Portal Pendant apart.
+    ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+    body = json.dumps(
+        {
+            "items": [
+                _live_row(True, "#8PP", "h6p17e61_49u5x177s1x2", ts),
+                _live_row(True, "#9PP", "h6p17e61_49u5x177", ts + timedelta(minutes=1)),
+            ]
+        }
+    ).encode()
+    read_all = "SELECT to_jsonb(decode) FROM battle_army_decodes AS decode ORDER BY id"
     with domain_database(database_url) as ci:
-        _, job_id = store_observation(
-            ci,
-            archive_server,
-            occurrence_key="catalog-v3",
-            endpoint="battle_log",
-            body=json.dumps(
-                {
-                    "items": [
-                        _live_row(True, "#8PP", "h6p17e61_49u5x177s1x2", tracked_at),
-                        _live_row(True, "#9PP", "h6p17e61_49u5x177", untracked_at),
-                        _live_row(True, "#QPP", "h6p17e61_49u5x177", unpublished_at),
-                        _live_row(True, "#RPP", "h6p17e61_49u5x177", finalized_at),
-                        _live_row(True, "#UPP", "h6p17e61_49u5x177", earlier_season_at),
-                    ]
-                }
-            ).encode(),
-            observed_at=finalized_at + timedelta(minutes=1),
-            normalized_tag="#2PP",
-        )
         db, proc = _processor(ci, archive_server)
         try:
-            assert proc.process_job(job_id, owner="seed").outcome == "processed"
-            with psycopg.connect(ci, autocommit=True) as connection:
-                (
-                    finalized_battle,
-                    tracked_battle,
-                    unpublished_battle,
-                    untracked_battle,
-                    earlier_season_battle,
-                ) = (
-                    row[0]
-                    for row in connection.execute(
-                        "SELECT id FROM legend_battles ORDER BY ranked_day_start DESC"
-                    ).fetchall()
+            for occurrence, minutes in (("first-poll", 5), ("later-poll", 10)):
+                _, job_id = store_observation(
+                    ci,
+                    archive_server,
+                    occurrence_key=occurrence,
+                    endpoint="battle_log",
+                    body=body,
+                    observed_at=ts + timedelta(minutes=minutes),
+                    normalized_tag="#2PP",
                 )
-                for day, season, state in (
-                    ("2026-10-04T05:00:00Z", "earlier-season", "Live"),
-                    ("2026-10-08T05:00:00Z", "test-season", "Live"),
-                    # A completed day with no Reset publication record.
-                    ("2026-10-07T05:00:00Z", "test-season", "Complete"),
-                    ("2026-10-09T05:00:00Z", "finalized-season", "Live"),
-                ):
-                    connection.execute(
-                        """
-                        INSERT INTO ranked_day_versions (
-                            player_id, ranked_day_start, ranked_day_end,
-                            official_season_id, season_day_number,
-                            season_anchor_rule_version, reconciliation_rule_version,
-                            result_hash, version, state, confidence, coverage_complete
+                if occurrence == "later-poll":
+                    with db.pool.connection() as connection:
+                        connection.execute(
+                            "UPDATE battle_army_decodes"
+                            " SET catalog_version = 'unit-catalog-v2'"
                         )
-                        SELECT id, %s::timestamptz, %s::timestamptz + interval '24 hours',
-                               %s, 1, 'test-anchor', 'test-reconciliation',
-                               repeat('a', 64), 1, %s, 'exact', %s
-                        FROM players WHERE normalized_tag = '#2PP'
-                        """,
-                        (day, day, season, state, state == "Complete"),
-                    )
-                connection.execute(
-                    """
-                    INSERT INTO season_detail_retirements (official_season_id, status)
-                    VALUES ('finalized-season', 'finalized')
-                    """
-                )
-                # Armies saved before the upgrade carry the old catalog.
-                connection.execute(
-                    "UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v2'"
-                )
-                connection.execute(migration)
-                connection.execute(migration)
-                jobs = connection.execute(
-                    """
-                    SELECT id, input_json FROM python_processing_jobs
-                    WHERE work_type = 'redecode_army'
-                    """
-                ).fetchall()
-            assert [job[1] for job in jobs] == [{"battle_ids": [tracked_battle]}]
-            assert proc.process_job(jobs[0][0], owner="redecode").outcome == "processed"
+                        connection.execute(
+                            """
+                            UPDATE battle_army_decodes
+                            SET status = 'partial', exact_army_id = NULL,
+                                identity_hash = NULL,
+                                heroes = '[{"hero": "hero:6", "pet": "pet:17",
+                                            "equipment": ["equipment:49"]}]',
+                                unresolved_components = '[{"numeric_id": 61,
+                                    "quantity": 1, "section": "h",
+                                    "origin": "hero:6:equipment"}]'
+                            WHERE id = (SELECT max(id) FROM battle_army_decodes)
+                            """
+                        )
+                        saved = connection.execute(read_all).fetchall()
+                    monkeypatch.setattr(army_ingestion, "CATALOG_VERSION", "unit-catalog-v4")
+                assert proc.process_job(job_id, owner=occurrence).outcome == "processed"
             with db.pool.connection() as connection:
-                rows = connection.execute(
-                    """
-                    SELECT battle_id, catalog_version, status, exact_army_id, heroes
-                    FROM battle_army_decodes WHERE is_active ORDER BY battle_id, id
-                    """
-                ).fetchall()
+                after = connection.execute(read_all).fetchall()
         finally:
             db.close()
-    upgraded = [row for row in rows if text(row[1]) == "unit-catalog-v3"]
-    assert [(row[0], text(row[2])) for row in upgraded] == [(tracked_battle, "decoded")]
-    assert upgraded[0][3] is not None
-    assert upgraded[0][4][0]["equipment"] == ["equipment:49", "equipment:61"]
-    # The old decodes stay as history, including the battles nothing re-decoded.
-    assert sorted(
-        row[0] for row in rows if text(row[1]) == "unit-catalog-v2"
-    ) == sorted(
-        [
-            tracked_battle,
-            untracked_battle,
-            unpublished_battle,
-            finalized_battle,
-            earlier_season_battle,
-        ]
-    )
+    assert len(saved) == 2
+    assert after == saved
+
+
+def test_names_at_display_migration_settles_only_catalog_v3_redecodes(
+    database_url: str,
+) -> None:
+    migration = (
+        Path(__file__).parents[2] / "deploy/migrations/0091_unit_names_at_display.sql"
+    ).read_text(encoding="utf-8")
+    jobs = {
+        "redecode_army:army-decoder-v2:unit-catalog-v3:1:1": "pending",
+        "redecode_army:army-decoder-v2:unit-catalog-v3:2:2": "waiting_retry",
+        "redecode_army:army-decoder-v2:unit-catalog-v3:3:3": "complete",
+        "redecode_army:army-decoder-v2:unit-catalog-v2:4:4": "pending",
+    }
+    with domain_database(database_url) as ci:
+        with psycopg.connect(ci, autocommit=True) as connection:
+            for key, status in jobs.items():
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, priority,
+                        processing_version, domain_rule_version,
+                        analytics_rule_version, due_at, status, outcome
+                    ) VALUES (
+                        'redecode_army', %s, '{"battle_ids": [1]}', 25,
+                        'clashlens-domain-processing-v1', 'clashlens-domain-rules-v1',
+                        'army-analytics-v2', '2026-10-10 08:00:00+00', %s,
+                        CASE WHEN %s = 'complete' THEN 'processed' END
+                    )
+                    """,
+                    (key, status, status),
+                )
+            connection.execute(migration)
+            connection.execute(migration)
+            rows = connection.execute(
+                """
+                SELECT deduplication_key, status, outcome FROM python_processing_jobs
+                WHERE work_type = 'redecode_army' ORDER BY deduplication_key
+                """
+            ).fetchall()
+    assert [(text(key), text(status), outcome and text(outcome)) for key, status, outcome in rows] == [
+        ("redecode_army:army-decoder-v2:unit-catalog-v2:4:4", "pending", None),
+        ("redecode_army:army-decoder-v2:unit-catalog-v3:1:1", "complete", "stale_superseded"),
+        ("redecode_army:army-decoder-v2:unit-catalog-v3:2:2", "complete", "stale_superseded"),
+        ("redecode_army:army-decoder-v2:unit-catalog-v3:3:3", "complete", "processed"),
+    ]
 
 
 def _job_state(db: Database, job_id: int) -> tuple[str, int]:

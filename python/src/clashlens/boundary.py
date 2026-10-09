@@ -10,7 +10,7 @@ from psycopg.types.json import Jsonb
 
 from . import battle_day_repair
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
-from .army_decoder import DECODER_VERSION
+from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_manifest import (
     _moved_decode_ids,
     profiles_not_found,
@@ -19,7 +19,6 @@ from .boundary_manifest import (
 from .boundary_manifest import (
     freeze_boundary_manifest as _freeze_boundary_manifest,
 )
-from .catalog import CATALOG_VERSION
 from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -662,8 +661,8 @@ def _army_decode_selection(
     """A daily log's listed battles, the decodes its army inputs freeze and
     the listed sides 0057 moved.
 
-    The decodes are every listed battle's active ones, both sides, plus each
-    moved side's on the battle it is on now.
+    The decodes are the newest saved army of both sides of every listed
+    battle, plus each moved side's on the battle it is on now.
     """
     sides = [
         (int(event["battle_id"]), event.get("lens"))
@@ -679,12 +678,8 @@ def _army_decode_selection(
             *(
                 int(row[0])
                 for row in connection.execute(
-                    """
-                    SELECT id FROM battle_army_decodes
-                    WHERE battle_id = ANY(%s::bigint[]) AND is_active
-                      AND decoder_version = %s AND catalog_version = %s
-                    """,
-                    (battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                    f"SELECT id FROM {CURRENT_DECODES} AS decode",
+                    (DECODER_VERSION, battle_ids),
                 ).fetchall()
             ),
             *_moved_decode_ids(connection, moved),
@@ -766,10 +761,9 @@ def _boundary_army_status(
         """
         SELECT count(DISTINCT battle_id)
         FROM battle_army_decodes
-        WHERE battle_id = ANY(%s::bigint[]) AND is_active
-          AND decoder_version = %s AND catalog_version = %s
+        WHERE battle_id = ANY(%s::bigint[]) AND is_active AND decoder_version = %s
         """,
-        (battle_ids, DECODER_VERSION, CATALOG_VERSION),
+        (battle_ids, DECODER_VERSION),
     ).fetchone()
     return (
         snapshot_status

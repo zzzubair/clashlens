@@ -214,8 +214,9 @@ def test_complete_season_materializes_whole_season_aggregates(
             assert summary["unknown_affected_attacks"] == 1
             assert summary["unknown_component_occurrences"] == 1
             states = dict(summary["army_states"])
-            assert states["fully_decoded"] == 3
-            assert states["partial"] == 1
+            # An old partial army counts as read: its unnamed ids count too.
+            assert states["fully_decoded"] == 4
+            assert "partial" not in states
             assert states["missing_code"] == 1
             assert summary["result_rows"] == []
             assert summary["unit_usage"] == [

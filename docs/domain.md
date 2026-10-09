@@ -352,12 +352,11 @@ A domain change is complete only when every affected source observation, derived
 - Preserve the raw `armyShareCode` from each battle observation.
 - An **army composition** is the exact decoded set and quantity of troops, spells, siege machines, and other units represented by an `armyShareCode`.
 - Record each decoded component's numeric identifier, quantity, encoded section, and origin.
-- Preserve an unknown numeric identifier, quantity, encoded section, and origin while retaining the known components from the same army. Keep its semantic category unresolved when the encoded section and current catalog cannot distinguish it. Unknown IDs indicate catalog work still to do and must not be discarded, guessed, or silently grouped.
+- Save each component's typed ID and quantity whether or not the unit catalog names it; the encoded section gives its kind. Names come from the catalog only when a page shows them. An ID the catalog does not name yet is an ordinary component: it counts in usage, outcomes and army identity, and shows as a placeholder such as `Unknown equipment #61` until its name is added, then by name everywhere, earlier battles included, with nothing recalculated. Siege machines share troop IDs; the decoder keeps its own fixed list of the nine known ones, so one released later is saved and counted as a troop.
+- An army is unreadable only when its code cannot be parsed. Armies saved before this rule kept unnamed IDs apart as "partial"; reading puts them back with the rest, so they count as read.
 - **Unit usage rate** is the share of unique Legend I attacks in a stated cohort and time period that contain the stated unit.
 - **Three-star rate** is the share of attacks in a stated population, time period, and filter that achieved three stars. It is exposed canonically as `three_star_rate`; there is no duplicate hit-rate field.
-- Confirmed individual components from a partial decode contribute to individual usage and outcomes. Their usage denominator is every fully or partially decoded eligible attack.
-- A relationship or complete composition uses fully decoded attacks plus only partial attacks where unresolved evidence cannot change whether that relationship is present. Publish the row's exact denominator and unknown exclusion count.
-- Equipment conditional on its owning hero uses attacks where that hero is confirmed and the equipment assignment can be proved present or absent.
+- The usage denominator of a unit, relationship or complete composition is every readable eligible attack. Equipment conditional on its owning hero uses the readable attacks that bring that hero.
 - One battle contributes at most one usage regardless of component quantity. Every aggregate keeps small samples visible.
 
 ### Population filters and lenses
@@ -416,7 +415,7 @@ leaderboard. Trophy-range filters need no leaderboard.
 - Calculate public URL-filtered army results on demand from retained versioned facts. Derive their stable identity from the selection, result, and source-evidence hashes; opening a new URL must not create persistent per-selection rows.
 - When a selected one-snapshot cohort includes entries that use old trophy observations, return the available analytics and state the old-entry count and age. Do not silently replace the requested population or present it as fully fresh.
 - Do not silently exclude malformed, partial, zero-trophy, or unknown-ID observations. Show their effect on coverage and confidence.
-- Preserve previously published analytics with their original rule labels when decoding, catalog, or calculation rules change.
+- Preserve previously published analytics with their original rule labels when decoding or calculation rules change. A catalog change only renames.
 
 ## 8. Evidence and confidence states
 

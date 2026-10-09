@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 
 from . import battle_day_repair, boundary, boundary_publication, reset_settlement
 from .army_decoder import (
+    CURRENT_DECODES,
     DECODER_VERSION,
     DecodedArmy,
     DecodeFailure,
@@ -41,16 +42,22 @@ def _decode_has_evidence(active: Any, evidence_id: int, raw_code: Any) -> bool:
 def _decode_is_current(
     active: Any, evidence_id: int, raw_code: Any, decoded: DecodedArmy | DecodeFailure
 ) -> bool:
-    """Whether the active decode row (id, evidence_id, raw_code, identity_hash,
-    status, failure_category) already records this evidence's result."""
+    """Whether the side's newest active decode row (id, evidence_id, raw_code,
+    identity_hash, status, failure_category) already records this result.
+
+    A row saved under any unit list counts: saved armies hold ids, not names,
+    so a unit list change saves nothing again. So does an older row that kept
+    unnamed ids apart ("partial"): reading puts them back (with_unnamed_ids).
+    """
     if not _decode_has_evidence(active, evidence_id, raw_code):
         return False
     if isinstance(decoded, DecodedArmy):
+        if _text_value(active[4]) == "partial":
+            return True
         return (
-            active[3] is None
-            if decoded.identity_hash is None
-            else _text_value(active[3]) == decoded.identity_hash
-        ) and _text_value(active[4]) == decoded.status
+            _text_value(active[4]) == "decoded"
+            and _text_value(active[3]) == decoded.identity_hash
+        )
     return _text_value(active[5]) == decoded.category
 
 
@@ -62,18 +69,12 @@ def _upsert_army_decodes(
     reset_baseline: tuple[int, int, datetime] | None = None,
     observation_id: int | None = None,
     reset_lock_wait: str | None = None,
-    reuse_any_catalog: bool = False,
 ) -> None:
     if not battle_ids:
         return
     exists = connection.execute("SELECT to_regclass('battle_army_decodes')").fetchone()
     if exists is None or exists[0] is None:
         return
-    catalog = connection.execute(
-        "SELECT content_hash FROM unit_catalog_versions WHERE version = %s",
-        (CATALOG_VERSION,),
-    ).fetchone()
-    catalog_ready = catalog is not None and _text_value(catalog[0]) == CATALOG_HASH
     rows = connection.execute(
         """
         SELECT b.id, p.evidence_id, p.perspective, e.army_share_code,
@@ -93,67 +94,28 @@ def _upsert_army_decodes(
         )
         if source_code is not None and not isinstance(source_code, str):
             decoded: DecodedArmy | DecodeFailure = DecodeFailure(
-                None,
-                "malformed",
-                "armyShareCode must be text",
-                DECODER_VERSION,
-                CATALOG_VERSION,
-                CATALOG_HASH,
+                None, "malformed", "armyShareCode must be text", DECODER_VERSION
             )
-        elif catalog_ready:
-            decoded = decode_army_share_code(raw_code)
         else:
-            decoded = DecodeFailure(
-                raw_code,
-                "catalog_version_unavailable",
-                "pinned unit catalog is unavailable or has the wrong hash",
-                DECODER_VERSION,
-                CATALOG_VERSION,
-                CATALOG_HASH,
-            )
+            decoded = decode_army_share_code(raw_code)
         decoded_rows.append(
             (battle_id, evidence_id, _text_value(perspective), raw_code, decoded)
         )
     current = {
-        (
-            int(row[0]),
-            _text_value(row[1]),
-            _text_value(row[2]),
-            _text_value(row[3]),
-        ): row[4:]
+        (int(row[0]), _text_value(row[1])): row[2:]
         for row in connection.execute(
-            """
-            SELECT battle_id, perspective, decoder_version, catalog_version,
+            f"""
+            SELECT battle_id, perspective,
                    id, evidence_id, raw_code, identity_hash, status, failure_category
-            FROM battle_army_decodes
-            WHERE battle_id = ANY(%s::bigint[]) AND is_active
+            FROM {CURRENT_DECODES} AS decode
             """,
-            (battle_ids,),
+            (DECODER_VERSION, battle_ids),
         ).fetchall()
     }
-    # Live battle logs reuse a saved decode of the same evidence from any
-    # catalog; moving it to a newer catalog is background work. On 9 Oct 2026
-    # live battle logs re-decoding catalog v2 battles under v3 queued on each
-    # other's battle locks and fell over two hours behind.
-    saved: dict[tuple[int, str, str], list[Any]] = {}
-    if reuse_any_catalog:
-        for key, active in current.items():
-            saved.setdefault(key[:3], []).append(active)
     decoded_rows = [
         row
         for row in decoded_rows
-        if not _decode_is_current(
-            current.get(
-                (row[0], row[2], row[4].decoder_version, row[4].catalog_version)
-            ),
-            row[1],
-            row[3],
-            row[4],
-        )
-        and not any(
-            _decode_has_evidence(active, row[1], row[3])
-            for active in saved.get((row[0], row[2], row[4].decoder_version), ())
-        )
+        if not _decode_is_current(current.get((row[0], row[2])), row[1], row[3], row[4])
     ]
     # Most battle logs repeat battles whose decodes are already saved. Those
     # change nothing a Reset publishes, so they skip the Reset locks below,
@@ -238,33 +200,33 @@ def _upsert_army_decodes(
     for battle_id, evidence_id, perspective, raw_code, decoded in decoded_rows:
         # Recheck under the locks: the job that held them may have saved it.
         active = connection.execute(
-            "SELECT id, evidence_id, raw_code, identity_hash, status, failure_category FROM battle_army_decodes WHERE battle_id = %s AND perspective = %s AND decoder_version = %s AND catalog_version = %s AND is_active = true",
-            (
-                battle_id,
-                perspective,
-                decoded.decoder_version,
-                decoded.catalog_version,
-            ),
+            f"""
+            SELECT id, evidence_id, raw_code, identity_hash, status, failure_category
+            FROM {CURRENT_DECODES} AS decode WHERE perspective = %s
+            """,
+            (DECODER_VERSION, [battle_id], perspective),
         ).fetchone()
         if _decode_is_current(active, evidence_id, raw_code, decoded):
             continue
         supersedes = None
         if active is not None:
+            # Rows saved under earlier unit lists can still be active beside
+            # the newest; the new row replaces them all.
             connection.execute(
-                "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
-                (active[0],),
+                """
+                UPDATE battle_army_decodes SET is_active = false
+                WHERE battle_id = %s AND perspective = %s
+                  AND decoder_version = %s AND is_active
+                """,
+                (battle_id, perspective, DECODER_VERSION),
             )
             supersedes = int(active[0])
-        is_decoded = isinstance(decoded, DecodedArmy)
-        if is_decoded:
-            exact_army_id = None
-            existing = None
-            if decoded.identity_hash is not None:
-                existing = connection.execute(
-                    "SELECT id FROM exact_armies WHERE identity_hash = %s",
-                    (decoded.identity_hash,),
-                ).fetchone()
-            if decoded.identity_hash is not None and existing is None:
+        if isinstance(decoded, DecodedArmy):
+            existing = connection.execute(
+                "SELECT id FROM exact_armies WHERE identity_hash = %s",
+                (decoded.identity_hash,),
+            ).fetchone()
+            if existing is None:
                 troop_quantities: dict[str, int] = {}
                 for fact in decoded.home_troops:
                     troop_quantities[fact.typed_id] = (
@@ -285,8 +247,8 @@ def _upsert_army_decodes(
                     (
                         decoded.identity_hash,
                         decoded.decoder_version,
-                        decoded.catalog_version,
-                        decoded.catalog_hash,
+                        CATALOG_VERSION,
+                        CATALOG_HASH,
                         Jsonb(sorted(troop_quantities.items())),
                         Jsonb(sorted(spell_quantities.items())),
                         Jsonb(
@@ -303,12 +265,12 @@ def _upsert_army_decodes(
                 ).fetchone()
                 assert inserted is not None
                 exact_army_id = int(inserted[0])
-            elif existing is not None:
+            else:
                 exact_army_id = int(existing[0])
             connection.execute(
                 """
-                INSERT INTO battle_army_decodes (battle_id, evidence_id, perspective, raw_code, decoder_version, catalog_version, catalog_hash, status, exact_army_id, identity_hash, home_troops, spells, home_spells, cc_spells, siege, cc_troops, heroes, raw_m, unresolved_components, is_active, supersedes_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s)
+                INSERT INTO battle_army_decodes (battle_id, evidence_id, perspective, raw_code, decoder_version, catalog_version, catalog_hash, status, exact_army_id, identity_hash, home_troops, spells, home_spells, cc_spells, siege, cc_troops, heroes, raw_m, is_active, supersedes_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s)
                 """,
                 (
                     battle_id,
@@ -316,9 +278,9 @@ def _upsert_army_decodes(
                     perspective,
                     raw_code,
                     decoded.decoder_version,
-                    decoded.catalog_version,
-                    decoded.catalog_hash,
-                    decoded.status,
+                    CATALOG_VERSION,
+                    CATALOG_HASH,
+                    "decoded",
                     exact_army_id,
                     decoded.identity_hash,
                     Jsonb(
@@ -356,17 +318,6 @@ def _upsert_army_decodes(
                         ]
                     ),
                     Jsonb([h.raw_m for h in decoded.heroes if h.raw_m]),
-                    Jsonb(
-                        [
-                            {
-                                "numeric_id": fact.numeric_id,
-                                "quantity": fact.quantity,
-                                "section": fact.section,
-                                "origin": fact.origin,
-                            }
-                            for fact in decoded.unknown
-                        ]
-                    ),
                     supersedes,
                 ),
             )
@@ -383,8 +334,8 @@ def _upsert_army_decodes(
                     perspective,
                     raw_code,
                     failure.decoder_version,
-                    failure.catalog_version,
-                    failure.catalog_hash,
+                    CATALOG_VERSION,
+                    CATALOG_HASH,
                     failure.category,
                     failure.detail,
                     supersedes,
@@ -588,7 +539,6 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                             "rule_versions": {
                                 "army_rule_version": _text_value(generation_row[6]),
                                 "decoder_version": DECODER_VERSION,
-                                "catalog_version": CATALOG_VERSION,
                             },
                             "output": {
                                 "day_fact_input_hash": (
@@ -611,7 +561,6 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     source_identity={
                         "ranked_day_start": str(ranked_day_str),
                         "decoder_version": DECODER_VERSION,
-                        "catalog_version": CATALOG_VERSION,
                     },
                 )
                 published_army = connection.execute(
@@ -1061,20 +1010,18 @@ def _build_army_fact_batch(
         "offense" if perspective == "attacker" else "defense"
         for perspective in perspective_values
     ]
-    decode_filter = "AND decoder_version = %s AND catalog_version = %s AND is_active"
-    decode_params: tuple[Any, ...] = (DECODER_VERSION, CATALOG_VERSION)
+    decode_from = f"{CURRENT_DECODES} AS decode WHERE true"
+    decode_params: tuple[Any, ...] = (DECODER_VERSION, battle_id_values)
     if decode_ids is not None:
-        decode_filter = "AND id = ANY(%s::bigint[])"
-        decode_params = (decode_ids,)
+        decode_from = """battle_army_decodes
+            WHERE battle_id = ANY(%s::bigint[]) AND id = ANY(%s::bigint[])"""
+        decode_params = (battle_id_values, decode_ids)
     decode_rows = connection.execute(
         f"""
         SELECT battle_id, perspective, id, evidence_id, status, failure_category
-        FROM battle_army_decodes
-        WHERE battle_id = ANY(%s::bigint[])
-          AND perspective = ANY(%s::text[])
-          {decode_filter}
+        FROM {decode_from} AND perspective = ANY(%s::text[])
         """,
-        (battle_id_values, perspective_values, *decode_params),
+        (*decode_params, perspective_values),
     ).fetchall()
     decodes = {
         (

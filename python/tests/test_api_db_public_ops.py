@@ -534,10 +534,10 @@ def test_public_army_shows_an_unknown_hero_once_as_unknown() -> None:
         )
     )
 
-    assert [component["typed_id"] for component in army["components"]] == ["pet:9"]
-    assert army["unknown_components"] == [
-        {"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}
-    ]
+    assert [
+        (component["typed_id"], component["name"]) for component in army["components"]
+    ] == [("hero:999", "Unknown hero #999"), ("pet:9", "Frosty")]
+    assert army["state"] == "decoded"
 
 
 def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> None:

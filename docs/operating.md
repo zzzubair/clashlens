@@ -606,8 +606,8 @@ Check the Armies page against the
 fixes change, held back from republishing until a single coordinated rebuild
 finishes. `--campaign preview --season <Season ID>` lists, without
 writing anything, every report, decode, player day and Reset publication of
-that Season that the 2-star/55% payout, five-minute day move, decodes under
-the pinned unit catalogue and accepted Reset settlements change, plus each
+that Season that the 2-star/55% payout, five-minute day move, reports with no
+saved army and accepted Reset settlements change, plus each
 affected player's first saved day of the next Season, to recalculate, and which are excluded
 (raw response gone, Season finalized, correction window closed). Later
 next-Season days are left to the repair itself. `--campaign register` saves

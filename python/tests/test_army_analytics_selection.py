@@ -1,6 +1,16 @@
+import json
+
 import pytest
 
-from clashlens.army_analytics import ArmyAnalyticsSelection, build_army_result
+from clashlens import catalog
+from clashlens.army_analytics import (
+    ArmyAnalyticsSelection,
+    add_army_fact,
+    build_army_result,
+    finish_army_result,
+    new_army_totals,
+)
+from clashlens.army_decoder import decode_army_share_code
 
 
 def test_public_army_selection_accepts_settled_filters() -> None:
@@ -130,7 +140,7 @@ def test_usage_counts_once_per_battle_regardless_of_quantity() -> None:
     assert "hit_rate" not in row
 
 
-def test_partial_individual_facts_count_with_unknown_totals() -> None:
+def test_old_partial_army_counts_its_unnamed_troop() -> None:
     facts = [
         _fact(1, troops=[("troop:58", 2)]),
         _fact(
@@ -145,20 +155,21 @@ def test_partial_individual_facts_count_with_unknown_totals() -> None:
         _fact(3, state="missing_army_share_code"),
     ]
     result = build_army_result(facts, _selection())
-    row = next(row for row in result["rows"] if row["key"] == "troop:58")
-    assert row["usage_count"] == 2
-    assert row["usage_denominator"] == 2
+    rows = {row["key"]: row for row in result["rows"]}
+    assert (rows["troop:58"]["usage_count"], rows["troop:58"]["usage_denominator"]) == (2, 2)
+    assert rows["troop:9999"]["label"] == "Unknown troop or siege #9999"
+    assert (rows["troop:9999"]["usage_count"], rows["troop:9999"]["star_counts"]) == (
+        1, [0, 1, 0, 0]
+    )
     assert result["total_attacks"] == 3
     assert result["usable_army_sample"] == 2
-    assert result["army_states"]["fully_decoded"] == 1
-    assert result["army_states"]["partial"] == 1
+    assert result["army_states"]["fully_decoded"] == 2
+    assert "partial" not in result["army_states"]
     assert result["army_states"]["missing_code"] == 1
     assert result["army_states_sum_confirmed"] is True
-    assert result["unknown_affected_attacks"] == 1
-    assert result["unknown_component_occurrences"] == 1
 
 
-def test_uncertain_relationship_excluded_from_denominator() -> None:
+def test_old_partial_army_counts_its_unnamed_pet() -> None:
     decoded_hero = {"hero": "hero:0", "pet": "pet:9", "equipment": []}
     facts = [
         _fact(1, heroes=[decoded_hero]),
@@ -178,12 +189,14 @@ def test_uncertain_relationship_excluded_from_denominator() -> None:
         ),
     ]
     result = build_army_result(facts, _selection(category="hero-pet"))
-    row = next(row for row in result["rows"] if "hero:0" in row["key"])
-    # The partial attack cannot prove which pet the hero brought, so it must
-    # be excluded from the hero+pet denominator and published as excluded.
-    assert row["usage_count"] == 1
-    assert row["usage_denominator"] == 1
-    assert row["unknown_excluded_attacks"] == 1
+    assert [
+        (row["key"], row["label"], row["usage_count"], row["usage_denominator"],
+         row["unknown_excluded_attacks"])
+        for row in result["rows"]
+    ] == [
+        ("hero:0|pet:77", "Barbarian King + Unknown pet #77", 1, 2, 0),
+        ("hero:0|pet:9", "Barbarian King + Frosty", 1, 2, 0),
+    ]
 
 
 def test_equipment_for_hero_denominator_uses_confirmed_hero() -> None:
@@ -238,11 +251,11 @@ def test_unknown_hero_analytics_use_public_unknown_id_label() -> None:
 
     heroes = build_army_result([fact], _selection(category="heroes"))
     assert [(row["key"], row["label"]) for row in heroes["rows"]] == [
-        ("hero:999", "Unknown ID 999")
+        ("hero:999", "Unknown hero #999")
     ]
     relationships = build_army_result([fact], _selection(category="hero-pet"))
     assert [(row["key"], row["label"]) for row in relationships["rows"]] == [
-        ("hero:999|pet:9", "Unknown ID 999 + Frosty")
+        ("hero:999|pet:9", "Unknown hero #999 + Frosty")
     ]
 
 
@@ -254,12 +267,12 @@ def test_unknown_label_fallback_is_robust_to_colonless_malformed_typed_id() -> N
         unresolved=[{"numeric_id": 1, "quantity": 1, "section": "h", "origin": "hero"}],
     )
     heroes = build_army_result([fact], _selection(category="heroes"))
-    assert [row["label"] for row in heroes["rows"]] == ["Unknown ID badtyped"]
+    assert [row["label"] for row in heroes["rows"]] == ["Unknown badtyped"]
     # Quantity suffix must not reintroduce the IndexError via x-split then colon-split.
     fact_cc = _fact(2, cc_troops=[("badtyped", 2)])
     cc = build_army_result([fact_cc], _selection(category="cc-composition"))
-    assert [row["label"] for row in cc["rows"]] == ["Unknown ID badtyped"]
-    # Valid unknown label stays "Unknown ID <numeric>".
+    assert [row["label"] for row in cc["rows"]] == ["Unknown badtyped"]
+    # A valid unnamed id names its kind and number.
     valid_unknown = _fact(
         3,
         state="partial",
@@ -268,7 +281,7 @@ def test_unknown_label_fallback_is_robust_to_colonless_malformed_typed_id() -> N
     )
     assert build_army_result([valid_unknown], _selection(category="heroes"))["rows"][0][
         "label"
-    ] == "Unknown ID 999"
+    ] == "Unknown hero #999"
 
 
 def test_reducer_visits_each_fact_once_per_nested_collection() -> None:
@@ -295,10 +308,9 @@ def test_reducer_visits_each_fact_once_per_nested_collection() -> None:
     assert TrackingFact.hero_reads == 2
 
 
-def test_equipment_for_hero_exclusions_scoped_to_confirmed_hero_denominator() -> None:
-    # hero:0's unresolved equipment makes that one attack uncertain. Other
-    # attacks stay in denominator accounting instead of being published as
-    # excluded; only the uncertain confirmed-hero attack counts here.
+def test_old_partial_army_counts_its_unnamed_equipment_for_its_hero() -> None:
+    # hero:0's equipment 33 was saved apart as unnamed; it counts for hero:0,
+    # whose two attacks make the denominator. hero:1's attack does not.
     facts = [
         _fact(
             1,
@@ -321,10 +333,11 @@ def test_equipment_for_hero_exclusions_scoped_to_confirmed_hero_denominator() ->
         _fact(3, heroes=[{"hero": "hero:1", "pet": None, "equipment": []}]),
     ]
     result = build_army_result(facts, _selection(category="equipment-for-hero"))
-    row = next(row for row in result["rows"] if "equipment:14" in row["key"])
-    assert row["usage_count"] == 1
-    assert row["usage_denominator"] == 1
-    assert row["unknown_excluded_attacks"] == 1
+    assert [
+        (row["key"], row["usage_count"], row["usage_denominator"],
+         row["unknown_excluded_attacks"])
+        for row in result["rows"]
+    ] == [("hero:0|equipment:14", 1, 2, 0), ("hero:0|equipment:33", 1, 2, 0)]
 
 
 def test_structurally_unsupported_state_stays_visible_and_reconciles() -> None:
@@ -337,7 +350,7 @@ def test_structurally_unsupported_state_stays_visible_and_reconciles() -> None:
     assert result["army_states_sum_confirmed"] is True
 
 
-def test_cc_composition_uncertain_partial_subset_is_not_published() -> None:
+def test_old_partial_army_counts_its_unnamed_clan_castle_troop() -> None:
     facts = [
         _fact(1, cc_troops=[("troop:0", 2)]),
         _fact(
@@ -359,13 +372,13 @@ def test_cc_composition_uncertain_partial_subset_is_not_published() -> None:
         ),
     ]
     result = build_army_result(facts, _selection(category="cc-composition"))
-    assert [row["key"] for row in result["rows"]] == [
-        "cc:troop:0x2",
-        "cc:troop:9x1",
+    assert [(row["key"], row["label"]) for row in result["rows"]] == [
+        ("cc:troop:0x2", "Barbarian"),
+        ("cc:troop:0x5,troop:88x1", "Barbarian + Unknown troop or siege #88"),
+        ("cc:troop:9x1", "P.E.K.K.A"),
     ]
-    assert [row["usage_count"] for row in result["rows"]] == [1, 1]
-    assert [row["usage_denominator"] for row in result["rows"]] == [2, 2]
-    assert [row["unknown_excluded_attacks"] for row in result["rows"]] == [1, 1]
+    assert [row["usage_count"] for row in result["rows"]] == [1, 1, 1]
+    assert [row["usage_denominator"] for row in result["rows"]] == [3, 3, 3]
 
 
 def test_sorting_is_deterministic_across_ties_and_selectable() -> None:
@@ -378,3 +391,40 @@ def test_sorting_is_deterministic_across_ties_and_selectable() -> None:
     by_count = build_army_result(facts, _selection(sort="average-destruction"))
     keys = [row["key"] for row in by_count["rows"]]
     assert keys == sorted(keys)
+
+
+def test_unnamed_equipment_counts_then_shows_its_name_without_recounting(
+    monkeypatch,
+) -> None:
+    # Portal Pendant (equipment 61) before the unit list named it.
+    monkeypatch.delitem(catalog._CATALOG_ENTRIES, "equipment:61")
+    army = decode_army_share_code("h6p17e61_49u5x177")
+    heroes = [
+        {"hero": hero.hero_typed_id, "pet": hero.pet_typed_id,
+         "equipment": list(hero.equipment_typed_ids)}
+        for hero in army.heroes
+    ]
+    saved = new_army_totals()
+    add_army_fact(saved, _fact(1, heroes=heroes), "equipment")
+    add_army_fact(saved, _fact(2, stars=1), "equipment")
+    saved = json.loads(json.dumps(saved))  # as the worker saves them
+    selection = _selection(category="equipment")
+    before = finish_army_result(saved, selection)
+    row = next(row for row in before["rows"] if row["key"] == "equipment:61")
+    assert (row["label"], row["usage_count"], row["usage_rate"]) == (
+        "Unknown equipment #61", 1, 0.5,
+    )
+    assert before["army_states"]["fully_decoded"] == 2
+
+    monkeypatch.undo()  # the name is added; nothing is counted again
+    after = finish_army_result(saved, selection)
+    assert next(
+        row["label"] for row in after["rows"] if row["key"] == "equipment:61"
+    ) == "Portal Pendant"
+    assert [
+        {key: value for key, value in row.items() if key != "label"}
+        for row in after["rows"]
+    ] == [
+        {key: value for key, value in row.items() if key != "label"}
+        for row in before["rows"]
+    ]

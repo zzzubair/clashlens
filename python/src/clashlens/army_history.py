@@ -4,7 +4,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from .catalog import catalog_name, is_siege_troop, is_valid_typed_id
+from .army_analytics import with_unnamed_ids
+from .catalog import is_siege_troop, is_valid_typed_id, unit_label
 
 HISTORY_CATEGORIES = frozenset({"troops", "spells", "heroes", "pets", "equipment"})
 HISTORY_READ_CATEGORIES = HISTORY_CATEGORIES | {"siege"}
@@ -19,6 +20,7 @@ def home_units(fact: dict[str, Any]) -> Counter[str]:
     Troop IDs keep their namespace even when their siege classification is not
     yet known. Nothing here stores relationships between different units.
     """
+    fact = with_unnamed_ids(fact)
     units: Counter[str] = Counter()
     for field in ("home_troops", "spells", "siege"):
         for entry in fact.get(field, []):
@@ -30,25 +32,6 @@ def home_units(fact: dict[str, Any]) -> Counter[str]:
         if hero.get("pet"):
             units[str(hero["pet"])] += 1
         units.update(hero.get("equipment", []))
-    for entry in fact.get("unresolved_components", []):
-        origin = str(entry.get("origin", ""))
-        section = entry.get("section")
-        numeric_id = entry.get("numeric_id")
-        if numeric_id is None or origin == "clan_castle" or section in {"i", "d"}:
-            continue
-        namespace = {"u": "troop", "s": "spell"}.get(section)
-        if section == "h":
-            namespace = ("pet" if origin.endswith(":pet") else
-                         "equipment" if origin.endswith(":equipment") else
-                         "hero" if origin == "hero" else None)
-        if namespace is None:
-            continue
-        typed_id = f"{namespace}:{numeric_id}"
-        # Unknown heroes already have a hero entry to hold known equipment.
-        if namespace == "hero":
-            units.setdefault(typed_id, 1)
-        else:
-            units[typed_id] += int(entry.get("quantity", 1))
     return units
 
 
@@ -85,22 +68,18 @@ def usage_by_category(
 
 def usage_rows(
     stored: list[list[Any]], category: str, denominator: int
-) -> tuple[list[dict], bool]:
+) -> list[dict]:
     rows = []
-    unresolved = False
     for typed_id, quantity, count, one_star, two_star, three_star in stored:
         known = is_valid_typed_id(typed_id)
         # Unclassified IDs appear explicitly ambiguous in both views until
         # the catalogue can determine which category owns them.
         if typed_id.startswith("troop:") and known and is_siege_troop(typed_id) != (category == "siege"):
             continue
-        unresolved |= not known
-        namespace, numeric_id = typed_id.split(":", 1)
-        kind = "troop or siege" if namespace == "troop" else namespace
         rows.append({
             "key": f"{typed_id}@{quantity}",
             "unit_id": typed_id,
-            "label": catalog_name(typed_id) or f"Unknown {kind} (ID {numeric_id})",
+            "label": unit_label(typed_id),
             "quantity": quantity,
             "usage_count": count,
             "usage_denominator": denominator,
@@ -109,4 +88,4 @@ def usage_rows(
             "two_star_count": two_star,
             "three_star_count": three_star,
         })
-    return rows, unresolved
+    return rows

@@ -15,7 +15,6 @@ from .analytics import (
     SNAPSHOT_ORDERING_RULE_VERSION,
 )
 from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
 from .db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -1044,12 +1043,14 @@ def complete_analytics(database: Database, claim: Claim) -> None:
 
 
 # An army reading's contents: what the army build reads from it, without the
-# row's own identity, the report it was read from or when it was saved.
+# row's own identity, the report it was read from, when it was saved or which
+# unit list was current then (saved armies hold ids, not names).
 _DECODE_CONTENTS = """
     SELECT coalesce(array_agg(contents ORDER BY contents), '{}')
     FROM (
         SELECT to_jsonb(decode)
-               - ARRAY['id', 'evidence_id', 'is_active', 'created_at', 'supersedes_id']
+               - ARRAY['id', 'evidence_id', 'is_active', 'created_at', 'supersedes_id',
+                       'catalog_version', 'catalog_hash']
                AS contents
         FROM battle_army_decodes AS decode
         WHERE decode.id = ANY(%s::bigint[])
@@ -1406,10 +1407,9 @@ def _enqueue_army_analytics(
           ON decode.battle_id = battle.id
          AND decode.is_active
          AND decode.decoder_version = %s
-         AND decode.catalog_version = %s
         WHERE battle.ranked_day_start = %s
         """,
-        (DECODER_VERSION, CATALOG_VERSION, ranked_day_start),
+        (DECODER_VERSION, ranked_day_start),
     ).fetchone()
     decode_generation = int(latest_decode[0]) if latest_decode else 0
     day_text = ranked_day_start.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1427,7 +1427,7 @@ def _enqueue_army_analytics(
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
         (
-            f"build_army_analytics:{day_text}:{generation}:{ARMY_ANALYTICS_RULE_VERSION}:{DECODER_VERSION}:{CATALOG_VERSION}",
+            f"build_army_analytics:{day_text}:{generation}:{ARMY_ANALYTICS_RULE_VERSION}:{DECODER_VERSION}",
             Jsonb(
                 {
                     "ranked_day_start": day_text,

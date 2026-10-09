@@ -11,7 +11,8 @@ from typing import Any
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from .catalog import catalog_name
+from .army_analytics import with_unnamed_ids
+from .catalog import unit_label
 from .domain import MAX_BATTLE_TROPHIES, SEASON_START_TROPHIES
 from .operating import database_pool_health
 from .profile import normalize_player_tag
@@ -537,6 +538,15 @@ def _public_snapshot_confidence(value: str) -> str:
 
 
 def _public_army(row: Any) -> dict[str, Any]:
+    army = with_unnamed_ids(
+        {
+            "status": _text(row[2]),
+            **dict(zip(("home_troops", "spells", "siege", "cc_troops"), row[4:8])),
+            "heroes": row[8] if isinstance(row[8], list) else [],
+            "unresolved_components": row[9] if isinstance(row[9], list) else [],
+        }
+    )
+
     def facts(value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             return []
@@ -548,41 +558,33 @@ def _public_army(row: Any) -> dict[str, Any]:
             result.append(
                 {
                     "typed_id": typed_id,
-                    "name": catalog_name(typed_id) or typed_id,
+                    "name": unit_label(typed_id),
                     "quantity": quantity,
                     "origin": origin,
                 }
             )
         return result
 
-    status = _text(row[2])
     components = []
-    for value in row[4:8]:
-        components.extend(facts(value))
-    if isinstance(row[8], list):
-        for hero in row[8]:
-            if not isinstance(hero, Mapping):
-                continue
-            for typed_id in [
-                hero.get("hero"),
-                hero.get("pet"),
-                *(hero.get("equipment") or []),
-            ]:
-                if isinstance(typed_id, str) and (name := catalog_name(typed_id)):
-                    components.append(
-                        {
-                            "typed_id": typed_id,
-                            "name": name,
-                            "quantity": 1,
-                            "origin": "hero",
-                        }
-                    )
-    unknown = row[9] if isinstance(row[9], list) else []
+    for field in ("home_troops", "spells", "siege", "cc_troops"):
+        components.extend(facts(army[field]))
+    for hero in army["heroes"]:
+        if not isinstance(hero, Mapping):
+            continue
+        for typed_id in [hero.get("hero"), hero.get("pet"), *(hero.get("equipment") or [])]:
+            if isinstance(typed_id, str):
+                components.append(
+                    {
+                        "typed_id": typed_id,
+                        "name": unit_label(typed_id),
+                        "quantity": 1,
+                        "origin": "hero",
+                    }
+                )
     return {
-        "state": status,
+        "state": army["status"],
         "failure_reason": _text(row[3]) if row[3] is not None else None,
         "components": components,
-        "unknown_components": unknown,
         "decoder_version": _text(row[10]),
         "catalog_version": _text(row[11]),
     }
