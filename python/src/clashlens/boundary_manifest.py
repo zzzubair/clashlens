@@ -692,9 +692,11 @@ def reset_trophies(
 
     ``readings`` maps a player to the version of their day ending at
     ``boundary_at``, their reading's saved response, its time and its
-    trophies. A Complete day already proves the total: its Reset readings at
+    trophies. A Complete day already gives the total: its Reset readings at
     both ends and every battle between agree, so its end plus its automatic
-    loss is the total whatever the reading shows. An attacker's profile can
+    loss is the total whatever the reading shows. It proves it only with
+    exact confidence: a day started by the Season rule or the day before's
+    calculated end, or read before its loss, has a part no reading matched. An attacker's profile can
     show an attack minutes after its report time: on 7 October 2026
     #2QCYU8C2G read 4,703 at 04:37:05 without its attack stamped 04:34:08,
     and the board showed 4,902, not 4,931. A Reset that resets trophies
@@ -720,7 +722,7 @@ def reset_trophies(
         int(row[0]): row[1:]
         for row in connection.execute(
             """
-            SELECT reading.player_id, ranked.state,
+            SELECT reading.player_id, ranked.state, ranked.confidence,
                    ranked.final_trophies_before_reset,
                    ranked.automatic_defense_loss,
                    ranked.automatic_defense_evidence_state,
@@ -801,7 +803,7 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
     if day is None:
         return reading, False
     (
-        state, final, automatic_loss, automatic_state, boundary_kind,
+        state, confidence, final, automatic_loss, automatic_state, boundary_kind,
         start, end, battles_proven, after_reading, whole_day,
     ) = day
     total = reading + int(after_reading) if battles_proven else None
@@ -814,7 +816,7 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
     if _text_value(state) == "Complete" and final is not None:
         settled = int(final) + int(automatic_loss or 0)
         if not end_reset or total == settled:
-            return settled, True
+            return settled, _text_value(confidence) == "exact"
     if total is None:
         return reading, False
     if start is not None:

@@ -11,6 +11,7 @@ built this way keep every usual day rule; a start from the Season rule stays
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -188,6 +189,44 @@ def queue_earlier_days(
         if not reset_baselines._season_rule_holds(connection, player_id, day):
             return
     _queue(connection, player_id, day, int(first[1]))
+
+
+def queue_days_read_after(connection: Any, battle_ids: Iterable[int]) -> None:
+    """When a battle reported before the reading that judged either player's
+    day before is saved, that reading may show it, so recalculate that day,
+    once per saved result."""
+    ids = sorted(battle_ids)
+    if not ids:
+        return
+    rows = connection.execute(
+        """
+        SELECT DISTINCT player.id, saved.ranked_day_start, saved.id
+        FROM legend_battles AS battle
+        JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
+        CROSS JOIN LATERAL (
+            VALUES (battle.attacker_player_id), (battle.defender_player_id)
+        ) AS player (id)
+        JOIN LATERAL (
+            SELECT day.id, day.ranked_day_start, day.input_evidence
+            FROM ranked_day_versions AS day
+            WHERE day.player_id = player.id
+              AND day.ranked_day_start = battle.ranked_day_start - interval '1 day'
+              AND day.reconciliation_rule_version = %s
+            ORDER BY day.version DESC LIMIT 1
+        ) AS saved ON true
+        WHERE battle.id = ANY(%s::bigint[])
+          AND (saved.input_evidence -> 'end_reading' ->> 'read_at')::timestamptz
+              > evidence.battle_timestamp
+        """,
+        (RECONCILIATION_RULE_VERSION, ids),
+    ).fetchall()
+    for player_id, day_start, version_id in rows:
+        _queue(
+            connection, int(player_id), day_start, None,
+            key=f"reconcile:read-after:{player_id}:"
+            f"{day_start.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{version_id}",
+            trigger="read_after_battle", later_days=False,
+        )
 
 
 def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> None:

@@ -736,10 +736,13 @@ def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> N
 
 def load_readings(
     database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
-    *, after: datetime, end_battle_log_observation_id: int | None,
+    *, reset_profile_observation_id: int | None,
+    end_battle_log_observation_id: int | None,
 ) -> tuple[reading_rule.Reading, ...]:
-    """Every profile of this player read after ``after`` and before the next
-    Reset that can judge the day's end (``reading_rule``): one accepted,
+    """Every profile of this player read between the day's end Reset and the
+    next, other than the Reset pair's own, ``reset_profile_observation_id``,
+    which the day reads as its Reset reading, that can judge the day's end
+    (``reading_rule``): one accepted,
     eligible and naming the day's Season, or a Legend I profile naming
     Season 0, which can only confirm. A reading can contradict only while
     the player's battle logs from the day's end Reset log on are continuous
@@ -775,6 +778,7 @@ def load_readings(
         WHERE observed.player_id = %(player)s AND observed.endpoint = 'profile'
           AND observed.response_completed_at > %(after)s
           AND observed.response_completed_at < %(until)s
+          AND observed.id IS DISTINCT FROM %(reset)s
           AND observed.http_status BETWEEN 200 AND 299
           AND outcome.outcome = 'processed'
           AND profile.player_id = %(player)s
@@ -785,7 +789,8 @@ def load_readings(
                    AND profile.current_league_season_id = '0'))
         ORDER BY observed.response_completed_at
         """,
-        {"processing": PROCESSING_VERSION, "player": player_id, "after": after,
+        {"processing": PROCESSING_VERSION, "player": player_id,
+         "after": ranked_day.end, "reset": reset_profile_observation_id,
          "until": min([until, *unreadable]),
          "season": ranked_day.official_season_id},
     ).fetchall()
