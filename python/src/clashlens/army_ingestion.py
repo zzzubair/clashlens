@@ -123,12 +123,12 @@ def _upsert_army_decodes(
     if not decoded_rows:
         return
     # Lock order everywhere: battle locks, then a Reset baseline's work lock,
-    # then Reset publication locks, then army rows. A battle lock keeps two jobs saving one battle's armies from
-    # interleaving, so neither replaces the other's newer evidence or races
-    # the one-active-per-perspective unique index. Different battles save
-    # concurrently. A live battle log never waits on a battle another job
-    # holds (skip_busy_battles): it leaves that battle's armies to a later
-    # battle log that lists it.
+    # then Reset publication locks, then army rows. A battle lock keeps two
+    # jobs saving one battle's armies from interleaving, so neither replaces
+    # the other's newer evidence or races the one-active-per-perspective
+    # unique index. Different battles save concurrently. A live battle log
+    # never waits on a battle another job holds (skip_busy_battles): it
+    # leaves that battle's armies to a later battle log that lists it.
     busy: set[int] = set()
     for battle_id in sorted({row[0] for row in decoded_rows}):
         if skip_busy_battles:
@@ -158,9 +158,10 @@ def _upsert_army_decodes(
         )
     # A Reset battle log records its baseline after these army writes, so it
     # takes all of them first; otherwise it could hold an army or generation
-    # row another job needs while that job holds a lock. A Reset with no sweep yet is only shared, so battle logs for the
-    # current Legend day do not queue behind each other, and stays shared for
-    # this transaction: two jobs upgrading their shared locks would deadlock.
+    # row another job needs while that job holds a lock. A Reset with no
+    # sweep yet is only shared, so battle logs for the current Legend day do
+    # not queue behind each other, and stays shared for this transaction:
+    # two jobs upgrading their shared locks would deadlock.
     boundaries = {day_start + timedelta(days=1) for day_start in players_by_day}
     if reset_lock_wait is not None:
         # Give up on a busy Reset after this wait; the whole transaction rolls

@@ -1,9 +1,4 @@
-"""What one player's Legend day is calculated from, read from saved evidence.
-
-Daily calculation and the Reset settlement check read the same battle-log
-coverage, own-side battle reports and previous saved day, so they cannot
-disagree about which battles a day holds.
-"""
+"""What one player's Legend day is calculated from, read from saved evidence."""
 
 from __future__ import annotations
 
