@@ -1174,7 +1174,9 @@ responses can run one while responses still wait. All worker processes together
 run at most two backfill jobs at once, one claim never takes more than one, and
 none starts while a live response or day result has been due 2 minutes or more
 and is still unfinished: waiting, waiting on its saved response, or leased,
-including one that keeps its lease after a lock conflict
+including one that keeps its lease after a lock conflict. A leased job counts
+until it leaves its lease, even after the lease runs out, because its work can
+still be running; queue maintenance clears dead ones
 ([`background_pacing.py`](../python/src/clashlens/background_pacing.py)). On
 2026-10-09 six army re-decodes ran at once, 568 jobs were leased beside Season
 repair, and live responses fell to about 8,000 players over 2 minutes late. An

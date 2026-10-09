@@ -29,11 +29,12 @@ def background_turn_free(
     """Whether this claim may lease one background job; it then holds the permit.
 
     Only live work this worker can claim counts, so a newer contract's never
-    pauses background work for good. Late live work counts while it waits, is
-    leased, or keeps a lease after a lock conflict refunded its attempt, under
-    each state's own attempt rule and claim index. The lease count is its own
-    statement, so it reads every background claim committed before this one
-    took the permit.
+    pauses background work for good. Late live work counts while it waits,
+    under each waiting state's own attempt rule and claim index. A leased job,
+    live or background, counts until it leaves its lease, even past expiry or
+    on its last attempt: its transaction can still be running, and queue
+    maintenance moves dead ones out. The lease count is its own statement, so
+    it reads every background claim committed before this one took the permit.
     """
     from .db import (
         PYTHON_BACKFILL_PRIORITY,
@@ -57,7 +58,7 @@ def background_turn_free(
           AND {supported_filter})""" for state in (
         f"job.state IN ('pending', 'waiting_retry') AND {tries}",
         "job.state = 'waiting_dependency'" + ("" if supports_dependency else f" AND {tries}"),
-        f"job.state = 'leased' AND (job.lease_expires_at > statement_timestamp() OR {tries})",
+        "job.state = 'leased'",
     )) + ")"
     if not connection.execute(
         "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -67,8 +68,7 @@ def background_turn_free(
     return connection.execute(
         f"""
         SELECT (SELECT count(*) FROM {jobs_relation}
-                WHERE state = 'leased' AND lease_expires_at > statement_timestamp()
-                  AND priority = %(backfill_priority)s) < %(background_limit)s
+                WHERE state = 'leased' AND priority = %(backfill_priority)s) < %(background_limit)s
            AND NOT {late_live}
         """,
         {

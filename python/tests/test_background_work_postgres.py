@@ -107,6 +107,21 @@ def test_at_most_two_background_jobs_run_across_worker_processes(database_url: s
                 (later, "reconcile_ranked_day"), (claims[1].job_id, "redecode_army")
             ]
             assert first.claim_jobs(owner="process-1", limit=8) == []
+            # Still running past their leases, their transactions holding the
+            # rows, they keep both turns.
+            running = [claimed[1][0].job_id, claims[1].job_id]
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET lease_expires_at ="
+                    " clock_timestamp() - interval '1 minute' WHERE id = ANY(%s)",
+                    (running,),
+                )
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "SELECT FROM python_processing_jobs WHERE id = ANY(%s) FOR UPDATE",
+                    (running,),
+                )
+                assert first.claim_jobs(owner="process-1", limit=8) == []
         finally:
             first.close()
             second.close()
@@ -157,6 +172,15 @@ def test_background_work_waits_while_late_live_work_is_leased_or_waiting(
             [claim] = database.claim_jobs(owner="live", work_types=["reconcile_ranked_day"])
             assert claim.job_id == live
             database.refund_claim_attempt(claim)
+            assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
+            # Still running past its lease on its last attempt, it pauses them too.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET attempt_count = max_attempts,"
+                    " lease_expires_at = clock_timestamp() - interval '1 minute'"
+                    " WHERE id = %s",
+                    (live,),
+                )
             assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
             # Waiting for its saved response on its last try, it can still
             # resume, so it pauses background work too.
