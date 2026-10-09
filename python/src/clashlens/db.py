@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from psycopg_pool import ConnectionPool
 
-from .background_pacing import background_turn_free
+from .background_pacing import DAY_RECHECK_PRIORITY, background_lanes
 from .operating import database_pool_health
 from .past_reset_pacing import (
     build_permit_busy,
@@ -363,17 +363,17 @@ def _supported_claim_filter(
 # empty queue even while eligible work remains behind it.
 _CLAIM_CANDIDATE_LIMIT = 32
 
-# Priority classes that can appear in the Python queue. Backfill has its own
-# indexed class so its probe stays bounded without sharing live work's class.
+# Priority classes that can appear in the Python queue. Backfill and day
+# rechecks each have their own indexed class so their probes stay bounded
+# without sharing live work's class, nor the catch-all's (migration 0093).
 # The catch-all still claims other operator priorities. Its index also holds
 # Reset work, so each side of Reset priority is its own probe that the index
 # bounds by itself: NOT IN read 6,404 rows a claim at 05:50 on 8 Oct 2026.
-_PYTHON_CLAIM_PRIORITIES = (
-    f"({PYTHON_BACKFILL_PRIORITY}), ({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})"
-)
+_BACKGROUND = f"{PYTHON_BACKFILL_PRIORITY}, {DAY_RECHECK_PRIORITY}"
+_PYTHON_CLAIM_PRIORITIES = (f"({PYTHON_BACKFILL_PRIORITY}), ({DAY_RECHECK_PRIORITY}),"
+                            f" ({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})")
 _PYTHON_OTHER_CLAIM_PRIORITIES = (
-    (f"job.priority NOT IN ({PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY})"
-     f" AND job.priority < {PYTHON_RESET_PRIORITY}"),
+    f"job.priority NOT IN ({_BACKGROUND}, {PYTHON_LIVE_PRIORITY}) AND job.priority < {PYTHON_RESET_PRIORITY}",
     f"job.priority > {PYTHON_RESET_PRIORITY}",
 )
 
@@ -386,7 +386,7 @@ def _claim_filters(
     work_types: Collection[str] | None,
     past_reset_build_hold: str | None,
     operator_build_hold: bool = False,
-    backfill: bool | None = None,
+    backfill: Collection[int] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     """Claim alias ``job``'s supported filter, whole eligibility and parameters."""
     supported_filter, params = _supported_claim_filter(
@@ -403,8 +403,8 @@ def _claim_filters(
         supported_filter = f"({supported_filter} AND job.work_type = ANY(%(claim_work_types)s::text[]))"
         params["claim_work_types"] = sorted(work_types)
     if backfill is not None:
-        supported_filter = (f"({supported_filter} AND job.priority"
-                            f" {'=' if backfill else '<>'} {PYTHON_BACKFILL_PRIORITY})")
+        supported_filter = (f"({supported_filter} AND job.priority {'' if backfill else 'NOT '}"
+                            f"IN ({', '.join(map(str, backfill)) or _BACKGROUND}))")
     dependency_filter = "job.state = 'waiting_dependency' OR " if supports_dependency else ""
     return supported_filter, f"""(((job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
             AND job.due_at <= statement_timestamp())
@@ -445,7 +445,7 @@ def _claim_select_statement(
     past_reset_build_hold: str | None = None,
     operator_build_hold: bool = False,
     reset_first: bool | None = None,
-    backfill: bool | None = None,
+    backfill: Collection[int] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT for up to ``limit`` jobs and its named parameters.
 
@@ -465,8 +465,8 @@ def _claim_select_statement(
     ``planned`` makes a ``job_ids`` claim refuse, and an ordinary one run only, while
     Reset-priority work it could take waits; ``reset_first`` puts that work first,
     False puts other due work but backfill before it, and None keeps waiting time.
-    ``backfill`` True probes and rechecks only the backfill class, which no
-    other probe holds, and False every other class.
+    ``backfill`` probes and rechecks only those background priorities, which
+    no other probe holds, and empty every other class.
     """
     supported_filter, claimable, params = _claim_filters(
         supports_dependency=supports_dependency,
@@ -477,8 +477,8 @@ def _claim_select_statement(
         operator_build_hold=operator_build_hold,
         backfill=backfill,
     )
-    priorities = {None: _PYTHON_CLAIM_PRIORITIES, True: f"({PYTHON_BACKFILL_PRIORITY})",
-                  False: f"({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})"}[backfill]
+    priorities = _PYTHON_CLAIM_PRIORITIES if backfill is None else ", ".join(
+        f"({priority})" for priority in backfill or (PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY))
     params["claim_limit"] = limit
     if job_id is not None:
         job_ids = [job_id]
@@ -487,8 +487,8 @@ def _claim_select_statement(
     gate = "AND NOT " if job_ids is not None else "AND "
     reset_gate = gate + _reset_waiting(jobs_relation, supported_filter) if planned else ""
     first = {None: "", True: f"job.priority = {PYTHON_RESET_PRIORITY}, ", False: "job.priority"
-             f" NOT IN ({PYTHON_RESET_PRIORITY}, {PYTHON_BACKFILL_PRIORITY}), "}[reset_first]
-    score = f"""{first}CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
+             f" NOT IN ({PYTHON_RESET_PRIORITY}, {_BACKGROUND}), "}[reset_first]
+    score = f"""{first}CASE WHEN job.priority IN ({_BACKGROUND})
         THEN 0 ELSE 1 END,
         CASE WHEN job.priority = {PYTHON_RESET_PRIORITY} THEN job.priority
         ELSE job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
@@ -1037,16 +1037,16 @@ class Database:
             )).fetchall()
             if job_ids is None or (not rows and planned):
                 rows = connection.execute(*_claim_select_statement(
-                    self._jobs_relation, planned=planned, backfill=False, **options
+                    self._jobs_relation, planned=planned, backfill=(), **options
                 )).fetchall()
                 # Backfill always comes last; see background_pacing.
-                if len(rows) < limit and not planned and background_turn_free(
+                lanes = () if len(rows) >= limit or planned else background_lanes(
                     connection, self._jobs_relation, self._supports_denormalized_contract,
                     supports_coordinator, self._supports_dependency_deferral,
-                ):
-                    rows += connection.execute(*_claim_select_statement(
-                        self._jobs_relation, backfill=True, **{**options, "limit": 1}
-                    )).fetchall()
+                )
+                rows += connection.execute(*_claim_select_statement(
+                    self._jobs_relation, backfill=lanes, **{**options, "limit": 1}
+                )).fetchall() if lanes else []
             return self._lease_rows(connection, rows, owner, lease_seconds)
 
     def _lease_rows(

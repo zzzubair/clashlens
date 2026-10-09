@@ -253,6 +253,62 @@ up_stack
 
 
 @pytest.mark.parametrize(
+    ("limits", "threads", "pool", "refusal"),
+    [
+        (("6", "8"), "12", "", None),
+        (("", ""), "12", "", None),
+        (("0", ""), "12", "", "CLASHLENS_BACKGROUND_JOB_LIMIT must be a whole number"),
+        (("", "65"), "12", "", "CLASHLENS_DAY_RECHECK_JOB_LIMIT must be a whole number"),
+        (("", ""), "12", "8", "CLASHLENS_WORKER_DATABASE_POOL_SIZE must be at least"),
+        (("", ""), "20", "", "allows at most 16 database connections"),
+    ],
+)
+def test_ops_forwards_background_limits_and_keeps_a_connection_a_thread(
+    tmp_path: Path, limits: tuple[str, str], threads: str, pool: str, refusal: str | None
+) -> None:
+    # The deploy settings tune background work without a code change; a pool
+    # smaller than the worker's 12 threads would make jobs wait for connections.
+    ops = Path(__file__).resolve().parents[2] / "ops"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+source "$1" help >/dev/null
+STATE_DIR="$2"
+MODE=fixture
+load_fixture_config
+[[ -z "$3" ]] || CONFIG[CLASHLENS_BACKGROUND_JOB_LIMIT]=$3
+[[ -z "$4" ]] || CONFIG[CLASHLENS_DAY_RECHECK_JOB_LIMIT]=$4
+WORKER_CONCURRENCY=$5; WORKER_DB_POOL=${6:-$5}
+validate_runtime_values
+write_environment
+""",
+            "test-ops-background",
+            str(ops),
+            str(tmp_path),
+            *limits,
+            threads,
+            pool,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if refusal is not None:
+        assert result.returncode != 0
+        assert refusal in result.stderr
+        assert not (tmp_path / "env/worker.env").exists()
+        return
+    assert result.returncode == 0, result.stderr
+    worker = dict(
+        line.split("=", 1) for line in (tmp_path / "env/worker.env").read_text().splitlines()
+    )
+    assert worker.get("CLASHLENS_BACKGROUND_JOB_LIMIT") == (limits[0] or None)
+    assert worker.get("CLASHLENS_DAY_RECHECK_JOB_LIMIT") == (limits[1] or None)
+
+
+@pytest.mark.parametrize(
     ("rate", "accepted"),
     [("20", True), ("0", True), ("2.5", True), ("20/s", False), ("-1", False), ("inf", False)],
 )

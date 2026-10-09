@@ -562,8 +562,8 @@ after its Reset, also queues one recalculation of that day,
 `reconcile:day-end:<player>:<day>:<rule>`, due two hours after its Reset at
 the lowest priority, so every tracked player's ended day is calculated once
 more with the readings and battles saved since: about 13,000 jobs a Reset,
-run only when no other work waits. New evidence also queues, at the same
-priority, each ended day it can change (`queue_refresh.py`): each saved
+run only when no other work waits. New evidence also queues each ended day
+it can change (`queue_refresh.py`), at priority 26 in its own lane: each saved
 profile or battle-log response the player's newest ended day
 (`reconcile:reading:` and `reconcile:log:`), each successful unchanged
 battle-log check after a profile read since the last one the day that ended
@@ -572,7 +572,14 @@ battle report added, changed or corrected, never one repeated unchanged, the
 battle's own day and the day before it for both players
 (`reconcile:report:`). A battle changes both players' profiles and logs and
 brings two reports, so about 104,000 battles a day make up to about
-1,250,000 such jobs, removed with other finished jobs after 48 hours. Every
+1,250,000 such pieces of evidence. A day usually waits in one such job at
+most: evidence for a day whose job has not started queues nothing, as that
+job reads the newest evidence when it runs, and evidence saved while it runs
+queues one more. Two saves for the same day committing at the same moment
+can each queue one, and both run. From 16:40 to 17:19 UTC on 9 October 2026 the evidence
+queued about 535 jobs a minute for 3,782 player days; replayed with this
+rule and 4 at a time, about 410 a minute, none waiting over 10 seconds. They
+are removed with other finished jobs after 48 hours. Every
 active player's last two ended days are also queued twice a day, once the
 day-end recheck has finished and from 23:00 UTC, never from 04:00 to 07:00
 UTC, skipping days already waiting: about 26,000 jobs each time at 13,000

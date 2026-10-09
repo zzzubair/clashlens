@@ -249,12 +249,12 @@ MAX_WORKER_POOL_SIZE = 16
 WORKER_CONNECTION_BUDGET = 38
 
 
-def check_connection_budget(processes: int, pool_size: int) -> None:
+def check_connection_budget(processes: int, pool_size: int, lanes: int = 1) -> None:
     total = processes * (pool_size + MAINTENANCE_POOL_SIZE + 1)
-    if pool_size > MAX_WORKER_POOL_SIZE or total > WORKER_CONNECTION_BUDGET:
+    if pool_size > MAX_WORKER_POOL_SIZE or total > WORKER_CONNECTION_BUDGET or pool_size < lanes:
         raise ValueError(
-            f"worker processes may have at most {MAX_WORKER_POOL_SIZE} database"
-            f" connections each and {WORKER_CONNECTION_BUDGET} in all"
+            f"worker processes may have at most {MAX_WORKER_POOL_SIZE} database connections"
+            f" each and {WORKER_CONNECTION_BUDGET} in all, and one a lane, so no job waits for one"
         )
 
 
@@ -459,7 +459,7 @@ def start_processes(
     """
     response_lane_count(arguments.concurrency, getattr(arguments, "response_lanes", None))
     processes = getattr(arguments, "processes", 1)
-    check_connection_budget(processes, pool_size)
+    check_connection_budget(processes, pool_size, arguments.concurrency)
     if processes == 1 or getattr(arguments, "process_index", 0):
         return None
     if not arguments.run_forever:

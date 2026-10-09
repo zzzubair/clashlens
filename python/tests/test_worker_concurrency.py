@@ -810,6 +810,20 @@ def test_each_worker_process_gets_at_most_16_connections() -> None:
             )
 
 
+def test_every_worker_lane_has_its_own_database_connection(monkeypatch) -> None:
+    # Raising the background limits only fills lanes that are already there;
+    # with a connection each, no job then waits for one.
+    with pytest.raises(ValueError, match="one a lane"):
+        check_connection_budget(2, 12, 16)
+    assert cli.main([*WORKER_ARGV, "--database-pool-size", "12"]) == 1
+    pools = []
+    monkeypatch.setattr(cli, "start_processes", lambda _arguments, pool, _signals: pools.append(pool) or 0)
+    assert cli.main(WORKER_ARGV) == 0
+    assert cli.main(["worker", "--database-url", "postgresql://prototype@postgres/db",
+                     "--owner", "one", "--run-forever", "--concurrency", "2"]) == 0
+    assert pools == [16, 8]
+
+
 @pytest.mark.parametrize("processes", ["3", "4"])
 def test_a_third_or_fourth_worker_process_is_refused(processes, capsys) -> None:
     with pytest.raises(SystemExit) as refused:

@@ -251,7 +251,7 @@ load_production_config() {
   HEALTH_PORT=$(setting CLASHLENS_HEALTH_PORT 8081)
   WORKER_LEASE=$(setting CLASHLENS_WORKER_LEASE_SECONDS 60) WORKER_PROCESSES=$(setting CLASHLENS_WORKER_PROCESSES 1)
   WORKER_CONCURRENCY=$(setting CLASHLENS_WORKER_CONCURRENCY 12) WORKER_RESPONSE_LANES=$(setting CLASHLENS_WORKER_RESPONSE_LANES)
-  WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE 12)
+  WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE "$WORKER_CONCURRENCY")
   WORKER_ARCHIVE_POOL=$(setting CLASHLENS_WORKER_ARCHIVE_POOL_SIZE 12)
   POSTGRES_MEMORY=$(setting CLASHLENS_POSTGRES_MEMORY 6g)
   POSTGRES_SHARED_BUFFERS=2048MB
@@ -319,6 +319,7 @@ validate_runtime_values() {
   [[ -z "$item" || ( "$item" =~ ^[1-9][0-9]{0,2}$ && "$item" -le 384 ) ]] || die "CLASHLENS_REGULAR_PARALLELISM must be a whole number from 1 to 384"
   (( save = ${item:-2 * keys * KEY_RATE}, save = save < 256 ? 256 : save > 384 ? 384 : save, save + ((keys + 1) * 6 < 448 - save ? (keys + 1) * 6 : 448 - save) + 32 + 64 <= COLLECTOR_PIDS )) || die "collector save, request and 32 upload threads plus 64 spare exceed CLASHLENS_COLLECTOR_PIDS=$COLLECTOR_PIDS"
   item=$(setting CLASHLENS_PROMOTION_RECHECK_PER_SECOND ''); [[ -z "$item" || "$item" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "CLASHLENS_PROMOTION_RECHECK_PER_SECOND must be a number of requests a second, 0 or more"
+  for item in CLASHLENS_BACKGROUND_JOB_LIMIT CLASHLENS_DAY_RECHECK_JOB_LIMIT; do [[ "$(setting "$item" 1)" =~ ^([1-9]|[1-5][0-9]|6[0-4])$ ]] || die "$item must be a whole number from 1 to 64"; done; (( WORKER_DB_POOL >= WORKER_CONCURRENCY )) || die "CLASHLENS_WORKER_DATABASE_POOL_SIZE must be at least CLASHLENS_WORKER_CONCURRENCY, one database connection a worker thread"; (( WORKER_DB_POOL <= 16 && WORKER_PROCESSES * (WORKER_DB_POOL + 3) <= 38 )) || die "CLASHLENS_WORKER_DATABASE_POOL_SIZE (default CLASHLENS_WORKER_CONCURRENCY) allows at most 16 database connections a worker process and 38 in all, counting 3 more a process"
   for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
   for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done
   local memory_mib=${POSTGRES_MEMORY%[bBkKmMgGtT]}
@@ -808,7 +809,7 @@ write_environment() {
     "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" \
     "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY true)" \
     "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=$KEY_RATE" CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081 "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=$([[ "$MODE" == fixture ]] && printf true || printf false)"
-  write_env worker.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
+  local worker_optional=() item; for item in CLASHLENS_BACKGROUND_JOB_LIMIT CLASHLENS_DAY_RECHECK_JOB_LIMIT; do [[ -z "$(setting "$item" '')" ]] || worker_optional+=("$item=$(setting "$item" '')"); done; write_env worker.env "${common[@]}" "${worker_optional[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key
   local hmac_caller hmac_key_id dashboard_enabled
   dashboard_enabled=CLASHLENS_DASHBOARD_ENABLED=$(setting CLASHLENS_DASHBOARD_ENABLED false)

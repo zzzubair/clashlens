@@ -1262,7 +1262,7 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
 
     result = cli._run_worker(
         _worker_namespace(
-            concurrency=20,
+            concurrency=4,
             database_pool_size=6,
             archive_pool_size=12,
         )

@@ -196,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument(
         "--database-pool-size",
         type=_bounded_int("database pool size", 1, MAX_WORKER_POOL_SIZE),
-        default=None, help="PostgreSQL pool size per process (default: 8, or 4 sequential)",
+        default=None, help="PostgreSQL pool size per process, at least one a lane (default: max(8, lanes), 4 sequential)",
     )
     worker.add_argument(
         "--archive-pool-size", type=_bounded_int("archive pool size", 1, MAX_ARCHIVE_POOL_SIZE),
@@ -815,7 +815,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
     database_pool_size = (
         arguments.database_pool_size
         if arguments.database_pool_size is not None
-        else (8 if concurrency > 1 else 4)
+        else (max(8, concurrency) if concurrency > 1 else 4)
     )
     process_index = getattr(arguments, "process_index", 0)
     exit_code = start_processes(arguments, database_pool_size, _install_shutdown_handlers)

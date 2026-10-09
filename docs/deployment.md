@@ -1179,10 +1179,25 @@ pages fell up to 59 minutes behind. Operator batches
 are queued at backfill priority, 25, which a worker thread only runs when no
 higher-priority work that thread can claim is due; a thread that does not process saved
 responses can run one while responses still wait. All worker processes together
-run at most two backfill jobs at once, one claim never takes more than one, and
-none starts while a live response or day result has been due 2 minutes or more
-and is still unfinished: waiting, waiting on its saved response, or leased,
-including one that keeps its lease after a lock conflict. A leased job counts
+run at most `CLASHLENS_BACKGROUND_JOB_LIMIT` backfill jobs at once (default
+2), and beside them at most `CLASHLENS_DAY_RECHECK_JOB_LIMIT` day rechecks after
+new evidence (priority 26, `queue_refresh.py`; default 4); see
+[Worker processes](#worker-processes). One claim never takes more than one
+background job of either kind, after any live work it can take. Live work
+is behind by a wait when at least 5 live responses and day results, and at
+least 1 in 20 of those due and unfinished, have waited that long, counting
+at most 200 in each state: waiting, waiting on its saved response, or
+leased, including one that keeps its lease after a lock conflict. Each limit
+halves, rounded up, while live work is 30 seconds behind (9 in 10 live
+responses waited under 14 seconds on 2026-10-09) or a statement of the
+worker's own has been blocked on a lock for a second or more (sessions of
+other database roles do not show what they wait on), and none starts while
+it is 2 minutes behind. A few stragglers are not enough: between 16:00 and 18:00 UTC on
+2026-10-09 about 120 saved responses waited 2 to 7 minutes for their first
+try, and stopping for any one of them stopped background work 32% of the
+time; replayed every 5 seconds, this rule stops it 0.6% of that time and
+halves it 3.2%, and stops it 39% of 05:00 to 06:20, when up to 21,800 live
+jobs waited. A leased job counts
 until it leaves its lease, even after the lease runs out, because its work can
 still be running; queue maintenance clears dead ones
 ([`background_pacing.py`](../python/src/clashlens/background_pacing.py)). On
@@ -1255,10 +1270,26 @@ In `app.env`, `CLASHLENS_WORKER_PROCESSES` (1 or 2, default 1) sets how many
 worker processes run in the worker container, `CLASHLENS_WORKER_CONCURRENCY` (default
 12) each process's threads, `CLASHLENS_WORKER_RESPONSE_LANES` (default about
 two thirds of them, 8 of 12) how many of them process only responses, and `CLASHLENS_WORKER_DATABASE_POOL_SIZE`
-(default 12, at most 16) each process's connections. All processes share the container's
-memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit. The
-worker refuses to start with more than 16 connections a process or 38 in
-all; see [the database connection budget](architecture.md#structured-data-and-evidence)
+(default one a thread, at most 16) each process's connections; `./ops` and
+the worker refuse fewer connections than threads, so no job waits for one.
+`CLASHLENS_BACKGROUND_JOB_LIMIT` (default 2) and
+`CLASHLENS_DAY_RECHECK_JOB_LIMIT` (default 4), each from 1 to 64, set how many
+backfill jobs and day rechecks all processes together run at once while live
+work keeps up. They are ceilings, not threads set aside: background work
+runs only on the threads that do not process only responses, 4 a process in
+production on 2026-10-09 (16 threads, 12 for responses), which also run live
+day results, publication builds and the maintenance timer's turn, and a
+claim takes live work first. So 2 backfill jobs and 4 rechecks run together
+only when those threads are otherwise free, and raising the limits past
+those threads adds nothing; giving fewer threads to responses, such as
+`CLASHLENS_WORKER_RESPONSE_LANES=10` for 6 a process, makes room for more
+without more connections. Season repair jobs took 0.8 seconds each on
+average on 2026-10-09 (13,390 of them, 2 at a time, about 5 hours); with
+`CLASHLENS_BACKGROUND_JOB_LIMIT=6` and 6 such threads a process, a Season's
+15,400 take at least 35 minutes, longer while live work pauses them. All processes share the container's
+memory limit (`CLASHLENS_WORKER_MEMORY`, 4 GB by default) and CPU limit.
+`./ops`, before it stops anything, and the worker refuse more than 16
+connections a process or 38 in all; see [the database connection budget](architecture.md#structured-data-and-evidence)
 for how that fits with the other processes.
 
 The setup proposed on 8 October 2026 for a 05:30 board with fresh live pages
