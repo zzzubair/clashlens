@@ -26,7 +26,7 @@ after the player's first battle of the new day.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from itertools import combinations
 
@@ -110,8 +110,13 @@ class _Judged:
     residual: int = 0
     # Landed attacks whose gains the reading lacks: the attacker's profile lag.
     lagged: tuple[str, ...] = ()
-    # Every automatic loss some reading of it that fits shows applied.
-    losses: frozenset[int] = frozenset()
+    # Every way it fits: the automatic loss it shows applied, and whether it
+    # shows the weekly raise to ``floor``.
+    ways: frozenset[tuple[int, bool]] = frozenset()
+
+    @property
+    def losses(self) -> frozenset[int]:
+        return frozenset(loss for loss, _ in self.ways)
 
 
 def judge(
@@ -160,9 +165,10 @@ def judge(
         return None
     losses = [0, *(loss for loss in loss_candidates if loss)]
 
-    def fits(ended: int, new: int) -> bool:
-        return reading.trophies == ended + new or (
-            floor is not None and ended < floor and reading.trophies == floor + new)
+    def fits(ended: int, new: int) -> list[bool]:
+        """Whether the reading shows the value unraised, raised, or both."""
+        values = [(ended, False)] + ([(floor, True)] if floor is not None and ended < floor else [])
+        return [raised for value, raised in values if reading.trophies == value + new]
 
     # The game can credit an attack to the attacker's own profile long after
     # it: on 6 October 2026 #P20G0CUJY read 4,766 at 05:02:41 without all 308
@@ -183,16 +189,17 @@ def judge(
         short = sum(effect.change for effect, ended in run if ended)
         new_short = sum(effect.change for effect, ended in run if not ended)
         found += [
-            (run, chosen, loss)
+            (run, chosen, loss, raised)
             for count in range(len(maybes) + 1)
             for chosen in combinations(maybes, count)
             for loss in losses
-            if fits(base - short - loss + sum(delta for delta, _, ended in chosen if ended),
-                    new_day_change - new_short
-                    + sum(delta for delta, _, ended in chosen if not ended))
+            for raised in fits(
+                base - short - loss + sum(delta for delta, _, ended in chosen if ended),
+                new_day_change - new_short
+                + sum(delta for delta, _, ended in chosen if not ended))
         ]
     if found:
-        run, chosen, loss = found[0]
+        run, chosen, loss, _ = found[0]
         lagged = tuple(effect.identity for effect, _ in run)
         return _Judged(
             # Any battle in flight leaves the reading read one way or the
@@ -202,7 +209,7 @@ def judge(
             + tuple(effect.identity for effect, ended in run if ended),
             new_day_change - sum(effect.change for effect, ended in run if not ended)
             + sum(delta for delta, _, ended in chosen if not ended),
-            lagged=lagged, losses=frozenset(loss for _, _, loss in found),
+            lagged=lagged, ways=frozenset(way[2:] for way in found),
         )
     # The residual is against the day's end after a certain loss, the value
     # every saved result records as the expected next start.
@@ -234,8 +241,9 @@ def decide(
     the player's latest landed attacks, the game's attacker-profile lag,
     never contradicts and confirms nothing. A reading shows a loss only when
     every way it fits has it: once every way a trustworthy reading fits has
-    the loss landed, a later one that fits only without it contradicts too,
-    as a loss does not un-land, and a clean match fits one way only. Otherwise the last
+    the loss landed, or the weekly raise applied, a later one that fits only
+    without it contradicts too (``_first_misfit``), and a clean match fits
+    one way only. Otherwise the last
     trustworthy clean match decides, a match proving the day with the loss
     landed when one is certain or a reading showed it, or, read before the
     loss, proving its end before the loss; with none, the last clean
@@ -275,24 +283,10 @@ def decide(
         return item.loss if len(item.losses) == 1 else 0
 
     lagged = tuple(dict.fromkeys(name for item in judged for name in item.lagged))
-    contradiction = next((
-        Verdict("contradicted", item.reading, residual=item.residual, lagged=lagged)
-        for item in judged
-        if trusted(item) and not item.matched
-    ), None)
+    misfit, shown = _first_misfit(item for item in judged if trusted(item))
+    if misfit is not None:
+        return replace(misfit, lagged=lagged)
     matches = [item for item in judged if trusted(item) and clean(item)]
-    landed = next((item for item in judged
-                   if trusted(item) and item.matched and 0 not in item.losses), None)
-    if contradiction is None and landed is not None:
-        contradiction = next((
-            Verdict("contradicted", item.reading, residual=landed.loss - item.loss,
-                    lagged=lagged)
-            for item in judged
-            if trusted(item) and item.matched and landed.loss not in item.losses
-            and item.reading.read_at > landed.reading.read_at
-        ), None)
-    if contradiction is not None:
-        return contradiction
     # A confirm-only reading may show a possible loss landed, but showing none
     # proves nothing: it may be read before the loss lands. One that may show
     # a battle only the opponent has reported proves neither.
@@ -300,7 +294,6 @@ def decide(
     judged = [item for item in judged
               if not possible or not unknown(item) and (shows(item) or trusted(item))]
     matches = matches or [item for item in judged if clean(item)]
-    shown = landed.loss if landed is not None else 0
     if matches:
         loss = max(shown, *(item.loss for item in matches))
         decider = ([item for item in matches if item.loss == loss] or matches)[-1]
@@ -340,24 +333,36 @@ def contradiction_during_day(
     raise to ``floor``, plus its automatic loss, ``pending_loss``, while it
     may not have landed, which has no fixed time, then raised, then every
     battle of the day landed by then. Once every way a reading fits has the
-    loss landed, every later one must too. A battle in flight is read both
+    loss landed, or the raise applied, every later one must too. A battle in flight is read both
     ways, and the latest attacks' late credits, ``earlier`` the day before's
     battles already in its end, may be missing."""
-    end = start + pending_loss
-    for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies)):
-        if reading.confirm_only or not (
-                day_start + DAY_READINGS_FROM <= reading.read_at < reset_at):
-            continue
-        judged = judge(
-            reading, end_before_loss=end,
+    judged = (
+        judge(
+            reading, end_before_loss=start + pending_loss,
             loss_candidates=(pending_loss,) if pending_loss else (),
             loss_certain=bool(pending_loss), day_effects=earlier,
             new_day_effects=day_effects, floor=floor,
         )
-        if judged is None:
-            continue
-        if not judged.matched:
-            return Verdict("contradicted", reading, residual=judged.residual)
-        if judged.losses and 0 not in judged.losses:
-            end, pending_loss = end - judged.loss, 0
-    return None
+        for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
+        if not reading.confirm_only
+        and day_start + DAY_READINGS_FROM <= reading.read_at < reset_at
+    )
+    return _first_misfit(item for item in judged if item is not None)[0]
+
+
+def _first_misfit(judged: Iterable[_Judged]) -> tuple[Verdict | None, int]:
+    """The first of these readings, in order, that fits no value, or fits
+    only without what an earlier one showed: once every way that one fits
+    has the automatic loss landed, or the weekly raise applied, so must
+    every later one, as neither undoes itself. Also the loss shown landed."""
+    loss, raised = 0, False
+    for item in judged:
+        ways = [(way_loss, way_raised) for way_loss, way_raised in item.ways
+                if (not loss or way_loss == loss) and (way_raised or not raised)]
+        if not ways:
+            residual = item.residual if not item.matched else (loss - item.loss) or None
+            return Verdict("contradicted", item.reading, residual=residual), loss
+        if all(way_loss for way_loss, _ in ways):
+            loss = ways[0][0]
+        raised = raised or all(way_raised for _, way_raised in ways)
+    return None, loss

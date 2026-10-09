@@ -614,3 +614,24 @@ def test_the_weekly_raise_applies_to_the_day_befores_late_credits_and_loss_toget
     for fits in (5100, 5060, 5000):
         assert "trophy_equation_mismatch" not in monday(fits), fits
     assert "trophy_equation_mismatch" in monday(4960)
+
+
+def test_the_weekly_raise_once_shown_never_goes_back() -> None:
+    # Sunday ends at 5,100 before its 200 loss, 4,900 after it. 05:20 reads
+    # the raised 5,000; 05:30 reads 4,900, unraised: it disagrees, and so it
+    # does when judging Sunday from its end Reset on.
+    day_start = RESET - timedelta(days=1)
+    found = contradiction_during_day(
+        (Reading(day_start + timedelta(minutes=20), 5000),
+         Reading(day_start + timedelta(minutes=30), 4900)),
+        day_start=day_start, reset_at=RESET, start=4900, pending_loss=200,
+        day_effects=(), floor=5000,
+    )
+    sunday = decide(
+        (Reading(at(20), 5000), Reading(at(30), 4900)), reset_at=RESET,
+        end_before_loss=5100, loss_candidates=(200,), loss_certain=True,
+        day_effects=(), new_day_effects=(), start_proven=True, floor=5000,
+    )
+
+    assert found is not None and found.reading.trophies == 4900
+    assert (sunday.outcome, sunday.reading.trophies) == ("contradicted", 4900)
