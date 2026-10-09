@@ -408,6 +408,9 @@ def get_player_page(
                 "current_day_start": None
                 if current_day is None
                 else current_day["ranked_day_start"],
+                "current_day_published_at": None
+                if current_day_raw is None
+                else current_day_raw[20].astimezone(UTC).isoformat(),
                 "recent_day_starts": [day["ranked_day_start"] for day in screen_days],
                 "season_day_starts": season_day_starts,
                 "season": None

@@ -3,6 +3,7 @@ import type { RouteConfig } from "@react-router/dev/routes";
 
 export default [
   index("routes/home.tsx"),
+  route("dashboard", "routes/dashboard.tsx"),
   route("players/:tag", "routes/player.tsx"),
   route("resources/players/search", "routes/player-search.ts"),
   route("resources/players/:tag/refresh", "routes/refresh.ts"),

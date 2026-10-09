@@ -454,6 +454,9 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
     season: mapSeason(screen.season),
     currentDay:
       screen.current_day_start === null ? null : dayAt(screen.current_day_start),
+    currentDayPublishedAt: isUtcTimestamp(screen.current_day_published_at)
+      ? screen.current_day_published_at
+      : null,
     recentDays: screen.recent_day_starts.map(dayAt),
     seasonDays: screen.season_day_starts.map(dayAt),
     dataQuality: mapDataQuality(screen.data_quality),

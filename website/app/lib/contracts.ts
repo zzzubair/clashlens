@@ -306,6 +306,8 @@ export interface PlayerPage {
     anchorObservedAt: string;
   } | null;
   currentDay: RankedDaySummary | null;
+  /** When `currentDay` was published. */
+  currentDayPublishedAt?: string | null;
   recentDays: RankedDaySummary[];
   seasonDays: RankedDaySummary[];
   dataQuality: Array<{

@@ -819,6 +819,8 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                 "anchor_source": "daily_publication",
                 "anchor_observed_at": "2026-08-06T11:30:00+00:00",
             }
+            # The earlier days were published after today's log.
+            assert screen["current_day_published_at"] == "2026-08-06T11:30:00+00:00"
             assert all(
                 day["official_season_id"] == "current-season"
                 for day in season_days
