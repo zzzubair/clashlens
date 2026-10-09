@@ -158,7 +158,8 @@ def enqueue_rebuilds(
     A player with reconciliation queued or running that rebuilds one of those
     days waits for a later run. A player whose latest rebuild failed is not
     queued again but listed, at most ``max_jobs`` of them, in
-    ``failed_blockers``; deleting the failed job lets a later run queue it.
+    ``failed_blockers``, and every one in ``failed_job_ids``; deleting the
+    failed job lets a later run queue it.
     Returns the queued job ids in the republish command's report shape;
     without ``queue``, writes nothing and lists only those blockers.
     """
@@ -254,7 +255,7 @@ def enqueue_rebuilds(
                        ) AS position
                 FROM candidates
             ) AS ranked
-            WHERE position <= %(max_jobs)s
+            WHERE position <= %(max_jobs)s OR job_id IS NOT NULL
             ORDER BY player_id
             """,
             {**season, "max_jobs": max_jobs},
@@ -301,10 +302,12 @@ def enqueue_rebuilds(
             ).fetchone()
             if row is not None:
                 job_ids.append(int(row[0]))
+    failed = [row for row in rows if row[4] is not None]
     return {
         "job_ids": job_ids,
         "evaluated_count": 0,
         "failure_reasons": {},
+        "failed_job_ids": [int(row[4]) for row in failed],
         "failed_blockers": [
             {
                 "job_id": int(job_id),
@@ -314,8 +317,8 @@ def enqueue_rebuilds(
                     _text_value(failure_category) if failure_category else None
                 ),
             }
-            for player_id, _, _, _, job_id, failure_category, job_day in rows
-            if job_id is not None
+            for player_id, _, _, _, job_id, failure_category, job_day
+            in failed[:max_jobs]
         ],
     }
 

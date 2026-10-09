@@ -420,7 +420,7 @@ def _input_jobs(
         """,
         {
             "states": [*_UNFINISHED_JOB_STATES, "failed"],
-            "moved": [blocker["job_id"] for blocker in moved["failed_blockers"]],
+            "moved": moved["failed_job_ids"],
             "season": season_id, "start": start, "end": start + SEASON_DURATION,
         },
     ).fetchall(), limit)

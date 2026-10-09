@@ -987,68 +987,82 @@ def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_agai
     assert (moved_on["phase"], moved_on["queued"]) == ("days", 1)
 
 
+@pytest.mark.parametrize("players,max_jobs", [(1, 10), (2, 1)])
 def test_season_repair_reports_a_failed_moved_battle_rebuild_from_another_season(
-    database_url: str,
+    database_url: str, players: int, max_jobs: int,
 ) -> None:
     """A player's moved-battle rebuild of an August day failed, and a
     September battle of theirs has moved day since: the failed job, which
     keeps the player's one rebuild key, holds September back. Preview and
-    receipt list it as the queue step does."""
+    receipt list it as the queue step does. With two such players and
+    --max-jobs 1, both count as failed; only the first is listed."""
     with _campaign_database(database_url) as (connection_info, worker):
         day2, day3 = START + DAY, START + 2 * DAY
+        august = START - 7 * DAY
+        blockers = []
         with _owner(connection_info) as connection:
-            moved, opponent = _player(connection, "#MOVED"), _player(connection, "#OPP")
-            evidence_id = _report(connection, moved, opponent, day2, destruction=56)
-            connection.execute(
-                """
-                INSERT INTO battle_day_repairs (
-                    from_battle_id, to_battle_id, perspective, evidence_id,
-                    attacker_player_id, defender_player_id, from_day, to_day
-                ) SELECT 0, battle_id, 'attacker', id, %s, %s, %s, %s
-                FROM battle_evidence WHERE id = %s
-                """,
-                (moved, opponent, day3, day2, evidence_id),
-            )
-            # Day 3 still shows the battle that moved to day 2.
-            for day, battles in ((day2, []), (day3, [{"source_evidence_id": evidence_id}])):
+            opponent = _player(connection, "#OPP")
+            for number in range(players):
+                moved = _player(connection, f"#MOVED{number}")
+                evidence_id = _report(connection, moved, opponent, day2, destruction=56)
                 connection.execute(
-                    "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
-                    " version, state, coverage, battles, official_season_id)"
-                    " VALUES (%s, %s, 1, 'Complete', 'complete', %s, %s)",
-                    (moved, day, Jsonb(battles), SEASON),
+                    """
+                    INSERT INTO battle_day_repairs (
+                        from_battle_id, to_battle_id, perspective, evidence_id,
+                        attacker_player_id, defender_player_id, from_day, to_day
+                    ) SELECT 0, battle_id, 'attacker', id, %s, %s, %s, %s
+                    FROM battle_evidence WHERE id = %s
+                    """,
+                    (moved, opponent, day3, day2, evidence_id),
                 )
-                _saved_day(connection, moved, day)
-            august = START - 7 * DAY
-            failed_id = connection.execute(
-                """
-                INSERT INTO python_processing_jobs (
-                    work_type, deduplication_key, input_json, status,
-                    failure_category, due_at
-                ) VALUES ('reconcile_ranked_day', %s, %s, 'failed',
-                          'invalid_work_input', clock_timestamp())
-                RETURNING id
-                """,
-                (f"reconcile:battle-day:{moved}",
-                 Jsonb({"player_id": moved,
-                        "ranked_day_start": august.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "last_ranked_day_start": august.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "recalculate_season": "1786338000"})),
-            ).fetchone()[0]
+                # Day 3 still shows the battle that moved to day 2.
+                for day, battles in (
+                    (day2, []), (day3, [{"source_evidence_id": evidence_id}]),
+                ):
+                    connection.execute(
+                        "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
+                        " version, state, coverage, battles, official_season_id)"
+                        " VALUES (%s, %s, 1, 'Complete', 'complete', %s, %s)",
+                        (moved, day, Jsonb(battles), SEASON),
+                    )
+                    _saved_day(connection, moved, day)
+                failed_id = connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, status,
+                        failure_category, due_at
+                    ) VALUES ('reconcile_ranked_day', %s, %s, 'failed',
+                              'invalid_work_input', clock_timestamp())
+                    RETURNING id
+                    """,
+                    (f"reconcile:battle-day:{moved}",
+                     Jsonb({"player_id": moved,
+                            "ranked_day_start": august.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "last_ranked_day_start": august.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "recalculate_season": "1786338000"})),
+                ).fetchone()[0]
+                blockers.append({"job_id": failed_id, "player_id": moved,
+                                 "failure_category": "invalid_work_input"})
 
         def run(action: str) -> dict:
-            return domain_repair.season_repair(worker, SEASON, action, max_jobs=10)
+            return domain_repair.season_repair(worker, SEASON, action, max_jobs=max_jobs)
 
         preview, held, receipt = run("preview"), run("queue"), run("receipt")
         with _owner(connection_info) as connection:
             jobs = connection.execute("SELECT count(*) FROM python_processing_jobs").fetchone()[0]
 
-    blocker = [{"job_id": failed_id, "player_id": moved,
-                "failure_category": "invalid_work_input"}]
-    assert (held["phase"], held["failed"], held["failed_blockers"]) == ("inputs", 1, blocker)
-    assert (preview["inputs"]["failed"], preview["inputs"]["failed_blockers"]) == (1, blocker)
-    assert (receipt["inputs"]["failed"], receipt["inputs"]["failed_blockers"]) == (1, blocker)
-    # Nothing was queued: the failed job is the only one.
-    assert jobs == 1
+    listed = blockers[:max_jobs]
+    assert (held["phase"], held["failed"], held["failed_blockers"]) == (
+        "inputs", players, listed
+    )
+    assert (preview["inputs"]["failed"], preview["inputs"]["failed_blockers"]) == (
+        players, listed
+    )
+    assert (receipt["inputs"]["failed"], receipt["inputs"]["failed_blockers"]) == (
+        players, listed
+    )
+    # Nothing was queued: the failed jobs are the only ones.
+    assert jobs == players
 
 
 @pytest.mark.parametrize("sequence", ["single_day_unretried", "pair_retried"])
