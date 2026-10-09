@@ -917,7 +917,7 @@ This alert fires when the website's public Daily leaderboard page does not
 show the latest Reset's frozen leaderboard by 05:30 UTC, including when that
 page cannot be read then, and when an earlier Reset is still unpublished. The **Reset
 behind its 05:30 target** early warning comes first and names the stage:
-collection not ended at 05:10, Reset work projected past 05:25 at 05:15, or
+collection not ended at 05:12, Reset work projected past 05:25 at 05:15, or
 inputs not frozen at 05:25.
 
 **First checks:** `./ops queue-status` for Reset work left, `./ops logs worker
@@ -974,6 +974,24 @@ battles have stayed untracked for over an hour, not counting players whose
 saved profile showed a lower tier after their latest such battle, such as
 Monday demotions.
 
+### Battles may be in the wrong day
+
+**What it means:** a battle report belongs to the Legend day of its stamp
+less five minutes. That holds because the game lets no new-day attack start
+until about 05:07:20 and every ended-day attack had ended by 05:03:38 at all
+11 Resets to 8 October 2026; the Reset sweep also reads every profile in that
+gap. A saved day of the current or previous Legend day with 9 attacks or 9
+defenses, or a report stamped 05:03:30 to 05:07:00 after a Reset, means that
+gap moved.
+
+**First checks:** `./ops logs worker --since '2 hours ago' --no-pager`, then
+look at the days and reports the alert counts.
+
+**Fix or escalate:** escalate; the battle-day rule and the sweep's profile
+window need re-measuring before any change. Nothing is moved automatically.
+
+**Recovered:** neither sign appears in the current or previous Legend day.
+
 ### Season final ranks missing
 
 Ended-Season pages show "Not published yet" until Clash of Clans league history
@@ -1006,9 +1024,10 @@ SSH, it is powered off or offline.
 ### When alerts themselves fail
 
 The monitoring warning means a disk, restart-history, Live Leaderboard,
-Reset publication or untracked battler check has been unreadable for ten minutes. Run
+Reset publication, Reset progress, untracked battler or battle-day check has
+been unreadable for ten minutes. Run
 `journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager`
-to see which diagnostic repeats. Its recovery only means all five checks can
+to see which diagnostic repeats. Its recovery only means all seven checks can
 be read again; a disk, Live Leaderboard or publication problem they then
 report keeps its own alert open.
 

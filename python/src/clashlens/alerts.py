@@ -99,6 +99,14 @@ CONDITIONS = {
         ),
         "./ops logs worker",
     ),
+    "battle_day": (
+        (
+            "A Legend day today or yesterday has 9 attacks or 9 defenses, or a battle"
+            " report is stamped 05:03:30-05:07:00 UTC: the game's no-attack window"
+            " after the Reset may have changed, so battles may be in the wrong day"
+        ),
+        "./ops logs worker",
+    ),
     "health": (
         "Early warning: a container may soon be restarted by its health check",
         "./ops status, then ./ops logs",
@@ -109,8 +117,8 @@ CONDITIONS = {
     ),
     "monitoring": (
         (
-            "A disk, restart-history, Live Leaderboard, Reset publication, Reset progress or"
-            " untracked battler check has been unreadable for at least 10 minutes"
+            "A disk, restart-history, Live Leaderboard, Reset publication, Reset progress,"
+            " untracked battler or battle-day check has been unreadable for at least 10 minutes"
         ),
         "journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager",
     ),
@@ -144,6 +152,7 @@ UNREADABLE = {
     "Reset publication status unavailable; run ./ops logs website",
     "Reset progress unavailable; run ./ops logs worker",
     "Untracked Legend I battler count unavailable; run ./ops logs worker",
+    "Battle-day check unavailable; run ./ops logs worker",
 }
 
 # A recovery is sent only after this long without the problem, so a problem
@@ -176,8 +185,10 @@ NO_PROGRESS = 120
 # PostgreSQL replays its change log after a crash; the health check waits.
 WARNING_DATABASE_STARTING = 300
 # Minutes after the Reset: collection done, projected inputs, inputs frozen,
-# board readable. Freezing by 05:25 leaves five minutes to publish by 05:30.
-RESET_COLLECTED, RESET_PROJECTED, RESET_FROZEN, RESET_READABLE = 10, 15, 25, 30
+# board readable. Battle logs wait for 05:07:20 (collector_reset), and a
+# Season's opening Reset adds a league history each, at least 3 minutes of
+# six keys. Freezing by 05:25 leaves five minutes to publish by 05:30.
+RESET_COLLECTED, RESET_PROJECTED, RESET_FROZEN, RESET_READABLE = 12, 15, 25, 30
 
 
 class CheckError(Exception):
@@ -466,6 +477,49 @@ def completeness_probe() -> None:
                         AND demoted.eligibility_state = 'ineligible'
                         AND demoted_seen.observed_at > seen.last_battle_at
                   )
+                """
+            ).fetchone()[0]
+        )
+
+
+def battle_day_probe() -> None:
+    """Run inside the worker container; prints how many signs of a battle in
+    the wrong day the current and previous Legend days show.
+
+    A report belongs to the day of its stamp less five minutes
+    (``domain.BATTLE_DAY_GRACE``): the game lets no new-day attack start until
+    about 05:07:20 and every ended-day attack had ended by 05:03:38 at all 11
+    Resets to 8 October 2026. A day with a 9th attack or defense, or a report
+    stamped 05:03:30-05:07:00, means that window moved.
+    """
+    import psycopg
+
+    url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
+    with psycopg.connect(url) as connection:
+        print(
+            connection.execute(
+                """
+                WITH since AS (
+                    SELECT date_bin(interval '1 day', clock_timestamp(),
+                                    timestamptz '2000-01-01 05:00:00+00')
+                           - interval '1 day' AS day_start
+                )
+                SELECT (
+                    SELECT count(DISTINCT (player_id, ranked_day_start))
+                    FROM ranked_day_versions
+                    WHERE ranked_day_end > (SELECT day_start FROM since)
+                      AND (attack_count > 8 OR defense_count > 8)
+                ) + (
+                    SELECT count(*)
+                    FROM legend_battles AS battle
+                    JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
+                    WHERE battle.ranked_day_start >= (SELECT day_start FROM since)
+                          - interval '1 day'
+                      AND evidence.battle_timestamp - date_bin(
+                              interval '1 day', evidence.battle_timestamp,
+                              timestamptz '2000-01-01 05:00:00+00')
+                          BETWEEN interval '3 minutes 30 seconds' AND interval '7 minutes'
+                )
                 """
             ).fetchone()[0]
         )
@@ -859,6 +913,9 @@ def observe(
     )
     if completeness is not None:
         findings["completeness"] = completeness[0] > UNTRACKED_BATTLER_LIMIT
+    battle_day = run_probe("worker", ["--battle-day"], 1, "Battle-day check")
+    if battle_day is not None:
+        findings["battle_day"] = battle_day[0] > 0
     # Each unreadable check keeps its own first-failure time; one readable
     # run restarts its ten minutes.
     failing = state.get("monitoring_failing_since", {})
@@ -1108,6 +1165,9 @@ def main() -> int:
             return 0
         if sys.argv[1:] == ["--completeness"]:
             completeness_probe()
+            return 0
+        if sys.argv[1:] == ["--battle-day"]:
+            battle_day_probe()
             return 0
         if sys.argv[1:2] == ["--uptime"] and len(sys.argv) > 4:
             state_dir, webhook, *urls = sys.argv[2:]

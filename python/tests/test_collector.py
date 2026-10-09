@@ -795,6 +795,64 @@ def test_intent_lane_refills_around_active_rows_without_overadmitting(
     assert store.completed == {1, 2, 3, 4}
 
 
+@pytest.mark.parametrize(
+    ("kind", "most_at_once"), [("reset_baseline", 4), ("reset_settlement", 2)]
+)
+def test_reset_pairs_use_the_regular_slots_while_other_work_keeps_its_own(
+    monkeypatch: pytest.MonkeyPatch, kind: str, most_at_once: int
+) -> None:
+    # Regular checks wait for every Reset pair, so their slots are free for them.
+    spool = _Spool()
+    now = datetime.now(UTC)
+    due = [
+        CollectorIntent(kind, now, index, f"#{index}", work_id=index, sweep_id=1)
+        for index in range(1, 7)
+    ]
+
+    class IntentStore(_Store):
+        def pending_intents(
+            self, limit: int, _now: datetime | None = None, *,
+            interactive: bool | None = None, **_kwargs: object,
+        ) -> list[CollectorIntent]:
+            return [] if interactive else due[:limit]
+
+        @staticmethod
+        def begin_reset(_boundary: datetime, *, local_regular_inflight: int) -> None:
+            return None
+
+        @staticmethod
+        def expire_settlement_checks(_now: datetime) -> int:
+            return 0
+
+    collector = _collector(spool, IntentStore(spool), _Client(spool))
+    collector.regular_parallelism = 4
+    monkeypatch.setattr(collector_module, "_ORDINARY_INTENT_PARALLELISM", 2)
+    started: list[int] = []
+    release = asyncio.Event()
+
+    async def collect_intent(intent: CollectorIntent) -> str:
+        assert intent.work_id is not None
+        started.append(intent.work_id)
+        await release.wait()
+        return "complete"
+
+    collector.collect_intent = collect_intent  # type: ignore[method-assign]
+
+    async def run() -> None:
+        stop = asyncio.Event()
+        task = asyncio.create_task(collector._intent_loop(stop, False, 0.001))
+        try:
+            await asyncio.sleep(0.1)
+        finally:
+            stop.set()
+            release.set()
+            await task
+
+    asyncio.run(run())
+
+    assert sorted(started) == list(range(1, most_at_once + 1))
+
+
 def test_cancelled_thread_waits_for_immutable_operation_to_finish() -> None:
     started = threading.Event()
     release = threading.Event()

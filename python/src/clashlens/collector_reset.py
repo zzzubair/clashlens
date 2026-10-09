@@ -1,13 +1,21 @@
 """Reset collection work: the 05:00 UTC sweep and its delayed settlement check.
 
 At each Reset the sweep freezes the active members, then schedules two
-pieces of work for each of them in one transaction: the Reset pair, due at
-once, and one settlement check, due 20 minutes later. A Season-opening Reset
+pieces of work for each of them in one transaction: the Reset pair and one
+settlement check, due 20 minutes later. A Season-opening Reset
 also adds one league-history refresh each, due 20 minutes later
 (``league_history_refresh``). The Reset pair holds
 ordinary collection until it finishes; the settlement check never does. It
 fetches a fresh profile, then the battle log that must cover it, and stops
 making requests 23h55m after the Reset.
+
+The Reset pair reads every profile in the minutes after the Reset when no
+battle is running: at all 11 Resets from 29 September to 8 October 2026 the
+last battle of the ended day ended by 05:03:38 and the first of the new day
+started at 05:07:20 or later, and the automatic defense loss showed in no
+profile before 05:07:38. So profiles go out from ``PROFILE_PASS_FROM`` and
+battle logs, which only need to come after their profile, from
+``BATTLE_LOG_PASS_FROM``, behind any profile still owed.
 """
 
 from __future__ import annotations
@@ -21,6 +29,8 @@ from .league_history_refresh import REFRESH_DELAY, schedule_refresh
 
 SETTLEMENT_DELAY = timedelta(minutes=20)
 COLLECTION_WINDOW = timedelta(hours=23, minutes=55)
+PROFILE_PASS_FROM = timedelta(minutes=3, seconds=40)
+BATTLE_LOG_PASS_FROM = timedelta(minutes=7, seconds=20)
 
 
 def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
@@ -123,7 +133,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
             )
             """,
             (
-                utc_boundary,
+                utc_boundary + PROFILE_PASS_FROM,
                 sweep_id,
                 sweep_id,
                 league_history_status,
@@ -168,6 +178,16 @@ def _schedule_settlement_checks(
         WHERE reset_boundary_settlements.delayed_work_id IS NULL
         """,
         (boundary_at, sweep_id, sweep_id),
+    )
+
+
+def profile_pass(kind: str, boundary_at: datetime | None, now: datetime) -> bool:
+    """Whether Reset pair work fetches only its profile now: before
+    ``BATTLE_LOG_PASS_FROM`` its battle log and any league history wait."""
+    return (
+        kind == "reset_baseline"
+        and boundary_at is not None
+        and now < boundary_at + BATTLE_LOG_PASS_FROM
     )
 
 

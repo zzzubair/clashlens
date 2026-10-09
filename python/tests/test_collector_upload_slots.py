@@ -309,8 +309,7 @@ def test_a_held_player_never_delays_another_players_reset_or_regular_checks(
 
     monkeypatch.setattr(collector_module, "datetime", Clock)
     reset_pair = CollectorIntent(
-        "reset_baseline", reset_at, 2, "#2P2G", work_id=7, sweep_id=1,
-        battle_log_required=False,
+        "reset_baseline", reset_at, 2, "#2P2G", work_id=7, sweep_id=1
     )
 
     class ResetStore(_Store):

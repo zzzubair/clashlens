@@ -946,7 +946,14 @@ class Collector:
         rankings_enabled: bool,
         idle_seconds: float,
     ) -> None:
-        active: dict[int, tuple[bool, asyncio.Task[str]]] = {}
+        active: dict[int, tuple[str, asyncio.Task[str]]] = {}
+        # Reset pairs hold regular checks until they finish, so they may use
+        # the regular checks' slots; other work keeps its own few.
+        slots = {
+            "interactive": 6,
+            "reset": self.regular_parallelism,
+            "ordinary": _ORDINARY_INTENT_PARALLELISM,
+        }
         scheduled_boundary: datetime | None = None
         next_rankings_at = datetime.min.replace(tzinfo=UTC)
         next_expiry_at = next_rankings_at
@@ -978,47 +985,59 @@ class Collector:
                             )
                             if sweep_id is not None:
                                 scheduled_boundary = boundary
-                for job_id, (_interactive, task) in list(active.items()):
+                for job_id, (_lane, task) in list(active.items()):
                     if task.done():
                         await task
                         del active[job_id]
-                for is_interactive, limit in (
-                    (True, 6),
-                    (False, _ORDINARY_INTENT_PARALLELISM),
+                for is_interactive, lanes in (
+                    (True, ("interactive",)),
+                    (False, ("reset", "ordinary")),
                 ):
-                    used = sum(
-                        kind == is_interactive for kind, _task in active.values()
-                    )
-                    available = limit - used
-                    if available <= 0:
+                    available = {
+                        lane: slots[lane]
+                        - sum(kind == lane for kind, _task in active.values())
+                        for lane in lanes
+                    }
+                    if max(available.values()) <= 0:
                         continue
                     intents = await self._database_call(
                         self.database.pending_intents,
-                        limit=limit,
+                        limit=sum(slots[lane] for lane in lanes),
                         now=now,
                         interactive=is_interactive,
                         held=self.held_work(),
                     )
                     for intent in intents:
-                        if intent.work_id is not None and intent.work_id not in active:
+                        lane = (
+                            "interactive"
+                            if is_interactive
+                            else "reset"
+                            if intent.kind == "reset_baseline"
+                            else "ordinary"
+                        )
+                        if (
+                            intent.work_id is not None
+                            and intent.work_id not in active
+                            and available[lane] > 0
+                        ):
                             active[intent.work_id] = (
-                                is_interactive,
+                                lane,
                                 asyncio.create_task(self.collect_intent(intent)),
                             )
-                            available -= 1
-                            if available == 0:
+                            available[lane] -= 1
+                            if max(available.values()) <= 0:
                                 break
                 await _wait_or_stop(stop_requested, idle_seconds)
             graceful = True
         finally:
             if not graceful:
-                for _interactive, task in active.values():
+                for _lane, task in active.values():
                     if not task.done():
                         task.cancel()
             if active:
                 results = await _drain_awaitable(
                     asyncio.gather(
-                        *(task for _interactive, task in active.values()),
+                        *(task for _lane, task in active.values()),
                         return_exceptions=True,
                     )
                 )
