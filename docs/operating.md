@@ -710,13 +710,11 @@ frozen before those rules still rank such players and miss those battles: on
 2026-10-07 the October 2026 Season's Day 1 board ranked 24 missing players
 and Day 2 34, with two of them first and second on Day 2 above ZOOS Yatta,
 and Day 2 missed late battles for 290 players. On 2026-10-08 the Day 3 board
-showed 3 players as proven but 29, 40 and 70 trophies low. The Complete-day
-rule must not be deployed, or used to repair boards, on its own: it ships
-together with the next change, which adds one shared proof per Reset, used by
-both days it bounds, the Daily board and the Season summary, and a versioned
-Season repair with before/after receipts. Until then the rule can mark a board
-entry proven while the Season summary still shows the same day's ending as
-provisional. Once both are deployed, run:
+showed 3 players as proven but 29, 40 and 70 trophies low. The Season repair
+above rebuilds them with every other view; the Complete-day rule's remaining
+limits are in
+[frozen snapshots](domain.md#6-ranked-day-and-leaderboard-snapshots). To
+rebuild only the boards, run:
 
 ```sh
 podman exec clashlens-python-worker \
