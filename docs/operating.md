@@ -741,10 +741,14 @@ other player is queued only through that player's saved day, not through
 their newest ended day. A refresh that needs the day's saved end reading is
 skipped while that reading is missing. A report or reading of the previous
 Season's days queues them only until 7 days after that Season ended, when it
-stops taking corrections. The 07:00 day-end recheck of each day of the Reset
+stops taking corrections. A correction that changes only a day's automatic
+defense loss, not its state or trophy totals, does not recalculate the day
+after it, which judges its readings against that loss. The 07:00 day-end recheck of each day of the Reset
 and the twice-daily recheck of each player's last two ended days judge those
 days again within a day; an older day waits for the 05:30 late-battle check,
-which looks back 7 days, or a Season repair.
+which looks back 7 days, or a Season repair; a correction more than 7 days
+old within the current Season escapes these checks until the planned nightly
+recalculation pass.
 
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)

@@ -521,9 +521,10 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             # The readings isolate the calculated settlement loss.
             automatic_state = "confirmed"
     # A reading during the day must show its start plus the battles landed by
-    # then; the weekly raise takes the part of the loss before it lands below 5,000.
+    # then; the weekly raise takes the part of the loss before it lands below 5,000,
+    # and a Season reset all of it.
     previous = data.previous_day
-    pending_loss = previous.automatic_loss if previous else 0
+    pending_loss = previous.automatic_loss if previous and not data.season_first_day else 0
     if previous and (previous.final_trophies or 5000) < 5000 == start_trophies:
         pending_loss = max(0, previous.final_trophies + pending_loss - 5000)
     during = reading_rule.contradiction_during_day(

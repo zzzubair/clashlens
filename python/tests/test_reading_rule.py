@@ -443,3 +443,20 @@ def test_readings_before_and_after_a_loss_both_confirm_across_the_weekly_raise()
     assert (result.state, result.confidence, result.failure_reasons) == (
         "Complete", "inferred", ())
     assert (result.final_trophies_before_reset, result.next_start_trophies) == (4970, 5000)
+
+
+def test_a_season_reset_removes_the_day_befores_pending_loss() -> None:
+    # The previous Season ended at 5,800 after a 70 loss; Day 1 starts at
+    # 5,000. A 05:20 reading of 5,070 is not the old loss still to land.
+    def day_1(trophies: int):
+        return reconcile_ranked_day(test_reconciliation._input(
+            start_trophies=5000, next_start_trophies=5000, contributions=(),
+            season_first_day=True,
+            previous_day=PreviousRankedDay(True, 8, 70, 0, automatic_loss=70,
+                                           final_trophies=5800),
+            readings=(Reading(test_reconciliation.DAY.start + timedelta(minutes=20),
+                              trophies),),
+        ))
+
+    assert "trophy_equation_mismatch" in day_1(5070).failure_reasons
+    assert "trophy_equation_mismatch" not in day_1(5000).failure_reasons
