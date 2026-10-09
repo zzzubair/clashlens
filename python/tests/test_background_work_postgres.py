@@ -18,7 +18,11 @@ from domain_test_support import domain_database, store_observation, text
 from test_army_ingestion_postgres import _live_row, _processor
 
 from clashlens import army_ingestion, background_pacing
-from clashlens.background_pacing import BACKGROUND_JOB_LIMIT, DAY_RECHECK_PRIORITY
+from clashlens.background_pacing import (
+    BACKGROUND_JOB_LIMIT,
+    DAY_RECHECK_PRIORITY,
+    LIVE_LAG_MIN_JOBS,
+)
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -72,6 +76,28 @@ def _queue_result(
             (key, priority, due_at, DEFAULT_PARSER_VERSION, processing_version,
              DOMAIN_RULE_VERSION, ANALYTICS_RULE_VERSION),
         ).fetchone()[0]
+
+
+def _queue_live(connection_info: str, key: str, due_at: datetime,
+                count: int = LIVE_LAG_MIN_JOBS) -> list[int]:
+    """``count`` live daily results due at ``due_at``: enough to be behind."""
+    with psycopg.connect(connection_info) as connection:
+        return [row[0] for row in connection.execute(
+            """
+            INSERT INTO python_processing_jobs (
+                work_type, deduplication_key, input_json, priority, due_at,
+                parser_version, processing_version, domain_rule_version,
+                analytics_rule_version
+            )
+            SELECT 'reconcile_ranked_day', %s || ':' || job,
+                   '{"player_id": 1, "ranked_day_start": "2026-10-08T05:00:00Z"}', 100,
+                   %s, %s, %s, %s, %s
+            FROM generate_series(1, %s) AS job
+            RETURNING id
+            """,
+            (key, due_at, DEFAULT_PARSER_VERSION, PROCESSING_VERSION,
+             DOMAIN_RULE_VERSION, ANALYTICS_RULE_VERSION, count),
+        ).fetchall()]
 
 
 def test_at_most_two_background_jobs_run_across_worker_processes(database_url: str) -> None:
@@ -132,17 +158,17 @@ def test_background_work_waits_while_live_work_is_two_minutes_late(database_url:
     with domain_database(database_url) as connection_info:
         _queue_redecodes(connection_info, [[1], [2]])
         now = datetime.now(UTC)
-        live = _queue_result(connection_info, "live", due_at=now - timedelta(minutes=3))
+        live = _queue_live(connection_info, "live", now - timedelta(minutes=3))
         database = Database(connection_info)
         try:
-            # This lane cannot take the late result, but starts no background job.
+            # This lane cannot take the late results, but starts no background job.
             assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
             # Season repair waiting an hour is background too and pauses nothing.
             _queue_result(connection_info, "season-repair", priority=25,
                           due_at=now - timedelta(hours=1))
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
-                    "UPDATE python_processing_jobs SET due_at = %s WHERE id = %s",
+                    "UPDATE python_processing_jobs SET due_at = %s WHERE id = ANY(%s)",
                     (now - timedelta(minutes=1), live),
                 )
             assert [claim.work_type for claim in database.claim_jobs(
@@ -150,10 +176,15 @@ def test_background_work_waits_while_live_work_is_two_minutes_late(database_url:
             )] == ["redecode_army"]
             # Live work this worker cannot take, such as a newer version's, never
             # pauses background work for good, nor halves it once the late
-            # result it can take is done.
-            _finish(connection_info, live)
-            _queue_result(connection_info, "newer", processing_version="future",
-                          due_at=now - timedelta(hours=1))
+            # results it can take are done.
+            for job_id in live:
+                _finish(connection_info, job_id)
+            _queue_live(connection_info, "newer", now - timedelta(hours=1))
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET processing_version = 'future'"
+                    " WHERE deduplication_key LIKE 'newer:%'"
+                )
             assert [claim.work_type for claim in database.claim_jobs(
                 owner="lane", work_types=["redecode_army"]
             )] == ["redecode_army"]
@@ -167,37 +198,39 @@ def test_background_work_waits_while_late_live_work_is_leased_or_waiting(
     with domain_database(database_url) as connection_info:
         _queue_redecodes(connection_info, [[1], [2]])
         now = datetime.now(UTC)
-        live = _queue_result(connection_info, "live", due_at=now - timedelta(minutes=3))
+        live = _queue_live(connection_info, "live", now - timedelta(minutes=3))
         database = Database(connection_info)
         try:
-            # A live lane takes the late result, hits a busy battle lock and
-            # keeps its lease with the attempt refunded, as on 9 Oct 2026.
-            [claim] = database.claim_jobs(owner="live", work_types=["reconcile_ranked_day"])
-            assert claim.job_id == live
-            database.refund_claim_attempt(claim)
+            # Live lanes take the late results, hit a busy battle lock and
+            # keep their leases with the attempts refunded, as on 9 Oct 2026.
+            claims = database.claim_jobs(owner="live", limit=len(live),
+                                         work_types=["reconcile_ranked_day"])
+            assert sorted(claim.job_id for claim in claims) == sorted(live)
+            for claim in claims:
+                database.refund_claim_attempt(claim)
             assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
-            # Still running past its lease on its last attempt, it pauses them too.
+            # Still running past their leases on their last attempts, they pause it too.
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     "UPDATE python_processing_jobs SET attempt_count = max_attempts,"
                     " lease_expires_at = clock_timestamp() - interval '1 minute'"
-                    " WHERE id = %s",
+                    " WHERE id = ANY(%s)",
                     (live,),
                 )
             assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
-            # Waiting for its saved response on its last try, it can still
-            # resume, so it pauses background work too.
+            # Waiting for their saved responses on their last tries, they can
+            # still resume, so they pause background work too.
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     "UPDATE python_processing_jobs SET status = 'waiting_dependency',"
                     " attempt_count = max_attempts, lease_owner = NULL,"
-                    " lease_token = NULL, lease_expires_at = NULL WHERE id = %s",
+                    " lease_token = NULL, lease_expires_at = NULL WHERE id = ANY(%s)",
                     (live,),
                 )
             assert database.claim_jobs(owner="lane", work_types=["redecode_army"]) == []
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
-                    "UPDATE python_processing_jobs SET status = 'complete' WHERE id = %s",
+                    "UPDATE python_processing_jobs SET status = 'complete' WHERE id = ANY(%s)",
                     (live,),
                 )
             assert [claim.work_type for claim in database.claim_jobs(
@@ -240,10 +273,12 @@ def test_day_rechecks_run_four_at_a_time_beside_two_other_background_jobs(
             assert database.claim_jobs(owner="lane") == []
             # Live work two minutes late pauses both lanes, leased or waiting.
             _finish(connection_info, rechecks[0])
-            live = _queue_result(connection_info, "live", due_at=now - timedelta(minutes=3))
-            assert [claim.job_id for claim in database.claim_jobs(owner="lane", limit=8)] == [live]
+            live = _queue_live(connection_info, "live", now - timedelta(minutes=3))
+            assert sorted(claim.job_id for claim in database.claim_jobs(
+                owner="lane", limit=8)) == sorted(live)
             assert database.claim_jobs(owner="lane", limit=8) == []
-            _finish(connection_info, live)
+            for job_id in live:
+                _finish(connection_info, job_id)
             assert [claim.job_id for claim in database.claim_jobs(owner="lane")] == [rechecks[4]]
         finally:
             database.close()
@@ -253,8 +288,8 @@ def test_background_limits_from_settings_halve_while_live_work_strains(
     database_url: str, monkeypatch
 ) -> None:
     # Raised in the deploy settings, 4 backfill jobs and 8 rechecks run while
-    # live work keeps up; each limit halves while a live job has waited 30
-    # seconds or a worker statement has waited a second on a lock.
+    # live work keeps up; each limit halves while enough live jobs have waited
+    # 30 seconds or a worker statement has waited a second on a lock.
     monkeypatch.setattr(background_pacing, "BACKGROUND_JOB_LIMIT", 4)
     monkeypatch.setattr(background_pacing, "DAY_RECHECK_JOB_LIMIT", 8)
     with domain_database(database_url) as connection_info:
@@ -279,10 +314,12 @@ def test_background_limits_from_settings_halve_while_live_work_strains(
                     "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
                     " lease_token = NULL, lease_expires_at = NULL WHERE status = 'leased'"
                 )
-            live = _queue_result(connection_info, "live", due_at=now - timedelta(seconds=60))
-            assert [claim.job_id for claim in database.claim_jobs(owner="live")] == [live]
+            live = _queue_live(connection_info, "live", now - timedelta(seconds=60))
+            assert sorted(claim.job_id for claim in database.claim_jobs(
+                owner="live", limit=len(live))) == sorted(live)
             live_strained = claim_all()
-            _finish(connection_info, live)
+            for job_id in live:
+                _finish(connection_info, job_id)
             with psycopg.connect(connection_info, autocommit=True) as holder, \
                     psycopg.connect(connection_info, autocommit=True) as waiter:
                 holder.execute("SELECT pg_advisory_lock(7)")
@@ -302,6 +339,36 @@ def test_background_limits_from_settings_halve_while_live_work_strains(
     assert live_strained == (2, 4)
     assert lock_strained == (0, 0)
     assert recovered == (2, 4)
+
+
+def test_a_few_straggling_live_jobs_never_stop_background_work(database_url: str) -> None:
+    # From 16:00 to 18:00 on 9 Oct 2026 about 120 saved responses waited 2 to 7
+    # minutes for their first try while 9 in 10 waited under 14 seconds, and
+    # stopping for any one of them stopped background work 32% of the time.
+    with domain_database(database_url) as connection_info:
+        _queue_redecodes(connection_info, [[1], [2], [3]])
+        now = datetime.now(UTC)
+        _queue_live(connection_info, "fresh", now - timedelta(seconds=5), count=30)
+        _queue_live(connection_info, "straggler", now - timedelta(minutes=3),
+                    count=LIVE_LAG_MIN_JOBS - 1)
+        database = Database(connection_info)
+        lane = {"owner": "lane", "work_types": ["redecode_army"]}
+        try:
+            # Neither stopped nor halved: both background turns are taken.
+            first = [database.claim_jobs(**lane) for _ in range(3)]
+            # One more straggler is enough live work behind to stop it.
+            _finish(connection_info, first[0][0].job_id)
+            _queue_live(connection_info, "late", now - timedelta(minutes=3), count=1)
+            stopped = database.claim_jobs(**lane)
+            # Among 200 more waiting live jobs those 5 are under 1 in 20.
+            _queue_live(connection_info, "busy", now - timedelta(seconds=5), count=200)
+            resumed = database.claim_jobs(**lane)
+        finally:
+            database.close()
+
+    assert [len(claims) for claims in first] == [1, 1, 0]
+    assert stopped == []
+    assert [claim.work_type for claim in resumed] == ["redecode_army"]
 
 
 def test_live_claims_read_no_waiting_day_rechecks(database_url: str) -> None:

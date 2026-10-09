@@ -1183,16 +1183,20 @@ run at most `CLASHLENS_BACKGROUND_JOB_LIMIT` backfill jobs at once (default
 2), and beside them at most `CLASHLENS_DAY_RECHECK_JOB_LIMIT` day rechecks after
 new evidence (priority 26, `queue_refresh.py`; default 4); see
 [Worker processes](#worker-processes). One claim never takes more than one
-background job of either kind, after any live work it can take. Each limit
-halves, rounded up, while live work strains: a live response or day result
-due 30 seconds or more and still unfinished (9 in 10 live responses waited
-under 14 seconds on 2026-10-09), or a worker statement waiting a second or
-more on a lock. None starts while a live response or day result has been due
-2 minutes or more and is still unfinished: waiting, waiting on its saved
-response, or leased, including one that keeps its lease after a lock
-conflict. On 2026-10-09, between 16:00 and 18:00 UTC, that pause held for 34%
-of the time, almost all of it for about 120 saved responses that waited 2 to
-7 minutes for their first try. A leased job counts
+background job of either kind, after any live work it can take. Live work
+is behind by a wait when at least 5 live responses and day results, and at
+least 1 in 20 of those due and unfinished, have waited that long, counting
+at most 200 in each state: waiting, waiting on its saved response, or
+leased, including one that keeps its lease after a lock conflict. Each limit
+halves, rounded up, while live work is 30 seconds behind (9 in 10 live
+responses waited under 14 seconds on 2026-10-09) or a worker statement has
+waited a second or more on a lock, and none starts while it is 2 minutes
+behind. A few stragglers are not enough: between 16:00 and 18:00 UTC on
+2026-10-09 about 120 saved responses waited 2 to 7 minutes for their first
+try, and stopping for any one of them stopped background work 32% of the
+time; replayed every 5 seconds, this rule stops it 0.6% of that time and
+halves it 3.2%, and stops it 39% of 05:00 to 06:20, when up to 21,800 live
+jobs waited. A leased job counts
 until it leaves its lease, even after the lease runs out, because its work can
 still be running; queue maintenance clears dead ones
 ([`background_pacing.py`](../python/src/clashlens/background_pacing.py)). On
