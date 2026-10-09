@@ -916,7 +916,8 @@ def test_postgres_persists_complete_inferred_shield_evidence(
             assert row is not None
             assert row[0] == 1
             assert text(row[1]) == "Complete"
-            assert text(row[2]) == "inferred"
+            # The shield is inferred; the readings prove the unchanged trophies.
+            assert text(row[2]) == "exact"
             assert row[3] == []
             assert row[4:9] == (0, 0, 0, 0, None)
             assert text(row[9]) == "not_applicable"

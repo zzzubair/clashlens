@@ -14,6 +14,7 @@ import json
 from datetime import timedelta
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, repair_season, store_observation
 from test_first_battle_log_postgres import LOSS, WIN, _log, _queued_priorities
 from test_reconciliation_postgres import DAY_START, _profile
@@ -24,8 +25,8 @@ from test_reset_settlement_state_postgres import (
     _reset_work,
 )
 
-from clashlens import ranked_day_inputs, reconciliation_db
-from clashlens.db import PYTHON_BACKFILL_PRIORITY
+from clashlens import queue_refresh, ranked_day_inputs, reconciliation_db
+from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import ranked_day_for
 
 # Three ordinary days: Monday 3 August to Thursday 6 August 2026.
@@ -106,12 +107,15 @@ def test_reading_before_the_loss_completes_the_day_and_settles_the_next_start(
 def _early_reading_days(
     connection_info: str, archive_server, later_profile: bytes,
     *, processed_first: tuple[tuple[str, bytes, timedelta], ...] = (),
+    saved_before_rule=None,
 ) -> tuple[int, int]:
     """As #P20G0CUJY on 6 October 2026: the Reset reading ending day B leaves
     out its attack gain, and ``later_profile`` is read 10 minutes after that
     Reset, before any new-day battle; ``processed_first`` responses, (endpoint,
-    body, read after that Reset), are processed before it. Return day B's
-    start and calculated end."""
+    body, read after that Reset), are processed before it. With
+    ``saved_before_rule``, a pytest monkeypatch, the later profile is saved as
+    before a changed profile recalculated the day before. Return day B's start
+    and calculated end."""
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
@@ -130,8 +134,10 @@ def _early_reading_days(
         profile=_profile(end_b + WIN), log=_log(*day_c),
     )
     _process(connection_info, archive_server, jobs)
+    # Day B's Reset reading lacks exactly its attack's gain, the attacker's
+    # profile lag: it neither confirms nor contradicts the day.
     assert [row[0] for row in _latest_days(connection_info)] == [
-        "Inconsistent", "Inconsistent",
+        "Partial", "Inconsistent",
     ]
     jobs = [
         store_observation(
@@ -146,7 +152,13 @@ def _early_reading_days(
         endpoint="profile", body=later_profile,
         observed_at=DAY_C + timedelta(minutes=10), normalized_tag=TAG,
     )[1])
+    if saved_before_rule is not None:
+        saved_before_rule.setattr(
+            queue_refresh, "queue_for_reading", lambda *args: None
+        )
     _process(connection_info, archive_server, jobs)
+    if saved_before_rule is not None:
+        saved_before_rule.undo()
     return start_b, end_b
 
 
@@ -168,16 +180,12 @@ def test_later_reading_settles_a_reset_reading_missing_an_attack(
         start_b, end_b = _early_reading_days(
             connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
         )
-        # The later reading alone recalculates nothing.
-        assert [row[0] for row in _latest_days(connection_info)] == [
-            "Inconsistent", "Inconsistent",
-        ]
-        # The recheck after the Reset settles day B, which changes its next
-        # start, so day C, saved before, is calculated again too.
-        _day_end_recheck(connection_info, archive_server)
+        # The later reading, read after the Reset reading and before any
+        # new-day battle, settles day B, which changes its next start, so day
+        # C, saved before, is calculated again too.
         day_b_row, day_c_row = _latest_days(connection_info)
 
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_b_row[7]["next_start_reading_trophies"] == end_b - WIN
     assert day_b_row[7]["next_start_reading_correction"] == WIN
     assert day_b_row[8] == []
@@ -203,7 +211,7 @@ def test_reading_soon_after_the_reset_is_kept_when_a_newer_one_came_first(
         _day_end_recheck(connection_info, archive_server)
         day_b_row, _ = _latest_days(connection_info)
 
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_b_row[7]["next_start_reading_correction"] == WIN
 
 
@@ -271,30 +279,32 @@ def _save_as_live(connection_info: str, *days) -> None:
 
 
 def test_finishing_a_day_saved_live_refreshes_the_following_day(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     # Day B is still saved Live, as when its Reset calculation is delayed,
     # while day C was already saved from B's early Reset reading.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         start_b, end_b = _early_reading_days(
-            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
+            saved_before_rule=monkeypatch,
         )
         _save_as_live(connection_info, DAY_B)
         _day_end_recheck(connection_info, archive_server)
         day_b_row, day_c_row = _latest_days(connection_info)
 
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
 
 
 def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     # Day C was saved Live from B's early Reset reading while day B itself
     # was not yet finished; finishing B with the later reading refreshes C.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         start_b, end_b = _early_reading_days(
-            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
+            saved_before_rule=monkeypatch,
         )
         _save_as_live(connection_info, DAY_B, DAY_C)
         before = [(row[0], row[2]) for row in _latest_days(connection_info)]
@@ -302,17 +312,18 @@ def test_following_day_saved_live_starts_from_the_finished_days_later_reading(
         day_b_row, day_c_row = _latest_days(connection_info)
 
     assert before == [("Live", start_b), ("Live", end_b - WIN)]
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
     assert day_c_row[7]["start_reading_correction"] == WIN
 
 
 def test_season_repair_settles_days_saved_before_the_later_reading_rule(
-    database_url: str, archive_server
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         start_b, end_b = _early_reading_days(
-            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS)
+            connection_info, archive_server, _profile(6000 + WIN - 8 * LOSS),
+            saved_before_rule=monkeypatch,
         )
         season = ranked_day_for(DAY_B).official_season_id
         preview, queued = repair_season(connection_info, season)
@@ -323,16 +334,19 @@ def test_season_repair_settles_days_saved_before_the_later_reading_rule(
     assert (preview["players"], preview["left_to_queue"]) == (1, 1)
     assert (queued["queued"], queued["left_to_queue"]) == (1, 0)
     assert priorities == {PYTHON_BACKFILL_PRIORITY}
-    assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
+    assert day_b_row[:5] == ("Complete", "exact", start_b, end_b, end_b)
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
 
 
-def test_rejected_later_reading_does_not_settle_the_day(
-    database_url: str, archive_server
+@pytest.mark.parametrize("right", [True, False])
+def test_a_season_zero_later_reading_can_confirm_the_day_but_never_contradict_it(
+    database_url: str, archive_server, right: bool
 ) -> None:
-    # The later profile has the right trophies, but reports Season ID 0, so
-    # it is rejected and proves nothing.
-    payload = json.loads(_profile(6000 + WIN - 8 * LOSS))
+    # The game sends Season ID 0 to some signed-up players. Such a profile is
+    # not trusted: it can confirm a day no trusted reading decided, and never
+    # contradict one. Day B's Reset reading only lags its attack's gain.
+    end_b = 6000 + WIN - 8 * LOSS
+    payload = json.loads(_profile(end_b if right else end_b + 3))
     payload["currentLeagueSeasonId"] = 0
     with domain_database(database_url, include_coordinator=True) as connection_info:
         _early_reading_days(
@@ -341,8 +355,11 @@ def test_rejected_later_reading_does_not_settle_the_day(
         _day_end_recheck(connection_info, archive_server)
         rows = _latest_days(connection_info)
 
-    assert [row[0] for row in rows] == ["Inconsistent", "Inconsistent"]
-    assert "next_start_reading_correction" not in rows[0][7]
+    if right:
+        assert [row[:2] for row in rows] == [("Complete", "exact"), ("Complete", "exact")]
+    else:
+        assert [row[0] for row in rows] == ["Partial", "Inconsistent"]
+        assert "end_reading_unverified" in rows[0][8]
 
 
 def _zero_defense_day_read_early(
@@ -400,13 +417,17 @@ def test_zero_defense_day_read_before_its_loss_is_charged_by_the_recheck(
         start_b, end_b = _zero_defense_day_read_early(connection_info, archive_server)
         day_b_row, day_c_row = _latest_days(connection_info)
 
+    # The reading that showed the charge proves it.
     assert day_b_row[:7] == (
-        "Complete", "inferred", start_b, end_b, end_b, 8 * LOSS, "calculated",
+        "Complete", "exact", start_b, end_b, end_b, 8 * LOSS, "confirmed",
     )
     assert day_b_row[7]["next_start_reading_trophies"] == start_b
-    assert day_b_row[7]["unsettled_automatic_loss"] == 8 * LOSS
+    # The Reset reading was read before the charge: day C starts from it
+    # less the charge the later reading showed.
+    assert day_b_row[7]["next_start_reading_correction"] == -8 * LOSS
+    assert "unsettled_automatic_loss" not in day_b_row[7]
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
-    assert day_c_row[7]["start_unsettled_automatic_loss"] == 8 * LOSS
+    assert day_c_row[7]["start_reading_correction"] == -8 * LOSS
 
 
 def test_unreadable_new_day_battle_before_the_later_reading_charges_nothing(
@@ -460,10 +481,417 @@ def test_reset_reading_before_the_last_attack_landed_settles_both_days(
         _process(connection_info, archive_server, jobs)
         day_b_row, day_c_row = _latest_days(connection_info)
 
+    # Read before the last attack landed, the reading fits only as a guess.
     assert day_b_row[:5] == ("Complete", "inferred", start_b, end_b, end_b)
     assert day_b_row[7]["next_start_reading_correction"] == WIN
     assert len(day_b_row[7]["next_start_battles_after_reading"]) == 1
     assert day_c_row[:5] == ("Complete", "exact", end_b, end_b + WIN, end_b + WIN)
+
+
+def test_reading_during_a_battle_log_gap_cannot_contradict_the_day(
+    database_url: str, archive_server
+) -> None:
+    # Day B's Reset reading proves it. A new-day attack at 05:08 is in no
+    # saved log: the next, at 05:30, is a full 50 rows of other battles
+    # sharing no row with the Reset log. A 05:20 reading shows that attack.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=_profile(end_b), log=_log(*day_b),
+        )
+        for endpoint, body, minutes in (
+            ("profile", _profile(end_b + WIN), 20),
+            ("battle_log", _log(filler=[
+                DAY_C + timedelta(minutes=10, seconds=10 * row) for row in range(50)
+            ]), 30),
+        ):
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=f"gap-{endpoint}",
+                endpoint=endpoint, body=body,
+                observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
+            )[1])
+        _process(connection_info, archive_server, jobs)
+        database = Database(connection_info)
+        try:
+            jobs = [reconciliation_db.enqueue_reconciliation(
+                database, player_tag=TAG, day_start=DAY_B, now=DAY_D,
+                request_key="after-gap",
+            )]
+        finally:
+            database.close()
+        _process(connection_info, archive_server, jobs)
+        (day_b_row,) = _latest_days(connection_info, (DAY_B,))
+
+    assert day_b_row[:4] == ("Complete", "exact", 6000, end_b)
+    assert day_b_row[8] == []
+
+
+def test_each_new_day_battle_saved_after_the_reading_recalculates_the_day_before(
+    database_url: str, archive_server
+) -> None:
+    # Day B's Reset reading is rejected. A 05:20 reading shows a new-day
+    # defense reported at 05:07 that the 05:25 log, served from cache, does
+    # not hold yet, so day B is Inconsistent, and stays so when the 05:30 log
+    # brings only a 0-trophy attack at 05:06; the 05:35 log brings the
+    # defense, which the reading showed, and day B is Complete.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    season_zero = json.loads(_profile(end_b))
+    season_zero["currentLeagueSeasonId"] = 0
+    log = json.loads(_log(*day_b))
+    zero_attack, defense = (
+        {**log["items"][0], "stars": 0, "destructionPercentage": 0,
+         "opponentPlayerTag": "#GGPP",
+         "battleTimestamp": f"{DAY_C + timedelta(minutes=6):%Y%m%dT%H%M%S.000Z}"},
+        {**log["items"][1], "opponentPlayerTag": "#GQPP",
+         "battleTimestamp": f"{DAY_C + timedelta(minutes=7):%Y%m%dT%H%M%S.000Z}"},
+    )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=json.dumps(season_zero).encode(), log=_log(*day_b),
+        )
+        for endpoint, body, minutes in (
+            ("profile", _profile(end_b - LOSS), 20), ("battle_log", _log(*day_b), 25),
+        ):
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=f"before-{minutes}",
+                endpoint=endpoint, body=body,
+                observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
+            )[1])
+        _process(connection_info, archive_server, jobs)
+        _day_end_recheck(connection_info, archive_server)
+        states = [_latest_days(connection_info, (DAY_B,))[0]]
+        for minutes, late in ((30, [zero_attack]), (35, [zero_attack, defense])):
+            _, log_job = store_observation(
+                connection_info, archive_server, occurrence_key=f"late-{minutes}",
+                endpoint="battle_log",
+                body=json.dumps({"items": log["items"] + late}).encode(),
+                observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
+            )
+            _process(connection_info, archive_server, [log_job])
+            states.append(_latest_days(connection_info, (DAY_B,))[0])
+
+    assert [row[0] for row in states] == ["Inconsistent", "Inconsistent", "Complete"]
+    assert (states[2][3], states[2][8]) == (end_b, [])
+
+
+def test_each_later_reading_and_covering_log_recalculates_the_day_before(
+    database_url: str, archive_server
+) -> None:
+    # Day B's 05:20 Reset reading proves it. A 05:40 reading 10 more, before
+    # any new-day battle, contradicts it once the 05:45 log shows no battle
+    # came; a 05:50 reading back at the Reset reading's value, with a 05:55
+    # log, cannot erase that disagreement.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(end_b),
+            log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=20),
+        )
+        _process(connection_info, archive_server, jobs)
+        states = [_latest_days(connection_info, (DAY_B,))[0]]
+        for responses in (
+            (("profile", _profile(end_b + 10), 40),),
+            (("battle_log", _log(*day_b), 45),),
+            (("battle_log", _log(*day_b), 55), ("profile", _profile(end_b), 50)),
+        ):
+            _process(connection_info, archive_server, [
+                store_observation(
+                    connection_info, archive_server,
+                    occurrence_key=f"later-{endpoint}-{minutes}", endpoint=endpoint,
+                    body=body, observed_at=DAY_C + timedelta(minutes=minutes),
+                    normalized_tag=TAG,
+                )[1]
+                for endpoint, body, minutes in responses
+            ])
+            states.append(_latest_days(connection_info, (DAY_B,))[0])
+
+    assert [row[:2] for row in states] == [
+        ("Complete", "exact"), ("Complete", "exact"), ("Inconsistent", "uncertain"),
+        ("Inconsistent", "uncertain"),
+    ]
+    assert "trophy_equation_mismatch" in states[2][8]
+
+
+def test_own_report_after_the_opponents_recalculates_the_day_before(
+    database_url: str, archive_server
+) -> None:
+    # Day B's Reset reading is rejected. A 05:20 reading shows a new-day
+    # defense reported at 05:07. The attacker's log brings it first: the
+    # 05:20 reading may show it, so it no longer contradicts, and the Season 0
+    # Reset reading confirms day B. The player's own 05:35 log brings it too.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    season_zero = json.loads(_profile(end_b))
+    season_zero["currentLeagueSeasonId"] = 0
+    log = json.loads(_log(*day_b))
+    at = f"{DAY_C + timedelta(minutes=7):%Y%m%dT%H%M%S.000Z}"
+    attack = {**log["items"][0], "stars": 2, "destructionPercentage": 60,
+              "opponentPlayerTag": TAG, "battleTimestamp": at}
+    defense = {**log["items"][1], "opponentPlayerTag": "#GQPP", "battleTimestamp": at}
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=json.dumps(season_zero).encode(), log=_log(*day_b),
+        )
+        for endpoint, body, minutes in (
+            ("profile", _profile(end_b - LOSS), 20), ("battle_log", _log(*day_b), 25),
+        ):
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=f"before-{minutes}",
+                endpoint=endpoint, body=body,
+                observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
+            )[1])
+        _process(connection_info, archive_server, jobs)
+        _day_end_recheck(connection_info, archive_server)
+        states = [_latest_days(connection_info, (DAY_B,))[0]]
+        for tag, items, minutes in (
+            ("#GQPP", [attack], 30), (TAG, log["items"] + [defense], 35),
+        ):
+            _, log_job = store_observation(
+                connection_info, archive_server, occurrence_key=f"late-{minutes}",
+                endpoint="battle_log", body=json.dumps({"items": items}).encode(),
+                observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=tag,
+            )
+            _process(connection_info, archive_server, [log_job])
+            states.append(_latest_days(connection_info, (DAY_B,))[0])
+
+    assert [row[0] for row in states] == ["Inconsistent", "Complete", "Complete"]
+    assert (states[2][3], states[2][8]) == (end_b, [])
+
+
+def test_monday_charge_hidden_by_the_raise_starts_no_next_day(
+    database_url: str, archive_server
+) -> None:
+    # Day Y takes 8 defenses; day Z, ending at the Monday Reset, none, so its
+    # automatic loss for all 8 would take it below 5,000, where the weekly
+    # raise hides it. The Monday Reset reading is rejected and a 05:10
+    # reading shows the charge: day Z is not settled, so Monday has no start.
+    day_y, day_z = DAY_A - timedelta(days=2), DAY_A - timedelta(days=1)
+    defenses = [(day_y + timedelta(hours=hour), False) for hour in range(1, 9)]
+    start_z = 4990 + 8 * LOSS
+    season_zero = json.loads(_profile(start_z))
+    season_zero["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, day_y,
+                           profile=_profile(start_z + 8 * LOSS), log=_log())
+        jobs += _reset_work(connection_info, archive_server, day_z,
+                            profile=_profile(start_z), log=_log(*defenses))
+        jobs += _reset_work(connection_info, archive_server, DAY_A,
+                            profile=json.dumps(season_zero).encode(), log=_log(*defenses))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="charged",
+            endpoint="profile", body=_profile(start_z - 8 * LOSS),
+            observed_at=DAY_A + timedelta(minutes=10), normalized_tag=TAG,
+        )[1])
+        jobs += _reset_work(connection_info, archive_server, DAY_B,
+                            profile=_profile(5000), log=_log(*defenses))
+        _process(connection_info, archive_server, jobs)
+        for day_start in (day_z, DAY_A):
+            database = Database(connection_info)
+            try:
+                jobs = [reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start, now=DAY_C,
+                    request_key="settle",
+                )]
+            finally:
+                database.close()
+            _process(connection_info, archive_server, jobs)
+        day_z_row, day_a_row = _latest_days(connection_info, (day_z, DAY_A))
+
+    assert (day_z_row[0], day_z_row[3]) == ("Partial", start_z)
+    assert day_a_row[2] is None
+
+
+def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
+    database_url: str, archive_server
+) -> None:
+    # Day B's 05:20 Reset reading already shows a new-day +40 attack reported
+    # at 05:08 that its 05:21 log, served from cache, lacks; a later log
+    # brings it. Day B ends without
+    # it and day C starts from that end, not from the reading, and counts it once.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    new_day_attack = (DAY_C + timedelta(minutes=8), True)
+    # _log names at most 9 opponents, so the tenth battle gets its own.
+    cached = json.loads(_log(*day_b))
+    later_log = json.dumps({"items": [*cached["items"], {
+        **json.loads(_log(new_day_attack))["items"][0], "opponentPlayerTag": "#GGPP",
+    }]}).encode()
+    end_b = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(end_b + WIN),
+            log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=20),
+            log_at=DAY_C + timedelta(minutes=21),
+        )
+        _process(connection_info, archive_server, jobs)
+        [before] = _latest_days(connection_info, (DAY_B,))
+        jobs = [store_observation(
+            connection_info, archive_server, occurrence_key="later-log",
+            endpoint="battle_log", body=later_log,
+            observed_at=DAY_C + timedelta(minutes=30), normalized_tag=TAG,
+        )[1]]
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D, profile=_profile(end_b + WIN),
+            log=later_log,
+        )
+        _process(connection_info, archive_server, jobs)
+        day_b_row, day_c_row = _latest_days(connection_info)
+
+    assert before[0] == "Inconsistent"
+    assert day_b_row[:5] == ("Complete", "exact", 6000, end_b, end_b)
+    assert day_b_row[7]["next_start_reading_correction"] == -WIN
+    assert day_c_row[2:4] == (end_b, end_b + WIN)
+
+
+def test_unreadable_new_day_battle_leaves_the_reset_reading_unused(
+    database_url: str, archive_server
+) -> None:
+    # Day A's one defense lost 5 and its 7 missing defenses 35, so day B,
+    # with none, starts at 6,000 and may be charged 40.
+    # Day B's 05:20 Reset reading shows 40 less, but the 05:30 log brings a
+    # new-day defense reported at 05:07 whose row cannot be read: it may be
+    # the 40, so the reading proves no charge and day B is not settled.
+    weak = json.loads(_log((DAY_A + timedelta(hours=1), False)))
+    weak["items"][0].update(stars=1, destructionPercentage=1)
+    unreadable = json.loads(_log((DAY_C + timedelta(minutes=7), False)))["items"][0]
+    unreadable.pop("attack")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_A, profile=_profile(6040), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000),
+            log=json.dumps(weak).encode(),
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(5960),
+            log=json.dumps(weak).encode(), profile_at=DAY_C + timedelta(minutes=20),
+            log_at=DAY_C + timedelta(minutes=21),
+        )
+        _process(connection_info, archive_server, jobs)
+        [before] = _latest_days(connection_info, (DAY_B,))
+        _, log_job = store_observation(
+            connection_info, archive_server, occurrence_key="unreadable-log",
+            endpoint="battle_log",
+            body=json.dumps({"items": [unreadable, *weak["items"]]}).encode(),
+            observed_at=DAY_C + timedelta(minutes=30), normalized_tag=TAG,
+        )
+        _process(connection_info, archive_server, [log_job])
+        [after] = _latest_days(connection_info, (DAY_B,))
+
+    assert (before[0], before[5]) == ("Complete", 40)
+    assert (after[0], after[5]) == ("Partial", None)
+    assert "end_reading_unverified" in after[8]
+
+
+@pytest.mark.parametrize("attack", [True, False])
+@pytest.mark.parametrize("read_after", [timedelta(minutes=15), timedelta(minutes=20)])
+def test_monday_reset_reading_after_a_new_day_battle_counts_it_once(
+    database_url: str, archive_server, read_after: timedelta, attack: bool
+) -> None:
+    # Saturday takes 8 defenses; Sunday one, and 7 missing at their average,
+    # ending at 4,980, raised to 5,000 on Monday. The Monday Reset reading
+    # already shows a 3-star Monday battle reported at 05:08 that its cached
+    # log a minute later lacks; a later log brings it. At 05:15 the battle may
+    # or may not have reached the profile; by 05:20 an attack has. Either way
+    # Monday starts from 5,000 and counts the battle once.
+    change = WIN if attack else -WIN
+    saturday, sunday = DAY_A - timedelta(days=2), DAY_A - timedelta(days=1)
+    saturday_defenses = [(saturday + timedelta(hours=hour), False) for hour in range(1, 9)]
+    cached = json.loads(_log(*saturday_defenses, (sunday + timedelta(hours=1), False)))
+    with_battle = json.dumps({"items": [*cached["items"], {
+        **cached["items"][0], "attack": attack, "stars": 3, "destructionPercentage": 100,
+        "opponentPlayerTag": "#GGPP",
+        "battleTimestamp": f"{DAY_A + timedelta(minutes=8):%Y%m%dT%H%M%S.000Z}",
+    }]}).encode()
+    start_sunday = 4980 + 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, saturday,
+                           profile=_profile(start_sunday + 8 * LOSS), log=_log())
+        jobs += _reset_work(connection_info, archive_server, sunday,
+                            profile=_profile(start_sunday), log=_log(*saturday_defenses))
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_A, profile=_profile(5000 + change),
+            log=json.dumps(cached).encode(), profile_at=DAY_A + read_after,
+            log_at=DAY_A + read_after + timedelta(minutes=1),
+        )
+        _process(connection_info, archive_server, jobs)
+        [before] = _latest_days(connection_info, (sunday,))
+        jobs = [store_observation(
+            connection_info, archive_server, occurrence_key="later-log",
+            endpoint="battle_log", body=with_battle,
+            observed_at=DAY_A + timedelta(minutes=30), normalized_tag=TAG,
+        )[1]]
+        jobs += _reset_work(connection_info, archive_server, DAY_B,
+                            profile=_profile(5000 + change), log=with_battle)
+        _process(connection_info, archive_server, jobs)
+        sunday_row, monday_row = _latest_days(connection_info, (sunday, DAY_A))
+
+    assert before[0] == "Inconsistent"
+    assert (sunday_row[0], sunday_row[3]) == ("Complete", 4980)
+    assert sunday_row[7]["next_start_reading_correction"] == -change
+    assert monday_row[2] == 5000
+    if attack:
+        assert monday_row[3] == 5000 + WIN
+
+
+@pytest.mark.parametrize(("off_by", "state"), [(0, "Complete"), (-10, "Inconsistent")])
+def test_a_reading_during_the_day_must_show_the_battles_landed_by_then(
+    database_url: str, archive_server, off_by: int, state: str
+) -> None:
+    # Day B starts at 6,000 with a defense an hour from 06:00. A noon reading
+    # must show the six landed by then, not the 12:00 one: 10 trophies off, it
+    # makes the day Uncertain even though both Reset readings agree with it.
+    day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(6000 - 8 * LOSS),
+            log=_log(*day_b),
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="noon", endpoint="profile",
+            body=_profile(6000 - 6 * LOSS + off_by),
+            observed_at=DAY_B + timedelta(hours=7), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        [day] = _latest_days(connection_info, (DAY_B,))
+
+    assert day[0] == state
+    if off_by:
+        assert "trophy_equation_mismatch" in day[8]
 
 
 def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
@@ -495,3 +923,109 @@ def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     assert sorted(
         (battle.battle_timestamp, battle.battle_seconds) for battle in battles
     ) == [(day_b[0][0], 120), (day_b[1][0], None), (day_b[2][0], None)]
+
+
+@pytest.mark.parametrize("row_time", ["not-a-time", f"{DAY_B + timedelta(hours=1):%Y%m%dT%H%M%S.000Z}"])
+def test_a_disagreeing_reading_during_the_day_outlasts_an_unreadable_new_day_row(
+    database_url: str, archive_server, row_time: str
+) -> None:
+    # A noon reading 10 off makes day B Uncertain. A 05:30 log brings a row
+    # that cannot be read, whose time is unreadable or day B's 06:00:
+    # readings from the Reset on are dropped, but the noon one still stands.
+    day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
+    log = json.loads(_log(*day_b))
+    unreadable = {**log["items"][0], "battleTimestamp": row_time}
+    unreadable.pop("attack")
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(6000 - 8 * LOSS),
+            log=_log(*day_b),
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="noon", endpoint="profile",
+            body=_profile(6000 - 6 * LOSS - 10),
+            observed_at=DAY_B + timedelta(hours=7), normalized_tag=TAG,
+        )[1])
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="unreadable-log",
+            endpoint="battle_log",
+            body=json.dumps({"items": [unreadable, *log["items"]]}).encode(),
+            observed_at=DAY_C + timedelta(minutes=30), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        [day] = _latest_days(connection_info, (DAY_B,))
+
+    assert day[0] == "Inconsistent"
+    assert "trophy_equation_mismatch" in day[8]
+
+
+def test_a_log_not_joined_to_the_reset_log_makes_no_reading_trustworthy(
+    database_url: str, archive_server
+) -> None:
+    # Day B's end Reset saved no battle log. The first later log, at 06:00,
+    # holds 50 other rows, so a battle between may have rolled out of it: the
+    # 05:40 reading can only confirm day B, never contradict it.
+    unjoined = _log(filler=[DAY_C + timedelta(minutes=55 - index) for index in range(50)])
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(connection_info, archive_server, DAY_C, profile=_profile(6000))
+        for key, endpoint, body, minutes in (
+            ("later-profile", "profile", _profile(6040), 40),
+            ("unjoined-log", "battle_log", unjoined, 60),
+        ):
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=key, endpoint=endpoint,
+                body=body, observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
+            )[1])
+        _process(connection_info, archive_server, jobs)
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                ).fetchone()[0]
+                readings, *_ = ranked_day_inputs.load_readings(
+                    database, connection, player_id, ranked_day_for(DAY_B),
+                    reset_profile_observation_id=None, end_battle_log_observation_id=None,
+                )
+        finally:
+            database.close()
+
+    later = [reading for reading in readings if reading.trophies == 6040]
+    assert later and all(reading.uncovered for reading in later)
+
+
+def test_a_reading_during_the_day_is_trusted_without_a_log_after_its_end(
+    database_url: str, archive_server
+) -> None:
+    # Day B's end Reset saved no battle log and none came later. Its noon
+    # reading is judged on day B's own logs, so it can still disagree.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="noon", endpoint="profile",
+            body=_profile(6010), observed_at=DAY_B + timedelta(hours=7), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                ).fetchone()[0]
+                readings, *_ = ranked_day_inputs.load_readings(
+                    database, connection, player_id, ranked_day_for(DAY_B),
+                    reset_profile_observation_id=None, end_battle_log_observation_id=None,
+                )
+        finally:
+            database.close()
+
+    noon = [reading for reading in readings if reading.trophies == 6010]
+    assert noon and not any(reading.confirm_only or reading.uncovered for reading in noon)

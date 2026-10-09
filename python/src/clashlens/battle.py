@@ -13,6 +13,7 @@ from .domain import (
     battle_day_for,
 )
 from .profile import ProfileParseError, normalize_player_tag
+from .response_fields import is_unrecognised_battle_row
 from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 BATTLE_LOG_ENDPOINT_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.endpoint_version
@@ -187,6 +188,11 @@ def _parse_row(
             index, source, "unsupported_legend_row", "battle row is not an object"
         )
     if source.get("battleType") != "legend":
+        if is_unrecognised_battle_row(source):
+            # A type that is not text, or "legend" spelt another way, may
+            # be a Legend battle in a shape we do not read: a gap, not a
+            # row of another mode to ignore.
+            return _gap(index, source, "unsupported_legend_row", "battle type is not recognised")
         return ParsedBattleRow(
             source_row_index=index,
             outcome="ignored_non_legend",
@@ -325,19 +331,46 @@ def _parse_opponent(
     return opponent_tag, name, opponent_trophies
 
 
+# Seconds since 1970 that reach 2001: below it a number is a length, not a date.
+_LEGACY_EPOCH_MINIMUM = 1_000_000_000
+
+
 def _battle_timestamp_value(source: dict[str, Any], parser_version: str) -> Any:
     # Live responses use battleTimestamp for the date and battleTime for the
     # battle's duration in seconds. Older archived shapes used battleTime alone.
     if parser_version in _LIVE_SHAPE_PARSER_VERSIONS:
         value = source.get("battleTimestamp")
         if value is None:
-            value = source.get("battleTime")
+            # Live battleTime is the battle's length in seconds, never a
+            # date: a row without battleTimestamp is malformed, not a battle
+            # fought in 1970. Only an archived date still stands in, as text
+            # or as a plausible number of seconds since 1970, in digits or not.
+            fallback = source.get("battleTime")
+            number = (
+                int(fallback)
+                if isinstance(fallback, str) and fallback.isascii() and fallback.isdigit()
+                else fallback
+            )
+            value = (
+                fallback
+                if isinstance(number, str)
+                or (
+                    isinstance(number, (int, float))
+                    and not isinstance(number, bool)
+                    and number >= _LEGACY_EPOCH_MINIMUM
+                )
+                else None
+            )
         return value
     return source.get("battleTimestamp")
 
 
 def _parse_battle_timestamp(value: Any, parser_version: str) -> datetime:
     # Accept the live timestamp text and dates from older archived shapes.
+    if value is None:
+        raise BattleLogParseError(
+            "invalid_battle_timestamp", "battle row has no battleTimestamp"
+        )
     if isinstance(value, bool):
         raise BattleLogParseError(
             "invalid_battle_timestamp", "battleTime must be seconds or text"

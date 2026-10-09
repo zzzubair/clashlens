@@ -6,7 +6,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import first_battle_log, job_outcomes, reset_baselines
+from . import first_battle_log, job_outcomes, queue_refresh, reset_baselines
 from .db import Claim, Database, _text_value, enqueue_discovered_players
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
@@ -33,7 +33,7 @@ def supersede_profile(database: Database, claim: Claim) -> bool:
     Nor is one read in the first RESET_SETTLING_WINDOW after a Reset, while
     the game finishes crediting the ended day and charges its automatic
     defense loss: such a reading can settle the ended day's end (see
-    ``ranked_day_inputs.load_later_reading``). Every other profile can still
+    ``ranked_day_inputs.load_readings``). Every other profile can still
     be skipped, so a post-Reset backlog costs at most that window's profiles.
     """
     if claim.normalized_tag is None or claim.observed_at is None:
@@ -219,6 +219,9 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 )
             if created_profile:
                 first_battle_log.queue_day_1(connection, player[0], profile_version_id)
+            queue_refresh.queue_for_reading(
+                connection, player[0], f"reading:{observation_id}", profile.observed_at
+            )
             if profile.eligibility_state == "ineligible":
                 first_battle_log.queue_weekly_drop(
                     connection, player[0], profile.observed_at
@@ -403,6 +406,9 @@ def _complete_profile_legacy(database: Database, claim: Claim, profile: ParsedPr
                 connection, profile_version_id, profile
             )
             first_battle_log.queue_day_1(connection, player[0], profile_version_id)
+            queue_refresh.queue_for_reading(
+                connection, player[0], f"reading:{observation_id}", profile.observed_at
+            )
             connection.execute(
                 """
                 WITH candidate AS (

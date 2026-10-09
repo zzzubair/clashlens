@@ -9,16 +9,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from itertools import pairwise
 from typing import Any
 
-from . import battle, domain
+from . import battle, domain, reading_rule
 from .db import PROCESSING_VERSION, Database, _text_value
 from .domain import RankedDay
 from .reconciliation import (
+    BATTLE_LOG_MAX_ROWS,
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
     CoverageObservation,
     PreviousRankedDay,
+    log_has_row_gap,
+    logs_leave_gap,
 )
 
 # Reasons after which a day's end cannot start the next day: a 9th attack or
@@ -353,7 +357,9 @@ def load_previous_day(
             COALESCE((input_evidence ->> 'zero_result_defense_slots')::int, 0),
             COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0),
             expected_next_start_trophies,
-            failure_reasons
+            failure_reasons,
+            COALESCE(automatic_defense_loss, 0),
+            final_trophies_before_reset
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -413,6 +419,10 @@ def load_previous_day(
             unsettled_automatic_loss=int(previous_row[10]),
             zero_result_defense_slots=int(previous_row[11]),
             reset_reading_correction=int(previous_row[12]),
+            automatic_loss=int(previous_row[15]),
+            final_trophies=(
+                int(previous_row[16]) if previous_row[16] is not None else None
+            ),
             expected_next_start=(
                 int(previous_row[13])
                 if end_known and previous_row[13] is not None
@@ -706,21 +716,6 @@ def load_profile_trophies(
     return tuple((at, None if trophies is None else int(trophies)) for at, trophies in rows)
 
 
-# A saved result a profile read after its end Reset reading may still
-# settle: one ending in a trophy mismatch, or a complete day after Day 1 with
-# no used defense slots whose Reset reading showed no automatic loss; or
-# disprove: one settled by battles its Reset reading missed (see
-# ``reconciliation.reads_later_reading``).
-LATER_READING_DAY_SQL = """(
-    failure_reasons ? 'trophy_equation_mismatch'
-    OR formula_components ? 'next_start_battles_after_reading'
-    OR (state = 'Complete' AND defense_count = 0 AND season_day_number > 1
-        AND automatic_defense_evidence_state = 'not_applicable'
-        AND unexplained_residual = 0
-        AND NOT input_evidence ? 'zero_result_defense_slots')
-)"""
-
-
 def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> None:
     """Serialize work deciding or saving one player's Legend day result."""
     connection.execute(
@@ -728,39 +723,121 @@ def lock_ranked_day(connection: Any, player_id: int, ranked_day: RankedDay) -> N
         (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
     )
 
-def load_later_reading(
+def load_readings(
     database: Database, connection: Any, player_id: int, ranked_day: RankedDay,
-    reading_at: datetime,
-) -> tuple[datetime, int] | None:
-    """The last accepted, eligible profile naming the day's Season read after
-    its end Reset reading at ``reading_at`` and before the player's first
-    battle of the next day, by either player's report or an unreadable row
-    of a battle log saved since the Reset, within a day; ``None`` without
-    one, or when such a row's time is unreadable too."""
-    boundary_at = ranked_day.end
-    until = boundary_at + timedelta(days=1)
-    new_day_from = domain.battle_window(boundary_at)[0]
-    first_new_day = load_first_reports(
-        connection, player_id, reading_at, new_day_from, until
-    )[1]
+    *, reset_profile_observation_id: int | None,
+    end_battle_log_observation_id: int | None,
+) -> tuple[tuple[reading_rule.Reading, ...], datetime | None, datetime]:
+    """Every profile of this player read between the day's start Reset and
+    the next Reset after its end, other than the end Reset pair's own,
+    ``reset_profile_observation_id``, which the day reads as its Reset
+    reading, that can judge the day (``reading_rule``): one accepted,
+    eligible and naming the day's Season, or a Legend I profile naming
+    Season 0, which can only confirm. A reading during the day is judged on
+    the day's own battle logs; one from its end Reset on can contradict only
+    while the player's battle logs from the day's end Reset log on are
+    continuous up to it: one taken after the last log before one that may have missed
+    a battle, or after the newest, or the last successful check with its
+    content, can only confirm, as a battle it shows may not be known.
+    Readings from when an unreadable row of a battle log saved
+    since the Reset happened, or from the Reset when that row is older or
+    its time unreadable, are left out: a battle they may show cannot be
+    placed. Readings during the day stay. Also return that time, or the Reset when
+    it is unreadable, for the Reset reading, and until when the logs cover
+    readings from the Reset on (the day's start when none does)."""
+    until = ranked_day.end + timedelta(days=1)
     unreadable = load_unreadable_report_times(
-        database, connection, player_id, boundary_at, until
+        database, connection, player_id, ranked_day.end, until
     )
-    if any(at is None for at in unreadable):
-        return None
-    cutoffs = [
-        at for at in (first_new_day, *unreadable)
-        if at is not None and at >= new_day_from
-    ]
-    readings = [
-        (at, trophies)
-        for at, trophies in load_profile_trophies(
-            database, connection, player_id, reading_at, min([until, *cutoffs]),
-            season_id=ranked_day.official_season_id,
+    cut = max(ranked_day.end, min(at or ranked_day.end for at in unreadable)) if unreadable else None
+    logs = load_coverage(
+        database, connection, player_id, domain.ranked_day_for(ranked_day.end),
+        end_battle_log_observation_id, None,
+    )
+    known_until = None
+    for previous, current in pairwise((None, *logs)):
+        if log_has_row_gap(current) or (
+            current.observation_id != end_battle_log_observation_id if previous is None
+            else logs_leave_gap(previous, current)
+        ):
+            break
+        known_until = current.observed_at
+    else:
+        # A later successful check repeating the newest log saves no log of
+        # its own, and still shows no battle came since, when that log is
+        # short and the check returned its exact bytes: a full log can roll a
+        # battle out past rows its change check ignores.
+        checked = connection.execute(
+            """
+            SELECT max(state.last_success_at) FROM collector_response_state AS state
+            JOIN collector_observations AS observed
+              ON observed.id = state.last_observation_id
+             AND observed.response_hash = state.last_response_hash
+            WHERE state.player_id = %s AND state.endpoint = 'battle_log'
+              AND state.last_observation_id = %s
+            """,
+            (player_id, logs[-1].observation_id),
+        ).fetchone()[0] if logs and logs[-1].row_count < BATTLE_LOG_MAX_ROWS else None
+        if checked is not None and checked > known_until:
+            known_until = checked
+    rows = connection.execute(
+        f"""
+        SELECT observed.response_completed_at, profile.trophies,
+               profile.source_contract_state = 'accepted'
+        FROM collector_observations AS observed
+        {_OUTCOME}
+        {_profile_join(database)}
+        WHERE observed.player_id = %(player)s AND observed.endpoint = 'profile'
+          AND observed.response_completed_at > %(after)s
+          AND observed.response_completed_at < %(until)s
+          AND observed.id IS DISTINCT FROM %(reset)s
+          AND observed.http_status BETWEEN 200 AND 299
+          AND outcome.outcome = 'processed'
+          AND profile.player_id = %(player)s
+          AND profile.eligibility_state = 'eligible'
+          AND ((profile.source_contract_state = 'accepted'
+                AND profile.current_league_season_id = %(season)s)
+               OR (profile.source_contract_state = 'conflict'
+                   AND profile.current_league_season_id = '0'))
+        ORDER BY observed.response_completed_at
+        """,
+        {"processing": PROCESSING_VERSION, "player": player_id,
+         "after": ranked_day.start, "reset": reset_profile_observation_id,
+         "until": min(until, cut or until),
+         "season": ranked_day.official_season_id},
+    ).fetchall()
+    covered_until = known_until or ranked_day.start
+    return tuple(
+        reading_rule.Reading(
+            at, int(trophies), confirm_only=not accepted,
+            uncovered=at >= ranked_day.end and at > covered_until,
         )
+        for at, trophies, accepted in rows
         if trophies is not None
-    ]
-    return readings[-1] if readings else None
+    ), cut, covered_until
+
+
+def load_first_unshown_report(
+    connection: Any, player_id: int, since: datetime, until: datetime
+) -> datetime | None:
+    """The earliest report from ``since`` to ``until`` of a battle of this
+    player that only the opponent has reported so far: a profile read after
+    it may show a battle the player's own logs do not hold yet."""
+    return connection.execute(
+        """
+        SELECT min(evidence.battle_timestamp)
+        FROM legend_battles AS battle
+        JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
+        WHERE (battle.attacker_player_id = %(player)s OR battle.defender_player_id = %(player)s)
+          AND battle.ranked_day_start > %(since)s - interval '2 days'
+          AND battle.ranked_day_start < %(until)s
+          AND evidence.battle_timestamp >= %(since)s
+          AND evidence.battle_timestamp < %(until)s
+          AND NOT EXISTS (SELECT 1 FROM battle_evidence AS own
+              WHERE own.battle_id = battle.id AND own.reporting_player_id = %(player)s)
+        """,
+        {"since": since, "player": player_id, "until": until},
+    ).fetchone()[0]
 
 
 def load_first_reports(

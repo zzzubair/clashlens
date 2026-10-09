@@ -557,9 +557,26 @@ queued or running wait for a later run. A request that failed while its
 result is still the latest is not queued again but listed, at most
 `--max-jobs` of them, in `failed_blockers`. Until October 2026 a failed
 ending Reset check never recalculated its day, which left 4,705 ended days
-`Live` on 2026-10-03. A day saved `Live` also queues one recalculation of
-that day, `reconcile:day-end:<player>:<day>:<rule>`, due two hours after its
-Reset at the lowest priority; it does nothing once the day is finished. Before
+`Live` on 2026-10-03. A day saved `Live`, or saved at all before two hours
+after its Reset, also queues one recalculation of that day,
+`reconcile:day-end:<player>:<day>:<rule>`, due two hours after its Reset at
+the lowest priority, so every tracked player's ended day is calculated once
+more with the readings and battles saved since: about 13,000 jobs a Reset,
+run only when no other work waits. New evidence also queues, at the same
+priority, each ended day it can change (`queue_refresh.py`): each saved
+profile or battle-log response the player's newest ended day
+(`reconcile:reading:` and `reconcile:log:`), each successful unchanged
+battle-log check after a profile read since the last one the day that ended
+at the latest Reset (`reconcile:check:`, queued by the collector), and each
+battle report added, changed or corrected, never one repeated unchanged, the
+battle's own day and the day before it for both players
+(`reconcile:report:`). A battle changes both players' profiles and logs and
+brings two reports, so about 104,000 battles a day make up to about
+1,250,000 such jobs, removed with other finished jobs after 48 hours. Every
+active player's last two ended days are also queued twice a day, once the
+day-end recheck has finished and from 23:00 UTC, never from 04:00 to 07:00
+UTC, skipping days already waiting: about 26,000 jobs each time at 13,000
+players. The worker logs each run's count as `daily_recheck`. Before
 October 2026 a player switched off during a day, such as the 2,037 moved out
 of Legend I when the 2026-10-05 Season started, got no Reset reading, so their
 day stayed `Live`; finish those with this command.
@@ -713,6 +730,25 @@ Reset's newest generation shows `snapshot_state` and `army_state` as
 `published` (see [Reset publication missing](#reset-publication-missing)).
 The receipt is kept per Season and rule revision, so the same revision is
 repaired once.
+
+**Known limits of refresh triggers:** these cases queue no recalculation of
+their own. A battle report is compared with that side's report before it, in
+time, length, stars, destruction and trophies, so one repeating it exactly
+queues nothing. A profile read before the latest Reset is not covered by a
+later unchanged battle-log check, so after failed calculations leave an older
+newest saved day, that reading waits. A corrected battle's own day for the
+other player is queued only through that player's saved day, not through
+their newest ended day. A refresh that needs the day's saved end reading is
+skipped while that reading is missing. A report or reading of the previous
+Season's days queues them only until 7 days after that Season ended, when it
+stops taking corrections. A correction that changes only a day's automatic
+defense loss, not its state or trophy totals, does not recalculate the day
+after it, which judges its readings against that loss. The 07:00 day-end recheck of each day of the Reset
+and the twice-daily recheck of each player's last two ended days judge those
+days again within a day; an older day waits for the 05:30 late-battle check,
+which looks back 7 days, or a Season repair; a correction more than 7 days
+old within the current Season escapes these checks until the planned nightly
+recalculation pass.
 
 **Boards that rank a missing player or miss late battles:** a Reset's Daily
 board leaves out a player whose profile check returned 404 (player not found)
