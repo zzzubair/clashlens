@@ -16,6 +16,7 @@ from . import battle, domain, reading_rule
 from .db import PROCESSING_VERSION, Database, _text_value
 from .domain import RankedDay
 from .reconciliation import (
+    BATTLE_LOG_MAX_ROWS,
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
     CoverageObservation,
@@ -752,16 +753,21 @@ def load_readings(
             break
         known_until = current.observed_at
     else:
-        # A later successful check with the newest log's content saves no
-        # log of its own, and still shows no battle came since.
+        # A later successful check repeating the newest log saves no log of
+        # its own, and still shows no battle came since, when that log is
+        # short and the check returned its exact bytes: a full log can roll a
+        # battle out past rows its change check ignores.
         checked = connection.execute(
             """
-            SELECT max(last_success_at) FROM collector_response_state
-            WHERE player_id = %s AND endpoint = 'battle_log'
-              AND last_observation_id = %s
+            SELECT max(state.last_success_at) FROM collector_response_state AS state
+            JOIN collector_observations AS observed
+              ON observed.id = state.last_observation_id
+             AND observed.response_hash = state.last_response_hash
+            WHERE state.player_id = %s AND state.endpoint = 'battle_log'
+              AND state.last_observation_id = %s
             """,
             (player_id, logs[-1].observation_id),
-        ).fetchone()[0] if logs else None
+        ).fetchone()[0] if logs and logs[-1].row_count < BATTLE_LOG_MAX_ROWS else None
         if checked is not None and checked > known_until:
             known_until = checked
     rows = connection.execute(

@@ -469,11 +469,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 unsettled_loss = automatic_loss
             next_start_trophies = expected_next
             observed_trophy_change = next_start_trophies - start_trophies
-            if data.next_start_trophies is not None and (
-                not verdict.reading.reset_reading or verdict.missed
-            ):
+            if data.next_start_trophies is not None:
                 # What the Reset reading was short of: credits that had not
-                # landed, or a loss it was read before.
+                # landed, a loss it was read before, or new-day battles it showed.
                 reading_correction = (
                     expected_next + unsettled_loss - data.next_start_trophies
                 )
