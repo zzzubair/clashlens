@@ -483,8 +483,8 @@ def test_battles_landing_after_the_reset_reading_settle_the_day() -> None:
         ),
     )
     assert (proven.state, proven.next_start_trophies) == ("Complete", 5960)
-    assert unproven.state == "Inconsistent"
-    assert unproven.unexplained_residual == 40
+    assert (unproven.state, unproven.unexplained_residual) == ("Partial", None)
+    assert unproven.failure_reasons == ("end_reading_unverified",)
     assert "next_start_battles_after_reading" not in unproven.formula_components
 
 

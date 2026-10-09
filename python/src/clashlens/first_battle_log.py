@@ -191,18 +191,20 @@ def queue_earlier_days(
     _queue(connection, player_id, day, int(first[1]))
 
 
-def queue_days_read_after(connection: Any, battle_ids: Iterable[int]) -> None:
-    """When a battle reported before a reading that judged either player's
-    day before is saved, that reading may show it, so recalculate that day,
-    once per battle: a result left unchanged, or with no reading that judges
-    it any more, still meets each later battle."""
+def queue_days_read_after(
+    connection: Any, observation_id: int, battle_ids: Iterable[int]
+) -> None:
+    """When battle log ``observation_id`` saves a battle reported before a
+    reading that judged either player's day before, that reading may show
+    it, so recalculate that day, once per battle log: a result left
+    unchanged, or with no reading that judges it any more, still meets each
+    later report, correction or opposing report of any battle."""
     ids = sorted(battle_ids)
     if not ids:
         return
     rows = connection.execute(
         """
-        SELECT DISTINCT player.id, battle.ranked_day_start - interval '1 day',
-               battle.id
+        SELECT DISTINCT player.id, battle.ranked_day_start - interval '1 day'
         FROM legend_battles AS battle
         JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
         CROSS JOIN LATERAL (
@@ -220,11 +222,11 @@ def queue_days_read_after(connection: Any, battle_ids: Iterable[int]) -> None:
         """,
         (ids, RECONCILIATION_RULE_VERSION),
     ).fetchall()
-    for player_id, day_start, battle_id in rows:
+    for player_id, day_start in rows:
         _queue(
             connection, int(player_id), day_start, None,
             key=f"reconcile:read-after:{player_id}:"
-            f"{day_start.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{battle_id}",
+            f"{day_start.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{observation_id}",
             trigger="read_after_battle", later_days=False,
         )
 
