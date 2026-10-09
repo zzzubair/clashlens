@@ -148,7 +148,9 @@ def _calls(command_workspace):
     )
 
 
-def test_every_job_pulls_docker_hub_images_from_a_public_copy(tmp_path) -> None:
+def test_every_job_pulls_docker_hub_images_from_a_public_copy(
+    command_workspace,
+) -> None:
     workflow = _workflow()
     mirror = workflow["env"]["DOCKER_HUB_MIRROR"]
     assert tomllib.loads(mirror) == {
@@ -156,39 +158,31 @@ def test_every_job_pulls_docker_hub_images_from_a_public_copy(tmp_path) -> None:
             {"location": "docker.io", "mirror": [{"location": "mirror.gcr.io"}]}
         ]
     }
-    calls = tmp_path / "calls"
-    sudo = tmp_path / "sudo"
+    workspace, _ = command_workspace
+    sudo = workspace / "bin" / "sudo"
     sudo.write_text(
-        f"#!{sys.executable}\nimport json,sys\n"
-        "stdin = sys.stdin.read() if sys.argv[1] == 'tee' else None\n"
-        f"with open({str(calls)!r}, 'a') as log: "
-        "log.write(json.dumps([sys.argv[1:], stdin])+'\\n')\n"
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        "stdin = sys.stdin.read() if sys.argv[1:2] == ['tee'] else None\n"
+        "with open(os.environ['COMMAND_LOG'], 'a') as log:\n"
+        "    log.write(json.dumps({'command': 'sudo', 'args': sys.argv[1:], "
+        "'stdin': stdin}) + '\\n')\n"
     )
-    sudo.chmod(0o700)
-    podman_jobs = set()
+    drop_in = "/etc/containers/registries.conf.d/docker-hub-mirror.conf"
+    write_mirror = {"command": "sudo", "args": ["tee", drop_in], "stdin": mirror + "\n"}
+    mirrored_jobs = set()
     for name, job in workflow["jobs"].items():
         for service in job.get("services", {}).values():
             assert service["image"].startswith("public.ecr.aws/docker/library/")
+        (workspace / "calls.jsonl").unlink(missing_ok=True)
         for step in job["steps"]:
-            if "install -y podman" not in step.get("run", ""):
-                continue
-            podman_jobs.add(name)
-            calls.unlink(missing_ok=True)
-            subprocess.run(
-                ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                check=True,
-                cwd=tmp_path,
-                env=dict(
-                    os.environ,
-                    PATH=f"{tmp_path}:{os.environ['PATH']}",
-                    DOCKER_HUB_MIRROR=mirror,
-                ),
-            )
-            drop_in = "/etc/containers/registries.conf.d/docker-hub-mirror.conf"
-            assert [["tee", drop_in], mirror + "\n"] in [
-                json.loads(line) for line in calls.read_text().splitlines()
-            ]
-    assert podman_jobs == {
+            if "run" in step:
+                _run_step(step, command_workspace, {"DOCKER_HUB_MIRROR": mirror})
+        calls = _calls(command_workspace)
+        pulls = [i for i, c in enumerate(calls) if c["command"] in ("podman", "dev")]
+        if pulls:
+            mirrored_jobs.add(name)
+            assert write_mirror in calls[: pulls[0]], name
+    assert mirrored_jobs == {
         "website-tests",
         "containers",
         "packaged-python-tests",
