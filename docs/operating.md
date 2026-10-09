@@ -667,8 +667,9 @@ Season's battles moved day, one job per player, and its Reset pairs left
 partial, at most `--max-jobs` pairs each queuing at most one job; no other
 Season's days change), until every such repair reaching a day of the
 Season, including one that started on the previous Season's last day, has
-finished and none has failed (`unfinished`, `failed` and `failed_blockers`
-count them while it is at `inputs`; a failed one is not retried
+finished and none has failed (`unfinished` and `failed` count every one
+while it is at `inputs`, and `failed_blockers` lists at most `--max-jobs`
+failed ones; a failed one is not retried
 automatically, so investigate it and retry it by hand; a failed Reset-pair
 repair stops counting once a day it names (its one day, or its first through
 its last) has a result saved since the failure and no ended one of those days
