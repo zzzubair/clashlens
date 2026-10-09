@@ -167,34 +167,41 @@ def judge(
     # it: on 6 October 2026 #P20G0CUJY read 4,766 at 05:02:41 without all 308
     # of the day's attack gains, and 5,074 at 05:09:56. The profile catches
     # up when the player stops attacking, so a reading short of exactly the
-    # latest landed attacks' gains shows that lag, tried only when nothing
-    # else fits. A battle in flight is read both ways either way.
-    attacks = sorted((effect for effect in day_effects
-                      if effect.change > 0 and effect.lands_until <= at),
-                     key=lambda effect: effect.lands_from)
+    # latest landed attacks' gains, of either day, shows that lag, tried only
+    # when nothing else fits. A battle in flight is read both ways either way.
+    attacks = sorted(
+        [(effect, True) for effect in day_effects]
+        + [(effect, False) for effect in new_day_effects if effect.lands_from <= at],
+        key=lambda item: item[0].lands_from)
+    attacks = [(effect, ended) for effect, ended in attacks
+               if effect.change > 0 and effect.lands_until <= at]
     runs = [attacks[len(attacks) - count:] for count in range(len(attacks) + 1)]
     found = []
     for run in runs:
-        short = sum(effect.change for effect in run)
+        short = sum(effect.change for effect, ended in run if ended)
+        new_short = sum(effect.change for effect, ended in run if not ended)
         found += [
             (run, chosen, loss)
             for count in range(len(maybes) + 1)
             for chosen in combinations(maybes, count)
             for loss in losses
             if fits(base - short - loss + sum(delta for delta, _, ended in chosen if ended),
-                    new_day_change + sum(delta for delta, _, ended in chosen if not ended))
+                    new_day_change - new_short
+                    + sum(delta for delta, _, ended in chosen if not ended))
         ]
         if found and not run:
             break
     if found:
         run, chosen, loss = found[0]
-        lagged = tuple(effect.identity for effect in run)
+        lagged = tuple(effect.identity for effect, _ in run)
         return _Judged(
             # Any battle in flight leaves the reading read one way or the
             # other, even when it fits as read.
             reading, True, bool(maybes or run), loss,
-            tuple(missed) + tuple(identity for _, identity, ended in chosen if ended) + lagged,
-            new_day_change + sum(delta for delta, _, ended in chosen if not ended),
+            tuple(missed) + tuple(identity for _, identity, ended in chosen if ended)
+            + tuple(effect.identity for effect, ended in run if ended),
+            new_day_change - sum(effect.change for effect, ended in run if not ended)
+            + sum(delta for delta, _, ended in chosen if not ended),
             lagged=lagged, losses=frozenset(loss for _, _, loss in found),
         )
     # The residual is against the day's end after a certain loss, the value

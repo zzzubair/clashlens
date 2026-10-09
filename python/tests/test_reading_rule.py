@@ -420,3 +420,26 @@ def test_a_reading_after_a_reset_that_hides_the_end_must_show_the_reset_total() 
     assert kept == reconcile_ranked_day(day)
     assert "trophy_equation_mismatch" not in kept.failure_reasons
     assert "trophy_equation_mismatch" in wrong.failure_reasons
+
+
+def test_a_late_credit_for_a_new_day_attack_is_the_lag_not_a_disagreement() -> None:
+    # A new-day +40 attack reported at 05:08 has landed by 05:30, yet the
+    # profile still lacks it: 5,870 is the day's end after its loss.
+    new_day = (Effect("next-attack", 40, at(8)),)
+    result = verdict(Reading(at(30), 5870), new_day=new_day)
+
+    assert (result.outcome, result.lagged) == ("unverified", ("next-attack",))
+
+
+def test_readings_before_and_after_a_loss_both_confirm_across_the_weekly_raise() -> None:
+    # The day ends at 5,040 before its 70 loss, 4,970 after it, raised to
+    # 5,000. The 05:00 Reset reading of 5,040 came before the loss and 05:20
+    # shows the raised 5,000: both fit, and the hidden end stays unproven.
+    day = test_reconciliation._input(start_trophies=5030, next_start_trophies=5040,
+                                     boundary_kind="weekly")
+    later = Reading(test_reconciliation.DAY.end + timedelta(minutes=20), 5000)
+    result = reconcile_ranked_day(replace(day, readings=(later,)))
+
+    assert (result.state, result.confidence, result.failure_reasons) == (
+        "Complete", "inferred", ())
+    assert (result.final_trophies_before_reset, result.next_start_trophies) == (4970, 5000)

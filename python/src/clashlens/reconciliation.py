@@ -405,36 +405,34 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         )
         expected_next = final_trophies + boundary_adjustment
 
+        # What a reading may show from the end Reset on: the day's end before
+        # its loss, or after it raised to 5,000 on a Monday; a Season reset
+        # shows only 5,000.
+        season = data.boundary_kind == "season"
+        rule: dict[str, Any] = {
+            "end_before_loss": expected_next if season else final_trophies + (automatic_loss or 0),
+            "loss_candidates": () if season else _loss_candidates(
+                data, automatic_loss, automatic_state, defense_count),
+            "loss_certain": automatic_state == "calculated" and bool(automatic_loss),
+            "day_effects": () if season else _effects(contributions),
+            "new_day_effects": _effects(_deduplicate_contributions(data.new_day_contributions)[0]),
+            "floor": 5000 if data.boundary_kind == "weekly" else None,
+        }
         if end_available and data.next_start_trophies is not None:
             residual = data.next_start_trophies - expected_next
             reset = next((item for item in _readings(data) if item.reset_reading), None)
             # A late Reset reading may already show new-day battles, landed or in flight.
-            judged = reading_rule.judge(
-                reset, end_before_loss=expected_next, loss_candidates=(), loss_certain=False,
-                day_effects=(), new_day_effects=_effects(
-                    _deduplicate_contributions(data.new_day_contributions)[0]),
-            ) if end_hidden_by_reset and residual and reset is not None else None
+            judged = reading_rule.judge(reset, **rule) if (
+                end_hidden_by_reset and residual and reset is not None) else None
             if judged is not None and judged.matched:
                 reading_correction, residual, next_start_trophies = -residual, 0, expected_next
                 observed_trophy_change = next_start_trophies - start_trophies
         # Every reading from the end Reset on judges a clean, ended day
-        # (reading_rule); one hidden by a reset only against the reset total.
+        # (reading_rule); one hidden by a reset it can only contradict.
         verdict = (
             reading_rule.decide(
-                _readings(data),
-                reset_at=data.ranked_day.end,
-                end_before_loss=expected_next + (0 if end_hidden_by_reset else automatic_loss or 0),
-                loss_candidates=() if end_hidden_by_reset else _loss_candidates(
-                    data, automatic_loss, automatic_state, defense_count
-                ),
-                loss_certain=automatic_state == "calculated" and bool(automatic_loss),
-                day_effects=() if end_hidden_by_reset else _effects(contributions),
-                new_day_effects=_effects(
-                    _deduplicate_contributions(data.new_day_contributions)[0]
-                ),
-                unknown_from=data.first_unshown_report,
-                start_proven=start_proven,
-                floor=5000 if data.boundary_kind == "weekly" else None,
+                _readings(data), reset_at=data.ranked_day.end,
+                unknown_from=data.first_unshown_report, start_proven=start_proven, **rule,
             )
             if ended
             and coverage_complete
