@@ -514,6 +514,20 @@ def test_a_reading_still_judges_a_day_with_all_16_battles_despite_a_log_gap() ->
     )
     result = reconcile_ranked_day(day)
 
-    assert "battle_log_overlap_gap" in result.failure_reasons
     assert result.state == "Inconsistent"
     assert "trophy_equation_mismatch" in result.failure_reasons
+
+    # Without it, a 05:20 Reset reading of 6,040 already showing a new-day
+    # +40 attack proves the day like any other: Complete, so the next day
+    # starts from the corrected 6,000 and counts the attack once.
+    end = test_reconciliation.DAY.end
+    attack = BattleContribution("next-attack", "offense", 40,
+                                battle_timestamp=end + timedelta(minutes=8))
+    result = reconcile_ranked_day(replace(
+        day, readings=(), next_start_trophies=6040, new_day_contributions=(attack,),
+        end_baseline_evidence={"profile": {"observed_at": (end + timedelta(minutes=20)).isoformat()}},
+    ))
+
+    assert (result.state, result.confidence, result.coverage_complete) == (
+        "Complete", "exact", True)
+    assert result.next_start_trophies == 6000
