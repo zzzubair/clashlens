@@ -683,6 +683,49 @@ def test_own_report_after_the_opponents_recalculates_the_day_before(
     assert (states[2][3], states[2][8]) == (end_b, [])
 
 
+def test_monday_charge_hidden_by_the_raise_starts_no_next_day(
+    database_url: str, archive_server
+) -> None:
+    # Day Y takes 8 defenses; day Z, ending at the Monday Reset, none, so its
+    # automatic loss for all 8 would take it below 5,000, where the weekly
+    # raise hides it. The Monday Reset reading is rejected and a 05:10
+    # reading shows the charge: day Z is not settled, so Monday has no start.
+    day_y, day_z = DAY_A - timedelta(days=2), DAY_A - timedelta(days=1)
+    defenses = [(day_y + timedelta(hours=hour), False) for hour in range(1, 9)]
+    start_z = 4990 + 8 * LOSS
+    season_zero = json.loads(_profile(start_z))
+    season_zero["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(connection_info, archive_server, day_y,
+                           profile=_profile(start_z + 8 * LOSS), log=_log())
+        jobs += _reset_work(connection_info, archive_server, day_z,
+                            profile=_profile(start_z), log=_log(*defenses))
+        jobs += _reset_work(connection_info, archive_server, DAY_A,
+                            profile=json.dumps(season_zero).encode(), log=_log(*defenses))
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="charged",
+            endpoint="profile", body=_profile(start_z - 8 * LOSS),
+            observed_at=DAY_A + timedelta(minutes=10), normalized_tag=TAG,
+        )[1])
+        jobs += _reset_work(connection_info, archive_server, DAY_B,
+                            profile=_profile(5000), log=_log(*defenses))
+        _process(connection_info, archive_server, jobs)
+        for day_start in (day_z, DAY_A):
+            database = Database(connection_info)
+            try:
+                jobs = [reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day_start, now=DAY_C,
+                    request_key="settle",
+                )]
+            finally:
+                database.close()
+            _process(connection_info, archive_server, jobs)
+        day_z_row, day_a_row = _latest_days(connection_info, (day_z, DAY_A))
+
+    assert (day_z_row[0], day_z_row[3]) == ("Partial", start_z)
+    assert day_a_row[2] is None
+
+
 def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     database_url: str, archive_server
 ) -> None:

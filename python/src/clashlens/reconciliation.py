@@ -444,15 +444,15 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             and all(reason == "missing_end_baseline" for reason in failures)
             else None
         )
+        zero_defense_loss = _zero_defense_loss(data, defense_count)
+        if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
+            verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
+            and final_trophies - zero_defense_loss <= 5000):
+            # The weekly raise to 5,000 hides whether the charge landed.
+            verdict = replace(verdict, outcome="unverified", loss=0, exact=False)
         if verdict is not None and verdict.outcome == "verified":
             assert verdict.reading is not None
-            zero_defense_loss = _zero_defense_loss(data, defense_count)
-            if zero_defense_loss and verdict.loss == zero_defense_loss and (
-                data.boundary_kind == "weekly" and final_trophies - zero_defense_loss <= 5000
-            ):
-                # The weekly raise to 5,000 hides whether the charge landed.
-                verdict = replace(verdict, loss=0, exact=False)
-            elif zero_defense_loss and verdict.loss == zero_defense_loss:
+            if zero_defense_loss and verdict.loss == zero_defense_loss:
                 # The game can charge a day with no used defense slots the
                 # automatic loss for all 8, or charge it nothing; its battles
                 # do not say which. On 6 October 2026, 3 such days lost
