@@ -4,11 +4,12 @@ At the moment a profile was read, its trophy count must equal what the
 ledger says the player had then: the day's start plus every battle the game
 had shown by then, less the automatic defense loss once the game applied it,
 plus any battle of the new day the profile already showed. A reading that
-equals it confirms the day; a reading that cannot contradicts it, unless
-it was taken at or after the player's first new-day battle; a reading taken
-while a battle may or may not have landed yet is read both ways and can only
-confirm. The last trustworthy reading that is not read both ways decides,
-but none undoes a loss an earlier one showed landed.
+equals it confirms the day; a reading that cannot contradicts it. A reading
+taken while a battle may or may not have landed yet is read both ways and
+can only confirm. The last trustworthy reading before the player's first
+new-day battle that is not read both ways decides, but none undoes a loss an
+earlier one showed landed; a later reading can only confirm, and only when
+none of those decided.
 
 This one rule replaces four: a Reset reading taken before the automatic
 loss landed, a later reading settling a Reset reading taken too early, a
@@ -171,24 +172,26 @@ def decide(
     loss_certain: bool,
     day_effects: tuple[Effect, ...],
     new_day_effects: tuple[Effect, ...],
+    new_day_from: datetime | None = None,
     start_proven: bool,
 ) -> Verdict:
     """The day's verdict from every reading taken from its end Reset on.
 
     A clean reading, one with every battle landed and none in flight,
-    either equals the ledger or contradicts it. Among trustworthy readings
-    the last clean one decides: a match proves the day, with the loss landed
-    when one is certain, or, read before the loss, confirms the battles and
-    leaves the loss unsettled; it outranks every contradiction before it. A
-    match showing no loss after one showing it landed proves nothing, as a
-    loss cannot be undone. A reading taken at or after the player's first
-    new-day battle can only confirm: a new-day battle it shows may not be
-    known. A confirm-only reading confirms only when no trustworthy reading
-    decided. A reading the ledger reads both ways settles nothing on its
-    own, except the Reset reading, which contradicts when no way fits. A
-    reading that fits only with a battle not yet shown, or read one way, is
-    a guess: taken when the day's start is proven and no clean reading
-    decided.
+    either equals the ledger or contradicts it. Trustworthy readings taken
+    before the player's first new-day battle, the earliest report of one by
+    either player (``new_day_from``) or of any in ``new_day_effects``,
+    decide, and the last clean one among them decides: a match proves the
+    day, with the loss landed when one is certain, or, read before the loss,
+    confirms the battles and leaves the loss unsettled; it outranks every
+    contradiction before it. A match showing no loss after one showing it
+    landed proves nothing, as a loss cannot be undone. Only when none of
+    them decided, a later or confirm-only reading can confirm the day, never
+    contradict it: a new-day battle it shows may not be known yet. A reading
+    the ledger reads both ways settles nothing on its own, except the Reset
+    reading, which contradicts when no way fits. A reading that fits only
+    with a battle not yet shown, or read one way, is a guess: taken when the
+    day's start is proven and no clean reading decided.
     """
     judged = [
         judged for judged in (
@@ -209,14 +212,20 @@ def decide(
         # defense slot used) is uncharged until a reading shows otherwise.
         return not (item.missed or item.ambiguous) and bool(item.loss or not loss_certain)
 
-    first_new_day = min((effect.lands_from for effect in new_day_effects), default=None)
+    cutoff = min(
+        (at for at in (new_day_from, *(effect.lands_from for effect in new_day_effects))
+         if at is not None),
+        default=None,
+    )
+
+    def deciding(item: _Judged) -> bool:
+        return not item.reading.confirm_only and (cutoff is None or item.reading.read_at < cutoff)
 
     def contradicts(item: _Judged) -> bool:
         return (
-            not item.matched
-            and not item.reading.confirm_only
+            deciding(item)
+            and not item.matched
             and (not item.ambiguous or item.reading.reset_reading)
-            and (first_new_day is None or item.reading.read_at < first_new_day)
         )
 
     def last_clean(items: Iterable[_Judged]) -> _Judged | None:
@@ -233,8 +242,8 @@ def decide(
         return decider
 
     decider = (
-        last_clean(item for item in judged if not item.reading.confirm_only)
-        or last_clean(item for item in judged if item.reading.confirm_only)
+        last_clean(item for item in judged if deciding(item))
+        or last_clean(item for item in judged if not deciding(item))
     )
     if decider is not None and decider.matched:
         return Verdict(

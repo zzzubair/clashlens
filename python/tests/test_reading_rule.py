@@ -21,11 +21,11 @@ LOSS = 70
 
 
 def verdict(*readings: Reading, loss=(LOSS,), certain=True, new_day=(), day=DAY_BATTLES,
-            start_proven=True, end=END_BEFORE_LOSS):
+            start_proven=True, end=END_BEFORE_LOSS, new_day_from=None):
     return decide(
         readings, reset_at=RESET, end_before_loss=end,
         loss_candidates=loss, loss_certain=certain, day_effects=day,
-        new_day_effects=new_day, start_proven=start_proven,
+        new_day_effects=new_day, new_day_from=new_day_from, start_proven=start_proven,
     )
 
 
@@ -79,6 +79,18 @@ def test_a_clean_reading_after_an_exact_match_still_contradicts_the_day() -> Non
     settled = verdict(Reading(at(20), 5880), Reading(at(30), 5875), Reading(at(40), 5870))
     assert (settled.outcome, settled.exact, settled.earlier_contradictions) == (
         "verified", True, 2)
+
+
+def test_no_reading_after_the_first_new_day_battle_overturns_a_contradiction() -> None:
+    # 05:20 fits neither 5,940 nor 5,870. A +30 attack is reported at 05:38;
+    # the 05:55 reading of 5,900 fits it, but can only confirm.
+    new_day = (Effect("next-attack", 30, at(38)),)
+    result = verdict(Reading(at(20), 5880), Reading(at(55), 5900), new_day=new_day)
+
+    assert (result.outcome, result.residual) == ("contradicted", 10)
+    # Only the opponent's log has a defense reported at 05:10 yet: a 05:15
+    # reading may show it, so it cannot contradict.
+    assert verdict(Reading(at(15), 5880), new_day_from=at(10)).outcome == "unverified"
 
 
 def test_a_reading_in_a_battles_landing_span_is_read_both_ways() -> None:

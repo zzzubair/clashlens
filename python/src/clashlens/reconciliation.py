@@ -185,6 +185,8 @@ class ReconciliationInput:
     # which say what each reading already showed.
     readings: tuple[reading_rule.Reading, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
+    # The earliest report, by either player, of a new-day battle.
+    first_new_day_report: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.boundary_kind not in {None, "weekly", "season"}:
@@ -430,6 +432,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 new_day_effects=_effects(
                     _deduplicate_contributions(data.new_day_contributions)[0]
                 ),
+                new_day_from=data.first_new_day_report,
                 start_proven=start_proven,
             )
             if ended
@@ -444,10 +447,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         if verdict is not None and verdict.outcome == "verified":
             assert verdict.reading is not None
             zero_defense_loss = _zero_defense_loss(data, defense_count)
-            if (
-                zero_defense_loss and verdict.loss == zero_defense_loss
-                and data.boundary_kind == "weekly"
-                and final_trophies - zero_defense_loss <= 5000
+            if zero_defense_loss and verdict.loss == zero_defense_loss and (
+                data.boundary_kind == "weekly" and final_trophies - zero_defense_loss <= 5000
             ):
                 # The weekly raise to 5,000 hides whether the charge landed.
                 verdict = replace(verdict, loss=0, exact=False)

@@ -427,24 +427,24 @@ def recalculate_ranked_day(
     # already showed.
     readings: tuple[reading_rule.Reading, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
+    first_new_day_report: datetime | None = None
     if now >= ranked_day.end:
-        reading_at = (
-            end_baseline["evidence"]["profile"]["observed_at"]
-            if end_baseline is not None and end_baseline["trophies"] is not None
-            else None
-        )
         readings = ranked_day_inputs.load_readings(
             database, connection, player_id, ranked_day,
-            after=(
-                datetime.fromisoformat(reading_at)
-                if isinstance(reading_at, str)
-                else ranked_day.end
+            reset_profile_observation_id=(
+                end_baseline["evidence"].get("profile_observation_id")
+                if end_baseline is not None and end_baseline["trophies"] is not None
+                else None
             ),
             end_battle_log_observation_id=end_battle_log_observation_id,
         )
         new_day_contributions = ranked_day_inputs.load_contributions(
             connection, player_id, ranked_day_for(ranked_day.end)
         )
+        new_day_start, new_day_end = domain.battle_window(ranked_day.end)
+        first_new_day_report = ranked_day_inputs.load_first_reports(
+            connection, player_id, new_day_start, new_day_start, new_day_end
+        )[1]
     data = ReconciliationInput(
         ranked_day=ranked_day,
         now=now,
@@ -515,6 +515,7 @@ def recalculate_ranked_day(
         zero_result_defense_slots=zero_result_defenses,
         readings=readings,
         new_day_contributions=new_day_contributions,
+        first_new_day_report=first_new_day_report,
     )
     result = reconcile_ranked_day(data)
     result_data = {

@@ -1084,6 +1084,7 @@ def _seed_days(
                 ),
                 "end": None,
                 "boundary_kind": None,
+                "confidence": "exact",
                 **(results or {}).get(player_id, {}),
             }
             connection.execute(
@@ -1114,12 +1115,13 @@ def _seed_days(
                     automatic_defense_evidence_state, input_evidence
                 ) OVERRIDING SYSTEM VALUE
                 VALUES (%s, %s, %s, %s, %s, 2, 'anchor', 'rules', repeat('a', 64),
-                        1, %s, 'exact', repeat('b', 64), %s, %s, %s, %s, %s,
+                        1, %s, %s, repeat('b', 64), %s, %s, %s, %s, %s,
                         %s, %s)
                 """,
                 (
                     player_id, player_id, DAY_2_RESET - RANKED_DAY_DURATION,
-                    DAY_2_RESET, season, result["state"], coverage_complete,
+                    DAY_2_RESET, season, result["state"], result["confidence"],
+                    coverage_complete,
                     json.dumps(result["failure_reasons"]), result["start"],
                     result["final"], result["automatic_loss"],
                     result["automatic_state"]
@@ -1399,6 +1401,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         ("#P2CC9URVR", 5080, _october(7, 4, 40)),  # less an unknown loss
         ("#Y8V9YYP9C", 5151, _october(7, 4, 40)),  # Season reset, disagrees
         ("#YPG0UY9LU", 5047, _october(7, 4, 40)),  # Season reset, agrees
+        ("#2GL8CJL", 5105, _october(7, 4, 40)),  # Season rule start
     ]
     days = {
         1: (True, [
@@ -1411,7 +1414,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
             ("offense", 69, _october(7, 4, 58), True),
         ]),
         **{player: (True, [("offense", 40, _october(7, 4, 50), True)])
-           for player in range(3, 8)},
+           for player in range(3, 9)},
     }
     no_start = {"failure_reasons": ["missing_start_baseline"], "start": None}
     complete = {"state": "Complete", "failure_reasons": []}
@@ -1426,6 +1429,8 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
             "end": 5000,
         },
         7: {**complete, "final": 5087, "boundary_kind": "season", "end": 5000},
+        # Complete from its end reading alone, its start no reading matched.
+        8: {**complete, "final": 5145, "end": 5145, "confidence": "inferred"},
     }
     with domain_database(database_url, include_coordinator=True) as connection_info:
         generation_id = _seed_board(connection_info, readings)
@@ -1434,6 +1439,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         try:
             assert _build_board(connection_info, database, generation_id) == [
                 ("#Y8V9YYP9C", 5191, "uncertain"),
+                ("#2GL8CJL", 5145, "uncertain"),
                 ("#PL0Q0UVLC", 5140, "confirmed"),
                 ("#P0VPRVPJJ", 5130, "confirmed"),
                 ("#P2CC9URVR", 5120, "uncertain"),
