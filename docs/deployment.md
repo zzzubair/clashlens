@@ -1184,10 +1184,10 @@ run at most `CLASHLENS_BACKGROUND_JOB_LIMIT` backfill jobs at once (default
 new evidence (priority 26, `queue_refresh.py`; default 4); see
 [Worker processes](#worker-processes). A claim takes any live work it can
 first, then fills the rest of its size with background jobs, each kind up to
-its own free room, the kind using less of its limit first. Only one claim at
-a time counts and takes background jobs; a claim that found no live work
-waits up to half a second for that turn instead of giving up and sleeping
-the 1 second poll. On 2026-10-09 a claim gave up at once and took one
+its own free room, the kind using less of its limit first, ties going at
+random in proportion to the limits. Only one claim at a time counts and
+takes background jobs; a claim that found no live work waits up to half a
+second for that turn instead of giving up and sleeping the 1 second poll. On 2026-10-09 a claim gave up at once and took one
 background job, the older kind first, so raising the limits from 2 and 4 to
 6 and 6 cut background work from about 217 jobs a minute to 178, with
 rechecks averaging 0.05 running. Live work

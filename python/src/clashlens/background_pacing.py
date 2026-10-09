@@ -20,8 +20,9 @@ halves, rounded up, as soon as live work strains: live jobs waiting
 waited on 9 Oct 2026, or a worker statement waiting ``LOCK_STRAIN_SECONDS``
 on a lock. Live work is still claimed first, and background work fills only
 what the claim has left, each kind up to its own room, the kind using less
-of its limit first. A claim that found no live work waits up to
-``PERMIT_WAIT`` for another claim's permit. On 9 Oct 2026 a claim gave up at
+of its limit first, ties going at random in proportion to the limits, so a
+worker with one free background thread still runs both. A claim that found
+no live work waits up to ``PERMIT_WAIT`` for another claim's permit. On 9 Oct 2026 a claim gave up at
 once, took one background job and the older kind first, and its thread slept
 the 1 second poll: raising the limits from 2 and 4 to 6 and 6 cut background
 work from about 217 jobs a minute to 178, with rechecks averaging 0.05
@@ -41,6 +42,7 @@ stops it 39% of 05:00 to 06:20, when up to 21,800 live jobs waited.
 from __future__ import annotations
 
 import os
+import random
 from typing import Any
 
 from psycopg import ClientCursor
@@ -69,8 +71,9 @@ def background_lanes(
     supports_coordinator: bool, supports_dependency: bool, *, wait: bool = False,
 ) -> list[tuple[int, int]]:
     """Each background priority with room, and how many more jobs it may
-    lease, the one using less of its limit first; with any, this claim holds
-    the permit. With ``wait`` it waits up to ``PERMIT_WAIT`` for the permit.
+    lease, the one using less of its limit first, ties at random in proportion
+    to the limits; with any, this claim holds the permit. With ``wait`` it
+    waits up to ``PERMIT_WAIT`` for the permit.
 
     Only live work this worker can claim counts, so a newer contract's never
     pauses background work for good. Late live work counts while it waits,
@@ -150,11 +153,12 @@ def background_lanes(
     )).fetchone()
     threshold = max(LIVE_LAG_MIN_JOBS, LIVE_LAG_SHARE * waiting)
     strained = strained >= threshold or lock_wait
-    lanes = sorted((leased / cap, priority, cap - leased) for priority, leased, limit in (
+    lanes = sorted((leased / cap, -random.random() ** (1 / cap), priority, cap - leased)
+                   for priority, leased, limit in (
         (PYTHON_BACKFILL_PRIORITY, bulk, BACKGROUND_JOB_LIMIT),
         (DAY_RECHECK_PRIORITY, rechecks, DAY_RECHECK_JOB_LIMIT),
     ) for cap in [(limit + 1) // 2 if strained else limit] if leased < cap)
-    return [] if late >= threshold else [(priority, room) for _, priority, room in lanes]
+    return [] if late >= threshold else [(priority, room) for *_, priority, room in lanes]
 
 
 def _take_permit(connection: Any, wait: bool) -> bool:

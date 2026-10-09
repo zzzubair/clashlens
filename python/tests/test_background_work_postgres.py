@@ -374,13 +374,18 @@ def test_each_background_kind_fills_its_own_limit_after_live_work(
 
         try:
             # Live work first, then background work fills the rest of the claim.
-            assert claim(4) == (2, 2, 0)
-            # The kind using less of its limit goes first, though the other's
-            # jobs have waited an hour longer.
-            assert claim(1) == (0, 0, 1)
-            assert claim(8) == (0, 3, 5)
+            live_taken, *background = claim(4)
+            assert live_taken == 2 and sorted(background) == [0, 2]
+
+            def first_won(taken: tuple[int, int, int]) -> tuple[int, int, int]:
+                return taken if background[0] else (taken[0], taken[2], taken[1])
+
+            # The kind using less of its limit goes first, whichever's jobs
+            # have waited longer.
+            assert claim(1) == first_won((0, 0, 1))
+            assert claim(8) == first_won((0, 3, 5))
             # Each stops at its own limit.
-            assert claim(8) == (0, 1, 0)
+            assert claim(8) == first_won((0, 1, 0))
             assert claim(8) == (0, 0, 0)
         finally:
             database.close()
