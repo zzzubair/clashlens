@@ -106,6 +106,17 @@ const note = (html: string) =>
   html.split('id="season-days-title"')[1].split('class="legend-days"')[0];
 const todayEntry = (html: string) =>
   html.split('id="legend-day-2026-10-08"')[1].split("</details>")[0];
+const ended = (day: number, extra: Partial<RankedDaySummary>): RankedDaySummary => ({
+  ...TODAY,
+  dayNumber: day,
+  period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
+  state: "Complete",
+  confidence: "exact",
+  uncertainty: [],
+  ...extra,
+});
+const cell = (html: string, key: string, label: string) =>
+  html.split(`id="legend-day-${key}"`)[1].split(`<small>${label}</small>`)[1];
 
 describe("today's Legend day wording", () => {
   it("shows no live trend and keeps the previous Season's days out", async () => {
@@ -206,15 +217,6 @@ describe("today's Legend day wording", () => {
   });
 
   it("ends each finished day on the next day's start and shows the automatic loss", async () => {
-    const ended = (day: number, extra: Partial<RankedDaySummary>): RankedDaySummary => ({
-      ...TODAY,
-      dayNumber: day,
-      period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
-      state: "Complete",
-      confidence: "exact",
-      uncertainty: [],
-      ...extra,
-    });
     const html = await page(WAITING, undefined, [
       // 40 from attacks, 0 on defense, 32 taken at Reset: +8.
       ended(7, {
@@ -232,26 +234,44 @@ describe("today's Legend day wording", () => {
         resetAdjustment: { kind: "weekly", amount: 80 },
       }),
     ]);
-    const cell = (key: string, label: string) =>
-      html.split(`id="legend-day-${key}"`)[1].split(`<small>${label}</small>`)[1];
-    expect(cell("2026-10-07", "End of day")).toMatch(
+    expect(cell(html, "2026-10-07", "End of day")).toMatch(
       /^<strong>6,000<span class="day-mark day-mark-verified" title="Verified">/,
     );
-    expect(cell("2026-10-07", "Defenses")).toContain(
+    expect(cell(html, "2026-10-07", "Defenses")).toContain(
       '<span title="Taken by the game at Reset for defenses not played">-32 automatic loss</span>',
     );
-    expect(cell("2026-10-06", "End of day")).toMatch(
-      /^<strong>5,992<span class="day-mark day-mark-gap" title="Uncertain">.*<\/strong><span>Battles add up to 5,050; next day started at 5,992<\/span>/,
+    const gap = "Battles add up to 5,050; next day started at 5,992.";
+    expect(cell(html, "2026-10-06", "End of day")).toMatch(
+      /^<strong>5,992<span class="day-mark day-mark-gap" title="Uncertain">.*<\/strong><span>Battles add up to 5,050; next day started at 5,992.<\/span>/,
     );
-    expect(cell("2026-10-05", "Trophy change")).toContain(
+    // The whole day is Uncertain: its heading and its explanation too.
+    const conflicted = html.split('id="legend-day-2026-10-06"')[1].split("</details>")[0];
+    expect(conflicted.split("<small>Starting trophies</small>")[0]).toContain(
+      'title="Uncertain"',
+    );
+    expect(conflicted).toContain(
+      `<p class="section-note"><strong>Uncertain.</strong> ${gap}</p>`,
+    );
+    expect(cell(html, "2026-10-05", "Trophy change")).toContain(
       "<span>+80 weekly reset</span>",
     );
-    expect(cell("2026-10-05", "End of day")).toMatch(
+    expect(cell(html, "2026-10-05", "End of day")).toMatch(
       /^<strong>5,000<span class="day-mark day-mark-verified" title="Verified">/,
     );
-    expect(cell("2026-10-06", "Defenses")).not.toContain("automatic loss");
-    expect(cell("2026-10-08", "End of day")).toMatch(
+    expect(cell(html, "2026-10-06", "Defenses")).not.toContain("automatic loss");
+    expect(cell(html, "2026-10-08", "End of day")).toMatch(
       /^<strong[^>]*>After Reset<\/strong>/,
     );
+  });
+
+  it("leaves an older day's end Unavailable when the next day is missing", async () => {
+    const html = await page(WAITING, undefined, [
+      ended(7, { startTrophies: 5992, trophyChange: 8 }),
+      ended(5, { startTrophies: 5000, trophyChange: 50 }),
+    ]);
+    expect(cell(html, "2026-10-05", "End of day")).toMatch(
+      /^<strong class="stat-unavailable">Unavailable<\/strong>/,
+    );
+    expect(cell(html, "2026-10-07", "End of day")).toMatch(/^<strong>6,000</);
   });
 });

@@ -270,33 +270,40 @@ export function legendDayKey(period: string): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// The log keeps only the current Season's days at the server time, numbered
-// from its start; an ended Season's days are under that Season in Seasons.
-// A finished day's end-of-day trophies: the next day's start. Without one,
-// the day's start plus its trophy change and any weekly or Season reset at
-// its closing Reset stands in. When both exist and disagree the end is
-// Uncertain and the conflict names both.
-export function dayEnd(day: RankedDaySummary, next?: RankedDaySummary | null) {
+// A finished day's end-of-day trophies: the next day's start. Only the latest
+// finished day, ended at the latest Reset, can fall back to its start plus its
+// trophy change and any weekly or Season reset at its closing Reset; an older
+// day without the next day's start has none. When both exist and disagree the
+// whole day is Uncertain and its reasons lead with the gap.
+export function dayEnd(
+  day: RankedDaySummary,
+  next: RankedDaySummary | null | undefined,
+  now: number,
+) {
+  const ended = Date.parse(day.period.split(" – ")[1]);
   const own =
     day.startTrophies != null && day.trophyChange !== null
       ? day.startTrophies + day.trophyChange + (day.resetAdjustment?.amount ?? 0)
       : null;
   const following =
-    next &&
-    Date.parse(next.period.split(" – ")[0]) === Date.parse(day.period.split(" – ")[1])
+    next && Date.parse(next.period.split(" – ")[0]) === ended
       ? (next.startTrophies ?? null)
       : null;
   const conflict =
     own !== null && following !== null && own !== following
-      ? { calculated: own, next: following }
+      ? `Battles add up to ${own.toLocaleString("en-GB")}; next day started at ${following.toLocaleString("en-GB")}.`
       : null;
+  const evidence = presentDay(dayEvidence(day), false);
   return {
-    trophies: following ?? own,
-    status: conflict ? "Uncertain" : presentDay(dayEvidence(day), false).status,
+    trophies: following ?? (ended <= now && now - ended < DAY_MS ? own : null),
+    status: conflict ? "Uncertain" : evidence.status,
+    reasons: conflict ? [conflict, ...evidence.reasons] : evidence.reasons,
     conflict,
   };
 }
 
+// The log keeps only the current Season's days at the server time, numbered
+// from its start; an ended Season's days are under that Season in Seasons.
 export function selectPlayerHistory(player: PlayerPage | null, now: number) {
   const anchor = player?.season ? Date.parse(player.season.anchor) : null;
   const seasonStart =

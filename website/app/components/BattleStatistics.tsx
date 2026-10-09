@@ -27,7 +27,7 @@ export function BattleStatistics({ player, now }: { player: PlayerPage; now: num
         )
       : undefined;
   // The same end of day as the Daily Legend log shows for that day.
-  const end = last ? dayEnd(last, player.currentDay) : null;
+  const end = last ? dayEnd(last, player.currentDay, now) : null;
   const side = ({ count, stars, perDay, perBattle }: typeof stats.attack) => ({
     count,
     stars,

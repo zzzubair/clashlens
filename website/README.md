@@ -71,10 +71,11 @@ The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
 trophy change, end of day and Reset rank. A finished day's end of day is the
 next day's start; it carries the day's Verified, Calculated or Uncertain dot.
 Only the latest finished day, with no next day saved yet, uses its start plus
-its trophy change plus any weekly or Season reset at its closing Reset. When
-that sum disagrees with the next day's start, the end shows the next day's
-start, is Uncertain and says so, such as Battles add up to 5,050; next day
-started at 5,992. Trophies at last Reset follows the same rule. Under Defenses, a day with an
+its trophy change plus any weekly or Season reset at its closing Reset; an
+older day without the next day's start shows Unavailable. When that sum
+disagrees with the next day's start, the end shows the next day's start and
+the whole day is Uncertain, its badges and explanation both, which says so,
+such as Battles add up to 5,050; next day started at 5,992. Trophies at last Reset follows the same rule. Under Defenses, a day with an
 automatic defense loss at Reset shows it, such as -32 automatic loss, so
 attacks minus defenses minus that loss equals the trophy change. A weekly or
 Season reset is not part of the trophy change and shows under it, such as +80

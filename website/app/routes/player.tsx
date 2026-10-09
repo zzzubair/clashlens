@@ -655,6 +655,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 key={legendDayKey(day.period)}
                 day={day}
                 next={history[index - 1]?.day}
+                now={statisticsTime}
                 seasonDay={seasonDay}
                 isCurrentDay={isCurrentDay(today, day)}
                 openDay={openDay}
@@ -806,6 +807,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
                 key={legendDayKey(day.period)}
                 day={day}
                 next={history[index - 1]?.day}
+                now={statisticsTime}
                 seasonDay={seasonDay}
                 isCurrentDay={isCurrentDay(today, day)}
                 openDay={openDay}
@@ -1168,20 +1170,24 @@ function isCurrentDay(today: RankedDaySummary | null, day: RankedDaySummary): bo
 function LegendDay({
   day,
   next,
+  now,
   seasonDay,
   isCurrentDay,
   openDay,
 }: {
   day: RankedDaySummary;
   next?: RankedDaySummary;
+  now: number;
   seasonDay: string;
   isCurrentDay: boolean;
   openDay: string | null;
 }) {
   const dayKey = legendDayKey(day.period);
   const dayLabel = legendDayDate(day.period);
-  const { status, reasons, battleNet } = presentDay(dayEvidence(day), isCurrentDay);
-  const end = dayEnd(day, next);
+  const shown = presentDay(dayEvidence(day), isCurrentDay);
+  const end = dayEnd(day, next, now);
+  const { status, reasons } = isCurrentDay ? shown : end;
+  const { battleNet } = shown;
   return (
     <details className="legend-day" id={`legend-day-${dayKey}`} open={openDay === dayKey}>
       <summary>
@@ -1273,17 +1279,14 @@ function LegendDay({
         <span className="legend-day-stat legend-day-end">
           <small>End of day</small>
           <strong className={end.trophies === null ? "stat-unavailable" : undefined}>
-            {isCurrentDay ? "After Reset" : formatCount(end.trophies)}
-            {isCurrentDay || end.trophies === null ? null : (
-              <DayMark status={end.status} />
-            )}
+            {isCurrentDay
+              ? "After Reset"
+              : end.trophies === null
+                ? "Unavailable"
+                : end.trophies.toLocaleString("en-GB")}
+            {isCurrentDay || end.trophies === null ? null : <DayMark status={status} />}
           </strong>
-          {!isCurrentDay && end.conflict ? (
-            <span>
-              Battles add up to {formatCount(end.conflict.calculated)}; next day started
-              at {formatCount(end.conflict.next)}
-            </span>
-          ) : null}
+          {!isCurrentDay && end.conflict ? <span>{end.conflict}</span> : null}
         </span>
         <span className="legend-day-stat legend-day-rank">
           <small>Reset rank</small>
