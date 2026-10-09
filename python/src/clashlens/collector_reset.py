@@ -137,7 +137,7 @@ def begin_reset(connection: Any, boundary_at: datetime) -> int | None:
 def _schedule_settlement_checks(
     connection: Any, sweep_id: int, boundary_at: datetime, member_ids: list[int]
 ) -> None:
-    """Add one settlement check per frozen member and link its boundary row."""
+    """Add one settlement check per frozen member."""
     connection.execute(
         """
         INSERT INTO collector_work (
@@ -154,20 +154,6 @@ def _schedule_settlement_checks(
         ON CONFLICT DO NOTHING
         """,
         {"due": boundary_at + SETTLEMENT_DELAY, "sweep": sweep_id, "members": member_ids},
-    )
-    connection.execute(
-        """
-        INSERT INTO reset_boundary_settlements (
-            player_id, boundary_at, sweep_id, delayed_work_id
-        )
-        SELECT work.player_id, %s, %s, work.id
-        FROM collector_work AS work
-        WHERE work.sweep_id = %s AND work.kind = 'reset_settlement'
-        ON CONFLICT (player_id, boundary_at) DO UPDATE
-        SET delayed_work_id = EXCLUDED.delayed_work_id
-        WHERE reset_boundary_settlements.delayed_work_id IS NULL
-        """,
-        (boundary_at, sweep_id, sweep_id),
     )
 
 

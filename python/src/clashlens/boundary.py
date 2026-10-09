@@ -51,8 +51,7 @@ def lock_boundary_publication(
 
     Lock order everywhere: a player-day lock or army battle locks
     (army_ingestion._upsert_army_decodes), then this lock for the Reset
-    ending that day, then that Reset's settlement locks
-    (reset_settlement.lock_resets), then its generation rows; several Resets
+    ending that day, then its generation rows; several Resets
     are taken oldest first. Every path that locks or updates a generation row
     takes this lock first: a build that locked the row and then waited here,
     while a day-result rebuild held this lock and waited for the row,

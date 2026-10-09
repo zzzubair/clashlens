@@ -223,10 +223,8 @@ use the [operating notes](operating.md#respond-to-alerts).
   ones in `collector_work.replaced_observation_ids`, a few ids on a retried
   item); when the first frozen board's inputs froze, when it was saved
   as published and when the website's public page first showed it, to the
-  second of that read; that board's input states (Complete, Partial,
-  Inconsistent and the rest); and how many of the Reset's boundaries were
-  settled, provisional or unresolved when the website first showed it. Each
-  value is kept as first seen. The processed time comes only from finished
+  second of that read; and that board's input states (Complete, Partial,
+  Inconsistent and the rest). Each value is kept as first seen. The processed time comes only from finished
   jobs: if the finished-job cleanup removed one of a response saved since the
   Reset before the check saw it finish, the time stays empty as unknown, never
   the collection time. A record that has not yet seen its readings processed

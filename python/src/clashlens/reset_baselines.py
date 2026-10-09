@@ -8,7 +8,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import boundary, ranked_day_inputs, reset_settlement
+from . import boundary, ranked_day_inputs
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -54,7 +54,6 @@ def _refresh_reset_baseline_evidence(
         failure_category=failure_category,
         failure_retryable=failure_retryable,
     )
-    reset_settlement.refresh_for_observation(database, connection, claim.observation_id)
 
 
 # The Season whose Reset pairs a repair re-checks: the one named, or else the
@@ -134,11 +133,10 @@ def repair_current_season_reset_baselines(
                 ) AS latest ON true
                 LEFT JOIN LATERAL (
                     SELECT delayed.battle_log_observation_id AS observation_id
-                    FROM reset_boundary_settlements AS settlement
-                    JOIN collector_work AS delayed
-                      ON delayed.id = settlement.delayed_work_id
-                    WHERE settlement.player_id = work.player_id
-                      AND settlement.boundary_at = sweep.boundary_at
+                    FROM collector_work AS delayed
+                    WHERE delayed.kind = 'reset_settlement'
+                      AND delayed.sweep_id = work.sweep_id
+                      AND delayed.player_id = work.player_id
                 ) AS delayed_log ON true
                 WHERE work.kind = 'reset_baseline'
                   AND (
@@ -689,21 +687,8 @@ def _evaluate_reset_baseline(
         assert inserted is not None
         evidence_id = int(inserted[0])
 
-    publishes = state in {"complete", "failed"} and ends_day
-    reset_settlement.lock_resets(
-        database, connection, observation_id, [(int(player_id), boundary_at)],
-        (boundary_at,) if publishes else (),
-    )
-    reset_settlement.record_provisional_boundary(
-        connection,
-        player_id=int(player_id),
-        boundary_at=boundary_at,
-        sweep_id=int(sweep_id),
-        early_baseline_id=evidence_id,
-        early_state=state,
-        reasons=reasons,
-    )
-    if publishes:
+    if state in {"complete", "failed"} and ends_day:
+        boundary.lock_boundary_members(connection, boundary_at.astimezone(UTC))
         _record_boundary_baseline(database,
             connection,
             boundary_at=boundary_at,
@@ -711,7 +696,6 @@ def _evaluate_reset_baseline(
             player_id=int(player_id),
             state=state,
         )
-    reset_settlement.refresh_boundary(database, connection, int(player_id), boundary_at)
     if state == "partial":
         return [], reasons
     # Failed evidence still finishes the day it ends, as incomplete; only a

@@ -27,10 +27,10 @@ how a saved day or board comes out, then run it once:
 
 Recalculating a day that comes out the same saves nothing new.
 
-A dormant campaign design follows. Four fixes change results already
+A dormant campaign design follows. Three fixes change results already
 published for a Season: the 2-star/55%
-payout (17, not 18, under trophy rule v2), the five-minute battle day move,
-saved armies for reports that have none and accepted Reset settlements. Each
+payout (17, not 18, under trophy rule v2), the five-minute battle day move
+and saved armies for reports that have none. Each
 fix repairing alone would republish every Reset several times from half-fixed inputs, so a
 campaign lists everything they change once, for one coordinated rebuild:
 
@@ -607,10 +607,6 @@ WITH selected AS (
            array_agg(DISTINCT c.reason) AS reasons
     FROM changes AS c JOIN battle_evidence AS e ON e.id = c.evidence_id
     GROUP BY 1, 2, 3, 4
-), settled AS (
-    SELECT player_id, boundary_at - interval '1 day' AS day
-    FROM reset_boundary_settlements
-    WHERE state = 'settled' AND boundary_at > %(start)s AND boundary_at <= %(end)s
 ), affected AS (
     -- Players whose saved days these fixes change, repaired yet or not.
     SELECT player_id FROM selected WHERE stars = 2 AND destruction_percentage = 55
@@ -620,8 +616,6 @@ WITH selected AS (
     FROM battle_day_repairs
     WHERE from_day >= %(start)s AND from_day < %(end)s
        OR to_day >= %(start)s AND to_day < %(end)s
-    UNION
-    SELECT player_id FROM settled
 ), newest AS (
     SELECT DISTINCT ON (player_id, ranked_day_start) player_id, ranked_day_start, id
     FROM ranked_day_versions
@@ -654,8 +648,6 @@ WITH selected AS (
      AND previous.ranked_day_start = saved.ranked_day_start - interval '1 day'
     WHERE saved.ranked_day_start >= %(start)s
       AND saved.built_from IS DISTINCT FROM previous.id::text
-    UNION ALL
-    SELECT player_id, day, 'settlement' FROM settled
 ), days AS (
     SELECT v.player_id, v.ranked_day_start, min(v.official_season_id) AS season,
            coalesce(array_agg(DISTINCT t.reason) FILTER (WHERE t.reason IS NOT NULL),

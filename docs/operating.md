@@ -619,12 +619,12 @@ for Top 100 and 0.93 s for all tracked players.
 Check the Armies page against the
 [current-season coverage and population rules](domain.md#population-filters-and-lenses).
 
-**Repair campaign:** one saved list, per Season, of every result four past
+**Repair campaign:** one saved list, per Season, of every result three past
 fixes change, held back from republishing until a single coordinated rebuild
 finishes. `--campaign preview --season <Season ID>` lists, without
 writing anything, every report, decode, player day and Reset publication of
-that Season that the 2-star/55% payout, five-minute day move, reports with no
-saved army and accepted Reset settlements change, plus each
+that Season that the 2-star/55% payout, five-minute day move and reports with
+no saved army change, plus each
 affected player's first saved day of the next Season, to recalculate, and which are excluded
 (raw response gone, Season finalized, correction window closed). Later
 next-Season days are left to the repair itself. `--campaign register` saves
@@ -933,8 +933,8 @@ podman exec --user postgres clashlens-postgres psql -X -d clashlens -c \
 
 The second shows, for the latest Resets, when collection ended, when the Reset
 readings were processed, when the board's inputs froze, when it was saved as
-published and when the website first showed it, with the board's input states
-and how many of the Reset's boundaries were settled.
+published and when the website first showed it, with the board's input states.
+Its `settlement` column is no longer filled: nothing proves a Reset settled.
 
 **Fix or escalate:** escalate; repairing a publication needs an approved change.
 

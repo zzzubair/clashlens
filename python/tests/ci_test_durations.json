@@ -99,8 +99,6 @@
   "test_reset_pair_publication_postgres.py": 7.1,
   "test_reset_reading_before_loss_postgres.py": 0.82,
   "test_reset_settlement_collection_postgres.py": 20.68,
-  "test_reset_settlement_proof.py": 0.0,
-  "test_reset_settlement_proof_postgres.py": 12.79,
   "test_reset_settlement_state_postgres.py": 20.78,
   "test_response_fields.py": 0.0,
   "test_season_anchor_locking.py": 0.0,
