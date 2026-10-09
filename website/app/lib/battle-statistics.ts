@@ -15,8 +15,7 @@ export function currentSeasonStart(player: PlayerPage, now: number) {
 // Only finished Legend days count, never today, which is still being played.
 // Each battle counts on the saved Legend day it belongs to. Counts, stars and
 // averages all use every saved finished Legend day, leaving out battle-free
-// days proven before sign-up or outside Legend I; per-day averages divide by
-// those days, battles or not.
+// days before sign-up; per-day averages divide by those days, battles or not.
 function summarize(events: RankedBattleEvent[], days: number) {
   const stars = [0, 0, 0, 0];
   let trophies = 0;

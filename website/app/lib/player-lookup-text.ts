@@ -279,14 +279,11 @@ function savedDays(player: PlayerPage) {
   ];
 }
 
-// A saved day is not a Legend day only when it has no battles and the player
-// is proven not signed up yet or proven outside Legend I. Missing both Reset
-// readings is no such proof, even though it also marks the player not eligible.
+// A saved day is not a Legend day only when saved profiles prove the player
+// had not signed up yet and it has no battles. Not eligible is no such proof:
+// a missing Reset reading alone sets it.
 export function isLegendDay(codes: string[], battles: number) {
-  const ineligible =
-    codes.includes("player_not_eligible") &&
-    !(codes.includes("missing_start_baseline") && codes.includes("missing_end_baseline"));
-  return battles > 0 || !(codes.includes("not_enrolled") || ineligible);
+  return battles > 0 || !codes.includes("not_enrolled");
 }
 
 // A finished day's end-of-day trophies: the next day's start, from any saved

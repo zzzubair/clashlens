@@ -102,9 +102,8 @@ progress, and can show This Season, Last 7 days or Last 14 days: the last 7 or
 option says how many finished days so far, such as Last 7 days (2 so far), and
 the box's one short line gives the dates and finished days saved. Counts,
 stars, hit rate and averages all use every recorded battle of those days,
-leaving out only days without battles that are proven to be before the player
-signed up or while not in Legend I; a day missing both Reset readings proves
-neither. Offense per day is trophies gained from attacks divided by the saved
+leaving out only days without battles that saved profiles prove were before
+the player signed up. Offense per day is trophies gained from attacks divided by the saved
 finished Legend days, battles or not, and defense per day is trophies lost on defense the same
 way; per attack and per defense divide by those days' recorded battles.
 Automatic Reset losses are not part of defense averages. Empty samples show

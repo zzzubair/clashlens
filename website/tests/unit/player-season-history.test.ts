@@ -322,11 +322,7 @@ describe("past-Season view", () => {
             {
               ...quiet,
               dayNumber: 27,
-              flags: [
-                "missing_end_baseline",
-                "missing_start_baseline",
-                "player_not_eligible",
-              ],
+              flags: ["missing_start_baseline", "player_not_eligible"],
             },
             { ...quiet, dayNumber: 28 },
           ],
