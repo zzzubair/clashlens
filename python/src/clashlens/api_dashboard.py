@@ -5,8 +5,11 @@ worst possible end of day: each attack still open can win at most 40 trophies
 and each defense still open can lose at most 40. A player surely finishes
 above you when their worst end beats your best end, and may finish above you
 when their best end reaches your worst end. The counts come from each
-player's latest published log for today, so the range is an estimate: a
-battle not yet read leaves a slot looking open.
+player's latest published log for today, and so do the trophies they start
+from: that log's Reset trophies plus its battles, so a battle the profile
+has not caught up with is never counted without its trophies. A player
+without them starts from their profile trophies with every slot open. The
+range is an estimate: a battle not yet read leaves a slot looking open.
 
 The board for that comparison, and today's held share across it, are read in
 one query and kept for a minute, so dashboards share one read per minute.
@@ -23,7 +26,7 @@ from typing import Any
 
 from .api_db import ApiDatabase, _screen_events, _text
 from .api_leaderboard import _LIVE_PLAYERS_SQL, _season_params
-from .domain import MAX_BATTLE_TROPHIES, ranked_day_for
+from .domain import CHAIN_BREAK_REASONS, MAX_BATTLE_TROPHIES, ranked_day_for
 from .reconciliation import MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
 
 BOARD_SECONDS = 60
@@ -32,30 +35,34 @@ _MAX_OPPONENTS = MAX_DAILY_ATTACKS
 
 _BOARD_SQL = f"""
 WITH live AS MATERIALIZED ({_LIVE_PLAYERS_SQL})
-SELECT live.normalized_tag, live.trophies,
-       day.attack_count, day.defense_count, day.defense_three_star_count
+SELECT live.normalized_tag, live.trophies, ranked_day.start_trophies,
+       day.attack_count, day.attack_gain, day.defense_count, day.defense_loss,
+       day.defense_three_star_count
 FROM live
 JOIN players AS player ON player.normalized_tag = live.normalized_tag
 LEFT JOIN LATERAL (
-    SELECT attack_count, defense_count, defense_three_star_count
+    SELECT attack_count, attack_gain, defense_count, defense_loss,
+           defense_three_star_count, ranked_day_version_id
     FROM api_player_daily_logs AS daily
     WHERE daily.player_id = player.id
       AND daily.ranked_day_start = %(day_start)s
     ORDER BY daily.version DESC
     LIMIT 1
 ) AS day ON true
+LEFT JOIN ranked_day_versions AS ranked_day
+    ON ranked_day.id = day.ranked_day_version_id
 """
 
 # Each player's latest log for one Legend day, with the day's start trophies
-# and its "no opponent, no battle" defense and attack slots, which the game
-# counts as used.
+# and its "no opponent, no battle" defense slots, which the game counts as
+# used.
 _DAY_LOGS_SQL = """
 SELECT DISTINCT ON (daily.player_id)
        player.normalized_tag, daily.attack_count, daily.defense_count,
        daily.defense_loss, daily.coverage, daily.battles, daily.published_at,
        ranked_day.start_trophies,
        COALESCE((ranked_day.input_evidence ->> 'zero_result_defense_slots')::int, 0),
-       COALESCE((ranked_day.input_evidence ->> 'zero_result_attack_slots')::int, 0)
+       daily.state, daily.partial_reasons
 FROM api_player_daily_logs AS daily
 JOIN players AS player ON player.id = daily.player_id
 LEFT JOIN ranked_day_versions AS ranked_day
@@ -89,11 +96,18 @@ def _read_board(connection: Any, now: datetime) -> _Board:
     ).fetchall()
     ends: dict[str, tuple[int, int]] = {}
     held = defenses = 0
-    for tag, trophies, attacks, defended, tripled in rows:
-        trophies = int(trophies)
+    for tag, trophies, start, attacks, gained, defended, lost, tripled in rows:
+        if None in (start, attacks, gained, defended, lost):
+            basis, open_attacks, open_defenses = (
+                int(trophies), MAX_DAILY_ATTACKS, MAX_DAILY_DEFENSES
+            )
+        else:
+            basis = int(start) + int(gained) - int(lost)
+            open_attacks = _open(attacks, MAX_DAILY_ATTACKS)
+            open_defenses = _open(defended, MAX_DAILY_DEFENSES)
         ends[_text(tag)] = (
-            trophies + MAX_BATTLE_TROPHIES * _open(attacks, MAX_DAILY_ATTACKS),
-            trophies - MAX_BATTLE_TROPHIES * _open(defended, MAX_DAILY_DEFENSES),
+            basis + MAX_BATTLE_TROPHIES * open_attacks,
+            basis - MAX_BATTLE_TROPHIES * open_defenses,
         )
         if defended:
             defenses += int(defended)
@@ -149,6 +163,22 @@ def rank_range(board: _Board, tag: str) -> dict[str, int] | None:
     return {"best": surely_above + 1, "worst": maybe_above_or_self}
 
 
+def _battles_known(day: tuple[Any, ...]) -> bool:
+    """Whether a published day can average the automatic loss, by the
+    worker's rule (ranked_day_inputs.load_previous_day): continuous logs, a
+    saved Legend day and no 9th attack or defense."""
+    reasons = day[10] if isinstance(day[10], list) else []
+    return (
+        day[4] == "complete"
+        and day[9] in {"Complete", "Partial"}
+        and not any(
+            reason in CHAIN_BREAK_REASONS
+            or str(reason).startswith("ranked_day_state:")
+            for reason in reasons
+        )
+    )
+
+
 def _automatic_defense(
     today: tuple[Any, ...] | None,
     previous: tuple[Any, ...] | None,
@@ -157,20 +187,17 @@ def _automatic_defense(
 ) -> tuple[int | None, int | None]:
     """Open defense slots at Reset and the game's loss for each, as the worker
     charges it (reconciliation.automatic_defense_loss). The loss is None
-    unless both days' battles are fully covered."""
+    unless both days' battles are known."""
     if today is None:
         return None, None
-    attacks = int(today[1] or 0) + int(today[9] or 0)
     defenses = int(today[2] or 0) + int(today[8] or 0)
     open_slots = max(0, MAX_DAILY_DEFENSES - defenses)
-    if season_first_day and attacks >= defenses:
-        open_slots = attacks - defenses
     if not 1 <= defenses < MAX_DAILY_DEFENSES or today[4] != "complete":
         return open_slots, None
     loss = int(today[3] or 0)
     previous_defenses = previous_loss = 0
     if not season_first_day:
-        if previous is None or previous[4] != "complete" or previous[2] is None:
+        if previous is None or not _battles_known(previous) or previous[2] is None:
             return open_slots, None
         previous_defenses = int(previous[2]) + int(previous[8] or 0)
         previous_loss = int(previous[3] or 0)

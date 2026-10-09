@@ -105,8 +105,8 @@ function CardFrame({
 }: {
   placed: PlacedCard;
   tools?: ReactNode;
-  /** Shown after the title, such as the player's name. */
-  titleExtra?: ReactNode;
+  /** Shown after the title, such as the player's name; cut short, in full on hover. */
+  titleExtra?: string | null;
   /** Top-right corner, such as "updated 2 min ago". */
   meta?: ReactNode;
   footer?: ReactNode;
@@ -126,7 +126,9 @@ function CardFrame({
           {titleExtra ? (
             <span className="dash-card-extra">
               {" · "}
-              <bdi className="dash-name">{titleExtra}</bdi>
+              <bdi className="dash-name" title={titleExtra}>
+                {titleExtra}
+              </bdi>
             </span>
           ) : null}
         </h2>
@@ -149,12 +151,12 @@ interface CardContext {
   savedTags: string[];
   nowMs: number | null;
   timeZone: string;
-  idempotencyKey: string;
+  saveKeys: Record<string, string>;
 }
 
 interface CardContent {
   body: ReactNode;
-  titleExtra?: ReactNode;
+  titleExtra?: string | null;
   meta?: ReactNode;
   footer?: ReactNode;
 }
@@ -182,6 +184,7 @@ const CARD_CONTENT: Partial<
   }),
   clock: (context) => ({
     titleExtra: context.pinned ? playerName(context.player) : null,
+    meta: updatedAgo(context.day?.battlesObservedAtMs ?? null, context.nowMs),
     footer: `Times in your zone: ${context.timeZone}`,
     body: (
       <LegendClock
@@ -203,19 +206,14 @@ const CARD_CONTENT: Partial<
       null,
     );
     return {
-      titleExtra: (
-        <>
-          {context.pinned ? `${playerName(context.player)} · ` : ""}today ·{" "}
-          {context.opponents.length} of 8
-        </>
-      ),
+      titleExtra: `${context.pinned ? `${playerName(context.player)} · ` : ""}today · ${context.opponents.length} of 8`,
       meta: updatedAgo(oldest, context.nowMs),
       body: (
         <OpponentsCard
           rows={context.opponents}
           legends={context.legends}
           savedTags={context.savedTags}
-          idempotencyKey={context.idempotencyKey}
+          saveKeys={context.saveKeys}
           timeZone={context.timeZone}
         />
       ),
@@ -412,6 +410,7 @@ export function DashboardGrid({
   opponents,
   legends,
   savedTags,
+  saveKeys,
   dayEndsMs,
   idempotencyKey,
   renderTabs,
@@ -426,6 +425,7 @@ export function DashboardGrid({
   opponents: Record<string, OpponentRow[]>;
   legends: LegendsHeld | null;
   savedTags: string[];
+  saveKeys: Record<string, string>;
   dayEndsMs: number;
   idempotencyKey: string;
   renderTabs: (meta: ReactNode) => ReactNode;
@@ -620,7 +620,7 @@ export function DashboardGrid({
                   savedTags,
                   nowMs,
                   timeZone,
-                  idempotencyKey,
+                  saveKeys,
                 })
               : null;
           if (content) {

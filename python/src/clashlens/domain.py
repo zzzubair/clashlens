@@ -17,6 +17,13 @@ SEASON_DURATION = timedelta(days=28)
 SEASON_START_TROPHIES = 5000
 # One attack or defense moves trophies by at most this many.
 MAX_BATTLE_TROPHIES = 40
+# Reasons after which a day's end cannot start the next day: a 9th attack or
+# defense means the game returned more than its own cap, and a day the player
+# was not enrolled or not in Legend I is not a Legend day at all.
+CHAIN_BREAK_REASONS = frozenset({
+    "attack_count_exceeds_eight", "defense_count_exceeds_eight",
+    "not_enrolled", "player_not_eligible",
+})
 # No new-day attack can start in the first minutes after the Reset, so a
 # battle reported in the first five minutes finished a previous-day attack.
 # The attacker's report is stamped when the attack ends, often after the

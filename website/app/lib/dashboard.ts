@@ -404,8 +404,12 @@ export interface PlayerDay {
   defenses: number | null;
   /** Rank on the board frozen at the Reset that started this Legend day. */
   lastResetRank: number | null;
-  /** When the player's newest profile was read, Unix milliseconds. */
+  /** The profile's trophies, read with `observedAtMs`. */
+  trophies: number;
+  /** The older of the profile and battle reads, Unix milliseconds. */
   observedAtMs: number | null;
+  /** When the battles were read, Unix milliseconds. */
+  battlesObservedAtMs: number | null;
   /** Defense slots still open; the game charges each at Reset. */
   openDefenses: number | null;
   /** The game's automatic loss for each defense still open at Reset, when known. */
@@ -449,9 +453,10 @@ export function baseStrength(
     return "early";
   }
   const held = defenses.filter((defense) => defense.stars < 3).length;
-  const points = (held / defenses.length) * 100 - (legends.held / legends.defenses) * 100;
-  if (points > BASE_STRENGTH_BAND) return "hard";
-  if (points < -BASE_STRENGTH_BAND) return "easy";
+  const points = 100 * (held * legends.defenses - legends.held * defenses.length);
+  const band = BASE_STRENGTH_BAND * defenses.length * legends.defenses;
+  if (points > band) return "hard";
+  if (points < -band) return "easy";
   return "average";
 }
 

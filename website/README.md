@@ -185,7 +185,10 @@ Three cards have content; the rest are labelled placeholders.
   Reset, the live rank among tracked players and the range the next Reset can
   still land in, labelled as an estimate that narrows during the day. Each
   player's best end adds 40 for every open attack and worst end takes 40 for
-  every open defense; anyone whose worst end beats your best surely finishes
+  every open defense, starting from the Reset trophies and battles in that
+  player's own daily log (or from their profile trophies with every slot open
+  when the log lacks them), so a counted battle always brings its trophies;
+  anyone whose worst end beats your best surely finishes
   above you, anyone whose best end reaches your worst may. Then attack and
   defense totals with star boxes, and "N defenses remain · auto defense −X each"
   using the worker's automatic defense loss rule, hidden while unknown.

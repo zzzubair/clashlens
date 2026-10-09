@@ -80,7 +80,7 @@ export function LegendDayCard({
   const attackCount = complete ? attacks.length : (day?.attacks ?? null);
   const defenseCount = complete ? defenses.length : (day?.defenses ?? null);
   const net = day?.net ?? null;
-  // From the server, which follows the game's Season Day 1 rule.
+  const trophies = day ? day.trophies : player.trophies;
   const openDefenses = day?.openDefenses ?? null;
   return (
     <div className="legend-day-card">
@@ -88,7 +88,7 @@ export function LegendDayCard({
         <div>
           <span className="dash-label">Trophies</span>
           <span className="dash-big">
-            {player.trophies === null ? "–" : player.trophies.toLocaleString("en-US")}
+            {trophies === null ? "–" : trophies.toLocaleString("en-US")}
           </span>
         </div>
         <div>

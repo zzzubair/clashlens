@@ -126,7 +126,9 @@ function emptyDay(overrides: Partial<PlayerDay> = {}): PlayerDay {
     attacks: null,
     defenses: null,
     lastResetRank: null,
+    trophies: 5696,
     observedAtMs: null,
+    battlesObservedAtMs: null,
     openDefenses: null,
     autoDefenseEach: null,
     ...overrides,
@@ -246,6 +248,9 @@ describe("dashboard layout", () => {
     expect(baseStrength(defenses(14, 20), legends)).toBe("hard");
     expect(baseStrength(defenses(7, 20), legends)).toBe("average");
     expect(baseStrength(defenses(6, 20), legends)).toBe("easy");
+    // Exactly 15 points either side of 49 of 60 held.
+    expect(baseStrength(defenses(2, 3), { held: 49, defenses: 60 })).toBe("average");
+    expect(baseStrength(defenses(29, 30), { held: 49, defenses: 60 })).toBe("average");
     expect(baseStrength(defenses(2, 2), legends)).toBe("early");
     expect(baseStrength(defenses(3, 3), null)).toBe("early");
   });
@@ -299,6 +304,7 @@ describe("Legend day card", () => {
   it("shows trophies, net, the ranks and the next Reset range as an estimate", () => {
     const html = render(
       emptyDay({
+        trophies: 5702,
         complete: true,
         net: 66,
         attacks: 2,
@@ -313,7 +319,7 @@ describe("Legend day card", () => {
         ],
       }),
     );
-    expect(html).toContain("Trophies 5,696");
+    expect(html).toContain("Trophies 5,702");
     expect(html).toContain("Net today +66");
     expect(html).toContain("Last Reset #331");
     expect(html).toContain("Now #318");
@@ -330,7 +336,7 @@ describe("Legend day card", () => {
     expect(html).toContain("– 3 attacks");
     expect(html).toContain("6 defenses remain");
     expect(html).not.toContain("auto defense");
-    expect(render(null)).toContain("Net today –");
+    expect(render(null)).toContain("Trophies 5,696 Net today –");
   });
 });
 
@@ -357,7 +363,7 @@ describe("Bases you attacked", () => {
       yours: index === total - 1,
     }));
 
-  it("lists hard bases first, colours them for the attacker and shows open attacks", async () => {
+  it("lists hard bases first and colours them for the attacker", async () => {
     const html = await renderInRouter(
       createElement(OpponentsCard, {
         rows: [
@@ -367,7 +373,7 @@ describe("Bases you attacked", () => {
         ],
         legends: { held: 52, defenses: 100 },
         savedTags: ["#8PP"],
-        idempotencyKey: IDEMPOTENCY_KEY,
+        saveKeys: {},
         timeZone: "UTC",
       }),
     );
@@ -377,8 +383,7 @@ describe("Bases you attacked", () => {
     expect(plain).toContain("Hard held 5 of 6 · 83%");
     expect(plain).toContain("Easy held 1 of 4 · 25%");
     expect(plain).toContain("Too early held 0 of 2 · needs 3+ defenses");
-    expect(plain).toContain("attack 4 · not yet");
-    expect(plain).toContain("attack 8 · not yet");
+    expect(plain).not.toContain("not yet");
     expect(plain).toContain("✓ In saved players");
     expect(html.match(/is-yours/g)).toHaveLength(3);
   });
@@ -449,6 +454,7 @@ describe("dashboard route", () => {
   ) => ({
     season: { currentDayNumber: 3, dayCount: 28 },
     profile: {
+      trophies: 5702,
       freshness: { observedAt: "2026-10-07T09:20:00Z" },
       battleHistoryUpdatedAt: "2026-10-07T09:25:00Z",
     },
@@ -567,11 +573,16 @@ describe("dashboard route", () => {
         attacks: 2,
         defenses: 1,
         lastResetRank: 331,
+        trophies: 5702,
         observedAtMs: Date.UTC(2026, 9, 7, 9, 20),
+        battlesObservedAtMs: Date.UTC(2026, 9, 7, 9, 25),
         openDefenses: 7,
         autoDefenseEach: 21,
       }),
     );
+    expect(Object.keys(data.saveKeys)).toEqual(["#8PY"]);
+    expect(data.saveKeys["#8PY"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(data.saveKeys["#8PY"]).not.toBe(data.idempotencyKey);
     expect(data.ranges[MAIN]).toEqual({ best: 95, worst: 760 });
     expect(data.legendsHeld).toEqual({ held: 52, defenses: 100 });
     expect(data.opponents[MAIN]).toEqual([
@@ -589,6 +600,29 @@ describe("dashboard route", () => {
         observedAtMs: Date.UTC(2026, 9, 7, 9, 10),
       },
     ]);
+  });
+
+  it("keeps the last Reset rank before today's log is published", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 9, 7, 5, 10) });
+    client.getPlayer.mockResolvedValue(
+      page(
+        {},
+        {
+          currentDay: null,
+          recentDays: [
+            {
+              period: "2026-10-06T05:00:00+00:00 – 2026-10-07T05:00:00+00:00",
+              resetRank: 331,
+            },
+          ],
+        },
+      ),
+    );
+    const { data } = unwrap<DashboardLoaderData>(
+      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
+    );
+    if (data.kind !== "signed-in") throw new Error("expected signed in");
+    expect(data.days[MAIN]).toMatchObject({ lastResetRank: 331, battles: [] });
   });
 
   it("drops a today read whose range is impossible", async () => {
@@ -751,6 +785,7 @@ describe("dashboard page", () => {
       opponents: {},
       legendsHeld: null,
       savedTags: [],
+      saveKeys: {},
       dayEndsMs: Date.UTC(2099, 0, 1, 5),
       idempotencyKey: IDEMPOTENCY_KEY,
       ...loaderData,
@@ -807,6 +842,8 @@ describe("dashboard page", () => {
     expect(html).toMatch(/dash-card dash-card-m" aria-label="Legend day"/);
     expect(html).toMatch(/dash-card dash-card-s" aria-label="Legend clock"/);
     expect(html).toMatch(/dash-card dash-card-l" aria-label="Bases you attacked"/);
+    // The Legend day heading and the switcher name the player in full on hover.
+    expect(html.match(/title="Lens Main"/g)).toHaveLength(2);
   });
 
   it("shows only the linking prompt on every tab when no player is linked", async () => {

@@ -10,7 +10,6 @@ import { canonicalPlayerPath } from "../lib/player-tag";
 import type { DashboardActionData } from "../routes/dashboard";
 import { signed, starText, timeFormatter } from "./LegendClock";
 
-const SLOTS = 8;
 const STRENGTH_LABELS: Record<BaseStrength, string> = {
   hard: "Hard",
   average: "Average",
@@ -36,25 +35,32 @@ function SaveButton({
   const fetcher = useFetcher<DashboardActionData>();
   const done = saved || fetcher.data?.saved === true;
   return (
-    <button
-      type="button"
-      className="button button-secondary dash-small-button"
-      aria-pressed={done}
-      disabled={done || fetcher.state !== "idle"}
-      onClick={(event) => {
-        event.stopPropagation();
-        fetcher.submit(
-          {
-            intent: "save-player",
-            tag,
-            idempotencyKey: fetcher.data?.idempotencyKey ?? idempotencyKey,
-          },
-          { method: "post" },
-        );
-      }}
-    >
-      {done ? "✓ In saved players" : "Add to saved players"}
-    </button>
+    <>
+      <button
+        type="button"
+        className="button button-secondary dash-small-button"
+        aria-pressed={done}
+        disabled={done || fetcher.state !== "idle"}
+        onClick={(event) => {
+          event.stopPropagation();
+          fetcher.submit(
+            {
+              intent: "save-player",
+              tag,
+              idempotencyKey: fetcher.data?.idempotencyKey ?? idempotencyKey,
+            },
+            { method: "post" },
+          );
+        }}
+      >
+        {done ? "✓ In saved players" : "Add to saved players"}
+      </button>
+      {fetcher.state === "idle" && fetcher.data?.error ? (
+        <span className="dash-save-error" role="alert">
+          {fetcher.data.error}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -67,13 +73,13 @@ export function OpponentsCard({
   rows,
   legends,
   savedTags,
-  idempotencyKey,
+  saveKeys,
   timeZone,
 }: {
   rows: OpponentRow[];
   legends: LegendsHeld | null;
   savedTags: string[];
-  idempotencyKey: string;
+  saveKeys: Record<string, string>;
   timeZone: string;
 }) {
   const navigate = useNavigate();
@@ -108,7 +114,7 @@ export function OpponentsCard({
             aria-label={`${row.name ?? row.tag}: open player page`}
             onClick={open}
             onKeyDown={(event) => {
-              if (event.key === "Enter") open();
+              if (event.key === "Enter" && event.target === event.currentTarget) open();
             }}
           >
             <div className="opponents-name">
@@ -175,17 +181,12 @@ export function OpponentsCard({
               <SaveButton
                 tag={row.tag}
                 saved={savedTags.includes(row.tag)}
-                idempotencyKey={idempotencyKey}
+                idempotencyKey={saveKeys[row.tag] ?? ""}
               />
             </div>
           </div>
         );
       })}
-      {Array.from({ length: Math.max(0, SLOTS - rows.length) }, (_, index) => (
-        <p key={index} className="opponents-empty dash-muted">
-          attack {rows.length + index + 1} · not yet
-        </p>
-      ))}
     </div>
   );
 }

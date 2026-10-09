@@ -34,6 +34,7 @@ import type { Route } from "./+types/dashboard";
 import "../dashboard.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
+const DAY_MS = 86_400_000;
 /** Players read per load: the switcher's player plus players pinned on Today. */
 const MAX_PLAYER_DAYS = 4;
 /** Today's cards that read the player page and today's numbers. */
@@ -53,6 +54,8 @@ export type DashboardLoaderData =
       opponents: Record<string, OpponentRow[]>;
       legendsHeld: LegendsHeld | null;
       savedTags: string[];
+      /** One request key per opponent, for saving that player. */
+      saveKeys: Record<string, string>;
       /** The Reset that ends the Legend day the players' numbers were read for. */
       dayEndsMs: number;
       idempotencyKey: string;
@@ -151,12 +154,15 @@ export async function loader({ request }: Route.LoaderArgs) {
         getPlayerToday(tag).catch(() => null),
       ]);
       // Each card still shows what it can without the other read.
-      if (page) days[tag] = playerDay(page, today);
+      if (page) days[tag] = playerDay(page, today, dayEndsMs - DAY_MS);
       if (today?.rankRange) ranges[tag] = today.rankRange;
       if (today) opponents[tag] = today.opponents;
       legendsHeld ??= today?.legendsHeld ?? null;
     }),
   ]);
+  const opponentTags = new Set(
+    Object.values(opponents).flatMap((rows) => rows.map((row) => row.tag)),
+  );
 
   return data<DashboardLoaderData>(
     {
@@ -170,6 +176,9 @@ export async function loader({ request }: Route.LoaderArgs) {
       opponents,
       legendsHeld,
       savedTags,
+      saveKeys: Object.fromEntries(
+        [...opponentTags].map((tag) => [tag, freshIdempotencyKey()]),
+      ),
       dayEndsMs,
       idempotencyKey: freshIdempotencyKey(),
     },
@@ -185,6 +194,7 @@ function dayBounds(day: RankedDaySummary): [number, number] {
 function playerDay(
   page: PlayerPage,
   today: { openDefenses: number | null; automaticDefenseEach: number | null } | null,
+  dayStartMs: number,
 ): PlayerDay {
   const day = page.currentDay;
   const battles = day
@@ -206,16 +216,14 @@ function playerDay(
   const gain = day?.offense.trophyGain ?? null;
   const loss = day?.defense.trophyLoss ?? null;
   // The finished day that ended at the Reset that started today.
-  const dayStart = day ? dayBounds(day)[0] : Number.NaN;
   const previous = [...page.recentDays, ...page.seasonDays].find(
-    (finished) => dayBounds(finished)[1] === dayStart,
+    (finished) => dayBounds(finished)[1] === dayStartMs,
   );
-  const observed = [
+  const [profileAt, battlesAt] = [
     page.profile.freshness.observedAt,
     page.profile.battleHistoryUpdatedAt,
-  ]
-    .map((value) => (value ? Date.parse(value) : Number.NaN))
-    .filter(Number.isFinite);
+  ].map((value) => (value ? Date.parse(value) : Number.NaN));
+  const observed = [profileAt, battlesAt].filter(Number.isFinite);
   return {
     dayNumber: page.season?.currentDayNumber ?? null,
     dayCount: page.season?.dayCount ?? null,
@@ -227,8 +235,10 @@ function playerDay(
     attacks: day?.offense.attacks ?? null,
     defenses: day?.defense.defenses ?? null,
     lastResetRank: previous?.resetRank ?? null,
+    trophies: page.profile.trophies,
     // The older of the trophy and battle reads, so the card never looks newer than it is.
     observedAtMs: observed.length ? Math.min(...observed) : null,
+    battlesObservedAtMs: Number.isFinite(battlesAt) ? (battlesAt as number) : null,
     openDefenses: today?.openDefenses ?? null,
     autoDefenseEach: today?.automaticDefenseEach ?? null,
   };
@@ -384,7 +394,7 @@ function AccountSwitcher({
           preventScrollReset
           replace
         >
-          <b>{player.name ?? player.tag}</b>
+          <b title={player.name ?? player.tag}>{player.name ?? player.tag}</b>
         </Link>
       ))}
       <Link className="dash-account dash-account-add" to="/account/verify-player">
@@ -502,6 +512,7 @@ export default function DashboardRoute() {
         opponents={loaderData.opponents}
         legends={loaderData.legendsHeld}
         savedTags={loaderData.savedTags}
+        saveKeys={loaderData.saveKeys}
         dayEndsMs={loaderData.dayEndsMs}
         idempotencyKey={loaderData.idempotencyKey}
         renderTabs={(meta) => <DashboardTabs tab={tab} meta={meta} />}

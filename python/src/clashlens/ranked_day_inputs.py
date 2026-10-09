@@ -13,21 +13,13 @@ from typing import Any
 
 from . import battle, domain
 from .db import PROCESSING_VERSION, Database, _text_value
-from .domain import RankedDay
+from .domain import CHAIN_BREAK_REASONS, RankedDay
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
     CoverageObservation,
     PreviousRankedDay,
 )
-
-# Reasons after which a day's end cannot start the next day: a 9th attack or
-# defense means the game returned more than its own cap, and a day the player
-# was not enrolled or not in Legend I is not a Legend day at all.
-CHAIN_BREAK_REASONS = frozenset({
-    "attack_count_exceeds_eight", "defense_count_exceeds_eight",
-    "not_enrolled", "player_not_eligible",
-})
 
 
 def _source_rows(database: Database) -> tuple[str, str, str]:
