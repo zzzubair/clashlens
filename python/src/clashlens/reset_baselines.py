@@ -730,7 +730,7 @@ def _evaluate_reset_baseline(
         ranked_day_start=day_starts[0],
         last_ranked_day_start=day_starts[-1],
         recalculate_season=recalculate_season,
-        priority=PYTHON_BACKFILL_PRIORITY if season_repair else None,
+        season_repair=season_repair,
     )
     job_ids = [job_id] if job_id is not None else []
     # The ended Season's last day and the new Season's first were built at
@@ -1355,7 +1355,7 @@ def _enqueue_reset_reconciliation(
     last_ranked_day_start: datetime,
     recalculate_season: str | None,
     deduplication_key: str | None = None,
-    priority: int | None = None,
+    season_repair: bool = False,
 ) -> int | None:
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
@@ -1401,13 +1401,15 @@ def _enqueue_reset_reconciliation(
                         if recalculate_season is not None
                         else {}
                     ),
+                    **({"trigger": "season_repair"} if season_repair else {}),
                 }
             ),
             DEFAULT_PARSER_VERSION,
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
-            ended_day_priority(ranked_day_start) if priority is None else priority,
+            PYTHON_BACKFILL_PRIORITY if season_repair
+            else ended_day_priority(ranked_day_start),
         ),
     ).fetchone()
     return int(row[0]) if row is not None else None

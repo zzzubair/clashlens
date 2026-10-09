@@ -81,10 +81,12 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
                     SELECT DISTINCT ranked_day_start
                     FROM api_player_daily_logs
                     WHERE player_id = %s AND ranked_day_start >= %s
-                      AND (official_season_id = %s OR ranked_day_start < %s)
+                      AND (official_season_id = %s
+                           OR %s AND ranked_day_start < %s)
                     ORDER BY ranked_day_start
                     """,
                     (player_id, day_start, claim.input_json["recalculate_season"],
+                     claim.input_json.get("trigger") == "season_repair",
                      ranked_day_for(day_start).season_end),
                 ).fetchall()
                 day_starts.update(row[0] for row in saved_days)

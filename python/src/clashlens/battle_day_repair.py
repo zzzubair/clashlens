@@ -287,7 +287,9 @@ def enqueue_rebuilds(
                                 UTC
                             ).strftime("%Y-%m-%dT%H:%M:%SZ"),
                             "recalculate_season": season_id or _text_value(day_season),
-                            "trigger": "battle_day_repair",
+                            "trigger": (
+                                "season_repair" if season_id else "battle_day_repair"
+                            ),
                         }
                     ),
                     DEFAULT_PARSER_VERSION,

@@ -359,8 +359,16 @@ def _input_jobs(
         SELECT job.id, job.state, job.failure_category,
                (job.input_json ->> 'player_id')::bigint
         FROM python_processing_jobs_worker AS job
+        -- The days a Reset repair recalculates: its first through the
+        -- later saved days of that day's Season.
+        CROSS JOIN LATERAL (
+            SELECT (job.input_json ->> 'ranked_day_start')::timestamptz AS first,
+                   CASE WHEN (job.input_json ->> 'ranked_day_start')::timestamptz
+                             >= %(start)s
+                        THEN %(end)s ELSE %(start)s END AS until
+        ) AS covered
         WHERE job.work_type = 'reconcile_ranked_day'
-          AND job.state::text = ANY(%s)
+          AND job.state::text = ANY(%(states)s)
           AND (
               job.deduplication_key LIKE 'reconcile:battle-day:%%'
               OR job.deduplication_key LIKE 'reconcile:reset-baseline:%%'
@@ -370,18 +378,19 @@ def _input_jobs(
           -- previous Season's last day through this one's first, or a
           -- failed one holding back the Season's moved battles.
           AND (
-              job.id = ANY(%s)
-              OR job.input_json ->> 'recalculate_season' = %s
-              OR (job.input_json ->> 'ranked_day_start')::timestamptz < %s
+              job.id = ANY(%(moved)s)
+              OR job.input_json ->> 'recalculate_season' = %(season)s
+              OR covered.first < %(end)s
               AND coalesce(
                   job.input_json ->> 'last_ranked_day_start',
                   job.input_json ->> 'ranked_day_start'
-              )::timestamptz >= %s
+              )::timestamptz >= %(start)s
           )
           -- A failed Reset repair queued again counts as its retry; once
           -- the retry has run, and after its finished job is cleaned
-          -- up, the days it covers show it: one saved since the failure
-          -- and none left Live, a day it did not change kept as saved.
+          -- up, the days it recalculated show it: one saved since the
+          -- failure and no ended one left Live, a day it did not change
+          -- kept as saved.
           AND NOT EXISTS (
               SELECT 1 FROM python_processing_jobs_worker AS retry
               WHERE retry.deduplication_key
@@ -393,37 +402,31 @@ def _input_jobs(
               AND EXISTS (
                   SELECT 1 FROM ranked_day_versions AS day
                   WHERE day.player_id = (job.input_json ->> 'player_id')::bigint
-                    AND day.ranked_day_start
-                        BETWEEN (job.input_json ->> 'ranked_day_start')::timestamptz
-                        AND coalesce(
-                            job.input_json ->> 'last_ranked_day_start',
-                            job.input_json ->> 'ranked_day_start'
-                        )::timestamptz
+                    AND day.ranked_day_start >= covered.first
+                    AND day.ranked_day_start < covered.until
                     AND day.created_at > job.updated_at
               )
               AND NOT EXISTS (
                   SELECT 1 FROM (
-                      SELECT DISTINCT ON (day.ranked_day_start) day.state
+                      SELECT DISTINCT ON (day.ranked_day_start)
+                             day.ranked_day_start, day.state
                       FROM ranked_day_versions AS day
                       WHERE day.player_id = (job.input_json ->> 'player_id')::bigint
-                        AND day.ranked_day_start
-                            BETWEEN (job.input_json ->> 'ranked_day_start')::timestamptz
-                            AND coalesce(
-                                job.input_json ->> 'last_ranked_day_start',
-                                job.input_json ->> 'ranked_day_start'
-                            )::timestamptz
+                        AND day.ranked_day_start >= covered.first
+                        AND day.ranked_day_start < covered.until
                       ORDER BY day.ranked_day_start, day.version DESC, day.id DESC
                   ) AS latest
                   WHERE latest.state = 'Live'
+                    AND latest.ranked_day_start + interval '1 day' <= clock_timestamp()
               )
           )
         ORDER BY job.id
         """,
-        (
-            [*_UNFINISHED_JOB_STATES, "failed"],
-            [blocker["job_id"] for blocker in moved["failed_blockers"]],
-            season_id, start + SEASON_DURATION, start,
-        ),
+        {
+            "states": [*_UNFINISHED_JOB_STATES, "failed"],
+            "moved": [blocker["job_id"] for blocker in moved["failed_blockers"]],
+            "season": season_id, "start": start, "end": start + SEASON_DURATION,
+        },
     ).fetchall(), limit)
 
 

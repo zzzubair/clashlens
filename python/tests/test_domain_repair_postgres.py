@@ -861,12 +861,15 @@ def test_season_repair_recalculates_days_saved_before_their_season_was_known(
     assert calculated == days
 
 
+@pytest.mark.parametrize("scoped", [True, False])
 def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, scoped: bool
 ) -> None:
     """A player's September days with a moved battle and an October day were
-    all saved as Season 'unknown'. Repairing September's moved battle
-    recalculates September's days and leaves October's as saved."""
+    all saved as Season 'unknown', a later September day as September.
+    Repairing September's moved battle in the Season repair recalculates
+    every September day and leaves October's as saved; the batch for every
+    Season still follows the moved day's saved Season."""
     from test_reconciliation_postgres import _processor
 
     from clashlens import battle_day_repair, reconciliation_db
@@ -877,7 +880,7 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
         lambda *_, day_start, **__: calculated.append(day_start) or False,
     )
     with _campaign_database(database_url) as (connection_info, worker):
-        day2, day3, october = START + DAY, START + 2 * DAY, END + DAY
+        day2, day3, day4, october = START + DAY, START + 2 * DAY, START + 3 * DAY, END + DAY
         with _owner(connection_info) as connection:
             moved, opponent = _player(connection, "#MOVED"), _player(connection, "#OPP")
             evidence_id = _report(connection, moved, opponent, day2, destruction=56)
@@ -901,7 +904,15 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
                     " VALUES (%s, %s, 1, 'Complete', 'complete', %s, 'unknown')",
                     (moved, day, Jsonb(battles)),
                 )
-        queued = battle_day_repair.enqueue_rebuilds(worker, max_jobs=10, season_id=SEASON)
+            connection.execute(
+                "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
+                " version, state, coverage, battles, official_season_id)"
+                " VALUES (%s, %s, 1, 'Complete', 'complete', '[]', %s)",
+                (moved, day4, SEASON),
+            )
+        queued = battle_day_repair.enqueue_rebuilds(
+            worker, max_jobs=10, season_id=SEASON if scoped else None
+        )
         database, processor = _processor(connection_info, archive_server)
         try:
             assert len(queued["job_ids"]) == 1
@@ -909,28 +920,31 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
         finally:
             database.close()
 
-    assert calculated == [day2, day3]
+    assert calculated == ([day2, day3, day4] if scoped else [day2, day3, october])
 
 
+@pytest.mark.parametrize("live_day", [2, 3])
 def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_again(
-    database_url: str,
+    database_url: str, live_day: int,
 ) -> None:
-    """A Reset-pair repair rebuilding the Season's Complete Day 1 and Live
-    Day 2 failed: preview and receipt list it, and the repair stays at
-    inputs. Its retry then saves Day 2 again, Day 1 coming out the same and
-    saving nothing new, and routine cleanup deletes the finished retry 48
-    hours later: the old failure no longer holds the repair, which moves on
-    to the days."""
+    """A Reset-pair repair rebuilding the Season's Complete Day 1 and Day 2,
+    and the later saved days of the Season, failed with Day 2 or Day 3 left
+    Live: preview and receipt list it, and the repair stays at inputs. Its
+    retry then saves the Live day again, the days before coming out the same
+    and saving nothing new, and routine cleanup deletes the finished retry
+    48 hours later: the old failure no longer holds the repair, which moves
+    on to the days."""
     with _campaign_database(database_url) as (connection_info, worker):
         day1, day2 = START, START + DAY
+        live = START + (live_day - 1) * DAY
         with _owner(connection_info) as connection:
             player = _player(connection, "#RESET")
-            _saved_day(connection, player, day1)
-            _saved_day(connection, player, day2)
+            for number in range(live_day):
+                _saved_day(connection, player, START + number * DAY)
             connection.execute(
                 "UPDATE ranked_day_versions SET state = 'Live'"
                 " WHERE player_id = %s AND ranked_day_start = %s",
-                (player, day2),
+                (player, live),
             )
             failed_id = connection.execute(
                 """
@@ -959,8 +973,8 @@ def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_agai
                 " clock_timestamp() FROM python_processing_jobs WHERE id = %s",
                 (failed_id,),
             )
-            # The retry saves Day 2 again; its finished job is cleaned up.
-            _saved_day(connection, player, day2, version=2)
+            # The retry saves the Live day again; its finished job is cleaned up.
+            _saved_day(connection, player, live, version=2)
             connection.execute(
                 "DELETE FROM python_processing_jobs WHERE deduplication_key = %s",
                 (f"reconcile:reset-recovery:{failed_id}",),
