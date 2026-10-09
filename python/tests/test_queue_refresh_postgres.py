@@ -36,6 +36,12 @@ def _queued(connection_info: str, prefix: str) -> list[tuple[str, str]]:
         )
 
 
+def _rechecked(connection_info: str, observation_id: int) -> list[tuple[str, str]]:
+    """The days a saved battle log queued, as a reading or by its reports."""
+    return sorted({*_queued(connection_info, f"reconcile:log:{observation_id}:"),
+                   *_queued(connection_info, f"reconcile:report:{observation_id}:")})
+
+
 def test_unchanged_battle_log_check_after_a_profile_read_queues_the_day(
     database_url: str,
 ) -> None:
@@ -63,7 +69,8 @@ def test_only_new_battle_reports_queue_their_day_and_the_day_before(
     database_url: str, archive_server
 ) -> None:
     # Days B and C are saved. A log repeating day C's attack unchanged queues
-    # nothing; one adding a day C defense queues day C and day B.
+    # only day C, which it can judge as a reading; one adding a day C defense
+    # queues day C and day B. A day's queued recheck covers both.
     day_b = [(DAY_B + timedelta(hours=hour), False) for hour in range(1, 9)]
     attack = (DAY_C + timedelta(hours=1), True)
     late_defense = (DAY_C + timedelta(hours=20), False)
@@ -82,19 +89,19 @@ def test_only_new_battle_reports_queue_their_day_and_the_day_before(
         _process(connection_info, archive_server, jobs)
         queued = []
         for minutes, battles in ((60, (attack,)), (70, (attack, late_defense))):
-            _, log_job = store_observation(
+            observation_id, log_job = store_observation(
                 connection_info, archive_server, occurrence_key=f"log-{minutes}",
                 endpoint="battle_log", body=_log(*battles),
                 observed_at=DAY_D + timedelta(minutes=minutes), normalized_tag=TAG,
             )
             _process(connection_info, archive_server, [log_job])
-            queued.append(_queued(connection_info, "reconcile:report:"))
+            queued.append(_rechecked(connection_info, observation_id))
         with psycopg.connect(connection_info) as connection:
             player_id = str(connection.execute(
                 "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
             ).fetchone()[0])
 
-    assert queued[0] == []
+    assert queued[0] == [(player_id, f"{DAY_C:%Y-%m-%dT%H:%M:%SZ}")]
     assert queued[1] == [
         (player_id, f"{DAY_B:%Y-%m-%dT%H:%M:%SZ}"),
         (player_id, f"{DAY_C:%Y-%m-%dT%H:%M:%SZ}"),
@@ -256,7 +263,7 @@ def test_one_new_battle_in_a_full_log_queues_only_its_two_players(
             )
         for tag in ("#8PP", "#GQPP"):
             _calculate(connection_info, archive_server, tag, DAY_B)
-        _, log_job = store_observation(
+        observation_id, log_job = store_observation(
             connection_info, archive_server, occurrence_key="full-log",
             endpoint="battle_log", body=json.dumps(full).encode(),
             observed_at=DAY_C + timedelta(hours=1), normalized_tag=TAG,
@@ -269,7 +276,7 @@ def test_one_new_battle_in_a_full_log_queues_only_its_two_players(
                     (TAG,),
                 )
             }
-        queued = {player for player, _ in _queued(connection_info, "reconcile:report:")}
+        queued = {player for player, _ in _rechecked(connection_info, observation_id)}
 
     assert len(full["items"]) == 50
     assert queued == expected
@@ -367,7 +374,7 @@ def test_a_report_changed_back_queues_its_days_again(
                 observed_at=DAY_D + timedelta(minutes=minutes), normalized_tag=TAG,
             )
             _process(connection_info, archive_server, [log_job])
-            queued.append(len(_queued(connection_info, f"reconcile:report:{observation_id}:")))
+            queued.append(len(_rechecked(connection_info, observation_id)))
 
     assert queued == [2, 2]
 
@@ -424,7 +431,7 @@ def test_a_late_report_queues_the_previous_seasons_days_for_a_week(
                     {"day": last_day, "player": player, "opponent": opponent,
                      "observation": observation_id, "at": last_day + timedelta(hours=3)},
                 )
-            for observation_id, days_in in ((101, 2), (102, 8)):
+            for observation_id, days_in in ((102, 8), (101, 2)):
                 queue_refresh.queue_for_battles(
                     connection, observation_id, (), season_start + timedelta(days=days_in)
                 )
@@ -528,3 +535,65 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
 
     assert count == 2
     assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]
+
+
+def test_a_day_waits_in_at_most_one_recheck(database_url: str) -> None:
+    # New evidence for a day whose recheck has not started adds nothing: that
+    # recheck reads the newest evidence when it runs. Evidence saved while it
+    # runs queues exactly one more, and no worker starts a waiting recheck
+    # until evidence merged into it is saved.
+    day = ranked_day_for(datetime(2026, 10, 8, 5, tzinfo=UTC))
+    read_at = day.end + timedelta(hours=1)
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            player = connection.execute(
+                "INSERT INTO players (normalized_tag) VALUES ('#2PP') RETURNING id"
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO ranked_day_versions (
+                    player_id, ranked_day_start, ranked_day_end, official_season_id,
+                    season_day_number, season_anchor_rule_version,
+                    reconciliation_rule_version, input_hash, result_hash, version,
+                    state, confidence
+                ) VALUES (%s, %s, %s, %s, %s, 'test', %s, repeat('a', 64),
+                          repeat('b', 64), 1, 'Complete', 'exact')
+                """,
+                (player, day.start, day.end, day.official_season_id, day.day_number,
+                 RECONCILIATION_RULE_VERSION),
+            )
+
+        def save(log: int) -> None:
+            with psycopg.connect(connection_info) as connection:
+                queue_refresh.queue_for_reading(connection, player, f"log:{log}", read_at)
+
+        def rechecks() -> list[str]:
+            with psycopg.connect(connection_info) as connection:
+                return sorted(str(row[0]) for row in connection.execute(
+                    "SELECT status FROM python_processing_jobs"
+                    " WHERE work_type = 'reconcile_ranked_day'"
+                ))
+
+        database = Database(connection_info)
+        try:
+            save(1)
+            save(2)
+            waiting = rechecks()
+            [running] = database.claim_jobs(owner="worker")
+            save(3)
+            save(4)
+            following = rechecks()
+            with psycopg.connect(connection_info) as saving:
+                queue_refresh.queue_for_reading(saving, player, "log:5", read_at)
+                held = database.claim_jobs(owner="worker")
+            [follow_up] = database.claim_jobs(owner="worker")
+        finally:
+            database.close()
+
+    assert waiting == ["pending"]
+    assert following == ["leased", "pending"]
+    assert held == []
+    assert [claim.input_json["ranked_day_start"] for claim in (running, follow_up)] == [
+        f"{day.start:%Y-%m-%dT%H:%M:%SZ}"
+    ] * 2

@@ -1179,7 +1179,9 @@ pages fell up to 59 minutes behind. Operator batches
 are queued at backfill priority, 25, which a worker thread only runs when no
 higher-priority work that thread can claim is due; a thread that does not process saved
 responses can run one while responses still wait. All worker processes together
-run at most two backfill jobs at once, one claim never takes more than one, and
+run at most two backfill jobs at once, and beside them at most four day
+rechecks after new evidence (priority 26, `queue_refresh.py`); one claim never
+takes more than one background job of either kind, and
 none starts while a live response or day result has been due 2 minutes or more
 and is still unfinished: waiting, waiting on its saved response, or leased,
 including one that keeps its lease after a lock conflict. A leased job counts

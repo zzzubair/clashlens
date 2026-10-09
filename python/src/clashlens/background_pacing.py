@@ -8,6 +8,11 @@ responses fell to about 8,000 players over 2 minutes late. So however many
 worker processes run, at most ``BACKGROUND_JOB_LIMIT`` background jobs hold
 a lease at once, and none starts while live data waits. Background work
 claims come last, so it still runs whenever live work leaves room.
+
+A day's recheck after new evidence (``queue_refresh``) is background work in
+its own lane, at ``DAY_RECHECK_PRIORITY``, with its own limit: from 16:41 on
+9 Oct 2026 about 530 a minute were queued, two at a time finished about 350,
+and Season repair would have waited behind them, or they behind it.
 """
 
 from __future__ import annotations
@@ -16,17 +21,20 @@ from typing import Any
 
 BACKGROUND_PERMIT_KEY = "background-work-permit"
 BACKGROUND_JOB_LIMIT = 2
+DAY_RECHECK_PRIORITY = 26
+DAY_RECHECK_JOB_LIMIT = 4
 # No background job starts while a live response or daily result has been
 # due this long, well before the website's delayed-updates notice at 15 minutes.
 LIVE_LAG_PAUSE_SECONDS = 120
 LIVE_WORK_TYPES = ("process_observation", "replay_observation", "reconcile_ranked_day")
 
 
-def background_turn_free(
+def background_lanes(
     connection: Any, jobs_relation: str, denormalized_contract: bool,
     supports_coordinator: bool, supports_dependency: bool,
-) -> bool:
-    """Whether this claim may lease one background job; it then holds the permit.
+) -> tuple[int, ...]:
+    """The background priorities with room for this claim to lease one job;
+    with any, it then holds the permit.
 
     Only live work this worker can claim counts, so a newer contract's never
     pauses background work for good. Late live work counts while it waits,
@@ -64,19 +72,26 @@ def background_turn_free(
         "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
         (BACKGROUND_PERMIT_KEY,),
     ).fetchone()[0]:
-        return False
-    return connection.execute(
+        return ()
+    bulk, rechecks, late = connection.execute(
         f"""
-        SELECT (SELECT count(*) FROM {jobs_relation}
-                WHERE state = 'leased' AND priority = %(backfill_priority)s) < %(background_limit)s
-           AND NOT {late_live}
+        SELECT count(*) FILTER (WHERE priority = %(backfill_priority)s) < %(background_limit)s,
+               count(*) FILTER (WHERE priority = %(recheck_priority)s) < %(recheck_limit)s,
+               {late_live}
+        FROM {jobs_relation} WHERE state = 'leased'
         """,
         {
             **params,
             "backfill_priority": PYTHON_BACKFILL_PRIORITY,
             "background_limit": BACKGROUND_JOB_LIMIT,
+            "recheck_priority": DAY_RECHECK_PRIORITY,
+            "recheck_limit": DAY_RECHECK_JOB_LIMIT,
             "live_priorities": [PYTHON_LIVE_PRIORITY, PYTHON_RESET_PRIORITY],
             "live_lag_pause": LIVE_LAG_PAUSE_SECONDS,
             "live_work_types": list(LIVE_WORK_TYPES),
         },
-    ).fetchone()[0]
+    ).fetchone()
+    return () if late else tuple(
+        priority for priority, room in
+        ((PYTHON_BACKFILL_PRIORITY, bulk), (DAY_RECHECK_PRIORITY, rechecks)) if room
+    )

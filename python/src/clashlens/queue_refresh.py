@@ -1,9 +1,13 @@
-"""New evidence for a player queues each ended day it can change, of the
-current Season or, for a week after its end while it still takes
-corrections, the Season before, keyed by the evidence and the day: a
-pending repeat is merged, a finished one never holds it back. A recheck of
-every active player's last two ended days twice a day catches anything
-else."""
+"""New evidence for a player queues a recheck of each ended day it can
+change, of the current Season or, for a week after its end while it still
+takes corrections, the Season before, in the day recheck lane
+(``background_pacing``). A day waits in at most one recheck: new evidence
+for a day whose recheck has not started adds nothing, as that recheck reads
+the newest evidence when it runs; one already running may have read too
+early, so the evidence queues one more. From 16:41 on 9 Oct 2026, 21,088
+rechecks in 39 minutes were for 3,782 player days. A recheck of every active
+player's last two ended days twice a day catches anything else, as bulk
+background work."""
 
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import db, domain
-from .first_battle_log import _queue
+from .background_pacing import DAY_RECHECK_PRIORITY
 from .reconciliation import RECONCILIATION_RULE_VERSION
 from .season_retirement import SEASON_CLOSE_WAIT
 
@@ -43,9 +47,43 @@ def _day_text(day_start: datetime) -> str:
     return f"{day_start.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}"
 
 
-def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str) -> None:
-    _queue(connection, player_id, day_start, None, key=f"{key}:{_day_text(day_start)}",
-           trigger="evidence", later_days=False, priority=db.PYTHON_BACKFILL_PRIORITY)
+# The worker's database role reaches jobs through its view, the collector's
+# only through the table, which names the state ``status``.
+_WORKER_JOBS = ("python_processing_jobs_worker", "state")
+_COLLECTOR_JOBS = ("python_processing_jobs", "status")
+
+
+def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
+               trigger: str = "evidence", only_if: str = "TRUE",
+               jobs: tuple[str, str] = _WORKER_JOBS, **params: Any) -> None:
+    """Queue a recheck of ``day_start`` unless one has not started. That one
+    stays locked until this transaction ends, so no worker starts it before
+    this evidence is saved; one a worker is starting is skipped, so this
+    evidence queues the next. Two saves committing at once can each queue
+    one; both run."""
+    day, (relation, state) = _day_text(day_start), jobs
+    connection.execute(
+        f"""
+        WITH waiting AS MATERIALIZED (
+            SELECT FROM {relation} AS job
+            WHERE job.work_type = 'reconcile_ranked_day' AND job.{state} = 'pending'
+              AND job.priority = {DAY_RECHECK_PRIORITY}
+              AND job.input_json ->> 'player_id' = %(player)s
+              AND job.input_json ->> 'ranked_day_start' = %(day)s
+            LIMIT 1 FOR SHARE SKIP LOCKED)
+        INSERT INTO {relation} (observation_id, work_type,
+            deduplication_key, input_json, {state}, due_at, parser_version,
+            processing_version, domain_rule_version, analytics_rule_version, priority)
+        SELECT NULL, 'reconcile_ranked_day', %(key)s, %(input)s, 'pending',
+               clock_timestamp(), %(parser)s, %(processing)s, %(domain)s, %(analytics)s,
+               {DAY_RECHECK_PRIORITY}
+        WHERE NOT EXISTS (SELECT FROM waiting) AND {only_if}
+        ON CONFLICT (deduplication_key) DO NOTHING
+        """,
+        {**_VERSIONS, **params, "player": str(player_id), "day": day,
+         "key": f"{key}:{day}", "input": Jsonb({
+             "player_id": int(player_id), "ranked_day_start": day, "trigger": trigger})},
+    )
 
 
 def queue_for_reading(connection: Any, player_id: int, evidence: str, at: datetime) -> None:
@@ -79,29 +117,21 @@ def queue_for_check(connection: Any, check: Any) -> None:
     if check.player_id is None:
         return
     reset = domain.ranked_day_for(check.response_completed_at).start
-    day = _day_text(reset - timedelta(days=1))
-    connection.execute(
-        """
-        INSERT INTO python_processing_jobs (observation_id, work_type, deduplication_key,
-            input_json, parser_version, processing_version, domain_rule_version,
-            analytics_rule_version, due_at, priority)
-        SELECT NULL, 'reconcile_ranked_day', %(key)s, %(input)s, %(parser)s,
-               %(processing)s, %(domain)s, %(analytics)s, %(at)s, %(priority)s
-        WHERE EXISTS (SELECT 1 FROM collector_observations AS profile
-            WHERE profile.player_id = %(player)s AND profile.endpoint = 'profile'
+    _queue_day(
+        connection, check.player_id, reset - timedelta(days=1),
+        f"reconcile:check:{check.player_id}:{check.response_completed_at}",
+        "battle_log_check",
+        jobs=_COLLECTOR_JOBS,
+        only_if="""EXISTS (SELECT 1 FROM collector_observations AS profile
+            WHERE profile.player_id = %(reader)s AND profile.endpoint = 'profile'
               AND profile.http_status BETWEEN 200 AND 299
               AND profile.response_completed_at <= %(at)s
               AND profile.response_completed_at > GREATEST((
                   SELECT last_success_at FROM collector_response_state
                   WHERE scope = %(scope)s AND identity_key = %(identity)s
-                    AND endpoint = 'battle_log'), %(reset)s))
-        ON CONFLICT DO NOTHING
-        """,
-        {**_VERSIONS, "at": check.response_completed_at, "player": check.player_id,
-         "scope": check.scope, "identity": check.identity_key, "reset": reset,
-         "key": f"reconcile:check:{check.player_id}:{day}:{check.response_completed_at}",
-         "input": Jsonb({"player_id": check.player_id, "trigger": "battle_log_check",
-                         "ranked_day_start": day})},
+                    AND endpoint = 'battle_log'), %(reset)s))""",
+        at=check.response_completed_at, reader=check.player_id,
+        scope=check.scope, identity=check.identity_key, reset=reset,
     )
 
 

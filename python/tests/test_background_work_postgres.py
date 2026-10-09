@@ -8,6 +8,7 @@ way, and live responses fell to about 8,000 players over 2 minutes late.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -17,7 +18,7 @@ from domain_test_support import domain_database, store_observation, text
 from test_army_ingestion_postgres import _live_row, _processor
 
 from clashlens import army_ingestion
-from clashlens.background_pacing import BACKGROUND_JOB_LIMIT
+from clashlens.background_pacing import BACKGROUND_JOB_LIMIT, DAY_RECHECK_PRIORITY
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
     ARMY_ANALYTICS_RULE_VERSION,
@@ -25,6 +26,7 @@ from clashlens.db import (
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
     Database,
+    _claim_select_statement,
 )
 
 DAY = datetime(2026, 10, 8, 5, tzinfo=UTC)
@@ -201,6 +203,79 @@ def test_background_work_waits_while_late_live_work_is_leased_or_waiting(
             )] == ["redecode_army"]
         finally:
             database.close()
+
+
+def _finish(connection_info: str, job_id: int) -> None:
+    with psycopg.connect(connection_info) as connection:
+        connection.execute(
+            "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
+            " lease_token = NULL, lease_expires_at = NULL WHERE id = %s",
+            (job_id,),
+        )
+
+
+def test_day_rechecks_run_four_at_a_time_beside_two_other_background_jobs(
+    database_url: str,
+) -> None:
+    # From 16:41 on 9 Oct 2026 about 530 day rechecks a minute were queued
+    # and two background jobs at a time finished about 350; Season repair
+    # would have waited behind them, or they behind it.
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        repair = [_queue_result(connection_info, f"season-repair:{index}", priority=25,
+                                due_at=now - timedelta(hours=1)) for index in range(3)]
+        rechecks = [_queue_result(connection_info, f"recheck:{index}",
+                                  priority=DAY_RECHECK_PRIORITY) for index in range(5)]
+        database = Database(connection_info)
+        try:
+            claimed = []
+            while claims := database.claim_jobs(owner="lane", limit=8):
+                claimed += [claim.job_id for claim in claims]
+            assert sorted(claimed) == sorted(repair[:2] + rechecks[:4])
+            # A finished job frees a turn in its own lane only.
+            _finish(connection_info, repair[0])
+            assert [claim.job_id for claim in database.claim_jobs(owner="lane")] == [repair[2]]
+            assert database.claim_jobs(owner="lane") == []
+            # Live work two minutes late pauses both lanes, leased or waiting.
+            _finish(connection_info, rechecks[0])
+            live = _queue_result(connection_info, "live", due_at=now - timedelta(minutes=3))
+            assert [claim.job_id for claim in database.claim_jobs(owner="lane", limit=8)] == [live]
+            assert database.claim_jobs(owner="lane", limit=8) == []
+            _finish(connection_info, live)
+            assert [claim.job_id for claim in database.claim_jobs(owner="lane")] == [rechecks[4]]
+        finally:
+            database.close()
+
+
+def test_live_claims_read_no_waiting_day_rechecks(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, priority, parser_version,
+                    processing_version, domain_rule_version, analytics_rule_version
+                )
+                SELECT 'reconcile_ranked_day', 'recheck:' || player,
+                       jsonb_build_object('player_id', player, 'trigger', 'evidence',
+                                          'ranked_day_start', '2026-10-08T05:00:00Z'),
+                       %s, %s, %s, %s, %s
+                FROM generate_series(1, 2000) AS player
+                """,
+                (DAY_RECHECK_PRIORITY, DEFAULT_PARSER_VERSION, PROCESSING_VERSION,
+                 DOMAIN_RULE_VERSION, ANALYTICS_RULE_VERSION),
+            )
+            connection.execute("ANALYZE python_processing_jobs")
+            statement, params = _claim_select_statement(
+                "python_processing_jobs_worker", backfill=()
+            )
+            plan = "\n".join(text(row[0]) for row in connection.execute(
+                f"EXPLAIN (ANALYZE, COSTS OFF) {statement}", params
+            ).fetchall())
+
+    removed = [int(rows) for rows in re.findall(r"Rows Removed by Filter: (\d+)", plan)]
+    assert "Seq Scan on python_processing_jobs" not in plan, plan
+    assert max(removed, default=0) < 100, plan
 
 
 def _seed_redecode(
