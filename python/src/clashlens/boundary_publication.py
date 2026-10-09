@@ -26,7 +26,11 @@ from .db import (
 )
 from .domain import DomainRuleError, battle_window
 from .domain_repair import boundary_held
-from .past_reset_pacing import past_reset_correction_waits
+from .past_reset_pacing import (
+    OPERATOR_CORRECTION,
+    operator_correction_waits,
+    past_reset_correction_waits,
+)
 
 
 def _positive_int_input(values: dict[str, Any], name: str) -> int:
@@ -293,11 +297,12 @@ def _maybe_emit_boundary_signal(
             SELECT id, affected_artifacts, pending_inputs
             FROM boundary_publication_corrections
             WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
+              AND NOT (%s AND pending_inputs @> %s::jsonb)
             ORDER BY requested_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """,
-            (row[0],),
+            (row[0], operator_correction_waits(connection), Jsonb([OPERATOR_CORRECTION])),
         ).fetchone()
         if queued is not None:
             source = connection.execute(

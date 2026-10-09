@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from domain_test_support import domain_database, seed_attacks, store_observation, text
+from psycopg.types.json import Jsonb
 from test_boundary_publication_postgres import (
     BOUNDARY,
     DAY_START,
@@ -12,9 +13,15 @@ from test_boundary_publication_postgres import (
     _sweep_with_members,
 )
 
-from clashlens import army_ingestion, boundary, boundary_publication, snapshots
+from clashlens import (
+    army_ingestion,
+    boundary,
+    boundary_publication,
+    past_reset_pacing,
+    snapshots,
+)
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, deterministic_tag_hash
-from clashlens.db import Database
+from clashlens.db import PYTHON_BACKFILL_PRIORITY, Database
 from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for
 
 OLDER = "tracked-player-order-v1"
@@ -88,9 +95,43 @@ def _labels(connection, generation: int) -> list[str | None]:
     return [text(value) for value in row]
 
 
+def _operator_correction_waits_out_the_window(
+    database: Database, connection, monkeypatch
+) -> None:
+    """An operator correction of the newest Reset, queued before 04:00, does
+    not start or have its army build claimed from 04:00 to 07:00 UTC, and that
+    build runs at background priority."""
+    now = [datetime(2026, 10, 10, 4, 10, tzinfo=UTC)]
+    monkeypatch.setattr(past_reset_pacing, "_now", lambda _connection: now[0])
+
+    def generations() -> int:
+        connection.commit()
+        return connection.execute(
+            "SELECT count(*) FROM boundary_publication_generations"
+        ).fetchone()[0]
+
+    boundary_publication.reevaluate_boundary_publications(database)
+    assert generations() == 1
+    now[0] = datetime(2026, 10, 10, 7, 10, tzinfo=UTC)
+    boundary_publication.reevaluate_boundary_publications(database)
+    assert generations() == 2
+    builds = connection.execute(
+        "SELECT id, priority FROM python_processing_jobs"
+        " WHERE work_type = 'build_army_analytics' AND status = 'pending'"
+    ).fetchall()
+    assert [int(priority) for _id, priority in builds] == [PYTHON_BACKFILL_PRIORITY]
+    connection.commit()
+    now[0] = datetime(2026, 10, 10, 5, 0, tzinfo=UTC)
+    assert database.claim_job(owner="labels-operator", job_id=int(builds[0][0])) is None
+    now[0] = datetime(2026, 10, 10, 7, 10, tzinfo=UTC)
+
+
 @pytest.mark.parametrize(
     "replacement",
-    ["army", "army-deferred", "army-queued", "reordered", "army-then-board", "army-rebuilt"],
+    [
+        "army", "army-deferred", "army-queued", "army-operator", "reordered",
+        "army-then-board", "army-rebuilt",
+    ],
 )
 def test_a_replacement_saves_one_ordering_label_everywhere(
     database_url: str, archive_server, monkeypatch, replacement: str
@@ -185,14 +226,23 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                         "SELECT id FROM boundary_publication_generations WHERE generation = 1"
                     ).fetchone()[0]
                 )
-                if replacement in {"reordered", "army-queued"}:
+                if replacement in {"reordered", "army-queued", "army-operator"}:
                     connection.execute(
                         """
                         INSERT INTO boundary_publication_corrections
                             (boundary_at, source_generation_id, affected_artifacts, pending_inputs)
-                        VALUES (%s, %s, %s, '[]'::jsonb)
+                        VALUES (%s, %s, %s, %s)
                         """,
-                        (BOUNDARY, source, ["army"] if replacement == "army-queued" else ["snapshot", "army"]),
+                        (
+                            BOUNDARY,
+                            source,
+                            ["snapshot", "army"] if replacement == "reordered" else ["army"],
+                            Jsonb(
+                                [past_reset_pacing.OPERATOR_CORRECTION]
+                                if replacement == "army-operator"
+                                else []
+                            ),
+                        ),
                     )
                 else:
                     boundary_publication._queue_boundary_army_correction(
@@ -260,6 +310,8 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                         ranked_day_input_hash="d" * 64,
                     )
                 connection.commit()
+                if replacement == "army-operator":
+                    _operator_correction_waits_out_the_window(database, connection, monkeypatch)
                 boundary_publication.reevaluate_boundary_publications(database)
                 _publish(database, connection)
                 if replacement in {"army-then-board", "army-rebuilt"}:

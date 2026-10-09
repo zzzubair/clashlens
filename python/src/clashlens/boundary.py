@@ -8,7 +8,7 @@ from typing import Any
 from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
-from . import battle_day_repair, past_reset_pacing
+from . import battle_day_repair
 from .analytics import FRESHNESS_RULE_VERSION, SNAPSHOT_ORDERING_RULE_VERSION
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .boundary_manifest import (
@@ -34,7 +34,12 @@ from .db import (
 )
 from .domain import SEASON_DURATION, is_season_boundary
 from .domain_repair import boundary_held
-from .past_reset_pacing import past_reset_build_waits, past_reset_correction_waits
+from .past_reset_pacing import (
+    OPERATOR_CORRECTION,
+    operator_correction_waits,
+    past_reset_build_waits,
+    past_reset_correction_waits,
+)
 
 
 def lock_boundary_publication(
@@ -616,9 +621,16 @@ def _try_enqueue_boundary_artifacts(
                 PROCESSING_VERSION,
                 DOMAIN_RULE_VERSION,
                 ARMY_ANALYTICS_RULE_VERSION,
-                # A past Reset's army rebuild is background work.
                 PYTHON_BACKFILL_PRIORITY
-                if past_reset_pacing._is_past_reset(connection, boundary_at)
+                if connection.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM boundary_publication_corrections
+                        WHERE generation_id = %s AND pending_inputs @> %s::jsonb
+                    )
+                    """,
+                    (generation_id, Jsonb([OPERATOR_CORRECTION])),
+                ).fetchone()[0]
                 else PYTHON_LIVE_PRIORITY,
             ),
         )
@@ -1275,13 +1287,15 @@ def queue_army_corrections(
 
     While unit catalogue v3 re-read the Season's armies, a Reset could freeze
     a side whose only saved army was under v2 before frozen builds read any
-    saved army. ``sides`` counts such battle sides per Reset.
+    saved army. ``sides`` counts such battle sides per Reset whose newest
+    saved army was read; a failed reading restores nothing.
 
-    Each Reset gets one army-only correction, started as any other: once its
-    build is published, outside a repair campaign and past-Reset pacing; a
-    past Reset's army rebuild runs at background priority and takes no
-    battle lock. At most ``max_jobs`` corrections of the Season wait or build
-    at once, and none is queued from 04:00 to 07:00 UTC. A rebuilt Reset
+    Each Reset gets one army-only operator correction (OPERATOR_CORRECTION),
+    started as any other: once its build is published, outside a repair
+    campaign and past-Reset pacing. It is not queued, started or its army
+    build claimed from 04:00 to 07:00 UTC, the newest Reset's included; that
+    build runs at background priority and takes no battle lock. At most
+    ``max_jobs`` corrections of the Season wait or build at once. A rebuilt Reset
     lists no such side, so a later run lists nothing for it; one still
     queued or rebuilding is listed again and not queued twice.
     """
@@ -1291,29 +1305,39 @@ def queue_army_corrections(
     resets: list[dict[str, Any]] = []
     with database.pool.connection() as connection:
         with connection.transaction():
-            now = past_reset_pacing._now(connection)
-            if queue and 4 <= now.astimezone(UTC).hour < 7:
+            if queue and operator_correction_waits(connection):
                 return {
                     "season_id": season_id,
                     "queue": queue,
                     "refused": "no correction is queued from 04:00 to 07:00 UTC",
                 }
+            unread = """
+                fact.is_current AND fact.army_state = 'decode_missing'
+                AND fact.ranked_day_start >= %s AND fact.ranked_day_start < %s
+            """
+            days = (season_start, season_start + SEASON_DURATION)
+            battle_ids = [
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT fact.battle_id"
+                    f" FROM army_analytics_battle_facts AS fact WHERE {unread}",
+                    days,
+                ).fetchall()
+            ]
+            # A side counts only if its newest saved army is readable.
             affected = connection.execute(
-                """
+                f"""
                 SELECT fact.ranked_day_start + interval '1 day', count(*)
-                FROM army_analytics_battle_facts AS fact
-                WHERE fact.is_current AND fact.army_state = 'decode_missing'
-                  AND fact.ranked_day_start >= %s AND fact.ranked_day_start < %s
-                  AND EXISTS (
-                      SELECT 1 FROM battle_army_decodes AS decode
-                      WHERE decode.battle_id = fact.battle_id
-                        AND decode.perspective = CASE fact.lens
-                            WHEN 'offense' THEN 'attacker' ELSE 'defender' END
-                        AND decode.decoder_version = %s AND decode.is_active
-                  )
+                FROM {CURRENT_DECODES} AS decode
+                JOIN army_analytics_battle_facts AS fact
+                  ON fact.battle_id = decode.battle_id
+                 AND fact.lens = CASE decode.perspective
+                     WHEN 'attacker' THEN 'offense' ELSE 'defense' END
+                WHERE decode.status IN ('decoded', 'partial')
+                  AND {unread}
                 GROUP BY 1 ORDER BY 1
                 """,
-                (season_start, season_start + SEASON_DURATION, DECODER_VERSION),
+                (DECODER_VERSION, battle_ids, *days),
             ).fetchall()
             in_flight = connection.execute(
                 """
@@ -1359,9 +1383,9 @@ def queue_army_corrections(
                         INSERT INTO boundary_publication_corrections
                             (boundary_at, source_generation_id,
                              affected_artifacts, pending_inputs)
-                        VALUES (%s, %s, ARRAY['army'], '[]'::jsonb)
+                        VALUES (%s, %s, ARRAY['army'], %s)
                         """,
-                        (boundary_at, generation_id),
+                        (boundary_at, generation_id, Jsonb([OPERATOR_CORRECTION])),
                     )
                     in_flight += 1
                     correction = "queued"

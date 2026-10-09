@@ -14,6 +14,7 @@ from .background_pacing import background_turn_free
 from .operating import database_pool_health
 from .past_reset_pacing import (
     build_permit_busy,
+    operator_correction_waits,
     past_reset_build_hold,
     take_build_permit,
 )
@@ -216,6 +217,7 @@ def _supported_claim_filter(
     denormalized_contract: bool = True,
     supports_coordinator: bool = False,
     past_reset_build_hold: str | None = None,
+    operator_build_hold: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Parameterized supported-job predicate for the claim SELECT.
 
@@ -226,6 +228,8 @@ def _supported_claim_filter(
     also bind the claim time and direct job id. ``past_reset_build_hold`` is
     the newest Reset while past-Reset builds wait out the quiet
     window; those builds stay queued until it is None again.
+    ``operator_build_hold`` holds operator corrections' army builds, the
+    only ones at background priority, while it is True.
     """
     # The source contract is denormalized onto the job row by migration 0009
     # (trigger python_processing_jobs_set_source_contract_v3), so every
@@ -328,7 +332,10 @@ def _supported_claim_filter(
             AND NOT COALESCE(
                 {alias}.work_type IN ('build_snapshot', 'build_army_analytics')
                 AND {alias}.input_json->>'boundary_at' < %(past_reset_build_hold)s::text,
-                false))
+                false)
+            AND NOT (%(operator_build_hold)s
+                AND {alias}.work_type = 'build_army_analytics'
+                AND {alias}.priority = {PYTHON_BACKFILL_PRIORITY}))
         """,
         {
             "source_work_types": list(SUPPORTED_WORK_TYPES[:2]),
@@ -341,6 +348,7 @@ def _supported_claim_filter(
             "army_work_types": ["build_army_analytics", "redecode_army"],
             "army_analytics_rule_version": ARMY_ANALYTICS_RULE_VERSION,
             "past_reset_build_hold": past_reset_build_hold,
+            "operator_build_hold": operator_build_hold,
         },
     )
 
@@ -375,6 +383,7 @@ def _claim_filters(
     supports_coordinator: bool,
     work_types: Collection[str] | None,
     past_reset_build_hold: str | None,
+    operator_build_hold: bool = False,
     backfill: bool | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     """Claim alias ``job``'s supported filter, whole eligibility and parameters."""
@@ -384,6 +393,7 @@ def _claim_filters(
         denormalized_contract=denormalized_contract,
         supports_coordinator=supports_coordinator,
         past_reset_build_hold=past_reset_build_hold,
+        operator_build_hold=operator_build_hold,
     )
     if work_types is not None:
         if not work_types or not set(work_types) <= set(SUPPORTED_WORK_TYPES):
@@ -431,6 +441,7 @@ def _claim_select_statement(
     supports_coordinator: bool = False,
     work_types: Collection[str] | None = None,
     past_reset_build_hold: str | None = None,
+    operator_build_hold: bool = False,
     reset_first: bool | None = None,
     backfill: bool | None = None,
 ) -> tuple[str, dict[str, Any]]:
@@ -461,6 +472,7 @@ def _claim_select_statement(
         supports_coordinator=supports_coordinator,
         work_types=work_types,
         past_reset_build_hold=past_reset_build_hold,
+        operator_build_hold=operator_build_hold,
         backfill=backfill,
     )
     priorities = {None: _PYTHON_CLAIM_PRIORITIES, True: f"({PYTHON_BACKFILL_PRIORITY})",
@@ -1013,6 +1025,9 @@ class Database:
                 "limit": limit,
                 "past_reset_build_hold": (
                     past_reset_build_hold(connection) if supports_coordinator else None
+                ),
+                "operator_build_hold": (
+                    supports_coordinator and operator_correction_waits(connection)
                 ),
             }
             rows = [] if job_ids is None else connection.execute(*_claim_select_statement(

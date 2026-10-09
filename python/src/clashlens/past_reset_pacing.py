@@ -28,6 +28,11 @@ PAST_RESET_CORRECTION_INTERVAL = timedelta(hours=6)
 # window, which keeps the worker free for the live Reset's publication.
 PAST_RESET_QUIET_START = time(4, 30)
 PAST_RESET_QUIET_END = time(7, 0)
+# An operator correction (boundary.queue_army_corrections), marked by this
+# pending input, neither starts nor has its army build claimed in this wider
+# UTC window, for any Reset; its army build runs at background priority.
+OPERATOR_CORRECTION = {"kind": "operator"}
+OPERATOR_QUIET_START = time(4, 0)
 
 
 def _now(connection: Any) -> datetime:
@@ -47,6 +52,12 @@ def _is_past_reset(connection: Any, boundary_at: datetime) -> bool:
 
 def _in_quiet_window(now: datetime) -> bool:
     return PAST_RESET_QUIET_START <= now.astimezone(UTC).time() < PAST_RESET_QUIET_END
+
+
+def operator_correction_waits(connection: Any) -> bool:
+    """Whether an operator correction, or its army build, must wait now."""
+    now = _now(connection).astimezone(UTC).time()
+    return OPERATOR_QUIET_START <= now < PAST_RESET_QUIET_END
 
 
 def past_reset_build_waits(connection: Any, boundary_at: datetime) -> bool:

@@ -26,7 +26,9 @@ def test_army_corrections_queue_once_for_resets_that_left_out_a_saved_army(
 ) -> None:
     """A Reset frozen during the unit catalogue v3 re-read could publish a
     side as unread although its v2 army was saved. Only such Resets get an
-    army rebuild, once, and none is queued from 04:00 to 07:00 UTC."""
+    army rebuild, once, and none is queued from 04:00 to 07:00 UTC. A side
+    whose newest saved army failed to read restores nothing, so it is not
+    counted even though an older reading was saved."""
     with domain_database(database_url, include_coordinator=True) as ci:
         ts1 = DAY_START + timedelta(hours=1)
         ts2 = FIRST_RESET + timedelta(hours=1)
@@ -65,13 +67,31 @@ def test_army_corrections_queue_once_for_resets_that_left_out_a_saved_army(
             with database.pool.connection() as connection:
                 connection.execute("SET LOCAL session_replication_role = replica")
                 # Both days published their attack as unread; only the first
-                # day's attack has an army saved.
+                # day's attack has a readable newest army saved.
                 connection.execute(
                     "UPDATE army_analytics_battle_facts SET army_state = 'decode_missing'"
                     " WHERE is_current"
                 )
                 connection.execute(
-                    "UPDATE battle_army_decodes SET is_active = false WHERE battle_id = %s",
+                    """
+                    UPDATE battle_army_decodes SET catalog_version = 'unit-catalog-v2'
+                    WHERE battle_id = %s AND perspective = 'attacker' AND is_active
+                    """,
+                    (battles["#9PP"],),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO battle_army_decodes (
+                        battle_id, evidence_id, perspective, raw_code,
+                        decoder_version, catalog_version, catalog_hash, status,
+                        failure_category
+                    )
+                    SELECT battle_id, evidence_id, perspective, raw_code,
+                           decoder_version, 'unit-catalog-test', catalog_hash,
+                           'failed', 'malformed'
+                    FROM battle_army_decodes
+                    WHERE battle_id = %s AND perspective = 'attacker' AND is_active
+                    """,
                     (battles["#9PP"],),
                 )
                 for reset in (FIRST_RESET, SECOND_RESET):
@@ -96,7 +116,7 @@ def test_army_corrections_queue_once_for_resets_that_left_out_a_saved_army(
                         ).fetchall()
                     ]
 
-            now = [datetime(2026, 10, 9, 5, 30, tzinfo=UTC)]
+            now = [datetime(2026, 10, 9, 4, 10, tzinfo=UTC)]
             monkeypatch.setattr(past_reset_pacing, "_now", lambda _connection: now[0])
             refused = boundary.queue_army_corrections(
                 database, SEASON_ID, queue=True, max_jobs=2

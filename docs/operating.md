@@ -763,8 +763,9 @@ Reset could freeze a battle side whose only saved army was under v2 before
 frozen builds read any saved army. Its army records show that side as unread
 (`decode_missing`), leaving it out of the Armies page and Season army
 summaries. A rebuild of the Reset now reads that side's newest saved army.
-Run this only after the background-job cap change is deployed, and never
-from 04:00 to 07:00 UTC; `queue` refuses in that window:
+Deploy order: migration 0091 can go before or after the background-job cap
+change; this correction runs only once that cap is live, and never from 04:00
+to 07:00 UTC (`queue` refuses in that window):
 
 ```sh
 podman exec clashlens-python-worker \
@@ -774,18 +775,22 @@ podman exec clashlens-python-worker \
 ```
 
 `preview` writes nothing and lists each of that Season's Resets with such
-sides, with how many (`sides`); their total is the size of the correction,
-and the number of listed Resets is how many rebuild. It was not measured
-before release, so read it from `preview`. `queue` adds one army-only
-correction for each listed Reset while fewer than `--max-jobs` corrections of
-the Season wait or rebuild (`in_flight`); `correction` reads `queued`,
-`already_queued`, `rebuilding` (a newer build not yet published) or
-`not_queued` (a preview, or the cap reached). The worker starts each as any other correction:
-an older Reset after the 04:30–07:00 UTC quiet window and 6 hours after its
-last rebuild, its army build at background priority. That build takes no
-battle lock; like every army day build it holds the one army-build lock,
-about 80 seconds. Run `queue` again after those finish until `resets` is
-empty; a second run while one is waiting queues nothing more.
+sides, with how many (`sides`), counting a side only when its newest saved
+army was read (a failed reading restores nothing); their total is the size of
+the correction, and the number of listed Resets is how many rebuild. It was
+not measured before release, so read it from `preview`. `queue` adds one
+army-only operator correction for each listed Reset while fewer than
+`--max-jobs` corrections of the Season wait or rebuild (`in_flight`);
+`correction` reads `queued`, `already_queued`, `rebuilding` (a newer build
+not yet published) or `not_queued` (a preview, or the cap reached). The
+worker starts each as any other correction, an older Reset also 6 hours after
+its last rebuild, except that no operator correction starts, and no worker
+claims its army build, from 04:00 to 07:00 UTC, for any Reset including the
+newest; one queued at 03:55 waits until 07:00. Its army build runs at
+background priority, takes no battle lock and, like every army day build,
+holds the one army-build lock for about 80 seconds. Run `queue` again after
+those finish until `resets` is empty; a second run while one is waiting
+queues nothing more.
 
 ### Raw-response cleanup failed
 
