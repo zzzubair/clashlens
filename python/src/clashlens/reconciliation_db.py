@@ -420,6 +420,7 @@ def recalculate_ranked_day(
     # and the new day's battles say what each reading already showed.
     readings: tuple[reading_rule.Reading, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
+    previous_day_contributions: tuple[BattleContribution, ...] = ()
     first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
     if now >= ranked_day.end:
@@ -434,6 +435,9 @@ def recalculate_ranked_day(
         )
         new_day_contributions = ranked_day_inputs.load_contributions(
             connection, player_id, ranked_day_for(ranked_day.end)
+        )
+        previous_day_contributions = ranked_day_inputs.load_contributions(
+            connection, player_id, ranked_day_for(ranked_day.start - timedelta(days=1))
         )
         first_unshown_report = ranked_day_inputs.load_first_unshown_report(
             connection, player_id, *domain.battle_window(ranked_day.end)
@@ -508,6 +512,7 @@ def recalculate_ranked_day(
         zero_result_defense_slots=zero_result_defenses,
         readings=readings,
         new_day_contributions=new_day_contributions,
+        previous_day_contributions=previous_day_contributions,
         first_unshown_report=first_unshown_report,
         unreadable_from=unreadable_from,
     )

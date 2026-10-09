@@ -531,3 +531,22 @@ def test_a_reading_still_judges_a_day_with_all_16_battles_despite_a_log_gap() ->
     assert (result.state, result.confidence, result.coverage_complete) == (
         "Complete", "exact", True)
     assert result.next_start_trophies == 6000
+
+
+def test_the_day_befores_late_attack_credit_carries_into_the_next_day() -> None:
+    # The day before's last +40 attack has not shown yet, nor today's 05:10
+    # +30 attack; today's 05:12 defense lost 40. From a start of 6,000,
+    # 05:20 reads 5,920: both credits are late, which is no disagreement.
+    day_start = RESET - timedelta(days=1)
+    earlier = (Effect("b-attack", 40, day_start - timedelta(minutes=30)),)
+    day = (Effect("c-attack", 30, day_start + timedelta(minutes=5)),
+           Effect("c-defense", -40, day_start + timedelta(minutes=6)))
+
+    def during(trophies: int):
+        return contradiction_during_day(
+            (Reading(day_start + timedelta(minutes=20), trophies),), day_start=day_start,
+            reset_at=RESET, start=6000, pending_loss=0, day_effects=day, earlier=earlier,
+        )
+
+    assert during(5920) is None
+    assert during(5915) is not None

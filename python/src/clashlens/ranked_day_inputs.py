@@ -755,7 +755,8 @@ def load_readings(
     known_until = None
     for previous, current in pairwise((None, *logs)):
         if log_has_row_gap(current) or (
-            previous is not None and logs_leave_gap(previous, current)
+            current.observation_id != end_battle_log_observation_id if previous is None
+            else logs_leave_gap(previous, current)
         ):
             break
         known_until = current.observed_at

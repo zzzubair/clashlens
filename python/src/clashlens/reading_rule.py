@@ -328,13 +328,16 @@ def contradiction_during_day(
     start: int,
     pending_loss: int,
     day_effects: tuple[Effect, ...],
+    earlier: tuple[Effect, ...] = (),
 ) -> Verdict | None:
     """The first trustworthy reading taken during the day, from
     ``DAY_READINGS_FROM`` after its start, that fits no value the ledger
     allows at its time: the start plus every battle landed by then, plus
     the day before's automatic loss, ``pending_loss``, while it may not have
     landed, which has no fixed time; once every way a reading fits has it
-    landed, every later one must too. A battle in flight is read both ways."""
+    landed, every later one must too. A battle in flight is read both ways,
+    and the latest attacks' late credits, ``earlier`` the day before's
+    battles already in the start, may be missing."""
     total = start + pending_loss + sum(effect.change for effect in day_effects)
     for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies)):
         if reading.confirm_only or not (
@@ -343,7 +346,8 @@ def contradiction_during_day(
         judged = judge(
             reading, end_before_loss=total,
             loss_candidates=(pending_loss,) if pending_loss else (),
-            loss_certain=bool(pending_loss), day_effects=day_effects, new_day_effects=(),
+            loss_certain=bool(pending_loss), day_effects=earlier + day_effects,
+            new_day_effects=(),
         )
         if judged is None:
             continue

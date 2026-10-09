@@ -173,11 +173,11 @@ class ReconciliationInput:
     zero_result_attack_slots: int = 0
     zero_result_defense_slots: int = 0
     # Every other profile read from the day's start Reset to the next Reset
-    # after its end that can judge it (``reading_rule``), the new day's
-    # battles, the earliest report of a new-day battle only the opponent has
-    # reported, and from when an unreadable battle row leaves no reading,
-    # the Reset pair's own included, usable.
+    # after its end that can judge it (``reading_rule``), the day before's and
+    # new day's battles, the first report of a new-day battle only the opponent
+    # has, and from when an unreadable row leaves no reading usable.
     readings: tuple[reading_rule.Reading, ...] = ()
+    previous_day_contributions: tuple[BattleContribution, ...] = ()
     new_day_contributions: tuple[BattleContribution, ...] = ()
     first_unshown_report: datetime | None = None
     unreadable_from: datetime | None = None
@@ -318,7 +318,6 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         failures.append("defense_count_exceeds_eight")
     if not (coverage_complete or malformed_evidence) and all_battles_recorded(
             attack_count, defense_count, failures):
-        # With all 8 attacks and 8 defenses none can be missing, gap or not.
         coverage_complete, failures = True, [r for r in failures if r not in COVERAGE_GAP_REASONS]
 
     automatic_loss, automatic_state = _automatic_defense_adjustment(
@@ -533,6 +532,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     during = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
         start=start_trophies, day_effects=_effects(contributions), pending_loss=pending_loss,
+        earlier=_effects(_deduplicate_contributions(data.previous_day_contributions)[0]),
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else None
     if during is not None and during.reading is not None:

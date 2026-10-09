@@ -960,3 +960,41 @@ def test_a_disagreeing_reading_during_the_day_outlasts_an_unreadable_new_day_row
 
     assert day[0] == "Inconsistent"
     assert "trophy_equation_mismatch" in day[8]
+
+
+def test_a_log_not_joined_to_the_reset_log_makes_no_reading_trustworthy(
+    database_url: str, archive_server
+) -> None:
+    # Day B's end Reset saved no battle log. The first later log, at 06:00,
+    # holds 50 other rows, so a battle between may have rolled out of it: the
+    # 05:40 reading can only confirm day B, never contradict it.
+    unjoined = _log(filler=[DAY_C + timedelta(minutes=55 - index) for index in range(50)])
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(connection_info, archive_server, DAY_C, profile=_profile(6000))
+        for key, endpoint, body, minutes in (
+            ("later-profile", "profile", _profile(6040), 40),
+            ("unjoined-log", "battle_log", unjoined, 60),
+        ):
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=key, endpoint=endpoint,
+                body=body, observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
+            )[1])
+        _process(connection_info, archive_server, jobs)
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                ).fetchone()[0]
+                readings, _ = ranked_day_inputs.load_readings(
+                    database, connection, player_id, ranked_day_for(DAY_B),
+                    reset_profile_observation_id=None, end_battle_log_observation_id=None,
+                )
+        finally:
+            database.close()
+
+    later = [reading for reading in readings if reading.trophies == 6040]
+    assert later and all(reading.confirm_only for reading in later)
