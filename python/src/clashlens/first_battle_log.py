@@ -30,7 +30,7 @@ from .db import (
     ended_day_priority,
 )
 from .domain import SEASON_START_TROPHIES, RankedDay
-from .ranked_day_inputs import _source_rows, load_first_reports
+from .ranked_day_inputs import _source_rows
 from .reconciliation import (
     BATTLE_LOG_MAX_ROWS,
     RECONCILIATION_RULE_VERSION,
@@ -191,74 +191,76 @@ def queue_earlier_days(
     _queue(connection, player_id, day, int(first[1]))
 
 
-def queue_days_read_after(
-    connection: Any, observation_id: int, battle_ids: Iterable[int]
+# A day this many days old or more is not recalculated from new evidence.
+EVIDENCE_REFRESH_WINDOW = timedelta(days=7)
+
+
+def queue_days_before_battles(
+    connection: Any, observation_id: int, player_id: int, observed_at: datetime,
+    battle_ids: Iterable[int],
 ) -> None:
-    """When battle log ``observation_id`` saves a battle reported before a
-    reading that judged either player's day before, that reading may show
-    it, so recalculate that day, once per battle log: a result left
-    unchanged, or with no reading that judges it any more, still meets each
-    later report, correction or opposing report of any battle."""
-    ids = sorted(battle_ids)
-    if not ids:
-        return
+    """Battle log ``observation_id`` can change the ended day before each
+    day it holds battles of, for either player, and the day before its own,
+    which the reading rule judges with those battles and the log's coverage:
+    recalculate each such saved day of the last 7 days once per log."""
     rows = connection.execute(
         """
-        SELECT DISTINCT player.id, battle.ranked_day_start - interval '1 day'
-        FROM legend_battles AS battle
-        JOIN battle_evidence AS evidence ON evidence.battle_id = battle.id
-        CROSS JOIN LATERAL (
-            VALUES (battle.attacker_player_id), (battle.defender_player_id)
-        ) AS player (id)
-        WHERE battle.id = ANY(%s::bigint[])
-          AND EXISTS (
-              SELECT 1 FROM ranked_day_versions AS day
-              WHERE day.player_id = player.id
-                AND day.ranked_day_start = battle.ranked_day_start - interval '1 day'
-                AND day.reconciliation_rule_version = %s
-                AND (day.input_evidence -> 'end_reading' ->> 'read_at')::timestamptz
-                    > evidence.battle_timestamp
-          )
+        SELECT DISTINCT day.player_id, day.ranked_day_start
+        FROM ranked_day_versions AS day
+        JOIN (
+            SELECT player.id, battle.ranked_day_start - interval '1 day'
+            FROM legend_battles AS battle
+            CROSS JOIN LATERAL (
+                VALUES (battle.attacker_player_id), (battle.defender_player_id)
+            ) AS player (id)
+            WHERE battle.id = ANY(%(battles)s::bigint[])
+            UNION SELECT %(player)s, %(own_day)s
+        ) AS touched (player_id, day_start)
+          ON touched.player_id = day.player_id
+         AND touched.day_start = day.ranked_day_start
+        WHERE day.reconciliation_rule_version = %(rule)s
+          AND day.ranked_day_end <= %(at)s
+          AND day.ranked_day_end > %(at)s - %(window)s
         """,
-        (ids, RECONCILIATION_RULE_VERSION),
+        {"battles": sorted(battle_ids), "player": player_id,
+         "own_day": domain.ranked_day_for(observed_at).start - timedelta(days=1),
+         "rule": RECONCILIATION_RULE_VERSION, "at": observed_at,
+         "window": EVIDENCE_REFRESH_WINDOW},
     ).fetchall()
-    for player_id, day_start in rows:
+    for day_player, day_start in rows:
         _queue(
-            connection, int(player_id), day_start, None,
-            key=f"reconcile:read-after:{player_id}:"
+            connection, int(day_player), day_start, None,
+            key=f"reconcile:log:{day_player}:"
             f"{day_start.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{observation_id}",
-            trigger="read_after_battle", later_days=False,
+            trigger="battle_log", later_days=False, priority=PYTHON_BACKFILL_PRIORITY,
         )
 
 
-def queue_day_read_again(
-    connection: Any, player_id: int, profile_version_id: int, read_at: datetime
+def queue_day_for_reading(
+    connection: Any, player_id: int, observation_id: int, read_at: datetime
 ) -> None:
-    """When a changed profile is read after the reading that judged the
-    player's day before, and before their first battle of the new day, it
-    can still decide that day, so recalculate it, once per profile version."""
-    day = domain.ranked_day_for(read_at)
-    previous = day.start - timedelta(days=1)
-    saved = connection.execute(
+    """Profile read ``observation_id`` can judge the player's newest ended
+    day (``reading_rule``): recalculate the newest saved one of the read's
+    Season that ended in the 7 days before it, once per read."""
+    row = connection.execute(
         """
-        SELECT (input_evidence -> 'end_reading' ->> 'read_at')::timestamptz
-        FROM ranked_day_versions
-        WHERE player_id = %s AND ranked_day_start = %s
-          AND reconciliation_rule_version = %s
-        ORDER BY version DESC LIMIT 1
+        SELECT ranked_day_start FROM ranked_day_versions
+        WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
+          AND official_season_id = %(season)s
+          AND ranked_day_end <= %(at)s AND ranked_day_end > %(at)s - %(window)s
+        ORDER BY ranked_day_start DESC LIMIT 1
         """,
-        (player_id, previous, RECONCILIATION_RULE_VERSION),
+        {"player": player_id, "rule": RECONCILIATION_RULE_VERSION,
+         "season": domain.ranked_day_for(read_at).official_season_id,
+         "at": read_at, "window": EVIDENCE_REFRESH_WINDOW},
     ).fetchone()
-    if saved is None or saved[0] is None or saved[0] >= read_at:
-        return
-    new_day_from = domain.battle_window(day.start)[0]
-    if load_first_reports(connection, player_id, new_day_from, new_day_from, read_at)[1]:
+    if row is None:
         return
     _queue(
-        connection, player_id, previous, None,
-        key=f"reconcile:new-reading:{player_id}:"
-        f"{previous.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{profile_version_id}",
-        trigger="new_reading", later_days=False,
+        connection, player_id, row[0], None,
+        key=f"reconcile:reading:{player_id}:"
+        f"{row[0].astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}:{observation_id}",
+        trigger="reading", later_days=False, priority=PYTHON_BACKFILL_PRIORITY,
     )
 
 

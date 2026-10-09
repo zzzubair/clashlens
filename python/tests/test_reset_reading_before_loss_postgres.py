@@ -152,7 +152,7 @@ def _early_reading_days(
     )[1])
     if saved_before_rule is not None:
         saved_before_rule.setattr(
-            first_battle_log, "queue_day_read_again", lambda *args: None
+            first_battle_log, "queue_day_for_reading", lambda *args: None
         )
     _process(connection_info, archive_server, jobs)
     if saved_before_rule is not None:
@@ -587,11 +587,13 @@ def test_each_new_day_battle_saved_after_the_reading_recalculates_the_day_before
     assert (states[2][3], states[2][8]) == (end_b, [])
 
 
-def test_changed_profile_after_the_reset_reading_recalculates_the_day_before(
+def test_each_later_reading_and_covering_log_recalculates_the_day_before(
     database_url: str, archive_server
 ) -> None:
     # Day B's 05:20 Reset reading proves it. A 05:40 reading 10 more, before
-    # any new-day battle and with a battle log at 05:45, contradicts it.
+    # any new-day battle, contradicts it once the 05:45 log shows no battle
+    # came; a 05:50 reading back at the Reset reading's value, with a 05:55
+    # log, settles it again.
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
@@ -605,22 +607,80 @@ def test_changed_profile_after_the_reset_reading_recalculates_the_day_before(
             log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=20),
         )
         _process(connection_info, archive_server, jobs)
-        [before] = _latest_days(connection_info, (DAY_B,))
-        jobs = [
-            store_observation(
-                connection_info, archive_server, occurrence_key=f"later-{endpoint}",
+        states = [_latest_days(connection_info, (DAY_B,))[0]]
+        for responses in (
+            (("profile", _profile(end_b + 10), 40),),
+            (("battle_log", _log(*day_b), 45),),
+            (("battle_log", _log(*day_b), 55), ("profile", _profile(end_b), 50)),
+        ):
+            _process(connection_info, archive_server, [
+                store_observation(
+                    connection_info, archive_server,
+                    occurrence_key=f"later-{endpoint}-{minutes}", endpoint=endpoint,
+                    body=body, observed_at=DAY_C + timedelta(minutes=minutes),
+                    normalized_tag=TAG,
+                )[1]
+                for endpoint, body, minutes in responses
+            ])
+            states.append(_latest_days(connection_info, (DAY_B,))[0])
+
+    assert [row[:2] for row in states] == [
+        ("Complete", "exact"), ("Complete", "exact"), ("Inconsistent", "uncertain"),
+        ("Complete", "exact"),
+    ]
+    assert "trophy_equation_mismatch" in states[2][8]
+
+
+def test_own_report_after_the_opponents_recalculates_the_day_before(
+    database_url: str, archive_server
+) -> None:
+    # Day B's Reset reading is rejected. A 05:20 reading shows a new-day
+    # defense reported at 05:07. The attacker's log brings it first, which day
+    # B, counting only its own reports, cannot use; the player's own 05:35
+    # log brings it, and day B again.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    season_zero = json.loads(_profile(end_b))
+    season_zero["currentLeagueSeasonId"] = 0
+    log = json.loads(_log(*day_b))
+    at = f"{DAY_C + timedelta(minutes=7):%Y%m%dT%H%M%S.000Z}"
+    attack = {**log["items"][0], "stars": 2, "destructionPercentage": 60,
+              "opponentPlayerTag": TAG, "battleTimestamp": at}
+    defense = {**log["items"][1], "opponentPlayerTag": "#GQPP", "battleTimestamp": at}
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=json.dumps(season_zero).encode(), log=_log(*day_b),
+        )
+        for endpoint, body, minutes in (
+            ("profile", _profile(end_b - LOSS), 20), ("battle_log", _log(*day_b), 25),
+        ):
+            jobs.append(store_observation(
+                connection_info, archive_server, occurrence_key=f"before-{minutes}",
                 endpoint=endpoint, body=body,
                 observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=TAG,
-            )[1]
-            for endpoint, body, minutes in (
-                ("battle_log", _log(*day_b), 45), ("profile", _profile(end_b + 10), 40),
-            )
-        ]
+            )[1])
         _process(connection_info, archive_server, jobs)
-        [after] = _latest_days(connection_info, (DAY_B,))
+        _day_end_recheck(connection_info, archive_server)
+        states = [_latest_days(connection_info, (DAY_B,))[0]]
+        for tag, items, minutes in (
+            ("#GQPP", [attack], 30), (TAG, log["items"] + [defense], 35),
+        ):
+            _, log_job = store_observation(
+                connection_info, archive_server, occurrence_key=f"late-{minutes}",
+                endpoint="battle_log", body=json.dumps({"items": items}).encode(),
+                observed_at=DAY_C + timedelta(minutes=minutes), normalized_tag=tag,
+            )
+            _process(connection_info, archive_server, [log_job])
+            states.append(_latest_days(connection_info, (DAY_B,))[0])
 
-    assert before[:2] == ("Complete", "exact")
-    assert after[0] == "Inconsistent" and "trophy_equation_mismatch" in after[8]
+    assert [row[0] for row in states] == ["Inconsistent", "Partial", "Complete"]
+    assert (states[2][3], states[2][8]) == (end_b, [])
 
 
 def test_battle_time_is_a_length_only_beside_a_battle_timestamp(

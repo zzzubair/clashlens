@@ -562,7 +562,12 @@ after its Reset, also queues one recalculation of that day,
 `reconcile:day-end:<player>:<day>:<rule>`, due two hours after its Reset at
 the lowest priority, so every tracked player's ended day is calculated once
 more with the readings and battles saved since: about 13,000 jobs a Reset,
-run only when no other work waits. Before
+run only when no other work waits. Each saved profile or battle-log response
+also queues, at the same priority, the ended day it can change
+(`reconcile:reading:` and `reconcile:log:<player>:<day>:<observation>`): a
+battle changes both players' profiles and logs, so about 104,000 battles a
+day make up to about 420,000 such jobs, removed with other finished jobs after
+48 hours. Before
 October 2026 a player switched off during a day, such as the 2,037 moved out
 of Legend I when the 2026-10-05 Season started, got no Reset reading, so their
 day stayed `Live`; finish those with this command.

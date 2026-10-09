@@ -1206,7 +1206,7 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
     """Clash Spot's Day 2 board of 7 October 2026 shows trophies at the Reset
     before the automatic defense loss. Ours missed battles after each player's
     last reading: RAIN showed 5,088, not 5,168, and SnowBBcreaM 5,160, not
-    5,128."""
+    5,128. A day not yet Complete and exact proves none of them."""
     readings = [
         ("#29QUQC8QL", 5088, _october(7, 4, 40)),  # RAIN
         ("#YYPUCVJUP", 5160, _october(6, 22, 22)),  # SnowBBcreaM
@@ -1234,11 +1234,11 @@ def test_board_adds_the_battles_after_each_reading(database_url: str) -> None:
         database = Database(connection_info)
         try:
             assert _build_board(connection_info, database, generation_id) == [
-                ("#29QUQC8QL", 5168, "confirmed"),
+                ("#29QUQC8QL", 5168, "uncertain"),
                 ("#2222222", 5150, "uncertain"),
                 ("#8888888", 5140, "uncertain"),
-                ("#YYPUCVJUP", 5128, "confirmed"),
-                ("#QVCU9PJCR", 5115, "confirmed"),
+                ("#YYPUCVJUP", 5128, "uncertain"),
+                ("#QVCU9PJCR", 5115, "uncertain"),
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
             # A board built under this rule is not rebuilt; one frozen before
@@ -1332,7 +1332,7 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
     reports and automatic defense loss can still land after a reading taken
     at 05:02 or 05:06. A day whose trophies don't add up proves nothing.
     Each keeps its reading and is marked uncertain; an attack stamped 04:52,
-    and a reading taken at 05:16, still prove their battles."""
+    and a reading taken at 05:16, still count their battles."""
     readings = [
         ("#GRJC0", 5160, _october(7, 4, 55)),  # defended
         ("#GRJC2", 5150, _october(7, 4, 55)),  # attacked
@@ -1368,9 +1368,9 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
             assert _build_board(connection_info, database, generation_id) == [
                 ("#GRJC9", 5210, "uncertain"),  # refreshed
                 ("#GRJC8", 5200, "uncertain"),  # early
-                ("#GRJC2", 5190, "confirmed"),  # attacked
+                ("#GRJC2", 5190, "uncertain"),  # attacked
                 ("#GRJC0", 5160, "uncertain"),  # defended
-                ("#GRJCU", 5140, "confirmed"),  # settled
+                ("#GRJCU", 5140, "uncertain"),  # settled
                 ("#GRJCV", 5120, "uncertain"),  # mismatch
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
@@ -1387,11 +1387,10 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
     """#2QCYU8C2G read 4,703 at 04:37:05 on 7 October 2026 without its attack
     stamped 04:34:08 for 29, and the board showed 4,902 as proven: a reading
     proves no battle stamped before it. Its Complete day ends at 4,931 from
-    its Reset readings at both ends. Without that, a reading plus the
-    battles after it is proven only when the day's start reading plus all
-    its battles, or without a start its end Reset reading, less any known
-    automatic loss, comes to it too; a Reset that resets trophies proves
-    nothing."""
+    its Reset readings at both ends. Without a Complete and exact day, a
+    reading plus the battles after it is never proven, even when the day's
+    start plus all its battles, or its end Reset reading, comes to it too;
+    a Reset that resets trophies proves nothing."""
     readings = [
         ("#2QCYU8C2G", 4703, datetime(2026, 10, 7, 4, 37, 5, tzinfo=UTC)),
         ("#GURYYP99", 4923, _october(7, 4, 54)),  # no end reading
@@ -1401,6 +1400,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         ("#Y8V9YYP9C", 5151, _october(7, 4, 40)),  # Season reset, disagrees
         ("#YPG0UY9LU", 5047, _october(7, 4, 40)),  # Season reset, agrees
         ("#2GL8CJL", 5105, _october(7, 4, 40)),  # calculated start
+        ("#82RV9CV8C", 5000, _october(7, 4, 59)),  # unproven start
     ]
     days = {
         1: (True, [
@@ -1414,6 +1414,9 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         ]),
         **{player: (True, [("offense", 40, _october(7, 4, 50), True)])
            for player in range(3, 9)},
+        # 8 defenses for 320 and an attack at 04:58 that may still be landing.
+        9: (True, [("defense", 40, _october(6, 6 + hour), True) for hour in range(8)]
+            + [("offense", 40, _october(7, 4, 58), True)]),
     }
     no_start = {"failure_reasons": ["missing_start_baseline"], "start": None}
     complete = {"state": "Complete", "failure_reasons": []}
@@ -1430,6 +1433,7 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
         7: {**complete, "final": 5087, "boundary_kind": "season", "end": 5000},
         # Complete from its end reading alone, its start no reading matched.
         8: {**complete, "final": 5145, "end": 5145, "confidence": "inferred"},
+        9: {"failure_reasons": ["end_reading_unverified"], "start": 5280, "end": 5000},
     }
     with domain_database(database_url, include_coordinator=True) as connection_info:
         generation_id = _seed_board(connection_info, readings)
@@ -1439,10 +1443,11 @@ def test_board_proves_a_reading_only_by_the_days_reset_readings(
             assert _build_board(connection_info, database, generation_id) == [
                 ("#Y8V9YYP9C", 5191, "uncertain"),
                 ("#2GL8CJL", 5145, "uncertain"),
-                ("#PL0Q0UVLC", 5140, "confirmed"),
-                ("#P0VPRVPJJ", 5130, "confirmed"),
+                ("#PL0Q0UVLC", 5140, "uncertain"),
+                ("#P0VPRVPJJ", 5130, "uncertain"),
                 ("#P2CC9URVR", 5120, "uncertain"),
                 ("#YPG0UY9LU", 5087, "confirmed"),
+                ("#82RV9CV8C", 5000, "uncertain"),
                 ("#GURYYP99", 4992, "uncertain"),
                 ("#2QCYU8C2G", 4931, "confirmed"),
             ]

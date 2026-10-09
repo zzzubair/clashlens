@@ -710,11 +710,10 @@ def reset_trophies(
     response, no defense stamped in the 4 minutes before that request, since
     its attack can end up to 4 minutes after the defender's report, and no
     battle amount the two players' logs disagree on. A reading proves no
-    battle stamped before it, so that total is proven only when the day's
-    start reading plus all its battles, or without a start its end Reset
-    reading, with or without its known automatic loss, comes to it too.
-    Without the battles' proof the total is the reading alone; any total not
-    proven is marked uncertain.
+    battle stamped before it, and a Partial or inferred day's start and end
+    are calculations or readings no rule judged, so that total is never
+    proven. Without the battles' proof the total is the reading alone; any
+    total not proven is marked uncertain.
     """
     if not readings:
         return {}
@@ -725,25 +724,14 @@ def reset_trophies(
             SELECT reading.player_id, ranked.state, ranked.confidence,
                    ranked.final_trophies_before_reset,
                    ranked.automatic_defense_loss,
-                   ranked.automatic_defense_evidence_state,
                    ranked.input_evidence->>'boundary_kind',
-                   CASE WHEN NOT ranked.failure_reasons
-                                 ?| ARRAY['missing_start_baseline',
-                                          'start_baseline_incomplete']
-                        THEN ranked.start_trophies
-                   END,
-                   CASE WHEN NOT ranked.failure_reasons
-                                 ?| ARRAY['missing_end_baseline',
-                                          'end_baseline_incomplete']
-                        THEN (ranked.input_evidence->>'next_start_trophies')::integer
-                   END,
                    ranked.coverage_complete
                    AND reading.observed_at
                        >= ranked.ranked_day_start + interval '15 minutes'
                    AND ranked.state <> 'Inconsistent'
                    AND NOT ranked.failure_reasons ?| %s::text[]
                    AND battles.every_battle_proven IS NOT FALSE,
-                   battles.after_reading, battles.whole_day
+                   battles.after_reading
             FROM unnest(
                 %s::bigint[], %s::bigint[], %s::bigint[], %s::timestamptz[]
             ) AS reading (player_id, version_id, observation_id, observed_at)
@@ -757,7 +745,6 @@ def reset_trophies(
                 SELECT COALESCE(sum(battle.change) FILTER (
                            WHERE battle.stamped_at > reading.observed_at
                        ), 0),
-                       COALESCE(sum(battle.change), 0),
                        bool_and(
                            battle.stamped_at IS NOT NULL
                            AND battle.stamped_at
@@ -779,7 +766,7 @@ def reset_trophies(
                            contribution.value->>'disagreement'
                 ) AS battle (change, stamped_at, lens, disputed)
                 WHERE contribution.value->>'included' = 'true'
-            ) AS battles (after_reading, whole_day, every_battle_proven)
+            ) AS battles (after_reading, every_battle_proven)
             """,
             (
                 sorted(DISPUTED_BATTLE_REASONS),
@@ -803,32 +790,21 @@ def _reset_total(reading: int, day: Any) -> tuple[int, bool]:
     if day is None:
         return reading, False
     (
-        state, confidence, final, automatic_loss, automatic_state, boundary_kind,
-        start, end, battles_proven, after_reading, whole_day,
+        state, confidence, final, automatic_loss, boundary_kind, battles_proven,
+        after_reading,
     ) = day
     total = reading + int(after_reading) if battles_proven else None
-    # The game resets trophies at a Season's end, and raises a total at or
-    # below 5,000 at a weekly one, so that Reset's reading proves nothing.
-    end_reset = _text_value(boundary_kind) == "season" or (
-        _text_value(boundary_kind) == "weekly"
-        and (final if final is not None else end if end is not None else 0) <= 5000
-    )
     if _text_value(state) == "Complete" and final is not None:
         settled = int(final) + int(automatic_loss or 0)
+        # The game resets trophies at a Season's end, and raises a total at
+        # or below 5,000 at a weekly one, so that Reset's reading proves
+        # nothing and the reading must agree.
+        end_reset = _text_value(boundary_kind) == "season" or (
+            _text_value(boundary_kind) == "weekly" and int(final) <= 5000
+        )
         if not end_reset or total == settled:
             return settled, _text_value(confidence) == "exact"
-    if total is None:
-        return reading, False
-    if start is not None:
-        return total, int(start) + int(whole_day) == total
-    known_loss = (
-        int(automatic_loss or 0)
-        if _text_value(automatic_state) in {"calculated", "confirmed"}
-        else 0
-    )
-    return total, end is not None and not end_reset and int(end) in {
-        total, total - known_loss
-    }
+    return (reading if total is None else total), False
 
 
 def _army_rows(
