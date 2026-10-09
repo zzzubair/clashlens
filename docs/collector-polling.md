@@ -77,7 +77,7 @@ and Legend III totals afterwards. About 130 bytes a row with its indexes: the la
 October 2026 list of 250,680 players is about 33 MB, growing only with newly
 seen Legend II and III players.
 
-Each Monday, after the Reset sweep (05:00-05:10 UTC), settlement (from 05:20)
+Each Monday, after the Reset sweep (05:03:40-05:10 UTC), settlement (from 05:20)
 and the late-battle check (from 05:30), from 06:00 the collector asks for the
 profile of every listed Legend II player not checked since 06:00, oldest
 check first, then every listed Legend III player the same way (an answer saved
@@ -411,8 +411,8 @@ grows only with the number of players checked, and is not saved. After a restart
 responses again: up to about 26,500 extra battle-log requests, three minutes of
 all six keys, but never a missed battle.
 
-The 05:00 UTC Reset, Refresh and interactive first-time collection still fetch
-both responses together. A newly found player's first regular battle-log check
+The 05:00 UTC Reset still fetches both responses, the profile first (below),
+and Refresh and interactive first-time collection fetch both together. A newly found player's first regular battle-log check
 can reuse its saved profile within the five-second profile cache window; if that
 window expires or the battle-log request fails, it fetches the profile again.
 
@@ -472,7 +472,7 @@ answering again, the work gets three more failed runs, then fails and settles
 as missing, so a few failing players cannot hold ordinary collection. The
 count is kept in collector memory, so a restart allows three more. Reset
 work fetches the profile, then the battle log, then any league history, one
-after another. A Reset retry fetches only the responses that have no usable
+after another, the last two from 05:07:20 UTC (below). A Reset retry fetches only the responses that have no usable
 answer yet, so a profile saved before the player's first battle is kept; a
 battle log saved before the profile is fetched again, even after a restart.
 Reset work stops retrying at 04:55 UTC, five minutes before its Legend day
@@ -518,8 +518,27 @@ due time. Player-token verification and interactive collection use the
 
 At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
-profile/battle work row per member. Regular work stays blocked until all Reset
+profile/battle work row per member, due at 05:03:40. At all 11 Resets from 29
+September to 9 October 2026 the ended day's last battle ended by 05:03:38 and
+the new day's first started at 05:07:20 or later, and no profile showed the
+automatic defense loss before 05:07:38. So from 05:03:40 the sweep fetches only
+profiles, each showing the ended day's end before that loss; from 05:07:20 it
+fetches each player's battle log, which only has to come after the profile,
+and any league history, after any profile still owed, which is then followed
+at once by its battle log. A new-day battle cannot reach a profile before about
+05:09:50: a defense shows about 2 minutes after it starts, an attack about 4
+minutes after its report. Regular work stays blocked until all Reset
 work is terminal; unfinished older Reset work also blocks the next boundary.
+So the Reset pairs may use the regular checks' slots (`CLASHLENS_REGULAR_PARALLELISM`,
+300 with six keys) instead of the 32 the other durable work shares, and the
+keys set their pace: 13,295 profiles take at least 89 seconds at six keys' 150
+starts a second. With 32 slots, each fetching a profile and then a battle log,
+the 8 October 2026 sweep read 23 profiles a second. On 9 October 2026 the
+collector, run locally against the fake API with production-sized answers
+taking 0.14 seconds each, read 13,295 profiles in 93 seconds with 300 slots
+and in 170 with 32, and their battle logs in 142 and 217 seconds after 05:07:20;
+the same machine ran the earlier pairs-at-once sweep at 43 players a second,
+1.9 times production's pace.
 Regular checks paused by a full spool or a provider-outage pause do not count
 as admitted work, so they never delay the sweep; once admission closes they
 wait for their next pass.

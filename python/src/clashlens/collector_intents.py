@@ -95,6 +95,9 @@ async def collect_intent(collector: Collector, intent: CollectorIntent) -> str:
             return "failed"
         return "retrying"
     collector._retries_while_answering.pop(intent.work_id, None)
+    if intent.kind == "reset_baseline" and endpoints == ("profile",):
+        # The profile pass: the battle log follows from its own pass.
+        return "profile_saved"
     completed = await _finish(
         collector, collector.database.complete_intent, intent.work_id
     )

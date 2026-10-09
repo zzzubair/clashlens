@@ -609,18 +609,18 @@ class CollectorDatabase:
         with self._connection() as connection:
             with connection.transaction():
                 connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (intent_time,))
-                # About 13,000 settlement or season-end history checks each go
-                # after due discovery and ranking checks, which then wait
-                # seconds instead of the hours those passes take.
+                # Reset profiles go before Reset battle logs. About 13,000
+                # settlement or season-end history checks go after due discovery
+                # and ranking checks, which then wait seconds, not hours.
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, battle_log.response_completed_at < profile.response_completed_at, battle_log.request_started_at < profile.response_completed_at, sweep.boundary_at FROM collector_work AS work LEFT JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'reset_settlement', 'discovery_profile', 'global_player_rankings', 'league_history_refresh') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND NOT (work.id = ANY(%s::bigint[])) AND (work.kind <> 'reset_settlement' OR %s < sweep.boundary_at + %s) AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 WHEN work.kind IN ('reset_settlement', 'league_history_refresh') THEN 3 ELSE 2 END, work.due_at, work.id LIMIT %s""",
-                    (intent_time, held or [], intent_time, collector_reset.COLLECTION_WINDOW, interactive, interactive, interactive, limit),
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, profile.http_status, battle_log.http_status, league_history.http_status, battle_log.response_completed_at < profile.response_completed_at, battle_log.request_started_at < profile.response_completed_at, sweep.boundary_at FROM collector_work AS work LEFT JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id LEFT JOIN collector_observations AS profile ON profile.id = work.profile_observation_id LEFT JOIN collector_observations AS battle_log ON battle_log.id = work.battle_log_observation_id LEFT JOIN collector_observations AS league_history ON league_history.id = work.league_history_observation_id WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'reset_settlement', 'discovery_profile', 'global_player_rankings', 'league_history_refresh') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND NOT (work.id = ANY(%s::bigint[])) AND (work.kind <> 'reset_settlement' OR %s < sweep.boundary_at + %s) AND NOT COALESCE(work.kind = 'reset_baseline' AND %s < sweep.boundary_at + %s AND (profile.http_status BETWEEN 200 AND 299 OR profile.http_status = 404), false) AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 WHEN work.kind IN ('reset_settlement', 'league_history_refresh') THEN 3 ELSE 2 END, COALESCE(work.kind = 'reset_baseline' AND (profile.http_status BETWEEN 200 AND 299 OR profile.http_status = 404), false), work.due_at, work.id LIMIT %s""",
+                    (intent_time, held or [], intent_time, collector_reset.COLLECTION_WINDOW, intent_time, collector_reset.BATTLE_LOG_PASS_FROM, interactive, interactive, interactive, limit),
                 ).fetchall()
 
-                # A Reset retry fetches again only what has no usable answer yet,
-                # and a battle log older than the profile it must cover. A
-                # settlement check keeps its first usable profile, and its log
-                # must have started after that profile arrived.
+                # A Reset pair fetches only its profile until its battle-log pass
+                # (collector_reset), then only what has no usable answer yet, and
+                # a battle log older than the profile. A settlement check keeps
+                # its first usable profile and a log started after that arrived.
                 def unanswered(status: int | None) -> bool:
                     return status is None or not (200 <= status < 300 or status == 404)
 
@@ -636,9 +636,9 @@ class CollectorDatabase:
                         due_at=row[2],
                         status=str(row[6]),
                         sweep_id=None if row[5] is None else int(row[5]),
-                        league_history_required=(str(row[7]) != "not_applicable" and unanswered(row[10])) if row[1] in {"reset_baseline", "discovery_profile", "league_history_refresh"} else str(row[7]) == "pending",
+                        league_history_required=(str(row[7]) != "not_applicable" and unanswered(row[10]) and not collector_reset.profile_pass(row[1], row[13], intent_time)) if row[1] in {"reset_baseline", "discovery_profile", "league_history_refresh"} else str(row[7]) == "pending",
                         profile_required=row[1] != "league_history_refresh" and (row[1] not in {*paired, "discovery_profile"} or unanswered(row[8])),
-                        battle_log_required=row[1] != "league_history_refresh" and (row[1] not in paired or unanswered(row[8]) or unanswered(row[9]) or bool(row[12 if row[1] == "reset_settlement" else 11])),
+                        battle_log_required=row[1] != "league_history_refresh" and not collector_reset.profile_pass(row[1], row[13], intent_time) and (row[1] not in paired or unanswered(row[8]) or unanswered(row[9]) or bool(row[12 if row[1] == "reset_settlement" else 11])),
                         collect_before=row[13] + collector_reset.COLLECTION_WINDOW if row[1] == "reset_settlement" else None,
                     )
                     for row in rows

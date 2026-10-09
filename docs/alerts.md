@@ -202,8 +202,11 @@ use the [operating notes](operating.md#respond-to-alerts).
   06:26, when the one-hour grace this replaced could alert only from 06:05.
 - **An early warning that the Reset is behind its 05:30 board target**, one
   alert naming every stage that holds, until that Reset's board is readable:
-  - at **05:10** the Reset sweep has not started, or has not ended for every
-    captured member (8 Oct 2026: all 13,251 by 05:09:42);
+  - at **05:12** the Reset sweep has not started, or has not ended for every
+    captured member (8 Oct 2026: all 13,251 by 05:09:42, before the sweep
+    waited for 05:03:40 to read profiles and 05:07:20 to read battle logs;
+    a Season's opening Reset also reads 13,000 league histories after
+    05:07:20, at least 89 more seconds at six keys);
   - from **05:15** to 05:25, while the board's inputs are not frozen, the
     Reset-priority work left (`reset_work_remaining`: Reset readings,
     ended-day results and board builds created since the Reset) would not
@@ -244,13 +247,24 @@ use the [operating notes](operating.md#respond-to-alerts).
   count; it reads the battles of two Legend days (about 44,000 rows) through
   their existing day lookup, and each battle's saved time through its existing
   battle lookup.
+- **Battles may be in the wrong day**: a saved result for the current or
+  previous Legend day with a 9th attack or defense, or a battle report
+  stamped 05:03:40 to 05:07:00 UTC after either of their Resets. A report
+  belongs to the day of its stamp less five minutes because, at all 11
+  Resets from 29 September to 9 October 2026, every ended-day battle ended by
+  05:03:38 and no new-day battle started before 05:07:20; the Reset sweep
+  reads its profiles inside that gap. Either sign means the gap moved. The
+  check never moves a battle. It enters the private worker container, prints
+  only the count, and reads the battles of three Legend days through their
+  existing day lookup, like the untracked battler check, and the two days'
+  saved results through their existing day-end lookup.
 
 Missing collector measurements or a failed publication check never clear these
 alerts, and each recovers only when its own measurement does.
 
 - **A disk, restart-history, Live Leaderboard, Reset publication, Reset
-  progress or untracked battler check unreadable for 10 minutes** (600
-  seconds). These six checks otherwise
+  progress, untracked battler or battle-day check unreadable for 10 minutes**
+  (600 seconds). These seven checks otherwise
   only log a diagnostic and stay unknown, which can hide their own problem
   indefinitely. Each keeps its own first-failure time, so a check that
   becomes readable and later fails again starts a new ten minutes, and one

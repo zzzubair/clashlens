@@ -53,6 +53,7 @@ def runtime(tmp_path, monkeypatch):
         reset=None,
         database="healthy 0",
         completeness="0",
+        battle_day="0",
         health_streaks={},
         site_status=200,
         disk_used=10,
@@ -186,6 +187,8 @@ def runtime(tmp_path, monkeypatch):
             code, output = 0, rt.database
         elif "--completeness" in args:
             code, output = 0, rt.completeness
+        elif "--battle-day" in args:
+            code, output = 0, rt.battle_day
         elif "inspect" in args:
             code, output = 0, str(rt.health_streaks.get(args[-1], 0))
         else:
@@ -254,6 +257,8 @@ def trigger(rt, condition, value=True):
         rt.publication = "1" if value else "0"
     elif condition == "completeness":
         rt.completeness = "11" if value else "10"
+    elif condition == "battle_day":
+        rt.battle_day = "1" if value else "0"
 
 
 @pytest.mark.parametrize(
@@ -272,6 +277,7 @@ def trigger(rt, condition, value=True):
         "upload",
         "publication",
         "completeness",
+        "battle_day",
     ],
 )
 def test_alert_and_recovery_once_across_separate_runs(runtime, condition, capsys):
