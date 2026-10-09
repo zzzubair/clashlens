@@ -384,22 +384,22 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     observed_boundary_adjustment: int | None = None
     expected_next: int | None = None
     residual: int | None = None
-    # A Season reset, or the weekly raise for a total at or below 5,000, makes
-    # the next start 5,000 whatever the day ended on, so that reading cannot
-    # prove the end-of-day total or the automatic defense loss.
+    # A Season reset, or the weekly raise for a total at or below 5,000, makes the next start
+    # 5,000 whatever the day ended on: that reading proves neither the end total nor the loss.
     end_hidden_by_reset = False
 
-    # A reading during the day shows its start plus the battles landed by then, with the
-    # day before's late credits and loss, before any weekly raise, when its end started it.
+    # A reading during the day shows its start plus the battles landed by then, with the day before's
+    # late credits and loss, before a weekly raise or a Season's reset, which can land after 05:15.
     previous = None if data.season_first_day or season_rule_start else data.previous_day
-    pending_loss = previous.automatic_loss if previous else 0
+    reset = data.season_first_day and data.previous_day and data.previous_day.final_trophies
     raised = previous and (previous.final_trophies or 5000) < 5000 == start_trophies
     earlier = _deduplicate_contributions(data.previous_day_contributions)[0] if previous else ()
     during, history = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
-        start=previous.final_trophies if raised else start_trophies, pending_loss=pending_loss,
+        start=previous.final_trophies if raised else reset or start_trophies,
+        pending_loss=previous.automatic_loss if previous else 0, reset=bool(reset),
         day_effects=_effects(contributions), earlier=_effects(earlier),
-        floor=5000 if raised or data.ranked_day.start.weekday() == 0 else None,
+        floor=5000 if raised or reset or data.ranked_day.start.weekday() == 0 else None,
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else (None, None)
     automatic_value_known = automatic_state != "unknown"
@@ -422,19 +422,19 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         )
         expected_next = final_trophies + boundary_adjustment
 
-        # What a reading may show from the end Reset on: the day's end before
-        # its loss, or after it raised to 5,000 on a Monday; a Season reset
-        # shows only 5,000, and the official Season-end total only the end.
-        season = data.boundary_kind == "season" or official_end
+        # What a reading may show from the end Reset on: the day's end before its loss, or
+        # after it raised to 5,000 on a Monday or reset to it at a Season's end, either of
+        # which can land after the Reset; the official Season-end total shows only the end.
         rule: dict[str, Any] = {
-            "end_before_loss": expected_next if season else final_trophies + (automatic_loss or 0),
-            "loss_candidates": () if season and (automatic_loss or not official_end) else
+            "end_before_loss": expected_next if official_end else final_trophies + (automatic_loss or 0),
+            "loss_candidates": () if official_end and automatic_loss else
             _loss_candidates(data, automatic_loss, automatic_state, defense_count),
-            "loss_certain": automatic_state == "calculated" and bool(automatic_loss) and not season,
-            "day_effects": () if season else _effects(contributions),
+            "loss_certain": automatic_state == "calculated" and bool(automatic_loss) and not official_end,
+            "day_effects": () if official_end else _effects(contributions),
             "new_day_effects": () if official_end else _effects(
                 _deduplicate_contributions(data.new_day_contributions)[0]),
-            "floor": 5000 if data.boundary_kind == "weekly" else None,
+            "floor": 5000 if data.boundary_kind in {"weekly", "season"} else None,
+            "reset": data.boundary_kind == "season",
         }
         if end_available and data.next_start_trophies is not None:
             residual = data.next_start_trophies - expected_next

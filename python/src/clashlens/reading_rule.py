@@ -135,11 +135,13 @@ def judge(
     day_effects: Iterable[Effect],
     new_day_effects: Iterable[Effect],
     floor: int | None = None,
+    reset: bool = False,
 ) -> _Judged | None:
     """Whether one reading equals a value the ledger allows at its time, or
     ``None`` when it cannot be judged: a disputed battle may be in it, or too
     many battles may be. ``floor`` is the weekly raise: an ended-day value
-    below it may also be read raised to it, before any new-day battle."""
+    below it may also be read raised to it, before any new-day battle; with
+    ``reset``, a Season's reset, any ended-day value may be read set to it."""
     day_effects = tuple(day_effects)
     at = reading.read_at
     base = end_before_loss
@@ -177,10 +179,15 @@ def judge(
         return None
     losses = [0, *(loss for loss in loss_candidates if loss)]
 
-    def fits(ended: int, new: int) -> list[bool]:
+    def fits(ended: int, new: int, loss: int) -> list[bool]:
         """Whether the reading shows the value unraised, raised, or both: a
         raise applied to a total above it changes nothing."""
-        values = [(ended, False)] + ([(max(ended, floor), True)] if floor is not None else [])
+        # The weekly raise follows the total at the Reset: a value below 5,000
+        # stays unraised only when the automatic loss landing after the Reset
+        # took it there. A Season's reset can land later (5 October 2026).
+        values = [(ended, False)] if (
+            floor is None or reset or ended + loss >= floor) else []
+        values += [(floor if reset else max(ended, floor), True)] if floor is not None else []
         return [raised for value, raised in values if reading.trophies == value + new]
 
     def shows(run: list[tuple[Effect, bool]], chosen: tuple[tuple[int, str, bool], ...]
@@ -216,7 +223,7 @@ def judge(
             for raised in fits(
                 base - short - loss + sum(delta for delta, _, ended in chosen if ended),
                 new_day_change - new_short
-                + sum(delta for delta, _, ended in chosen if not ended))
+                + sum(delta for delta, _, ended in chosen if not ended), loss)
         ]
     if found:
         run, chosen, loss, _ = found[0]
@@ -252,6 +259,7 @@ def decide(
     unknown_from: datetime | None = None,
     start_proven: bool,
     floor: int | None = None,
+    reset: bool = False,
     history: frozenset[Way] | None = None,
 ) -> Verdict:
     """The day's verdict from every reading taken from its end Reset on.
@@ -287,6 +295,7 @@ def decide(
                 day_effects=day_effects,
                 new_day_effects=new_day_effects,
                 floor=floor,
+                reset=reset,
             )
             for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
             if reading.read_at >= reset_at
@@ -370,14 +379,19 @@ def contradiction_during_day(
     day_effects: tuple[Effect, ...],
     earlier: tuple[Effect, ...] = (),
     floor: int | None = None,
+    reset: bool = False,
 ) -> tuple[Verdict | None, frozenset[Way] | None]:
     """The first trustworthy reading taken during the day, from
     ``DAY_READINGS_FROM`` after its start, that fits no value the ledger
     allows at its time: the day before's end, ``start`` before any weekly
     raise to ``floor``, plus its automatic loss, ``pending_loss``, while it
     may not have landed, which has no fixed time, then raised, then every
-    battle of the day landed by then. Once every way a reading fits has the
-    loss landed, or the raise applied, every later one must too. A battle in flight is read both
+    battle of the day landed by then. With ``reset``, on a Season's first day,
+    ``start`` is the previous Season's total and the reset to ``floor`` may
+    land after the first readings (on 5 October 2026, 112 of 14,877 Day 1
+    profiles read from 05:15 still showed the old total). Once every way a
+    reading fits has the loss landed, or the raise or reset applied, every
+    later one must too. A battle in flight is read both
     ways, and the latest attacks' late credits, ``earlier`` the day before's
     battles already in its end, may be missing. Also every way the day's
     battles may have shown by then, from which the readings from its end
@@ -387,7 +401,7 @@ def contradiction_during_day(
             reading, end_before_loss=start + pending_loss,
             loss_candidates=(pending_loss,) if pending_loss else (),
             loss_certain=bool(pending_loss), day_effects=earlier,
-            new_day_effects=day_effects, floor=floor,
+            new_day_effects=day_effects, floor=floor, reset=reset,
         )
         for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
         if not reading.confirm_only
