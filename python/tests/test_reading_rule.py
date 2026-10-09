@@ -10,8 +10,15 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+import test_reconciliation
+
 from clashlens.domain import allocate_trophies
 from clashlens.reading_rule import Effect, Reading, contradiction_during_day, decide
+from clashlens.reconciliation import (
+    BattleContribution,
+    PreviousRankedDay,
+    reconcile_ranked_day,
+)
 
 RESET = datetime(2026, 8, 5, 5, tzinfo=UTC)
 DAY_BATTLES = (
@@ -177,8 +184,11 @@ def test_a_new_day_battle_in_flight_at_the_reading_leaves_it_read_both_ways() ->
     # Read 3 minutes after the attack's report: with or without it.
     assert verdict(Reading(at(41), 5870), new_day=new_day).exact is False
     assert verdict(Reading(at(41), 5900), new_day=new_day).exact is False
-    # Neither fits: not evidence on its own.
-    assert verdict(Reading(at(41), 5880), new_day=new_day).outcome == "unverified"
+    # Neither fits, with or without the attack, before or after the loss: a
+    # disagreement, which a later match does not erase.
+    assert verdict(Reading(at(41), 5880), new_day=new_day).outcome == "contradicted"
+    result = verdict(Reading(at(41), 5880), Reading(at(60), 5900), new_day=new_day)
+    assert (result.outcome, result.reading.read_at) == ("contradicted", at(41))
 
 
 def test_a_disputed_battle_in_flight_makes_the_reading_unjudgeable() -> None:
@@ -219,6 +229,16 @@ def test_a_confirm_only_reading_never_settles_that_a_possible_loss_missed() -> N
 
     assert kept.outcome == "unverified"
     assert (charged.outcome, charged.loss, charged.exact) == ("verified", 304, True)
+
+
+def test_a_reading_after_an_opponent_only_battle_never_settles_that_a_possible_loss_missed() -> None:
+    # A zero-defense day ends at 6,000 before a possible 320 charge. The
+    # opponent reports a new-day attack at 05:10 that the player's own log
+    # lacks; the 05:20 profile may show it, so its 6,000 proves no charge missed.
+    result = verdict(Reading(at(20), 6000), loss=(320,), certain=False, end=6000,
+                     unknown_from=at(10))
+
+    assert result.outcome == "unverified"
 
 
 def test_no_confirm_only_reading_undoes_a_charge_a_reading_showed() -> None:
@@ -290,12 +310,40 @@ def test_a_reading_during_the_day_must_show_the_battles_landed_by_then() -> None
     assert during(Reading(noon, 6010)) is None
     found = during(Reading(noon, 6100))
     assert found is not None and (found.reading.read_at, found.residual) == (noon, 90)
-    # At 07:03 the attack may or may not have landed: either way fits.
+    # At 07:03 the attack may or may not have landed: either way fits, and
+    # a value fitting neither way disagrees.
     assert during(Reading(day_start + timedelta(hours=2, minutes=3), 6000)) is None
     assert during(Reading(day_start + timedelta(hours=2, minutes=3), 6020)) is None
+    found = during(Reading(day_start + timedelta(hours=2, minutes=3), 6010))
+    assert found is not None and found.residual == -10
     # The day before's automatic loss may not have landed at 05:20.
     assert during(Reading(day_start + timedelta(minutes=20), 6070), pending_loss=70) is None
+    # Once a reading shows it landed, a later one without it disagrees.
+    landed = Reading(day_start + timedelta(minutes=20), 6000)
+    unlanded = Reading(day_start + timedelta(minutes=90), 6080)
+    assert during(landed, pending_loss=80) is None
+    found = during(landed, unlanded, pending_loss=80)
+    assert found is not None and (found.reading, found.residual) == (unlanded, 80)
     # Before 05:15 the day before's last credits may still be landing, and a
     # Season 0 reading can only confirm.
     assert during(Reading(day_start + timedelta(minutes=10), 5900)) is None
     assert during(Reading(noon, 6100, confirm_only=True)) is None
+
+
+def test_the_weekly_raise_hides_a_possible_charge_a_reading_may_show() -> None:
+    # A Sunday ending at 5,310 with no defense slot used may be charged 320,
+    # which the Monday raise lifts from 4,990 to 5,000: a 5,000 reading, or
+    # 5,030 after a new-day +30 attack, fits but cannot prove the charge.
+    day = test_reconciliation._input(
+        start_trophies=5310, next_start_trophies=5000, contributions=(),
+        previous_day=PreviousRankedDay(True, 8, 320, 0), boundary_kind="weekly",
+    )
+    attack = BattleContribution("next-attack", "offense", 30,
+                                battle_timestamp=day.ranked_day.end + timedelta(minutes=5))
+    later = replace(day, next_start_trophies=5310, new_day_contributions=(attack,),
+                    readings=(Reading(day.ranked_day.end + timedelta(minutes=20), 5030),))
+
+    for data in (day, later):
+        result = reconcile_ranked_day(data)
+        assert (result.state, result.failure_reasons) == ("Partial", ("end_reading_unverified",))
+        assert result.final_trophies_before_reset == 5310

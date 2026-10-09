@@ -120,10 +120,12 @@ def judge(
     loss_certain: bool,
     day_effects: Iterable[Effect],
     new_day_effects: Iterable[Effect],
+    floor: int | None = None,
 ) -> _Judged | None:
     """Whether one reading equals a value the ledger allows at its time, or
     ``None`` when it cannot be judged: a disputed battle may be in it, or too
-    many battles may be."""
+    many battles may be. ``floor`` is the weekly raise: an ended-day value
+    below it may also be read raised to it, before any new-day battle."""
     day_effects = tuple(day_effects)
     at = reading.read_at
     base = end_before_loss
@@ -148,32 +150,36 @@ def judge(
         if effect.disputed:
             return None
         if effect.lands_until <= at:
-            base += effect.change
             new_day_change += effect.change
         else:
             maybes.append((effect.change, effect.identity, False))
     if len(maybes) > MAX_AMBIGUOUS_BATTLES:
         return None
     losses = [0, *(loss for loss in loss_candidates if loss)]
+
+    def fits(ended: int, new: int) -> bool:
+        return reading.trophies == ended + new or (
+            floor is not None and ended < floor and reading.trophies == floor + new)
+
     # Any battle in flight leaves the reading read one way or the other, even
     # when it fits as read: the battle's credit may have been visible or not.
     ambiguous = bool(maybes)
     for loss in losses:
-        if reading.trophies == base - loss:
+        if fits(base - loss, new_day_change):
             return _Judged(reading, True, ambiguous, loss, tuple(missed), new_day_change)
     for count in range(1, len(maybes) + 1):
         for chosen in combinations(maybes, count):
-            value = base + sum(delta for delta, _, _ in chosen)
+            ended = base + sum(delta for delta, _, is_ended in chosen if is_ended)
+            new = new_day_change + sum(
+                delta for delta, _, is_ended in chosen if not is_ended)
             for loss in losses:
-                if reading.trophies == value - loss:
+                if fits(ended - loss, new):
                     return _Judged(
                         reading, True, True, loss,
                         tuple(missed) + tuple(
-                            identity for _, identity, ended in chosen if ended
+                            identity for _, identity, is_ended in chosen if is_ended
                         ),
-                        new_day_change + sum(
-                            delta for delta, _, ended in chosen if not ended
-                        ),
+                        new,
                     )
     # The game can credit an attack to the attacker's own profile long after
     # it: on 6 October 2026 #P20G0CUJY read 4,766 at 05:02:41 without all 308
@@ -187,13 +193,14 @@ def judge(
         lagging = attacks[-count:]
         short = sum(effect.change for effect in lagging)
         for loss in losses:
-            if reading.trophies == base - loss - short:
+            if fits(base - loss - short, new_day_change):
                 lagged = tuple(effect.identity for effect in lagging)
                 return _Judged(reading, True, True, loss, tuple(missed) + lagged,
                                new_day_change, lagged=lagged)
     # The residual is against the day's end after a certain loss, the value
     # every saved result records as the expected next start.
-    expected = base - (max(loss_candidates) if loss_certain and loss_candidates else 0)
+    expected = base + new_day_change - (
+        max(loss_candidates) if loss_certain and loss_candidates else 0)
     return _Judged(reading, False, ambiguous, residual=reading.trophies - expected)
 
 
@@ -208,15 +215,15 @@ def decide(
     new_day_effects: tuple[Effect, ...],
     unknown_from: datetime | None = None,
     start_proven: bool,
+    floor: int | None = None,
 ) -> Verdict:
     """The day's verdict from every reading taken from its end Reset on.
 
     A reading is trustworthy unless it is confirm-only or taken at or after
     ``unknown_from``, the earliest report of a new-day battle only the
     opponent has reported, which it may show. A trustworthy reading that
-    fits no value contradicts the day, unless a battle in flight leaves it
-    read both ways (the Reset reading still contradicts then), and no later
-    match erases that. One short of exactly the gains of the player's latest
+    fits no value, each battle in flight read both ways, contradicts the
+    day, and no later match erases that. One short of exactly the gains of the player's latest
     landed attacks, the game's attacker-profile lag, never contradicts and
     confirms nothing. A trustworthy clean match that shows no loss after
     one that showed it landed contradicts too: a loss does not un-land.
@@ -237,6 +244,7 @@ def decide(
                 loss_certain=loss_certain,
                 day_effects=day_effects,
                 new_day_effects=new_day_effects,
+                floor=floor,
             )
             for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies))
             if reading.read_at >= reset_at
@@ -256,7 +264,6 @@ def decide(
         Verdict("contradicted", item.reading, residual=item.residual, lagged=lagged)
         for item in judged
         if trusted(item) and not item.matched
-        and (not item.ambiguous or item.reading.reset_reading)
     ), None)
     matches = [item for item in judged if trusted(item) and clean(item)]
     landed = next((item for item in matches if item.loss), None)
@@ -273,7 +280,7 @@ def decide(
     # proves nothing: it may be read before the loss lands.
     possible = bool(loss_candidates) and not loss_certain
     judged = [item for item in judged
-              if item.loss or not possible or not item.reading.confirm_only]
+              if item.loss or not possible or trusted(item)]
     matches = matches or [item for item in judged if clean(item)]
     if matches:
         loss = max(item.loss for item in matches)
@@ -310,7 +317,8 @@ def contradiction_during_day(
     ``DAY_READINGS_FROM`` after its start, that fits no value the ledger
     allows at its time: the start plus every battle landed by then, plus
     the day before's automatic loss, ``pending_loss``, while it may not have
-    landed, which has no fixed time. A battle in flight is read both ways."""
+    landed, which has no fixed time; once a reading shows it landed, every
+    later one must too. A battle in flight is read both ways."""
     total = start + pending_loss + sum(effect.change for effect in day_effects)
     for reading in sorted(readings, key=lambda item: (item.read_at, item.trophies)):
         if reading.confirm_only or not (
@@ -321,6 +329,10 @@ def contradiction_during_day(
             loss_candidates=(pending_loss,) if pending_loss else (),
             loss_certain=bool(pending_loss), day_effects=day_effects, new_day_effects=(),
         )
-        if judged is not None and not judged.matched and not judged.ambiguous:
+        if judged is None:
+            continue
+        if not judged.matched:
             return Verdict("contradicted", reading, residual=judged.residual)
+        if judged.loss and not judged.ambiguous:
+            total, pending_loss = total - judged.loss, 0
     return None

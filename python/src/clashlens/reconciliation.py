@@ -432,6 +432,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 ),
                 unknown_from=data.first_unshown_report,
                 start_proven=start_proven,
+                floor=5000 if data.boundary_kind == "weekly" else None,
             )
             if ended
             and coverage_complete
