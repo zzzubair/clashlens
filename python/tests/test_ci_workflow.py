@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -147,6 +148,48 @@ def _calls(command_workspace):
     )
 
 
+def test_every_job_pulls_docker_hub_images_from_a_public_copy(
+    command_workspace,
+) -> None:
+    workflow = _workflow()
+    mirror = workflow["env"]["DOCKER_HUB_MIRROR"]
+    assert tomllib.loads(mirror) == {
+        "registry": [
+            {"location": "docker.io", "mirror": [{"location": "mirror.gcr.io"}]}
+        ]
+    }
+    workspace, _ = command_workspace
+    sudo = workspace / "bin" / "sudo"
+    sudo.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        "stdin = sys.stdin.read() if sys.argv[1:2] == ['tee'] else None\n"
+        "with open(os.environ['COMMAND_LOG'], 'a') as log:\n"
+        "    log.write(json.dumps({'command': 'sudo', 'args': sys.argv[1:], "
+        "'stdin': stdin}) + '\\n')\n"
+    )
+    drop_in = "/etc/containers/registries.conf.d/docker-hub-mirror.conf"
+    write_mirror = {"command": "sudo", "args": ["tee", drop_in], "stdin": mirror + "\n"}
+    mirrored_jobs = set()
+    for name, job in workflow["jobs"].items():
+        for service in job.get("services", {}).values():
+            assert service["image"].startswith("public.ecr.aws/docker/library/")
+        (workspace / "calls.jsonl").unlink(missing_ok=True)
+        for step in job["steps"]:
+            if "run" in step:
+                _run_step(step, command_workspace, {"DOCKER_HUB_MIRROR": mirror})
+        calls = _calls(command_workspace)
+        pulls = [i for i, c in enumerate(calls) if c["command"] in ("podman", "dev")]
+        if pulls:
+            mirrored_jobs.add(name)
+            assert write_mirror in calls[: pulls[0]], name
+    assert mirrored_jobs == {
+        "website-tests",
+        "containers",
+        "packaged-python-tests",
+        "container-runtime",
+    }
+
+
 @pytest.mark.parametrize("group", ["1", "2", "3", "4"])
 def test_python_groups_have_independent_postgresql_and_run_development_tests_once(
     command_workspace, group
@@ -156,7 +199,7 @@ def test_python_groups_have_independent_postgresql_and_run_development_tests_onc
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     assert job["env"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
     assert job["services"]["postgres"] == {
-        "image": "postgres:18",
+        "image": "public.ecr.aws/docker/library/postgres:18",
         "env": {
             "POSTGRES_DB": "clashlens",
             "POSTGRES_PASSWORD": "postgres",
@@ -492,7 +535,7 @@ def test_packaged_python_groups_run_the_full_packaged_suite_once(
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     # The development stack's database image, user and test database.
     assert job["services"]["postgres"] == {
-        "image": "postgres:18-alpine",
+        "image": "public.ecr.aws/docker/library/postgres:18-alpine",
         "env": {
             "POSTGRES_DB": "clashlens_test",
             "POSTGRES_PASSWORD": "clashlens-dev",

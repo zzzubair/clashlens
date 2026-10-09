@@ -15,6 +15,18 @@ concurrency:
 permissions:
   contents: read
 
+# Docker Hub rate-limits and times out unauthenticated pulls from shared
+# runners. The PostgreSQL services cannot fall back to another registry, so
+# they pull from AWS's full public copy of Docker's official images. Podman
+# jobs install this file to try Google's public copy of Docker Hub first and
+# fall back to Docker Hub only if it fails.
+env:
+  DOCKER_HUB_MIRROR: |
+    [[registry]]
+    location = "docker.io"
+    [[registry.mirror]]
+    location = "mirror.gcr.io"
+
 jobs:
   python-tests:
     name: Python PostgreSQL tests, group ${{ matrix.group }}
@@ -30,7 +42,7 @@ jobs:
       UV_PROJECT_ENVIRONMENT: /tmp/clashlens-ci-venv
     services:
       postgres:
-        image: postgres:18
+        image: public.ecr.aws/docker/library/postgres:18
         env:
           POSTGRES_DB: clashlens
           POSTGRES_PASSWORD: postgres
@@ -99,7 +111,9 @@ jobs:
         run: npm test
       - name: Install rootless Podman
         working-directory: website
-        run: sudo apt-get update && sudo apt-get install -y podman
+        run: |
+          sudo apt-get update && sudo apt-get install -y podman
+          sudo tee /etc/containers/registries.conf.d/docker-hub-mirror.conf <<<"$DOCKER_HUB_MIRROR" >/dev/null
       - name: Install Chromium and WebKit
         working-directory: website
         # WebKit runs the iPhone search tests.
@@ -134,7 +148,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install rootless Podman
-        run: sudo apt-get update && sudo apt-get install -y podman
+        run: |
+          sudo apt-get update && sudo apt-get install -y podman
+          sudo tee /etc/containers/registries.conf.d/docker-hub-mirror.conf <<<"$DOCKER_HUB_MIRROR" >/dev/null
       - name: Build Python check container
         run: podman build --file development/PythonCheck.Containerfile --tag clashlens-python-check:ci .
       - name: Verify packaged operations and support wrappers
@@ -154,7 +170,7 @@ jobs:
     # server per group and no collector load beside the tests.
     services:
       postgres:
-        image: postgres:18-alpine
+        image: public.ecr.aws/docker/library/postgres:18-alpine
         env:
           POSTGRES_DB: clashlens_test
           POSTGRES_PASSWORD: clashlens-dev
@@ -169,7 +185,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install rootless Podman
-        run: sudo apt-get update && sudo apt-get install -y podman
+        run: |
+          sudo apt-get update && sudo apt-get install -y podman
+          sudo tee /etc/containers/registries.conf.d/docker-hub-mirror.conf <<<"$DOCKER_HUB_MIRROR" >/dev/null
       - name: Build Python check container
         run: podman build --file development/PythonCheck.Containerfile --tag clashlens-python-check:ci .
       - name: Packaged lint, compile, and development service tests
@@ -191,7 +209,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install rootless Podman
-        run: sudo apt-get update && sudo apt-get install -y podman
+        run: |
+          sudo apt-get update && sudo apt-get install -y podman
+          sudo tee /etc/containers/registries.conf.d/docker-hub-mirror.conf <<<"$DOCKER_HUB_MIRROR" >/dev/null
       - name: Full development container checks
         run: ./dev check
 
