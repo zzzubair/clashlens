@@ -340,9 +340,9 @@ def test_season_repair_settles_days_saved_before_the_later_reading_rule(
 def test_a_season_zero_later_reading_can_confirm_the_day_but_never_contradict_it(
     database_url: str, archive_server, right: bool
 ) -> None:
-    # The game sends Season ID 0 to some signed-up players. Such a profile's
-    # trophies can confirm the calculated end; one that disagrees proves
-    # nothing, because the profile itself is not trusted.
+    # The game sends Season ID 0 to some signed-up players. Such a profile is
+    # not trusted: it can confirm only a day no trusted reading decided, so
+    # neither value overturns the Reset reading's contradiction.
     end_b = 6000 + WIN - 8 * LOSS
     payload = json.loads(_profile(end_b if right else end_b + 3))
     payload["currentLeagueSeasonId"] = 0
@@ -353,12 +353,8 @@ def test_a_season_zero_later_reading_can_confirm_the_day_but_never_contradict_it
         _day_end_recheck(connection_info, archive_server)
         rows = _latest_days(connection_info)
 
-    if right:
-        assert [row[0] for row in rows] == ["Complete", "Complete"]
-        assert rows[0][7]["next_start_reading_correction"] == WIN
-    else:
-        assert [row[0] for row in rows] == ["Inconsistent", "Inconsistent"]
-        assert "next_start_reading_correction" not in rows[0][7]
+    assert [row[0] for row in rows] == ["Inconsistent", "Inconsistent"]
+    assert "next_start_reading_correction" not in rows[0][7]
 
 
 def _zero_defense_day_read_early(
@@ -730,7 +726,8 @@ def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
     database_url: str, archive_server
 ) -> None:
     # Day B's 05:20 Reset reading already shows a new-day +40 attack reported
-    # at 05:08 that its log lacks; a later log brings it. Day B ends without
+    # at 05:08 that its 05:21 log, served from cache, lacks; a later log
+    # brings it. Day B ends without
     # it and day C starts from that end, not from the reading, and counts it once.
     day_b = [(DAY_B + timedelta(hours=1), True)] + [
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
@@ -744,6 +741,7 @@ def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
         jobs += _reset_work(
             connection_info, archive_server, DAY_C, profile=_profile(end_b + WIN),
             log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=20),
+            log_at=DAY_C + timedelta(minutes=21),
         )
         _process(connection_info, archive_server, jobs)
         [before] = _latest_days(connection_info, (DAY_B,))
