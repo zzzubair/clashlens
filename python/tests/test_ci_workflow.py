@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -147,6 +148,54 @@ def _calls(command_workspace):
     )
 
 
+def test_every_job_pulls_images_from_google_copy_of_docker_hub_first(tmp_path) -> None:
+    workflow = _workflow()
+    mirror = workflow["env"]["DOCKER_HUB_MIRROR"]
+    assert tomllib.loads(mirror) == {
+        "registry": [
+            {"location": "docker.io", "mirror": [{"location": "mirror.gcr.io"}]}
+        ]
+    }
+    calls = tmp_path / "calls"
+    sudo = tmp_path / "sudo"
+    sudo.write_text(
+        f"#!{sys.executable}\nimport json,sys\n"
+        "stdin = sys.stdin.read() if sys.argv[1] == 'tee' else None\n"
+        f"with open({str(calls)!r}, 'a') as log: "
+        "log.write(json.dumps([sys.argv[1:], stdin])+'\\n')\n"
+    )
+    sudo.chmod(0o700)
+    podman_jobs = set()
+    for name, job in workflow["jobs"].items():
+        for service in job.get("services", {}).values():
+            assert service["image"].startswith("mirror.gcr.io/library/")
+        for step in job["steps"]:
+            if "install -y podman" not in step.get("run", ""):
+                continue
+            podman_jobs.add(name)
+            calls.unlink(missing_ok=True)
+            subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                check=True,
+                cwd=tmp_path,
+                env=dict(
+                    os.environ,
+                    PATH=f"{tmp_path}:{os.environ['PATH']}",
+                    DOCKER_HUB_MIRROR=mirror,
+                ),
+            )
+            drop_in = "/etc/containers/registries.conf.d/docker-hub-mirror.conf"
+            assert [["tee", drop_in], mirror + "\n"] in [
+                json.loads(line) for line in calls.read_text().splitlines()
+            ]
+    assert podman_jobs == {
+        "website-tests",
+        "containers",
+        "packaged-python-tests",
+        "container-runtime",
+    }
+
+
 @pytest.mark.parametrize("group", ["1", "2", "3", "4"])
 def test_python_groups_have_independent_postgresql_and_run_development_tests_once(
     command_workspace, group
@@ -156,7 +205,7 @@ def test_python_groups_have_independent_postgresql_and_run_development_tests_onc
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     assert job["env"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
     assert job["services"]["postgres"] == {
-        "image": "postgres:18",
+        "image": "mirror.gcr.io/library/postgres:18",
         "env": {
             "POSTGRES_DB": "clashlens",
             "POSTGRES_PASSWORD": "postgres",
@@ -492,7 +541,7 @@ def test_packaged_python_groups_run_the_full_packaged_suite_once(
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     # The development stack's database image, user and test database.
     assert job["services"]["postgres"] == {
-        "image": "postgres:18-alpine",
+        "image": "mirror.gcr.io/library/postgres:18-alpine",
         "env": {
             "POSTGRES_DB": "clashlens_test",
             "POSTGRES_PASSWORD": "clashlens-dev",
