@@ -232,9 +232,10 @@ def decide(
     fits no value, each battle in flight read both ways, contradicts the
     day, and no later match erases that. One short of exactly the gains of
     the player's latest landed attacks, the game's attacker-profile lag,
-    never contradicts and confirms nothing. Once every way a trustworthy
-    reading fits has the loss landed, a later one that fits only without it
-    contradicts too: a loss does not un-land. Otherwise the last
+    never contradicts and confirms nothing. A reading shows a loss only when
+    every way it fits has it: once every way a trustworthy reading fits has
+    the loss landed, a later one that fits only without it contradicts too,
+    as a loss does not un-land, and a clean match fits one way only. Otherwise the last
     trustworthy clean match decides, a match proving the day with the loss
     landed when one is certain or a reading showed it, or, read before the
     loss, proving its end before the loss; with none, the last clean
@@ -268,7 +269,10 @@ def decide(
         return not item.reading.confirm_only and not unknown(item)
 
     def clean(item: _Judged) -> bool:
-        return item.matched and not item.ambiguous and not item.missed
+        return item.matched and not item.ambiguous and not item.missed and len(item.losses) == 1
+
+    def shows(item: _Judged) -> int:
+        return item.loss if len(item.losses) == 1 else 0
 
     lagged = tuple(dict.fromkeys(name for item in judged for name in item.lagged))
     contradiction = next((
@@ -294,7 +298,7 @@ def decide(
     # a battle only the opponent has reported proves neither.
     possible = bool(loss_candidates) and not loss_certain
     judged = [item for item in judged
-              if not possible or not unknown(item) and (item.loss or trusted(item))]
+              if not possible or not unknown(item) and (shows(item) or trusted(item))]
     matches = matches or [item for item in judged if clean(item)]
     shown = landed.loss if landed is not None else 0
     if matches:
@@ -311,7 +315,7 @@ def decide(
     guessed = next((item for item in judged if item.matched), None)
     if guessed is not None and start_proven and not lagged:
         return Verdict(
-            "verified", guessed.reading, max(shown, guessed.loss), False,
+            "verified", guessed.reading, max(shown, shows(guessed)), False,
             guessed.missed, guessed.new_day_change, lagged=lagged,
         )
     # Its evidence keeps the last reading that showed the lag, when one did.

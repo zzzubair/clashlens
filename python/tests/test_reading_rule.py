@@ -556,14 +556,15 @@ def test_a_reading_late_credits_also_explain_never_proves_the_loss_landed() -> N
     # The day ends at 6,080 before its 80 loss, its last +40 attack's credit
     # late; a new-day +40 attack at 05:08 is late too. 05:20 reads 6,040:
     # the loss, or both credits missing. 05:25 shows both credits, 6,120,
-    # and 05:29 the loss, 6,040. None of them disagrees.
+    # and 05:29 the loss, 6,040, or both credits late again. None of them
+    # disagrees, and none proves the loss landed.
     result = verdict(
         Reading(at(20), 6040), Reading(at(25), 6120), Reading(at(29), 6040),
         loss=(80,), end=6080, day=(Effect("attack", 40, at(-20)),),
         new_day=(Effect("next-attack", 40, at(8)),),
     )
 
-    assert (result.outcome, result.loss) == ("verified", 80)
+    assert (result.outcome, result.loss) == ("verified", 0)
 
 
 def test_no_late_credit_carries_into_a_seasons_first_day() -> None:
@@ -579,3 +580,16 @@ def test_no_late_credit_carries_into_a_seasons_first_day() -> None:
     ))
 
     assert "trophy_equation_mismatch" in result.failure_reasons
+
+
+def test_a_reading_that_fits_charged_or_uncharged_proves_no_charge() -> None:
+    # A day with no defense slot used ends at 6,080 before a possible 80
+    # charge, after two +40 attacks. 05:20 reads 6,000: the charge, or both
+    # credits late. 05:25 reads 6,080: uncharged, so the day stays uncharged.
+    day = (Effect("attack-1", 40, at(-60)), Effect("attack-2", 40, at(-40)))
+    early = Reading(at(20), 6000)
+    both = verdict(early, Reading(at(25), 6080), loss=(80,), certain=False, end=6080, day=day)
+    alone = verdict(early, loss=(80,), certain=False, end=6080, day=day)
+
+    assert (both.outcome, both.loss, both.exact) == ("verified", 0, True)
+    assert (alone.loss, alone.exact) == (0, False)
