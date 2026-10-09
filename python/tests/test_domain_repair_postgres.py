@@ -26,7 +26,6 @@ from clashlens import (
 )
 from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION
 from clashlens.army_decoder import DECODER_VERSION
-from clashlens.catalog import CATALOG_VERSION
 from clashlens.db import Database
 from clashlens.domain import (
     HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
@@ -376,6 +375,20 @@ def _unpublished_correction(connection_info: str, boundary_at: datetime, pending
         )
 
 
+def test_campaign_counts_a_catalogue_v2_decode_as_done(database_url: str) -> None:
+    # September decodes stay on catalogue v2: v3's Portal Pendant came later.
+    assert domain_repair.target_versions()["unit_catalog"] == "unit-catalog-v2"
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            player, opponent = _player(connection, "#V2"), _player(connection, "#OTHER")
+            evidence_id = _report(connection, player, opponent, START, destruction=56,
+                                  code="u1x0-2x1")
+            _population(connection, START + DAY, player, opponent)
+        assert domain_repair.preview(worker, SEASON, now=NOW)["items"]["decode_batch"] == 1
+        _decoded(connection_info, evidence_id)
+        assert domain_repair.preview(worker, SEASON, now=NOW)["items"] == {}
+
+
 def _decoded(connection_info: str, evidence_id: int) -> None:
     with _owner(connection_info) as connection:
         connection.execute(
@@ -386,7 +399,7 @@ def _decoded(connection_info: str, evidence_id: int) -> None:
             ) SELECT battle_id, id, 'attacker', %s, %s, %s, 'failed', 'undecodable'
             FROM battle_evidence WHERE id = %s
             """,
-            (DECODER_VERSION, CATALOG_VERSION, "a" * 64, evidence_id),
+            (DECODER_VERSION, "unit-catalog-v2", "a" * 64, evidence_id),
         )
 
 

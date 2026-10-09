@@ -75,7 +75,6 @@ from psycopg.types.json import Jsonb
 
 from . import domain
 from .army_decoder import DECODER_VERSION
-from .catalog import CATALOG_VERSION
 from .db import PYTHON_BACKFILL_PRIORITY, Database, _text_value
 from .domain import (
     BATTLE_DAY_GRACE,
@@ -526,6 +525,10 @@ ACTIONS = ("preview", "register", "activate")
 # Each later repair change adds its stage; activation refuses until all exist.
 REQUIRED_STAGES = ("battle_reports", "army_decodes", "day_results", "publications")
 HANDLERS: dict[str, Any] = {}
+# The catalogue in force for September 2026, the Season this campaign is
+# for. Portal Pendant, catalogue v3's only addition, arrived on 8 October,
+# so re-decoding that Season's battles under v3 would change nothing.
+CAMPAIGN_CATALOG_VERSION = "unit-catalog-v2"
 
 
 class CampaignRefused(ValueError):
@@ -545,7 +548,7 @@ def target_versions() -> dict[str, str]:
         "trophy_rule": TROPHY_ALLOCATION_RULE_VERSION,
         "battle_day_grace": str(BATTLE_DAY_GRACE),
         "army_decoder": DECODER_VERSION,
-        "unit_catalog": CATALOG_VERSION,
+        "unit_catalog": CAMPAIGN_CATALOG_VERSION,
         "reconciliation_rule": RECONCILIATION_RULE_VERSION,
     }
 
@@ -739,7 +742,7 @@ def _inventory(connection: Any, season_id: str, start: datetime, now: datetime) 
     parameters = {
         "start": start, "end": campaign_window(start)[0], "grace": BATTLE_DAY_GRACE,
         "old_rule": HISTORICAL_TROPHY_ALLOCATION_RULE_VERSION,
-        "decoder": DECODER_VERSION, "catalog": CATALOG_VERSION,
+        "decoder": DECODER_VERSION, "catalog": CAMPAIGN_CATALOG_VERSION,
     }
     items = []
     query = _INVENTORY.format(unfinished_moves=UNFINISHED_MOVES)
