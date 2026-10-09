@@ -733,6 +733,11 @@ def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
         (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
     ]
     new_day_attack = (DAY_C + timedelta(minutes=8), True)
+    # _log names at most 9 opponents, so the tenth battle gets its own.
+    cached = json.loads(_log(*day_b))
+    later_log = json.dumps({"items": [*cached["items"], {
+        **json.loads(_log(new_day_attack))["items"][0], "opponentPlayerTag": "#GGPP",
+    }]}).encode()
     end_b = 6000 + WIN - 8 * LOSS
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(
@@ -747,12 +752,12 @@ def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
         [before] = _latest_days(connection_info, (DAY_B,))
         jobs = [store_observation(
             connection_info, archive_server, occurrence_key="later-log",
-            endpoint="battle_log", body=_log(*day_b, new_day_attack),
+            endpoint="battle_log", body=later_log,
             observed_at=DAY_C + timedelta(minutes=30), normalized_tag=TAG,
         )[1]]
         jobs += _reset_work(
             connection_info, archive_server, DAY_D, profile=_profile(end_b + WIN),
-            log=_log(new_day_attack),
+            log=later_log,
         )
         _process(connection_info, archive_server, jobs)
         day_b_row, day_c_row = _latest_days(connection_info)
@@ -766,7 +771,8 @@ def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
 def test_unreadable_new_day_battle_leaves_the_reset_reading_unused(
     database_url: str, archive_server
 ) -> None:
-    # Day A's one defense lost 5, so day B, with none, may be charged 40.
+    # Day A's one defense lost 5 and its 7 missing defenses 35, so day B,
+    # with none, starts at 6,000 and may be charged 40.
     # Day B's 05:20 Reset reading shows 40 less, but the 05:30 log brings a
     # new-day defense reported at 05:07 whose row cannot be read: it may be
     # the 40, so the reading proves no charge and day B is not settled.
@@ -776,7 +782,7 @@ def test_unreadable_new_day_battle_leaves_the_reset_reading_unused(
     unreadable.pop("attack")
     with domain_database(database_url, include_coordinator=True) as connection_info:
         jobs = _reset_work(
-            connection_info, archive_server, DAY_A, profile=_profile(6005), log=_log()
+            connection_info, archive_server, DAY_A, profile=_profile(6040), log=_log()
         )
         jobs += _reset_work(
             connection_info, archive_server, DAY_B, profile=_profile(6000),
