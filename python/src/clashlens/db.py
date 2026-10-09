@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from psycopg_pool import ConnectionPool
 
+from .background_pacing import background_turn_free
 from .operating import database_pool_health
 from .past_reset_pacing import (
     build_permit_busy,
@@ -374,6 +375,7 @@ def _claim_filters(
     supports_coordinator: bool,
     work_types: Collection[str] | None,
     past_reset_build_hold: str | None,
+    backfill: bool | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     """Claim alias ``job``'s supported filter, whole eligibility and parameters."""
     supported_filter, params = _supported_claim_filter(
@@ -388,6 +390,9 @@ def _claim_filters(
             raise ValueError("claim work types must be supported work types")
         supported_filter = f"({supported_filter} AND job.work_type = ANY(%(claim_work_types)s::text[]))"
         params["claim_work_types"] = sorted(work_types)
+    if backfill is not None:
+        supported_filter = (f"({supported_filter} AND job.priority"
+                            f" {'=' if backfill else '<>'} {PYTHON_BACKFILL_PRIORITY})")
     dependency_filter = "job.state = 'waiting_dependency' OR " if supports_dependency else ""
     return supported_filter, f"""(((job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
             AND job.due_at <= statement_timestamp())
@@ -427,6 +432,7 @@ def _claim_select_statement(
     work_types: Collection[str] | None = None,
     past_reset_build_hold: str | None = None,
     reset_first: bool | None = None,
+    backfill: bool | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT for up to ``limit`` jobs and its named parameters.
 
@@ -446,6 +452,8 @@ def _claim_select_statement(
     ``planned`` makes a ``job_ids`` claim refuse, and an ordinary one run only, while
     Reset-priority work it could take waits; ``reset_first`` puts that work first,
     False puts other due work but backfill before it, and None keeps waiting time.
+    ``backfill`` True probes and rechecks only the backfill class, which no
+    other probe holds, and False every other class.
     """
     supported_filter, claimable, params = _claim_filters(
         supports_dependency=supports_dependency,
@@ -453,7 +461,10 @@ def _claim_select_statement(
         supports_coordinator=supports_coordinator,
         work_types=work_types,
         past_reset_build_hold=past_reset_build_hold,
+        backfill=backfill,
     )
+    priorities = {None: _PYTHON_CLAIM_PRIORITIES, True: f"({PYTHON_BACKFILL_PRIORITY})",
+                  False: f"({PYTHON_LIVE_PRIORITY}), ({PYTHON_RESET_PRIORITY})"}[backfill]
     params["claim_limit"] = limit
     if job_id is not None:
         job_ids = [job_id]
@@ -496,7 +507,7 @@ def _claim_select_statement(
         """
 
     def other_priorities(state: str, job_filter: str) -> str:
-        return "".join(f"""
+        return "" if backfill else "".join(f"""
                 UNION ALL
                 (
                     SELECT job.id
@@ -541,7 +552,7 @@ def _claim_select_statement(
             SELECT pick.id
             FROM (
                 SELECT claim_id.id
-                FROM (VALUES {_PYTHON_CLAIM_PRIORITIES}) AS claim_priority (priority)
+                FROM (VALUES {priorities}) AS claim_priority (priority)
                 CROSS JOIN LATERAL (
                     SELECT eligible.id
                     FROM (
@@ -1004,13 +1015,21 @@ class Database:
                     past_reset_build_hold(connection) if supports_coordinator else None
                 ),
             }
-            rows = connection.execute(*_claim_select_statement(
+            rows = [] if job_ids is None else connection.execute(*_claim_select_statement(
                 self._jobs_relation, job_ids=job_ids, planned=planned, **options
             )).fetchall()
-            if not rows and planned and job_ids is not None:
+            if job_ids is None or (not rows and planned):
                 rows = connection.execute(*_claim_select_statement(
-                    self._jobs_relation, planned=True, **options
+                    self._jobs_relation, planned=planned, backfill=False, **options
                 )).fetchall()
+                # Backfill always comes last; see background_pacing.
+                if len(rows) < limit and not planned and background_turn_free(
+                    connection, self._jobs_relation, self._supports_denormalized_contract,
+                    supports_coordinator,
+                ):
+                    rows += connection.execute(*_claim_select_statement(
+                        self._jobs_relation, backfill=True, **{**options, "limit": 1}
+                    )).fetchall()
             return self._lease_rows(connection, rows, owner, lease_seconds)
 
     def _lease_rows(

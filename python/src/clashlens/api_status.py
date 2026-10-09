@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .api_db import ApiDatabase
+from .db import PYTHON_LIVE_PRIORITY
 
 # Normal processing takes about a second; a busy Reset can take ten minutes or more.
 DELAY_SECONDS = 900
@@ -15,6 +16,8 @@ def get_update_status(database: ApiDatabase, *, now: datetime) -> dict[str, Any]
     with database.pool.connection() as connection:
         row = connection.execute(
             """
+            -- Live work only: background jobs, such as Season repair and
+            -- day-end recalculations, wait behind it by design.
             SELECT (SELECT max(last_success_at) FROM collector_response_state
                     WHERE scope = 'player' AND endpoint IN ('profile', 'battle_log')),
                    (SELECT min(CASE WHEN status = 'pending'
@@ -22,10 +25,11 @@ def get_update_status(database: ApiDatabase, *, now: datetime) -> dict[str, Any]
                                     ELSE created_at END)
                     FROM python_processing_jobs
                     WHERE work_type IN ('process_observation', 'reconcile_ranked_day')
+                      AND priority >= %s
                       AND (status IN ('waiting_retry', 'waiting_dependency', 'leased')
                            OR (status = 'pending' AND due_at <= %s)))
             """,
-            (now,),
+            (PYTHON_LIVE_PRIORITY, now),
         ).fetchone()
     now = now.astimezone(UTC)
     limit = now - timedelta(seconds=DELAY_SECONDS)

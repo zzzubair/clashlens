@@ -1170,7 +1170,17 @@ pages fell up to 59 minutes behind. Operator batches
 (`republish-current-season --first-logs` and `--repair`)
 are queued at backfill priority, 25, which a worker thread only runs when no
 higher-priority work that thread can claim is due; a thread that does not process saved
-responses can run one while responses still wait. On a thread's Reset-first
+responses can run one while responses still wait. All worker processes together
+run at most two backfill jobs at once, one claim never takes more than one, and
+none starts while a live response or day result has been due 2 minutes or more
+([`background_pacing.py`](../python/src/clashlens/background_pacing.py)). On
+2026-10-09 six army re-decodes ran at once, 568 jobs were leased beside Season
+repair, and live responses fell to about 8,000 players over 2 minutes late. An
+army re-decode saves 10 battles per transaction and waits at most a
+millisecond for any lock: when a live job holds one, it rolls those 10 back and
+tries again a quarter second later, up to 20 times, so a live job waits at most
+for one group of 10. The
+website's delayed-updates notice counts only live work. On a thread's Reset-first
 turn, a claim from the newest-job plan takes its planned job only if, in the
 same database statement, no Reset-priority work it could take is waiting: due,
 waiting on its saved response, or with an expired lease. If there is any, the

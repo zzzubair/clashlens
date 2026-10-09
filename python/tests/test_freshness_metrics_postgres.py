@@ -590,6 +590,15 @@ def test_update_status_reports_delayed_collection_and_processing(database_url):
                             (now - timedelta(minutes=minutes),),
                         )
                     assert status() == (False, delayed)
+                # The same result queued as background work, as Season repair
+                # and day-end recalculations queue it, waits behind live data by
+                # design and is no delay.
+                with psycopg.connect(info) as connection:
+                    connection.execute(
+                        "UPDATE python_processing_jobs SET priority = 25"
+                        " WHERE deduplication_key = 'status-day-end'"
+                    )
+                assert status() == (False, False)
         finally:
             collector.close()
 
