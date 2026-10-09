@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import warnings
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from psycopg.errors import LockNotAvailable
 from psycopg.types.json import Jsonb
 
 from . import battle_day_repair, boundary, boundary_publication, reset_settlement
@@ -1364,29 +1366,58 @@ def _season_metadata_for_ranked_day(
     return day.official_season_id, day.day_number
 
 
+# A re-decode is background work. It commits this many battles at a time and
+# waits at most a millisecond for any lock, giving way and trying again shortly
+# instead, so a live job waits at most for one small group's writes and never
+# queues behind it. On 9 Oct 2026 each 100-battle job held about 103 locks for
+# 5 to 14 seconds.
+REDECODE_GROUP = 10
+REDECODE_LOCK_WAIT = "1ms"
+REDECODE_LOCK_TRIES = 20
+REDECODE_RETRY_SECONDS = 0.25
+
+
 def complete_army_redecode(database: Database, claim: Claim) -> None:
+    battle_ids: list[int] = []
+    bid = claim.input_json.get("battle_id")
+    if bid is not None:
+        battle_ids.append(int(bid))
+    bids = claim.input_json.get("battle_ids")
+    if isinstance(bids, list) and bids:
+        for x in bids[:100]:
+            try:
+                battle_ids.append(int(x))
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"battle_ids must be integers: {e}") from e
+    if not battle_ids:
+        raise ValueError("redecode requires battle_id or battle_ids")
+    if len(battle_ids) > 100:
+        raise ValueError("redecode batch limited to 100")
+    groups = [battle_ids[at:at + REDECODE_GROUP]
+              for at in range(0, len(battle_ids), REDECODE_GROUP)]
+    for index, group in enumerate(groups):
+        # A group already saved writes nothing when the job runs again.
+        for tries_left in reversed(range(REDECODE_LOCK_TRIES)):
+            try:
+                _redecode_group(database, claim, group, finish=index == len(groups) - 1)
+                break
+            except LockNotAvailable:
+                if not tries_left:
+                    raise
+                time.sleep(REDECODE_RETRY_SECONDS)
+
+
+def _redecode_group(
+    database: Database, claim: Claim, battle_ids: list[int], *, finish: bool
+) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
+            connection.execute(f"SET LOCAL lock_timeout = '{REDECODE_LOCK_WAIT}'")
             job = database._lock_live_claim(connection, claim)
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"army-redecode:{claim.job_id}",),
             )
-            battle_ids: list[int] = []
-            bid = claim.input_json.get("battle_id")
-            if bid is not None:
-                battle_ids.append(int(bid))
-            bids = claim.input_json.get("battle_ids")
-            if isinstance(bids, list) and bids:
-                for x in bids[:100]:
-                    try:
-                        battle_ids.append(int(x))
-                    except (TypeError, ValueError) as e:
-                        raise ValueError(f"battle_ids must be integers: {e}") from e
-            if not battle_ids:
-                raise ValueError("redecode requires battle_id or battle_ids")
-            if len(battle_ids) > 100:
-                raise ValueError("redecode batch limited to 100")
             from .season_retirement import (
                 SEASON_DETAIL_RETIRED,
                 acquire_season_lock_shared,
@@ -1416,6 +1447,7 @@ def complete_army_redecode(database: Database, claim: Claim) -> None:
                         f"season {season_id} detail is retired",
                     )
             _upsert_army_decodes(database, connection, battle_ids)
-            database._finish_claim(
-                connection, claim, job, state="complete", outcome="processed"
-            )
+            if finish:
+                database._finish_claim(
+                    connection, claim, job, state="complete", outcome="processed"
+                )

@@ -590,6 +590,23 @@ def test_update_status_reports_delayed_collection_and_processing(database_url):
                             (now - timedelta(minutes=minutes),),
                         )
                     assert status() == (False, delayed)
+                # Queued as background work, the latest finished Legend day's
+                # day-end calculation still counts: players see that day. An
+                # older day's recalculation and Season repair wait by design.
+                for day, trigger, delayed in (
+                    ("2027-01-14T05:00:00Z", "day_end", True),
+                    ("2027-01-13T05:00:00Z", "day_end", False),
+                    ("2027-01-14T05:00:00Z", "season_repair", False),
+                ):
+                    with psycopg.connect(info) as connection:
+                        connection.execute(
+                            "UPDATE python_processing_jobs SET priority = 25,"
+                            " input_json = input_json || jsonb_build_object("
+                            "'ranked_day_start', %s::text, 'trigger', %s::text)"
+                            " WHERE deduplication_key = 'status-day-end'",
+                            (day, trigger),
+                        )
+                    assert status() == (False, delayed)
         finally:
             collector.close()
 
