@@ -456,8 +456,10 @@ describe("dashboard route", () => {
     profile: {
       trophies: 5702,
       freshness: { observedAt: "2026-10-07T09:20:00Z" },
-      battleHistoryUpdatedAt: "2026-10-07T09:25:00Z",
+      // A later correction to an earlier day.
+      battleHistoryUpdatedAt: "2026-10-07T09:28:00Z",
     },
+    currentDayPublishedAt: "2026-10-07T09:25:00Z",
     recentDays: [],
     seasonDays: [],
     currentDay: {
@@ -641,6 +643,19 @@ describe("dashboard route", () => {
     if (data.kind !== "signed-in") throw new Error("expected signed in");
     expect(data.ranges).toEqual({});
     expect(data.days[MAIN]).toMatchObject({ openDefenses: null, autoDefenseEach: null });
+  });
+
+  it("never shows last Season's trophies as live", async () => {
+    const pending = page({});
+    client.getPlayer.mockResolvedValue({
+      ...pending,
+      profile: { ...pending.profile, trophies: 6000, seasonResetPending: true },
+    });
+    const { data } = unwrap<DashboardLoaderData>(
+      await loader(loaderArgs(`${ORIGIN}/dashboard`)),
+    );
+    if (data.kind !== "signed-in") throw new Error("expected signed in");
+    expect(data.days[MAIN]).toMatchObject({ trophies: null });
   });
 
   it("works out a complete live day's gain from its attacks and defenses", async () => {

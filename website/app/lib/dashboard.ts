@@ -404,11 +404,11 @@ export interface PlayerDay {
   defenses: number | null;
   /** Rank on the board frozen at the Reset that started this Legend day. */
   lastResetRank: number | null;
-  /** The profile's trophies, read with `observedAtMs`. */
-  trophies: number;
+  /** The profile's trophies, read with `observedAtMs`; null until the Season's reset shows. */
+  trophies: number | null;
   /** The older of the profile and battle reads, Unix milliseconds. */
   observedAtMs: number | null;
-  /** When the battles were read, Unix milliseconds. */
+  /** When today's battles were published, Unix milliseconds. */
   battlesObservedAtMs: number | null;
   /** Defense slots still open; the game charges each at Reset. */
   openDefenses: number | null;

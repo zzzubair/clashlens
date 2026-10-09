@@ -221,7 +221,7 @@ function playerDay(
   );
   const [profileAt, battlesAt] = [
     page.profile.freshness.observedAt,
-    page.profile.battleHistoryUpdatedAt,
+    page.currentDayPublishedAt,
   ].map((value) => (value ? Date.parse(value) : Number.NaN));
   const observed = [profileAt, battlesAt].filter(Number.isFinite);
   return {
@@ -235,7 +235,7 @@ function playerDay(
     attacks: day?.offense.attacks ?? null,
     defenses: day?.defense.defenses ?? null,
     lastResetRank: previous?.resetRank ?? null,
-    trophies: page.profile.trophies,
+    trophies: page.profile.seasonResetPending ? null : page.profile.trophies,
     // The older of the trophy and battle reads, so the card never looks newer than it is.
     observedAtMs: observed.length ? Math.min(...observed) : null,
     battlesObservedAtMs: Number.isFinite(battlesAt) ? (battlesAt as number) : null,

@@ -1,11 +1,7 @@
 import { useNavigate, useFetcher } from "react-router";
 
 import type { BaseStrength, LegendsHeld, OpponentRow } from "../lib/dashboard";
-import {
-  BASE_STRENGTH_BAND,
-  BASE_STRENGTH_MIN_DEFENSES,
-  baseStrength,
-} from "../lib/dashboard";
+import { BASE_STRENGTH_MIN_DEFENSES, baseStrength } from "../lib/dashboard";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import type { DashboardActionData } from "../routes/dashboard";
 import { signed, starText, timeFormatter } from "./LegendClock";
@@ -84,8 +80,6 @@ export function OpponentsCard({
 }) {
   const navigate = useNavigate();
   const format = timeFormatter(timeZone);
-  const average =
-    legends && legends.defenses > 0 ? legends.held / legends.defenses : null;
   const sorted = rows
     .map((row) => ({ row, strength: baseStrength(row.defenses, legends) }))
     .sort(
@@ -151,25 +145,6 @@ export function OpponentsCard({
               <span className={`dash-strength dash-strength-${strength}`}>
                 {STRENGTH_LABELS[strength]}
               </span>
-              {strength !== "early" && average !== null ? (
-                <div className="opponents-gauge" aria-hidden="true">
-                  <div
-                    className="opponents-band"
-                    style={{
-                      left: `${Math.max(0, average * 100 - BASE_STRENGTH_BAND)}%`,
-                      width: `${Math.min(100, average * 100 + BASE_STRENGTH_BAND) - Math.max(0, average * 100 - BASE_STRENGTH_BAND)}%`,
-                    }}
-                  />
-                  <div
-                    className={`opponents-fill dash-strength-${strength}`}
-                    style={{ width: `${heldShare(row.defenses) * 100}%` }}
-                  />
-                  <div
-                    className="opponents-average"
-                    style={{ left: `${average * 100}%` }}
-                  />
-                </div>
-              ) : null}
               <span className="dash-muted">
                 held {held} of {row.defenses.length}
                 {row.defenses.length < BASE_STRENGTH_MIN_DEFENSES
