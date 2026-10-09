@@ -670,9 +670,11 @@ Season, including one that started on the previous Season's last day, has
 finished and none has failed (`unfinished`, `failed` and `failed_blockers`
 count them while it is at `inputs`; a failed one is not retried
 automatically, so investigate it and retry it by hand; a failed Reset-pair
-repair stops counting once its day has a result saved since the failure that
-is not Live, as its retry saves, even after the finished retry job is
-cleaned up 48 hours later); `days`, one job
+repair stops counting once a day it covers has a result saved since the
+failure and none of those days is left Live, as after its retry, even after
+the finished retry job is cleaned up 48 hours later; `preview` and `receipt`
+list the same failures, including a player's failed moved-battle rebuild from
+another Season that holds back this Season's); `days`, one job
 per player recalculating every saved day in the Season's 28 days, oldest
 first, even one saved before its Season was known, so each
 day starts where the day before now ends; once every such job has finished,

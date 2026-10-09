@@ -98,7 +98,7 @@ def season_repair(
     database: Database, season_id: str, action: str, *, max_jobs: int
 ) -> dict[str, Any]:
     """Run one Season repair action; see the module notes."""
-    from . import boundary
+    from . import battle_day_repair, boundary
 
     start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(start):
@@ -138,12 +138,19 @@ def season_repair(
             **_repair_jobs(connection, revision, season_id,
                            [p for p in players if p <= through], max_jobs),
         }
+        if action != "queue":
+            inputs = _input_jobs(
+                connection, season_id, start, max_jobs,
+                battle_day_repair.enqueue_rebuilds(
+                    database, max_jobs=max_jobs, season_id=season_id, queue=False
+                ),
+            )
         if action == "receipt":
             if receipt is None:
                 return {**report, "refused": "no repair queued for this revision"}
             return {
                 **report,
-                "inputs": _input_jobs(connection, season_id, start, max_jobs),
+                "inputs": inputs,
                 "boards_queued_at": receipt[3].isoformat() if receipt[3] else None,
                 "days": {"before": receipt[0], "now": _day_counts(connection, start)},
                 "boards": {"before": receipt[1], "now": _board_counts(connection, start)},
@@ -158,7 +165,7 @@ def season_repair(
         if action == "preview":
             return {
                 **report,
-                "inputs": _input_jobs(connection, season_id, start, max_jobs),
+                "inputs": inputs,
                 "days": _day_counts(connection, start),
                 "boards": _board_counts(connection, start),
                 "boards_to_rebuild": boundary.queue_board_rebuilds(
@@ -336,17 +343,17 @@ def _repair_inputs(
         queued = max(len(pairs["job_ids"]), pairs["evaluated_count"])
     with database.pool.connection() as connection:
         return {"queued": queued, **_input_jobs(
-            connection, season_id, start, max_jobs,
-            tuple(blocker["job_id"] for blocker in moved["failed_blockers"]),
+            connection, season_id, start, max_jobs, moved
         )}
 
 
 def _input_jobs(
     connection: Any, season_id: str, start: datetime, limit: int,
-    failed_moves: tuple[int, ...] = (),
+    moved: dict[str, Any],
 ) -> dict[str, Any]:
     """How many of the Season's evidence repairs are unfinished, and the
-    failed ones, with ``failed_moves`` holding back its moved battles."""
+    failed ones, with ``moved``'s failed blockers holding back its moved
+    battles."""
     return _job_states(connection.execute(
         """
         SELECT job.id, job.state, job.failure_category,
@@ -373,7 +380,8 @@ def _input_jobs(
           )
           -- A failed Reset repair queued again counts as its retry; once
           -- the retry has run, and after its finished job is cleaned
-          -- up, its day's result saved since the failure shows it.
+          -- up, the days it covers show it: one saved since the failure
+          -- and none left Live, a day it did not change kept as saved.
           AND NOT EXISTS (
               SELECT 1 FROM python_processing_jobs_worker AS retry
               WHERE retry.deduplication_key
@@ -386,15 +394,34 @@ def _input_jobs(
                   SELECT 1 FROM ranked_day_versions AS day
                   WHERE day.player_id = (job.input_json ->> 'player_id')::bigint
                     AND day.ranked_day_start
-                        = (job.input_json ->> 'ranked_day_start')::timestamptz
+                        BETWEEN (job.input_json ->> 'ranked_day_start')::timestamptz
+                        AND coalesce(
+                            job.input_json ->> 'last_ranked_day_start',
+                            job.input_json ->> 'ranked_day_start'
+                        )::timestamptz
                     AND day.created_at > job.updated_at
-                    AND day.state <> 'Live'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM (
+                      SELECT DISTINCT ON (day.ranked_day_start) day.state
+                      FROM ranked_day_versions AS day
+                      WHERE day.player_id = (job.input_json ->> 'player_id')::bigint
+                        AND day.ranked_day_start
+                            BETWEEN (job.input_json ->> 'ranked_day_start')::timestamptz
+                            AND coalesce(
+                                job.input_json ->> 'last_ranked_day_start',
+                                job.input_json ->> 'ranked_day_start'
+                            )::timestamptz
+                      ORDER BY day.ranked_day_start, day.version DESC, day.id DESC
+                  ) AS latest
+                  WHERE latest.state = 'Live'
               )
           )
         ORDER BY job.id
         """,
         (
-            [*_UNFINISHED_JOB_STATES, "failed"], list(failed_moves),
+            [*_UNFINISHED_JOB_STATES, "failed"],
+            [blocker["job_id"] for blocker in moved["failed_blockers"]],
             season_id, start + SEASON_DURATION, start,
         ),
     ).fetchall(), limit)

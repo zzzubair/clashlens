@@ -147,7 +147,8 @@ WHERE day.battles IS NOT NULL
 
 
 def enqueue_rebuilds(
-    database: Database, *, max_jobs: int, season_id: str | None = None
+    database: Database, *, max_jobs: int, season_id: str | None = None,
+    queue: bool = True,
 ) -> dict[str, Any]:
     """Queue at most ``max_jobs`` rebuilds of players not yet done; with
     ``season_id``, as a Season repair, only of that Season's days, so no
@@ -158,31 +159,33 @@ def enqueue_rebuilds(
     days waits for a later run. A player whose latest rebuild failed is not
     queued again but listed, at most ``max_jobs`` of them, in
     ``failed_blockers``; deleting the failed job lets a later run queue it.
-    Returns the queued job ids in the republish command's report shape.
+    Returns the queued job ids in the republish command's report shape;
+    without ``queue``, writes nothing and lists only those blockers.
     """
     from .battle_ingestion import _refresh_battle_disagreements
 
     start = datetime.fromtimestamp(int(season_id), UTC) if season_id else None
     season = {"start": start, "end": start + SEASON_DURATION if start else None}
     with database.pool.connection() as connection, connection.transaction():
-        # A battle that gained or lost a side's report compares them again.
-        _refresh_battle_disagreements(
-            connection,
-            [
-                int(row[0])
-                for row in connection.execute(
-                    """
-                    SELECT DISTINCT battle_id FROM battle_day_repairs,
-                        unnest(ARRAY[from_battle_id, to_battle_id]) AS battle_id
-                    WHERE %(start)s::timestamptz IS NULL
-                       OR from_day >= %(start)s AND from_day < %(end)s
-                       OR to_day >= %(start)s AND to_day < %(end)s
-                    ORDER BY battle_id
-                    """,
-                    season,
-                ).fetchall()
-            ],
-        )
+        if queue:
+            # A battle that gained or lost a side's report compares them again.
+            _refresh_battle_disagreements(
+                connection,
+                [
+                    int(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT DISTINCT battle_id FROM battle_day_repairs,
+                            unnest(ARRAY[from_battle_id, to_battle_id]) AS battle_id
+                        WHERE %(start)s::timestamptz IS NULL
+                           OR from_day >= %(start)s AND from_day < %(end)s
+                           OR to_day >= %(start)s AND to_day < %(end)s
+                        ORDER BY battle_id
+                        """,
+                        season,
+                    ).fetchall()
+                ],
+            )
         rows = connection.execute(
             f"""
             WITH pending AS (
@@ -258,7 +261,7 @@ def enqueue_rebuilds(
         ).fetchall()
         job_ids: list[int] = []
         for player_id, first_day, last_day, day_season, job_id, *_ in rows:
-            if job_id is not None:
+            if job_id is not None or not queue:
                 continue
             day_text = first_day.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             row = connection.execute(

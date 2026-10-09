@@ -915,15 +915,23 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
 def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_again(
     database_url: str,
 ) -> None:
-    """A Reset-pair repair of the Season's Day 2 failed: preview and receipt
-    list it, and the repair stays at inputs. Its retry then saves the day
-    again, and routine cleanup deletes the finished retry 48 hours later:
-    the old failure no longer holds the repair, which moves on to the days."""
+    """A Reset-pair repair rebuilding the Season's Complete Day 1 and Live
+    Day 2 failed: preview and receipt list it, and the repair stays at
+    inputs. Its retry then saves Day 2 again, Day 1 coming out the same and
+    saving nothing new, and routine cleanup deletes the finished retry 48
+    hours later: the old failure no longer holds the repair, which moves on
+    to the days."""
     with _campaign_database(database_url) as (connection_info, worker):
-        day2 = START + DAY
+        day1, day2 = START, START + DAY
         with _owner(connection_info) as connection:
             player = _player(connection, "#RESET")
+            _saved_day(connection, player, day1)
             _saved_day(connection, player, day2)
+            connection.execute(
+                "UPDATE ranked_day_versions SET state = 'Live'"
+                " WHERE player_id = %s AND ranked_day_start = %s",
+                (player, day2),
+            )
             failed_id = connection.execute(
                 """
                 INSERT INTO python_processing_jobs (
@@ -934,7 +942,9 @@ def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_agai
                 RETURNING id
                 """,
                 (Jsonb({"player_id": player,
-                        "ranked_day_start": day2.strftime("%Y-%m-%dT%H:%M:%SZ")}),),
+                        "ranked_day_start": day1.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "last_ranked_day_start": day2.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "recalculate_season": SEASON}),),
             ).fetchone()[0]
 
         def run(action: str) -> dict:
@@ -949,7 +959,7 @@ def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_agai
                 " clock_timestamp() FROM python_processing_jobs WHERE id = %s",
                 (failed_id,),
             )
-            # The retry saves the day again; its finished job is cleaned up.
+            # The retry saves Day 2 again; its finished job is cleaned up.
             _saved_day(connection, player, day2, version=2)
             connection.execute(
                 "DELETE FROM python_processing_jobs WHERE deduplication_key = %s",
@@ -963,3 +973,67 @@ def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_agai
     assert (held["phase"], held["failed"], held["failed_blockers"]) == ("inputs", 1, blocker)
     assert (receipt["inputs"]["failed"], receipt["inputs"]["unfinished"]) == (1, 0)
     assert (moved_on["phase"], moved_on["queued"]) == ("days", 1)
+
+
+def test_season_repair_reports_a_failed_moved_battle_rebuild_from_another_season(
+    database_url: str,
+) -> None:
+    """A player's moved-battle rebuild of an August day failed, and a
+    September battle of theirs has moved day since: the failed job, which
+    keeps the player's one rebuild key, holds September back. Preview and
+    receipt list it as the queue step does."""
+    with _campaign_database(database_url) as (connection_info, worker):
+        day2, day3 = START + DAY, START + 2 * DAY
+        with _owner(connection_info) as connection:
+            moved, opponent = _player(connection, "#MOVED"), _player(connection, "#OPP")
+            evidence_id = _report(connection, moved, opponent, day2, destruction=56)
+            connection.execute(
+                """
+                INSERT INTO battle_day_repairs (
+                    from_battle_id, to_battle_id, perspective, evidence_id,
+                    attacker_player_id, defender_player_id, from_day, to_day
+                ) SELECT 0, battle_id, 'attacker', id, %s, %s, %s, %s
+                FROM battle_evidence WHERE id = %s
+                """,
+                (moved, opponent, day3, day2, evidence_id),
+            )
+            # Day 3 still shows the battle that moved to day 2.
+            for day, battles in ((day2, []), (day3, [{"source_evidence_id": evidence_id}])):
+                connection.execute(
+                    "INSERT INTO api_player_daily_logs (player_id, ranked_day_start,"
+                    " version, state, coverage, battles, official_season_id)"
+                    " VALUES (%s, %s, 1, 'Complete', 'complete', %s, %s)",
+                    (moved, day, Jsonb(battles), SEASON),
+                )
+                _saved_day(connection, moved, day)
+            august = START - 7 * DAY
+            failed_id = connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, status,
+                    failure_category, due_at
+                ) VALUES ('reconcile_ranked_day', %s, %s, 'failed',
+                          'invalid_work_input', clock_timestamp())
+                RETURNING id
+                """,
+                (f"reconcile:battle-day:{moved}",
+                 Jsonb({"player_id": moved,
+                        "ranked_day_start": august.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "last_ranked_day_start": august.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "recalculate_season": "1786338000"})),
+            ).fetchone()[0]
+
+        def run(action: str) -> dict:
+            return domain_repair.season_repair(worker, SEASON, action, max_jobs=10)
+
+        preview, held, receipt = run("preview"), run("queue"), run("receipt")
+        with _owner(connection_info) as connection:
+            jobs = connection.execute("SELECT count(*) FROM python_processing_jobs").fetchone()[0]
+
+    blocker = [{"job_id": failed_id, "player_id": moved,
+                "failure_category": "invalid_work_input"}]
+    assert (held["phase"], held["failed"], held["failed_blockers"]) == ("inputs", 1, blocker)
+    assert (preview["inputs"]["failed"], preview["inputs"]["failed_blockers"]) == (1, blocker)
+    assert (receipt["inputs"]["failed"], receipt["inputs"]["failed_blockers"]) == (1, blocker)
+    # Nothing was queued: the failed job is the only one.
+    assert jobs == 1
