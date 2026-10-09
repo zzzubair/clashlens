@@ -1189,9 +1189,10 @@ least 1 in 20 of those due and unfinished, have waited that long, counting
 at most 200 in each state: waiting, waiting on its saved response, or
 leased, including one that keeps its lease after a lock conflict. Each limit
 halves, rounded up, while live work is 30 seconds behind (9 in 10 live
-responses waited under 14 seconds on 2026-10-09) or a worker statement has
-waited a second or more on a lock, and none starts while it is 2 minutes
-behind. A few stragglers are not enough: between 16:00 and 18:00 UTC on
+responses waited under 14 seconds on 2026-10-09) or a statement of the
+worker's own has been blocked on a lock for a second or more (sessions of
+other database roles do not show what they wait on), and none starts while
+it is 2 minutes behind. A few stragglers are not enough: between 16:00 and 18:00 UTC on
 2026-10-09 about 120 saved responses waited 2 to 7 minutes for their first
 try, and stopping for any one of them stopped background work 32% of the
 time; replayed every 5 seconds, this rule stops it 0.6% of that time and
@@ -1274,9 +1275,12 @@ the worker refuse fewer connections than threads, so no job waits for one.
 `CLASHLENS_BACKGROUND_JOB_LIMIT` (default 2) and
 `CLASHLENS_DAY_RECHECK_JOB_LIMIT` (default 4), each from 1 to 64, set how many
 backfill jobs and day rechecks all processes together run at once while live
-work keeps up. Background work runs only on the threads that do not process
-only responses, 4 a process in production on 2026-10-09 (16 threads, 12 for
-responses), and a claim takes live work first, so raising the limits past
+work keeps up. They are ceilings, not threads set aside: background work
+runs only on the threads that do not process only responses, 4 a process in
+production on 2026-10-09 (16 threads, 12 for responses), which also run live
+day results, publication builds and the maintenance timer's turn, and a
+claim takes live work first. So 2 backfill jobs and 4 rechecks run together
+only when those threads are otherwise free, and raising the limits past
 those threads adds nothing; giving fewer threads to responses, such as
 `CLASHLENS_WORKER_RESPONSE_LANES=10` for 6 a process, makes room for more
 without more connections. Season repair jobs took 0.8 seconds each on

@@ -1,10 +1,10 @@
 """New evidence for a player queues a recheck of each ended day it can
 change, of the current Season or, for a week after its end while it still
 takes corrections, the Season before, in the day recheck lane
-(``background_pacing``). A day waits in at most one recheck: new evidence
-for a day whose recheck has not started adds nothing, as that recheck reads
-the newest evidence when it runs; one already running may have read too
-early, so the evidence queues one more. From 16:41 on 9 Oct 2026, 21,088
+(``background_pacing``). A day usually waits in one recheck at most: new
+evidence for a day whose recheck has not started adds nothing, as that
+recheck reads the newest evidence when it runs; one already running may have
+read too early, so the evidence queues one more. From 16:41 on 9 Oct 2026, 21,088
 rechecks in 39 minutes were for 3,782 player days. A recheck of every active
 player's last two ended days twice a day catches anything else, as bulk
 background work."""

@@ -537,7 +537,7 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
     assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]
 
 
-def test_a_day_waits_in_at_most_one_recheck(database_url: str) -> None:
+def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -> None:
     # New evidence for a day whose recheck has not started adds nothing: that
     # recheck reads the newest evidence when it runs. Evidence saved while it
     # runs queues exactly one more, and no worker starts a waiting recheck

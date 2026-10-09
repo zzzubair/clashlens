@@ -289,14 +289,16 @@ def test_background_limits_from_settings_halve_while_live_work_strains(
 ) -> None:
     # Raised in the deploy settings, 4 backfill jobs and 8 rechecks run while
     # live work keeps up; each limit halves while enough live jobs have waited
-    # 30 seconds or a worker statement has waited a second on a lock.
+    # 30 seconds or a worker statement has been blocked on a lock as long as
+    # the lock limit, 2 seconds here, however long it ran before.
     monkeypatch.setattr(background_pacing, "BACKGROUND_JOB_LIMIT", 4)
     monkeypatch.setattr(background_pacing, "DAY_RECHECK_JOB_LIMIT", 8)
+    monkeypatch.setattr(background_pacing, "LOCK_STRAIN_SECONDS", 2)
     with domain_database(database_url) as connection_info:
         now = datetime.now(UTC)
         repair = {_queue_result(connection_info, f"repair:{index}", priority=25,
-                                due_at=now - timedelta(hours=1)) for index in range(8)}
-        for index in range(16):
+                                due_at=now - timedelta(hours=1)) for index in range(14)}
+        for index in range(28):
             _queue_result(connection_info, f"recheck:{index}", priority=DAY_RECHECK_PRIORITY)
         database = Database(connection_info)
 
@@ -307,27 +309,33 @@ def test_background_limits_from_settings_halve_while_live_work_strains(
                 claimed += [claim.job_id for claim in claims]
             return len(repair & set(claimed)), len(set(claimed) - repair)
 
-        try:
-            healthy = claim_all()
+        def finish_all() -> None:
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
                     " lease_token = NULL, lease_expires_at = NULL WHERE status = 'leased'"
                 )
+
+        try:
+            healthy = claim_all()
+            finish_all()
             live = _queue_live(connection_info, "live", now - timedelta(seconds=60))
             assert sorted(claim.job_id for claim in database.claim_jobs(
                 owner="live", limit=len(live))) == sorted(live)
             live_strained = claim_all()
-            for job_id in live:
-                _finish(connection_info, job_id)
+            finish_all()
             with psycopg.connect(connection_info, autocommit=True) as holder, \
                     psycopg.connect(connection_info, autocommit=True) as waiter:
                 holder.execute("SELECT pg_advisory_lock(7)")
                 waiting = threading.Thread(
-                    target=waiter.execute, args=("SELECT pg_advisory_lock(7)",)
+                    target=waiter.execute, args=("SELECT pg_sleep(2.5), pg_advisory_lock(7)",)
                 )
                 waiting.start()
-                time.sleep(1.5)
+                # The statement has run 2.8 seconds but been blocked only 0.3.
+                time.sleep(2.8)
+                just_blocked = claim_all()
+                finish_all()
+                time.sleep(2)
                 lock_strained = claim_all()
                 holder.execute("SELECT pg_advisory_unlock(7)")
                 waiting.join(10)
@@ -337,7 +345,8 @@ def test_background_limits_from_settings_halve_while_live_work_strains(
 
     assert healthy == (4, 8)
     assert live_strained == (2, 4)
-    assert lock_strained == (0, 0)
+    assert just_blocked == (4, 8)
+    assert lock_strained == (2, 4)
     assert recovered == (2, 4)
 
 

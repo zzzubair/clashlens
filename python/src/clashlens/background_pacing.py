@@ -99,18 +99,27 @@ def background_lanes(
         (BACKGROUND_PERMIT_KEY,),
     ).fetchone()[0]:
         return ()
-    # Only the worker's own sessions show what they wait on.
+    # Only the worker's own sessions show what they wait on. The lock table,
+    # which says when each wait began, is read only once one of them has run
+    # that long and is waiting on a lock.
+    since = "statement_timestamp() - %(lock_strain)s * interval '1 second'"
     bulk, rechecks, waiting, strained, late, lock_wait = connection.execute(
         f"""
         SELECT count(*) FILTER (WHERE priority = %(backfill_priority)s),
                count(*) FILTER (WHERE priority = %(recheck_priority)s),
                {live_waiting("live_due")}, {live_waiting("live_strain")},
                {live_waiting("live_lag_pause")},
-               EXISTS (
+               CASE WHEN EXISTS (
                    SELECT FROM pg_stat_activity
                    WHERE datname = current_database() AND usename = current_user
-                     AND wait_event_type = 'Lock'
-                     AND query_start <= statement_timestamp() - %(lock_strain)s * interval '1 second')
+                     AND wait_event_type = 'Lock' AND query_start <= {since})
+               THEN EXISTS (
+                   SELECT FROM pg_locks AS blocked
+                   JOIN pg_stat_activity AS session ON session.pid = blocked.pid
+                   WHERE session.datname = current_database()
+                     AND session.usename = current_user
+                     AND NOT blocked.granted AND blocked.waitstart <= {since})
+               ELSE false END
         FROM {jobs_relation} WHERE state = 'leased'
         """,
         {

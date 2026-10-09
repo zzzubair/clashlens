@@ -572,10 +572,11 @@ battle report added, changed or corrected, never one repeated unchanged, the
 battle's own day and the day before it for both players
 (`reconcile:report:`). A battle changes both players' profiles and logs and
 brings two reports, so about 104,000 battles a day make up to about
-1,250,000 such pieces of evidence. A day waits in at most one such job:
-evidence for a day whose job has not started queues nothing, as that job
-reads the newest evidence when it runs, and evidence saved while it runs
-queues one more. From 16:40 to 17:19 UTC on 9 October 2026 the evidence
+1,250,000 such pieces of evidence. A day usually waits in one such job at
+most: evidence for a day whose job has not started queues nothing, as that
+job reads the newest evidence when it runs, and evidence saved while it runs
+queues one more. Two saves for the same day committing at the same moment
+can each queue one, and both run. From 16:40 to 17:19 UTC on 9 October 2026 the evidence
 queued about 535 jobs a minute for 3,782 player days; replayed with this
 rule and 4 at a time, about 410 a minute, none waiting over 10 seconds. They
 are removed with other finished jobs after 48 hours. Every
