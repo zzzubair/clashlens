@@ -17,7 +17,7 @@ import psycopg
 from domain_test_support import domain_database, store_observation, text
 from test_army_ingestion_postgres import _live_row, _processor
 
-from clashlens import army_ingestion
+from clashlens import army_ingestion, background_pacing
 from clashlens.background_pacing import BACKGROUND_JOB_LIMIT, DAY_RECHECK_PRIORITY
 from clashlens.db import (
     ANALYTICS_RULE_VERSION,
@@ -149,7 +149,9 @@ def test_background_work_waits_while_live_work_is_two_minutes_late(database_url:
                 owner="lane", work_types=["redecode_army"]
             )] == ["redecode_army"]
             # Live work this worker cannot take, such as a newer version's, never
-            # pauses background work for good.
+            # pauses background work for good, nor halves it once the late
+            # result it can take is done.
+            _finish(connection_info, live)
             _queue_result(connection_info, "newer", processing_version="future",
                           due_at=now - timedelta(hours=1))
             assert [claim.work_type for claim in database.claim_jobs(
@@ -245,6 +247,61 @@ def test_day_rechecks_run_four_at_a_time_beside_two_other_background_jobs(
             assert [claim.job_id for claim in database.claim_jobs(owner="lane")] == [rechecks[4]]
         finally:
             database.close()
+
+
+def test_background_limits_from_settings_halve_while_live_work_strains(
+    database_url: str, monkeypatch
+) -> None:
+    # Raised in the deploy settings, 4 backfill jobs and 8 rechecks run while
+    # live work keeps up; each limit halves while a live job has waited 30
+    # seconds or a worker statement has waited a second on a lock.
+    monkeypatch.setattr(background_pacing, "BACKGROUND_JOB_LIMIT", 4)
+    monkeypatch.setattr(background_pacing, "DAY_RECHECK_JOB_LIMIT", 8)
+    with domain_database(database_url) as connection_info:
+        now = datetime.now(UTC)
+        repair = {_queue_result(connection_info, f"repair:{index}", priority=25,
+                                due_at=now - timedelta(hours=1)) for index in range(8)}
+        for index in range(16):
+            _queue_result(connection_info, f"recheck:{index}", priority=DAY_RECHECK_PRIORITY)
+        database = Database(connection_info)
+
+        def claim_all() -> tuple[int, int]:
+            """How many backfill jobs and rechecks claims take until none."""
+            claimed = []
+            while claims := database.claim_jobs(owner="lane", limit=8):
+                claimed += [claim.job_id for claim in claims]
+            return len(repair & set(claimed)), len(set(claimed) - repair)
+
+        try:
+            healthy = claim_all()
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete', lease_owner = NULL,"
+                    " lease_token = NULL, lease_expires_at = NULL WHERE status = 'leased'"
+                )
+            live = _queue_result(connection_info, "live", due_at=now - timedelta(seconds=60))
+            assert [claim.job_id for claim in database.claim_jobs(owner="live")] == [live]
+            live_strained = claim_all()
+            _finish(connection_info, live)
+            with psycopg.connect(connection_info, autocommit=True) as holder, \
+                    psycopg.connect(connection_info, autocommit=True) as waiter:
+                holder.execute("SELECT pg_advisory_lock(7)")
+                waiting = threading.Thread(
+                    target=waiter.execute, args=("SELECT pg_advisory_lock(7)",)
+                )
+                waiting.start()
+                time.sleep(1.5)
+                lock_strained = claim_all()
+                holder.execute("SELECT pg_advisory_unlock(7)")
+                waiting.join(10)
+            recovered = claim_all()
+        finally:
+            database.close()
+
+    assert healthy == (4, 8)
+    assert live_strained == (2, 4)
+    assert lock_strained == (0, 0)
+    assert recovered == (2, 4)
 
 
 def test_live_claims_read_no_waiting_day_rechecks(database_url: str) -> None:
