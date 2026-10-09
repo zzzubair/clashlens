@@ -266,11 +266,11 @@ describe("calculated starting trophies on the player page", () => {
     ]);
     expect(player.recentDays[0]).toMatchObject({
       automaticDefenseLoss: 32,
-      otherAdjustment: -170,
+      resetAdjustment: { kind: "Season", amount: -170 },
     });
     expect((await load([])).recentDays[0]).toMatchObject({
       automaticDefenseLoss: null,
-      otherAdjustment: null,
+      resetAdjustment: null,
     });
     await expect(load([{ type: "automatic_defense", amount: "-32" }])).rejects.toThrow();
   });

@@ -223,8 +223,14 @@ describe("today's Legend day wording", () => {
         trophyChange: 8,
         automaticDefenseLoss: 32,
       }),
-      // Its own end, 5,950, disagrees with the next day's 5,992 start.
-      ended(6, { startTrophies: 5900, trophyChange: 50 }),
+      // Its own end, 5,050, disagrees with the next day's 5,992 start.
+      ended(6, { startTrophies: 5000, trophyChange: 50 }),
+      // 4,900 + 20, raised 80 by the weekly reset to the next day's 5,000.
+      ended(5, {
+        startTrophies: 4900,
+        trophyChange: 20,
+        resetAdjustment: { kind: "weekly", amount: 80 },
+      }),
     ]);
     const cell = (key: string, label: string) =>
       html.split(`id="legend-day-${key}"`)[1].split(`<small>${label}</small>`)[1];
@@ -235,7 +241,13 @@ describe("today's Legend day wording", () => {
       '<span title="Taken by the game at Reset for defenses not played">-32 automatic loss</span>',
     );
     expect(cell("2026-10-06", "End of day")).toMatch(
-      /^<strong>5,950<span class="day-mark day-mark-gap" title="Uncertain">/,
+      /^<strong>5,050<span class="day-mark day-mark-gap" title="Uncertain">/,
+    );
+    expect(cell("2026-10-05", "Trophy change")).toContain(
+      "<span>+80 weekly reset</span>",
+    );
+    expect(cell("2026-10-05", "End of day")).toMatch(
+      /^<strong>5,000<span class="day-mark day-mark-verified" title="Verified">/,
     );
     expect(cell("2026-10-06", "Defenses")).not.toContain("automatic loss");
     expect(cell("2026-10-08", "End of day")).toMatch(

@@ -146,7 +146,7 @@ describe("past Seasons on the player page", () => {
       /Jul 2024<\/th><td class="past-season-rank">#934,651<\/td><td>5,011<\/td>/,
     );
     expect(html).toMatch(/Dec 2021<\/th><td>Not recorded<\/td><td>4,965<\/td>/);
-    expect(html).toMatch(/from.*<a href="https:\/\/clashk.ing"[^>]*>ClashKing<\/a>/);
+    expect(html).toMatch(/From.*<a href="https:\/\/clashk.ing"[^>]*>ClashKing<\/a>/);
   });
 
   it("keeps the player page working when ClashKing finishes are unavailable", async () => {

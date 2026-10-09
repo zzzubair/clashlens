@@ -942,19 +942,12 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
     stars: Record<string, number | null>,
     unknown: number | null,
     trophies: number | null,
-    played: "attacks" | "defenses",
   ): SummarySide => ({
     count,
     stars: [0, 1, 2, 3].map((star) => stars[star] ?? null),
     unknown,
+    perDay: per(trophies, summary.daysObserved),
     perBattle: per(trophies, count),
-    perDayHint: `Averaged over finished Legend days with ${played}`,
-    // Days without a battle on this side, such as shielded days, don't count.
-    perDay: per(
-      trophies,
-      summary.daysObserved -
-        summary.dailyEntries.filter((day) => day[played] === 0).length,
-    ),
   });
   return (
     <SeasonSummary
@@ -975,14 +968,12 @@ function SeasonFinish({ summary }: { summary: HistoricalSeasonSummary }) {
           summary.attackStars,
           summary.attackStarsUnknown,
           summary.attackGain,
-          "attacks",
         ),
         defense: side(
           summary.defenseCount,
           summary.defenseStars,
           summary.defenseStarsUnknown,
           summary.defenseLoss,
-          "defenses",
         ),
       })}
     />
@@ -1270,8 +1261,11 @@ function LegendDay({
               {day.trophyChange === null && battleNet !== null ? (
                 <span>{formatSigned(battleNet)} from battles</span>
               ) : null}
-              {day.otherAdjustment ? (
-                <span>{formatSigned(day.otherAdjustment)} Reset adjustment</span>
+              {day.resetAdjustment ? (
+                <span>
+                  {formatSigned(day.resetAdjustment.amount)} {day.resetAdjustment.kind}{" "}
+                  reset
+                </span>
               ) : null}
             </>
           )}

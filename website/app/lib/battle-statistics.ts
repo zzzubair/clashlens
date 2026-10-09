@@ -1,6 +1,5 @@
 import { seasonStartAt } from "../components/SeasonReread";
 import type { PlayerPage, RankedBattleEvent } from "./contracts";
-import { dayEvidence, presentDay } from "./player-lookup-text";
 
 export type BattlePeriod = "7" | "14" | "season";
 const DAY_MS = 86_400_000;
@@ -13,33 +12,24 @@ export function currentSeasonStart(player: PlayerPage, now: number) {
 
 // Use recorded battles, never daily trophy adjustments or unplayed defenses.
 // Only finished Legend days count, never today, which is still being played.
-// Each battle counts on the saved Legend day it belongs to. Counts and stars
-// use every finished day; averages leave out Uncertain and not-signed-up days,
-// and per-day averages divide by every other finished day, battles or not.
-function summarize(
-  events: (readonly [RankedBattleEvent, number])[],
-  averaged: Set<number>,
-) {
+// Each battle counts on the saved Legend day it belongs to. Counts, stars and
+// averages all use every saved finished day; per-day averages divide by those
+// days, battles or not.
+function summarize(events: RankedBattleEvent[], days: number) {
   const stars = [0, 0, 0, 0];
   let trophies = 0;
-  let averagedTrophies = 0;
-  let averagedCount = 0;
-  for (const [event, day] of events) {
+  for (const event of events) {
     stars[event.stars]++;
     trophies += Math.abs(event.trophyChange);
-    if (averaged.has(day)) {
-      averagedTrophies += Math.abs(event.trophyChange);
-      averagedCount++;
-    }
   }
-  const per = (by: number) => (by === 0 ? null : averagedTrophies / by);
+  const per = (by: number) => (by === 0 ? null : trophies / by);
   return {
     count: events.length,
     stars,
     trophies,
-    perDay: per(averaged.size),
-    perBattle: per(averagedCount),
-    disputed: events.some(([event]) => event.perspectiveDisagreement),
+    perDay: per(days),
+    perBattle: per(events.length),
+    disputed: events.some((event) => event.perspectiveDisagreement),
   };
 }
 
@@ -60,23 +50,15 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
       })
       .map((day) => [Date.parse(day.period.split(" – ")[0]), day]),
   );
-  const statuses = [...days].map(
-    ([time, day]) => [time, presentDay(dayEvidence(day), false).status] as const,
-  );
-  const averaged = new Set(
-    statuses
-      .filter(([, status]) => status !== "Uncertain" && status !== "Not enrolled")
-      .map(([time]) => time),
-  );
   const events = (side: "offenseEvents" | "defenseEvents") => [
     ...new Map(
-      [...days]
-        .flatMap(([day, saved]) => saved[side].map((event) => [event, day] as const))
-        .filter(([event]) => {
+      [...days.values()]
+        .flatMap((saved) => saved[side])
+        .filter((event) => {
           const time = Date.parse(event.battleTimestamp);
           return time >= start && time <= now;
         })
-        .map(([event, day]) => [event.battleId, [event, day] as const]),
+        .map((event) => [event.battleId, event] as const),
     ).values(),
   ];
   return {
@@ -86,8 +68,7 @@ export function battleStatistics(player: PlayerPage, period: BattlePeriod, now: 
     daysSaved: days.size,
     daysExpected: Math.round((today - start) / DAY_MS),
     incomplete: [...days.values()].some((day) => !day.battlesComplete),
-    uncertainDays: statuses.filter(([, status]) => status === "Uncertain").length,
-    attack: summarize(events("offenseEvents"), averaged),
-    defense: summarize(events("defenseEvents"), averaged),
+    attack: summarize(events("offenseEvents"), days.size),
+    defense: summarize(events("defenseEvents"), days.size),
   };
 }

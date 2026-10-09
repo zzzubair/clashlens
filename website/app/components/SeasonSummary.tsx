@@ -1,13 +1,11 @@
 // One side of a Season's recorded battles. Averages are trophies moved, never
-// signed; null anywhere means that part is unknown. The hint says which days
-// the per-day average divides by.
+// signed; null anywhere means that part is unknown.
 export interface SummarySide {
   count: number | null;
   stars: Array<number | null>;
   unknown: number | null;
   perDay: number | null;
   perBattle: number | null;
-  perDayHint: string;
 }
 
 const count = (value: number | null) =>
@@ -150,8 +148,16 @@ export function SeasonSummary({
           <dl className="season-summary-averages">
             {(
               [
-                ["Offense per day", signed(attack.perDay, 1), attack.perDayHint],
-                ["Defense per day", signed(defense.perDay, -1), defense.perDayHint],
+                [
+                  "Offense per day",
+                  signed(attack.perDay, 1),
+                  "Averaged over every finished Legend day",
+                ],
+                [
+                  "Defense per day",
+                  signed(defense.perDay, -1),
+                  "Averaged over every finished Legend day",
+                ],
                 ["Per attack", signed(attack.perBattle, 1, 1)],
                 ["Per defense", signed(defense.perBattle, -1, 1)],
               ] as const

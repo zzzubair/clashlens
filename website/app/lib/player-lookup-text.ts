@@ -272,13 +272,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 // The log keeps only the current Season's days at the server time, numbered
 // from its start; an ended Season's days are under that Season in Seasons.
-// A finished day's end-of-day trophies: its start plus its trophy change,
-// which is the next day's start. Without its own change the next day's start
-// stands in; a next start that disagrees makes the end Uncertain.
+// A finished day's end-of-day trophies: its start plus its trophy change and
+// any weekly or Season reset at its closing Reset, which is the next day's
+// start. Without its own change the next day's start stands in; a next start
+// that disagrees makes the end Uncertain.
 export function dayEnd(day: RankedDaySummary, next?: RankedDaySummary | null) {
   const own =
     day.startTrophies != null && day.trophyChange !== null
-      ? day.startTrophies + day.trophyChange
+      ? day.startTrophies + day.trophyChange + (day.resetAdjustment?.amount ?? 0)
       : null;
   const following =
     next &&

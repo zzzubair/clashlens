@@ -190,16 +190,15 @@ describe("recorded battle period statistics", () => {
     expect(stats.incomplete).toBe(true);
   });
 
-  it("leaves Uncertain days out of the averages but not the counts", () => {
+  it("averages every finished day's battles, Uncertain days included", () => {
     const saved = player([
       day(1, [event("a1", 3, 100, 40, YESTERDAY)]),
       { ...day(2, [event("a2", 1, 50, 10, TODAY - 2 * DAY)]), trophyChange: null },
       day(3),
     ]);
     const stats = battleStatistics(saved, "7", NOW);
-    expect(stats.uncertainDays).toBe(1);
-    expect(stats.attack).toMatchObject({ count: 2, perDay: 20, perBattle: 40 });
-    expect(render(saved)).toContain("Averages leave out 1 Uncertain day.");
+    expect(stats.attack).toMatchObject({ count: 2, trophies: 50, perBattle: 25 });
+    expect(stats.attack.perDay).toBeCloseTo(50 / 3);
   });
 
   it("renders one summary with dates and unavailable rates and averages", () => {
@@ -232,8 +231,10 @@ describe("recorded battle period statistics", () => {
             [event("a2", 3, 100, 40, YESTERDAY), event("a3", 2, 80, 20, YESTERDAY)],
             [event("d2", 3, 100, -40, YESTERDAY)],
           ),
-          startTrophies: 5200,
+          // Sunday: 4,900 + 20, raised 80 to 5,000 by the weekly reset.
+          startTrophies: 4900,
           trophyChange: 20,
+          resetAdjustment: { kind: "weekly", amount: 80 },
           resetRank: 1042,
         },
         { ...day(2), resetRank: 2000 },
@@ -243,7 +244,7 @@ describe("recorded battle period statistics", () => {
     );
     expect(html).toContain("<dt>Rank at last Reset</dt><dd>1,042</dd>");
     expect(html).toMatch(
-      /<dt>Trophies at last Reset<\/dt><dd>5,220<span class="day-mark" title="Calculated">/,
+      /<dt>Trophies at last Reset<\/dt><dd>5,000<span class="day-mark" title="Calculated">/,
     );
     expect(html).toContain("50.0%<small>1 of 2 attacks</small>");
     expect(html).toMatch(
@@ -289,7 +290,6 @@ describe("recorded battle period statistics", () => {
       stars: [0, 1, 1, 1],
       perDay: 60,
       perBattle: 15,
-      perDayHint: "",
     };
     const render = (unknown: number | null) =>
       renderToStaticMarkup(

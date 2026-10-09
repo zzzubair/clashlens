@@ -69,12 +69,14 @@ itself with titles, labels and short counts rather than help paragraphs.
 
 The Daily Legend log shows, for each day, starting trophies, attacks, defenses,
 trophy change, end of day and Reset rank. A finished day's end of day is its
-start plus its trophy change, which is the next day's start; it carries the
-day's Verified, Calculated or Uncertain dot, and a next-day start that
-disagrees makes it Uncertain. A day without its own change uses the next day's
-start. Under Defenses, a day with an automatic defense loss at Reset shows it,
-such as -32 automatic loss, so attacks minus defenses minus that loss equals
-the trophy change; any other Reset adjustment shows under the trophy change.
+start plus its trophy change plus any weekly or Season reset at its closing
+Reset, which is the next day's start; it carries the day's Verified, Calculated
+or Uncertain dot, and a next-day start that disagrees makes it Uncertain. A day
+without its own change uses the next day's start. Under Defenses, a day with an
+automatic defense loss at Reset shows it, such as -32 automatic loss, so
+attacks minus defenses minus that loss equals the trophy change. A weekly or
+Season reset is not part of the trophy change and shows under it, such as +80
+weekly reset.
 Today's end of day and Reset rank read After Reset.
 
 Each Season shows one Season summary box. A past Season's box leads with its
@@ -95,19 +97,17 @@ progress, and can show This Season, Last 7 days or Last 14 days: the last 7 or
 14 finished days, never days before the current Season. Early in a Season the
 option says how many finished days so far, such as Last 7 days (2 so far), and
 the box's one short line gives the dates and finished days saved. Counts,
-stars and hit rate use every recorded battle of those days. Averages leave out
-Uncertain days and days before the player signed up, and say how many
-Uncertain days they left out: offense per day is trophies gained from attacks
-divided by the remaining saved days, battles or not, and defense per day is
-trophies lost on defense the same way; per attack and per defense divide by
-those days' recorded battles. Automatic Reset losses are not part of defense
-averages. Empty samples show Unavailable for rates and averages. Partial
-history and conflicting reports are flagged; retained past-Season totals cannot
-fill missing battle details. A past Season's box uses its saved summary;
-its per-day averages count only days with a battle on that side, and when
-coverage is partial it says how many of the 28 days are recorded. A Season
-known only from in-game history shows just the rank, which reads Not
-published yet until the game publishes it, and trophies.
+stars, hit rate and averages all use every recorded battle of those days:
+offense per day is trophies gained from attacks divided by the saved finished
+days, battles or not, and defense per day is trophies lost on defense the same
+way; per attack and per defense divide by those days' recorded battles.
+Automatic Reset losses are not part of defense averages. Empty samples show
+Unavailable for rates and averages. Partial history and conflicting reports
+are flagged; retained past-Season totals cannot fill missing battle details. A
+past Season's box uses its saved summary, with per-day averages over every
+recorded day, and when coverage is partial it says how many of the 28 days are
+recorded. A Season known only from in-game history shows just the rank, which
+reads Not published yet until the game publishes it, and trophies.
 
 With JavaScript enabled, changing the period uses battle details already loaded with
 the player page and makes no request or additional database read. It adds no stored data; the

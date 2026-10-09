@@ -28,16 +28,12 @@ export function BattleStatistics({ player, now }: { player: PlayerPage; now: num
       : undefined;
   // The same end of day as the Daily Legend log shows for that day.
   const end = last ? dayEnd(last, player.currentDay) : null;
-  const side = (
-    { count, stars, perDay, perBattle }: typeof stats.attack,
-    played: string,
-  ) => ({
+  const side = ({ count, stars, perDay, perBattle }: typeof stats.attack) => ({
     count,
     stars,
     unknown: 0,
     perDay,
     perBattle,
-    perDayHint: `Trophies ${played} on finished Legend days, divided by those days, leaving out Uncertain days`,
   });
   const flags = [
     stats.incomplete || stats.daysSaved < stats.daysExpected
@@ -90,15 +86,8 @@ export function BattleStatistics({ player, now }: { player: PlayerPage; now: num
             : end.trophies.toLocaleString("en-GB"),
         end?.trophies == null ? null : <DayMark status={end.status} />,
       ]}
-      attack={side(stats.attack, "gained from attacks")}
-      defense={side(stats.defense, "lost on defense")}
-    >
-      {stats.uncertainDays > 0 ? (
-        <p className="section-note">
-          Averages leave out {stats.uncertainDays} Uncertain{" "}
-          {stats.uncertainDays === 1 ? "day" : "days"}.
-        </p>
-      ) : null}
-    </SeasonSummary>
+      attack={side(stats.attack)}
+      defense={side(stats.defense)}
+    />
   );
 }
