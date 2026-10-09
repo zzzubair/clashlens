@@ -1039,14 +1039,14 @@ class Database:
                 rows = connection.execute(*_claim_select_statement(
                     self._jobs_relation, planned=planned, backfill=(), **options
                 )).fetchall()
-                # Backfill always comes last; see background_pacing.
-                lanes = () if len(rows) >= limit or planned else background_lanes(
+                # Backfill fills only what live work leaves; see background_pacing.
+                for priority, room in [] if len(rows) >= limit or planned else background_lanes(
                     connection, self._jobs_relation, self._supports_denormalized_contract,
-                    supports_coordinator, self._supports_dependency_deferral,
-                )
-                rows += connection.execute(*_claim_select_statement(
-                    self._jobs_relation, backfill=lanes, **{**options, "limit": 1}
-                )).fetchall() if lanes else []
+                    supports_coordinator, self._supports_dependency_deferral, wait=not rows):
+                    rows += connection.execute(*_claim_select_statement(
+                        self._jobs_relation, backfill=(priority,),
+                        **{**options, "limit": min(room, limit - len(rows))},
+                    )).fetchall() if len(rows) < limit else []
             return self._lease_rows(connection, rows, owner, lease_seconds)
 
     def _lease_rows(
