@@ -861,7 +861,7 @@ function SeasonNav({
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
-  // Only Seasons with Clash Lens days; older finishes are in the separate Older Seasons table.
+  // Only Seasons with Clash Lens days; older finishes are in the separate Older history table.
   seasons = seasons.filter((season) => season.source === "tracked_summary");
   // A selected past Season always keeps its way back, even if the list failed.
   if (seasons.length === 0 && selectedSeason === null && !error) return null;
