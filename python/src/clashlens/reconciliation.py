@@ -420,7 +420,8 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                     _deduplicate_contributions(data.new_day_contributions)[0])
                 if effect.lands_until <= reset.read_at):
                 # A late Reset reading already shows the new-day battles landed by then.
-                reading_correction, residual = -residual, 0
+                reading_correction, residual, next_start_trophies = -residual, 0, expected_next
+                observed_trophy_change = next_start_trophies - start_trophies
         # Every reading from the end Reset on judges a clean, ended day
         # (reading_rule); the Reset reading alone still checks any other.
         verdict = (
