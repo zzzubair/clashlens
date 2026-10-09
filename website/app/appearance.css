@@ -169,13 +169,16 @@ main {
   scroll-margin-top: 6rem;
 }
 @media (max-width: 64rem) {
+  html {
+    scroll-padding-top: 8rem;
+  }
   main {
-    scroll-margin-top: 8.5rem;
+    scroll-margin-top: 0.5rem;
   }
 }
 @media (max-width: 40rem) {
-  main {
-    scroll-margin-top: 11.5rem;
+  html {
+    scroll-padding-top: 11rem;
   }
 }
 .lede,
