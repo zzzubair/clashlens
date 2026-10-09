@@ -526,7 +526,7 @@ def test_reading_during_a_battle_log_gap_cannot_contradict_the_day(
         finally:
             database.close()
         _process(connection_info, archive_server, jobs)
-        day_b_row, _ = _latest_days(connection_info)
+        (day_b_row,) = _latest_days(connection_info, (DAY_B,))
 
     assert day_b_row[:4] == ("Complete", "exact", 6000, end_b)
     assert day_b_row[8] == []

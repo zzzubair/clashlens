@@ -160,6 +160,10 @@ def test_a_disputed_battle_in_flight_makes_the_reading_unjudgeable() -> None:
 def test_a_season_zero_reading_can_confirm_but_never_contradict() -> None:
     assert verdict(Reading(at(20), 5870, confirm_only=True)).outcome == "verified"
     assert verdict(Reading(at(20), 5000, confirm_only=True)).outcome == "unverified"
+    # Its match outranks a Reset reading missing the attack's 20 before it.
+    stale = Reading(at(2), 5920, reset_reading=True)
+    result = verdict(stale, Reading(at(20), 5870, confirm_only=True))
+    assert (result.outcome, result.earlier_contradictions) == ("verified", 1)
 
 
 def test_a_day_with_no_used_defense_slot_is_charged_only_when_a_reading_shows_it() -> None:
