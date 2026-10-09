@@ -184,10 +184,11 @@ def test_a_new_day_battle_in_flight_at_the_reading_leaves_it_read_both_ways() ->
     # Read 3 minutes after the attack's report: with or without it.
     assert verdict(Reading(at(41), 5870), new_day=new_day).exact is False
     assert verdict(Reading(at(41), 5900), new_day=new_day).exact is False
-    # Neither fits, with or without the attack, before or after the loss: a
-    # disagreement, which a later match does not erase.
-    assert verdict(Reading(at(41), 5880), new_day=new_day).outcome == "contradicted"
-    result = verdict(Reading(at(41), 5880), Reading(at(60), 5900), new_day=new_day)
+    # Neither fits, with or without the attack, before or after the loss, nor
+    # short the +20 attack's late credit: a disagreement, which a later match
+    # does not erase.
+    assert verdict(Reading(at(41), 5885), new_day=new_day).outcome == "contradicted"
+    result = verdict(Reading(at(41), 5885), Reading(at(60), 5900), new_day=new_day)
     assert (result.outcome, result.reading.read_at) == ("contradicted", at(41))
 
 
@@ -347,3 +348,75 @@ def test_the_weekly_raise_hides_a_possible_charge_a_reading_may_show() -> None:
         result = reconcile_ranked_day(data)
         assert (result.state, result.failure_reasons) == ("Partial", ("end_reading_unverified",))
         assert result.final_trophies_before_reset == 5310
+
+
+def test_a_delayed_attack_credit_and_a_battle_in_flight_read_together() -> None:
+    # The +20 attack landed at 04:44 but its credit has not shown; a
+    # 10-trophy defense started at 04:55 may not have either. 6,000 lacks both.
+    day = (Effect("attack", 20, at(-20)), Effect("defense", -10, at(-5)))
+    result = verdict(Reading(at(2), 6000, reset_reading=True), day=day, end=6010)
+
+    assert (result.outcome, result.lagged) == ("unverified", ("attack",))
+
+
+def test_a_loss_every_reading_of_it_shows_landed_never_un_lands() -> None:
+    # A new-day +30 attack reported at 05:17 is in flight at 05:20, whose
+    # 5,870 fits only without it and with the 70 loss. At 05:40 5,970 fits
+    # only without the loss: it disagrees.
+    new_day = (Effect("next-attack", 30, at(17)),)
+    result = verdict(Reading(at(20), 5870), Reading(at(40), 5970), new_day=new_day)
+
+    assert (result.outcome, result.residual) == ("contradicted", 70)
+    assert result.reading is not None and result.reading.read_at == at(40)
+
+    # So too during the day: from a settled 6,000 with the day before's 80
+    # loss pending, 05:20 reads 6,000 while a +30 attack reported at 05:17
+    # is in flight, which only fits with the loss landed.
+    day_start = RESET - timedelta(days=1)
+    attack = (Effect("attack", 30, day_start + timedelta(minutes=17)),)
+    found = contradiction_during_day(
+        (Reading(day_start + timedelta(minutes=20), 6000),
+         Reading(day_start + timedelta(hours=1), 6110)),
+        day_start=day_start, reset_at=RESET, start=6000, pending_loss=80,
+        day_effects=attack,
+    )
+    assert found is not None and (found.reading.trophies, found.residual) == (6110, 80)
+
+
+def test_a_reading_after_an_opponent_only_battle_never_shows_a_possible_charge() -> None:
+    # The day may be charged 40. An opponent reports a new-day 40-trophy
+    # defense the player's log lacks; the 05:20 profile's 5,960 may be that.
+    result = verdict(Reading(at(20), 5960), loss=(40,), certain=False, end=6000,
+                     unknown_from=at(10))
+
+    assert result.outcome == "unverified"
+
+
+def test_a_monday_reading_before_the_loss_shows_the_day_before_unraised() -> None:
+    # Sunday ended at 4,900 after its 200 loss, so Monday starts at 5,000.
+    # Before the loss lands the profile shows 5,100, never 5,200.
+    def monday(trophies: int):
+        return reconcile_ranked_day(test_reconciliation._input(
+            start_trophies=5000, next_start_trophies=5000, contributions=(),
+            previous_day=PreviousRankedDay(True, 8, 200, 0, automatic_loss=200,
+                                           final_trophies=4900),
+            readings=(Reading(test_reconciliation.DAY.start + timedelta(minutes=20),
+                              trophies),),
+        ))
+
+    assert "trophy_equation_mismatch" not in monday(5100).failure_reasons
+    assert "trophy_equation_mismatch" in monday(5200).failure_reasons
+
+
+def test_a_reading_after_a_reset_that_hides_the_end_must_show_the_reset_total() -> None:
+    # The day ends at 4,840 and the weekly raise takes it to 5,000, which
+    # hides its end. A later 5,010, with no new-day battle, disagrees.
+    day = test_reconciliation._input(start_trophies=4900, next_start_trophies=5000,
+                                     boundary_kind="weekly")
+    later = test_reconciliation.DAY.end + timedelta(minutes=20)
+    kept = reconcile_ranked_day(replace(day, readings=(Reading(later, 5000),)))
+    wrong = reconcile_ranked_day(replace(day, readings=(Reading(later, 5010),)))
+
+    assert kept == reconcile_ranked_day(day)
+    assert "trophy_equation_mismatch" not in kept.failure_reasons
+    assert "trophy_equation_mismatch" in wrong.failure_reasons

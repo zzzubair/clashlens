@@ -432,3 +432,37 @@ def test_a_late_report_queues_the_previous_seasons_days_for_a_week(
                   for observation_id in (101, 102)]
 
     assert queued == [1, 0]
+
+
+def test_a_late_reading_queues_its_own_ended_day_and_the_day_before(
+    database_url: str, archive_server
+) -> None:
+    # A profile read at 05:20 on day C judges day B from its end and day C
+    # during it. Processed after day C ended, it queues both.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = []
+        for day in (DAY_B, DAY_C, DAY_D):
+            jobs += _reset_work(
+                connection_info, archive_server, day, profile=_profile(6000), log=_log()
+            )
+        _process(connection_info, archive_server, jobs)
+        for day in (DAY_B, DAY_C):
+            database = Database(connection_info)
+            try:
+                job = reconciliation_db.enqueue_reconciliation(
+                    database, player_tag=TAG, day_start=day, now=DAY_D,
+                    request_key=f"test-{day:%d}",
+                )
+            finally:
+                database.close()
+            _process(connection_info, archive_server, [job])
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+            ).fetchone()[0]
+            queue_refresh.queue_for_reading(
+                connection, player_id, "late", DAY_C + timedelta(minutes=20)
+            )
+        queued = _queued(connection_info, "reconcile:late:")
+
+    assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]

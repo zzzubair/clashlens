@@ -49,20 +49,27 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str) -
 
 
 def queue_for_reading(connection: Any, player_id: int, evidence: str, at: datetime) -> None:
-    """A profile or battle log read at ``at`` can judge the newest ended day."""
-    row = connection.execute(
+    """A profile or battle log read at ``at`` can judge the newest ended day,
+    and its own day once that has ended, when it is processed late."""
+    rows = connection.execute(
         """
+        (SELECT ranked_day_start FROM ranked_day_versions
+         WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
+           AND official_season_id IN (%(season)s, %(previous)s)
+           AND ranked_day_end <= %(at)s AND ranked_day_end > %(at)s - %(window)s
+         ORDER BY ranked_day_start DESC LIMIT 1)
+        UNION
         SELECT ranked_day_start FROM ranked_day_versions
         WHERE player_id = %(player)s AND reconciliation_rule_version = %(rule)s
           AND official_season_id IN (%(season)s, %(previous)s)
-          AND ranked_day_end <= %(at)s AND ranked_day_end > %(at)s - %(window)s
-        ORDER BY ranked_day_start DESC LIMIT 1
+          AND ranked_day_start <= %(at)s AND ranked_day_end > %(at)s
+          AND ranked_day_end <= clock_timestamp()
         """,
         {**_VERSIONS, "player": player_id, "at": at, "window": EVIDENCE_REFRESH_WINDOW,
          **_seasons(at)},
-    ).fetchone()
-    if row is not None:
-        _queue_day(connection, player_id, row[0], f"reconcile:{evidence}:{player_id}")
+    ).fetchall()
+    for (day_start,) in rows:
+        _queue_day(connection, player_id, day_start, f"reconcile:{evidence}:{player_id}")
 
 
 def queue_for_check(connection: Any, check: Any) -> None:

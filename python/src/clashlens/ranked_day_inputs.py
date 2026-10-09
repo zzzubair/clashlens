@@ -358,7 +358,8 @@ def load_previous_day(
             COALESCE((formula_components ->> 'next_start_reading_correction')::int, 0),
             expected_next_start_trophies,
             failure_reasons,
-            COALESCE(automatic_defense_loss, 0)
+            COALESCE(automatic_defense_loss, 0),
+            final_trophies_before_reset
         FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s
@@ -419,6 +420,9 @@ def load_previous_day(
             zero_result_defense_slots=int(previous_row[11]),
             reset_reading_correction=int(previous_row[12]),
             automatic_loss=int(previous_row[15]),
+            final_trophies=(
+                int(previous_row[16]) if previous_row[16] is not None else None
+            ),
             expected_next_start=(
                 int(previous_row[13])
                 if end_known and previous_row[13] is not None

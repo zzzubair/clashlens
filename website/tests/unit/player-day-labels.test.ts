@@ -72,6 +72,22 @@ describe("ended day labels", () => {
     ).toBe("Uncertain");
   });
 
+  it("gives every cause of an end reading that could not be judged, not one guess", () => {
+    const day = presentDay(
+      {
+        ...COMPLETE,
+        state: "Partial",
+        confidence: "partial",
+        codes: ["end_reading_unverified"],
+      },
+      false,
+    );
+    expect(day.status).toBe("Calculated");
+    expect(day.reasons).toEqual([
+      "No trophy reading after this day could confirm its end: a battle may still have been landing, an attack's trophies may have shown late, part of a battle log could not be read, or the weekly raise to 5,000 hid the automatic defense loss.",
+    ]);
+  });
+
   it("explains an ended day whose final evidence was never processed", () => {
     const day = presentDay(
       {

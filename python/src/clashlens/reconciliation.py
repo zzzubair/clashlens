@@ -114,6 +114,8 @@ class PreviousRankedDay:
     # which may land after this day's first readings.
     reset_reading_correction: int = 0
     automatic_loss: int = 0
+    # That day's end after its automatic loss, before any reset.
+    final_trophies: int | None = None
     # That day's calculated end, after any weekly or Season reset, when its
     # battles and automatic loss are known: the next day's start when its
     # Reset reading cannot give one (see ``recalculate_ranked_day``).
@@ -416,17 +418,17 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
                 reading_correction, residual, next_start_trophies = -residual, 0, expected_next
                 observed_trophy_change = next_start_trophies - start_trophies
         # Every reading from the end Reset on judges a clean, ended day
-        # (reading_rule); the Reset reading alone still checks any other.
+        # (reading_rule); one hidden by a reset only against the reset total.
         verdict = (
             reading_rule.decide(
                 _readings(data),
                 reset_at=data.ranked_day.end,
-                end_before_loss=expected_next + (automatic_loss or 0),
-                loss_candidates=_loss_candidates(
+                end_before_loss=expected_next + (0 if end_hidden_by_reset else automatic_loss or 0),
+                loss_candidates=() if end_hidden_by_reset else _loss_candidates(
                     data, automatic_loss, automatic_state, defense_count
                 ),
                 loss_certain=automatic_state == "calculated" and bool(automatic_loss),
-                day_effects=_effects(contributions),
+                day_effects=() if end_hidden_by_reset else _effects(contributions),
                 new_day_effects=_effects(
                     _deduplicate_contributions(data.new_day_contributions)[0]
                 ),
@@ -438,10 +440,12 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
             and coverage_complete
             and not malformed_evidence
             and not inconsistent_evidence
-            and not (end_hidden_by_reset or official_end)
+            and not official_end
             and all(reason == "missing_end_baseline" for reason in failures)
             else None
         )
+        if end_hidden_by_reset and verdict is not None and verdict.outcome != "contradicted":
+            verdict = None
         zero_defense_loss = _zero_defense_loss(data, defense_count)
         if verdict is not None and verdict.outcome == "verified" and zero_defense_loss and (
             verdict.loss == zero_defense_loss and data.boundary_kind == "weekly"
@@ -518,11 +522,15 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         ):
             # The readings isolate the calculated settlement loss.
             automatic_state = "confirmed"
-    # A reading during the day must show its start plus the battles landed by then.
+    # A reading during the day must show its start plus the battles landed by
+    # then; the weekly raise takes the part of the loss before it lands below 5,000.
+    previous = data.previous_day
+    pending_loss = previous.automatic_loss if previous else 0
+    if previous and (previous.final_trophies or 5000) < 5000 == start_trophies:
+        pending_loss = max(0, previous.final_trophies + pending_loss - 5000)
     during = reading_rule.contradiction_during_day(
         data.readings, day_start=data.ranked_day.start, reset_at=data.ranked_day.end,
-        start=start_trophies, day_effects=_effects(contributions),
-        pending_loss=data.previous_day.automatic_loss if data.previous_day else 0,
+        start=start_trophies, day_effects=_effects(contributions), pending_loss=pending_loss,
     ) if ended and coverage_complete and start_trophies is not None and start_available and not (
         malformed_evidence or inconsistent_evidence) else None
     if during is not None and during.reading is not None:
