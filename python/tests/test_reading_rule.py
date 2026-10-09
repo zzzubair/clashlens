@@ -163,5 +163,16 @@ def test_a_day_with_no_used_defense_slot_is_charged_only_when_a_reading_shows_it
     assert (later.loss, later.exact) == (304, True)
 
 
+def test_no_later_reading_undoes_a_charge_a_reading_showed() -> None:
+    # 05:20 shows the 304 charge. At 13:00, after battles no saved log holds
+    # yet, the profile is back at 5,940: it can only confirm, and the charge
+    # cannot be undone.
+    charged = Reading(at(20), 5636)
+    for later in (Reading(at(480), 5940, confirm_only=True), Reading(at(40), 5940)):
+        result = verdict(charged, later, loss=(304,), certain=False)
+        assert (result.outcome, result.loss, result.exact) == ("verified", 304, True)
+        assert result.reading == charged
+
+
 def test_no_reading_leaves_the_day_unverified() -> None:
     assert verdict().outcome == "unverified"

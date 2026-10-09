@@ -7,7 +7,8 @@ plus any battle of the new day the profile already showed. A reading that
 equals it confirms the day; a reading that cannot contradicts it, unless
 it was taken at or after the player's first new-day battle; a reading taken
 while a battle may or may not have landed yet is read both ways and can only
-confirm. The last reading that is not read both ways decides.
+confirm. The last trustworthy reading that is not read both ways decides,
+but none undoes a loss an earlier one showed landed.
 
 This one rule replaces four: a Reset reading taken before the automatic
 loss landed, a later reading settling a Reset reading taken too early, a
@@ -175,16 +176,19 @@ def decide(
     """The day's verdict from every reading taken from its end Reset on.
 
     A clean reading, one with every battle landed and none in flight,
-    either equals the ledger or contradicts it, and the last clean reading
-    decides: a match proves the day, with the loss landed when one is
-    certain, or, read before the loss, confirms the battles and leaves the
-    loss unsettled; it outranks every contradiction before it. A reading
-    taken at or after the player's first new-day battle can only confirm:
-    a new-day battle it shows may not be known. A reading the ledger reads
-    both ways settles nothing on its own, except the Reset reading, which
-    contradicts when no way fits. A reading that fits only with a battle not
-    yet shown, or read one way, is a guess: taken when the day's start is
-    proven and no clean reading decided.
+    either equals the ledger or contradicts it. Among trustworthy readings
+    the last clean one decides: a match proves the day, with the loss landed
+    when one is certain, or, read before the loss, confirms the battles and
+    leaves the loss unsettled; it outranks every contradiction before it. A
+    match showing no loss after one showing it landed proves nothing, as a
+    loss cannot be undone. A reading taken at or after the player's first
+    new-day battle can only confirm: a new-day battle it shows may not be
+    known. A confirm-only reading confirms only when no trustworthy reading
+    decided. A reading the ledger reads both ways settles nothing on its
+    own, except the Reset reading, which contradicts when no way fits. A
+    reading that fits only with a battle not yet shown, or read one way, is
+    a guess: taken when the day's start is proven and no clean reading
+    decided.
     """
     judged = [
         judged for judged in (
@@ -215,13 +219,22 @@ def decide(
             and (first_new_day is None or item.reading.read_at < first_new_day)
         )
 
-    decider = next(
-        (
-            item for item in reversed(judged)
-            if (item.matched and not item.ambiguous and not item.missed)
-            or contradicts(item)
-        ),
-        None,
+    def last_clean(items: Iterable[_Judged]) -> _Judged | None:
+        decider = None
+        loss_landed = False
+        for item in items:
+            if item.matched and not item.ambiguous and not item.missed:
+                if loss_landed and not item.loss:
+                    continue
+                loss_landed = loss_landed or bool(item.loss)
+                decider = item
+            elif contradicts(item):
+                decider = item
+        return decider
+
+    decider = (
+        last_clean(item for item in judged if not item.reading.confirm_only)
+        or last_clean(item for item in judged if item.reading.confirm_only)
     )
     if decider is not None and decider.matched:
         return Verdict(
