@@ -726,6 +726,45 @@ def test_monday_charge_hidden_by_the_raise_starts_no_next_day(
     assert day_a_row[2] is None
 
 
+def test_new_day_attack_in_the_reset_reading_moves_out_of_both_days(
+    database_url: str, archive_server
+) -> None:
+    # Day B's 05:20 Reset reading already shows a new-day +40 attack reported
+    # at 05:08 that its log lacks; a later log brings it. Day B ends without
+    # it and day C starts from that end, not from the reading, and counts it once.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    new_day_attack = (DAY_C + timedelta(minutes=8), True)
+    end_b = 6000 + WIN - 8 * LOSS
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C, profile=_profile(end_b + WIN),
+            log=_log(*day_b), profile_at=DAY_C + timedelta(minutes=20),
+        )
+        _process(connection_info, archive_server, jobs)
+        [before] = _latest_days(connection_info, (DAY_B,))
+        jobs = [store_observation(
+            connection_info, archive_server, occurrence_key="later-log",
+            endpoint="battle_log", body=_log(*day_b, new_day_attack),
+            observed_at=DAY_C + timedelta(minutes=30), normalized_tag=TAG,
+        )[1]]
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_D, profile=_profile(end_b + WIN),
+            log=_log(new_day_attack),
+        )
+        _process(connection_info, archive_server, jobs)
+        day_b_row, day_c_row = _latest_days(connection_info)
+
+    assert before[0] == "Inconsistent"
+    assert day_b_row[:5] == ("Complete", "exact", 6000, end_b, end_b)
+    assert day_b_row[7]["next_start_reading_correction"] == -WIN
+    assert day_c_row[2:4] == (end_b, end_b + WIN)
+
+
 def test_battle_time_is_a_length_only_beside_a_battle_timestamp(
     database_url: str, archive_server
 ) -> None:

@@ -269,3 +269,63 @@ def test_one_new_battle_in_a_full_log_queues_only_its_two_players(
 
     assert len(full["items"]) == 50
     assert queued == expected
+
+
+def test_unchanged_full_log_check_covers_nothing(database_url: str, archive_server) -> None:
+    # Day B's Reset reading is rejected. A later full 50-row log of another
+    # mode has the short Reset log's fingerprint, so it is recorded unchanged,
+    # yet it can hide a new-day battle: a 05:40 reading 40 more stays unjudged.
+    day_b = [(DAY_B + timedelta(hours=1), True)] + [
+        (DAY_B + timedelta(hours=hour), False) for hour in range(2, 10)
+    ]
+    end_b = 6000 + WIN - 8 * LOSS
+    reset_log = _log(*day_b)
+    digest = hashlib.sha256(reset_log).hexdigest()
+    full = _log(filler=[DAY_C + timedelta(minutes=minute) for minute in range(50)])
+    season_zero = json.loads(_profile(end_b))
+    season_zero["currentLeagueSeasonId"] = 0
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        jobs = _reset_work(
+            connection_info, archive_server, DAY_B, profile=_profile(6000), log=_log()
+        )
+        jobs += _reset_work(
+            connection_info, archive_server, DAY_C,
+            profile=json.dumps(season_zero).encode(), log=reset_log,
+        )
+        jobs.append(store_observation(
+            connection_info, archive_server, occurrence_key="later-profile",
+            endpoint="profile", body=_profile(end_b + 40),
+            observed_at=DAY_C + timedelta(minutes=40), normalized_tag=TAG,
+        )[1])
+        _process(connection_info, archive_server, jobs)
+        _calculate(connection_info, archive_server, TAG, DAY_B)
+        with psycopg.connect(connection_info) as connection:
+            player_id, log_id = connection.execute(
+                "SELECT player_id, id FROM collector_observations"
+                " WHERE endpoint = 'battle_log' AND response_completed_at = %s",
+                (DAY_C,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO collector_response_state (
+                    scope, identity_key, endpoint, player_id, normalized_tag,
+                    last_response_hash, last_content_fingerprint, last_occurrence_key,
+                    last_applied_occurrence_key, last_seen_at, last_observation_id,
+                    last_success_at
+                ) VALUES ('player', %s, 'battle_log', %s, %s, %s, %s, 'reset-log',
+                          'reset-log', %s, %s, %s)
+                """,
+                (TAG, player_id, TAG, digest, digest, DAY_C, log_id, DAY_C),
+            )
+        unchanged = CollectorDatabase(connection_info).record_response(_handoff(
+            occurrence_key="full-check", response_hash=hashlib.sha256(full).hexdigest(),
+            content_fingerprint=digest, player_id=player_id, endpoint="battle_log",
+            completed_at=DAY_C + timedelta(minutes=45),
+        ))
+        _process(connection_info, archive_server, [])
+        queued = _queued(connection_info, "reconcile:check:")
+        day = _day(connection_info, TAG, DAY_B)
+
+    assert unchanged.observation_id is None
+    assert queued == [(str(player_id), f"{DAY_B:%Y-%m-%dT%H:%M:%SZ}")]
+    assert day[0] == "Partial" and "trophy_equation_mismatch" not in day[2]
