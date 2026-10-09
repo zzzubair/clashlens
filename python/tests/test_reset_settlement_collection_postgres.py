@@ -962,7 +962,8 @@ def test_reset_pair_reads_every_profile_before_the_new_day_then_its_battle_log(
     database_url: str, tmp_path
 ) -> None:
     # The ended day's last battle ended by 05:03:38 and the new day's first
-    # started at 05:07:20 or later at every Reset to 8 October 2026.
+    # started at 05:07:20 or later at all 11 Resets from 29 September to
+    # 9 October 2026.
     with (
         domain_database(database_url, include_coordinator=True) as connection_info,
         _provider() as origin,

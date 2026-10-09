@@ -489,9 +489,9 @@ def battle_day_probe() -> None:
     A report belongs to the day of its stamp less five minutes
     (``domain.BATTLE_DAY_GRACE``): the game lets no new-day attack start until
     about 05:07:20 and every ended-day attack had ended by 05:03:38 at all 11
-    Resets to 8 October 2026. A day with a 9th attack or defense, or a report
-    stamped 05:03:40-05:07:00 after either day's Reset, means that window
-    moved.
+    Resets from 29 September to 9 October 2026. A day with a 9th attack or
+    defense, or a report stamped 05:03:40-05:07:00 after either day's Reset,
+    means that window moved.
     """
     import psycopg
 

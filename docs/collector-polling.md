@@ -519,7 +519,7 @@ due time. Player-token verification and interactive collection use the
 At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
 profile/battle work row per member, due at 05:03:40. At all 11 Resets from 29
-September to 8 October 2026 the ended day's last battle ended by 05:03:38 and
+September to 9 October 2026 the ended day's last battle ended by 05:03:38 and
 the new day's first started at 05:07:20 or later, and no profile showed the
 automatic defense loss before 05:07:38. So from 05:03:40 the sweep fetches only
 profiles, each showing the ended day's end before that loss; from 05:07:20 it

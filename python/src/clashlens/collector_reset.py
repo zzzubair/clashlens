@@ -10,7 +10,7 @@ fetches a fresh profile, then the battle log that must cover it, and stops
 making requests 23h55m after the Reset.
 
 The Reset pair reads every profile in the minutes after the Reset when no
-battle is running: at all 11 Resets from 29 September to 8 October 2026 the
+battle is running: at all 11 Resets from 29 September to 9 October 2026 the
 last battle of the ended day ended by 05:03:38 and the first of the new day
 started at 05:07:20 or later, and the automatic defense loss showed in no
 profile before 05:07:38. So profiles go out from ``PROFILE_PASS_FROM`` and
