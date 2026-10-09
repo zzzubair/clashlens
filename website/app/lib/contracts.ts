@@ -251,6 +251,11 @@ export interface RankedDaySummary {
     trophyLoss: number | null;
   };
   trophyChange: number | null;
+  // Trophies the game took at this day's closing Reset for unplayed
+  // defenses, and any other Reset adjustment such as a Season reset; null
+  // when there was none. The trophy change already includes both.
+  automaticDefenseLoss?: number | null;
+  otherAdjustment?: number | null;
   // Clash Lens rank on the frozen board saved at this day's closing Reset.
   resetRank?: number | null;
   // Python found every battle of the day among the recorded ones: so far for

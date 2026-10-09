@@ -108,7 +108,7 @@ const todayEntry = (html: string) =>
   html.split('id="legend-day-2026-10-08"')[1].split("</details>")[0];
 
 describe("today's Legend day wording", () => {
-  it("keeps the previous Season's days out of recent trophy trends", async () => {
+  it("shows no live trend and keeps the previous Season's days out", async () => {
     const previousSeasonDay: RankedDaySummary = {
       ...TODAY,
       dayNumber: 28,
@@ -119,11 +119,10 @@ describe("today's Legend day wording", () => {
       uncertainty: [],
     };
     const html = await page(WAITING, "2026-10-08T12:00:00Z", [previousSeasonDay]);
-    const trends = html.split('id="player-trends-title"')[1].split("</section>")[0];
-    expect(trends).toContain("Last 7 days (3 so far)");
-    expect(trends).toContain("Last 14 days (3 so far)");
-    expect(trends).not.toContain("+35");
-    expect(trends.match(/<dd>0 of 3<\/dd>/g)).toHaveLength(2);
+    expect(html).not.toContain("Trophy trend");
+    const summary = html.split('id="season-summary-title"')[1].split("</section>")[0];
+    expect(summary).toContain("Last 7 days (3 so far)");
+    expect(summary).not.toContain("Trophies now");
     expect(html).not.toContain('id="legend-day-2026-10-04"');
   });
 
@@ -204,5 +203,43 @@ describe("today's Legend day wording", () => {
     expect(rank("2026-10-07")).toMatch(/>1,234$/);
     expect(rank("2026-10-06")).toMatch(/>Unknown$/);
     expect(rank("2026-10-08")).toMatch(/>After Reset$/);
+  });
+
+  it("ends each finished day on the next day's start and shows the automatic loss", async () => {
+    const ended = (day: number, extra: Partial<RankedDaySummary>): RankedDaySummary => ({
+      ...TODAY,
+      dayNumber: day,
+      period: `2026-10-0${day}T05:00:00Z – 2026-10-0${day + 1}T05:00:00Z`,
+      state: "Complete",
+      confidence: "exact",
+      uncertainty: [],
+      ...extra,
+    });
+    const html = await page(WAITING, undefined, [
+      // 40 from attacks, 0 on defense, 32 taken at Reset: +8.
+      ended(7, {
+        startTrophies: 5992,
+        offense: { attacks: 1, threeStars: 1, trophyGain: 40 },
+        trophyChange: 8,
+        automaticDefenseLoss: 32,
+      }),
+      // Its own end, 5,950, disagrees with the next day's 5,992 start.
+      ended(6, { startTrophies: 5900, trophyChange: 50 }),
+    ]);
+    const cell = (key: string, label: string) =>
+      html.split(`id="legend-day-${key}"`)[1].split(`<small>${label}</small>`)[1];
+    expect(cell("2026-10-07", "End of day")).toMatch(
+      /^<strong>6,000<span class="day-mark day-mark-verified" title="Verified">/,
+    );
+    expect(cell("2026-10-07", "Defenses")).toContain(
+      '<span title="Taken by the game at Reset for defenses not played">-32 automatic loss</span>',
+    );
+    expect(cell("2026-10-06", "End of day")).toMatch(
+      /^<strong>5,950<span class="day-mark day-mark-gap" title="Uncertain">/,
+    );
+    expect(cell("2026-10-06", "Defenses")).not.toContain("automatic loss");
+    expect(cell("2026-10-08", "End of day")).toMatch(
+      /^<strong[^>]*>After Reset<\/strong>/,
+    );
   });
 });

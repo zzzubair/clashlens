@@ -315,9 +315,24 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         (isInteger(value.start_trophies) && value.start_trophies >= 0)
       ) ||
       !Array.isArray(value.offense_events) ||
-      !Array.isArray(value.defense_events)
+      !Array.isArray(value.defense_events) ||
+      !(
+        value.adjustments === undefined ||
+        (Array.isArray(value.adjustments) &&
+          value.adjustments.every(
+            (item) => isRecord(item) && isString(item.type) && isInteger(item.amount),
+          ))
+      )
     )
       malformed();
+    const adjustments = (value.adjustments ?? []) as { type: string; amount: number }[];
+    const adjustment = (automatic: boolean) => {
+      const amounts = adjustments
+        .filter((item) => (item.type === "automatic_defense") === automatic)
+        .map((item) => item.amount);
+      return amounts.length === 0 ? null : amounts.reduce((sum, amount) => sum + amount);
+    };
+    const automatic = adjustment(true);
     const valid = [
       value.attack_count,
       value.attack_three_star_count,
@@ -359,6 +374,8 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         trophyLoss: value.defense_loss as number | null,
       },
       trophyChange: value.net_trophy_change as number | null,
+      automaticDefenseLoss: automatic === null ? null : -automatic,
+      otherAdjustment: adjustment(false),
       resetRank: mapResetRank(value.reset_rank),
       battlesComplete: value.battles_complete === true,
       offenseEvents: value.offense_events.map((event) => mapEvent(event, "offense")),
