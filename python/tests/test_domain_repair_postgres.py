@@ -910,3 +910,56 @@ def test_season_repair_rebuilds_moved_battle_days_of_its_season_only(
             database.close()
 
     assert calculated == [day2, day3]
+
+
+def test_season_repair_reports_a_failed_reset_repair_until_its_day_is_saved_again(
+    database_url: str,
+) -> None:
+    """A Reset-pair repair of the Season's Day 2 failed: preview and receipt
+    list it, and the repair stays at inputs. Its retry then saves the day
+    again, and routine cleanup deletes the finished retry 48 hours later:
+    the old failure no longer holds the repair, which moves on to the days."""
+    with _campaign_database(database_url) as (connection_info, worker):
+        day2 = START + DAY
+        with _owner(connection_info) as connection:
+            player = _player(connection, "#RESET")
+            _saved_day(connection, player, day2)
+            failed_id = connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, status,
+                    failure_category, due_at
+                ) VALUES ('reconcile_ranked_day', 'reconcile:reset-baseline:1:v1',
+                          %s, 'failed', 'lease_expired_max_attempts', clock_timestamp())
+                RETURNING id
+                """,
+                (Jsonb({"player_id": player,
+                        "ranked_day_start": day2.strftime("%Y-%m-%dT%H:%M:%SZ")}),),
+            ).fetchone()[0]
+
+        def run(action: str) -> dict:
+            return domain_repair.season_repair(worker, SEASON, action, max_jobs=10)
+
+        preview, held, receipt = run("preview"), run("queue"), run("receipt")
+        with _owner(connection_info) as connection:
+            connection.execute(
+                "INSERT INTO python_processing_jobs (work_type, deduplication_key,"
+                " input_json, status, due_at) SELECT work_type,"
+                " 'reconcile:reset-recovery:' || id, input_json, 'complete',"
+                " clock_timestamp() FROM python_processing_jobs WHERE id = %s",
+                (failed_id,),
+            )
+            # The retry saves the day again; its finished job is cleaned up.
+            _saved_day(connection, player, day2, version=2)
+            connection.execute(
+                "DELETE FROM python_processing_jobs WHERE deduplication_key = %s",
+                (f"reconcile:reset-recovery:{failed_id}",),
+            )
+        moved_on = run("queue")
+
+    blocker = [{"job_id": failed_id, "player_id": player,
+                "failure_category": "lease_expired_max_attempts"}]
+    assert (preview["inputs"]["failed"], preview["inputs"]["failed_blockers"]) == (1, blocker)
+    assert (held["phase"], held["failed"], held["failed_blockers"]) == ("inputs", 1, blocker)
+    assert (receipt["inputs"]["failed"], receipt["inputs"]["unfinished"]) == (1, 0)
+    assert (moved_on["phase"], moved_on["queued"]) == ("days", 1)

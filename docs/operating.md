@@ -657,7 +657,9 @@ podman exec clashlens-python-worker \
 `preview` writes nothing: each ended day's latest saved results by state and
 by reason (`days`), each Reset's published Daily board with its rule and how
 many entries are proven (`boards`), the boards the board rules would now
-change, and how many players have saved days (`players`). The first `queue`
+change, how many players have saved days (`players`), and the Season's
+evidence repairs still unfinished or failed (`inputs`, as `receipt` shows them
+too). The first `queue`
 saves those counts as the repair's receipt, then each run does one step, at
 most `--max-jobs` (default 100) jobs at backfill priority, and says which in
 `phase`: `inputs`, repairs of the evidence days are built from (the
@@ -667,7 +669,10 @@ Season's days change), until every such repair reaching a day of the
 Season, including one that started on the previous Season's last day, has
 finished and none has failed (`unfinished`, `failed` and `failed_blockers`
 count them while it is at `inputs`; a failed one is not retried
-automatically, so investigate it and retry it by hand); `days`, one job
+automatically, so investigate it and retry it by hand; a failed Reset-pair
+repair stops counting once its day has a result saved since the failure that
+is not Live, as its retry saves, even after the finished retry job is
+cleaned up 48 hours later); `days`, one job
 per player recalculating every saved day in the Season's 28 days, oldest
 first, even one saved before its Season was known, so each
 day starts where the day before now ends; once every such job has finished,

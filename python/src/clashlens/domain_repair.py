@@ -143,6 +143,7 @@ def season_repair(
                 return {**report, "refused": "no repair queued for this revision"}
             return {
                 **report,
+                "inputs": _input_jobs(connection, season_id, start, max_jobs),
                 "boards_queued_at": receipt[3].isoformat() if receipt[3] else None,
                 "days": {"before": receipt[0], "now": _day_counts(connection, start)},
                 "boards": {"before": receipt[1], "now": _board_counts(connection, start)},
@@ -157,6 +158,7 @@ def season_repair(
         if action == "preview":
             return {
                 **report,
+                "inputs": _input_jobs(connection, season_id, start, max_jobs),
                 "days": _day_counts(connection, start),
                 "boards": _board_counts(connection, start),
                 "boards_to_rebuild": boundary.queue_board_rebuilds(
@@ -333,45 +335,69 @@ def _repair_inputs(
         )
         queued = max(len(pairs["job_ids"]), pairs["evaluated_count"])
     with database.pool.connection() as connection:
-        rows = connection.execute(
-            """
-            SELECT job.id, job.state, job.failure_category,
-                   (job.input_json ->> 'player_id')::bigint
-            FROM python_processing_jobs_worker AS job
-            WHERE job.work_type = 'reconcile_ranked_day'
-              AND job.state::text = ANY(%s)
-              AND (
-                  job.deduplication_key LIKE 'reconcile:battle-day:%%'
-                  OR job.deduplication_key LIKE 'reconcile:reset-baseline:%%'
-                  OR job.deduplication_key LIKE 'reconcile:reset-recovery:%%'
+        return {"queued": queued, **_input_jobs(
+            connection, season_id, start, max_jobs,
+            tuple(blocker["job_id"] for blocker in moved["failed_blockers"]),
+        )}
+
+
+def _input_jobs(
+    connection: Any, season_id: str, start: datetime, limit: int,
+    failed_moves: tuple[int, ...] = (),
+) -> dict[str, Any]:
+    """How many of the Season's evidence repairs are unfinished, and the
+    failed ones, with ``failed_moves`` holding back its moved battles."""
+    return _job_states(connection.execute(
+        """
+        SELECT job.id, job.state, job.failure_category,
+               (job.input_json ->> 'player_id')::bigint
+        FROM python_processing_jobs_worker AS job
+        WHERE job.work_type = 'reconcile_ranked_day'
+          AND job.state::text = ANY(%s)
+          AND (
+              job.deduplication_key LIKE 'reconcile:battle-day:%%'
+              OR job.deduplication_key LIKE 'reconcile:reset-baseline:%%'
+              OR job.deduplication_key LIKE 'reconcile:reset-recovery:%%'
+          )
+          -- Any job reaching a day of the Season, such as one from the
+          -- previous Season's last day through this one's first, or a
+          -- failed one holding back the Season's moved battles.
+          AND (
+              job.id = ANY(%s)
+              OR job.input_json ->> 'recalculate_season' = %s
+              OR (job.input_json ->> 'ranked_day_start')::timestamptz < %s
+              AND coalesce(
+                  job.input_json ->> 'last_ranked_day_start',
+                  job.input_json ->> 'ranked_day_start'
+              )::timestamptz >= %s
+          )
+          -- A failed Reset repair queued again counts as its retry; once
+          -- the retry has run, and after its finished job is cleaned
+          -- up, its day's result saved since the failure shows it.
+          AND NOT EXISTS (
+              SELECT 1 FROM python_processing_jobs_worker AS retry
+              WHERE retry.deduplication_key
+                    = 'reconcile:reset-recovery:' || job.id::text
+          )
+          AND NOT (
+              job.state::text = 'failed'
+              AND job.deduplication_key LIKE 'reconcile:reset-%%'
+              AND EXISTS (
+                  SELECT 1 FROM ranked_day_versions AS day
+                  WHERE day.player_id = (job.input_json ->> 'player_id')::bigint
+                    AND day.ranked_day_start
+                        = (job.input_json ->> 'ranked_day_start')::timestamptz
+                    AND day.created_at > job.updated_at
+                    AND day.state <> 'Live'
               )
-              -- Any job reaching a day of the Season, such as one from the
-              -- previous Season's last day through this one's first, or a
-              -- failed one holding back the Season's moved battles.
-              AND (
-                  job.id = ANY(%s)
-                  OR job.input_json ->> 'recalculate_season' = %s
-                  OR (job.input_json ->> 'ranked_day_start')::timestamptz < %s
-                  AND coalesce(
-                      job.input_json ->> 'last_ranked_day_start',
-                      job.input_json ->> 'ranked_day_start'
-                  )::timestamptz >= %s
-              )
-              -- A failed Reset repair queued again counts as its retry.
-              AND NOT EXISTS (
-                  SELECT 1 FROM python_processing_jobs_worker AS retry
-                  WHERE retry.deduplication_key
-                        = 'reconcile:reset-recovery:' || job.id::text
-              )
-            ORDER BY job.id
-            """,
-            (
-                [*_UNFINISHED_JOB_STATES, "failed"],
-                [blocker["job_id"] for blocker in moved["failed_blockers"]],
-                season_id, start + SEASON_DURATION, start,
-            ),
-        ).fetchall()
-    return {"queued": queued, **_job_states(rows, max_jobs)}
+          )
+        ORDER BY job.id
+        """,
+        (
+            [*_UNFINISHED_JOB_STATES, "failed"], list(failed_moves),
+            season_id, start + SEASON_DURATION, start,
+        ),
+    ).fetchall(), limit)
 
 
 def _queue_days(
