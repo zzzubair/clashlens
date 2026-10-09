@@ -148,7 +148,7 @@ def _calls(command_workspace):
     )
 
 
-def test_every_job_pulls_images_from_google_copy_of_docker_hub_first(tmp_path) -> None:
+def test_every_job_pulls_docker_hub_images_from_a_public_copy(tmp_path) -> None:
     workflow = _workflow()
     mirror = workflow["env"]["DOCKER_HUB_MIRROR"]
     assert tomllib.loads(mirror) == {
@@ -168,7 +168,7 @@ def test_every_job_pulls_images_from_google_copy_of_docker_hub_first(tmp_path) -
     podman_jobs = set()
     for name, job in workflow["jobs"].items():
         for service in job.get("services", {}).values():
-            assert service["image"].startswith("mirror.gcr.io/library/")
+            assert service["image"].startswith("public.ecr.aws/docker/library/")
         for step in job["steps"]:
             if "install -y podman" not in step.get("run", ""):
                 continue
@@ -205,7 +205,7 @@ def test_python_groups_have_independent_postgresql_and_run_development_tests_onc
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     assert job["env"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
     assert job["services"]["postgres"] == {
-        "image": "mirror.gcr.io/library/postgres:18",
+        "image": "public.ecr.aws/docker/library/postgres:18",
         "env": {
             "POSTGRES_DB": "clashlens",
             "POSTGRES_PASSWORD": "postgres",
@@ -541,7 +541,7 @@ def test_packaged_python_groups_run_the_full_packaged_suite_once(
     assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2, 3, 4]}}
     # The development stack's database image, user and test database.
     assert job["services"]["postgres"] == {
-        "image": "mirror.gcr.io/library/postgres:18-alpine",
+        "image": "public.ecr.aws/docker/library/postgres:18-alpine",
         "env": {
             "POSTGRES_DB": "clashlens_test",
             "POSTGRES_PASSWORD": "clashlens-dev",
