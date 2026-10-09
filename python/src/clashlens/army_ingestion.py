@@ -29,16 +29,21 @@ from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, anchored_ranked
 ARMY_FACT_PLAYER_BATCH = 500
 
 
+def _decode_has_evidence(active: Any, evidence_id: int, raw_code: Any) -> bool:
+    """Whether the active decode row was made from this evidence and code."""
+    if active is None or int(active[1]) != int(evidence_id):
+        return False
+    return (active[2] is None) == (raw_code is None) and (
+        raw_code is None or _text_value(active[2]) == _text_value(raw_code)
+    )
+
+
 def _decode_is_current(
     active: Any, evidence_id: int, raw_code: Any, decoded: DecodedArmy | DecodeFailure
 ) -> bool:
     """Whether the active decode row (id, evidence_id, raw_code, identity_hash,
     status, failure_category) already records this evidence's result."""
-    if active is None or int(active[1]) != int(evidence_id):
-        return False
-    if (active[2] is None) != (raw_code is None) or (
-        raw_code is not None and _text_value(active[2]) != _text_value(raw_code)
-    ):
+    if not _decode_has_evidence(active, evidence_id, raw_code):
         return False
     if isinstance(decoded, DecodedArmy):
         return (
@@ -57,6 +62,7 @@ def _upsert_army_decodes(
     reset_baseline: tuple[int, int, datetime] | None = None,
     observation_id: int | None = None,
     reset_lock_wait: str | None = None,
+    reuse_any_catalog: bool = False,
 ) -> None:
     if not battle_ids:
         return
@@ -125,6 +131,14 @@ def _upsert_army_decodes(
             (battle_ids,),
         ).fetchall()
     }
+    # Live battle logs reuse a saved decode of the same evidence from any
+    # catalog; moving it to a newer catalog is background work. On 9 Oct 2026
+    # live battle logs re-decoding catalog v2 battles under v3 queued on each
+    # other's battle locks and fell over two hours behind.
+    saved: dict[tuple[int, str, str], list[Any]] = {}
+    if reuse_any_catalog:
+        for key, active in current.items():
+            saved.setdefault(key[:3], []).append(active)
     decoded_rows = [
         row
         for row in decoded_rows
@@ -135,6 +149,10 @@ def _upsert_army_decodes(
             row[1],
             row[3],
             row[4],
+        )
+        and not any(
+            _decode_has_evidence(active, row[1], row[3])
+            for active in saved.get((row[0], row[2], row[4].decoder_version), ())
         )
     ]
     # Most battle logs repeat battles whose decodes are already saved. Those
