@@ -311,40 +311,114 @@ describe("adding and removing one group player", () => {
   });
 
   it("lists a full, a one-player and an empty group with worst-case names", async () => {
-    const groups = worstGroups();
-    const keys = Object.fromEntries(
-      groups.map((group) => [group.groupId, IDEMPOTENCY_KEY]),
-    );
-    const handler = createStaticHandler([
-      {
-        path: "/account/groups",
-        Component: GroupsRoute,
-        loader: () => ({
-          groups,
-          season: null,
-          error: null,
-          createIdempotencyKey: IDEMPOTENCY_KEY,
-          updateIdempotencyKeys: keys,
-          deleteIdempotencyKeys: keys,
-          addIdempotencyKeys: keys,
-          removeIdempotencyKeys: {},
-        }),
-      },
-    ]);
-    const context = await handler.query(new Request(`${ORIGIN}/account/groups`));
-    if (context instanceof Response) throw new Error("unexpected response");
-    const html = renderToString(
-      createElement(StaticRouterProvider, {
-        router: createStaticRouter(handler.dataRoutes, context),
-        context,
-      }),
-    ).replaceAll("<!-- -->", "");
+    const html = await renderGroups(worstGroups());
     for (const text of ["20 of 20 players", "1 of 20 players", "No players yet"])
       expect(html).toContain(text);
-    // Each card offers three actions; renaming, removing and deleting wait behind Edit.
-    for (const text of ["Compare players", "Add player", ">Edit</button>"])
-      expect(html).toContain(text);
-    for (const text of ["Remove", "Save name", "Delete group"])
-      expect(html).not.toContain(text);
+  });
+
+  it("folds adding and editing behind Add player and Edit without needing JavaScript", async () => {
+    const html = await renderGroups(worstGroups());
+    const card = html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`));
+    // Each fold is a native disclosure holding an ordinary form, closed at first.
+    expect(card).toMatch(
+      /^[^]*?<a [^>]*>Compare players<\/a><details class="group-tool"[^>]*><summary class="button button-secondary">Add player<\/summary><form[^>]* action="\/account\/groups" method="post"><input type="hidden" name="action" value="add-player"\/>/,
+    );
+    expect(card).toMatch(
+      /^[^]*?<details class="group-tool group-tool-edit"[^>]*><summary class="button button-secondary">Edit<\/summary>[^]*?name="action" value="update"[^]*?>Save name<\/button>[^]*?aria-label="Remove [^"]+ from [^"]+"[^]*?<details class="group-delete-step"><summary[^>]*>Delete group<\/summary>[^]*?<button type="submit"[^>]*>Yes, delete group<\/button><a [^>]*>Keep group<\/a>/,
+    );
+    expect(html).not.toMatch(/<details[^>]* open=""/);
+  });
+
+  it("reopens the fold a no-JavaScript form came from, with its result", async () => {
+    const reply = (action: string, outcome: object) => ({
+      action,
+      groupId: GROUP_ID,
+      createIdempotencyKey: IDEMPOTENCY_KEY,
+      updateIdempotencyKey: IDEMPOTENCY_KEY,
+      deleteIdempotencyKey: IDEMPOTENCY_KEY,
+      playerIdempotencyKey: IDEMPOTENCY_KEY,
+      fieldErrors: {},
+      notice: null,
+      generalError: null,
+      values: { name: "Taken", tag: "#2PP", action, groupId: GROUP_ID },
+      ...outcome,
+    });
+    const card = (html: string) =>
+      html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`)).split('<li id="group-')[1];
+
+    const added = card(
+      await renderGroups(
+        worstGroups(),
+        reply("add-player", { fieldErrors: { tag: "Not a player." } }),
+      ),
+    );
+    expect(added).toMatch(
+      /<details class="group-tool"[^>]* open=""><summary[^>]*>Add player/,
+    );
+    expect(added).toContain("Not a player.");
+    expect(added).toContain('value="#2PP"');
+    expect(added).not.toMatch(/group-tool-edit"[^>]* open=""/);
+
+    const renamed = await renderGroups(
+      worstGroups(),
+      reply("update", {
+        fieldErrors: { name: "A group with this name already exists." },
+      }),
+    );
+    expect(card(renamed)).toMatch(
+      /<details class="group-tool group-tool-edit"[^>]* open="">/,
+    );
+    expect(card(renamed)).toContain("A group with this name already exists.");
+    expect(card(renamed)).toContain('value="Taken"');
+    // Only that group's card opens.
+    expect(renamed.match(/ open=""/g)).toHaveLength(1);
+
+    const deleted = card(
+      await renderGroups(
+        worstGroups(),
+        reply("delete", {
+          generalError: { error: { code: "conflict", message: "Gone elsewhere." } },
+        }),
+      ),
+    );
+    expect(deleted).toMatch(/group-tool-edit"[^>]* open="">/);
+    expect(deleted).toMatch(/<details class="group-delete-step" open="">/);
+    expect(deleted).toContain("Gone elsewhere.");
   });
 });
+
+/** The page as server-rendered HTML, after a no-JavaScript form result if given. */
+async function renderGroups(groups: ReturnType<typeof worstGroups>, actionData?: object) {
+  const keys = Object.fromEntries(
+    groups.map((group) => [group.groupId, IDEMPOTENCY_KEY]),
+  );
+  const handler = createStaticHandler([
+    {
+      path: "/account/groups",
+      Component: GroupsRoute,
+      action: () => actionData,
+      loader: () => ({
+        groups,
+        season: null,
+        error: null,
+        createIdempotencyKey: IDEMPOTENCY_KEY,
+        updateIdempotencyKeys: keys,
+        deleteIdempotencyKeys: keys,
+        addIdempotencyKeys: keys,
+        removeIdempotencyKeys: {},
+      }),
+    },
+  ]);
+  const context = await handler.query(
+    actionData === undefined
+      ? new Request(`${ORIGIN}/account/groups`)
+      : new Request(`${ORIGIN}/account/groups`, { method: "POST", body: new FormData() }),
+  );
+  if (context instanceof Response) throw new Error("unexpected response");
+  return renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+    }),
+  ).replaceAll("<!-- -->", "");
+}

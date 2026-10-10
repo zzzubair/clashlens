@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import {
   data,
   Form,
@@ -315,7 +315,7 @@ function notFound(tag: string): string {
 }
 
 function stillChecking(tag: string): string {
-  return `Still checking ${tag} with Clash of Clans. Press Add player again in a few seconds.`;
+  return `Still checking ${tag} with Clash of Clans. Press Add again in a few seconds.`;
 }
 
 function addedNotice(player: GroupPlayer): string {
@@ -447,7 +447,14 @@ export default function GroupsRoute() {
         ) : groups.length > 0 ? (
           <ul className="group-card-list">
             {groups.map((group) => (
-              <GroupCard key={group.groupId} group={group} loaderData={loaderData} />
+              <GroupCard
+                key={group.groupId}
+                group={group}
+                loaderData={loaderData}
+                actionData={
+                  actionData?.groupId === group.groupId ? actionData : undefined
+                }
+              />
             ))}
           </ul>
         ) : (
@@ -464,116 +471,114 @@ export default function GroupsRoute() {
 function GroupCard({
   group,
   loaderData,
+  actionData,
 }: {
   group: ListedGroup;
   loaderData: GroupsLoaderData;
+  /** A no-JavaScript form result for this group, if any. */
+  actionData: GroupsActionData | undefined;
 }) {
   const id = group.groupId;
-  const [adding, setAdding] = useState(false);
-  const [editing, setEditing] = useState(false);
   const add = useFetcher<GroupsActionData>();
   const addForm = useRef<HTMLFormElement>(null);
   const tagInput = useRef<HTMLInputElement>(null);
+  const addResult =
+    add.data ?? (actionData?.action === "add-player" ? actionData : undefined);
   const checking = add.state !== "idle";
-  const tagError = add.data?.fieldErrors.tag;
+  const tagError = addResult?.fieldErrors.tag;
   useEffect(() => {
     if (add.state === "idle" && add.data?.notice) addForm.current?.reset();
   }, [add.state, add.data]);
-  useEffect(() => {
-    if (adding) tagInput.current?.focus();
-  }, [adding]);
+  const editResult = actionData?.action === "add-player" ? undefined : actionData;
   const count = group.players.length;
 
   return (
     <li id={`group-${id}`} className="group-card">
       <div className="group-card-head">
         <h3>{group.name}</h3>
-        <div className="group-card-actions">
-          <Link
-            className="button button-primary"
-            to={`/account/groups/${id}`}
-            state={{ backTo: "/account/groups" }}
-          >
-            Compare players
-          </Link>
-          <button
-            type="button"
-            className="button button-secondary"
-            aria-expanded={adding}
-            aria-controls={`group-add-${id}-form`}
-            onClick={() => setAdding(!adding)}
-          >
-            Add player
-          </button>
-          <button
-            type="button"
-            className="button button-secondary"
-            aria-haspopup="dialog"
-            onClick={() => setEditing(true)}
-          >
-            Edit
-          </button>
-        </div>
+        <Link
+          className="button button-primary"
+          to={`/account/groups/${id}`}
+          state={{ backTo: "/account/groups" }}
+        >
+          Compare players
+        </Link>
+        <details
+          className="group-tool"
+          name={`group-${id}-tools`}
+          open={actionData?.action === "add-player"}
+          onToggle={(event) => {
+            if (event.currentTarget.open) tagInput.current?.focus();
+          }}
+        >
+          <summary className="button button-secondary">Add player</summary>
+          <add.Form method="post" action="." className="add-player-form" ref={addForm}>
+            <input type="hidden" name="action" value="add-player" />
+            <input type="hidden" name="groupId" value={id} />
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={addResult?.playerIdempotencyKey ?? loaderData.addIdempotencyKeys[id]}
+            />
+            <label htmlFor={`group-add-${id}`}>Player tag</label>
+            <div className="add-player-row">
+              <input
+                ref={tagInput}
+                id={`group-add-${id}`}
+                name="tag"
+                type="text"
+                placeholder="#2PY0LQ"
+                required
+                maxLength={MAX_PLAYER_TAG_INPUT_LENGTH}
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                defaultValue={tagError ? addResult?.values.tag : ""}
+                aria-invalid={tagError ? true : undefined}
+                aria-describedby={`group-add-${id}-message`}
+              />
+              <button type="submit" className="button button-primary" disabled={checking}>
+                {checking ? "Checking…" : "Add"}
+              </button>
+            </div>
+            {checking ? (
+              <p id={`group-add-${id}-message`} className="form-help" role="status">
+                Checking the tag with Clash of Clans…
+              </p>
+            ) : tagError ? (
+              <p id={`group-add-${id}-message`} className="field-error" role="alert">
+                {tagError}
+              </p>
+            ) : addResult?.notice ? (
+              <p id={`group-add-${id}-message`} className="add-player-done" role="status">
+                {addResult.notice}
+              </p>
+            ) : (
+              <p id={`group-add-${id}-message`} className="form-help">
+                {count} of {MAX_GROUP_TAGS} players. Each tag is checked with Clash of
+                Clans before it joins.
+              </p>
+            )}
+            {addResult?.generalError ? (
+              <ErrorNotice error={addResult.generalError} />
+            ) : null}
+          </add.Form>
+        </details>
+        <details
+          className="group-tool group-tool-edit"
+          name={`group-${id}-tools`}
+          open={editResult !== undefined}
+        >
+          <summary className="button button-secondary">Edit</summary>
+          <EditGroup group={group} loaderData={loaderData} actionData={editResult} />
+        </details>
       </div>
 
-      <add.Form
-        method="post"
-        action="."
-        id={`group-add-${id}-form`}
-        className="add-player-form"
-        ref={addForm}
-        hidden={!adding}
-      >
-        <input type="hidden" name="action" value="add-player" />
-        <input type="hidden" name="groupId" value={id} />
-        <input
-          type="hidden"
-          name="idempotencyKey"
-          value={add.data?.playerIdempotencyKey ?? loaderData.addIdempotencyKeys[id]}
-        />
-        <label htmlFor={`group-add-${id}`}>Player tag</label>
-        <div className="add-player-row">
-          <input
-            ref={tagInput}
-            id={`group-add-${id}`}
-            name="tag"
-            type="text"
-            placeholder="#2PY0LQ"
-            required
-            maxLength={MAX_PLAYER_TAG_INPUT_LENGTH}
-            autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck={false}
-            aria-invalid={tagError ? true : undefined}
-            aria-describedby={`group-add-${id}-message`}
-          />
-          <button type="submit" className="button button-primary" disabled={checking}>
-            {checking ? "Checking…" : "Add"}
-          </button>
-        </div>
-        {checking ? (
-          <p id={`group-add-${id}-message`} className="form-help" role="status">
-            Checking the tag with Clash of Clans…
-          </p>
-        ) : tagError ? (
-          <p id={`group-add-${id}-message`} className="field-error" role="alert">
-            {tagError}
-          </p>
-        ) : add.data?.notice ? (
-          <p id={`group-add-${id}-message`} className="add-player-done" role="status">
-            {add.data.notice}
-          </p>
-        ) : (
-          <p id={`group-add-${id}-message`} className="form-help">
-            {count} of {MAX_GROUP_TAGS} players. Each tag is checked with Clash of Clans
-            before it joins.
-          </p>
-        )}
-        {add.data?.generalError ? <ErrorNotice error={add.data.generalError} /> : null}
-      </add.Form>
-
       {count > 0 ? (
-        <ul className="player-action-list" aria-label={`Players in ${group.name}`}>
+        <ul
+          className="player-action-list group-members"
+          aria-label={`Players in ${group.name}`}
+        >
           {group.players.map((player) => (
             <li key={player.tag}>
               <MemberName player={player} />
@@ -581,59 +586,38 @@ function GroupCard({
           ))}
         </ul>
       ) : (
-        <p className="muted">No players yet.</p>
+        <p className="muted group-members">No players yet.</p>
       )}
-      {editing ? (
-        <EditGroup
-          group={group}
-          loaderData={loaderData}
-          onClose={() => setEditing(false)}
-        />
-      ) : null}
     </li>
   );
 }
 
-/** Rename, remove players and delete, kept out of the card until Edit is pressed. */
+/** Rename, remove players and delete, folded under the card's Edit. */
 function EditGroup({
   group,
   loaderData,
-  onClose,
+  actionData,
 }: {
   group: ListedGroup;
   loaderData: GroupsLoaderData;
-  onClose: () => void;
+  /** A no-JavaScript rename, remove or delete result for this group, if any. */
+  actionData: GroupsActionData | undefined;
 }) {
   const id = group.groupId;
-  const dialog = useRef<HTMLDialogElement>(null);
-  const deleteButton = useRef<HTMLButtonElement>(null);
-  const [confirming, setConfirming] = useState(false);
+  const deleteStep = useRef<HTMLDetailsElement>(null);
+  const deleteSummary = useRef<HTMLElement>(null);
   const rename = useFetcher<GroupsActionData>();
   const deletion = useFetcher<GroupsActionData>();
+  const renameResult =
+    rename.data ?? (actionData?.action === "update" ? actionData : undefined);
+  const deleteResult =
+    deletion.data ?? (actionData?.action === "delete" ? actionData : undefined);
+  const removeResult = actionData?.action === "remove-player" ? actionData : undefined;
   const saving = rename.state !== "idle";
   const deleting = deletion.state !== "idle";
-  useEffect(() => {
-    dialog.current?.showModal();
-  }, []);
 
   return (
-    <dialog
-      ref={dialog}
-      className="group-edit"
-      aria-labelledby={`group-edit-${id}-title`}
-      onClose={onClose}
-    >
-      <div className="group-edit-head">
-        <h3 id={`group-edit-${id}-title`}>Edit {group.name}</h3>
-        <button
-          type="button"
-          className="button button-secondary"
-          onClick={() => dialog.current?.close()}
-        >
-          Done
-        </button>
-      </div>
-
+    <div className="group-edit">
       <rename.Form method="post" action="." className="stack-form">
         <input type="hidden" name="action" value="update" />
         <input type="hidden" name="groupId" value={id} />
@@ -641,24 +625,24 @@ function EditGroup({
           type="hidden"
           name="idempotencyKey"
           value={
-            rename.data?.updateIdempotencyKey ?? loaderData.updateIdempotencyKeys[id]
+            renameResult?.updateIdempotencyKey ?? loaderData.updateIdempotencyKeys[id]
           }
         />
         <NameField
           id={`group-update-name-${id}`}
-          value={group.name}
-          error={rename.data?.fieldErrors.name}
+          value={renameResult?.fieldErrors.name ? renameResult.values.name : group.name}
+          error={renameResult?.fieldErrors.name}
         />
         <button type="submit" className="button button-secondary" disabled={saving}>
           {saving ? "Saving…" : "Save name"}
         </button>
-        {!saving && rename.data?.notice ? (
+        {!saving && renameResult?.notice ? (
           <p className="add-player-done" role="status">
-            {rename.data.notice}
+            {renameResult.notice}
           </p>
         ) : null}
-        {rename.data?.generalError ? (
-          <ErrorNotice error={rename.data.generalError} />
+        {renameResult?.generalError ? (
+          <ErrorNotice error={renameResult.generalError} />
         ) : null}
       </rename.Form>
 
@@ -679,6 +663,19 @@ function EditGroup({
         ) : (
           <p className="muted">No players yet.</p>
         )}
+        {removeResult?.notice ? (
+          <p className="form-help" role="status">
+            {removeResult.notice}
+          </p>
+        ) : null}
+        {removeResult?.fieldErrors.tag ? (
+          <p className="field-error" role="alert">
+            {removeResult.fieldErrors.tag}
+          </p>
+        ) : null}
+        {removeResult?.generalError ? (
+          <ErrorNotice error={removeResult.generalError} />
+        ) : null}
       </section>
 
       <deletion.Form method="post" action="." className="group-delete">
@@ -688,21 +685,18 @@ function EditGroup({
           type="hidden"
           name="idempotencyKey"
           value={
-            deletion.data?.deleteIdempotencyKey ?? loaderData.deleteIdempotencyKeys[id]
+            deleteResult?.deleteIdempotencyKey ?? loaderData.deleteIdempotencyKeys[id]
           }
         />
         <input type="hidden" name="confirm" value="on" />
-        <button
-          ref={deleteButton}
-          type="button"
-          className="button button-secondary danger-button"
-          aria-expanded={confirming}
-          aria-controls={`group-delete-${id}`}
-          onClick={() => setConfirming(!confirming)}
+        <details
+          ref={deleteStep}
+          className="group-delete-step"
+          open={deleteResult !== undefined}
         >
-          Delete group
-        </button>
-        <div id={`group-delete-${id}`} hidden={!confirming}>
+          <summary ref={deleteSummary} className="button button-secondary danger-button">
+            Delete group
+          </summary>
           <p>
             Delete {group.name} and its list of players? This cannot be undone. The
             players stay on Clash Lens.
@@ -711,23 +705,24 @@ function EditGroup({
             <button type="submit" className="button danger-button" disabled={deleting}>
               {deleting ? "Deleting…" : "Yes, delete group"}
             </button>
-            <button
-              type="button"
+            <a
               className="button button-secondary"
-              onClick={() => {
-                setConfirming(false);
-                deleteButton.current?.focus();
+              href="/account/groups"
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteStep.current) deleteStep.current.open = false;
+                deleteSummary.current?.focus();
               }}
             >
               Keep group
-            </button>
+            </a>
           </div>
-        </div>
-        {deletion.data?.generalError ? (
-          <ErrorNotice error={deletion.data.generalError} />
+        </details>
+        {deleteResult?.generalError ? (
+          <ErrorNotice error={deleteResult.generalError} />
         ) : null}
       </deletion.Form>
-    </dialog>
+    </div>
   );
 }
 

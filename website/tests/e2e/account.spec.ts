@@ -82,23 +82,28 @@ test("a Clasher can sign in and use account features against the real backend", 
   const players = warPlan.getByRole("list", { name: "Players in War plan" });
   if ((await players.count()) === 0) {
     // Players join one at a time, after the game confirms the tag.
-    await warPlan.getByRole("button", { name: "Add player" }).click();
+    await warPlan.locator("summary", { hasText: "Add player" }).click();
     await warPlan.getByLabel("Player tag").fill("#2PP");
     await warPlan.getByRole("button", { name: "Add", exact: true }).click();
   }
   await expect(players).toBeVisible();
   // Renaming, removing and deleting wait behind Edit.
   await expect(warPlan.getByRole("button", { name: /^Remove / })).toHaveCount(0);
-  await warPlan.getByRole("button", { name: "Edit" }).click();
-  const edit = page.getByRole("dialog", { name: "Edit War plan" });
+  const editToggle = warPlan.locator("summary", { hasText: /^Edit$/ });
+  await editToggle.click();
+  const edit = warPlan.locator(".group-edit");
   await expect(edit.getByLabel("Group name")).toHaveValue("War plan");
   await expect(
     edit.getByRole("button", { name: /^Remove .+ from War plan$/ }),
   ).toBeVisible();
-  await edit.getByRole("button", { name: "Delete group" }).click();
-  await expect(edit.getByRole("button", { name: "Yes, delete group" })).toBeVisible();
-  await edit.getByRole("button", { name: "Done" }).click();
+  const yesDelete = edit.getByRole("button", { name: "Yes, delete group" });
+  await edit.locator("summary", { hasText: "Delete group" }).click();
+  await expect(yesDelete).toBeVisible();
+  await edit.getByRole("link", { name: "Keep group" }).click();
+  await expect(yesDelete).toBeHidden();
+  await editToggle.click();
   await expect(edit).toBeHidden();
+  await expect(players).toBeVisible();
 
   // Back returns to Your groups in one step, however many views were opened.
   for (const back of [
@@ -111,7 +116,8 @@ test("a Clasher can sign in and use account features against the real backend", 
     await page.getByRole("link", { name: "Attack", exact: true }).click();
     await expect(page).toHaveURL(/sort=attack/);
     await back();
-    await expect(page).toHaveURL(/\/account\/groups$/);
+    await expect(page).toHaveURL((url) => url.pathname === "/account/groups");
+    await expect(page.getByRole("heading", { name: "Your groups" })).toBeVisible();
   }
 
   await page.goto("/account/verify-player");
