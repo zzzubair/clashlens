@@ -40,6 +40,7 @@ test("an account can link, use, and unlink a second sign-in provider", async ({
   await expect(page).toHaveURL(/\/account\/providers$/);
   await expect(discordRow.getByRole("button", { name: "Unlink" })).toBeVisible();
 
+  await page.locator('[aria-controls="account-menu-panel"]').click();
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL("/");
   await signInDiscord(page);

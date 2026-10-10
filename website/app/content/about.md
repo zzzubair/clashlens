@@ -23,7 +23,9 @@ If a number can't be confirmed from the game, we say so instead of guessing. You
 
 ## Built with players
 
-Clash Lens is in preview and gets better every week based on what you want. [Join the Discord](https://discord.gg/792KJQTtRf) to see what's coming next.
+<!-- DISCORD_INVITE_URL is filled in from app/lib/discord.ts, shared with the site header. -->
+
+Clash Lens is in preview and gets better every week based on what you want. [Join the Discord](DISCORD_INVITE_URL) to see what's coming next.
 
 ## Acknowledgement
 

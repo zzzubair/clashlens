@@ -104,6 +104,56 @@ test("a Clasher can sign in and use account features against the real backend", 
   expectNoPageErrors(errors);
 });
 
+test("the account name opens Account and Log out beside Join Discord", async ({
+  page,
+}) => {
+  await signIn(page);
+  await ensureAccount(page, "lensscout", "Lens Scout");
+  await page.goto("/about");
+  const header = page.getByRole("navigation", { name: "Account and appearance" });
+  const discord = header.getByRole("link", { name: /^Join Discord/ });
+  await expect(discord).toHaveAttribute("href", "https://discord.gg/792KJQTtRf");
+  await expect(discord).toHaveAttribute("target", "_blank");
+  const toggle = header.locator('[aria-controls="account-menu-panel"]');
+  const account = header.getByRole("link", { name: "Account", exact: true });
+  const logOut = header.getByRole("button", { name: "Log out" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(logOut).toBeHidden();
+
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Tab");
+  await expect(account).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(account).toBeHidden();
+  await expect(toggle).toBeFocused();
+
+  await toggle.click();
+  await expect(logOut).toBeVisible();
+  await page.getByRole("heading", { name: "About Clash Lens" }).click();
+  await expect(logOut).toBeHidden();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await toggle.click();
+  for (const control of [toggle, discord, account, logOut]) {
+    const box = await control.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await account.click();
+  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
+  await expect(account).toBeHidden();
+
+  await toggle.click();
+  await logOut.click();
+  await expect(page).toHaveURL("/");
+  await expect(
+    header.getByRole("link", { name: "Account", exact: true }),
+  ).toHaveAttribute("href", "/login");
+});
+
 test("account pages redirect anonymous users to login", async ({ page }) => {
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
