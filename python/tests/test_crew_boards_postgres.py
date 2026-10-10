@@ -313,7 +313,9 @@ def test_a_new_season_starts_every_board_fresh(site: Site) -> None:
 
 def test_a_full_crew_season_board_reads_quickly(site: Site) -> None:
     """100 accounts on Day 28, each with 28 saved days of 8 attacks and 7
-    defenses: about 3 KB of battles per day, as production stored on 8 Oct."""
+    defenses: about 3 KB of battles per day, as production stored on 8 Oct.
+    Measured on 10 Oct at about 0.55 s, mostly decoding and checking 42,000
+    battles; the owner accepted that for the largest crews late in a Season."""
     now = datetime(2026, 8, 9, 20, tzinfo=UTC)
     season_start = ranked_day_for(now).season_start
     site.account("akira")
@@ -365,4 +367,4 @@ def test_a_full_crew_season_board_reads_quickly(site: Site) -> None:
         timings.append(time.perf_counter() - started)
     assert len(result["boards"]["attackers"]["rows"]) == 100
     assert result["boards"]["attackers"]["rows"][0]["days"] == 27
-    assert min(timings) < 0.3, timings
+    assert min(timings) < 1, timings
