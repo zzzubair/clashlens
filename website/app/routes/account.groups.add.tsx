@@ -277,7 +277,7 @@ export default function AddToGroupRoute() {
         </aside>
       ) : (
         <section className="form-panel" aria-labelledby="add-form-title">
-          <Form method="post" className="stack-form">
+          <Form method="post" action="." className="stack-form">
             <input type="hidden" name="tag" value={tag} />
             <input type="hidden" name="addIdempotencyKey" value={addKey} />
             {groups.length === 0 ? (

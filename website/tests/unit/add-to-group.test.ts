@@ -79,7 +79,7 @@ function submit(fields: Record<string, string>, origin = "https://clashlens.exam
   } as never);
 }
 
-async function renderPage() {
+async function renderPage(search = "") {
   const handler = createStaticHandler([
     {
       path: "/account/groups/add/:tag",
@@ -88,7 +88,7 @@ async function renderPage() {
     },
   ]);
   const context = await handler.query(
-    new Request("https://clashlens.example/account/groups/add/2PP"),
+    new Request(`https://clashlens.example/account/groups/add/2PP${search}`),
   );
   if (context instanceof Response) throw new Error("unexpected route response");
   return renderToString(
@@ -156,7 +156,10 @@ it("adds to the only group and names it", async () => {
     season: "1791176400",
     groups: [group(FRIENDS, "Friends", [])],
   });
-  const html = await renderPage();
+  // Query text in the address, such as another account's group id, is not echoed back.
+  const html = await renderPage(`?groupId=${WAR}`);
+  expect(html).toContain('action="/account/groups/add/2PP"');
+  expect(html).not.toContain(WAR);
   expect(html).toContain("Friends is your only group, so #2PP goes there.");
   expect(html).toContain("Add to Friends");
 
