@@ -61,7 +61,10 @@ def runtime(tmp_path, monkeypatch):
         read_requests=[],
         probe_status=200,
         website_status=302,
-        board_page='<h1 id="leaderboard-title">Day 7 standings</h1>',
+        board_page=(
+            '<p class="rankings-kicker">Day <!-- -->7</p>'
+            '<h1 id="leaderboard-title">Leaderboard at 9 Oct 2026, 05:00 UTC</h1>'
+        ),
         calls=[],
     )
     key = b"a" * 32
@@ -461,6 +464,23 @@ def test_unreadable_leaderboard_freshness_fails_the_check_without_clearing(runti
     rt.leaderboard = ""
     assert rt.run() == 1
     assert len(rt.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        (
+            '<p class="rankings-kicker">Day <!-- -->6</p>'
+            '<h1 id="leaderboard-title">Leaderboard at 8 Oct 2026, 05:00 UTC</h1>'
+        ),
+        '<h1 id="leaderboard-title">Daily leaderboard</h1>',
+    ],
+)
+def test_daily_page_without_the_board_fails_the_check(runtime, page, capsys):
+    rt = runtime
+    rt.board_page = page
+    assert rt.run() == 1
+    assert "Reset publication status unavailable" in capsys.readouterr().err
 
 
 def test_empty_leaderboard_is_healthy_and_recovers_an_open_alert(runtime):
