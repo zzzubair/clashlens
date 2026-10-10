@@ -1378,3 +1378,38 @@ def test_army_build_that_gave_up_on_pending_members_runs_once_they_settle(
             assert jobs("build_army_analytics") == []
         finally:
             database.close()
+
+
+def test_reevaluation_settles_members_left_pending_on_an_older_reset(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A member saved army-pending on a board whose army was still pending,
+    # though its day's log was complete and decoded, was checked again only
+    # if a repair had moved one of its battles: the board never built.
+    monkeypatch.setattr(
+        boundary, "_boundary_army_status", lambda *_args, **_kwargs: "pending"
+    )
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            jobs = _reconcile_day(connection_info, archive_server, processor)
+            assert jobs("build_army_analytics") == []
+            monkeypatch.undo()
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_day_repairs"
+                ).fetchone() == (0,)
+            boundary_publication.reevaluate_boundary_publications(database)
+            [(army_job, army_input)] = jobs("build_army_analytics")
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT member.army_status"
+                    " FROM boundary_publication_generation_members AS member"
+                    " JOIN boundary_publication_manifests AS manifest"
+                    "   ON manifest.generation_id = member.generation_id"
+                    " WHERE manifest.id = %s",
+                    (army_input["manifest_id"],),
+                ).fetchall() == [("complete",)]
+            assert processor.process_job(army_job, owner="army").outcome == "processed"
+        finally:
+            database.close()

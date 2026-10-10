@@ -951,6 +951,10 @@ failed; once the new one has published, accept it with `./ops failed-items
 --accept-job-id ID --reason 'army build ran again as a new job' --apply` so the
 failed-work count stops counting it.
 
+A board whose `army_state` is still `pending` for a Reset more than a day old
+needs no action either: the worker checks each of its army-pending members the
+same way, and queues the board's army build once none is left.
+
 **Fix or escalate:** escalate; repairing a publication needs an approved change.
 
 **Recovered:** the latest board is readable and every Reset since the first

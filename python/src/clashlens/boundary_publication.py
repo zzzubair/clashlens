@@ -136,8 +136,10 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
     for (generation_id,) in generations:
         # A player 0057 moved a battle of may have been saved pending
         # before readiness followed the move; check them again. So is any
-        # member left pending on a board whose army is ready: its build
-        # fails until each settles.
+        # member left pending on a board whose army is ready, or on one for
+        # a Reset over a day old: its build waits until each settles. A newer
+        # Reset's members settle as their results land, and checking each of
+        # them every pass would hold its lock through the busiest hours.
         for player_id, version_id, snapshot_status in connection.execute(
             """
             SELECT member.player_id, member.ranked_day_version_id,
@@ -150,11 +152,13 @@ def _reevaluate_boundary(database, connection: Any, boundary_at: datetime) -> in
               AND member.ranked_day_version_id IS NOT NULL
               AND (generation.army_state = 'ready'
                    OR (generation.army_state = 'pending'
-                       AND member.player_id IN (
-                           SELECT attacker_player_id FROM battle_day_repairs
-                           UNION
-                           SELECT defender_player_id FROM battle_day_repairs
-                       )))
+                       AND (generation.boundary_at
+                                < clock_timestamp() - interval '1 day'
+                            OR member.player_id IN (
+                                SELECT attacker_player_id FROM battle_day_repairs
+                                UNION
+                                SELECT defender_player_id FROM battle_day_repairs
+                            ))))
             ORDER BY member.player_id
             FOR UPDATE OF member
             """,
