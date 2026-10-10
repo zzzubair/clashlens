@@ -380,6 +380,24 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
                         reason="Fresh verification was reviewed.",
                     )
 
+            def waiting_checks() -> int:
+                return database.scalar(
+                    """
+                    SELECT count(*) FROM collector_work
+                    WHERE normalized_tag = '#2PP' AND kind = 'initial_collection'
+                      AND status = 'pending'
+                    """
+                )
+
+            # The first link's check has just finished.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    UPDATE collector_work
+                    SET status = 'complete', completed_at = clock_timestamp()
+                    """
+                )
+            assert waiting_checks() == 0
             with ThreadPoolExecutor(max_workers=2) as executor:
                 transfer_results = list(
                     executor.map(lambda _item: transfer_once(), range(2))
@@ -388,6 +406,8 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
                 ("transferred", "#2PP"),
                 ("transferred", "#2PP"),
             ]
+            # Moving the link to its new owner checks the player at once.
+            assert waiting_checks() == 1
             assert (
                 database.scalar("SELECT account_id FROM verified_player_links")
                 == second_account
