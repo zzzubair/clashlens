@@ -223,7 +223,7 @@ details and their historical evidence:
   oldest promised point and both sides of physical expiry with required raw
   references readable, including time to finish recovery.
 - Website/accounts: both real providers, fixed usernames/editable display
-  names, private saved lists/groups, public ownership disclosure, shared URLs,
+  names, private groups, public ownership disclosure, shared URLs,
   keyboard/no-JavaScript operation and honest empty/partial/failure states.
   Until the Sheets export is built, export requests enqueue nothing. Check
   phones/tablets/older devices and slow connections while collection runs;
