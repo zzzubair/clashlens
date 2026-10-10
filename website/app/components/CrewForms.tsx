@@ -134,6 +134,7 @@ export function Sheet({
   useEffect(() => {
     const element = dialog.current;
     if (element === null || typeof element.showModal !== "function") return;
+    if (element.matches(":modal")) return;
     if (element.open) {
       reopening.current = true;
       element.close();
