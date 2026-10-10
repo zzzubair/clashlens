@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
-from . import api_crews
+from . import api_crew_boards, api_crews
 from .accounts import normalize_crew_name, normalize_username
 from .api import (
     ApiError,
@@ -114,6 +114,18 @@ def register_crew_routes(
     def crew(crew_id: str, request: Request) -> JSONResponse:
         result = api_crews.get_crew(
             database, account_id(request), _safe_uuid(crew_id), now=current_time()
+        )
+        if result is None:
+            raise ApiError(404, "crew_not_found")
+        return JSONResponse(content=_json_safe(result))
+
+    @router.get("/v1/account/crews/{crew_id}/boards")
+    def crew_boards(crew_id: str, request: Request, period: str = "season") -> JSONResponse:
+        caller = account_id(request)
+        if period not in api_crew_boards.PERIODS:
+            raise ApiError(422, "invalid_request")
+        result = api_crew_boards.get_crew_boards(
+            database, caller, _safe_uuid(crew_id), period=period, now=current_time()
         )
         if result is None:
             raise ApiError(404, "crew_not_found")

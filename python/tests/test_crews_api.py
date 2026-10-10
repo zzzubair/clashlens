@@ -18,6 +18,7 @@ ROUTES = [
     ("GET", "/v1/account/crews", None),
     ("POST", "/v1/account/crews", {"name": "x", "size": 50, "tags": ["#2PP"]}),
     ("GET", f"/v1/account/crews/{CREW}", None),
+    ("GET", f"/v1/account/crews/{CREW}/boards?period=week", None),
     ("PATCH", f"/v1/account/crews/{CREW}", {"name": "x"}),
     ("DELETE", f"/v1/account/crews/{CREW}", None),
     ("POST", f"/v1/account/crews/{CREW}/players", {"tags": ["#2PP"]}),
@@ -121,8 +122,21 @@ def test_a_crew_made_and_joined_through_the_api(served) -> None:
         ("bea", "member", True),
     ]
 
+    boards = call(client, "bea", "GET", f"/v1/account/crews/{crew_id}/boards").json()
+    assert (boards["kind"], boards["period"], sorted(boards["boards"])) == (
+        "crew-boards",
+        "season",
+        ["attackers", "best_defenders", "live", "streaks", "top", "worst_defenders"],
+    )
+    assert call(
+        client, "bea", "GET", f"/v1/account/crews/{crew_id}/boards?period=month"
+    ).json() == {"error": "invalid_request"}
+
     # A clasher outside the crew reads it as missing.
     assert call(client, "cleo", "GET", f"/v1/account/crews/{crew_id}").json() == {
+        "error": "crew_not_found"
+    }
+    assert call(client, "cleo", "GET", f"/v1/account/crews/{crew_id}/boards").json() == {
         "error": "crew_not_found"
     }
     assert call(client, "cleo", "GET", f"/v1/account/crews/{uuid4()}").status_code == 404
