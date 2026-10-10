@@ -74,14 +74,11 @@ CREATE INDEX IF NOT EXISTS crew_invites_by_crew_creator
 
 -- A non-owner left with no places is out of the crew, however the last
 -- place went: a kick, removing it, or the game account's link moving.
--- Locking the member first makes two places going at once check in turn,
--- so the second sees the first gone.
+-- Everything that removes a place holds the crew row first, so two places
+-- going at once check in turn and the second sees the first gone.
 CREATE OR REPLACE FUNCTION clashlens_crew_member_without_places()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    PERFORM 1 FROM crew_accounts
-    WHERE crew_id = OLD.crew_id AND account_id = OLD.account_id
-    FOR UPDATE;
     DELETE FROM crew_accounts AS member
     WHERE member.crew_id = OLD.crew_id
       AND member.account_id = OLD.account_id
@@ -100,10 +97,17 @@ CREATE TRIGGER crew_players_member_without_places
 
 -- When the operator's support transfer moves a game account to another
 -- Clash Lens account, it leaves every crew first. BEFORE, so the place
--- is gone before the link check above sees the new owner.
+-- is gone before the link check above sees the new owner. It locks those
+-- crews first, as every crew write does. A join waiting on this link while
+-- holding one of those crews is a deadlock: PostgreSQL aborts one side with
+-- nothing changed, the website tries again and the operator reruns.
 CREATE OR REPLACE FUNCTION clashlens_crew_link_moved()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    PERFORM 1 FROM crews
+    WHERE id IN (SELECT crew_id FROM crew_players WHERE player_id = OLD.player_id)
+    ORDER BY id
+    FOR UPDATE;
     DELETE FROM crew_players WHERE player_id = OLD.player_id;
     RETURN NEW;
 END

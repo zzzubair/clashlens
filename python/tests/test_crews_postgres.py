@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, wait
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from typing import Any
@@ -537,17 +538,46 @@ _DELETE_PLACE = """
 """
 
 
-def _while_held(site: Site, hold: Any, call: Any) -> Any:
-    """Run ``call`` while another transaction that ran ``hold`` is still
-    open, give it time to queue behind that, then commit and return what
-    ``call`` returned."""
+def _while_held(site: Site, held: psycopg.Connection, hold: Any, call: Any) -> Any:
+    """Run ``call`` while ``held`` sits in a transaction that ran ``hold``;
+    once ``call`` is seen waiting on that transaction, commit and return
+    what ``call`` returned."""
     with ThreadPoolExecutor(max_workers=1) as pool:
-        with psycopg.connect(site.info) as held:
-            with held.transaction():
-                hold(held)
-                queued = pool.submit(call)
-                wait([queued], timeout=0.5)
+        with held.transaction():
+            hold(held)
+            queued = pool.submit(call)
+            deadline = time.monotonic() + 10
+            while not site.sql(
+                "SELECT 1 FROM pg_stat_activity WHERE %s = ANY(pg_blocking_pids(pid))",
+                (held.info.backend_pid,),
+            ):
+                if queued.done() or time.monotonic() > deadline:
+                    pytest.fail("the second write did not wait for the first")
+                time.sleep(0.01)
         return queued.result()
+
+
+def _transfer(site: Site, tag: str, from_name: str) -> Any:
+    """A hold that moves ``tag`` from ``from_name`` to a new account through
+    the operator's support transfer."""
+    taker = site.account(f"taker{len(site.ids)}")
+    candidate = site.link(taker, tag)
+    public = dict(
+        site.sql("SELECT normalized_username, public_id::text FROM clash_lens_accounts")
+    )
+
+    def hold(held: psycopg.Connection) -> None:
+        assert call_support_transfer(
+            held,
+            verification_request_id=candidate,
+            player_tag=tag,
+            from_account_public_id=public[from_name],
+            to_account_public_id=public[taker],
+            operator_identity="sudo:operator:1000",
+            reason="Fresh verification was reviewed.",
+        ) == ("transferred", tag)
+
+    return hold
 
 
 def _crew_of(site: Site, members: dict[str, list[str]]) -> str:
@@ -563,14 +593,16 @@ def _crew_of(site: Site, members: dict[str, list[str]]) -> str:
     return crew_id
 
 
-def test_two_places_going_at_once_take_the_member_out(site: Site) -> None:
+def test_a_kick_and_a_transfer_at_once_take_the_member_out(site: Site) -> None:
     crew_id = _crew_of(site, {"owner": ["#2PP"], "member": ["#8PY", "#9QQ"]})
-
-    def remove_other() -> None:
-        with psycopg.connect(site.info) as other:
-            other.execute(_DELETE_PLACE, ("#9QQ",))
-
-    _while_held(site, lambda held: held.execute(_DELETE_PLACE, ("#8PY",)), remove_other)
+    with support_connection(site.info) as support:
+        kicked = _while_held(
+            site,
+            support,
+            _transfer(site, "#8PY", "member"),
+            lambda: site.call("owner", api_crews.remove_player, crew_id=crew_id, tag="#9QQ"),
+        )
+    assert kicked.payload == {"removed": True, "tag": "#9QQ", "left_crew": True}
     assert site.crew("member", crew_id) is None
 
 
@@ -580,29 +612,33 @@ def test_a_demoted_admin_queued_behind_the_demotion_cannot_kick(site: Site) -> N
         "owner", api_crews.set_member_role, crew_id=crew_id, username="admin", role="admin"
     ).status_code == 200
 
-    def demote(held: Any) -> None:
+    def demote(held: psycopg.Connection) -> None:
         held.execute("SELECT 1 FROM crews WHERE public_id = %s FOR UPDATE", (crew_id,))
         held.execute(
             "UPDATE crew_accounts SET role = 'member' WHERE account_id = %s",
             (site.ids["admin"],),
         )
 
-    kick = _while_held(
-        site,
-        demote,
-        lambda: site.call("admin", api_crews.remove_player, crew_id=crew_id, tag="#9QQ"),
-    )
+    with psycopg.connect(site.info, autocommit=True) as held:
+        kick = _while_held(
+            site,
+            held,
+            demote,
+            lambda: site.call("admin", api_crews.remove_player, crew_id=crew_id, tag="#9QQ"),
+        )
     assert (kick.status_code, kick.payload) == (403, {"error": "crew_forbidden"})
     assert site.crew("member", crew_id) is not None
 
 
 def test_handing_over_to_someone_leaving_keeps_the_owner(site: Site) -> None:
     crew_id = _crew_of(site, {"owner": ["#2PP"], "leaver": ["#8PY"], "stayer": ["#9QQ"]})
-    handed = _while_held(
-        site,
-        lambda held: held.execute(_DELETE_PLACE, ("#8PY",)),
-        lambda: site.call("owner", api_crews.hand_over, crew_id=crew_id, username="leaver"),
-    )
+    with support_connection(site.info) as support:
+        handed = _while_held(
+            site,
+            support,
+            _transfer(site, "#8PY", "leaver"),
+            lambda: site.call("owner", api_crews.hand_over, crew_id=crew_id, username="leaver"),
+        )
     assert (handed.status_code, handed.payload) == (404, {"error": "member_not_found"})
     assert site.crew("owner", crew_id)["my_role"] == "owner"
     # An owner whose accounts all went keeps the crew, and is out of it once
