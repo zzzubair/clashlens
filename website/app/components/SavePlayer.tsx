@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import type { ReactNode } from "react";
 import { Link, useFetcher, useRouteLoaderData } from "react-router";
 
 import type { RootLoaderData } from "../root";
@@ -8,9 +9,17 @@ import type {
 } from "../routes/account.saved-players";
 import { ErrorNotice } from "./ErrorNotice";
 
-export function SavePlayer({ tag }: { tag: string }) {
+// The profile's one action row: the page's own actions, then Save and View
+// Saved Players for a signed-in Clasher.
+export function SavePlayer({ tag, children }: { tag: string; children?: ReactNode }) {
   const navigation = useRouteLoaderData<RootLoaderData>("root");
-  return navigation?.loggedIn ? <SignedInSavePlayer key={tag} tag={tag} /> : null;
+  const save = navigation?.loggedIn ? <SignedInSavePlayer key={tag} tag={tag} /> : null;
+  return children || save ? (
+    <div className="player-actions">
+      {children}
+      {save}
+    </div>
+  ) : null;
 }
 
 function SignedInSavePlayer({ tag }: { tag: string }) {
@@ -31,7 +40,7 @@ function SignedInSavePlayer({ tag }: { tag: string }) {
   const busy = mutation.state !== "idle" || list.state !== "idle";
 
   return (
-    <section aria-label="Save player" className="data-section">
+    <>
       {error ? <ErrorNotice error={error} /> : null}
       {list.data?.error ? (
         <button
@@ -65,7 +74,9 @@ function SignedInSavePlayer({ tag }: { tag: string }) {
           </button>
         </mutation.Form>
       )}
-      <Link to="/account/saved-players">View Saved Players</Link>
-    </section>
+      <Link to="/account/saved-players">
+        View Saved Players <span aria-hidden="true">→</span>
+      </Link>
+    </>
   );
 }
