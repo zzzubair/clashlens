@@ -123,10 +123,6 @@ export default function Home() {
               ? `Daily results, rankings and armies for ${trackedPlayers(leaderboard.totalTracked)}.`
               : "Daily results, rankings and armies for tracked players."}
           </p>
-          <p>
-            To look someone up, enter their full player tag, including the #. Legend I
-            players start tracking automatically.
-          </p>
         </div>
         <div className="player-search-panel">
           <Form
@@ -331,19 +327,13 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
     return (
       <section>
         <h3>No players or profiles found</h3>
-        <p>
-          Name search only finds players and profiles Clash Lens has already saved. To
-          look up anyone else, enter their full player tag, including the #.
-        </p>
+        <p>Enter a full #tag to look up anyone.</p>
       </section>
     );
   }
   return (
     <section>
       <h3>Clash of Clans players</h3>
-      <p className="section-note">
-        Names are not unique. Tag, clan, trophies, and data age distinguish each result.
-      </p>
       <ul className="search-result-list">
         {search.results.map((result) => (
           <li key={result.tag}>

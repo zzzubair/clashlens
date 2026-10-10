@@ -427,7 +427,12 @@ def website_daily_board(origin: str) -> list[str]:
         or not re.fullmatch(r"[1-9][0-9]?", daily[1])
     ):
         raise CheckError("Daily leaderboard page sent an invalid board address")
-    if f">Day {daily[1]} standings</h1>" not in request(target).decode(errors="replace"):
+    # The board shows a "Day N" label right above its "Leaderboard at" heading;
+    # React separates "Day " and N with an empty comment when it renders.
+    heading = (
+        rf'>Day (?:<!-- -->)?{daily[1]}</p><h1 id="leaderboard-title">Leaderboard at '
+    )
+    if not re.search(heading, request(target).decode(errors="replace")):
         raise CheckError("Daily leaderboard page did not show the board")
     return daily
 

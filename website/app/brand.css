@@ -151,8 +151,7 @@
     .button-secondary,
     .section-link,
     .player-refresh-form button,
-    .snapshot-pagination a,
-    .page-position
+    .snapshot-pagination a
   ) {
   color: var(--cl-ink);
   background: var(--cl-surface);

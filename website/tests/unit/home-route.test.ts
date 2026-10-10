@@ -113,15 +113,15 @@ it("disables the search button and marks results busy while a search loads", asy
   }
 });
 
-it("explains tag lookup and that name search only finds saved players", async () => {
+it("leaves search help to the placeholder and keeps a short tag hint when nothing matches", async () => {
   const html = await renderHome(
     { leaderboard: null, query: "Nova", error: null, search },
     "?q=Nova",
   );
-  expect(html).toContain("enter their full player tag, including the #. Legend I");
-  expect(html).toContain("players start tracking automatically.");
+  expect(html).not.toContain("To look someone up");
+  expect(html).toContain('placeholder="Search player, @username or #tag"');
   expect(html).toContain("<h3>No players or profiles found</h3>");
-  expect(html).toContain("Name search only finds players and profiles Clash Lens has");
+  expect(html).toContain("<p>Enter a full #tag to look up anyone.</p>");
   const dropdown = renderToString(
     createElement(
       MemoryRouter,

@@ -31,8 +31,7 @@ body {
   .button-secondary,
   .button.secondary,
   .theme-toggle,
-  .header-search-toggle,
-  .page-position
+  .header-search-toggle
 ),
 .leaderboard-row[data-podium-rank] .rank-mark {
   box-shadow: var(--cl-raise);

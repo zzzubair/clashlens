@@ -442,13 +442,6 @@
   transform: translate(0);
 }
 
-.standings-explanation {
-  margin: 0;
-  padding: 0.85rem 1rem;
-  color: var(--cl-muted);
-  font-size: 0.85rem;
-}
-
 .player-update-mobile {
   display: none;
 }
@@ -674,24 +667,13 @@
   font-size: 1.05rem;
 }
 
-.standings-toolbar p,
-.page-position {
+.standings-toolbar p {
   margin: 0.25rem 0 0;
   color: var(--cl-muted);
   font-size: 0.75rem;
 }
 
-.page-position {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 0.4rem 0.65rem;
-  border: 1px solid var(--cl-outline);
-  border-radius: var(--cl-radius);
-  background: var(--cl-panel);
-}
-
 .rankings-page .tracked-leaderboard-viewport {
-  max-block-size: 70vh;
   overflow: auto;
   border: 0;
   border-bottom: 1px solid var(--cl-border);

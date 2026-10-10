@@ -7,7 +7,7 @@ The Live Leaderboard's Find your rank search accepts player names and tags.
 A tag typed with `#` opens its row directly when that tag is on the board, or
 links to that player's page when it is not; other searches show up to 20
 tracked players whose name matches, or whose tag matches without the `#`, with
-their whole-board ranks and trophies and a prompt to narrow larger results.
+their whole-board ranks and trophies, noting when only the first 20 are shown.
 Selecting a player loads their current page, highlights the row and scrolls it
 into view, adding up to 5 players from the next or previous page when the row
 sits at a page edge. The page is located again when
