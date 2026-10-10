@@ -82,7 +82,7 @@ def seed_day(
 
 def seed_reset_board(
     site: Site, reset: datetime, trophies: dict[str, int], state: str = "published"
-) -> None:
+) -> int:
     """Save a Reset board with these accounts in this order."""
     board = site.sql(
         """
@@ -113,6 +113,7 @@ def seed_reset_board(
             """,
             (board, position, total, reset, tag),
         )
+    return board
 
 
 def seed_parity(site: Site) -> None:
@@ -260,6 +261,49 @@ def test_live_and_top_players(site: Site) -> None:
     assert missing(top) == [
         ("#9QQ", "no_battles_this_season"), ("#PPP", "not_in_legend"),
     ]
+
+
+def test_top_players_reads_one_view_and_skips_withdrawn_boards(
+    site: Site, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    crew_id = crew_of_four(site)
+    site.link("bea", "#LQ2")
+    board = seed_reset_board(site, TODAY, {"#LQ2": 5600, "#2PP": 5400})
+    # #LQ2 joins while the boards are loading, after the crew list is read.
+    read_players = api_crew_boards.api_crews._players
+
+    def join_midway(*args: Any) -> Any:
+        places = read_players(*args)
+        site.sql(
+            """
+            INSERT INTO crew_players (crew_id, account_id, player_id)
+            SELECT crew.id, %s, player.id FROM crews AS crew, players AS player
+            WHERE crew.public_id = %s AND player.normalized_tag = '#LQ2'
+            """,
+            (site.ids["bea"], crew_id),
+        )
+        return places
+
+    monkeypatch.setattr(api_crew_boards.api_crews, "_players", join_midway)
+    result = boards(site, crew_id, "season")
+    monkeypatch.undo()
+    assert rows(result["boards"]["top"], "trophies") == [("#2PP", 5400)]
+    top = boards(site, crew_id, "season")["boards"]["top"]
+    assert rows(top, "trophies") == [("#LQ2", 5600), ("#2PP", 5400)]
+    # A recalculation withdraws the board before its replacement is saved.
+    site.sql(
+        """
+        INSERT INTO boundary_publication_generations (
+            boundary_at, target_at, generation, ordering_rule_version,
+            freshness_rule_version, expected_population_count,
+            expected_population_hash, snapshot_state, snapshot_id
+        ) VALUES (%s, %s, 1, 'test', 'test', 1, %s, 'superseded', %s)
+        """,
+        (TODAY, TODAY, "0" * 64, board),
+    )
+    top = boards(site, crew_id, "season")["boards"]["top"]
+    assert top["rows"] == []
+    assert ("#2PP", "no_reset_reading") in missing(top)
 
 
 def test_a_new_season_starts_every_board_fresh(site: Site) -> None:

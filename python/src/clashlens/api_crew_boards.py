@@ -43,7 +43,8 @@ ORDER BY daily.player_id, daily.ranked_day_start, daily.version DESC
 """
 
 # The places on the published Reset board for the Reset at ``%(reset)s``, in
-# that board's order.
+# that board's order. A board whose every publication was withdrawn for a
+# recalculation is not shown.
 _RESET_BOARD_SQL = """
 SELECT player.normalized_tag, entry.trophies
 FROM leaderboard_snapshots AS board
@@ -53,6 +54,11 @@ JOIN players AS player ON player.id = entry.player_id
 WHERE board.snapshot_kind = 'frozen'
   AND board.state = 'published'
   AND board.boundary_at = %(reset)s
+  AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS generation
+                   WHERE generation.snapshot_id = board.id)
+       OR EXISTS (SELECT 1 FROM boundary_publication_generations AS generation
+                  WHERE generation.snapshot_id = board.id
+                    AND generation.snapshot_state <> 'superseded'))
   AND place.crew_id = %(crew)s
 ORDER BY entry.position
 """
@@ -113,7 +119,8 @@ def get_crew_boards(
     window = {"today": [today], "week": finished[-_WEEK_DAYS:], "season": finished}[period]
     streak_window = [*finished, today] if period == "season" else window
     first = streak_window[0] if streak_window else today
-    with database.pool.connection() as connection:
+    with database.pool.connection() as connection, connection.transaction():
+        connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         try:
             crew_row, _size, _role = api_crews._membership(
                 connection, crew_id, account_id, lock=False
