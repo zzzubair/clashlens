@@ -17,6 +17,7 @@ import {
   crewRefusal,
   formatInviteExpiry,
   INVITE_CODE,
+  joiningCount,
   MAX_CREW_SIZE,
   MAX_CREWS,
   type InviteAccount,
@@ -264,7 +265,7 @@ function JoinForm({
   // Without JavaScript the picks can't be counted here; the server checks them.
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
-  const count = picked.length;
+  const count = joiningCount(accounts, picked);
   const tooMany = count > open;
   const toggle = (tag: string, on: boolean) =>
     setPicked((current) =>
@@ -327,10 +328,10 @@ function JoinForm({
         {!hydrated
           ? "Join with the picked accounts"
           : count === 0
-          ? "Pick at least one account"
-          : tooMany
-            ? `Pick at most ${open}`
-            : `Join with ${count} ${count === 1 ? "account" : "accounts"}`}
+            ? "Pick at least one account"
+            : tooMany
+              ? `Pick at most ${open}`
+              : `Join with ${count} ${count === 1 ? "account" : "accounts"}`}
       </button>
       <Link className="crew-link-button" to={linkAccount}>
         Link another account

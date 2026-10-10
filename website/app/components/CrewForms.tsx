@@ -206,7 +206,6 @@ export function ConfirmForm({
   intent,
   idempotencyKey,
   fields = {},
-  danger = true,
 }: {
   label: React.ReactNode;
   question: React.ReactNode;
@@ -214,7 +213,6 @@ export function ConfirmForm({
   intent: string;
   idempotencyKey: string;
   fields?: Record<string, string>;
-  danger?: boolean;
 }) {
   return (
     <details className="crew-confirm">
@@ -226,10 +224,7 @@ export function ConfirmForm({
         {Object.entries(fields).map(([name, value]) => (
           <input key={name} type="hidden" name={name} value={value} />
         ))}
-        <button
-          type="submit"
-          className={danger ? "button danger-button" : "button button-primary"}
-        >
+        <button type="submit" className="button danger-button">
           {confirm}
         </button>
       </Form>

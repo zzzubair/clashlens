@@ -42,6 +42,7 @@ vi.mock("../../app/services/group-players.server", () => ({
 import {
   crewRefusal,
   formatInviteExpiry,
+  joiningCount,
   mapCrew,
   mapInvitePreview,
 } from "../../app/lib/crew-contracts";
@@ -490,7 +491,9 @@ describe("edit crew", () => {
 
   it("takes an owner with no places left out to their crews after handing over", async () => {
     mocks.requestJson.mockResolvedValue({ crew_id: CREW_ID, left_crew: true });
-    const handed = await thrown(() => settings({ intent: "transfer", username: "kenji" }));
+    const handed = await thrown(() =>
+      settings({ intent: "transfer", username: "kenji" }),
+    );
     expect((handed as Response).headers.get("Location")).toBe("/crews");
   });
 
@@ -559,6 +562,18 @@ describe("edit crew", () => {
 });
 
 describe("join by invite", () => {
+  it("counts only picked accounts that can still join", () => {
+    const accounts = mapInvitePreview(
+      invitePayload({
+        accounts: [
+          { tag: "#2PP", name: "Left", trophies: 4900, eligibility: "not_in_legend" },
+          { tag: "#2RR", name: "New", trophies: 5200, eligibility: "ok" },
+        ],
+      }),
+    )!.accounts;
+    expect(joiningCount(accounts, ["#2PP", "#2RR"])).toBe(1);
+  });
+
   const joinRoute = {
     path: "/crews/join/:code",
     Component: JoinRoute,

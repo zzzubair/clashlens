@@ -131,6 +131,13 @@ export interface InviteAccount {
   eligibility: Eligibility;
 }
 
+/** How many picked accounts a join sends: an account that can't join isn't sent. */
+export function joiningCount(accounts: InviteAccount[], picked: string[]): number {
+  return accounts.filter(
+    (account) => account.eligibility === "ok" && picked.includes(account.tag),
+  ).length;
+}
+
 /**
  * What an invite link shows the signed-in clasher. A link that doesn't
  * work says nothing about its crew.
