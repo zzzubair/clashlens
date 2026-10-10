@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 from typing import Any
 
 from .analytics import tie_order_sql
@@ -178,6 +182,73 @@ def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str,
     }
 
 
+@dataclass(frozen=True)
+class _LiveBoard:
+    season: tuple[Any, ...]
+    tracked_population: int
+    season_reset_pending: int
+    # (tag, name, trophies, observed_at, eligibility_state, clan) in rank order.
+    rows: list[tuple[Any, ...]]
+
+
+def _read_live_board(connection: Any, now: datetime) -> _LiveBoard:
+    season = _season_params(now)
+    rows = connection.execute(
+        f"""
+        WITH candidates AS MATERIALIZED (
+            {_LIVE_CANDIDATES_SQL}
+        ), totals AS (
+            SELECT count(*)::bigint AS tracked_population,
+                   (SELECT count(*) FROM candidates WHERE NOT season_current)
+                       AS season_reset_pending
+            FROM players WHERE active
+        )
+        SELECT totals.tracked_population, totals.season_reset_pending,
+               live.normalized_tag, live.name, live.trophies, live.observed_at,
+               live.eligibility_state, live.clan
+        FROM totals LEFT JOIN (
+            SELECT * FROM candidates WHERE season_current
+        ) AS live ON true
+        ORDER BY {_LIVE_ORDER_SQL}
+        """,
+        season,
+    ).fetchall()
+    return _LiveBoard(
+        season=tuple(season.values()),
+        tracked_population=int(rows[0][0]),
+        season_reset_pending=int(rows[0][1]),
+        rows=[tuple(row[2:]) for row in rows if row[2] is not None],
+    )
+
+
+class LiveBoardCache:
+    """The ranked Live Leaderboard, read at most once per ``seconds`` and
+    shared by every page of it, the home page's top players included."""
+
+    def __init__(
+        self, seconds: float = 30, *, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._seconds = seconds
+        self._clock = clock
+        self._lock = Lock()
+        self._board: _LiveBoard | None = None
+        self._refresh_after = 0.0
+
+    def current(self, database: ApiDatabase, now: datetime) -> _LiveBoard:
+        with self._lock:
+            board = self._board
+            if (
+                board is None
+                or self._clock() >= self._refresh_after
+                or board.season != tuple(_season_params(now).values())
+            ):
+                with database.pool.connection() as connection:
+                    board = _read_live_board(connection, now)
+                self._board = board
+                self._refresh_after = self._clock() + self._seconds
+            return board
+
+
 def get_live_leaderboard(
     database: ApiDatabase,
     *,
@@ -185,151 +256,110 @@ def get_live_leaderboard(
     offset: int = 0,
     now: datetime,
     focus_tag: str | None = None,
+    cache: LiveBoardCache | None = None,
 ) -> dict[str, Any] | None:
     if offset < 0 or offset % limit:
         raise ValueError("offset must be non-negative and aligned to limit")
-    with database.pool.connection() as connection:
-        rows = connection.execute(
-            f"""
-            WITH candidates AS MATERIALIZED (
-                {_LIVE_CANDIDATES_SQL}
-            ), selected AS MATERIALIZED (
-                SELECT *, row_number() OVER (ORDER BY {_LIVE_ORDER_SQL}) AS position
-                FROM candidates WHERE season_current
-            ), location AS (
-                SELECT CASE WHEN %(focus_tag)s::text IS NULL THEN %(offset)s::bigint
-                            ELSE ((position - 1) / %(limit)s) * %(limit)s
-                       END AS page_offset,
-                       position AS focus_position
-                FROM (SELECT max(position) AS position FROM selected
-                      WHERE normalized_tag = %(focus_tag)s::text) AS focus
-            ), stats AS (
-                SELECT count(*) AS total_entries,
-                       count(*) FILTER (
-                           WHERE observed_at < %(now)s - make_interval(secs => %(fresh)s)
-                       ) AS stale_count,
-                       min(observed_at) AS oldest_observed_at,
-                       max(observed_at) AS newest_observed_at
-                FROM selected
-            ), page AS MATERIALIZED (
-                SELECT selected.* FROM selected CROSS JOIN location
-                WHERE position BETWEEN
-                    least(page_offset + 1, focus_position - %(neighbors)s)
-                    AND greatest(page_offset + %(limit)s, focus_position + %(neighbors)s)
-            ), totals AS (
-                SELECT count(*)::bigint AS tracked_population,
-                       (SELECT count(*) FROM candidates WHERE NOT season_current)
-                           AS season_reset_pending
-                FROM players WHERE active
-            )
-            SELECT page.normalized_tag, page.name, page.trophies,
-                   page.observed_at, page.eligibility_state, page.clan,
-                   page.position,
-                   stats.total_entries, stats.stale_count,
-                   stats.oldest_observed_at, stats.newest_observed_at,
-                   totals.tracked_population, location.page_offset,
-                   totals.season_reset_pending
-            FROM stats CROSS JOIN totals CROSS JOIN location
-            LEFT JOIN page ON true
-            ORDER BY position NULLS LAST
-            """,
+    if cache is not None:
+        board = cache.current(database, now)
+    else:
+        with database.pool.connection() as connection:
+            board = _read_live_board(connection, now)
+    rows = board.rows
+    total_entries = len(rows)
+    first, last = offset + 1, offset + limit
+    if focus_tag is not None:
+        focus_position = next(
+            (index + 1 for index, row in enumerate(rows) if row[0] == focus_tag),
+            None,
+        )
+        if focus_position is None:
+            return None
+        offset = (focus_position - 1) // limit * limit
+        first = min(offset + 1, focus_position - _FOCUS_NEIGHBORS)
+        last = max(offset + limit, focus_position + _FOCUS_NEIGHBORS)
+    if offset and offset >= total_entries:
+        return None
+    observed = [row[3] for row in rows if row[3] is not None]
+    stale_before = now - timedelta(seconds=_LIVE_FRESHNESS_SECONDS)
+    stale_count = sum(1 for value in observed if value < stale_before)
+    oldest_observed_at = min(observed, default=None)
+    newest_observed_at = max(observed, default=None)
+    entries = []
+    first = max(first, 1)
+    for position, row in enumerate(rows[first - 1 : last], start=first):
+        observed_at = row[3].astimezone(UTC)
+        age = max(0.0, (now.astimezone(UTC) - observed_at).total_seconds())
+        age_seconds = int(age)
+        freshness = "fresh" if age <= _LIVE_FRESHNESS_SECONDS else "stale"
+        entries.append(
             {
-                "focus_tag": focus_tag,
-                "offset": offset,
-                "limit": limit,
-                "now": now,
-                "fresh": _LIVE_FRESHNESS_SECONDS,
-                "neighbors": _FOCUS_NEIGHBORS,
-                **_season_params(now),
-            },
-        ).fetchall()
-        if rows[0][12] is None:
-            return None
-        offset = int(rows[0][12])
-        total_entries = int(rows[0][7]) if rows else 0
-        if offset and offset >= total_entries:
-            return None
-        tracked_population = int(rows[0][11])
-        season_reset_pending = int(rows[0][13])
-        stale_count = int(rows[0][8])
-        oldest_observed_at = rows[0][9]
-        newest_observed_at = rows[0][10]
-        entries = []
-        for row in rows:
-            if row[0] is None:
-                continue
-            observed_at = row[3].astimezone(UTC)
-            age = max(0.0, (now.astimezone(UTC) - observed_at).total_seconds())
-            age_seconds = int(age)
-            freshness = "fresh" if age <= _LIVE_FRESHNESS_SECONDS else "stale"
-            entries.append(
-                {
-                    "position": int(row[6]),
-                    "tag": _text(row[0]),
-                    "name": _text(row[1]),
-                    "trophies": int(row[2]),
-                    "observed_at": observed_at.isoformat(),
-                    "age_seconds": age_seconds,
-                    "freshness": freshness,
-                    "confidence": _text(row[4]),
-                    "public_confidence": _public_confidence(True, _text(row[4])),
-                    "clan": None if row[5] is None else _text(row[5]),
-                    "official_rank": None,
-                }
-            )
-        page_count = (total_entries + limit - 1) // limit
-        page = offset // limit + 1
-        return {
-            "kind": "live",
-            "ordering_rule_version": _LIVE_ORDER_VERSION,
-            "generated_at": now.astimezone(UTC).isoformat(),
-            "tracked_population": tracked_population,
-            "total_entries": total_entries,
-            # Tracked players left off until a profile names this Season.
-            "season_reset_pending": season_reset_pending,
-            "page": page,
-            "page_size": limit,
-            "page_count": page_count,
-            "has_previous": page > 1,
-            "has_next": page < page_count,
-            "coverage": {
-                "state": "partial",
-                "tracked_players": tracked_population,
-                "measured_percent": (
-                    100.0 * total_entries / tracked_population
-                    if tracked_population
-                    else 0.0
-                ),
-                "note": "Tracked-player publication; complete Legend I coverage is not claimed.",
-            },
-            "provenance": {
-                "source": "current accepted player profiles",
-                "observed_at": (
-                    None
-                    if newest_observed_at is None
-                    else newest_observed_at.astimezone(UTC).isoformat()
-                ),
-                "freshness": "stale" if stale_count else "fresh",
-                "confidence": "partial",
-                "coverage": "partial",
-                "version": _LIVE_ORDER_VERSION,
-            },
-            "source_observations": {
-                "oldest_observed_at": (
-                    None
-                    if oldest_observed_at is None
-                    else oldest_observed_at.astimezone(UTC).isoformat()
-                ),
-                "newest_observed_at": (
-                    None
-                    if newest_observed_at is None
-                    else newest_observed_at.astimezone(UTC).isoformat()
-                ),
-                "stale_count": stale_count,
-            },
-            "quality_states": ["partial"] + (["stale"] if stale_count else []),
-            "entries": entries,
-        }
+                "position": position,
+                "tag": _text(row[0]),
+                "name": _text(row[1]),
+                "trophies": int(row[2]),
+                "observed_at": observed_at.isoformat(),
+                "age_seconds": age_seconds,
+                "freshness": freshness,
+                "confidence": _text(row[4]),
+                "public_confidence": _public_confidence(True, _text(row[4])),
+                "clan": None if row[5] is None else _text(row[5]),
+                "official_rank": None,
+            }
+        )
+    page_count = (total_entries + limit - 1) // limit
+    page = offset // limit + 1
+    return {
+        "kind": "live",
+        "ordering_rule_version": _LIVE_ORDER_VERSION,
+        "generated_at": now.astimezone(UTC).isoformat(),
+        "tracked_population": board.tracked_population,
+        "total_entries": total_entries,
+        # Tracked players left off until a profile names this Season.
+        "season_reset_pending": board.season_reset_pending,
+        "page": page,
+        "page_size": limit,
+        "page_count": page_count,
+        "has_previous": page > 1,
+        "has_next": page < page_count,
+        "coverage": {
+            "state": "partial",
+            "tracked_players": board.tracked_population,
+            "measured_percent": (
+                100.0 * total_entries / board.tracked_population
+                if board.tracked_population
+                else 0.0
+            ),
+            "note": "Tracked-player publication; complete Legend I coverage is not claimed.",
+        },
+        "provenance": {
+            "source": "current accepted player profiles",
+            "observed_at": (
+                None
+                if newest_observed_at is None
+                else newest_observed_at.astimezone(UTC).isoformat()
+            ),
+            "freshness": "stale" if stale_count else "fresh",
+            "confidence": "partial",
+            "coverage": "partial",
+            "version": _LIVE_ORDER_VERSION,
+        },
+        "source_observations": {
+            "oldest_observed_at": (
+                None
+                if oldest_observed_at is None
+                else oldest_observed_at.astimezone(UTC).isoformat()
+            ),
+            "newest_observed_at": (
+                None
+                if newest_observed_at is None
+                else newest_observed_at.astimezone(UTC).isoformat()
+            ),
+            "stale_count": stale_count,
+        },
+        "quality_states": ["partial"] + (["stale"] if stale_count else []),
+        "entries": entries,
+    }
 
 
 def get_frozen_leaderboard(

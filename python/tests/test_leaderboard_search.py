@@ -74,6 +74,34 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
     assert len(moved["entries"]) == 100
 
 
+def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
+    database = board_database
+    clock = [0.0]
+    cache = api_leaderboard.LiveBoardCache(30, clock=lambda: clock[0])
+    home = api_leaderboard.get_live_leaderboard(database, limit=25, now=NOW, cache=cache)
+    target = home["entries"][24]["tag"]
+    with database.pool.connection() as connection:
+        connection.execute(
+            "UPDATE player_profile_versions SET trophies = 7000 WHERE normalized_tag = %s",
+            (target,),
+        )
+    clock[0] = 29.9
+    rankings = api_leaderboard.get_live_leaderboard(
+        database, limit=100, now=NOW, cache=cache
+    )
+    assert rankings["entries"][:25] == home["entries"]
+    clock[0] = 30.0
+    later = api_leaderboard.get_live_leaderboard(database, limit=100, now=NOW, cache=cache)
+    assert later["entries"][0]["tag"] == target
+    assert later["entries"][0]["trophies"] == 7000
+    # A new Season is read at once: these profiles still name the old one.
+    next_season = api_leaderboard.get_live_leaderboard(
+        database, limit=100, now=NOW + timedelta(days=28), cache=cache
+    )
+    assert next_season["total_entries"] == 0
+    assert next_season["season_reset_pending"] == 105
+
+
 def test_equal_trophies_follow_season_attack_destruction(board_database, monkeypatch):
     database = board_database
     season_start = ranked_day_for(NOW).season_start

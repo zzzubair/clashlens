@@ -76,22 +76,40 @@ describe("delayed-updates status read", () => {
     else process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = savedSecret;
   });
 
+  const delayed = () =>
+    Response.json({
+      ...ON_TIME,
+      processing_delayed: true,
+      oldest_waiting_saved_at: "2026-10-03T04:00:00+00:00",
+    });
+
   it("shows no notice when the status cannot be read, and asks again only after 30 seconds", async () => {
     const fetch = vi.fn().mockRejectedValue(new Error("down"));
     vi.stubGlobal("fetch", fetch);
     expect(await loadUpdateStatus(0)).toBeNull();
     expect(await loadUpdateStatus(29_999)).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(1);
-    fetch.mockResolvedValue(
-      Response.json({
-        ...ON_TIME,
-        processing_delayed: true,
-        oldest_waiting_saved_at: "2026-10-03T04:00:00+00:00",
+    fetch.mockImplementation(async () => delayed());
+    // The page that asks first gets the last reading without waiting.
+    expect(await loadUpdateStatus(30_000)).toBeNull();
+    expect(await loadUpdateStatus(30_001)).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.waitFor(async () =>
+      expect(await loadUpdateStatus(30_002)).toMatchObject({
+        oldestWaitingSavedAt: "2026-10-03T04:00:00+00:00",
+        lastCollectedAt: null,
       }),
     );
-    expect(await loadUpdateStatus(30_000)).toMatchObject({
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a fresh reading once the last one is five minutes old", async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error("down"));
+    vi.stubGlobal("fetch", fetch);
+    expect(await loadUpdateStatus(0)).toBeNull();
+    fetch.mockImplementation(async () => delayed());
+    expect(await loadUpdateStatus(300_000)).toMatchObject({
       oldestWaitingSavedAt: "2026-10-03T04:00:00+00:00",
-      lastCollectedAt: null,
     });
     expect(fetch).toHaveBeenCalledTimes(2);
   });

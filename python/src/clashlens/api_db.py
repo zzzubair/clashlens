@@ -110,6 +110,9 @@ class ApiDatabase:
         def configure(connection: Any) -> None:
             connection.execute(f"SET lock_timeout = '{API_LOCK_TIMEOUT}'")
             connection.execute(f"SET statement_timeout = '{API_STATEMENT_TIMEOUT}'")
+            # Compiling a page query to machine code cost more than it saved:
+            # about 0.1 s per Live Leaderboard read and 0.76 s per name search.
+            connection.execute("SET jit = off")
             connection.commit()
 
         self.pool = ConnectionPool(
