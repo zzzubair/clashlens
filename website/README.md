@@ -221,6 +221,15 @@ empty cards, and any other player not yet tracked (still being checked, or
 the check failed) gets one line with the player page's status message. The
 day's numbers clear at the Reset until the page reloads.
 
+Crews at `/crews` sit behind the same switch as the Dashboard. Signed-in users
+see their crews (at most 5) and can create one at `/crews/new` with a name, a
+number of places and which linked accounts join. A crew's page at
+`/crews/<id>` shows six boards: Live leaderboard, Top players, Top attackers,
+Best defenders, Worst defenders and Highest streaks, the last four switched
+between Today, Last 7 days and Season (the default). Each card shows its top 5
+and links to the full board at `/crews/<id>/boards/<board>`, which also lists
+who is not on it and why. Invites, members and settings pages are not built yet.
+
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the
 website reads them from a copy of the private blog repo on the server, named by
