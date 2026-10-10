@@ -42,6 +42,7 @@ export interface RootLoaderData {
   logoutIdempotencyKey: string | null;
   updateStatus: UpdateStatus | null;
   dashboardEnabled?: boolean;
+  crewsEnabled?: boolean;
 }
 
 /**
@@ -55,21 +56,24 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
   const updateStatus = import("./server/update-status.server")
     .then(({ loadUpdateStatus }) => loadUpdateStatus())
     .catch(() => null);
-  const dashboardEnabled = import("./server/config.server")
-    .then(({ isDashboardEnabled }) => isDashboardEnabled())
-    .catch(() => false);
+  const switches = import("./server/config.server")
+    .then(({ isDashboardEnabled, isCrewsEnabled }) => ({
+      dashboardEnabled: isDashboardEnabled(),
+      crewsEnabled: isCrewsEnabled(),
+    }))
+    .catch(() => ({ dashboardEnabled: false, crewsEnabled: false }));
   try {
     const { loadRootNavigation } = await import("./server/root-navigation.server");
     return {
       ...(await loadRootNavigation(request)),
       updateStatus: await updateStatus,
-      dashboardEnabled: await dashboardEnabled,
+      ...(await switches),
     };
   } catch {
     return {
       ...LOGGED_OUT,
       updateStatus: await updateStatus,
-      dashboardEnabled: await dashboardEnabled,
+      ...(await switches),
     };
   }
 }
@@ -156,6 +160,7 @@ export default function App() {
           <NavLink to="/analytics/armies">Armies</NavLink>
           <NavLink to="/blog">Blog</NavLink>
           <NavLink to="/account/groups">Groups</NavLink>
+          {data.crewsEnabled && <NavLink to="/crews">Crews</NavLink>}
           <NavLink to="/about">About</NavLink>
         </nav>
         <nav className="site-nav" aria-label="Account and appearance">

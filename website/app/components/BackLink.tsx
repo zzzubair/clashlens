@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation, useMatches } from "react-router";
+import { Link, useLocation, useMatches, type UIMatch } from "react-router";
 
 /** Where Back leads: the page this one sits under, and its name. */
 export interface BackTarget {
@@ -9,10 +9,11 @@ export interface BackTarget {
 
 /**
  * A route handle for a page that sits under another page. Pages reached
- * from the header have no handle and no Back.
+ * from the header have no handle and no Back. A parent named by the page's
+ * own data, such as a crew, is worked out from its route match.
  */
 export interface BackHandle {
-  back: BackTarget;
+  back: BackTarget | ((match: UIMatch) => BackTarget | null);
 }
 
 /**
@@ -43,7 +44,10 @@ function stateBack(state: unknown): BackTarget | null {
 export function BackLink() {
   const location = useLocation();
   const handle = useMatches()
-    .map((match) => (match.handle as Partial<BackHandle> | undefined)?.back)
+    .map((match) => {
+      const back = (match.handle as Partial<BackHandle> | undefined)?.back;
+      return typeof back === "function" ? back(match) : back;
+    })
     .reverse()
     .find(Boolean);
   // Link state only exists in the browser, so it waits for the first render there.

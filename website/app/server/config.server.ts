@@ -66,6 +66,9 @@ export function isDashboardEnabled(
   return env.CLASHLENS_DASHBOARD_ENABLED === "true";
 }
 
+/** Crews ship with the dashboard, so they stay hidden behind the same switch. */
+export const isCrewsEnabled = isDashboardEnabled;
+
 export function loadWebsiteConfig(
   env: Record<string, string | undefined> = process.env,
 ): WebsiteConfig {

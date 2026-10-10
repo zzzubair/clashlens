@@ -1,0 +1,513 @@
+/* Crews: the list, Create a crew, a crew's boards and one board. */
+
+.crew-page h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.crew-panel {
+  display: block;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+  box-shadow: var(--cl-card-drop);
+}
+
+.crew-lede {
+  margin: 0.35rem 0 0;
+  color: var(--cl-muted);
+}
+
+.crew-page .notice {
+  margin-top: 1rem;
+}
+
+/* ---------- Chips ---------- */
+
+.crew-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.5rem;
+  border: 1.5px solid var(--cl-outline);
+  border-radius: 999px;
+  font-family: var(--cl-font);
+  font-size: 0.75rem;
+  font-weight: 900;
+  line-height: 1.3;
+  white-space: nowrap;
+  vertical-align: 0.1rem;
+}
+
+.crew-chip-owner {
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill);
+  border-color: var(--cl-brand-night);
+}
+
+.crew-chip-admin {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
+}
+
+.crew-chip-you {
+  color: #fff;
+  background: #2f6fdb;
+  border-color: #2f6fdb;
+}
+
+/* ---------- Crew list ---------- */
+
+.crew-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 0.9rem;
+  align-items: center;
+  margin: 1rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+}
+
+.crew-create [aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.crew-list {
+  display: grid;
+  gap: 1rem;
+  margin: 1.3rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.crew-list-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: center;
+  min-height: 4.5rem;
+  padding: 0.9rem 1rem;
+  color: var(--cl-ink);
+  text-decoration: none;
+}
+
+.crew-list-item:hover {
+  color: var(--cl-ink);
+  background: var(--cl-action-soft);
+}
+
+.crew-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.8rem;
+  height: 2.8rem;
+  color: var(--cl-brand-night);
+  background: var(--cl-brand-fill);
+  border: 2px solid var(--cl-brand-night);
+  border-radius: 12px;
+  font-family: var(--cl-font-heading);
+  font-size: 1.3rem;
+}
+
+.crew-list-name {
+  min-width: 0;
+}
+
+.crew-list-name b {
+  display: block;
+  overflow: hidden;
+  font-family: var(--cl-font-heading);
+  font-size: 1.2rem;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crew-list-name span {
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+}
+
+/* ---------- Create a crew ---------- */
+
+.crew-form {
+  margin-top: 1rem;
+}
+
+.crew-stepper {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 7rem) 3rem;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.crew-stepper .button {
+  min-height: 3rem;
+  padding: 0;
+  font-size: 1.3rem;
+}
+
+.crew-stepper input {
+  text-align: center;
+  font-size: 1.15rem;
+  font-weight: 900;
+}
+
+.crew-pick {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.crew-pick legend {
+  margin-bottom: 0.4rem;
+  padding: 0;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.crew-pick ul {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.crew-pick label {
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+  min-height: 3.6rem;
+  padding: 0.65rem 0.8rem;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+  cursor: pointer;
+}
+
+.crew-pick input {
+  width: 1.3rem;
+  height: 1.3rem;
+  accent-color: #ff8a1f;
+}
+
+.crew-pick label:has(input:checked) {
+  background: var(--cl-action-soft);
+  box-shadow: inset 4px 0 0 #ff8a1f;
+}
+
+.crew-pick .crew-pick-off {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--cl-outline);
+  cursor: not-allowed;
+}
+
+.crew-pick-off .crew-who {
+  opacity: 0.7;
+}
+
+.crew-notice-action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ---------- Crew header ---------- */
+
+.crew-head {
+  padding: 1rem;
+}
+
+.crew-meta {
+  margin: 0.3rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.9rem;
+}
+
+.crew-bar {
+  height: 0.55rem;
+  margin-top: 0.8rem;
+  overflow: hidden;
+  background: var(--cl-panel);
+  border: 1.5px solid var(--cl-card-line);
+  border-radius: 999px;
+}
+
+.crew-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--cl-brand-fill);
+}
+
+.crew-places {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.3rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+
+.crew-full {
+  color: var(--cl-negative);
+}
+
+/* ---------- Boards ---------- */
+
+.crew-section-title {
+  margin: 1.6rem 0 0.7rem;
+  font-size: 1.35rem;
+}
+
+.crew-period {
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.crew-section-title + .crew-period {
+  margin-top: 0;
+}
+
+.crew-period .button {
+  min-width: 0;
+  min-height: 2.75rem;
+  padding-inline: 0.4rem;
+}
+
+.crew-boards {
+  display: grid;
+  gap: 1.1rem;
+  margin-top: 1.1rem;
+}
+
+/*
+ * Cards side by side share one width and one height, and their header,
+ * rows and footer start on the same lines however long a description is,
+ * however few rows a board has: each card spans three rows of the outer
+ * grid and lays its parts on them.
+ */
+@media (min-width: 52rem) {
+  .crew-boards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 0;
+  }
+
+  .crew-boards > .crew-board {
+    display: grid;
+    grid-row: span 3;
+    grid-template-rows: subgrid;
+    row-gap: 0;
+  }
+
+  .crew-boards > .crew-board:nth-child(n + 3) {
+    margin-top: 1.1rem;
+  }
+}
+
+.crew-board {
+  overflow: hidden;
+}
+
+.crew-board-full {
+  margin-top: 1.1rem;
+}
+
+.crew-board-head {
+  padding: 0.9rem 1rem 0.55rem;
+}
+
+.crew-board-head h3 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.crew-board-head p {
+  margin: 0.15rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.86rem;
+}
+
+.crew-board-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem 0.9rem;
+  color: var(--cl-muted);
+  font-size: 0.82rem;
+}
+
+.crew-board-foot a:not(.button) {
+  color: var(--cl-action-text);
+  font-weight: 800;
+  text-decoration: underline;
+}
+
+.crew-board-foot .button {
+  flex: 0 0 auto;
+  min-height: 2.5rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.86rem;
+}
+
+.crew-empty {
+  margin: 0;
+  padding: 1rem;
+  color: var(--cl-muted);
+  text-align: center;
+}
+
+.crew-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.crew-rows li {
+  border-top: 1px solid var(--cl-border);
+}
+
+.crew-row {
+  display: grid;
+  grid-template-columns: 2.2rem minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+  min-height: 3.4rem;
+  padding: 0.6rem 1rem;
+  color: var(--cl-ink);
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.crew-row:hover {
+  color: var(--cl-ink);
+  background: var(--cl-action-soft);
+}
+
+.crew-row-you .crew-row {
+  background: var(--cl-action-soft);
+  box-shadow: inset 4px 0 0 #ff8a1f;
+}
+
+.crew-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 0.92rem;
+  font-weight: 900;
+}
+
+.crew-rank[data-podium-rank] {
+  color: var(--cl-brand-night);
+  border: 2px solid var(--cl-brand-night);
+  border-radius: 50%;
+  box-shadow: var(--cl-raise);
+}
+
+.crew-rank[data-podium-rank="1"] {
+  background: var(--cl-medal-gold);
+}
+
+.crew-rank[data-podium-rank="2"] {
+  background: var(--cl-silver);
+}
+
+.crew-rank[data-podium-rank="3"] {
+  background: var(--cl-bronze);
+}
+
+.crew-who {
+  min-width: 0;
+}
+
+.crew-who b {
+  display: block;
+  overflow: hidden;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crew-who > span {
+  display: block;
+  overflow: hidden;
+  color: var(--cl-muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crew-value {
+  font-size: 1.05rem;
+  font-weight: 900;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.crew-value small {
+  display: block;
+  color: var(--cl-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.crew-value .crew-going {
+  color: var(--cl-positive);
+}
+
+.crew-gain {
+  color: var(--cl-positive);
+}
+
+.crew-loss {
+  color: var(--cl-negative);
+}
+
+/* ---------- Not on this board ---------- */
+
+.crew-missing {
+  margin-top: 1.1rem;
+  padding: 1rem;
+}
+
+.crew-missing h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.crew-missing ul {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.crew-missing li {
+  min-height: 3rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px dashed var(--cl-outline);
+}
+
+.crew-missing li:last-child {
+  border-bottom: 0;
+}
+
+.crew-missing li span {
+  display: block;
+  color: var(--cl-muted);
+  font-size: 0.78rem;
+}
