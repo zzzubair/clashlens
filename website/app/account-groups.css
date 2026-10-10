@@ -1,4 +1,4 @@
-/* Private groups list: members with names, and add and edit folded behind buttons. */
+/* Private groups list: members with names, and add and edit opened below the buttons. */
 /* Back lines up with this narrower page. */
 .page-back:has(+ .narrow-shell) {
   width: min(100% - 2rem, 54rem);
@@ -13,30 +13,6 @@
 
 .group-card-head > h3 {
   flex: 1 1 12rem;
-}
-
-summary.button {
-  list-style: none;
-  cursor: pointer;
-}
-
-summary.button::-webkit-details-marker {
-  display: none;
-}
-
-/* An open Add player or Edit drops below the buttons and spans the card. */
-.group-tool[open] {
-  flex-basis: 100%;
-  order: 1;
-}
-
-.group-tool[open] > summary {
-  margin-bottom: 0.75rem;
-}
-
-/* Edit lists the players with their Remove buttons, so the plain list steps aside. */
-.group-card:has(> .group-card-head > .group-tool-edit[open]) > .group-members {
-  display: none;
 }
 
 .group-card .player-action-list li {
@@ -130,12 +106,8 @@ summary.button::-webkit-details-marker {
     grid-template-columns: 1fr 1fr;
   }
 
-  .group-card-head > :is(h3, .button, .group-tool[open]) {
+  .group-card-head > :is(h3, .button-primary) {
     grid-column: 1 / -1;
-  }
-
-  .group-tool > summary {
-    width: 100%;
   }
 }
 

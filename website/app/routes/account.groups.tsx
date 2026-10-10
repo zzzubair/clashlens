@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   data,
   Form,
@@ -9,6 +10,7 @@ import {
   useFetcher,
   useLoaderData,
   useNavigation,
+  useSearchParams,
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -468,6 +470,9 @@ export default function GroupsRoute() {
   );
 }
 
+const PANELS = ["add", "edit"] as const;
+type Panel = (typeof PANELS)[number];
+
 function GroupCard({
   group,
   loaderData,
@@ -491,6 +496,30 @@ function GroupCard({
   }, [add.state, add.data]);
   const editResult = actionData?.action === "add-player" ? undefined : actionData;
   const count = group.players.length;
+  // Opened by its link without JavaScript, or kept open after that panel's form result.
+  const [searchParams] = useSearchParams();
+  const [panel, setPanel] = useState<Panel | null>(() =>
+    actionData === undefined
+      ? searchParams.get("group") === id
+        ? PANELS.find((name) => name === searchParams.get("panel")) ?? null
+        : null
+      : editResult === undefined
+        ? "add"
+        : "edit",
+  );
+  const toggle = (name: Panel) => ({
+    href:
+      panel === name
+        ? `/account/groups#group-${id}`
+        : `/account/groups?group=${id}&panel=${name}#group-${id}`,
+    "aria-expanded": panel === name,
+    "aria-controls": `group-${id}-${name}`,
+    onClick: (event: MouseEvent) => {
+      event.preventDefault();
+      flushSync(() => setPanel(panel === name ? null : name));
+      if (name === "add" && panel !== name) tagInput.current?.focus();
+    },
+  });
 
   return (
     <li id={`group-${id}`} className="group-card">
@@ -503,78 +532,71 @@ function GroupCard({
         >
           Compare players
         </Link>
-        <details
-          className="group-tool"
-          name={`group-${id}-tools`}
-          open={actionData?.action === "add-player"}
-          onToggle={(event) => {
-            if (event.currentTarget.open) tagInput.current?.focus();
-          }}
-        >
-          <summary className="button button-secondary">Add player</summary>
-          <add.Form method="post" action="." className="add-player-form" ref={addForm}>
-            <input type="hidden" name="action" value="add-player" />
-            <input type="hidden" name="groupId" value={id} />
-            <input
-              type="hidden"
-              name="idempotencyKey"
-              value={addResult?.playerIdempotencyKey ?? loaderData.addIdempotencyKeys[id]}
-            />
-            <label htmlFor={`group-add-${id}`}>Player tag</label>
-            <div className="add-player-row">
-              <input
-                ref={tagInput}
-                id={`group-add-${id}`}
-                name="tag"
-                type="text"
-                placeholder="#2PY0LQ"
-                required
-                maxLength={MAX_PLAYER_TAG_INPUT_LENGTH}
-                autoComplete="off"
-                autoCapitalize="characters"
-                spellCheck={false}
-                defaultValue={tagError ? addResult?.values.tag : ""}
-                aria-invalid={tagError ? true : undefined}
-                aria-describedby={`group-add-${id}-message`}
-              />
-              <button type="submit" className="button button-primary" disabled={checking}>
-                {checking ? "Checking…" : "Add"}
-              </button>
-            </div>
-            {checking ? (
-              <p id={`group-add-${id}-message`} className="form-help" role="status">
-                Checking the tag with Clash of Clans…
-              </p>
-            ) : tagError ? (
-              <p id={`group-add-${id}-message`} className="field-error" role="alert">
-                {tagError}
-              </p>
-            ) : addResult?.notice ? (
-              <p id={`group-add-${id}-message`} className="add-player-done" role="status">
-                {addResult.notice}
-              </p>
-            ) : (
-              <p id={`group-add-${id}-message`} className="form-help">
-                {count} of {MAX_GROUP_TAGS} players. Each tag is checked with Clash of
-                Clans before it joins.
-              </p>
-            )}
-            {addResult?.generalError ? (
-              <ErrorNotice error={addResult.generalError} />
-            ) : null}
-          </add.Form>
-        </details>
-        <details
-          className="group-tool group-tool-edit"
-          name={`group-${id}-tools`}
-          open={editResult !== undefined}
-        >
-          <summary className="button button-secondary">Edit</summary>
-          <EditGroup group={group} loaderData={loaderData} actionData={editResult} />
-        </details>
+        <a className="button button-secondary" {...toggle("add")}>
+          Add player
+        </a>
+        <a className="button button-secondary" {...toggle("edit")}>
+          Edit
+        </a>
       </div>
 
-      {count > 0 ? (
+      {/* Both panels stay mounted while closed, so their request state survives. */}
+      <div id={`group-${id}-add`} className="group-panel" hidden={panel !== "add"}>
+        <add.Form method="post" action="." className="add-player-form" ref={addForm}>
+          <input type="hidden" name="action" value="add-player" />
+          <input type="hidden" name="groupId" value={id} />
+          <input
+            type="hidden"
+            name="idempotencyKey"
+            value={addResult?.playerIdempotencyKey ?? loaderData.addIdempotencyKeys[id]}
+          />
+          <label htmlFor={`group-add-${id}`}>Player tag</label>
+          <div className="add-player-row">
+            <input
+              ref={tagInput}
+              id={`group-add-${id}`}
+              name="tag"
+              type="text"
+              placeholder="#2PY0LQ"
+              required
+              maxLength={MAX_PLAYER_TAG_INPUT_LENGTH}
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              defaultValue={tagError ? addResult?.values.tag : ""}
+              aria-invalid={tagError ? true : undefined}
+              aria-describedby={`group-add-${id}-message`}
+            />
+            <button type="submit" className="button button-primary" disabled={checking}>
+              {checking ? "Checking…" : "Add"}
+            </button>
+          </div>
+          {checking ? (
+            <p id={`group-add-${id}-message`} className="form-help" role="status">
+              Checking the tag with Clash of Clans…
+            </p>
+          ) : tagError ? (
+            <p id={`group-add-${id}-message`} className="field-error" role="alert">
+              {tagError}
+            </p>
+          ) : addResult?.notice ? (
+            <p id={`group-add-${id}-message`} className="add-player-done" role="status">
+              {addResult.notice}
+            </p>
+          ) : (
+            <p id={`group-add-${id}-message`} className="form-help">
+              {count} of {MAX_GROUP_TAGS} players. Each tag is checked with Clash of Clans
+              before it joins.
+            </p>
+          )}
+          {addResult?.generalError ? <ErrorNotice error={addResult.generalError} /> : null}
+        </add.Form>
+      </div>
+      <div id={`group-${id}-edit`} className="group-panel" hidden={panel !== "edit"}>
+        <EditGroup group={group} loaderData={loaderData} actionData={editResult} />
+      </div>
+
+      {panel === "edit" ? null : count > 0 ? (
         <ul
           className="player-action-list group-members"
           aria-label={`Players in ${group.name}`}

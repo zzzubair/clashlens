@@ -82,16 +82,20 @@ test("a Clasher can sign in and use account features against the real backend", 
   const players = warPlan.getByRole("list", { name: "Players in War plan" });
   if ((await players.count()) === 0) {
     // Players join one at a time, after the game confirms the tag.
-    await warPlan.locator("summary", { hasText: "Add player" }).click();
+    await warPlan.getByRole("link", { name: "Add player" }).click();
     await warPlan.getByLabel("Player tag").fill("#2PP");
     await warPlan.getByRole("button", { name: "Add", exact: true }).click();
   }
   await expect(players).toBeVisible();
   // Renaming, removing and deleting wait behind Edit.
   await expect(warPlan.getByRole("button", { name: /^Remove / })).toHaveCount(0);
-  const editToggle = warPlan.locator("summary", { hasText: /^Edit$/ });
+  const editToggle = warPlan.getByRole("link", { name: "Edit", exact: true });
+  const closedAt = await editToggle.boundingBox();
   await editToggle.click();
   const edit = warPlan.locator(".group-edit");
+  await expect(edit).toBeVisible();
+  // Opening Edit leaves its button where it was; the panel opens below the row.
+  expect(await editToggle.boundingBox()).toEqual(closedAt);
   await expect(edit.getByLabel("Group name")).toHaveValue("War plan");
   await expect(
     edit.getByRole("button", { name: /^Remove .+ from War plan$/ }),
