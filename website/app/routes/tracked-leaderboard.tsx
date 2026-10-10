@@ -9,6 +9,7 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark } from "../components/LeaderboardShared";
@@ -181,6 +182,7 @@ export default function TrackedLeaderboardRoute() {
   const search = seasonExpired ? null : savedSearch;
   const unlistedTag = search?.results.length === 0 ? normalizePlayerTag(query) : null;
   const navigation = useNavigation();
+  const backState = useBackState("Rankings");
   const selectedRow = useRef<HTMLTableRowElement>(null);
   useEffect(() => {
     if (focusTag && selectedRow.current) {
@@ -471,12 +473,13 @@ export default function TrackedLeaderboardRoute() {
                           <span className="rank-mark">{entry.rank.toLocaleString()}</span>
                         </td>
                         <th scope="row" data-label="Player">
-                          <a
+                          <Link
                             className="player-name"
-                            href={canonicalPlayerPath(entry.tag)}
+                            to={canonicalPlayerPath(entry.tag)}
+                            state={backState}
                           >
                             <bdi>{entry.name}</bdi>
-                          </a>
+                          </Link>
                           <span className="player-tag">{entry.tag}</span>
                           <details className="player-update-mobile">
                             <summary>

@@ -13,6 +13,7 @@ import {
   useSearchParams,
 } from "react-router";
 
+import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
 import {
@@ -25,15 +26,12 @@ import type { WebsiteErrorResponse } from "../lib/contracts";
 import { canonicalPlayerPath, MAX_PLAYER_TAG_INPUT_LENGTH } from "../lib/player-tag";
 import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
-import type { BackHandle } from "../root";
 import type { Route } from "./+types/account.groups";
 import "../account-groups.css";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 const ACTIONS = ["create", "update", "delete", "add-player", "remove-player"] as const;
 type GroupAction = (typeof ACTIONS)[number];
-
-export const handle: BackHandle = { back: {} };
 
 export interface GroupsLoaderData {
   groups: ListedGroup[];
@@ -525,11 +523,7 @@ function GroupCard({
     <li id={`group-${id}`} className="group-card">
       <div className="group-card-head">
         <h3>{group.name}</h3>
-        <Link
-          className="button button-primary"
-          to={`/account/groups/${id}`}
-          state={{ backTo: "/account/groups" }}
-        >
+        <Link className="button button-primary" to={`/account/groups/${id}`}>
           Compare players
         </Link>
         <a className="button button-secondary" {...toggle("add")}>
@@ -751,9 +745,12 @@ function EditGroup({
 }
 
 function MemberName({ player }: { player: GroupPlayer }) {
+  const backState = useBackState("Your groups");
   return (
     <span className="player-action-name">
-      <a href={canonicalPlayerPath(player.tag)}>{player.name ?? player.tag}</a>
+      <Link to={canonicalPlayerPath(player.tag)} state={backState}>
+        {player.name ?? player.tag}
+      </Link>
       {player.name === null ? null : <span className="player-tag">{player.tag}</span>}
       <span className="group-member-detail">
         {player.state === "tracking"

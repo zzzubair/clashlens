@@ -863,6 +863,7 @@ function SeasonNav({
   selectedSeason: string | null;
   currentAvailable?: boolean;
 }) {
+  const location = useLocation();
   // Only Seasons with Clash Lens days; older finishes are in the separate Older history table.
   seasons = seasons.filter((season) => season.source === "tracked_summary");
   // A selected past Season always keeps its way back, even if the list failed.
@@ -888,7 +889,7 @@ function SeasonNav({
             {selectedSeason === null ? (
               <strong aria-current="page">Current Season</strong>
             ) : (
-              <Link to={canonicalPlayerPath(tag)} replace>
+              <Link to={canonicalPlayerPath(tag)} state={location.state} replace>
                 Current Season
               </Link>
             )}
@@ -901,6 +902,7 @@ function SeasonNav({
             ) : (
               <Link
                 to={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
+                state={location.state}
                 replace
               >
                 {seasonLabel(season.seasonId)}

@@ -14,7 +14,7 @@ import {
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
-import type { BackHandle } from "../root";
+import { type BackHandle, useBackState } from "../components/BackLink";
 import type { Route } from "./+types/account.groups.$groupId";
 import "../group-compare.css";
 
@@ -28,7 +28,7 @@ const SORTS = {
 type SortKey = keyof typeof SORTS;
 
 export const handle: BackHandle = {
-  back: { to: "/account/groups", label: "Back to your groups" },
+  back: { to: "/account/groups", label: "Your groups" },
 };
 
 export interface GroupCompareLoaderData {
@@ -155,7 +155,7 @@ export default function GroupCompareRoute() {
       player.days.map((day) => Math.abs(day.net ?? 0)),
     ),
   );
-  // Switching views replaces this history entry, so Back skips past them.
+  // Switching views replaces this history entry, so the browser's Back skips past them.
   const query = (next: { days?: number; sort?: SortKey }) =>
     `?days=${next.days ?? days}&sort=${next.sort ?? sort}`;
 
@@ -186,7 +186,6 @@ export default function GroupCompareRoute() {
                 className="button secondary"
                 to={query({ days: value })}
                 aria-current={value === days ? "page" : undefined}
-                state={location.state}
                 preventScrollReset
                 replace
               >
@@ -201,7 +200,6 @@ export default function GroupCompareRoute() {
                 className="button secondary"
                 to={query({ sort: key })}
                 aria-current={key === sort ? "page" : undefined}
-                state={location.state}
                 preventScrollReset
                 replace
               >
@@ -246,7 +244,13 @@ export default function GroupCompareRoute() {
             </thead>
             <tbody>
               {players.map((player) => (
-                <PlayerRow key={player.tag} player={player} scale={scale} days={days} />
+                <PlayerRow
+                  key={player.tag}
+                  group={comparison.name}
+                  player={player}
+                  scale={scale}
+                  days={days}
+                />
               ))}
             </tbody>
           </table>
@@ -265,21 +269,28 @@ export default function GroupCompareRoute() {
 }
 
 function PlayerRow({
+  group,
   player,
   scale,
   days,
 }: {
+  group: string;
   player: ComparedPlayer;
   scale: number;
   days: number;
 }) {
   const { attack, defense } = player;
+  const backState = useBackState(group);
   return (
     <tr className={player.you ? "compare-you" : undefined}>
       <th scope="row" data-label="Player">
-        <a className="compare-name" href={canonicalPlayerPath(player.tag)}>
+        <Link
+          className="compare-name"
+          to={canonicalPlayerPath(player.tag)}
+          state={backState}
+        >
           {player.name ?? player.tag}
-        </a>
+        </Link>
         <span className="compare-tag">
           {player.tag}
           {player.you ? <span className="compare-badge">You</span> : null}

@@ -9,6 +9,7 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
+import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { useSeasonReread } from "../components/SeasonReread";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
@@ -355,12 +356,17 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
 }
 
 function SearchResult({ result }: { result: SearchResponse["results"][number] }) {
+  const backState = useBackState("Home");
   return (
     <div className="search-result">
       <div>
-        <a className="player-name" href={canonicalPlayerPath(result.tag)}>
+        <Link
+          className="player-name"
+          to={canonicalPlayerPath(result.tag)}
+          state={backState}
+        >
           <bdi>{result.name}</bdi>
-        </a>
+        </Link>
         <span className="player-tag">{result.tag}</span>
       </div>
       <div className="search-context">
@@ -376,6 +382,7 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
 }
 
 function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
+  const backState = useBackState("Home");
   return (
     <div className="table-wrap">
       <table aria-label="Latest saved standings" className="data-table leaderboard-table">
@@ -401,9 +408,13 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                 <span className="rank-mark">{entry.rank}</span>
               </td>
               <th scope="row" data-label="Player">
-                <a className="player-name" href={canonicalPlayerPath(entry.tag)}>
+                <Link
+                  className="player-name"
+                  to={canonicalPlayerPath(entry.tag)}
+                  state={backState}
+                >
                   <bdi>{entry.name}</bdi>
-                </a>
+                </Link>
                 <span className="player-tag">{entry.tag}</span>
               </th>
               <td data-label="Clan">

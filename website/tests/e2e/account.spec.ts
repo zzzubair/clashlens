@@ -111,7 +111,7 @@ test("a Clasher can sign in and use account features against the real backend", 
 
   // Back returns to Your groups in one step, however many views were opened.
   for (const back of [
-    () => page.getByRole("link", { name: "Back to your groups" }).click(),
+    () => page.getByRole("link", { name: "Back to Your groups" }).click(),
     () => page.goBack(),
   ]) {
     await warPlan.getByRole("link", { name: "Compare players" }).click();
@@ -123,6 +123,15 @@ test("a Clasher can sign in and use account features against the real backend", 
     await expect(page).toHaveURL((url) => url.pathname === "/account/groups");
     await expect(page.getByRole("heading", { name: "Your groups" })).toBeVisible();
   }
+
+  // A player opened from the comparison goes Back to it, on the same view.
+  await warPlan.getByRole("link", { name: "Compare players" }).click();
+  await page.getByRole("link", { name: "14 days", exact: true }).click();
+  await expect(page).toHaveURL(/days=14/);
+  await page.locator(".compare-name").first().click();
+  await expect(page).toHaveURL(/\/players\//);
+  await page.getByRole("link", { name: "Back to War plan" }).click();
+  await expect(page).toHaveURL(/\/account\/groups\/[^/]+\?days=14&sort=trophies$/);
 
   await page.goto("/account/verify-player");
   await page.getByLabel("Player tag").fill("#2PP");
