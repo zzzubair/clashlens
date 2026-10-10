@@ -1,4 +1,4 @@
-/* Crews: the list, Create a crew, a crew's boards and one board. */
+/* Crews: the list, Create a crew, a crew's boards and one board, Members, Edit crew, Invite and joining. */
 
 .crew-page h1 {
   margin: 0;
@@ -510,4 +510,263 @@
   display: block;
   color: var(--cl-muted);
   font-size: 0.78rem;
+}
+
+/* ---------- Crew actions and forms ---------- */
+
+.crew-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.crew-actions form {
+  display: contents;
+}
+
+.crew-link-button {
+  min-height: 2.5rem;
+  padding: 0.35rem 0;
+  color: var(--cl-action-text);
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.crew-chip-quiet {
+  color: var(--cl-muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+/* ---------- Invite sheet ---------- */
+
+.crew-sheet {
+  width: min(100%, 34rem);
+  max-width: 100%;
+  max-height: 92dvh;
+  margin: auto auto 0;
+  padding: 0;
+  color: var(--cl-ink);
+  background: var(--cl-paper);
+  border: 2px solid var(--cl-card-line);
+  border-bottom: 0;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -4px 0 var(--cl-card-line);
+}
+
+/* Before the page's JavaScript runs, the sheet shows in place. */
+.crew-sheet:not(:modal) {
+  position: static;
+  margin: 1rem 0 0;
+  border-bottom: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-card-radius);
+}
+
+.crew-sheet::backdrop {
+  background: rgb(18 13 23 / 0.55);
+}
+
+.crew-sheet-body {
+  padding: 1rem 1rem calc(1.2rem + env(safe-area-inset-bottom));
+}
+
+.crew-sheet-head {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+
+.crew-sheet-head h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.crew-close {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  color: var(--cl-ink);
+  font-size: 1.1rem;
+  font-weight: 900;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.crew-linkbox {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0.4rem 0.4rem 0.8rem;
+  background: var(--cl-surface);
+  border: 2px solid var(--cl-card-line);
+  border-radius: var(--cl-radius);
+}
+
+.crew-linkbox code {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.crew-sheet-note {
+  margin: 0.6rem 0 0;
+  color: var(--cl-muted);
+  font-size: 0.85rem;
+}
+
+.crew-share {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.crew-new-link {
+  margin-top: 0.4rem;
+  text-align: right;
+}
+
+/* ---------- Members ---------- */
+
+.crew-members {
+  display: grid;
+  gap: 0.9rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.crew-member {
+  padding: 0.9rem 1rem;
+}
+
+.crew-member-top {
+  display: grid;
+  grid-template-columns: 2.6rem minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.crew-accounts {
+  margin: 0.65rem 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px dashed var(--cl-outline);
+}
+
+.crew-accounts li {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 3rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px dashed var(--cl-outline);
+}
+
+.crew-accounts li:last-child {
+  border-bottom: 0;
+}
+
+.crew-accounts .crew-who a {
+  font-weight: 800;
+}
+
+.crew-edit,
+.crew-confirm {
+  margin-top: 0.7rem;
+}
+
+.crew-edit > summary,
+.crew-confirm > summary {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.86rem;
+  list-style: none;
+}
+
+.crew-edit > summary::-webkit-details-marker,
+.crew-confirm > summary::-webkit-details-marker {
+  display: none;
+}
+
+.crew-edit[open] > summary {
+  background: var(--cl-action-soft);
+}
+
+.crew-tray {
+  margin-top: 0.6rem;
+  padding: 0.75rem;
+  background: var(--cl-panel);
+  border: 1.5px dashed var(--cl-outline);
+  border-radius: var(--cl-radius);
+}
+
+.crew-tray > :first-child {
+  margin-top: 0;
+}
+
+.crew-confirm-body {
+  display: grid;
+  gap: 0.6rem;
+  justify-items: start;
+  margin-top: 0.6rem;
+}
+
+.crew-confirm-body p {
+  margin: 0;
+  color: var(--cl-muted);
+  font-size: 0.88rem;
+}
+
+.crew-confirm-body .crew-pick {
+  width: 100%;
+}
+
+/* ---------- Edit crew ---------- */
+
+.crew-setting {
+  display: grid;
+  gap: 0.8rem;
+  justify-items: start;
+  margin-top: 1rem;
+  padding: 1rem;
+}
+
+.crew-setting h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.crew-setting .form-field,
+.crew-setting .crew-accounts,
+.crew-setting input[type="text"],
+.crew-setting select {
+  width: 100%;
+}
+
+.crew-danger {
+  border-color: var(--cl-negative);
+}
+
+.crew-tick {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+.crew-tick input {
+  flex: 0 0 auto;
+  width: 1.3rem;
+  height: 1.3rem;
 }

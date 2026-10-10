@@ -1,4 +1,4 @@
-import { data, Link, useLoaderData } from "react-router";
+import { data, Link, useActionData, useLoaderData } from "react-router";
 
 import { type BackHandle } from "../components/BackLink";
 import {
@@ -7,6 +7,7 @@ import {
   PeriodSwitch,
   RoleChip,
 } from "../components/CrewBoards";
+import { CrewInvite } from "../components/CrewForms";
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
   BOARD_KEYS,
@@ -18,6 +19,7 @@ import {
   type Crew,
   type CrewBoards,
   type CrewPeriod,
+  type InviteLink,
 } from "../lib/crew-contracts";
 import type { Route } from "./+types/crews.$crewId";
 import "../crews.css";
@@ -33,7 +35,29 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const period = crewPeriod(new URL(request.url).searchParams.get("period"));
   const { loadCrewPage } = await import("../services/crews.server");
   const page = await loadCrewPage(request, params.crewId, period);
-  return data({ ...page, period }, { status: page.error ? 503 : 200, headers: NO_STORE });
+  const { freshIdempotencyKey } = await import("../server/actions.server");
+  return data(
+    { ...page, period, idempotencyKey: freshIdempotencyKey() },
+    { status: page.error ? 503 : 200, headers: NO_STORE },
+  );
+}
+
+/** POST /crews/:crewId — Invite: the clasher's live link, or a new one. */
+export async function action({ request, params }: Route.ActionArgs) {
+  const { crewFormAction, makeInvite } = await import("../services/crews.server");
+  const { getWebsiteConfig } = await import("../server/config.server");
+  return crewFormAction(
+    request,
+    params.crewId,
+    ["invite"],
+    async ({ identity, crewId, fields, key }) => {
+      const fresh = fields["new"] === "1";
+      const made = await makeInvite(identity, crewId, fresh, key(fresh ? "new" : "same"));
+      const link = new URL(`/crews/join/${made.code}`, getWebsiteConfig().publicOrigin);
+      const invite: InviteLink = { ...made, link: link.href };
+      return { invite };
+    },
+  );
 }
 
 export function headers() {
@@ -47,7 +71,8 @@ export function meta({ loaderData: loaded }: Route.MetaArgs) {
 }
 
 export default function CrewRoute() {
-  const { crew, boards, period, error } = useLoaderData<typeof loader>();
+  const { crew, boards, period, error, idempotencyKey } = useLoaderData<typeof loader>();
+  const answer = useActionData<typeof action>();
   if (crew === null || boards === null) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell crew-page">
@@ -75,6 +100,23 @@ export default function CrewRoute() {
           </span>
           {open === 0 ? <b className="crew-full">Full</b> : <span>{open} open</span>}
         </p>
+        <div className="crew-actions">
+          {open > 0 ? (
+            <CrewInvite
+              crewName={crew.name}
+              idempotencyKey={idempotencyKey}
+              answer={answer ?? null}
+            />
+          ) : null}
+          <Link className="button secondary" to={`/crews/${crew.crewId}/members`}>
+            Members
+          </Link>
+          {crew.myRole === "member" ? null : (
+            <Link className="button secondary" to={`/crews/${crew.crewId}/settings`}>
+              Edit
+            </Link>
+          )}
+        </div>
       </section>
 
       <h2 className="crew-section-title">Right now</h2>
