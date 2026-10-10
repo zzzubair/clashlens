@@ -943,6 +943,14 @@ readings were processed, when the board's inputs froze, when it was saved as
 published and when the website first showed it, with the board's input states.
 Its `settlement` column is no longer filled: nothing proves a Reset settled.
 
+An army build that failed with `boundary army publication dependency is not
+terminal` on a board whose `army_state` is `ready` needs no action: about every
+10 seconds the worker checks each member still army-pending again, and once
+none is left it queues that build again as a new job. The failed job stays
+failed; once the new one has published, accept it with `./ops failed-items
+--accept-job-id ID --reason 'army build ran again as a new job' --apply` so the
+failed-work count stops counting it.
+
 **Fix or escalate:** escalate; repairing a publication needs an approved change.
 
 **Recovered:** the latest board is readable and every Reset since the first

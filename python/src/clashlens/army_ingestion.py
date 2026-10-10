@@ -431,9 +431,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     (generation_row[0],),
                 ).fetchone()
                 if pending_members is not None:
-                    raise ValueError(
-                        "boundary army publication dependency is not terminal"
-                    )
+                    raise ValueError(boundary.ARMY_MEMBERS_PENDING)
                 ranked_day_str = (boundary_at - timedelta(days=1)).strftime(
                     "%Y-%m-%dT%H:%M:%SZ"
                 )

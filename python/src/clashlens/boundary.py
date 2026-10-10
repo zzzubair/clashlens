@@ -600,6 +600,20 @@ def _try_enqueue_boundary_artifacts(
             connection, generation_id=generation_id, artifact_kind="army"
         )
         assert manifest is not None
+        key = base = f"build_army_analytics:boundary:{boundary_text}:gen:{generation_number}:manifest:{manifest[1]}"
+        # A build that gave up while members were still pending runs again,
+        # under a new key, once they have all settled; it stays failed.
+        while (
+            failed := connection.execute(
+                """
+                SELECT id FROM python_processing_jobs_worker
+                WHERE deduplication_key = %s AND state = 'failed'
+                  AND failure_detail = %s
+                """,
+                (key, ARMY_MEMBERS_PENDING),
+            ).fetchone()
+        ) is not None:
+            key = f"{base}:retry:{failed[0]}"
         connection.execute(
             """
             INSERT INTO python_processing_jobs_worker (
@@ -610,7 +624,7 @@ def _try_enqueue_boundary_artifacts(
             ON CONFLICT (deduplication_key) DO NOTHING
             """,
             (
-                f"build_army_analytics:boundary:{boundary_text}:gen:{generation_number}:manifest:{manifest[1]}",
+                key,
                 Jsonb(
                     {
                         "boundary_at": boundary_text,
@@ -628,6 +642,10 @@ def _try_enqueue_boundary_artifacts(
                 else PYTHON_LIVE_PRIORITY,
             ),
         )
+
+
+# Why an army build fails while a member's army status is still pending.
+ARMY_MEMBERS_PENDING = "boundary army publication dependency is not terminal"
 
 
 def _boundary_snapshot_status(
