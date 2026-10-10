@@ -91,6 +91,26 @@ describe("requireLogin auth guard", () => {
     );
   });
 
+  it("returns to the page, not its data, when an in-app link needs sign-in", async () => {
+    for (const path of [
+      "/account/groups.data",
+      "/account/groups.data?_routes=root%2Croutes%2Faccount.groups",
+    ]) {
+      await expect(requireLogin(loginRequest(path))).rejects.toSatisfy(
+        (thrown: unknown) => {
+          expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fgroups");
+          return true;
+        },
+      );
+    }
+    await expect(
+      requireLogin(loginRequest("/account/setup.data?returnPath=%2Faccount%2Fgroups")),
+    ).rejects.toSatisfy((thrown: unknown) => {
+      expectLoginRedirect(thrown, "/login?returnPath=%2Faccount%2Fgroups");
+      return true;
+    });
+  });
+
   it("keeps account setup's destination when its login has expired", async () => {
     const config = testConfig();
     const expired = createLoginCookieValue(
