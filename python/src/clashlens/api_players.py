@@ -448,14 +448,14 @@ def get_player_page(
 
 def player_cards(
     connection: Any,
-    players: list[tuple[int, str, str | None, str | None]],
+    players: list[tuple[int, str, str | None, str | None, str | None]],
     *,
     now: datetime,
 ) -> list[dict[str, Any]]:
     """Each player's current trophies, Live Leaderboard position and today's
     battles so far, read for every player at once.
 
-    ``players`` holds (player id, tag, name, clan). Every card carries the
+    ``players`` holds (player id, tag, name, clan, league). Every card carries the
     lookup state and reason its own page explains, and the player's Live
     Leaderboard position whenever it is on the board, and the league its newest
     saved profile names. Trophies and today come only from an accepted current
@@ -496,30 +496,8 @@ def player_cards(
             (ids, ranked_day_for(now).start),
         ).fetchall()
     }
-    # Each player's league comes from its newest saved profile, which the
-    # weekly check keeps fresh; an uncertain newest profile names none.
-    leagues = {
-        int(row[0]): None if row[2] else _text(row[1])
-        for row in connection.execute(
-            """
-            SELECT DISTINCT ON (version.player_id)
-                   version.player_id, version.league_tier_name,
-                   version.eligibility_state = 'uncertain'
-            FROM player_profile_versions AS version
-            CROSS JOIN LATERAL (
-                SELECT max(observed_at) AS observed_at FROM player_profile_effects
-                WHERE profile_version_id = version.id
-            ) AS effect
-            WHERE version.player_id = ANY(%s)
-            ORDER BY version.player_id,
-                     COALESCE(effect.observed_at, version.observed_at) DESC,
-                     version.id DESC
-            """,
-            (ids,),
-        ).fetchall()
-    }
     cards = []
-    for player_id, tag, name, clan in players:
+    for player_id, tag, name, clan, league in players:
         lookup = api_player_lookup._lookup(connection, tag)
         profile = profiles.get(player_id)
         reason = lookup.get("reason")
@@ -534,7 +512,7 @@ def player_cards(
             "trophies": None,
             "season_reset_pending": False,
             "rank": None,
-            "league": leagues.get(player_id),
+            "league": league,
             "today": None,
         }
         if reason is None and profile is not None:

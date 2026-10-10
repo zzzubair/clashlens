@@ -672,6 +672,18 @@ def test_every_link_checks_the_players_profile_at_once(
             # Linking again reuses the waiting check instead of adding one.
             assert link("#2PP", VerificationOutcome.VERIFIED) == "already_linked"
             assert len(checks()) == 3
+            # A check that finished moments ago does not stand in for a new one.
+            with psycopg.connect(info) as connection:
+                connection.execute(
+                    """
+                    UPDATE collector_work
+                    SET status = 'complete', completed_at = clock_timestamp()
+                    WHERE normalized_tag = '#2PP'
+                    """
+                )
+            assert link("#2PP", VerificationOutcome.VERIFIED) == "already_linked"
+            assert checks()[-1] == ("#2PP", "initial_collection", "interactive", True)
+            assert len(checks()) == 4
             collector = CollectorDatabase(info)
             try:
                 assert len(collector.pending_intents(10, interactive=True)) == 3

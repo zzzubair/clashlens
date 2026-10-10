@@ -477,7 +477,7 @@ def test_first_day_trophies_from_before_the_reset_wait_for_the_season_reset(
                     )
                 with database.pool.connection() as connection:
                     ids = connection.execute(
-                        "SELECT id, normalized_tag, NULL, NULL FROM players"
+                        "SELECT id, normalized_tag, NULL, NULL, NULL FROM players"
                     ).fetchall()
                     cards = api_players.player_cards(connection, ids, now=now)
                 assert {c["tag"] for c in cards if c["season_reset_pending"]} == waiting

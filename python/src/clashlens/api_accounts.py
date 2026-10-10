@@ -1305,23 +1305,27 @@ def _group_player(connection: Any, row: Any, now: datetime) -> dict[str, Any]:
 def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:
     return [
         {"tag": tag, "name": name}
-        for _id, tag, name, _clan in _linked_players(connection, account_id)
+        for _id, tag, name, _clan, _league in _linked_players(connection, account_id)
     ]
 
 
 def _linked_players(
     connection: Any, account_id: int
-) -> list[tuple[int, str, str | None, str | None]]:
-    """Each verified player's id, tag, and newest saved name and clan."""
+) -> list[tuple[int, str, str | None, str | None, str | None]]:
+    """Each verified player's id, tag, and newest saved name, clan and league."""
     # Profile parsing validates the player tag and name separately from Legend
-    # season/tier evidence. Linking a non-Legend account still exposes its name.
+    # season/tier evidence. Linking a non-Legend account still exposes its name;
+    # an uncertain newest profile names no league.
     rows = connection.execute(
         """
-        SELECT player.id, player.normalized_tag, profile.name, profile.clan
+        SELECT player.id, player.normalized_tag, profile.name, profile.clan,
+               profile.league
         FROM verified_player_links AS link
         JOIN players AS player ON player.id = link.player_id
         LEFT JOIN LATERAL (
             SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan,
+                   CASE WHEN version.eligibility_state <> 'uncertain'
+                        THEN version.league_tier_name END AS league,
                    version.player_id
             FROM player_profile_versions AS version
             CROSS JOIN LATERAL (
@@ -1345,6 +1349,7 @@ def _linked_players(
             _text(row[1]),
             None if row[2] is None else _text(row[2]),
             None if row[3] is None else _text(row[3]),
+            None if row[4] is None else _text(row[4]),
         )
         for row in rows
     ]

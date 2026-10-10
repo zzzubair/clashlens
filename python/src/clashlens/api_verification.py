@@ -275,7 +275,7 @@ def complete_verification(
                 # visit does, so its name and league show and its own profile
                 # decides whether it is tracked.
                 connection.execute(
-                    "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
+                    "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30, true)",
                     (normalized_tag,),
                 ).fetchone()
             updated = connection.execute(
