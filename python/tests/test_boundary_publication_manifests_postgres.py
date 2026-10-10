@@ -1335,3 +1335,46 @@ def test_reevaluation_recovers_armies_saved_pending_after_a_merge(
                 ]
         finally:
             database.close()
+
+
+def test_army_build_that_gave_up_on_pending_members_runs_once_they_settle(
+    database_url: str, archive_server
+) -> None:
+    # A member left army-pending on a board whose army was ready, though its
+    # day's log was complete and decoded, was never checked again: the
+    # board's army build failed on it and the board stayed unbuilt.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            jobs, army_job, army_input = _freeze_army_inputs(
+                connection_info, archive_server, processor
+            )
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE boundary_publication_generation_members"
+                    " SET army_status = 'pending'"
+                )
+                connection.execute(
+                    "UPDATE python_processing_jobs SET max_attempts = 1 WHERE id = %s",
+                    (army_job,),
+                )
+            assert processor.process_job(army_job, owner="army").outcome == "failed"
+            boundary_publication.reevaluate_boundary_publications(database)
+            [(retry_job, retry_input)] = jobs("build_army_analytics")
+            assert retry_input == army_input
+            assert processor.process_job(retry_job, owner="retry").outcome == "processed"
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT army_state FROM boundary_publication_generations"
+                    " WHERE boundary_at = %s",
+                    (DAY_END,),
+                ).fetchone() == ("published",)
+                # The build that gave up stays failed; it is not run again.
+                assert connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s",
+                    (army_job,),
+                ).fetchone() == ("failed",)
+            boundary_publication.reevaluate_boundary_publications(database)
+            assert jobs("build_army_analytics") == []
+        finally:
+            database.close()
