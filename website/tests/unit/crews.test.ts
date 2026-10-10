@@ -475,7 +475,25 @@ describe("create a crew", () => {
     expect(keys.slice(2)).toEqual(keys.slice(0, 2));
   });
 
-  it("keeps the form when checking an account fails", async () => {
+  it("keeps the form's key while an account is still being checked", async () => {
+    mocks.requestJson.mockRejectedValue(
+      new PythonApiError(409, { error: "player_not_checked", tag: TAGS[0] }),
+    );
+    mocks.checkPlayerTag.mockResolvedValue({ tag: TAGS[0], state: "checking" });
+    const result = unwrap<{ idempotencyKey: string; fieldErrors: { accounts?: string } }>(
+      await createAction(
+        createRequest({
+          name: "Red Dawn",
+          size: "20",
+          [`join:${TAGS[0]}`]: "on",
+        }) as never,
+      ),
+    );
+    expect(result.data.fieldErrors.accounts).toContain(`Still checking ${TAGS[0]}`);
+    expect(result.data.idempotencyKey).toBe(IDEMPOTENCY_KEY);
+  });
+
+  it("keeps the form and its key when checking an account fails", async () => {
     mocks.requestJson.mockRejectedValue(
       new PythonApiError(409, { error: "player_not_checked", tag: TAGS[0] }),
     );
@@ -483,6 +501,7 @@ describe("create a crew", () => {
       new PythonApiError(429, { error: "rate_limited" }),
     );
     const result = unwrap<{
+      idempotencyKey: string;
       values: { tags: string[] };
       generalError: { error: { code: string } };
     }>(
@@ -497,5 +516,6 @@ describe("create a crew", () => {
     expect(result.status).toBe(429);
     expect(result.data.values.tags).toEqual([TAGS[0]]);
     expect(result.data.generalError.error.code).toBe("rate_limited");
+    expect(result.data.idempotencyKey).toBe(IDEMPOTENCY_KEY);
   });
 });

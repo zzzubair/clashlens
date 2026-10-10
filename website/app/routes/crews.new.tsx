@@ -122,7 +122,8 @@ export function headers() {
  * owner. The private API repeats every check and has the final say. An
  * account Clash Lens has not checked yet is checked with the game, then
  * the crew is made again. The form keeps its key until the private API
- * answers, so pressing Create again after a lost answer makes no second crew.
+ * gives a final answer, so pressing Create again after a lost answer or an
+ * unfinished account check makes no second crew.
  */
 export async function action({ request, context }: Route.ActionArgs) {
   const identity = await guard(request);
@@ -200,6 +201,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       const tag = (cause as { payload?: { tag?: unknown } }).payload?.tag;
       const status = (cause as { status?: number }).status ?? 503;
       const { safeWebsiteError } = await import("../server/errors.server");
+      let unfinished = status >= 500;
       if (
         code === "player_not_checked" &&
         typeof tag === "string" &&
@@ -210,19 +212,23 @@ export async function action({ request, context }: Route.ActionArgs) {
           lookup = await checkPlayerTag(context?.get(clientAddressContext), tag);
         } catch (lookupCause) {
           const lookupStatus = (lookupCause as { status?: number }).status ?? 503;
-          return reply(lookupStatus, values, {
-            generalError: safeWebsiteError(lookupCause),
-          });
+          return reply(
+            lookupStatus,
+            values,
+            { generalError: safeWebsiteError(lookupCause) },
+            idempotencyKey,
+          );
         }
         if (lookup.state !== "checking") {
           key = actions.followUpIdempotencyKey(key, tag);
           continue;
         }
+        unfinished = true;
       }
+      const formKey = unfinished ? idempotencyKey : undefined;
       const refusal = createRefusal(code, typeof tag === "string" ? tag : "");
-      if (refusal !== null) return reply(status, values, refusal);
-      const unanswered = status >= 500 ? idempotencyKey : undefined;
-      return reply(status, values, { generalError: safeWebsiteError(cause) }, unanswered);
+      if (refusal !== null) return reply(status, values, refusal, formKey);
+      return reply(status, values, { generalError: safeWebsiteError(cause) }, formKey);
     }
   }
   return reply(409, values, {
