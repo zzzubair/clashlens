@@ -282,15 +282,36 @@ def get_army_analytics(
                         "end_day": clipped_end,
                     }
                 )
+            # Step from one distinct day to the next in the completed-day
+            # index; a plain DISTINCT read every player's row for the Season.
             day_rows = connection.execute(
                 """
-                SELECT DISTINCT season_day_number, ranked_day_start
-                FROM api_player_daily_logs
-                WHERE official_season_id = %s
-                  AND state = 'Complete' AND coverage = 'complete'
-                  AND season_day_number BETWEEN %s AND %s
+                WITH RECURSIVE day AS (
+                    (SELECT season_day_number, ranked_day_start
+                     FROM api_player_daily_logs
+                     WHERE official_season_id = %(season)s
+                       AND state = 'Complete' AND coverage = 'complete'
+                       AND season_day_number BETWEEN %(start)s AND %(end)s
+                     ORDER BY season_day_number, ranked_day_start LIMIT 1)
+                    UNION ALL
+                    SELECT later.* FROM day CROSS JOIN LATERAL (
+                        SELECT season_day_number, ranked_day_start
+                        FROM api_player_daily_logs
+                        WHERE official_season_id = %(season)s
+                          AND state = 'Complete' AND coverage = 'complete'
+                          AND season_day_number <= %(end)s
+                          AND (season_day_number, ranked_day_start)
+                              > (day.season_day_number, day.ranked_day_start)
+                        ORDER BY season_day_number, ranked_day_start LIMIT 1
+                    ) AS later
+                )
+                SELECT season_day_number, ranked_day_start FROM day
                 """,
-                (resolved.season, resolved.start_day, resolved.end_day),
+                {
+                    "season": resolved.season,
+                    "start": resolved.start_day,
+                    "end": resolved.end_day,
+                },
             ).fetchall()
             day_starts = {int(row[0]): row[1] for row in day_rows}
             completed_day_rows = connection.execute(

@@ -206,6 +206,7 @@ def create_app(
     clashking = clashking_client or ClashKingClient()
     freshness_lock = Lock()
     dashboard_board = api_dashboard.DashboardBoard()
+    live_board = api_leaderboard.LiveBoardCache()
     freshness_refresh_after = 0.0
     leaderboard_metrics: dict[str, Any] = {}
 
@@ -521,7 +522,7 @@ def create_app(
             raise ApiError(422, "invalid_request")
         return JSONResponse(
             content=api_leaderboard.search_live_leaderboard(
-                production_database, q, now=current_time()
+                production_database, q, now=current_time(), cache=live_board
             )
         )
 
@@ -548,6 +549,7 @@ def create_app(
                 offset=offset,
                 now=current_time(),
                 focus_tag=None if focus_tag is None else _safe_tag(focus_tag),
+                cache=live_board,
             )
         else:
             if focus_tag is not None:
