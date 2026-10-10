@@ -7,6 +7,7 @@ import {
   useLoaderData,
   useNavigation,
 } from "react-router";
+import type { ShouldRevalidateFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { ListedGroup } from "../lib/account-contracts";
@@ -18,7 +19,7 @@ import {
 } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { addedNotice, GROUP_LIMIT } from "../lib/group-text";
-import { canonicalPlayerPath } from "../lib/player-tag";
+import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import type { Route } from "./+types/account.groups.add";
 import "../account-groups.css";
 
@@ -62,17 +63,23 @@ function choices(groups: ListedGroup[], tag: string): GroupChoice[] {
   }));
 }
 
+/** Account setup, returning to this page once the account exists. */
+async function setupRedirect(request: Request): Promise<Response> {
+  const { accountSetupPath } = await import("../server/return-path.server");
+  const url = new URL(request.url);
+  return redirect(accountSetupPath(url.pathname, url));
+}
+
 /**
- * GET /account/groups/add?tag= — where a player is saved: into the only
- * group, a chosen one of several, or a first group created on the spot.
+ * GET /account/groups/add/:tag — where a player is saved: into the only
+ * group, a chosen one of several, or a first group created on the spot. The
+ * tag is in the path so login and account setup return here with it.
  */
-export async function loader({ request }: Route.LoaderArgs) {
+export async function loader({ request, params }: Route.LoaderArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
-  const tag = normalizeSubmittedPlayerTag(
-    new URL(request.url).searchParams.get("tag") ?? "",
-  );
+  const tag = normalizeSubmittedPlayerTag(params.tag);
   const loaded: AddToGroupLoaderData = {
     tag,
     groups: [],
@@ -87,18 +94,14 @@ export async function loader({ request }: Route.LoaderArgs) {
     return data({ ...loaded, groups: choices(groups, tag) }, { headers: NO_STORE });
   } catch (cause) {
     const actions = await import("../server/actions.server");
-    if (actions.isAccountNotFoundError(cause)) {
-      const { accountSetupPath } = await import("../server/return-path.server");
-      const url = new URL(request.url);
-      throw redirect(accountSetupPath(url.pathname, url));
-    }
+    if (actions.isAccountNotFoundError(cause)) throw await setupRedirect(request);
     const { safeWebsiteError } = await import("../server/errors.server");
     return data({ ...loaded, error: safeWebsiteError(cause) }, { headers: NO_STORE });
   }
 }
 
 /**
- * POST /account/groups/add — add the player to a chosen group, or, for an
+ * POST /account/groups/add/:tag — add the player to a chosen group, or, for an
  * account with no groups, create the first one and add the player to it.
  * Same-origin only, with a canonical idempotency UUID for each change.
  */
@@ -198,7 +201,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     });
   } catch (cause) {
     if (cause instanceof Response) throw cause;
-    if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
+    if (actions.isAccountNotFoundError(cause)) throw await setupRedirect(request);
     const { status, payload } = cause as {
       status?: number;
       payload?: { error?: unknown };
@@ -221,6 +224,14 @@ export async function action({ request, context }: Route.ActionArgs) {
 
 export function headers() {
   return NO_STORE;
+}
+
+/** A refused save can follow a change, such as a first group created, so the choices reload. */
+export function shouldRevalidate({
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  return formMethod === undefined ? defaultShouldRevalidate : true;
 }
 
 export default function AddToGroupRoute() {
@@ -262,7 +273,7 @@ export default function AddToGroupRoute() {
       ) : loaderData.error ? (
         <aside className="notice notice-unavailable" role="alert">
           <strong>Your groups could not be loaded.</strong>{" "}
-          <a href={`/account/groups/add?tag=${encodeURIComponent(tag)}`}>Try again</a>
+          <a href={addToGroupPath(tag)}>Try again</a>
         </aside>
       ) : (
         <section className="form-panel" aria-labelledby="add-form-title">

@@ -55,7 +55,7 @@ test("two signed-in accounts keep groups private through direct requests", async
       const other = owners[1 - index];
       for (const path of [
         "/account/groups?",
-        `/account/groups/add?tag=${encodeURIComponent(owner.tag)}&`,
+        `/account/groups/add/${owner.tag.slice(1)}?`,
       ]) {
         const response = await owner.context.request.get(
           `${owner.origin}${path}username=${other.username}&groupId=${other.groupId}`,
@@ -98,7 +98,7 @@ test("two signed-in accounts keep groups private through direct requests", async
       await expect(
         other.page.getByRole("heading", { name: other.groupName, exact: true }),
       ).toBeVisible();
-      await other.page.goto(`/account/groups/add?tag=${encodeURIComponent(other.tag)}`);
+      await other.page.goto(`/account/groups/add/${other.tag.slice(1)}`);
       await expect(
         other.page.getByText(`${other.tag} is already in ${other.groupName}`).first(),
       ).toBeVisible();

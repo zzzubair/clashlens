@@ -2,7 +2,7 @@ import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, LegendsHeld, OpponentRow } from "../lib/dashboard";
 import { BASE_STRENGTH_MIN_DEFENSES, baseStrength } from "../lib/dashboard";
-import { canonicalPlayerPath } from "../lib/player-tag";
+import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import { signed, starText, timeFormatter } from "./LegendClock";
 
 const STRENGTH_LABELS: Record<BaseStrength, string> = {
@@ -109,7 +109,7 @@ export function OpponentsCard({
             <div className="opponents-action">
               <Link
                 className="button button-secondary dash-small-button"
-                to={`/account/groups/add?tag=${encodeURIComponent(row.tag)}`}
+                to={addToGroupPath(row.tag)}
                 onClick={(event) => event.stopPropagation()}
               >
                 Add to group

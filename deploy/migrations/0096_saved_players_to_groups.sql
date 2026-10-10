@@ -40,10 +40,10 @@ HAVING count(*) <= 20
         WHERE group_row.account_id = saved.account_id) < 10
    AND NOT EXISTS (SELECT 1 FROM account_groups AS group_row
                    WHERE group_row.account_id = saved.account_id
-                     AND group_row.normalized_name = 'Saved players');
+                     AND group_row.normalized_name = 'saved players');
 
 INSERT INTO account_groups (public_id, account_id, name, normalized_name)
-SELECT gen_random_uuid(), account_id, 'Saved players', 'Saved players'
+SELECT gen_random_uuid(), account_id, 'Saved players', 'saved players'
 FROM saved_players_moving;
 
 INSERT INTO account_group_players (group_id, player_id, created_at)
@@ -52,7 +52,7 @@ FROM account_saved_players AS saved
 JOIN saved_players_moving AS moving ON moving.account_id = saved.account_id
 JOIN account_groups AS group_row
   ON group_row.account_id = saved.account_id
- AND group_row.normalized_name = 'Saved players';
+ AND group_row.normalized_name = 'saved players';
 
 DELETE FROM account_saved_players AS saved
 USING saved_players_moving AS moving

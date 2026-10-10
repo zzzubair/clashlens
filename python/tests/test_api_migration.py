@@ -727,6 +727,13 @@ def test_saved_players_move_into_a_group_and_the_old_list_goes_once_empty(
             fits = account("fits", 9, 20)
             full = account("tengroups", 10, 1)
             crowded = account("crowded", 0, 21)
+            named = account("named", 0, 1)
+            # Stored the way creating a group stores it.
+            connection.execute(
+                """INSERT INTO account_groups (public_id, account_id, name, normalized_name)
+                VALUES (%s, %s, 'Saved players', 'saved players')""",
+                (uuid4(), named),
+            )
 
             apply_migration(connection, move.read_text(encoding="utf-8"))
 
@@ -747,10 +754,11 @@ def test_saved_players_move_into_a_group_and_the_old_list_goes_once_empty(
 
             assert groups(fits) == [("Saved players", 20)]
             assert groups(full) == groups(crowded) == []
+            assert groups(named) == [("Saved players", 0)]
             # What did not fit stays saved rather than lost.
             assert connection.execute(
                 "SELECT account_id, count(*) FROM account_saved_players GROUP BY 1 ORDER BY 1"
-            ).fetchall() == [(full, 1), (crowded, 21)]
+            ).fetchall() == [(full, 1), (crowded, 21), (named, 1)]
             with pytest.raises(psycopg.errors.CheckViolation):
                 connection.execute(
                     """INSERT INTO account_groups (public_id, account_id, name, normalized_name)
@@ -768,10 +776,16 @@ def test_saved_players_move_into_a_group_and_the_old_list_goes_once_empty(
                 AND player_id = (SELECT max(player_id) FROM account_saved_players)""",
                 (crowded,),
             )
+            connection.execute(
+                """UPDATE account_groups SET name = 'Old', normalized_name = 'old'
+                WHERE account_id = %s""",
+                (named,),
+            )
             apply_migration(connection, move.read_text(encoding="utf-8"))
             assert groups(full) == [("Saved players", 1)]
             assert groups(crowded) == [("Saved players", 20)]
             assert groups(fits) == [("Saved players", 20)]
+            assert groups(named) == [("Saved players", 1)]
             assert connection.execute(
                 "SELECT to_regclass('account_saved_players')"
             ).fetchone() == (None,)

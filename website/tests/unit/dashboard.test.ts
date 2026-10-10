@@ -385,7 +385,7 @@ describe("Bases you attacked", () => {
     expect(plain).toContain("Too early held 0 of 2 · needs 3+ defenses");
     expect(plain).not.toContain("not yet");
     // Each opponent can be saved into one of the account's groups.
-    expect(html).toContain('href="/account/groups/add?tag=%238PP"');
+    expect(html).toContain('href="/account/groups/add/8PP"');
     expect(html.match(/is-yours/g)).toHaveLength(3);
   });
 });

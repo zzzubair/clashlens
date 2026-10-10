@@ -26,7 +26,7 @@ export default [
   route("account/saved-players", "routes/account.saved-players.ts"),
   route("account/verify-player", "routes/account.verify-player.tsx"),
   route("account/groups", "routes/account.groups.tsx"),
-  route("account/groups/add", "routes/account.groups.add.tsx"),
+  route("account/groups/add/:tag", "routes/account.groups.add.tsx"),
   route("account/groups/:groupId", "routes/account.groups.$groupId.tsx"),
   route("users/:username", "routes/users.$username.tsx"),
   route("about", "routes/about.tsx"),

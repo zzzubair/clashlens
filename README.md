@@ -7,7 +7,7 @@ can make evidence-led decisions.
 ## Saving players in groups
 
 Players are saved in private groups. When signed in, "Add to group" on a player
-page (and on the dashboard's opponent list) opens `/account/groups/add`: with
+page (and on the dashboard's opponent list) opens `/account/groups/add/<tag>`: with
 no groups you name a first group and the player goes straight into it, with one
 group the player goes there, and with several you choose which one. A group
 that already holds the player, or already has 20 players, says so and cannot

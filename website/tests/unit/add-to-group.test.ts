@@ -39,7 +39,11 @@ vi.mock("../../app/services/past-seasons.server", () => ({
 }));
 
 import { PlayerActions } from "../../app/components/PlayerActions";
-import AddToGroupRoute, { action, loader } from "../../app/routes/account.groups.add";
+import AddToGroupRoute, {
+  action,
+  loader,
+  shouldRevalidate,
+} from "../../app/routes/account.groups.add";
 import { loader as playerLoader } from "../../app/routes/player";
 
 const identity = { provider: "google", providerSubject: "owner" };
@@ -66,7 +70,7 @@ const twentyTags = Array.from(
 
 function submit(fields: Record<string, string>, origin = "https://clashlens.example") {
   return action({
-    request: new Request("https://clashlens.example/account/groups/add?tag=%232PP", {
+    request: new Request("https://clashlens.example/account/groups/add/2PP", {
       method: "POST",
       headers: { Origin: origin },
       body: new URLSearchParams({ tag: "#2PP", addIdempotencyKey: ADD_KEY, ...fields }),
@@ -77,10 +81,14 @@ function submit(fields: Record<string, string>, origin = "https://clashlens.exam
 
 async function renderPage() {
   const handler = createStaticHandler([
-    { path: "/account/groups/add", Component: AddToGroupRoute, loader: loader as never },
+    {
+      path: "/account/groups/add/:tag",
+      Component: AddToGroupRoute,
+      loader: loader as never,
+    },
   ]);
   const context = await handler.query(
-    new Request("https://clashlens.example/account/groups/add?tag=%232PP"),
+    new Request("https://clashlens.example/account/groups/add/2PP"),
   );
   if (context instanceof Response) throw new Error("unexpected route response");
   return renderToString(
@@ -192,6 +200,45 @@ it("makes a Clasher with several groups choose, and explains the ones that canno
   expect(chosen.data.notice).toBe("Added Nova (#2PP) to War.");
 });
 
+it("keeps the player through account setup", async () => {
+  const { PythonApiError } = await import("../../app/services/python-response.server");
+  mocks.listGroups.mockRejectedValue(
+    new PythonApiError(404, { error: "account_not_found" }),
+  );
+  const setup = "/account/setup?returnPath=%2Faccount%2Fgroups%2Fadd%2F2PP";
+  const page = await loader({
+    request: new Request("https://clashlens.example/account/groups/add/2PP"),
+    params: { tag: "2PP" },
+  } as never).catch((thrown: unknown) => thrown);
+  expect((page as Response).headers.get("Location")).toBe(setup);
+  const saved = await submit({ action: "add", groupId: WAR }).catch(
+    (thrown: unknown) => thrown,
+  );
+  expect((saved as Response).headers.get("Location")).toBe(setup);
+});
+
+it("reloads the group choices after a refused save", async () => {
+  mocks.listGroups.mockResolvedValue({ season: "1791176400", groups: [] });
+  mocks.createGroup.mockResolvedValue({ groupId: FRIENDS, name: "Friends", tags: [] });
+  mocks.requestJson.mockRejectedValue(new Error("private API down"));
+  const refused = await submit({
+    action: "create",
+    name: "Friends",
+    createIdempotencyKey: CREATE_KEY,
+  });
+  expect(refused.init?.status).toBe(503);
+  const url = new URL("https://clashlens.example/account/groups/add/2PP");
+  expect(
+    shouldRevalidate({
+      currentUrl: url,
+      nextUrl: url,
+      formMethod: "POST",
+      actionStatus: refused.init?.status,
+      defaultShouldRevalidate: false,
+    } as never),
+  ).toBe(true);
+});
+
 it("refuses other sites and needs a login", async () => {
   const crossSite = await submit(
     { action: "add", groupId: WAR },
@@ -205,7 +252,8 @@ it("refuses other sites and needs a login", async () => {
   await expect(submit({ action: "add", groupId: WAR })).rejects.toBe(login);
   await expect(
     loader({
-      request: new Request("https://clashlens.example/account/groups/add?tag=%232PP"),
+      request: new Request("https://clashlens.example/account/groups/add/2PP"),
+      params: { tag: "2PP" },
     } as never),
   ).rejects.toBe(login);
   expect(mocks.createPythonClient).not.toHaveBeenCalled();
@@ -229,7 +277,7 @@ it("shows Add to group on a profile only to a signed-in Clasher", async () => {
         context,
       }),
     );
-    expect(html.includes('href="/account/groups/add?tag=%232PP"')).toBe(loggedIn);
+    expect(html.includes('href="/account/groups/add/2PP"')).toBe(loggedIn);
   }
 });
 
