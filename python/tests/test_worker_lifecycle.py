@@ -1455,6 +1455,7 @@ def test_worker_terminal_refused_when_heartbeat_stuck(
 
     monkeypatch.setattr(cli, "write_private_snapshot", record_write)
     terminal = tmp_path / "terminal.json"
+    threads_before = set(_threading.enumerate())
     result = cli._run_worker(
         _terminal_namespace(
             tmp_path, terminal_snapshot_file=str(terminal)
@@ -1471,3 +1472,7 @@ def test_worker_terminal_refused_when_heartbeat_stuck(
         assert output["terminal_snapshot"] == "heartbeat_unfinished"
     finally:
         release.set()
+        # The released heartbeat prints once more; finish it here, not
+        # inside the next test's captured output.
+        for thread in set(_threading.enumerate()) - threads_before:
+            thread.join(timeout=5)
