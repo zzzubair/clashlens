@@ -311,35 +311,148 @@ describe("adding and removing one group player", () => {
   });
 
   it("lists a full, a one-player and an empty group with worst-case names", async () => {
-    const groups = worstGroups();
-    const keys = Object.fromEntries(
-      groups.map((group) => [group.groupId, IDEMPOTENCY_KEY]),
-    );
-    const handler = createStaticHandler([
-      {
-        path: "/account/groups",
-        Component: GroupsRoute,
-        loader: () => ({
-          groups,
-          season: null,
-          error: null,
-          createIdempotencyKey: IDEMPOTENCY_KEY,
-          updateIdempotencyKeys: keys,
-          deleteIdempotencyKeys: keys,
-          addIdempotencyKeys: keys,
-          removeIdempotencyKeys: {},
-        }),
-      },
-    ]);
-    const context = await handler.query(new Request(`${ORIGIN}/account/groups`));
-    if (context instanceof Response) throw new Error("unexpected response");
-    const html = renderToString(
-      createElement(StaticRouterProvider, {
-        router: createStaticRouter(handler.dataRoutes, context),
-        context,
-      }),
-    ).replaceAll("<!-- -->", "");
+    const html = await renderGroups(worstGroups());
     for (const text of ["20 of 20 players", "1 of 20 players", "No players yet"])
       expect(html).toContain(text);
   });
+
+  it("opens adding and editing below the card's buttons without needing JavaScript", async () => {
+    const html = await renderGroups(worstGroups());
+    const card = html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`));
+    // The three buttons share one row; each panel below it holds ordinary forms, closed at first.
+    expect(card).toMatch(
+      new RegExp(
+        `^<li[^>]*><div class="group-card-head"><h3>[^<]*</h3><a [^>]*>Compare players</a>` +
+          `<a class="button button-secondary" href="/account/groups\\?group=${GROUP_ID}&amp;panel=add#group-${GROUP_ID}" aria-expanded="false"[^>]*>Add player</a>` +
+          `<a class="button button-secondary" href="/account/groups\\?group=${GROUP_ID}&amp;panel=edit#group-${GROUP_ID}" aria-expanded="false"[^>]*>Edit</a></div>` +
+          `<div id="group-${GROUP_ID}-add" class="group-panel" hidden=""><form[^>]* action="/account/groups" method="post"><input type="hidden" name="action" value="add-player"/>`,
+      ),
+    );
+    expect(card).toMatch(
+      /^[^]*?<div id="[^"]+-edit" class="group-panel" hidden=""><div class="group-edit">[^]*?name="action" value="update"[^]*?>Save name<\/button>[^]*?aria-label="Remove [^"]+ from [^"]+"[^]*?<details class="group-delete-step"><summary[^>]*>Delete group<\/summary>[^]*?<button type="submit"[^>]*>Yes, delete group<\/button><a [^>]*>Keep group<\/a>/,
+    );
+    expect(html).not.toMatch(/class="group-panel">/);
+  });
+
+  it("opens the panel a no-JavaScript link asks for, in that card only", async () => {
+    const card = (html: string) =>
+      html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`)).split('<li id="group-')[1];
+    const add = await renderGroups(
+      worstGroups(),
+      undefined,
+      `?group=${GROUP_ID}&panel=add`,
+    );
+    expect(card(add)).toContain(`<div id="group-${GROUP_ID}-add" class="group-panel">`);
+    expect(card(add)).toContain(
+      `href="/account/groups#group-${GROUP_ID}" aria-expanded="true" aria-controls="group-${GROUP_ID}-add">Add player</a>`,
+    );
+    expect(add.match(/class="group-panel">/g)).toHaveLength(1);
+
+    const edit = await renderGroups(
+      worstGroups(),
+      undefined,
+      `?group=${GROUP_ID}&panel=edit`,
+    );
+    expect(card(edit)).toContain(`<div id="group-${GROUP_ID}-edit" class="group-panel">`);
+    // Edit lists the players with their Remove buttons, so the plain list steps aside.
+    expect(card(edit)).not.toContain("group-members");
+    expect(edit.match(/class="group-panel">/g)).toHaveLength(1);
+  });
+
+  it("reopens the panel a no-JavaScript form came from, with its result", async () => {
+    const reply = (action: string, outcome: object) => ({
+      action,
+      groupId: GROUP_ID,
+      createIdempotencyKey: IDEMPOTENCY_KEY,
+      updateIdempotencyKey: IDEMPOTENCY_KEY,
+      deleteIdempotencyKey: IDEMPOTENCY_KEY,
+      playerIdempotencyKey: IDEMPOTENCY_KEY,
+      fieldErrors: {},
+      notice: null,
+      generalError: null,
+      values: { name: "Taken", tag: "#2PP", action, groupId: GROUP_ID },
+      ...outcome,
+    });
+    const card = (html: string) =>
+      html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`)).split('<li id="group-')[1];
+
+    const added = card(
+      await renderGroups(
+        worstGroups(),
+        reply("add-player", { fieldErrors: { tag: "Not a player." } }),
+      ),
+    );
+    expect(added).toContain(`<div id="group-${GROUP_ID}-add" class="group-panel">`);
+    expect(added).toContain("Not a player.");
+    expect(added).toContain('value="#2PP"');
+    expect(added).toContain(
+      `<div id="group-${GROUP_ID}-edit" class="group-panel" hidden="">`,
+    );
+
+    const renamed = await renderGroups(
+      worstGroups(),
+      reply("update", {
+        fieldErrors: { name: "A group with this name already exists." },
+      }),
+    );
+    expect(card(renamed)).toContain(
+      `<div id="group-${GROUP_ID}-edit" class="group-panel">`,
+    );
+    expect(card(renamed)).toContain("A group with this name already exists.");
+    expect(card(renamed)).toContain('value="Taken"');
+    // Only that group's card opens.
+    expect(renamed.match(/class="group-panel">/g)).toHaveLength(1);
+
+    const deleted = card(
+      await renderGroups(
+        worstGroups(),
+        reply("delete", {
+          generalError: { error: { code: "conflict", message: "Gone elsewhere." } },
+        }),
+      ),
+    );
+    expect(deleted).toContain(`<div id="group-${GROUP_ID}-edit" class="group-panel">`);
+    expect(deleted).toMatch(/<details class="group-delete-step" open="">/);
+    expect(deleted).toContain("Gone elsewhere.");
+  });
 });
+
+/** The page as server-rendered HTML, after a no-JavaScript form result if given. */
+async function renderGroups(
+  groups: ReturnType<typeof worstGroups>,
+  actionData?: object,
+  search = "",
+) {
+  const keys = Object.fromEntries(
+    groups.map((group) => [group.groupId, IDEMPOTENCY_KEY]),
+  );
+  const handler = createStaticHandler([
+    {
+      path: "/account/groups",
+      Component: GroupsRoute,
+      action: () => actionData,
+      loader: () => ({
+        groups,
+        season: null,
+        error: null,
+        createIdempotencyKey: IDEMPOTENCY_KEY,
+        updateIdempotencyKeys: keys,
+        deleteIdempotencyKeys: keys,
+        addIdempotencyKeys: keys,
+        removeIdempotencyKeys: {},
+      }),
+    },
+  ]);
+  const context = await handler.query(
+    actionData === undefined
+      ? new Request(`${ORIGIN}/account/groups${search}`)
+      : new Request(`${ORIGIN}/account/groups`, { method: "POST", body: new FormData() }),
+  );
+  if (context instanceof Response) throw new Error("unexpected response");
+  return renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+    }),
+  ).replaceAll("<!-- -->", "");
+}

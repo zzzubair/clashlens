@@ -1,4 +1,4 @@
-import { data, redirect, useLoaderData, useLocation } from "react-router";
+import { data, Link, redirect, useLoaderData, useLocation } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { formatAge } from "../components/Provenance";
@@ -14,6 +14,7 @@ import {
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { expireSeasonTrophies, useSeasonEnded } from "../lib/season-end";
 import { isCanonicalUuid } from "../lib/validation";
+import type { BackHandle } from "../root";
 import type { Route } from "./+types/account.groups.$groupId";
 import "../group-compare.css";
 
@@ -25,6 +26,10 @@ const SORTS = {
   defense: "Defense",
 } as const;
 type SortKey = keyof typeof SORTS;
+
+export const handle: BackHandle = {
+  back: { to: "/account/groups", label: "Back to your groups" },
+};
 
 export interface GroupCompareLoaderData {
   comparison: GroupComparison | null;
@@ -150,6 +155,7 @@ export default function GroupCompareRoute() {
       player.days.map((day) => Math.abs(day.net ?? 0)),
     ),
   );
+  // Switching views replaces this history entry, so Back skips past them.
   const query = (next: { days?: number; sort?: SortKey }) =>
     `?days=${next.days ?? days}&sort=${next.sort ?? sort}`;
 
@@ -175,26 +181,32 @@ export default function GroupCompareRoute() {
         <div className="compare-controls">
           <nav aria-label="Days compared" className="leaderboard-view-switch">
             {COMPARISON_DAYS.map((value) => (
-              <a
+              <Link
                 key={value}
                 className="button secondary"
-                href={query({ days: value })}
+                to={query({ days: value })}
                 aria-current={value === days ? "page" : undefined}
+                state={location.state}
+                preventScrollReset
+                replace
               >
                 {value} days
-              </a>
+              </Link>
             ))}
           </nav>
           <nav aria-label="Sort by" className="leaderboard-view-switch">
             {(Object.keys(SORTS) as SortKey[]).map((key) => (
-              <a
+              <Link
                 key={key}
                 className="button secondary"
-                href={query({ sort: key })}
+                to={query({ sort: key })}
                 aria-current={key === sort ? "page" : undefined}
+                state={location.state}
+                preventScrollReset
+                replace
               >
                 {SORTS[key]}
-              </a>
+              </Link>
             ))}
           </nav>
         </div>

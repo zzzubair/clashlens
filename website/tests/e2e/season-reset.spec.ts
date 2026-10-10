@@ -178,7 +178,11 @@ for (const view of ["list", "comparison"] as const) {
     }, path);
     const trophies =
       view === "list"
-        ? page.locator("li").filter({ hasText: "#2PP" }).locator(".group-member-detail")
+        ? page
+            .getByRole("list", { name: "Players in Season watch" })
+            .getByRole("listitem")
+            .filter({ hasText: "#2PP" })
+            .locator(".group-member-detail")
         : page
             .getByRole("row")
             .filter({ hasText: "#2PP" })

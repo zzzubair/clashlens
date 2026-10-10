@@ -72,20 +72,57 @@ test("a Clasher can sign in and use account features against the real backend", 
       page
         .locator(".group-card")
         .filter({ has: page.getByRole("heading", { name: "War plan" }) })
-        .getByLabel("Add player"),
+        .getByLabel("Player tag"),
     ).toHaveValue("");
   }
   await expect(page.getByRole("heading", { name: "War plan" })).toBeVisible();
   const warPlan = page.locator(".group-card").filter({
     has: page.getByRole("heading", { name: "War plan" }),
   });
-  const member = warPlan.getByRole("button", { name: /^Remove .+ from War plan$/ });
-  if ((await member.count()) === 0) {
+  const players = warPlan.getByRole("list", { name: "Players in War plan" });
+  if ((await players.count()) === 0) {
     // Players join one at a time, after the game confirms the tag.
-    await warPlan.getByLabel("Add player").fill("#2PP");
-    await warPlan.getByRole("button", { name: "Add player" }).click();
+    await warPlan.getByRole("link", { name: "Add player" }).click();
+    await warPlan.getByLabel("Player tag").fill("#2PP");
+    await warPlan.getByRole("button", { name: "Add", exact: true }).click();
   }
-  await expect(member).toBeVisible();
+  await expect(players).toBeVisible();
+  // Renaming, removing and deleting wait behind Edit.
+  await expect(warPlan.getByRole("button", { name: /^Remove / })).toHaveCount(0);
+  const editToggle = warPlan.getByRole("link", { name: "Edit", exact: true });
+  const closedAt = await editToggle.boundingBox();
+  await editToggle.click();
+  const edit = warPlan.locator(".group-edit");
+  await expect(edit).toBeVisible();
+  // Opening Edit leaves its button where it was; the panel opens below the row.
+  expect(await editToggle.boundingBox()).toEqual(closedAt);
+  await expect(edit.getByLabel("Group name")).toHaveValue("War plan");
+  await expect(
+    edit.getByRole("button", { name: /^Remove .+ from War plan$/ }),
+  ).toBeVisible();
+  const yesDelete = edit.getByRole("button", { name: "Yes, delete group" });
+  await edit.locator("summary", { hasText: "Delete group" }).click();
+  await expect(yesDelete).toBeVisible();
+  await edit.getByRole("link", { name: "Keep group" }).click();
+  await expect(yesDelete).toBeHidden();
+  await editToggle.click();
+  await expect(edit).toBeHidden();
+  await expect(players).toBeVisible();
+
+  // Back returns to Your groups in one step, however many views were opened.
+  for (const back of [
+    () => page.getByRole("link", { name: "Back to your groups" }).click(),
+    () => page.goBack(),
+  ]) {
+    await warPlan.getByRole("link", { name: "Compare players" }).click();
+    await page.getByRole("link", { name: "14 days", exact: true }).click();
+    await expect(page).toHaveURL(/days=14/);
+    await page.getByRole("link", { name: "Attack", exact: true }).click();
+    await expect(page).toHaveURL(/sort=attack/);
+    await back();
+    await expect(page).toHaveURL((url) => url.pathname === "/account/groups");
+    await expect(page.getByRole("heading", { name: "Your groups" })).toBeVisible();
+  }
 
   await page.goto("/account/verify-player");
   await page.getByLabel("Player tag").fill("#2PP");
