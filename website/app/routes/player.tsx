@@ -711,6 +711,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </div>
             <PlayerFreshness profile={trackedPlayer.profile} />
           </div>
+        </div>
+        <SavePlayer tag={trackedPlayer.tag}>
           <refreshFetcher.Form
             className="player-refresh-form"
             action={refreshActionPath}
@@ -738,10 +740,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               {refreshFetcher.state === "submitting" ? "Refreshing…" : "Refresh"}
             </button>
           </refreshFetcher.Form>
-        </div>
+        </SavePlayer>
       </header>
-
-      <SavePlayer tag={trackedPlayer.tag} />
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
       {visibleStatus ? (
@@ -886,7 +886,9 @@ function SeasonNav({
             {selectedSeason === null ? (
               <strong aria-current="page">Current Season</strong>
             ) : (
-              <Link to={canonicalPlayerPath(tag)}>Current Season</Link>
+              <Link to={canonicalPlayerPath(tag)} replace>
+                Current Season
+              </Link>
             )}
           </li>
         ) : null}
@@ -897,6 +899,7 @@ function SeasonNav({
             ) : (
               <Link
                 to={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
+                replace
               >
                 {seasonLabel(season.seasonId)}
               </Link>

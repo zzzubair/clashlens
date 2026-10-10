@@ -103,6 +103,31 @@
   min-width: 5.75rem;
   min-height: 2.75rem;
 }
+/* Every profile action sits in one row along the bottom of the player card. */
+.player-page .player-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+.player-page .player-header .player-actions {
+  grid-column: 1 / -1;
+  padding-top: 1rem;
+  border-top: 1px solid var(--cl-border);
+}
+.player-page .player-actions > .notice {
+  flex-basis: 100%;
+}
+.player-page .player-actions > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.75rem;
+}
+/* Text links are underlined so they read as links before hover. */
+.player-page a:not([class]):not(.season-list a) {
+  text-decoration: underline;
+}
 .player-page nav.data-section {
   margin-top: 1rem;
   padding-bottom: 1.1rem;
@@ -837,6 +862,10 @@
   }
   .player-page .player-trophy-card {
     padding-right: 0.75rem;
+  }
+  .player-page .player-actions :is(button, .button) {
+    padding: 0.6rem 0.85rem;
+    font-size: 0.9rem;
   }
   .player-page .player-freshness {
     max-width: 14rem;

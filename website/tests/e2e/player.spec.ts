@@ -10,6 +10,7 @@ import {
 import { UNSAFE_decodeViaTurboStream } from "react-router";
 
 import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
+import { ensureAccount, signIn } from "./helpers/account";
 import {
   WORST_SEASON_SUMMARY,
   WORST_SEASONS,
@@ -82,9 +83,12 @@ function pagePlayer(data: ReturnType<typeof decodePageData>) {
   return player!;
 }
 
-// Read the complete response before changing its age. Adding a value to only
+// Read the complete response before changing its data. Adding a value to only
 // the first chunk shifts the references used by later streamed values.
-async function withServerAge(html: string, ageSeconds: number) {
+async function withServerData(
+  html: string,
+  edit: (saved: { player: PlayerPage; seasons?: unknown }) => void,
+) {
   const enqueue =
     /window\.__reactRouterContext\.streamController\.enqueue\(("(?:[^"\\]|\\.)*")\);/g;
   const stream = [...html.matchAll(enqueue)]
@@ -99,7 +103,7 @@ async function withServerAge(html: string, ageSeconds: number) {
     loaderData: Record<string, { player: PlayerPage; pastSeasons: unknown }>;
   };
   const saved = data.loaderData["routes/player"];
-  saved.player.profile.freshness.ageSeconds = ageSeconds;
+  edit(saved);
   saved.pastSeasons = await saved.pastSeasons;
   const escaped = JSON.stringify(encodePageData(data)).replace(
     /[&<>\u2028\u2029]/g,
@@ -113,6 +117,12 @@ async function withServerAge(html: string, ageSeconds: number) {
   });
   expect(served).not.toBe(html);
   return served;
+}
+
+function withServerAge(html: string, ageSeconds: number) {
+  return withServerData(html, (saved) => {
+    saved.player.profile.freshness.ageSeconds = ageSeconds;
+  });
 }
 
 test("saved-page age override preserves streamed history and unrelated counts", async () => {
@@ -540,22 +550,70 @@ test("season navigation clears refresh state for the same player", async ({ page
   // Fake players have no ended Season with Clash Lens days to list, so the
   // past Season is opened by its link and left through Current Season.
   await page.goto("/players/%232PP?season=1788757200");
-  const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
-  await seasons.getByRole("link", { name: "Current Season" }).click();
-  await expect(page).toHaveURL(/\/players\/%232PP$/);
   await page.waitForLoadState("networkidle");
   manual = true;
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   const refresh = page.getByRole("region", { name: "Player refresh" });
   await expect(refresh).toBeVisible();
 
-  await page.goBack();
-  await expect(page).toHaveURL(/\/players\/%232PP\?season=/);
-  await expect(refresh).toHaveCount(0);
-
+  const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
   await seasons.getByRole("link", { name: "Current Season" }).click();
   await expect(page).toHaveURL(/\/players\/%232PP$/);
   await expect(refresh).toHaveCount(0);
+});
+
+test("Back after switching Seasons returns to Saved players in one step", async ({
+  page,
+}) => {
+  await refuseRefreshes(page);
+  await signIn(page);
+  await ensureAccount(page, "lensscout", "Lens Scout");
+  await page.goto("/account/saved-players");
+  const savedPlayer = page.getByRole("listitem").filter({ hasText: "#2PP" });
+  if ((await savedPlayer.count()) === 0) {
+    await page.getByLabel("Player tag").fill("#2PP");
+    await page.getByRole("button", { name: "Save player" }).click();
+  }
+  await expect(savedPlayer).toBeVisible();
+
+  // Give the saved player past Seasons to switch between.
+  const html = await (await page.request.get("/players/%232PP")).text();
+  const served = await withServerData(html, (saved) => {
+    saved.seasons = WORST_SEASONS;
+  });
+  await page.route("**/players/%232PP", (route) =>
+    route.fulfill({ contentType: "text/html", body: served }),
+  );
+  const saved = await page.request.get("/players/%232PP.data");
+  const decoded = decodePageData(await saved.text());
+  const data = Object.values(decoded).find((route) => route.data?.player)!.data!;
+  Object.assign(data, { seasons: WORST_SEASONS });
+  const current = encodePageData(decoded);
+  Object.assign(data, {
+    selectedSeason: WORST_SEASON_SUMMARY.seasonId,
+    historical: { ...WORST_SEASON_SUMMARY, tag: "#2PP" },
+  });
+  const season = encodePageData(decoded);
+  await page.route("**/players/%232PP.data*", (route) =>
+    route.fulfill({
+      contentType: saved.headers()["content-type"],
+      body: new URL(route.request().url()).searchParams.has("season") ? season : current,
+    }),
+  );
+
+  await savedPlayer.getByRole("link").first().click();
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
+  await seasons.getByRole("link").first().click();
+  await expect(page).toHaveURL(/\/players\/%232PP\?season=/);
+  await seasons.getByRole("link", { name: "Current Season" }).click();
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+
+  await page.getByRole("link", { name: "Back", exact: true }).click();
+  await expect(page).toHaveURL(/\/account\/saved-players$/);
+  await expect(
+    page.getByRole("heading", { name: "Saved players", exact: true }),
+  ).toBeVisible();
 });
 
 test("unknown tag starts anonymously, shows progress, and enters tracking", async ({
