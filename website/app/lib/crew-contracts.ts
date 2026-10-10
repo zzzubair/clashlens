@@ -6,6 +6,7 @@
  * rejected as malformed.
  */
 
+import type { LinkedPlayerCard } from "./account-contracts";
 import { validPlayerTag } from "./player-tag";
 import { isCanonicalUuid } from "./validation";
 
@@ -31,12 +32,35 @@ export interface CrewList {
   maxCrews: number;
 }
 
+/** Whether a placed account shows on boards this Season. */
+export type CrewPlayerStatus = "tracking" | "not_in_legend" | "no_battles_this_season";
+const PLAYER_STATUSES: readonly CrewPlayerStatus[] = [
+  "tracking",
+  "not_in_legend",
+  "no_battles_this_season",
+];
+
+export interface CrewPlayer {
+  tag: string;
+  name: string | null;
+  trophies: number | null;
+  status: CrewPlayerStatus;
+}
+
 export interface CrewMember {
   username: string;
   displayName: string;
   role: CrewRole;
   you: boolean;
-  players: { tag: string; name: string | null }[];
+  players: CrewPlayer[];
+}
+
+/** A live invite link; owners and admins see every one, members their own. */
+export interface CrewInviteLink {
+  inviteId: string;
+  madeBy: string;
+  expiresAt: string;
+  mine: boolean;
 }
 
 export interface Crew {
@@ -46,7 +70,94 @@ export interface Crew {
   used: number;
   myRole: CrewRole;
   members: CrewMember[];
+  invites: CrewInviteLink[];
 }
+
+/** An invite link just made or reused, with the code that goes in it. */
+export interface MadeInvite {
+  inviteId: string;
+  code: string;
+  expiresAt: string;
+  openPlaces: number;
+}
+
+/** One of the signed-in account's linked Clash of Clans accounts. */
+export type LinkedAccount = Pick<
+  LinkedPlayerCard,
+  "tag" | "name" | "state" | "trophies" | "league"
+>;
+
+/** A linked account the game puts outside Legend League cannot join. */
+export function canJoin(account: LinkedAccount): boolean {
+  return !["not_in_legend", "uncertain", "not_found"].includes(account.state);
+}
+
+/** A made invite with its full address on this website. */
+export type InviteLink = MadeInvite & { link: string };
+
+/** When an invite link stops working, in UTC: "Mon 19 Oct, 14:20 UTC". */
+export function formatInviteExpiry(expiresAt: string): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "UTC",
+  }).formatToParts(new Date(expiresAt));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("weekday")} ${part("day")} ${part("month")}, ${part("hour")}:${part("minute")} UTC`;
+}
+
+/** The code in an invite link, as the private API makes it. */
+export const INVITE_CODE = /^[A-Za-z0-9_-]{22}$/;
+
+export type InviteState = "ok" | "invalid" | "full" | "limit";
+const INVITE_STATES: readonly InviteState[] = ["ok", "invalid", "full", "limit"];
+export type Eligibility = "ok" | "not_in_legend" | "already_in_crew" | "unchecked";
+const ELIGIBILITIES: readonly Eligibility[] = [
+  "ok",
+  "not_in_legend",
+  "already_in_crew",
+  "unchecked",
+];
+
+export interface InviteAccount {
+  tag: string;
+  name: string | null;
+  trophies: number | null;
+  eligibility: Eligibility;
+}
+
+/** How many picked accounts a join sends: an account that can't join isn't sent. */
+export function joiningCount(accounts: InviteAccount[], picked: string[]): number {
+  return accounts.filter(
+    (account) => account.eligibility === "ok" && picked.includes(account.tag),
+  ).length;
+}
+
+/**
+ * What an invite link shows the signed-in clasher. A link that doesn't
+ * work says nothing about its crew.
+ */
+export type InvitePreview = {
+  inCrew: boolean;
+  crewCount: number;
+  accounts: InviteAccount[];
+} & (
+  | { state: "invalid" }
+  | {
+      state: Exclude<InviteState, "invalid">;
+      crewId: string;
+      name: string;
+      ownerName: string | null;
+      size: number;
+      used: number;
+      expiresAt: string;
+    }
+);
 
 export const PERIODS = ["today", "week", "season"] as const;
 export type CrewPeriod = (typeof PERIODS)[number];
@@ -222,12 +333,23 @@ export function mapCrew(value: unknown): Crew | null {
     ) {
       return null;
     }
-    const players = [];
+    const players: CrewPlayer[] = [];
     for (const player of item.players) {
-      if (!isRecord(player) || !isTag(player.tag) || !isNullableString(player.name)) {
+      if (
+        !isRecord(player) ||
+        !isTag(player.tag) ||
+        !isNullableString(player.name) ||
+        !(player.trophies === null || isCount(player.trophies)) ||
+        !PLAYER_STATUSES.includes(player.status as CrewPlayerStatus)
+      ) {
         return null;
       }
-      players.push({ tag: player.tag, name: player.name });
+      players.push({
+        tag: player.tag,
+        name: player.name,
+        trophies: player.trophies,
+        status: player.status as CrewPlayerStatus,
+      });
     }
     members.push({
       username: item.username,
@@ -237,7 +359,144 @@ export function mapCrew(value: unknown): Crew | null {
       players,
     });
   }
-  return { ...header, myRole: value.my_role, members };
+  if (!Array.isArray(value.invites)) return null;
+  const invites: CrewInviteLink[] = [];
+  for (const item of value.invites) {
+    if (
+      !isRecord(item) ||
+      !isUuid(item.invite_id) ||
+      !isString(item.made_by) ||
+      !isTimestamp(item.expires_at) ||
+      typeof item.mine !== "boolean"
+    ) {
+      return null;
+    }
+    invites.push({
+      inviteId: item.invite_id,
+      madeBy: item.made_by,
+      expiresAt: item.expires_at,
+      mine: item.mine,
+    });
+  }
+  return { ...header, myRole: value.my_role, members, invites };
+}
+
+/** The link a make-invite answer gives. */
+export function mapMadeInvite(value: unknown): MadeInvite | null {
+  if (
+    !isRecord(value) ||
+    !isUuid(value.invite_id) ||
+    typeof value.code !== "string" ||
+    !INVITE_CODE.test(value.code) ||
+    !isTimestamp(value.expires_at) ||
+    !isCount(value.open_places)
+  ) {
+    return null;
+  }
+  return {
+    inviteId: value.invite_id,
+    code: value.code,
+    expiresAt: value.expires_at,
+    openPlaces: value.open_places,
+  };
+}
+
+export function mapInvitePreview(value: unknown): InvitePreview | null {
+  if (
+    !isRecord(value) ||
+    value.kind !== "crew-invite" ||
+    !INVITE_STATES.includes(value.state as InviteState) ||
+    typeof value.in_crew !== "boolean" ||
+    !isCount(value.crew_count) ||
+    !Array.isArray(value.accounts)
+  ) {
+    return null;
+  }
+  const accounts: InviteAccount[] = [];
+  for (const item of value.accounts) {
+    if (
+      !isRecord(item) ||
+      !isTag(item.tag) ||
+      !isNullableString(item.name) ||
+      !(item.trophies === null || isCount(item.trophies)) ||
+      !ELIGIBILITIES.includes(item.eligibility as Eligibility)
+    ) {
+      return null;
+    }
+    accounts.push({
+      tag: item.tag,
+      name: item.name,
+      trophies: item.trophies,
+      eligibility: item.eligibility as Eligibility,
+    });
+  }
+  const common = { inCrew: value.in_crew, crewCount: value.crew_count, accounts };
+  if (value.state === "invalid") return { ...common, state: "invalid" };
+  const header = mapHeader(value);
+  if (
+    header === null ||
+    !isNullableString(value.owner_display_name) ||
+    !isTimestamp(value.expires_at)
+  ) {
+    return null;
+  }
+  return {
+    ...common,
+    state: value.state as Exclude<InviteState, "invalid">,
+    crewId: header.crewId,
+    name: header.name,
+    ownerName: value.owner_display_name,
+    size: header.size,
+    used: header.used,
+    expiresAt: value.expires_at,
+  };
+}
+
+/** What a refused account in a join or add reads as. */
+const ACCOUNT_REFUSALS: Record<string, (tag: string) => string> = {
+  player_not_linked: (tag) => `${tag} is not linked to your account.`,
+  player_not_in_legend: (tag) => `${tag} is not in Legend League, so it can't join.`,
+  player_not_checked: (tag) =>
+    `Still checking ${tag} with Clash of Clans. Try again in a few seconds.`,
+  player_already_in_crew: (tag) => `${tag} is already in this crew.`,
+};
+
+/**
+ * The message for a crew request the private API refused, from its error
+ * code and the details it sent with it; null for a code with no message of
+ * its own, which then reads as a general error.
+ */
+export function crewRefusal(
+  code: string | null,
+  details: { tag?: unknown; open_places?: unknown; used?: unknown } = {},
+): string | null {
+  if (code === null) return null;
+  const tag = typeof details.tag === "string" ? details.tag : "An account";
+  if (code in ACCOUNT_REFUSALS) return ACCOUNT_REFUSALS[code]!(tag);
+  const open = isCount(details.open_places) ? details.open_places : null;
+  const used = isCount(details.used) ? details.used : null;
+  const messages: Record<string, string> = {
+    crew_full:
+      open === null || open === 0
+        ? "The crew is full."
+        : `Only ${open} ${open === 1 ? "place is" : "places are"} open. Pick fewer accounts.`,
+    crew_limit_reached: `You're already in ${MAX_CREWS} crews, the most you can be in.`,
+    crew_forbidden: "Only the owner or an admin can do that.",
+    crew_not_found: "This crew no longer exists, or you're no longer in it.",
+    crew_size_below_used:
+      used === null
+        ? "The crew can't have fewer places than accounts in it."
+        : `${used} places are in use. Pick ${used} or more, or kick accounts first.`,
+    invalid_crew_size: `Places must be from ${MIN_CREW_SIZE} to ${MAX_CREW_SIZE}.`,
+    invalid_crew_name: "Choose a different crew name.",
+    owner_must_hand_over: "As owner, hand over the crew or delete it first.",
+    owner_role_fixed: "The owner's role can only change by handing over.",
+    member_not_found: "That clasher is no longer in this crew.",
+    player_not_in_crew: "That account is no longer in this crew.",
+    invite_not_found: "That link is already off or expired.",
+    invite_invalid: "This invite link has expired or was turned off.",
+  };
+  return messages[code] ?? null;
 }
 
 /** The new crew's id from a create answer. */

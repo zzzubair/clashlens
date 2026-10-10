@@ -618,7 +618,7 @@ def hand_over(
         _set_role(connection, crew_row, target, "owner")
         # An owner whose game accounts all moved away kept the crew; as an
         # admin with no places they are out of it.
-        connection.execute(
+        left = connection.execute(
             """
             DELETE FROM crew_accounts AS member
             WHERE member.crew_id = %s AND member.account_id = %s
@@ -629,8 +629,10 @@ def hand_over(
               )
             """,
             (crew_row, account_id),
+        ).rowcount
+        return OperationResult(
+            200, {**_header(connection, crew_row), "left_crew": left == 1}
         )
-        return OperationResult(200, _header(connection, crew_row))
 
     return _write(database, binding, transfer)
 

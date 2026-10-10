@@ -12,11 +12,13 @@ import {
 import { type BackHandle } from "../components/BackLink";
 import { TrophyMark } from "../components/LeaderboardShared";
 import { ErrorNotice } from "../components/ErrorNotice";
-import type { LinkedPlayerCard } from "../lib/account-contracts";
 import { isInappropriateName, normalizeGroupName } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import {
+  canJoin,
+  crewRefusal,
   DEFAULT_CREW_SIZE,
+  type LinkedAccount,
   MAX_CREW_SIZE,
   MAX_CREWS,
   MIN_CREW_SIZE,
@@ -35,11 +37,6 @@ export function meta() {
   return [{ title: "Create a crew · Clash Lens" }];
 }
 
-type LinkedAccount = Pick<
-  LinkedPlayerCard,
-  "tag" | "name" | "state" | "trophies" | "league"
->;
-
 export interface NewCrewLoaderData {
   crewCount: number;
   accounts: LinkedAccount[];
@@ -52,11 +49,6 @@ export interface NewCrewActionData {
   values: { name: string; size: string; tags: string[] };
   fieldErrors: { name?: string; size?: string; accounts?: string };
   generalError: string | WebsiteErrorResponse | null;
-}
-
-/** A linked account the game puts outside Legend League cannot join. */
-function canJoin(account: LinkedAccount): boolean {
-  return !["not_in_legend", "uncertain", "not_found"].includes(account.state);
 }
 
 async function guard(request: Request) {
@@ -81,24 +73,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { freshIdempotencyKey } = await import("../server/actions.server");
   const idempotencyKey = freshIdempotencyKey();
   try {
-    const { listCrews } = await import("../services/crews.server");
-    const { createPythonClient } = await import("../services/python.server");
-    const client = createPythonClient(identity);
-    const [list, summary] = await Promise.all([
+    const { linkedAccounts, listCrews } = await import("../services/crews.server");
+    const [list, accounts] = await Promise.all([
       listCrews(identity),
-      client.getAccountSummary(),
+      linkedAccounts(identity),
     ]);
-    // The public profile adds whether each linked account is in Legend League.
-    const profile = await client.getPublicUser(summary.username);
-    const accounts = profile.verifiedPlayers.map(
-      ({ tag, name, state, trophies, league }) => ({
-        tag,
-        name,
-        state,
-        trophies,
-        league,
-      }),
-    );
     return data<NewCrewLoaderData>(
       { crewCount: list.crews.length, accounts, idempotencyKey, error: null },
       { headers: NO_STORE },
@@ -181,88 +160,39 @@ export async function action({ request, context }: Route.ActionArgs) {
     return reply(400, values, { fieldErrors }, idempotencyKey);
   }
 
-  const { createCrew, crewErrorCode } = await import("../services/crews.server");
-  const { checkPlayerTag } = await import("../services/group-players.server");
+  const { createCrew, crewErrorCode, joinCheckingAccounts } =
+    await import("../services/crews.server");
   const { clientAddressContext } = await import("../server/client-address.server");
-  let key = idempotencyKey;
-  // Each retry follows a check of one more picked account, so this ends.
-  for (let attempt = 0; attempt <= tags.length; attempt += 1) {
-    try {
-      const crewId = await createCrew(
-        identity,
-        { name: name as string, size, tags },
-        key,
-      );
-      throw redirect(`/crews/${crewId}`);
-    } catch (cause) {
-      if (cause instanceof Response) throw cause;
-      await setupRedirect(request, cause);
-      const code = crewErrorCode(cause);
-      const tag = (cause as { payload?: { tag?: unknown } }).payload?.tag;
-      const status = (cause as { status?: number }).status ?? 503;
-      const { safeWebsiteError } = await import("../server/errors.server");
-      let unfinished = status >= 500;
-      if (
-        code === "player_not_checked" &&
-        typeof tag === "string" &&
-        attempt < tags.length
-      ) {
-        let lookup;
-        try {
-          lookup = await checkPlayerTag(context?.get(clientAddressContext), tag);
-        } catch (lookupCause) {
-          const lookupStatus = (lookupCause as { status?: number }).status ?? 503;
-          return reply(
-            lookupStatus,
-            values,
-            { generalError: safeWebsiteError(lookupCause) },
-            idempotencyKey,
-          );
-        }
-        if (lookup.state !== "checking") {
-          key = actions.followUpIdempotencyKey(key, tag);
-          continue;
-        }
-        unfinished = true;
-      }
-      const formKey = unfinished ? idempotencyKey : undefined;
-      const refusal = createRefusal(code, typeof tag === "string" ? tag : "");
-      if (refusal !== null) return reply(status, values, refusal, formKey);
-      return reply(status, values, { generalError: safeWebsiteError(cause) }, formKey);
-    }
+  const created = await joinCheckingAccounts(
+    context?.get(clientAddressContext),
+    idempotencyKey,
+    tags.length,
+    (key) => createCrew(identity, { name: name as string, size, tags }, key),
+  );
+  // The new crew opens with its invite link ready to share.
+  if (created.ok) throw redirect(`/crews/${created.value}?invite=1`);
+  const { cause, unfinished } = created;
+  await setupRedirect(request, cause);
+  const status = (cause as { status?: number }).status ?? 503;
+  const formKey = unfinished ? idempotencyKey : undefined;
+  const code = crewErrorCode(cause);
+  const message = crewRefusal(code, (cause as { payload?: object }).payload);
+  if (message === null) {
+    const { safeWebsiteError } = await import("../server/errors.server");
+    return reply(status, values, { generalError: safeWebsiteError(cause) }, formKey);
   }
-  return reply(409, values, {
-    fieldErrors: { accounts: "Still checking your accounts. Press Create crew again." },
-  });
-}
-
-/** The message for a refused create, where it has one. */
-function createRefusal(
-  code: string | null,
-  tag: string,
-): Pick<NewCrewActionData, "fieldErrors" | "generalError"> | null {
-  const accounts: Record<string, string> = {
-    player_not_linked: `${tag} is not linked to your account.`,
-    player_not_in_legend: `${tag} is not in Legend League, so it can't join.`,
-    player_not_checked: `Still checking ${tag} with Clash of Clans. Press Create crew again in a few seconds.`,
-    crew_full: "Pick fewer accounts, or add places.",
-  };
-  if (code !== null && code in accounts) {
-    return { fieldErrors: { accounts: accounts[code] }, generalError: null };
-  }
-  if (code === "invalid_crew_name") {
-    return { fieldErrors: { name: "Choose a different crew name." }, generalError: null };
-  }
-  if (code === "invalid_crew_size") {
-    return {
-      fieldErrors: { size: `Places must be from ${MIN_CREW_SIZE} to ${MAX_CREW_SIZE}.` },
-      generalError: null,
-    };
-  }
-  if (code === "crew_limit_reached") {
-    return { fieldErrors: {}, generalError: `You're already in ${MAX_CREWS} crews.` };
-  }
-  return null;
+  const field = code?.startsWith("player_") || code === "crew_full" ? "accounts" : null;
+  const refusedField =
+    field !== null
+      ? { accounts: message }
+      : code === "invalid_crew_name"
+        ? { name: message }
+        : code === "invalid_crew_size"
+          ? { size: message }
+          : null;
+  return refusedField === null
+    ? reply(status, values, { generalError: message }, formKey)
+    : reply(status, values, { fieldErrors: refusedField }, formKey);
 }
 
 export default function NewCrewRoute() {

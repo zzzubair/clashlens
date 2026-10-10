@@ -13,10 +13,24 @@ import type { Route } from "./+types/account.verify-player";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-export const handle: BackHandle = { back: { to: "/account", label: "Your account" } };
+/** Back leads to the crew invite that sent the clasher here, or to the account. */
+export const handle: BackHandle = {
+  back: (match) => {
+    const returnPath = (match.loaderData as VerifyPlayerLoaderData | undefined)
+      ?.returnPath;
+    return returnPath
+      ? { to: returnPath, label: "Crew invite" }
+      : { to: "/account", label: "Your account" };
+  },
+};
+
+/** Only a crew invite may ask to be returned to after linking. */
+const RETURN_PREFIX = "/crews/join/";
 
 export interface VerifyPlayerLoaderData {
   idempotencyKey: string;
+  /** The crew invite to go back to once the player is linked. */
+  returnPath: string | null;
 }
 
 export interface VerifyPlayerActionData {
@@ -53,7 +67,18 @@ export async function loader({
   const { requireLogin } = await import("../server/auth-guard.server");
   await requireLogin(request);
   const { freshIdempotencyKey } = await import("../server/actions.server");
-  return { idempotencyKey: freshIdempotencyKey() };
+  const returnPath = await crewReturnPath(
+    new URL(request.url).searchParams.get("return"),
+  );
+  return { idempotencyKey: freshIdempotencyKey(), returnPath };
+}
+
+/** A same-origin crew invite path, or null. */
+async function crewReturnPath(value: string | null | undefined): Promise<string | null> {
+  const { getWebsiteConfig } = await import("../server/config.server");
+  const { safeReturnPath } = await import("../server/return-path.server");
+  const path = safeReturnPath(value, getWebsiteConfig().publicOrigin);
+  return path !== null && path.startsWith(RETURN_PREFIX) ? path : null;
 }
 
 /**
@@ -110,6 +135,11 @@ export async function action({ request }: Route.ActionArgs) {
       idempotencyKey,
     );
     if (result.status === "linked" || result.status === "already_linked") {
+      // A crew invite that sent the clasher here shows the new account.
+      const returnPath = await crewReturnPath(form["return"]);
+      if (returnPath !== null) {
+        return redirect(returnPath, { status: 303, headers: NO_STORE });
+      }
       // The profile confirms the link by showing this tag.
       const linked = encodeURIComponent(result.tag ?? (tag as string));
       return redirect(`/account?linked=${linked}`, { status: 303, headers: NO_STORE });
@@ -228,6 +258,9 @@ export default function VerifyPlayerRoute() {
             name="idempotencyKey"
             value={actionData?.idempotencyKey ?? loaderData.idempotencyKey}
           />
+          {loaderData.returnPath ? (
+            <input type="hidden" name="return" value={loaderData.returnPath} />
+          ) : null}
           <div className="form-field">
             <label htmlFor="verify-tag">Player tag</label>
             <input

@@ -228,7 +228,16 @@ number of places and which linked accounts join. A crew's page at
 Best defenders, Worst defenders and Highest streaks, the last four switched
 between Today, Last 7 days and Season (the default). Each card shows its top 5
 and links to the full board at `/crews/<id>/boards/<board>`, which also lists
-who is not on it and why. Invites, members and settings pages are not built yet.
+who is not on it and why. Invite on a crew's page makes or reuses the clasher's
+48-hour link and shows it with Copy and Share; a new crew opens with it. The
+link, `/crews/join/<code>`, shows the crew and which of the clasher's linked
+accounts can join, and "Link another account" goes through
+`/account/verify-player?return=/crews/join/<code>` and comes back. Members at
+`/crews/<id>/members` lets clashers add or remove their own accounts and leave,
+the owner make or remove admins, and the owner or an admin kick accounts. Edit
+crew at `/crews/<id>/settings` renames, resizes (never below the places in
+use), turns off links, hands over and deletes; members only see that the owner
+and admins change settings.
 
 The Blog at `/blog` lists posts newest first, shows each at `/blog/<slug>` and
 publishes an RSS feed at `/blog/rss.xml`. Posts are not in this repository: the

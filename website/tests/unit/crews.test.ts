@@ -386,7 +386,9 @@ describe("create a crew", () => {
         }) as never,
       ),
     );
-    expect((response as Response).headers.get("Location")).toBe(`/crews/${CREW_ID}`);
+    expect((response as Response).headers.get("Location")).toBe(
+      `/crews/${CREW_ID}?invite=1`,
+    );
     const [target, method, body, , key] = mocks.requestJson.mock.calls[0]!;
     expect([target, method, key]).toEqual(["/v1/account/crews", "POST", IDEMPOTENCY_KEY]);
     expect(JSON.parse((body as Buffer).toString())).toEqual({
@@ -425,7 +427,9 @@ describe("create a crew", () => {
         }) as never,
       ),
     );
-    expect((response as Response).headers.get("Location")).toBe(`/crews/${CREW_ID}`);
+    expect((response as Response).headers.get("Location")).toBe(
+      `/crews/${CREW_ID}?invite=1`,
+    );
     expect(mocks.checkPlayerTag).toHaveBeenCalledWith(undefined, TAGS[0]);
     // The retry is a new request, since the first one's refusal is stored.
     expect(mocks.requestJson.mock.calls[1]![4]).not.toBe(IDEMPOTENCY_KEY);
@@ -468,7 +472,9 @@ describe("create a crew", () => {
     expect(lost.status).toBe(503);
     expect(lost.data.idempotencyKey).toBe(IDEMPOTENCY_KEY);
     const response = await thrown(() => createAction(createRequest(fields) as never));
-    expect((response as Response).headers.get("Location")).toBe(`/crews/${CREW_ID}`);
+    expect((response as Response).headers.get("Location")).toBe(
+      `/crews/${CREW_ID}?invite=1`,
+    );
     const keys = mocks.requestJson.mock.calls.map((call) => call[4]);
     expect(keys[0]).toBe(IDEMPOTENCY_KEY);
     expect(keys[1]).not.toBe(IDEMPOTENCY_KEY);
