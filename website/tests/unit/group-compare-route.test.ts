@@ -185,7 +185,7 @@ describe("group comparison", () => {
     );
   });
 
-  it("explains the two trophy totals before the table", async () => {
+  it("shows the table without explanation paragraphs", async () => {
     const handler = createStaticHandler([
       {
         path: "/account/groups/:groupId",
@@ -210,24 +210,23 @@ describe("group comparison", () => {
       new Request(`${ORIGIN}/account/groups/${GROUP_ID}`),
     );
     if (context instanceof Response) throw new Error("unexpected response");
-    const text = renderToString(
+    const html = renderToString(
       createElement(StaticRouterProvider, {
         router: createStaticRouter(handler.dataRoutes, context),
         context,
       }),
-    )
+    );
+    // Each day bar still says what it means on hover and to screen readers.
+    expect(html).toContain('title="5 Aug: may still change, +40"');
+    expect(html).toContain("4 Aug incomplete +10");
+    const text = html
       .replaceAll("<!-- -->", "")
       .replaceAll("&#x27;", "'")
       .replace(/<[^>]*>/g, " ")
       .replace(/\s+/g, " ");
-    const explanation =
-      "Last 3 days adds up each player's trophy change on counted days only. Won vs lost adds up trophies won in attacks and lost in defenses across every battle recorded in these days, incomplete days included, so the two can differ.";
-    expect(text).toContain(explanation);
-    expect(text.indexOf(explanation)).toBeLessThan(text.indexOf("Trophies now"));
-    expect(text).toContain(
-      "Some battles are missing. Shown, but left out of the Last 3 days total.",
-    );
-    expect(text).not.toContain("left out of the totals");
+    expect(text).not.toContain("adds up each player's trophy change");
+    expect(text).not.toContain("Some battles are missing");
+    expect(text).not.toContain("Attack and defense also use every battle recorded");
     expect(text).toContain("Not yet proven");
     expect(text).toContain("Recorded: +80 won · −16 lost");
     expect(text).toContain("Recorded: 2 attacks, 1 defense");
