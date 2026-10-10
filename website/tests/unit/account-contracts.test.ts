@@ -90,6 +90,7 @@ describe("Python account response mappers", () => {
       trophies: 5300,
       season_reset_pending: false,
       rank: 12,
+      league: null,
       today: { net: -8, attacks: 5, defenses: 3 },
     };
     const season0 = {
@@ -102,8 +103,17 @@ describe("Python account response mappers", () => {
       rank: null,
       today: null,
     };
+    const notInLegend = {
+      ...season0,
+      tag: "#8PY",
+      state: "not_in_legend",
+      reason: null,
+      league: "Electro League 33",
+    };
     const user = { username: "nova", display_name: "Nova" };
-    expect(mapPublicUser({ ...user, verified_players: [card, season0] })).toEqual({
+    expect(
+      mapPublicUser({ ...user, verified_players: [card, season0, notInLegend] }),
+    ).toEqual({
       username: "nova",
       displayName: "Nova",
       verifiedPlayers: [
@@ -116,6 +126,7 @@ describe("Python account response mappers", () => {
           trophies: 5300,
           seasonResetPending: false,
           rank: 12,
+          league: null,
           today: { net: -8, attacks: 5, defenses: 3 },
         },
         {
@@ -127,6 +138,19 @@ describe("Python account response mappers", () => {
           trophies: null,
           seasonResetPending: false,
           rank: null,
+          league: null,
+          today: null,
+        },
+        {
+          tag: "#8PY",
+          name: null,
+          clan: null,
+          state: "not_in_legend",
+          reason: null,
+          trophies: null,
+          seasonResetPending: false,
+          rank: null,
+          league: "Electro League 33",
           today: null,
         },
       ],
@@ -135,6 +159,7 @@ describe("Python account response mappers", () => {
       { ...card, state: "ranked" },
       { ...card, reason: "other" },
       { ...card, rank: 0 },
+      { ...card, league: 33 },
       { ...card, trophies: "5300" },
       { ...card, today: { net: 1, attacks: -1, defenses: 0 } },
       { tag: "#2PP", name: "Nova" },

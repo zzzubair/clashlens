@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from psycopg.conninfo import make_conninfo
 from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_verification
@@ -209,7 +210,9 @@ def test_gate_cooldown_and_quarantine_persist_and_fail_closed(
 def test_concurrent_verified_links_never_transfer_between_accounts_automatically(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info, max_size=8)
         try:
             first_account = create_account(database, "google-first", "firstowner")
@@ -292,7 +295,9 @@ def test_concurrent_verified_links_never_transfer_between_accounts_automatically
 def test_support_transfer_is_atomic_restricted_and_idempotent(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info, max_size=8)
         try:
             assert not hasattr(database, "apply_support_player_link_transfer")
@@ -598,5 +603,78 @@ def test_verification_reservation_has_recovery_state_and_stale_reuse_fails_close
                 )
                 == "verification_unavailable"
             )
+        finally:
+            database.close()
+
+
+def test_a_link_checks_the_players_profile_at_once_unless_already_tracked(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        # Link with the deployed API role, not migration-owner powers.
+        with psycopg.connect(info) as connection:
+            schema = connection.execute("SELECT current_schema()").fetchone()[0]
+            # Already known players: one answered as not in Legend I with no
+            # check due (as #L82PYUC9J was), one tracked.
+            connection.execute(
+                """
+                INSERT INTO players (normalized_tag, active, eligibility_state, next_due_at)
+                VALUES ('#8PY', false, 'ineligible', NULL),
+                       ('#9PY', true, 'eligible', clock_timestamp())
+                """
+            )
+        database = ApiDatabase(
+            make_conninfo(
+                info, options=f"-c search_path={schema} -c role=clashlens_python_api"
+            )
+        )
+        try:
+            account_id = create_account(database, "google-check", "checkowner")
+
+            def link(tag: str, outcome: VerificationOutcome) -> str:
+                binding = verification_binding(account_id, "google-check", tag)
+                assert api_verification.reserve_verification(
+                    database, binding, normalized_tag=tag
+                ).fresh
+                return api_verification.complete_verification(
+                    database,
+                    binding,
+                    normalized_tag=tag,
+                    outcome=outcome,
+                    account_id=account_id,
+                    completed_at=NOW,
+                ).payload["status"]
+
+            def checks() -> list[tuple[str, str, str, bool]]:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        """
+                        SELECT normalized_tag, kind, lane, due_at <= clock_timestamp()
+                        FROM collector_work ORDER BY id
+                        """
+                    ).fetchall()
+
+            assert link("#2PP", VerificationOutcome.INVALID_TOKEN) == "invalid_token"
+            assert link("#2PY", VerificationOutcome.UNAVAILABLE) == (
+                "verification_unavailable"
+            )
+            assert checks() == []
+            assert link("#2PP", VerificationOutcome.VERIFIED) == "linked"
+            assert link("#8PY", VerificationOutcome.VERIFIED) == "linked"
+            assert link("#9PY", VerificationOutcome.VERIFIED) == "linked"
+            assert checks() == [
+                ("#2PP", "initial_collection", "interactive", True),
+                ("#8PY", "initial_collection", "interactive", True),
+            ]
+            # Linking again reuses the waiting check instead of adding one.
+            assert link("#2PP", VerificationOutcome.VERIFIED) == "already_linked"
+            assert len(checks()) == 2
+            collector = CollectorDatabase(info)
+            try:
+                assert len(collector.pending_intents(10, interactive=True)) == 2
+            finally:
+                collector.close()
         finally:
             database.close()

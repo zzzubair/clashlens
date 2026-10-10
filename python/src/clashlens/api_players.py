@@ -495,9 +495,38 @@ def player_cards(
             (ids, ranked_day_for(now).start),
         ).fetchall()
     }
+    lookups = {tag: api_player_lookup._lookup(connection, tag) for _id, tag, _n, _c in players}
+    # A player outside Legend I shows the league its newest saved profile
+    # with a known league named; the weekly check keeps that profile fresh.
+    leagues = {
+        int(row[0]): _text(row[1])
+        for row in connection.execute(
+            """
+            SELECT DISTINCT ON (version.player_id)
+                   version.player_id, version.league_tier_name
+            FROM player_profile_versions AS version
+            CROSS JOIN LATERAL (
+                SELECT max(observed_at) AS observed_at FROM player_profile_effects
+                WHERE profile_version_id = version.id
+            ) AS effect
+            WHERE version.player_id = ANY(%s)
+              AND version.eligibility_state IN ('eligible', 'ineligible')
+            ORDER BY version.player_id,
+                     COALESCE(effect.observed_at, version.observed_at) DESC,
+                     version.id DESC
+            """,
+            (
+                [
+                    player_id
+                    for player_id, tag, _n, _c in players
+                    if lookups[tag]["state"] == "not_in_legend"
+                ],
+            ),
+        ).fetchall()
+    }
     cards = []
     for player_id, tag, name, clan in players:
-        lookup = api_player_lookup._lookup(connection, tag)
+        lookup = lookups[tag]
         profile = profiles.get(player_id)
         reason = lookup.get("reason")
         if lookup["state"] == "tracking" and reason is None and profile is None:
@@ -511,6 +540,7 @@ def player_cards(
             "trophies": None,
             "season_reset_pending": False,
             "rank": None,
+            "league": leagues.get(player_id),
             "today": None,
         }
         if reason is None and profile is not None:

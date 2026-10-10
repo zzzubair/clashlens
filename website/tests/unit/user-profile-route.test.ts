@@ -24,6 +24,7 @@ const data = {
         trophies: 5300,
         seasonResetPending: false,
         rank: 1234,
+        league: null,
         today: { net: 28, attacks: 5, defenses: 3 },
       },
       {
@@ -35,6 +36,7 @@ const data = {
         trophies: 5100,
         seasonResetPending: false,
         rank: null,
+        league: null,
         today: { net: null, attacks: 2, defenses: 0 },
       },
       {
@@ -46,6 +48,7 @@ const data = {
         trophies: null,
         seasonResetPending: false,
         rank: null,
+        league: null,
         today: null,
       },
       {
@@ -57,6 +60,7 @@ const data = {
         trophies: 4900,
         seasonResetPending: false,
         rank: null,
+        league: "Electro League 33",
         today: { net: -40, attacks: 0, defenses: 1 },
       },
     ],
@@ -113,10 +117,12 @@ it("shows each linked account as one card linking to its player page", async () 
   );
   for (const text of ["Trophies", "Unknown", "Unranked", "Not available yet"])
     expect(season0).toContain(text);
-  // A player who left Legend I keeps their saved trophies and today's battles.
+  // A player who left Legend I keeps their saved trophies and today's battles,
+  // and shows its saved league where a Legend I player shows its rank.
   expect(demoted).toContain("This player is not in Legend I.");
-  for (const text of ["4,900", "Unranked", "-40", "0/8 attacks · 1/8 defenses"])
+  for (const text of ["4,900", "Electro League 33", "-40", "0/8 attacks · 1/8 defenses"])
     expect(demoted).toContain(text);
+  expect(demoted).not.toContain("Unranked");
   expect(demoted).toContain(
     'aria-describedby="linked-player-9PY-details linked-player-9PY-note"',
   );
@@ -148,6 +154,7 @@ it("shows worst-case linked players with separators and every missing value name
     "Waiting for this player's Season reset",
     "Not available yet",
     "4,812",
+    "Electro League 33",
   ])
     expect(html).toContain(text);
 });
