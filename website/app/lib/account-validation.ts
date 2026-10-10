@@ -28,6 +28,8 @@ export const MAX_NAME_LENGTH = 80;
 // Matches the most players a group comparison shows (MAX_COMPARED_MEMBERS in
 // python/src/clashlens/api_groups.py).
 export const MAX_GROUP_TAGS = 20;
+// An account holds at most this many groups (migration 0096 enforces it).
+export const MAX_GROUPS = 10;
 export const MAX_VERIFICATION_TOKEN_LENGTH = 512;
 
 /** Canonical player tag for account forms, which accept an optional leading `#`. */

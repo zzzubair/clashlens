@@ -684,3 +684,97 @@ def test_each_migration_records_exactly_its_filename_version(database_url: str) 
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def test_saved_players_move_into_a_group_and_the_old_list_goes_once_empty(
+    database_url: str,
+) -> None:
+    schema = f"python_api_saved_players_{uuid4().hex}"
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute(f'CREATE SCHEMA "{schema}"')
+    connection_info = make_conninfo(database_url, options=f"-c search_path={schema}")
+    try:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            migrations = sorted((ROOT / "deploy/migrations").glob("*.sql"))
+            [move] = [path for path in migrations if path.name.startswith("0096_")]
+            for migration in migrations[: migrations.index(move)]:
+                apply_migration(connection, migration.read_text(encoding="utf-8"))
+
+            def account(name: str, groups: int, saved: int) -> int:
+                [account_id] = connection.execute(
+                    """INSERT INTO clash_lens_accounts (
+                        public_id, username, normalized_username, display_name
+                    ) VALUES (%s, %s, %s, %s) RETURNING id""",
+                    (uuid4(), name, name, name),
+                ).fetchone()
+                for index in range(groups):
+                    connection.execute(
+                        """INSERT INTO account_groups (
+                            public_id, account_id, name, normalized_name
+                        ) VALUES (%s, %s, %s, %s)""",
+                        (uuid4(), account_id, f"Group {index}", f"Group {index}"),
+                    )
+                connection.execute(
+                    """INSERT INTO account_saved_players (account_id, player_id)
+                    SELECT %s, id FROM players ORDER BY id LIMIT %s""",
+                    (account_id, saved),
+                )
+                return account_id
+
+            connection.execute(
+                "INSERT INTO players (normalized_tag) SELECT '#P' || n FROM generate_series(200, 221) AS n"
+            )
+            fits = account("fits", 9, 20)
+            full = account("tengroups", 10, 1)
+            crowded = account("crowded", 0, 21)
+
+            apply_migration(connection, move.read_text(encoding="utf-8"))
+
+            def groups(account_id: int) -> list[tuple[str, int]]:
+                return [
+                    (text(name), count)
+                    for name, count in connection.execute(
+                        """SELECT group_row.name, count(member.player_id)
+                        FROM account_groups AS group_row
+                        LEFT JOIN account_group_players AS member
+                          ON member.group_id = group_row.id
+                        WHERE group_row.account_id = %s
+                          AND group_row.name = 'Saved players'
+                        GROUP BY group_row.name""",
+                        (account_id,),
+                    )
+                ]
+
+            assert groups(fits) == [("Saved players", 20)]
+            assert groups(full) == groups(crowded) == []
+            # What did not fit stays saved rather than lost.
+            assert connection.execute(
+                "SELECT account_id, count(*) FROM account_saved_players GROUP BY 1 ORDER BY 1"
+            ).fetchall() == [(full, 1), (crowded, 21)]
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    """INSERT INTO account_groups (public_id, account_id, name, normalized_name)
+                    VALUES (%s, %s, 'Eleventh', 'Eleventh')""",
+                    (uuid4(), full),
+                )
+
+            # Once room is made, running the move again finishes it.
+            connection.execute(
+                "DELETE FROM account_groups WHERE account_id = %s AND name = 'Group 0'",
+                (full,),
+            )
+            connection.execute(
+                """DELETE FROM account_saved_players WHERE account_id = %s
+                AND player_id = (SELECT max(player_id) FROM account_saved_players)""",
+                (crowded,),
+            )
+            apply_migration(connection, move.read_text(encoding="utf-8"))
+            assert groups(full) == [("Saved players", 1)]
+            assert groups(crowded) == [("Saved players", 20)]
+            assert groups(fits) == [("Saved players", 20)]
+            assert connection.execute(
+                "SELECT to_regclass('account_saved_players')"
+            ).fetchone() == (None,)
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as admin:
+            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

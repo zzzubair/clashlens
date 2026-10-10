@@ -81,8 +81,6 @@ _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
         "player_links.verify",
         "providers.link",
         "providers.unlink",
-        "saved_tags.read",
-        "saved_tags.write",
         "session.check",
         "session.revoke",
         "summary.read",
@@ -109,7 +107,7 @@ class AccountUpdateBody(AccountCreateBody):
     preferences: dict[str, Any] = Field(default_factory=dict)
 
 
-class SavedTagBody(StrictBody):
+class TagBody(StrictBody):
     tag: str = Field(min_length=4, max_length=16)
 
 
@@ -778,41 +776,6 @@ def create_app(
         )
         return _operation_response(result)
 
-    @app.get("/v1/account/saved-tags")
-    def saved_tags(request: Request, tag: str | None = None) -> JSONResponse:
-        context = _authorize(request, "saved_tags.read", production_database)
-        assert production_database is not None and context.account is not None
-        return JSONResponse(
-            status_code=200,
-            content={
-                "players": api_accounts.list_saved_players(production_database,
-                    context.account.internal_id, normalized_tag=_safe_tag(tag) if tag else None
-                )
-            },
-        )
-
-    @app.post("/v1/account/saved-tags")
-    def add_saved_tag(body: SavedTagBody, request: Request) -> JSONResponse:
-        context = _authorize(request, "saved_tags.write", production_database)
-        assert production_database is not None
-        tag = _safe_tag(body.tag)
-        result = api_accounts.add_saved_player(production_database,
-            _binding(request, context, "saved_tags.add", {"tag": tag}),
-            normalized_tag=tag,
-        )
-        return _operation_response(result)
-
-    @app.delete("/v1/account/saved-tags/{tag}")
-    def remove_saved_tag(tag: str, request: Request) -> JSONResponse:
-        context = _authorize(request, "saved_tags.write", production_database)
-        assert production_database is not None
-        normalized_tag = _safe_tag(tag)
-        result = api_accounts.remove_saved_player(production_database,
-            _binding(request, context, "saved_tags.remove", {"tag": normalized_tag}),
-            normalized_tag=normalized_tag,
-        )
-        return _operation_response(result)
-
     @app.get("/v1/account/groups")
     def groups(request: Request) -> JSONResponse:
         context = _authorize(request, "groups.read", production_database)
@@ -880,7 +843,7 @@ def create_app(
 
     @app.post("/v1/account/groups/{group_id}/players")
     def add_group_player(
-        group_id: str, body: SavedTagBody, request: Request
+        group_id: str, body: TagBody, request: Request
     ) -> JSONResponse:
         context = _authorize(request, "groups.write", production_database)
         assert production_database is not None

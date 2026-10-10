@@ -27,16 +27,6 @@ export interface AccountSummary {
   verifiedPlayers: VerifiedPlayer[];
 }
 
-export interface SavedPlayer {
-  tag: string;
-  name: string | null;
-}
-
-export interface SavedTagResult {
-  tag: string;
-  saved: boolean;
-}
-
 export interface PrivateGroup {
   groupId: string;
   name: string;
@@ -243,28 +233,6 @@ export function mapSummary(value: unknown): AccountSummary | null {
     displayName: payload.display_name,
     verifiedPlayers: payload.verified_players,
   };
-}
-
-export function mapSavedTags(value: unknown): SavedPlayer[] | null {
-  if (!isRecord(value) || !Array.isArray(value.players)) return null;
-  const players: SavedPlayer[] = [];
-  for (const entry of value.players) {
-    const player = asVerifiedPlayer(entry);
-    if (player === null) return null;
-    players.push(player);
-  }
-  return players;
-}
-
-export function mapSavedTagResult(value: unknown): SavedTagResult | null {
-  if (
-    !isRecord(value) ||
-    !isCanonicalTag(value.tag) ||
-    typeof value.saved !== "boolean"
-  ) {
-    return null;
-  }
-  return { tag: value.tag, saved: value.saved };
 }
 
 interface GroupPayload {

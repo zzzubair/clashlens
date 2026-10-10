@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { ensureAccount, signIn } from "./helpers/account";
 import { websiteOrigin } from "../fixtures/test-values";
 
-test("two signed-in accounts keep saved players and groups private through direct requests", async ({
+test("two signed-in accounts keep groups private through direct requests", async ({
   browser,
 }) => {
   const contexts = await Promise.all([
@@ -25,11 +25,6 @@ test("two signed-in accounts keep saved players and groups private through direc
       // Both tags are fake Clash API players: adding one to a group checks it exists.
       const tag = index === 0 ? "#2PP" : "#Q0002";
       const groupName = `Private plan ${index}`;
-      const saved = await context.request.post(`${origin}/account/saved-players`, {
-        headers: { Origin: origin },
-        form: { mode: "add", tag, idempotencyKey: randomUUID() },
-      });
-      expect(saved.ok()).toBeTruthy();
       const created = await context.request.post(`${origin}/account/groups`, {
         headers: { Origin: origin },
         form: { action: "create", name: groupName, idempotencyKey: randomUUID() },
@@ -58,9 +53,12 @@ test("two signed-in accounts keep saved players and groups private through direc
     }
     for (const [index, owner] of owners.entries()) {
       const other = owners[1 - index];
-      for (const path of ["/account/saved-players", "/account/groups"]) {
+      for (const path of [
+        "/account/groups?",
+        `/account/groups/add?tag=${encodeURIComponent(owner.tag)}&`,
+      ]) {
         const response = await owner.context.request.get(
-          `${owner.origin}${path}?username=${other.username}&groupId=${other.groupId}`,
+          `${owner.origin}${path}username=${other.username}&groupId=${other.groupId}`,
         );
         expect(response.ok()).toBeTruthy();
         expect(response.headers()["cache-control"]).toContain("no-store");
@@ -90,10 +88,6 @@ test("two signed-in accounts keep saved players and groups private through direc
         expect(responses[0].status()).toBe(responses[1].status());
         expect(responses[0].ok()).toBeFalsy();
       }
-      await owner.context.request.post(`${owner.origin}/account/saved-players`, {
-        headers: { Origin: owner.origin },
-        form: { mode: "remove", tag: other.tag, idempotencyKey: randomUUID() },
-      });
       const publicProfile = await owner.context.request.get(
         `${owner.origin}/users/${other.username}`,
       );
@@ -104,9 +98,9 @@ test("two signed-in accounts keep saved players and groups private through direc
       await expect(
         other.page.getByRole("heading", { name: other.groupName, exact: true }),
       ).toBeVisible();
-      await other.page.goto("/account/saved-players");
+      await other.page.goto(`/account/groups/add?tag=${encodeURIComponent(other.tag)}`);
       await expect(
-        other.page.getByText(other.tag, { exact: true }).first(),
+        other.page.getByText(`${other.tag} is already in ${other.groupName}`).first(),
       ).toBeVisible();
     }
   } finally {

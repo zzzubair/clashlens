@@ -141,15 +141,6 @@ const CARD_LIST = {
     "Your trophies today against the player above you or your goal pace.",
     "ready",
   ),
-  saved: card(
-    "Saved players",
-    "users",
-    "today",
-    "s",
-    "Live numbers for players you saved.",
-    "ready",
-    { perPlayer: false, offByDefault: true },
-  ),
   daily: card(
     "Day by day",
     "bars",

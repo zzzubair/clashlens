@@ -760,85 +760,6 @@ def get_export_status(
         return result
 
 
-def add_saved_player(
-    database: ApiDatabase,
-    binding: RequestBinding,
-    *,
-    normalized_tag: str,
-) -> OperationResult:
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
-            if existing is not None:
-                return existing
-            player_id = api_db._ensure_player(connection, normalized_tag)
-            connection.execute(
-                """
-                INSERT INTO account_saved_players (account_id, player_id)
-                VALUES (%s, %s)
-                ON CONFLICT (account_id, player_id) DO NOTHING
-                """,
-                (binding.account_id, player_id),
-            )
-            result = OperationResult(200, {"tag": normalized_tag, "saved": True})
-            api_db._complete_request(connection, binding.request_id, result)
-            return result
-
-
-def remove_saved_player(
-    database: ApiDatabase,
-    binding: RequestBinding,
-    *,
-    normalized_tag: str,
-) -> OperationResult:
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            existing = api_db._reserve_request(database, connection, binding)
-            if existing is not None:
-                return existing
-            connection.execute(
-                """
-                DELETE FROM account_saved_players AS saved
-                USING players AS player
-                WHERE saved.account_id = %s
-                  AND saved.player_id = player.id
-                  AND player.normalized_tag = %s
-                """,
-                (binding.account_id, normalized_tag),
-            )
-            result = OperationResult(200, {"tag": normalized_tag, "saved": False})
-            api_db._complete_request(connection, binding.request_id, result)
-            return result
-
-
-def list_saved_players(
-    database: ApiDatabase, account_id: int, *, normalized_tag: str | None = None
-) -> list[dict[str, Any]]:
-    """Filter profile state before the list cap so every saved tag stays removable."""
-    with database.pool.connection() as connection:
-        rows = connection.execute(
-            f"""
-            SELECT player.normalized_tag, profile.name
-            FROM account_saved_players AS saved
-            JOIN players AS player ON player.id = saved.player_id
-            LEFT JOIN player_profile_versions AS profile
-                ON profile.id = player.current_profile_version_id
-            WHERE saved.account_id = %s
-            {"AND player.normalized_tag = %s" if normalized_tag else ""}
-            ORDER BY player.normalized_tag
-            LIMIT 500
-            """,
-            (account_id, normalized_tag) if normalized_tag else (account_id,),
-        ).fetchall()
-        return [
-            {
-                "tag": _text(row[0]),
-                "name": None if row[1] is None else _text(row[1]),
-            }
-            for row in rows
-        ]
-
-
 def create_group(
     database: ApiDatabase,
     binding: RequestBinding,
@@ -870,6 +791,12 @@ def create_group(
                     )
             except psycopg.errors.UniqueViolation:
                 result = OperationResult(409, {"error": "group_name_conflict"})
+                api_db._complete_request(connection, binding.request_id, result)
+                return result
+            except psycopg.errors.CheckViolation as error:
+                if error.diag.constraint_name != "account_groups_limit":
+                    raise
+                result = OperationResult(422, {"error": "group_limit_reached"})
                 api_db._complete_request(connection, binding.request_id, result)
                 return result
             result = OperationResult(

@@ -51,16 +51,6 @@ def accounts(database_url, request):
                         call(client, owner, "GET", "/v1/account").json()["username"]
                         == owner["username"]
                     )
-                    assert (
-                        call(
-                            client,
-                            owner,
-                            "POST",
-                            "/v1/account/saved-tags",
-                            {"tag": owner["tag"]},
-                        ).status_code
-                        == 200
-                    )
                     owner["request_id"] = str(uuid4())
                     group = call(
                         client,
@@ -97,9 +87,6 @@ def call(client, owner, method, target, value=None, *, request_id=None, headers=
 
 
 def assert_private_state(client, owner):
-    assert call(client, owner, "GET", "/v1/account/saved-tags").json() == {
-        "players": [{"tag": owner["tag"], "name": None}],
-    }
     listed = call(client, owner, "GET", "/v1/account/groups").json()
     # The Season holding 2027-04-06, which opened at 2027-03-22 05:00 UTC.
     assert listed["season"] == "1805691600"
@@ -117,7 +104,6 @@ def test_direct_reads_ignore_guessed_owner_and_do_not_publish_membership(account
         query = f"?account_id=1&username={other['username']}&group_id={other['group']['group_id']}"
         for target in (
             "/v1/account",
-            "/v1/account/saved-tags",
             "/v1/account/groups",
             "/v1/account/summary",
         ):
@@ -292,32 +278,17 @@ def test_group_comparison_reads_only_the_owning_accounts_group(accounts):
         assert theirs.json()["name"] == f"Watch {other['username']}"
 
 
-def test_saved_tag_mutations_cannot_reveal_or_change_other_account(accounts):
+def test_group_mutations_cannot_name_another_account(accounts):
     client, owners = accounts
     for owner, other in (owners, owners[::-1]):
-        # Removing a tag saved only by the other account has the same result as
-        # removing a tag saved by nobody. Both leave the other account intact.
-        for tag in (other["tag"], "#9PY"):
-            removed = call(
-                client, owner, "DELETE", f"/v1/account/saved-tags/{quote(tag)}"
-            )
-            assert removed.status_code == 200
-            assert removed.json() == {"tag": tag, "saved": False}
-            added = call(client, owner, "POST", "/v1/account/saved-tags", {"tag": tag})
-            assert added.status_code == 200
-            assert added.json() == {"tag": tag, "saved": True}
-            assert (
-                call(
-                    client, owner, "DELETE", f"/v1/account/saved-tags/{quote(tag)}"
-                ).status_code
-                == 200
-            )
-        for target, body in (
-            ("/v1/account/saved-tags", {"tag": other["tag"]}),
-            ("/v1/account/groups", {"name": "Injected", "tags": [other["tag"]]}),
-        ):
-            injected = call(client, owner, "POST", target, {**body, "account_id": 1})
-            assert injected.status_code == 422
+        injected = call(
+            client,
+            owner,
+            "POST",
+            "/v1/account/groups",
+            {"name": "Injected", "tags": [other["tag"]], "account_id": 1},
+        )
+        assert injected.status_code == 422
         assert_private_state(client, owner)
         assert_private_state(client, other)
 
@@ -329,9 +300,6 @@ def test_private_endpoints_require_signed_identity_and_exports_stay_disabled(acc
         endpoints = [
             ("GET", "/v1/account", None),
             ("GET", "/v1/account/summary", None),
-            ("GET", "/v1/account/saved-tags", None),
-            ("POST", "/v1/account/saved-tags", {"tag": other["tag"]}),
-            ("DELETE", f"/v1/account/saved-tags/{quote(other['tag'])}", None),
             ("GET", "/v1/account/groups", None),
             ("POST", "/v1/account/groups", {"name": "Intruder", "tags": []}),
             ("PATCH", group_path, {"name": "Intruder", "tags": []}),

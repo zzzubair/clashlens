@@ -57,10 +57,7 @@ import ProfileRoute, {
   action as profileAction,
   loader as profileLoader,
 } from "../../app/routes/account.profile";
-import SavedPlayersRoute, {
-  action as savedPlayersAction,
-  loader as savedPlayersLoader,
-} from "../../app/routes/account.saved-players";
+import { loader as savedPlayersLoader } from "../../app/routes/account.saved-players";
 import {
   action as setupAction,
   loader as setupLoader,
@@ -76,7 +73,6 @@ const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" }
 const IDEMPOTENCY_KEY = "3be934b5-68fa-4741-8c7b-e03592e4ad70";
 const GROUP_ID = "6c1e3f8a-2a44-4b7d-9c0e-1f2a3b4c5d6e";
 const TAG = "#P0LQ2Y8";
-const TAG2 = "#G2Y8P0LQ";
 const ACCOUNT = {
   username: "nova88",
   displayName: "Nova",
@@ -136,9 +132,6 @@ function fakeClient(overrides: Partial<PythonClient> = {}): PythonClient {
     getAccount: vi.fn(async () => ({ ...ACCOUNT })),
     createAccount: vi.fn(async () => ({ ...ACCOUNT })),
     updateAccount: vi.fn(async () => ({ ...ACCOUNT })),
-    listSavedTags: vi.fn(async () => []),
-    addSavedTag: vi.fn(async () => ({ tag: TAG, saved: true })),
-    removeSavedTag: vi.fn(async () => ({ tag: TAG, saved: false })),
     listGroups: vi.fn(async () => ({ groups: [], season: "1791176400" })),
     createGroup: vi.fn(async () => ({
       groupId: GROUP_ID,
@@ -215,15 +208,6 @@ describe("account routes", () => {
 
     it.each([
       [
-        "saved-players",
-        SavedPlayersRoute,
-        savedPlayersLoader,
-        "listSavedTags",
-        "Saved players could not be loaded.",
-        "No saved players yet",
-        "Save player",
-      ],
-      [
         "groups",
         GroupsRoute,
         groupsLoader,
@@ -295,15 +279,6 @@ describe("account routes", () => {
 
     it.each([
       [
-        "saved-players",
-        SavedPlayersRoute,
-        savedPlayersLoader,
-        savedPlayersAction,
-        "addSavedTag",
-        { mode: "add", tag: TAG2 },
-        TAG,
-      ],
-      [
         "groups",
         GroupsRoute,
         groupsLoader,
@@ -324,7 +299,6 @@ describe("account routes", () => {
     ] as const)(
       "keeps loaded values after a failed save on %s",
       async (route, Component, loader, action, write, fields, savedContent) => {
-        client.listSavedTags = vi.fn(async () => [{ tag: TAG, name: "Nova" }]);
         client.listGroups = vi.fn(async () => ({
           season: "1791176400",
           groups: [{ groupId: GROUP_ID, name: "Clanmates", tags: [], players: [] }],
@@ -837,138 +811,12 @@ describe("account routes", () => {
   });
 
   describe("account.saved-players", () => {
-    it("loads players with fresh per-player remove keys", async () => {
-      client.listSavedTags = vi.fn(async () => [
-        { tag: TAG, name: "Alpha" },
-        { tag: TAG2, name: null },
-      ]);
-      const result = await savedPlayersLoader({
-        request: new Request(`${ORIGIN}/account/saved-players`),
-      } as never);
-      expect(result.players).toHaveLength(2);
-      expect(UUID_PATTERN.test(result.addIdempotencyKey)).toBe(true);
-      expect(UUID_PATTERN.test(result.removeIdempotencyKeys[TAG])).toBe(true);
-      expect(UUID_PATTERN.test(result.removeIdempotencyKeys[TAG2])).toBe(true);
-      expect(result.error).toBeNull();
-      assertNoProviderData(result);
-    });
-
-    it("redirects an unresolved account to setup", async () => {
-      client.listSavedTags = vi.fn(async () => {
-        throw new PythonApiError(403, { error: "account_not_found" });
-      });
+    it("sends a signed-in visit to the old address on to Your groups", async () => {
       await expect(
         savedPlayersLoader({
           request: new Request(`${ORIGIN}/account/saved-players`),
         } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
-    });
-
-    it("returns a safe error when listing fails for another reason", async () => {
-      client.listSavedTags = vi.fn(async () => {
-        throw new PythonApiError(503, { error: "unavailable" });
-      });
-      const result = await savedPlayersLoader({
-        request: new Request(`${ORIGIN}/account/saved-players`),
-      } as never);
-      expect(result.error?.error.code).toBe("unavailable");
-      expect(result.players).toEqual([]);
-      assertNoProviderData(result);
-    });
-
-    it("adds and removes canonical tags through Python, then redirects", async () => {
-      await expect(
-        savedPlayersAction({
-          request: formRequest("/account/saved-players", {
-            mode: "add",
-            tag: " p0lq2y8 ",
-            idempotencyKey: IDEMPOTENCY_KEY,
-          }),
-        } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/saved-players"));
-      expect(client.addSavedTag).toHaveBeenCalledWith(TAG, IDEMPOTENCY_KEY);
-
-      await expect(
-        savedPlayersAction({
-          request: formRequest("/account/saved-players", {
-            mode: "remove",
-            tag: TAG,
-            idempotencyKey: IDEMPOTENCY_KEY,
-          }),
-        } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/saved-players"));
-      expect(client.removeSavedTag).toHaveBeenCalledWith(TAG, IDEMPOTENCY_KEY);
-    });
-
-    it("rejects invalid tags, modes, and cross-origin requests before calling Python", async () => {
-      const invalidTag = await savedPlayersAction({
-        request: formRequest("/account/saved-players", {
-          mode: "add",
-          tag: "not a tag",
-          idempotencyKey: IDEMPOTENCY_KEY,
-        }),
-      } as never);
-      const tagResult = dataOf<{ fieldErrors: Record<string, string> }>(invalidTag);
-      expect(tagResult.status).toBe(400);
-      expect(tagResult.data.fieldErrors.tag).toBeTruthy();
-
-      const invalidMode = await savedPlayersAction({
-        request: formRequest("/account/saved-players", {
-          mode: "rename",
-          tag: TAG,
-          idempotencyKey: IDEMPOTENCY_KEY,
-        }),
-      } as never);
-      expect(dataOf(invalidMode).status).toBe(400);
-
-      const crossOrigin = await savedPlayersAction({
-        request: formRequest(
-          "/account/saved-players",
-          { mode: "add", tag: TAG, idempotencyKey: IDEMPOTENCY_KEY },
-          { Origin: "https://evil.example" },
-        ),
-      } as never);
-      expect(dataOf(crossOrigin).status).toBe(403);
-      expect(client.addSavedTag).not.toHaveBeenCalled();
-      expect(client.removeSavedTag).not.toHaveBeenCalled();
-    });
-
-    it("redirects unresolved and maps general failures safely", async () => {
-      client.addSavedTag = vi.fn(async () => {
-        throw new PythonApiError(403, { error: "account_not_found" });
-      });
-      await expect(
-        savedPlayersAction({
-          request: formRequest("/account/saved-players", {
-            mode: "add",
-            tag: TAG,
-            idempotencyKey: IDEMPOTENCY_KEY,
-          }),
-        } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
-
-      client.addSavedTag = vi.fn(async () => {
-        throw new PythonApiError(503, { error: "unavailable" });
-      });
-      const result = await savedPlayersAction({
-        request: formRequest("/account/saved-players", {
-          mode: "add",
-          tag: TAG,
-          idempotencyKey: IDEMPOTENCY_KEY,
-        }),
-      } as never);
-      const { data, status, headers } = dataOf<{
-        generalError: { error: { code: string } };
-      }>(result);
-      expect(status).toBe(422);
-      expect(data.generalError.error.code).toBe("unavailable");
-      assertNoStoreHeaders(headers);
-      assertNoProviderData(data);
-    });
-
-    it("exports a no-store headers policy", async () => {
-      const { headers } = await import("../../app/routes/account.saved-players");
-      expect(headers()).toEqual({ "Cache-Control": "no-store" });
+      ).rejects.toSatisfy(expectRedirectTo("/account/groups"));
     });
   });
 
@@ -1044,6 +892,51 @@ describe("account routes", () => {
         { name: "Clanmates" },
         IDEMPOTENCY_KEY,
       );
+    });
+
+    it("stops a Clasher at ten groups and says why", async () => {
+      client.listGroups = vi.fn(async () => ({
+        season: "1791176400",
+        groups: Array.from({ length: 10 }, (_, index) => ({
+          groupId: `${GROUP_ID.slice(0, -2)}${String(index).padStart(2, "0")}`,
+          name: `Group ${index}`,
+          tags: [],
+          players: [],
+        })),
+      }));
+      const handler = createStaticHandler([
+        {
+          path: "/account/groups",
+          Component: GroupsRoute,
+          loader: groupsLoader as never,
+        },
+      ]);
+      const context = await handler.query(new Request(`${ORIGIN}/account/groups`));
+      if (context instanceof Response) throw new Error("unexpected route response");
+      const html = renderToString(
+        createElement(StaticRouterProvider, {
+          router: createStaticRouter(handler.dataRoutes, context),
+          context,
+        }),
+      );
+      expect(html).toMatch(
+        /<button type="submit" class="button button-primary" disabled="">Create group/,
+      );
+      expect(html).toContain("You have 10 groups, the most an account can have.");
+
+      client.createGroup = vi.fn(async () => {
+        throw new PythonApiError(422, { error: "group_limit_reached" });
+      });
+      const refused = await groupsAction({
+        request: formRequest("/account/groups", {
+          action: "create",
+          name: "Eleventh",
+          idempotencyKey: IDEMPOTENCY_KEY,
+        }),
+      } as never);
+      const { status, data } = dataOf<{ fieldErrors: { name?: string } }>(refused);
+      expect(status).toBe(422);
+      expect(data.fieldErrors.name).toContain("the most an account can have");
     });
 
     it("requires a confirmation before deleting a group", async () => {
@@ -1414,14 +1307,11 @@ describe("account routes", () => {
   });
 
   describe("account overview", () => {
-    it("opens the public profile even when saved players and groups are unavailable", async () => {
+    it("opens the public profile even when groups are unavailable", async () => {
       client.getAccountSummary = vi.fn(async () => ({
         ...SUMMARY,
         verifiedPlayers: [{ tag: TAG, name: "Alpha" }],
       }));
-      client.listSavedTags = vi.fn(async () => {
-        throw new PythonApiError(503, { error: "unavailable" });
-      });
       client.listGroups = vi.fn(async () => {
         throw new PythonApiError(503, { error: "unavailable" });
       });

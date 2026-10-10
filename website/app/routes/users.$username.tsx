@@ -30,7 +30,7 @@ export interface UserLoaderData {
 /**
  * GET /users/:username — the public user page from the anonymous Python
  * client. Only the canonical username, display name, and verified player
- * links are shown; Google identity, saved tags, groups, preferences, and
+ * links are shown; Google identity, groups, preferences, and
  * internal IDs never appear.
  */
 export async function loader({ params }: Route.LoaderArgs) {

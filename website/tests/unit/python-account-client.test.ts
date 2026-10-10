@@ -267,66 +267,6 @@ describe("server-only Python account client", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("lists, adds, and removes saved tags with exact payloads", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ players: [{ tag: "#2PP", name: "Nova" }] }))
-      .mockResolvedValueOnce(jsonResponse({ tag: "#2PP", saved: true }))
-      .mockResolvedValueOnce(jsonResponse({ tag: "#2PP", saved: false }));
-    vi.stubGlobal("fetch", fetchMock);
-    const client = await importClient();
-
-    await expect(client.listSavedTags()).resolves.toEqual([
-      { tag: "#2PP", name: "Nova" },
-    ]);
-    await expect(client.addSavedTag("2PP", IDEMPOTENCY_KEY)).resolves.toEqual({
-      tag: "#2PP",
-      saved: true,
-    });
-    await expect(client.removeSavedTag("#2PP", IDEMPOTENCY_KEY)).resolves.toEqual({
-      tag: "#2PP",
-      saved: false,
-    });
-
-    const [addUrl, addInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
-    expect(addUrl).toEqual(
-      new URL("/v1/account/saved-tags", "http://python-fixture.test/"),
-    );
-    expect(addInit.method).toBe("POST");
-    expect(decodeBody(addInit)).toBe('{"tag":"#2PP"}');
-    const [removeUrl, removeInit] = fetchMock.mock.calls[2] as [URL, RequestInit];
-    expect(removeUrl).toEqual(
-      new URL("/v1/account/saved-tags/%232PP", "http://python-fixture.test/"),
-    );
-    expect(removeInit.method).toBe("DELETE");
-  });
-
-  it("can read only the profile's saved state through the signed account API", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ players: [] }));
-    vi.stubGlobal("fetch", fetchMock);
-    const client = await importClient();
-    await expect(client.listSavedTags("#2PP")).resolves.toEqual([]);
-    expect(fetchMock.mock.calls[0][0]).toEqual(
-      new URL("/v1/account/saved-tags?tag=%232PP", "http://python-fixture.test/"),
-    );
-  });
-
-  it("rejects invalid saved tags before contacting the service", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const client = await importClient();
-
-    await expect(client.addSavedTag("!!!", IDEMPOTENCY_KEY)).rejects.toMatchObject({
-      status: 422,
-      payload: { error: "invalid_tag" },
-    });
-    await expect(client.removeSavedTag("!!!", IDEMPOTENCY_KEY)).rejects.toMatchObject({
-      status: 422,
-      payload: { error: "invalid_tag" },
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("lists, creates, updates, and deletes groups with exact payloads", async () => {
     const fetchMock = vi
       .fn()
@@ -614,7 +554,7 @@ describe("server-only Python account client", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ username: "nova88" }))
-      .mockResolvedValueOnce(jsonResponse({ players: [{ tag: "not-a-tag" }] }))
+      .mockResolvedValueOnce(jsonResponse({ groups: [{ group_id: "not-a-group" }] }))
       .mockResolvedValueOnce(jsonResponse({ status: "linked" }));
     vi.stubGlobal("fetch", fetchMock);
     const client = await importClient();
@@ -623,7 +563,7 @@ describe("server-only Python account client", () => {
       status: 502,
       payload: { error: "malformed" },
     });
-    await expect(client.listSavedTags()).rejects.toMatchObject({
+    await expect(client.listGroups()).rejects.toMatchObject({
       status: 502,
       payload: { error: "malformed" },
     });

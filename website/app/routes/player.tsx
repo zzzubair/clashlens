@@ -13,7 +13,7 @@ import {
 import { DayMark, DayStatusNote, provisional } from "../components/DayStatus";
 import { BattleStatistics } from "../components/BattleStatistics";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { SavePlayer } from "../components/SavePlayer";
+import { PlayerActions } from "../components/PlayerActions";
 import { nextSeasonReset, useSeasonReread } from "../components/SeasonReread";
 import { PastSeasons } from "../components/PastSeasons";
 import { SeasonSummary, per, type SummarySide } from "../components/SeasonSummary";
@@ -619,7 +619,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         ) : (
           <h1>{data.requestedTag}</h1>
         )}
-        <SavePlayer tag={data.requestedTag} />
+        <PlayerActions tag={data.requestedTag} />
         {lookup ? (
           <LookupNotice lookup={lookup} timedOut={lookupTimedOut} />
         ) : (
@@ -714,7 +714,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             <PlayerFreshness profile={trackedPlayer.profile} />
           </div>
         </div>
-        <SavePlayer tag={trackedPlayer.tag}>
+        <PlayerActions tag={trackedPlayer.tag}>
           <refreshFetcher.Form
             className="player-refresh-form"
             action={refreshActionPath}
@@ -742,7 +742,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               {refreshFetcher.state === "submitting" ? "Refreshing…" : "Refresh"}
             </button>
           </refreshFetcher.Form>
-        </SavePlayer>
+        </PlayerActions>
       </header>
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}

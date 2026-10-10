@@ -7,8 +7,6 @@ import {
   mapGroupPlayer,
   mapGroups,
   mapPublicUser,
-  mapSavedTagResult,
-  mapSavedTags,
   mapSummary,
   mapVerificationResult,
 } from "../../app/lib/account-contracts";
@@ -183,20 +181,6 @@ describe("Python account response mappers", () => {
       mapPublicUser({ username: "nova", display_name: "Nova", verified_players: "x" }),
     ).toBeNull();
     expect(mapSummary({})).toBeNull();
-  });
-
-  it("maps saved tag lists and results", () => {
-    expect(mapSavedTags({ players: [{ tag: "#2PP", name: "Nova" }] })).toEqual([
-      { tag: "#2PP", name: "Nova" },
-    ]);
-    expect(mapSavedTags({ players: [{ tag: "#2PP", name: 4 }] })).toBeNull();
-    expect(mapSavedTags({ players: "x" })).toBeNull();
-    expect(mapSavedTagResult({ tag: "#2PP", saved: true })).toEqual({
-      tag: "#2PP",
-      saved: true,
-    });
-    expect(mapSavedTagResult({ tag: "#2PP", saved: "yes" })).toBeNull();
-    expect(mapSavedTagResult({ tag: "bad", saved: true })).toBeNull();
   });
 
   it("maps group lists, results, and deletion results", () => {

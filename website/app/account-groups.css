@@ -127,3 +127,26 @@
 .group-delete p {
   margin: 0.75rem 0;
 }
+
+/* Add to group: one row per group the player can go to. */
+.group-choices {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.group-choice {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+}
+
+.group-choice:has(input:disabled) {
+  color: var(--cl-muted);
+}
+
+.group-choices .button {
+  justify-self: start;
+}

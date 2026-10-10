@@ -17,8 +17,6 @@ import type {
   GroupList,
   PrivateGroup,
   PublicUser,
-  SavedPlayer,
-  SavedTagResult,
   VerificationResult,
 } from "../lib/account-contracts";
 import {
@@ -28,8 +26,6 @@ import {
   mapGroups,
   mapPublicUser,
   mapPublicUserResults,
-  mapSavedTagResult,
-  mapSavedTags,
   mapSummary,
   mapVerificationResult,
 } from "../lib/account-contracts";
@@ -109,9 +105,6 @@ export interface PythonClient {
     input: AccountNameInput & { preferences: Record<string, unknown> },
     idempotencyKey: string,
   ): Promise<ClashLensAccount>;
-  listSavedTags(tag?: string): Promise<SavedPlayer[]>;
-  addSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
-  removeSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
   listGroups(): Promise<GroupList>;
   createGroup(input: GroupInput, idempotencyKey: string): Promise<PrivateGroup>;
   updateGroup(
@@ -1068,9 +1061,6 @@ type AccountOperations = Pick<
   | "createAccount"
   | "getAccount"
   | "updateAccount"
-  | "listSavedTags"
-  | "addSavedTag"
-  | "removeSavedTag"
   | "listGroups"
   | "createGroup"
   | "updateGroup"
@@ -1100,10 +1090,6 @@ function createAccountOperations(
     getAccount: () => getAccount(identity, accountReadTimeoutMs),
     updateAccount: (input, idempotencyKey) =>
       updateAccount(input, idempotencyKey, identity),
-    listSavedTags: (tag) => listSavedTags(identity, tag),
-    addSavedTag: (tag, idempotencyKey) => addSavedTag(tag, idempotencyKey, identity),
-    removeSavedTag: (tag, idempotencyKey) =>
-      removeSavedTag(tag, idempotencyKey, identity),
     listGroups: () => listGroups(identity),
     createGroup: (input, idempotencyKey) => createGroup(input, idempotencyKey, identity),
     updateGroup: (groupId, input, idempotencyKey) =>
@@ -1230,66 +1216,6 @@ async function updateAccount(
     identity,
   );
   return mappedOrMalformed(mapAccount(payload));
-}
-
-async function listSavedTags(
-  identity: GoogleAccountIdentity | undefined,
-  tag?: string,
-): Promise<SavedPlayer[]> {
-  requireIdentity(identity);
-  const path = tag
-    ? `/v1/account/saved-tags?tag=${encodeURIComponent(tag)}`
-    : "/v1/account/saved-tags";
-  const raw = await requestJson(path, "GET", undefined, undefined, undefined, identity);
-  return mappedOrMalformed(mapSavedTags(raw));
-}
-
-async function addSavedTag(
-  tag: string,
-  idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
-): Promise<SavedTagResult> {
-  requireIdentity(identity);
-  if (!isCanonicalUuid(idempotencyKey)) {
-    throw new PythonApiError(400, { error: "invalid_input" });
-  }
-  const normalized = normalizeSubmittedPlayerTag(tag);
-  if (normalized === null) {
-    throw new PythonApiError(422, { error: "invalid_tag" });
-  }
-  const payload = await requestJson<unknown>(
-    "/v1/account/saved-tags",
-    "POST",
-    jsonBody({ tag: normalized }),
-    undefined,
-    idempotencyKey,
-    identity,
-  );
-  return mappedOrMalformed(mapSavedTagResult(payload));
-}
-
-async function removeSavedTag(
-  tag: string,
-  idempotencyKey: string,
-  identity: GoogleAccountIdentity | undefined,
-): Promise<SavedTagResult> {
-  requireIdentity(identity);
-  if (!isCanonicalUuid(idempotencyKey)) {
-    throw new PythonApiError(400, { error: "invalid_input" });
-  }
-  const normalized = normalizeSubmittedPlayerTag(tag);
-  if (normalized === null) {
-    throw new PythonApiError(422, { error: "invalid_tag" });
-  }
-  const payload = await requestJson<unknown>(
-    `/v1/account/saved-tags/${encodeURIComponent(normalized)}`,
-    "DELETE",
-    undefined,
-    undefined,
-    idempotencyKey,
-    identity,
-  );
-  return mappedOrMalformed(mapSavedTagResult(payload));
 }
 
 async function listGroups(

@@ -374,8 +374,6 @@ describe("Bases you attacked", () => {
           row("Hard one", held(5, 6)),
         ],
         legends: { held: 52, defenses: 100 },
-        savedTags: ["#8PP"],
-        saveKeys: {},
         timeZone: "UTC",
       }),
     );
@@ -386,7 +384,8 @@ describe("Bases you attacked", () => {
     expect(plain).toContain("Easy held 1 of 4 · 25%");
     expect(plain).toContain("Too early held 0 of 2 · needs 3+ defenses");
     expect(plain).not.toContain("not yet");
-    expect(plain).toContain("✓ In saved players");
+    // Each opponent can be saved into one of the account's groups.
+    expect(html).toContain('href="/account/groups/add?tag=%238PP"');
     expect(html.match(/is-yours/g)).toHaveLength(3);
   });
 });
@@ -402,8 +401,6 @@ describe("dashboard route", () => {
     updateAccount: ReturnType<typeof vi.fn>;
     getPublicUser: ReturnType<typeof vi.fn>;
     getPlayer: ReturnType<typeof vi.fn>;
-    listSavedTags: ReturnType<typeof vi.fn>;
-    addSavedTag: ReturnType<typeof vi.fn>;
   };
 
   afterEach(() => {
@@ -446,8 +443,6 @@ describe("dashboard route", () => {
       getPlayer: vi.fn(async () => {
         throw new PythonApiError(503, { error: "unavailable" });
       }),
-      listSavedTags: vi.fn(async () => [{ tag: "#8PY", name: null }]),
-      addSavedTag: vi.fn(async () => ({ tag: "#8PY", saved: true })),
     };
     mocks.createPythonClient.mockReturnValue(client);
   });
@@ -499,7 +494,6 @@ describe("dashboard route", () => {
     expect(data.ranges).toEqual({});
     expect(data.opponents).toEqual({});
     expect(data.legendsHeld).toBeNull();
-    expect(data.savedTags).toEqual(["#8PY"]);
     expect(client.getPlayer).toHaveBeenCalledWith(MAIN);
   });
 
@@ -586,9 +580,6 @@ describe("dashboard route", () => {
         autoDefenseEach: 21,
       }),
     );
-    expect(Object.keys(data.saveKeys)).toEqual(["#8PY"]);
-    expect(data.saveKeys["#8PY"]).toMatch(/^[0-9a-f-]{36}$/);
-    expect(data.saveKeys["#8PY"]).not.toBe(data.idempotencyKey);
     expect(data.ranges[MAIN]).toEqual({ best: 95, worst: 760 });
     expect(data.legendsHeld).toEqual({ held: 52, defenses: 100 });
     expect(data.opponents[MAIN]).toEqual([
@@ -765,25 +756,6 @@ describe("dashboard route", () => {
     expect(status).toBe(503);
     expect(data).toMatchObject({ saved: false, error: expect.any(String) });
   });
-
-  it("adds an attacked player to saved players", async () => {
-    const saved = unwrap<DashboardActionData>(
-      await action(postRequest({ intent: "save-player", tag: "#8py" })),
-    );
-    expect(saved).toMatchObject({ status: 200, data: { saved: true } });
-    expect(client.addSavedTag).toHaveBeenCalledWith("#8PY", IDEMPOTENCY_KEY);
-    const bad = unwrap<DashboardActionData>(
-      await action(postRequest({ intent: "save-player", tag: "nope!" })),
-    );
-    expect(bad.status).toBe(400);
-    client.addSavedTag.mockRejectedValue(
-      new PythonApiError(503, { error: "unavailable" }),
-    );
-    const failed = unwrap<DashboardActionData>(
-      await action(postRequest({ intent: "save-player", tag: "#8PY" })),
-    );
-    expect(failed).toMatchObject({ status: 503, data: { saved: false } });
-  });
 });
 
 describe("dashboard switch", () => {
@@ -850,8 +822,6 @@ describe("dashboard page", () => {
       ranges: {},
       opponents: {},
       legendsHeld: null,
-      savedTags: [],
-      saveKeys: {},
       dayEndsMs: Date.UTC(2099, 0, 1, 5),
       idempotencyKey: IDEMPOTENCY_KEY,
       ...loaderData,

@@ -16,9 +16,11 @@ import {
 import { useBackState } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { GroupPlayer, ListedGroup } from "../lib/account-contracts";
+import { addedNotice, GROUP_LIMIT, STATE_LABELS } from "../lib/group-text";
 import {
   isInappropriateName,
   MAX_GROUP_TAGS,
+  MAX_GROUPS,
   normalizeGroupName,
   normalizeSubmittedPlayerTag,
 } from "../lib/account-validation";
@@ -124,6 +126,8 @@ export async function action({ request, context }: Route.ActionArgs) {
   const { requireLogin } = await import("../server/auth-guard.server");
   const identity = await requireLogin(request);
   const actions = await import("../server/actions.server");
+  const players = await import("../services/group-players.server");
+  const adding = await import("../services/group-add.server");
   const { getWebsiteConfig } = await import("../server/config.server");
 
   const config = getWebsiteConfig();
@@ -185,13 +189,12 @@ export async function action({ request, context }: Route.ActionArgs) {
   }
   const tag = normalizeSubmittedPlayerTag(values.tag);
   if ((actionMode === "add-player" || actionMode === "remove-player") && tag === null) {
-    return reply(400, { fieldErrors: { tag: INVALID_TAG } });
+    return reply(400, { fieldErrors: { tag: adding.INVALID_TAG } });
   }
 
   try {
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient(identity);
-    const players = await import("../services/group-players.server");
     if (actionMode === "create") {
       const created = await client.createGroup(
         { name: normalizedName as string },
@@ -216,61 +219,34 @@ export async function action({ request, context }: Route.ActionArgs) {
         (row) => row.groupId === groupId,
       );
       if (group === undefined) return reply(404, { generalError: GROUP_GONE });
-      const member = group.players.find((player) => player.tag === tag);
-      if (member !== undefined) {
-        const who = member.name === null ? member.tag : `${member.name} (${member.tag})`;
-        return reply(409, { fieldErrors: { tag: `${who} is already in this group.` } });
-      }
-      if (group.tags.length >= MAX_GROUP_TAGS) {
-        return reply(422, { fieldErrors: { tag: GROUP_FULL } });
-      }
       const { clientAddressContext } = await import("../server/client-address.server");
-      const lookup = await players.checkPlayerTag(
-        context?.get(clientAddressContext),
-        tag as string,
-      );
-      if (lookup.state === "not_found") {
-        return reply(422, { fieldErrors: { tag: notFound(tag as string) } });
-      }
-      if (lookup.state === "checking") {
-        return reply(409, { fieldErrors: { tag: stillChecking(tag as string) } });
-      }
-      if (lookup.state === "failed" || lookup.state === "unknown") {
-        return reply(503, {
-          fieldErrors: {
-            tag: `Clash of Clans could not be reached to check ${tag}. Try again in a minute.`,
-          },
-        });
-      }
-      const added = await players.addGroupPlayer(
+      const added = await adding.addToGroup(
         identity,
-        groupId,
+        context?.get(clientAddressContext),
+        group,
         tag as string,
         idempotencyKey,
       );
-      return reply(200, { notice: addedNotice(added) });
+      return "player" in added
+        ? reply(200, { notice: addedNotice(added.player) })
+        : reply(added.status, { fieldErrors: { tag: added.tagError } });
     }
   } catch (cause) {
     if (cause instanceof Response) throw cause;
     if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
     const pythonError = cause as { status?: number; payload?: unknown };
     const code = isRecord(pythonError.payload) ? pythonError.payload.error : undefined;
-    const tagError: Record<string, string> = {
-      group_player_exists: `${tag} is already in this group.`,
-      group_full: GROUP_FULL,
-      player_not_found: notFound(tag ?? ""),
-      player_not_checked: stillChecking(tag ?? ""),
-      rate_limited:
-        "Too many player checks from your connection. Wait a minute and try again.",
-      invalid_tag: INVALID_TAG,
-    };
-    if (typeof code === "string" && code in tagError) {
-      return reply(pythonError.status ?? 422, { fieldErrors: { tag: tagError[code] } });
+    const tagError = adding.groupTagError(code, tag ?? "");
+    if (tagError !== null) {
+      return reply(pythonError.status ?? 422, { fieldErrors: { tag: tagError } });
     }
     if (pythonError.status === 409 && code === "group_name_conflict") {
       return reply(409, {
         fieldErrors: { name: "A group with this name already exists." },
       });
+    }
+    if (code === "group_limit_reached") {
+      return reply(422, { fieldErrors: { name: GROUP_LIMIT } });
     }
     if (
       pythonError.status === 422 &&
@@ -303,41 +279,8 @@ export async function action({ request, context }: Route.ActionArgs) {
   throw replace("/account/groups");
 }
 
-const INVALID_TAG =
-  "Enter one valid player tag, like #2PY0LQ. Tags use only 0, 2, 8, 9 and the letters P Y L Q G R J C U V.";
-const GROUP_FULL = `This group already has ${MAX_GROUP_TAGS} players, the most a comparison shows. Remove a player to add another.`;
 const GROUP_GONE: WebsiteErrorResponse = {
   error: { code: "conflict", message: "The group no longer exists. Refresh the page." },
-};
-
-function notFound(tag: string): string {
-  return `Clash of Clans has no player with the tag ${tag}. Check the tag and try again.`;
-}
-
-function stillChecking(tag: string): string {
-  return `Still checking ${tag} with Clash of Clans. Press Add again in a few seconds.`;
-}
-
-function addedNotice(player: GroupPlayer): string {
-  const who = player.name === null ? player.tag : `${player.name} (${player.tag})`;
-  if (player.state === "tracking") {
-    // An add retry can return the saved response from before a Season Reset.
-    return player.seasonResetPending
-      ? `Added ${who}. Waiting for this player's Season reset.`
-      : `Added ${who}.`;
-  }
-  return `Added ${who}. ${STATE_LABELS[player.state]}.`;
-}
-
-/** What a member row says when the player is not tracked in Legend League. */
-const STATE_LABELS: Record<GroupPlayer["state"], string> = {
-  tracking: "",
-  not_in_legend: "Not in Legend League, no data",
-  uncertain: "Not confirmed in Legend League yet, no data",
-  checking: "Looking up this player…",
-  unknown: "Not looked up yet",
-  not_found: "Tag not found in Clash of Clans",
-  failed: "Lookup failed; open the player to retry",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -395,6 +338,7 @@ export default function GroupsRoute() {
       ? actionData.createIdempotencyKey
       : loaderData.createIdempotencyKey;
   const createErrors = actionData?.action === "create" ? actionData.fieldErrors : {};
+  const atLimit = !loaderData.error && groups.length >= MAX_GROUPS;
   const listTitle = useRef<HTMLHeadingElement>(null);
   const shownGroups = useRef(groups.length);
   useEffect(() => {
@@ -427,9 +371,17 @@ export default function GroupsRoute() {
             id="group-create-name"
             value={actionData?.action === "create" ? actionData.values.name : ""}
             error={createErrors.name}
-            help="You add players one at a time once the group exists."
+            help={
+              atLimit
+                ? GROUP_LIMIT
+                : `You add players one at a time once the group exists. Up to ${MAX_GROUPS} groups.`
+            }
           />
-          <button type="submit" className="button button-primary" disabled={creating}>
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={creating || atLimit}
+          >
             {creating ? "Creating group…" : "Create group"}
           </button>
         </Form>
