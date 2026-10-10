@@ -522,7 +522,7 @@ def create_app(
             raise ApiError(422, "invalid_request")
         return JSONResponse(
             content=api_leaderboard.search_live_leaderboard(
-                production_database, q, now=current_time()
+                production_database, q, now=current_time(), cache=live_board
             )
         )
 

@@ -102,6 +102,45 @@ def test_home_and_rankings_share_one_live_board_for_30_seconds(board_database):
     assert next_season["season_reset_pending"] == 105
 
 
+def test_search_then_focus_read_the_same_cached_board(board_database):
+    database = board_database
+    clock = [0.0]
+    cache = api_leaderboard.LiveBoardCache(30, clock=lambda: clock[0])
+    api_leaderboard.get_live_leaderboard(database, limit=25, now=NOW, cache=cache)
+    seed_profile(database, "#PQQ", 7000)
+    with database.pool.connection() as connection:
+        connection.execute(
+            "UPDATE player_profile_versions SET trophies = 6500 WHERE normalized_tag = '#P22'"
+        )
+
+    def search_then_focus(query):
+        found = api_leaderboard.search_live_leaderboard(
+            database, query, now=NOW, cache=cache
+        )
+        for result in found["results"]:
+            focused = api_leaderboard.get_live_leaderboard(
+                database, limit=100, now=NOW, focus_tag=result["tag"], cache=cache
+            )
+            entry = next(e for e in focused["entries"] if e["tag"] == result["tag"])
+            assert (entry["position"], entry["trophies"]) == (
+                result["rank"],
+                result["trophies"],
+            )
+        return found
+
+    clock[0] = 29.9
+    assert search_then_focus("#PQQ") == {
+        "exact_tag": None, "has_more": False, "results": []
+    }
+    assert search_then_focus("#P22")["results"][0]["trophies"] == 6000
+    assert len(search_then_focus("Player")["results"]) == 20
+    clock[0] = 30.0
+    found = search_then_focus("#PQQ")
+    assert found["exact_tag"] == "#PQQ"
+    assert [(r["rank"], r["trophies"]) for r in found["results"]] == [(1, 7000)]
+    assert search_then_focus("#P22")["results"][0]["rank"] == 2
+
+
 def test_equal_trophies_follow_season_attack_destruction(board_database, monkeypatch):
     database = board_database
     season_start = ranked_day_for(NOW).season_start

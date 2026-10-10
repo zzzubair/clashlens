@@ -89,47 +89,38 @@ def _season_params(now: datetime) -> dict[str, Any]:
 
 
 def search_live_leaderboard(
-    database: ApiDatabase, query: str, *, now: datetime
+    database: ApiDatabase,
+    query: str,
+    *,
+    now: datetime,
+    cache: LiveBoardCache | None = None,
 ) -> dict[str, Any]:
-    """Filter after ranking the board, using only indexed current-profile reads."""
+    """Filter the ranked board the focused Live Leaderboard page reads."""
     query = query.strip()
     if not query or len(query) > 80:
         raise ValueError("invalid leaderboard search")
-    explicit_tag = query.startswith("#")
     tag = "#" + query.removeprefix("#").upper()
-    with database.pool.connection() as connection:
-        rows = connection.execute(
-            f"""
-            WITH ranked AS MATERIALIZED ({_LIVE_RANKED_SQL}), exact AS (
-                SELECT 1 FROM ranked
-                WHERE %(explicit_tag)s AND normalized_tag = %(tag)s
-            )
-            SELECT normalized_tag, name, trophies, position,
-                   EXISTS (SELECT 1 FROM exact) AS exact_match
-            FROM ranked
-            WHERE normalized_tag = %(tag)s
-               OR (NOT EXISTS (SELECT 1 FROM exact)
-                   AND strpos(lower(name), lower(%(query)s)) > 0)
-            ORDER BY position LIMIT 21
-            """,
-            {
-                "tag": tag,
-                "explicit_tag": explicit_tag,
-                "query": query,
-                **_season_params(now),
-            },
-        ).fetchall()
+    ranked = list(enumerate(_live_board(database, now, cache).rows, start=1))
+    exact = [
+        (rank, row) for rank, row in ranked if query.startswith("#") and row[0] == tag
+    ]
+    needle = query.lower()
+    found = exact or [
+        (rank, row)
+        for rank, row in ranked
+        if row[0] == tag or needle in _text(row[1]).lower()
+    ]
     return {
-        "exact_tag": tag if rows and rows[0][4] else None,
-        "has_more": len(rows) > 20,
+        "exact_tag": tag if exact else None,
+        "has_more": len(found) > 20,
         "results": [
             {
                 "tag": _text(row[0]),
                 "name": _text(row[1]),
                 "trophies": int(row[2]),
-                "rank": int(row[3]),
+                "rank": rank,
             }
-            for row in rows[:20]
+            for rank, row in found[:20]
         ],
     }
 
@@ -249,6 +240,15 @@ class LiveBoardCache:
             return board
 
 
+def _live_board(
+    database: ApiDatabase, now: datetime, cache: LiveBoardCache | None
+) -> _LiveBoard:
+    if cache is not None:
+        return cache.current(database, now)
+    with database.pool.connection() as connection:
+        return _read_live_board(connection, now)
+
+
 def get_live_leaderboard(
     database: ApiDatabase,
     *,
@@ -260,11 +260,7 @@ def get_live_leaderboard(
 ) -> dict[str, Any] | None:
     if offset < 0 or offset % limit:
         raise ValueError("offset must be non-negative and aligned to limit")
-    if cache is not None:
-        board = cache.current(database, now)
-    else:
-        with database.pool.connection() as connection:
-            board = _read_live_board(connection, now)
+    board = _live_board(database, now, cache)
     rows = board.rows
     total_entries = len(rows)
     first, last = offset + 1, offset + limit
