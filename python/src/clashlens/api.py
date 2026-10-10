@@ -74,6 +74,8 @@ _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
         "account.create",
         "account.read",
         "account.update",
+        "crews.read",
+        "crews.write",
         "groups.read",
         "groups.write",
         "player_links.verify",
@@ -1123,6 +1125,15 @@ def create_app(
         )
         return _operation_response(result)
 
+    # A local import: the crew routes reuse this module's request checks.
+    from .api_crews_http import register_crew_routes
+
+    register_crew_routes(
+        app,
+        database=production_database,
+        current_time=current_time,
+        enabled=dashboard_enabled,
+    )
     return app
 
 

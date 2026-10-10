@@ -35,6 +35,7 @@ def test_username_normalization_is_ascii_case_insensitive(
         "admin",
         "support",
         "api",
+        "crews",
     ],
 )
 def test_username_rejects_unsafe_or_reserved_values(supplied: str) -> None:
