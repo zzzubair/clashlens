@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   data,
   Form,
@@ -261,6 +261,9 @@ function JoinForm({
   const [picked, setPicked] = useState<string[]>(() =>
     answer ? answer.tags : joinable.length > 0 && open > 0 ? [joinable[0]!.tag] : [],
   );
+  // Without JavaScript the picks can't be counted here; the server checks them.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
   const count = picked.length;
   const tooMany = count > open;
   const toggle = (tag: string, on: boolean) =>
@@ -317,9 +320,13 @@ function JoinForm({
       <button
         type="submit"
         className="button button-primary"
-        disabled={count === 0 || tooMany || navigation.state === "submitting"}
+        disabled={
+          (hydrated && (count === 0 || tooMany)) || navigation.state === "submitting"
+        }
       >
-        {count === 0
+        {!hydrated
+          ? "Join with the picked accounts"
+          : count === 0
           ? "Pick at least one account"
           : tooMany
             ? `Pick at most ${open}`

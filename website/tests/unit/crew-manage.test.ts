@@ -166,19 +166,26 @@ function invitePayload(overrides: Record<string, unknown> = {}) {
 
 async function render(
   path: string,
-  route: { path: string; Component: () => unknown; loader: (a: Args) => unknown },
+  route: {
+    path: string;
+    Component: () => unknown;
+    loader: (a: Args) => unknown;
+    action?: (a: Args) => unknown;
+  },
+  request = new Request(`${ORIGIN}${path}`),
 ) {
   const handler = createStaticHandler([
     {
       path: route.path,
       Component: route.Component as () => null,
       loader: route.loader as never,
+      action: route.action as never,
     },
   ]);
   // The server gives every request the clasher's address.
   const requestContext = new RouterContextProvider();
   requestContext.set(clientAddressContext, undefined);
-  const context = await handler.query(new Request(`${ORIGIN}${path}`), {
+  const context = await handler.query(request, {
     requestContext,
   });
   if (context instanceof Response) throw new Error("unexpected response");
@@ -481,6 +488,12 @@ describe("edit crew", () => {
     expect(mocks.requestJson).toHaveBeenCalledTimes(1);
   });
 
+  it("takes an owner with no places left out to their crews after handing over", async () => {
+    mocks.requestJson.mockResolvedValue({ crew_id: CREW_ID, left_crew: true });
+    const handed = await thrown(() => settings({ intent: "transfer", username: "kenji" }));
+    expect((handed as Response).headers.get("Location")).toBe("/crews");
+  });
+
   it("renames, resizes, turns off a link and hands over", async () => {
     mocks.requestJson.mockResolvedValue({});
     const notices = [];
@@ -582,8 +595,24 @@ describe("join by invite", () => {
     expect(html).toContain("Night Owls");
     expect(html).toContain("12 places open");
     expect(html).toContain("Not in Legend League");
-    expect(html).toContain("Join with 1 account");
+    expect(html).toContain('name="join:#2PP" checked=""');
+    expect(html).toContain("Join with the picked accounts");
     expect(html).toContain(`/account/verify-player?return=/crews/join/${CODE}`);
+  });
+
+  it("keeps Join working without JavaScript after a join with no picks", async () => {
+    mocks.requestJson.mockResolvedValue(
+      invitePayload({
+        accounts: [{ tag: "#2PP", name: "Zara", trophies: 5390, eligibility: "ok" }],
+      }),
+    );
+    const html = await render(
+      `/crews/join/${CODE}`,
+      { ...joinRoute, action: joinAction as never },
+      post(`/crews/join/${CODE}`, {}, { code: CODE }).request,
+    );
+    expect(html).toContain("Pick at least one account.");
+    expect(html).toMatch(/<button type="submit" class="button button-primary">Join with/);
   });
 
   it.each([

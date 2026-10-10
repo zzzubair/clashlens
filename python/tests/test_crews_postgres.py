@@ -645,8 +645,7 @@ def test_handing_over_to_someone_leaving_keeps_the_owner(site: Site) -> None:
     # they hand it over.
     site.sql(_DELETE_PLACE, ("#2PP",))
     assert site.crew("owner", crew_id)["my_role"] == "owner"
-    assert site.call(
-        "owner", api_crews.hand_over, crew_id=crew_id, username="stayer"
-    ).status_code == 200
+    handed = site.call("owner", api_crews.hand_over, crew_id=crew_id, username="stayer")
+    assert (handed.status_code, handed.payload["left_crew"]) == (200, True)
     assert site.crew("owner", crew_id) is None
     assert site.crew("stayer", crew_id)["my_role"] == "owner"

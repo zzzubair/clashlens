@@ -95,7 +95,15 @@ export async function action({ request, params }: Route.ActionArgs) {
       if (intent === "transfer") {
         const username = fields["username"] ?? "";
         if (username === "") return { error: "Pick the new owner." };
-        await writeCrew(identity, "POST", `${path}/owner`, { username }, key(username));
+        const handed = (await writeCrew(
+          identity,
+          "POST",
+          `${path}/owner`,
+          { username },
+          key(username),
+        )) as { left_crew?: unknown };
+        // An owner with no places left is out of the crew once it is handed over.
+        if (handed.left_crew === true) throw redirect("/crews");
         return { notice: `@${username} owns the crew now.` };
       }
       if (fields["confirm"] !== "on")
