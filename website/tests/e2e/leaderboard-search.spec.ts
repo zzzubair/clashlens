@@ -67,7 +67,7 @@ test("only hash tags jump directly; back restores search", async ({ page }) => {
 
 test("empty searches explain that there is no match", async ({ page }) => {
   await page.goto("/leaderboards/tracked?view=live&page=1&q=NoSuchClasherForThisTest");
-  await expect(page.getByText(/No tracked players matching/)).toBeVisible();
+  await expect(page.getByText(/No players on this board match/)).toBeVisible();
   await expect(page.locator(".rank-search-results a")).toHaveCount(0);
   await expect(page.locator(".leaderboard-row").first()).toBeVisible();
 });
