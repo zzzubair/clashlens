@@ -586,7 +586,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         </main>
       );
     }
-    const current = player && showsCurrentSeason(lookup, history.length) ? player : null;
+    const current = player && showsCurrentSeason(lookup, history) ? player : null;
     return (
       <main id="main-content" tabIndex={-1} className="page-shell player-page">
         {lookup?.profile ? (

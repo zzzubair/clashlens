@@ -33,8 +33,15 @@ export function lookupMessage(lookup: PlayerLookup): string {
  * player outside Legend I needs a saved Legend day this Season, so the page
  * never shows them an empty Season.
  */
-export function showsCurrentSeason(lookup: PlayerLookup | null, legendDays: number) {
-  return legendDays > 0 || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "");
+export function showsCurrentSeason(
+  lookup: PlayerLookup | null,
+  history: { day: RankedDaySummary }[],
+) {
+  return (
+    history.some(({ day }) =>
+      isLegendDay(day.uncertainty, day.offenseEvents.length + day.defenseEvents.length),
+    ) || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "")
+  );
 }
 
 /**
