@@ -53,7 +53,10 @@ Name results include active players or players with recorded history. Empty
 day records marked `player_not_eligible` do not count as history unless they
 contain battles. A full current profile and Refresh appear only when the displayed
 player response itself confirms active tracking, including after Refresh. Other
-pages show the eligibility explanation or lookup error and any saved history.
+pages show the eligibility explanation or lookup error and any saved history. A
+player outside Legend I, or not confirmed in it, is named by its newest saved
+profile, with that profile's league when known, and shows no current Season
+unless it has a saved Legend day this Season.
 Saved daily history combines available season, recent and current-day records
 without duplicate dates. Records with unconfirmed season membership show Date
 only instead of a season day number. This adds no weekly recheck or clan discovery
@@ -431,9 +434,10 @@ league its newest saved profile names, or "Unranked" when none is known) and
 today's net so far with attacks and defenses done. The one profile
 read returns every card. An account without current results also shows its
 player page's explanation, with any saved trophies and today's battles from its
-last accepted profile (for example after leaving Legend I), its rank whenever
-it is on the board, and "Unknown" or "Not available yet" where nothing valid is
-saved.
+last accepted profile, its rank whenever it is on the board, and "Unknown" or
+"Not available yet" where nothing valid is saved. An account outside Legend I,
+or not confirmed in it, shows its newest saved profile's trophies instead, as
+its player page does.
 
 Usernames are fixed after signup. Both the website action and private API reject
 rename attempts; display-name edits still work. The form directs username-change

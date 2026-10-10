@@ -4,6 +4,7 @@ import {
   dayEvidence,
   presentDay,
   selectPlayerHistory,
+  showsCurrentSeason,
 } from "../../app/lib/player-lookup-text";
 
 const DAY = {
@@ -72,5 +73,16 @@ describe("days before a late joiner signed up", () => {
     const history = selectPlayerHistory(player, Date.parse("2026-09-16T06:00:00Z"));
     expect(history.map(({ seasonDay }) => seasonDay)).toEqual(["Day 3"]);
     expect(presentDay(dayEvidence(history[0].day), false).status).toBe("Not enrolled");
+  });
+
+  it("give a player outside Legend I no current Season when they never played a Legend day", () => {
+    const lookup = { tag: "#L82PYUC9J", state: "not_in_legend" } as const;
+    const notEnrolled = emptyDay(3, ["missing_start_baseline", "not_enrolled"]);
+    const played = { ...emptyDay(4, []), offenseEvents: [{}] } as RankedDaySummary;
+    expect(showsCurrentSeason(lookup, [{ day: notEnrolled }])).toBe(false);
+    expect(showsCurrentSeason(lookup, [{ day: notEnrolled }, { day: played }])).toBe(
+      true,
+    );
+    expect(showsCurrentSeason({ ...lookup, state: "tracking" }, [])).toBe(true);
   });
 });

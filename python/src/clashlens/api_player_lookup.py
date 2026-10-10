@@ -33,6 +33,15 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
             state = (
                 "not_in_legend" if _text(eligibility) == "ineligible" else "uncertain"
             )
+            # Off the board, the newest saved profile still names the player,
+            # and its league when that profile is itself outside Legend I.
+            _, _, newest, _, name, clan, trophies, _, league = _newest_profile(
+                connection, player_id
+            )
+            profile = {"name": _text(name), "clan": _text(clan), "trophies": trophies}
+            if _text(newest) == "ineligible" and league is not None:
+                profile["league"] = _text(league)
+            return {"tag": tag, "state": state, "profile": profile}
         else:
             work_row = connection.execute(
                 """
@@ -79,15 +88,9 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
     return {"tag": tag, "state": state}
 
 
-def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
-    """Explain why a tracked player's newest processed profile gives no
-    current results.
-
-    Reads that profile without accepting it. Only a Legend I profile whose
-    Season ID is 0 shows its name, clan and trophies, and only on the
-    player's own page.
-    """
-    row = connection.execute(
+def _newest_profile(connection: Any, player_id: int) -> Any:
+    """The player's newest processed profile, read without accepting it."""
+    return connection.execute(
         """
         SELECT profile.current_league_season_id, profile.eligibility_reason,
                profile.eligibility_state, profile.source_contract_state,
@@ -100,7 +103,8 @@ def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
                              SELECT 1 FROM api_player_daily_logs AS newer
                              WHERE newer.player_id = day.player_id
                                AND newer.ranked_day_start = day.ranked_day_start
-                               AND newer.version > day.version))
+                               AND newer.version > day.version)),
+               profile.league_tier_name
         FROM player_profile_versions AS profile
         CROSS JOIN LATERAL (
             SELECT max(observed_at) AS observed_at FROM player_profile_effects
@@ -112,9 +116,19 @@ def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
         """,
         (ranked_day_for(datetime.now(UTC)).season_start, player_id),
     ).fetchone()
+
+
+def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
+    """Explain why a tracked player's newest processed profile gives no
+    current results.
+
+    Among tracked players, only a Legend I profile whose Season ID is 0 shows
+    its name, clan and trophies, and only on the player's own page.
+    """
+    row = _newest_profile(connection, player_id)
     if row is None:
         return {"reason": "pending"}
-    season, reason, eligibility, contract, name, clan, trophies, battles = row
+    season, reason, eligibility, contract, name, clan, trophies, battles, _league = row
     if (
         _text(season) == "0"
         and _text(reason) == "confirmed_legend_i"

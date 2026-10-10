@@ -20,7 +20,6 @@ import { SeasonSummary, per, type SummarySide } from "../components/SeasonSummar
 import { formatAge, useCurrentTime, useServerTime } from "../components/Provenance";
 import { pageMeta } from "../lib/blog";
 import {
-  LOOKUP_MESSAGES,
   dayEnd,
   dayEvidence,
   dayReasons,
@@ -29,9 +28,11 @@ import {
   legendDayKey,
   liveDayNotice,
   lookupExplanation,
+  lookupMessage,
   presentDay,
   seasonForDay,
   selectPlayerHistory,
+  showsCurrentSeason,
 } from "../lib/player-lookup-text";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
@@ -585,6 +586,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         </main>
       );
     }
+    const current = player && showsCurrentSeason(lookup, history) ? player : null;
     return (
       <main id="main-content" tabIndex={-1} className="page-shell player-page">
         {lookup?.profile ? (
@@ -636,7 +638,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
           seasons={data.seasons}
           error={data.seasonsError ?? null}
           selectedSeason={data.selectedSeason}
-          currentAvailable={player !== null}
+          currentAvailable={current !== null}
         />
         {data.selectedSeason !== null ? (
           <SelectedSeason
@@ -645,8 +647,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             error={data.historicalError}
           />
         ) : null}
-        {data.selectedSeason === null && player ? (
-          <BattleStatistics player={player} now={statisticsTime} />
+        {data.selectedSeason === null && current ? (
+          <BattleStatistics player={current} now={statisticsTime} />
         ) : null}
         {data.selectedSeason === null && player && history.length > 0 ? (
           <section className="data-section" aria-label="Saved Legend history">
@@ -833,7 +835,7 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
         {explanation ??
           (timedOut && (lookup.state === "checking" || lookup.state === "tracking")
             ? "The check is taking longer than expected. It may still be running."
-            : LOOKUP_MESSAGES[lookup.state])}
+            : lookupMessage(lookup))}
       </p>
       {explanation ? (
         <a href={canonicalPlayerPath(lookup.tag)}>Check again</a>

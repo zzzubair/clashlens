@@ -173,11 +173,12 @@ def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
                     "today": None,
                 },
                 {
+                    # Off the board, its newest saved profile's trophies, as
+                    # its page shows, not its last Legend I count.
                     "tag": "#YQ2", "name": "Player #YQ2", "clan": None,
-                    "state": "not_in_legend", "reason": None, "trophies": 4900,
+                    "state": "not_in_legend", "reason": None, "trophies": 0,
                     "season_reset_pending": False, "rank": None,
-                    "league": "Electro League 33",
-                    "today": {"net": None, "attacks": None, "defenses": None},
+                    "league": "Electro League 33", "today": None,
                 },
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.

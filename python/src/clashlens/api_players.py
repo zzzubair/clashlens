@@ -458,10 +458,10 @@ def player_cards(
     ``players`` holds (player id, tag, name, clan, league). Every card carries the
     lookup state and reason its own page explains, and the player's Live
     Leaderboard position whenever it is on the board, and the league its newest
-    saved profile names. Trophies and today come only from an accepted current
-    profile, including for a player who has left Legend I. While a newer
-    profile goes unaccepted they stay unknown, so Season 0 trophies stay on
-    that page alone.
+    saved profile names. For a player outside Legend I, trophies come from its
+    newest saved profile. Otherwise trophies and today come only from an
+    accepted current profile. While a newer profile goes unaccepted they stay
+    unknown, so a Legend I player's Season 0 trophies stay on its page alone.
     """
     ids = [player[0] for player in players]
     profiles = {
@@ -515,7 +515,10 @@ def player_cards(
             "league": league,
             "today": None,
         }
-        if reason is None and profile is not None:
+        if lookup["state"] in ("not_in_legend", "uncertain"):
+            # Off the board, the newest saved profile's trophies, as on its page.
+            card["trophies"] = lookup["profile"]["trophies"]
+        elif reason is None and profile is not None:
             # As on the player page: an earlier Season's trophies are no total.
             pending = awaits_season_reset(
                 _text(profile[1]), int(profile[0]), profile[2], profile[3], now
