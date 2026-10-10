@@ -6,7 +6,12 @@
 
 .nav-account {
   gap: 0.5rem;
+  list-style: none;
   cursor: pointer;
+}
+
+.nav-account::-webkit-details-marker {
+  display: none;
 }
 
 .nav-account svg {
@@ -25,11 +30,11 @@
   margin-left: -0.15rem;
 }
 
-.nav-account[aria-expanded="true"] .account-menu-chevron {
+.account-menu[open] > .nav-account .account-menu-chevron {
   transform: rotate(180deg);
 }
 
-:root .site-nav .nav-account[aria-expanded="true"] {
+:root .site-nav .account-menu[open] > .nav-account {
   background: var(--cl-header-soft);
 }
 

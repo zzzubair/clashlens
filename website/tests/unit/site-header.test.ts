@@ -56,10 +56,9 @@ it("signed in puts Account and Log out behind the closed account name", async ()
   });
 
   expect(nav).toMatch(
-    /<button type="button" class="nav-link nav-account" aria-expanded="false" aria-controls="account-menu-panel">[\s\S]*Lens Scout/,
+    /<details class="account-menu"><summary class="nav-link nav-account">[\s\S]*Lens Scout[\s\S]*<\/summary>/,
   );
-  const panel = /<ul id="account-menu-panel"[\s\S]*?<\/ul>/.exec(nav)![0];
-  expect(panel).toContain("hidden");
+  const panel = /<ul class="account-menu-panel"[\s\S]*?<\/ul>/.exec(nav)![0];
   expect(panel).toContain('href="/users/lens_scout" data-discover="true">Account</a>');
   expect(panel).toContain('action="/logout"');
   expect(panel).toContain('value="logout-key"');

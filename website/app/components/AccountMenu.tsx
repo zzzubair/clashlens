@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Form, Link } from "react-router";
 
 /**
  * The signed-in account name in the header. Clicking it opens a small list
  * with Account and Log out; outside clicks, Escape and tabbing away close it.
+ * It is a native disclosure, so it also opens before or without page scripts.
  */
 export function AccountMenu({
   label,
@@ -14,27 +15,30 @@ export function AccountMenu({
   accountPath: string;
   logoutIdempotencyKey: string;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const toggleRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  const toggleRef = useRef<HTMLElement>(null);
+
+  function close() {
+    if (menuRef.current) menuRef.current.open = false;
+  }
 
   useEffect(() => {
-    if (!expanded) return;
     function handlePointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setExpanded(false);
+      const menu = menuRef.current;
+      if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
     }
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [expanded]);
+  }, []);
 
   return (
-    <div
-      ref={rootRef}
+    <details
+      ref={menuRef}
       className="account-menu"
       onKeyDown={(event) => {
-        if (expanded && event.key === "Escape") {
+        if (event.currentTarget.open && event.key === "Escape") {
           event.preventDefault();
-          setExpanded(false);
+          close();
           toggleRef.current?.focus();
         }
       }}
@@ -43,18 +47,11 @@ export function AccountMenu({
           event.relatedTarget !== null &&
           !event.currentTarget.contains(event.relatedTarget)
         ) {
-          setExpanded(false);
+          close();
         }
       }}
     >
-      <button
-        ref={toggleRef}
-        type="button"
-        className="nav-link nav-account"
-        aria-expanded={expanded}
-        aria-controls="account-menu-panel"
-        onClick={() => setExpanded(!expanded)}
-      >
+      <summary ref={toggleRef} className="nav-link nav-account">
         <svg
           width="20"
           height="20"
@@ -85,10 +82,10 @@ export function AccountMenu({
         >
           <path d="m6 9 6 6 6-6" />
         </svg>
-      </button>
-      <ul id="account-menu-panel" className="account-menu-panel" hidden={!expanded}>
+      </summary>
+      <ul className="account-menu-panel">
         <li>
-          <Link to={accountPath} onClick={() => setExpanded(false)}>
+          <Link to={accountPath} onClick={close}>
             Account
           </Link>
         </li>
@@ -99,6 +96,6 @@ export function AccountMenu({
           </Form>
         </li>
       </ul>
-    </div>
+    </details>
   );
 }

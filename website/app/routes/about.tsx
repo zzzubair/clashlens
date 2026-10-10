@@ -1,6 +1,5 @@
 import { useLoaderData } from "react-router";
 
-import { DISCORD_INVITE_URL } from "../lib/discord";
 import { Markdown } from "../lib/markdown";
 import "../about.css";
 
@@ -11,7 +10,7 @@ import "../about.css";
  */
 export async function loader() {
   const { default: source } = await import("../content/about.md?raw");
-  return { source: source.replaceAll("DISCORD_INVITE_URL", DISCORD_INVITE_URL) };
+  return { source };
 }
 
 export default function AboutRoute() {
