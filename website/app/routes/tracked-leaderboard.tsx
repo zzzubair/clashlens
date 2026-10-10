@@ -200,7 +200,12 @@ export default function TrackedLeaderboardRoute() {
     leaderboard && entries.length
       ? `${entries[0].rank.toLocaleString()}–${lastRank.toLocaleString()} of ${leaderboard.totalEntries.toLocaleString()}`
       : null;
-  const nextCount = Math.min(PAGE_SIZE, (leaderboard?.totalEntries ?? 0) - lastRank);
+  const nextCount = leaderboard
+    ? Math.min(
+        leaderboard.pageSize,
+        leaderboard.totalEntries - leaderboard.page * leaderboard.pageSize,
+      )
+    : 0;
   const newestObservedAt = leaderboard?.sourceObservations?.newestObservedAt ?? null;
   const now = useCurrentTime(leaderboard?.generatedAt);
   const ageSeconds = (observedAt: string) =>
@@ -509,7 +514,7 @@ export default function TrackedLeaderboardRoute() {
                     className="button button-secondary"
                     to={leaderboardUrl(view, leaderboard.page + 1, daily ?? undefined)}
                   >
-                    {nextCount > 0 ? `Next ${nextCount}` : "Next"}
+                    Next {nextCount}
                   </Link>
                 ) : null}
               </nav>

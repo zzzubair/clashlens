@@ -149,20 +149,23 @@ it("formats large ranks without explaining unlisted tracked players", async () =
 });
 
 it.each([
-  [1, 250, "Next 100"],
-  [2, 250, "Next 50"],
+  [1, 250, 100, "Next 100"],
+  [2, 250, 200, "Next 50"],
+  [2, 250, 205, "Next 50"],
+  [1, 104, 100, "Next 4"],
+  [1, 104, 104, "Next 4"],
 ])(
-  "labels the Next button on page %s of %s ranks with how many rows it adds",
-  async (page, total, label) => {
+  "labels the Next button on page %s of %s ranks ending at %s with the next page's rows",
+  async (page, total, lastRank, label) => {
     mocks.getTrackedLeaderboard.mockResolvedValue({
       ...structuredClone(board),
       entries: [
         { ...board.entries[0], rank: 1 + (page - 1) * 100 },
-        { ...board.entries[0], tag: "#2PY", rank: page * 100 },
+        { ...board.entries[0], tag: "#2PY", rank: lastRank },
       ],
       totalEntries: total,
       page,
-      pageCount: 3,
+      pageCount: Math.ceil(total / 100),
       hasPrevious: page > 1,
       hasNext: true,
     });
