@@ -13,6 +13,7 @@ export const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
   "analytics",
   "api",
   "clashlens",
+  "crews",
   "groups",
   "leaderboard",
   "login",

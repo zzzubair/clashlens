@@ -36,6 +36,7 @@ Use these exactly.
 - **EOD**: trophy count at the end of a Legend day.
 - **Season**: exactly 28 Legend days.
 - **Tournament**: a ranked competition period. Weekly in other Ranked Leagues, 28 Legend days in Legend I.
+- **Crew**: an invite-only group of up to 100 Legend League accounts, owned by Clash Lens accounts, with shared boards. Separate from Groups.
 
 ## Technical words
 

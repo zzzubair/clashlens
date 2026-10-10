@@ -471,6 +471,12 @@ dashboard's own player read (`/v1/players/{tag}/today`) with
 `dashboard_disabled`. `./ops` passes the setting to the website and the private
 API, so turning it on or off takes `./ops up`.
 
+Crews use the same setting: they ship with the dashboard and have no switch of
+their own. While it is off, every private API crew route
+(`/v1/account/crews…` and `/v1/account/crew-invites/…`) answers 404
+`crews_disabled` before reading anything. Migration 0095 creates the crew
+tables either way; they stay empty while the setting is off.
+
 Build from the checkout to be released, review the resulting commit, then run
 the already-built release:
 
