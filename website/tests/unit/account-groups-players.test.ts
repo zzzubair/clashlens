@@ -337,14 +337,22 @@ describe("adding and removing one group player", () => {
   it("opens the panel a no-JavaScript link asks for, in that card only", async () => {
     const card = (html: string) =>
       html.slice(html.indexOf(`<li id="group-${GROUP_ID}"`)).split('<li id="group-')[1];
-    const add = await renderGroups(worstGroups(), undefined, `?group=${GROUP_ID}&panel=add`);
+    const add = await renderGroups(
+      worstGroups(),
+      undefined,
+      `?group=${GROUP_ID}&panel=add`,
+    );
     expect(card(add)).toContain(`<div id="group-${GROUP_ID}-add" class="group-panel">`);
     expect(card(add)).toContain(
       `href="/account/groups#group-${GROUP_ID}" aria-expanded="true" aria-controls="group-${GROUP_ID}-add">Add player</a>`,
     );
     expect(add.match(/class="group-panel">/g)).toHaveLength(1);
 
-    const edit = await renderGroups(worstGroups(), undefined, `?group=${GROUP_ID}&panel=edit`);
+    const edit = await renderGroups(
+      worstGroups(),
+      undefined,
+      `?group=${GROUP_ID}&panel=edit`,
+    );
     expect(card(edit)).toContain(`<div id="group-${GROUP_ID}-edit" class="group-panel">`);
     // Edit lists the players with their Remove buttons, so the plain list steps aside.
     expect(card(edit)).not.toContain("group-members");
@@ -377,7 +385,9 @@ describe("adding and removing one group player", () => {
     expect(added).toContain(`<div id="group-${GROUP_ID}-add" class="group-panel">`);
     expect(added).toContain("Not a player.");
     expect(added).toContain('value="#2PP"');
-    expect(added).toContain(`<div id="group-${GROUP_ID}-edit" class="group-panel" hidden="">`);
+    expect(added).toContain(
+      `<div id="group-${GROUP_ID}-edit" class="group-panel" hidden="">`,
+    );
 
     const renamed = await renderGroups(
       worstGroups(),
@@ -385,7 +395,9 @@ describe("adding and removing one group player", () => {
         fieldErrors: { name: "A group with this name already exists." },
       }),
     );
-    expect(card(renamed)).toContain(`<div id="group-${GROUP_ID}-edit" class="group-panel">`);
+    expect(card(renamed)).toContain(
+      `<div id="group-${GROUP_ID}-edit" class="group-panel">`,
+    );
     expect(card(renamed)).toContain("A group with this name already exists.");
     expect(card(renamed)).toContain('value="Taken"');
     // Only that group's card opens.

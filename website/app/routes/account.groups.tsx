@@ -501,7 +501,7 @@ function GroupCard({
   const [panel, setPanel] = useState<Panel | null>(() =>
     actionData === undefined
       ? searchParams.get("group") === id
-        ? PANELS.find((name) => name === searchParams.get("panel")) ?? null
+        ? (PANELS.find((name) => name === searchParams.get("panel")) ?? null)
         : null
       : editResult === undefined
         ? "add"
@@ -589,7 +589,9 @@ function GroupCard({
               before it joins.
             </p>
           )}
-          {addResult?.generalError ? <ErrorNotice error={addResult.generalError} /> : null}
+          {addResult?.generalError ? (
+            <ErrorNotice error={addResult.generalError} />
+          ) : null}
         </add.Form>
       </div>
       <div id={`group-${id}-edit`} className="group-panel" hidden={panel !== "edit"}>
