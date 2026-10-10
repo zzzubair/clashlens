@@ -82,6 +82,7 @@ function linked(
     trophies: 5696,
     seasonResetPending: false,
     rank: 318,
+    league: null,
     today: { net: 46, attacks: 5, defenses: 6 },
     ...overrides,
   };

@@ -89,6 +89,8 @@ export interface LinkedPlayerCard extends VerifiedPlayer {
   seasonResetPending: boolean;
   /** Live Leaderboard position; null when not on the board. */
   rank: number | null;
+  /** League its newest saved profile names; shown when it has no rank. */
+  league: string | null;
   /** Today's battles so far; `net` only once every one is recorded. */
   today: { net: number | null; attacks: number | null; defenses: number | null } | null;
 }
@@ -411,8 +413,10 @@ function asLinkedPlayerCard(
 ): LinkedPlayerCard | null {
   if (!isRecord(value)) return null;
   const { clan, state, reason, trophies, season_reset_pending, rank, today } = value;
+  const league = value.league ?? null;
   if (
     !isNullableString(clan) ||
+    !isNullableString(league) ||
     !LOOKUP_STATES.includes(state as PlayerLookup["state"]) ||
     (reason !== null &&
       !LOOKUP_REASONS.includes(reason as NonNullable<PlayerLookup["reason"]>)) ||
@@ -437,6 +441,7 @@ function asLinkedPlayerCard(
     trophies,
     seasonResetPending: season_reset_pending,
     rank: rank as number | null,
+    league,
     today:
       today === null
         ? null

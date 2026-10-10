@@ -206,7 +206,7 @@ function LinkedPlayer({ player }: { player: LinkedPlayerCard }) {
           <small>Rank</small>
           <strong>
             {player.rank === null
-              ? "Unranked"
+              ? (player.league ?? "Unranked")
               : `#${player.rank.toLocaleString("en-GB")}`}
           </strong>
         </span>

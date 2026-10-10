@@ -426,8 +426,9 @@ public `/users/:username` profile, including after successful player linking.
 Only the owner sees edit, sign-in connection and account-linking controls.
 The linking form includes the in-game API token instructions.
 Each linked account on a profile is one card that opens its player page: name,
-tag, clan, current trophies, Live Leaderboard rank ("Unranked" when off the
-board) and today's net so far with attacks and defenses done. The one profile
+tag, clan, current trophies, Live Leaderboard rank (when off the board, the
+league its newest saved profile names, or "Unranked" when none is known) and
+today's net so far with attacks and defenses done. The one profile
 read returns every card. An account without current results also shows its
 player page's explanation, with any saved trophies and today's battles from its
 last accepted profile (for example after leaving Legend I), its rank whenever

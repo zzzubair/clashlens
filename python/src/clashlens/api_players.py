@@ -448,19 +448,20 @@ def get_player_page(
 
 def player_cards(
     connection: Any,
-    players: list[tuple[int, str, str | None, str | None]],
+    players: list[tuple[int, str, str | None, str | None, str | None]],
     *,
     now: datetime,
 ) -> list[dict[str, Any]]:
     """Each player's current trophies, Live Leaderboard position and today's
     battles so far, read for every player at once.
 
-    ``players`` holds (player id, tag, name, clan). Every card carries the
+    ``players`` holds (player id, tag, name, clan, league). Every card carries the
     lookup state and reason its own page explains, and the player's Live
-    Leaderboard position whenever it is on the board. Trophies and today come
-    only from an accepted current profile, including for a player who has left
-    Legend I. While a newer profile goes unaccepted they stay unknown, so
-    Season 0 trophies stay on that page alone.
+    Leaderboard position whenever it is on the board, and the league its newest
+    saved profile names. Trophies and today come only from an accepted current
+    profile, including for a player who has left Legend I. While a newer
+    profile goes unaccepted they stay unknown, so Season 0 trophies stay on
+    that page alone.
     """
     ids = [player[0] for player in players]
     profiles = {
@@ -496,7 +497,7 @@ def player_cards(
         ).fetchall()
     }
     cards = []
-    for player_id, tag, name, clan in players:
+    for player_id, tag, name, clan, league in players:
         lookup = api_player_lookup._lookup(connection, tag)
         profile = profiles.get(player_id)
         reason = lookup.get("reason")
@@ -511,6 +512,7 @@ def player_cards(
             "trophies": None,
             "season_reset_pending": False,
             "rank": None,
+            "league": league,
             "today": None,
         }
         if reason is None and profile is not None:

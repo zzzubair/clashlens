@@ -270,6 +270,14 @@ def complete_verification(
                             "verification_request_id": binding.request_id,
                         },
                     )
+            if audit_outcome in ("linked", "already_linked"):
+                # Check a linked player's profile at once, as a player page
+                # visit does, so its name and league show and its own profile
+                # decides whether it is tracked.
+                connection.execute(
+                    "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30, true)",
+                    (normalized_tag,),
+                ).fetchone()
             updated = connection.execute(
                 """
                 UPDATE player_link_verification_audits

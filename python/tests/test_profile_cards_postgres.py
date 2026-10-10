@@ -9,7 +9,7 @@ from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase
 
 
-def test_profile_shows_each_linked_players_trophies_rank_and_today(
+def test_profile_shows_each_linked_players_trophies_rank_league_and_today(
     database_url: str,
 ) -> None:
     with migrated_production_database(
@@ -106,11 +106,30 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
                     WHERE normalized_tag = '#2PP' AND profile_json -> 'clan' ->> 'name' = 'Clan A'
                     """
                 )
-                # Dropped out of Legend I, keeping its last accepted profile.
+                # Dropped out of Legend I, keeping its last accepted profile;
+                # its newest saved profile names its league now.
                 connection.execute(
                     """
                     UPDATE players SET active = false, eligibility_state = 'ineligible'
                     WHERE normalized_tag = '#YQ2'
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO player_profile_versions (
+                        player_id, observation_id, normalized_tag,
+                        endpoint_version, schema_version, parser_version,
+                        observed_at, source_http_status, name, trophies,
+                        league_tier_id, league_tier_name, eligibility_state,
+                        eligibility_reason, current_league_season_id,
+                        profile_json, source_contract_state
+                    )
+                    SELECT player_id, observation_id, normalized_tag,
+                           endpoint_version, schema_version, 'electro-test',
+                           observed_at + interval '1 minute', source_http_status,
+                           name, 0, 105000033, 'Electro League 33', 'ineligible',
+                           'confirmed_non_legend_i', '0', '{}'::jsonb, 'conflict'
+                    FROM player_profile_versions WHERE normalized_tag = '#YQ2'
                     """
                 )
 
@@ -128,19 +147,20 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
                 {
                     "tag": "#2PP", "name": "Player #2PP", "clan": "Clan A",
                     "state": "tracking", "reason": None, "trophies": 5300,
-                    "season_reset_pending": False, "rank": board["#2PP"],
+                    "season_reset_pending": False, "rank": board["#2PP"], "league": "Legend I",
                     "today": {"net": 28, "attacks": 1, "defenses": 1},
                 },
                 {
                     "tag": "#8PY", "name": "Player #8PY", "clan": None,
                     "state": "tracking", "reason": None, "trophies": 5400,
-                    "season_reset_pending": False, "rank": board["#8PY"],
+                    "season_reset_pending": False, "rank": board["#8PY"], "league": "Legend I",
                     "today": {"net": None, "attacks": 3, "defenses": 0},
                 },
                 {
                     "tag": "#9PY", "name": "Player #9PY", "clan": None,
                     "state": "tracking", "reason": None, "trophies": None,
-                    "season_reset_pending": True, "rank": None,
+                    # With no Live Leaderboard position, its league still shows.
+                    "season_reset_pending": True, "rank": None, "league": "Legend I",
                     # Today's battles still count while the trophies wait.
                     "today": {"net": None, "attacks": None, "defenses": None},
                 },
@@ -149,17 +169,44 @@ def test_profile_shows_each_linked_players_trophies_rank_and_today(
                     "state": "tracking", "reason": "no_legend_battles",
                     "trophies": None, "season_reset_pending": False,
                     # Its accepted profile still places it on the board.
-                    "rank": board["#LQ2"],
+                    "rank": board["#LQ2"], "league": "Legend I",
                     "today": None,
                 },
                 {
                     "tag": "#YQ2", "name": "Player #YQ2", "clan": None,
                     "state": "not_in_legend", "reason": None, "trophies": 4900,
                     "season_reset_pending": False, "rank": None,
+                    "league": "Electro League 33",
                     "today": {"net": None, "attacks": None, "defenses": None},
                 },
             ]
             # Ranks are positions on the whole Live Leaderboard, not the list.
             assert (board["#LQ2"], board["#8PY"], board["#2PP"]) == (2, 3, 4)
+            # A newer uncertain profile names no league, rather than the
+            # older Electro League 33 staying shown.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO player_profile_versions (
+                        player_id, observation_id, normalized_tag,
+                        endpoint_version, schema_version, parser_version,
+                        observed_at, source_http_status, name, trophies,
+                        league_tier_id, league_tier_name, eligibility_state,
+                        current_league_season_id, profile_json,
+                        source_contract_state
+                    )
+                    SELECT player_id, observation_id, normalized_tag,
+                           endpoint_version, schema_version, 'unranked-test',
+                           observed_at + interval '1 minute', source_http_status,
+                           name, 0, 105000000, 'Unranked', 'uncertain', '0',
+                           '{}'::jsonb, 'conflict'
+                    FROM player_profile_versions
+                    WHERE parser_version = 'electro-test'
+                    """
+                )
+            cards = api_accounts.get_public_user(database, "groupowner", now=NOW)[
+                "verified_players"
+            ]
+            assert [card["league"] for card in cards if card["tag"] == "#YQ2"] == [None]
         finally:
             database.close()
