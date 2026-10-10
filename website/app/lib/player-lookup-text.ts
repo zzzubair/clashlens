@@ -14,13 +14,28 @@ export const LOOKUP_MESSAGES: Record<PlayerLookup["state"], string> = {
   tracking: "Now tracking in Legend I. The first results are being prepared.",
   not_found:
     "Player not found. Clash of Clans did not find this tag. Check the tag and try again.",
-  not_in_legend:
-    "This player is not in Legend I. Clash Lens tracks Legend League players only. We have kept the tag and any saved history.",
+  not_in_legend: "This player is not in Legend I.",
   uncertain:
     "Clash Lens tracks Legend League players only. This player exists, but we could not confirm they are in Legend I. Any saved history is still available.",
   failed:
     "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
 };
+
+/** The page's lookup note, naming the league of a player outside Legend I. */
+export function lookupMessage(lookup: PlayerLookup): string {
+  const league = lookup.state === "not_in_legend" ? lookup.profile?.league : undefined;
+  const message = LOOKUP_MESSAGES[lookup.state];
+  return league ? `${message} Current league: ${league}.` : message;
+}
+
+/**
+ * Whether a player without current results has a current Season to show. A
+ * player outside Legend I needs a saved Legend day this Season, so the page
+ * never shows them an empty Season.
+ */
+export function showsCurrentSeason(lookup: PlayerLookup | null, legendDays: number) {
+  return legendDays > 0 || !["not_in_legend", "uncertain"].includes(lookup?.state ?? "");
+}
 
 /**
  * Why a tracked player's newest profile gives no current results, or null

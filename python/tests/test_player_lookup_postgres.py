@@ -110,7 +110,15 @@ def test_first_profile_retains_real_identity_and_uses_existing_eligibility(
             )
             result = processor.process_once(owner="lookup-test")
             assert result is not None and result.outcome == "processed"
-            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == state
+            lookup = api_player_lookup.get_lookup(database, "#2PP")
+            assert lookup["state"] == state
+            if not active:
+                # Off the board, the page still names the player, and its
+                # league when Clash of Clans reported a known one.
+                assert lookup["profile"]["name"] == "Synthetic Legend I"
+                assert lookup["profile"].get("league") == (
+                    tier["name"] if state == "not_in_legend" else None
+                )
             assert (
                 database.scalar(
                     "SELECT active FROM players WHERE normalized_tag = '#2PP'"

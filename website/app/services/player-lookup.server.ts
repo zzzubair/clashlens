@@ -52,7 +52,8 @@ async function lookupRequest(tag: string, method: "GET" | "POST"): Promise<Playe
       payload.profile === undefined ||
       (typeof payload.profile?.name === "string" &&
         (payload.profile.clan === null || typeof payload.profile.clan === "string") &&
-        Number.isInteger(payload.profile.trophies))
+        Number.isInteger(payload.profile.trophies) &&
+        ["undefined", "string"].includes(typeof payload.profile.league))
     )
   ) {
     throw new PythonApiError(502, { error: "malformed" });

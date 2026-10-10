@@ -528,7 +528,7 @@ describe("automatic tag lookup", () => {
 
   it.each([
     ["not_found", "Player not found"],
-    ["not_in_legend", "not in Legend I. Clash Lens tracks Legend League players only."],
+    ["not_in_legend", "This player is not in Legend I."],
     ["uncertain", "Clash Lens tracks Legend League players only."],
     ["failed", "could not finish checking"],
   ])(
@@ -560,22 +560,27 @@ describe("automatic tag lookup", () => {
     expect(html).not.toContain("Try refreshing");
   });
 
-  it("hides the old current profile when newer evidence says the player left Legend I", async () => {
+  it.each([
+    ["Electro League 33", "not in Legend I. Current league: Electro League 33."],
+    [undefined, "This player is not in Legend I."],
+  ])("names a player outside Legend I in %s", async (league, note) => {
+    const state = "not_in_legend";
     mocks.createPythonClient.mockReturnValue({
-      getPlayer: vi.fn().mockResolvedValue({ ...PLAYER, trackingState: "not_in_legend" }),
+      getPlayer: vi.fn().mockResolvedValue({ ...PLAYER, trackingState: state }),
       getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
       getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
     });
-    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "not_in_legend" });
-    const result = await playerLoader({
-      request: requestFor(SEASON),
-      params: { tag: TAG },
-    } as never);
-    const html = await renderRoute(result);
-    expect(html).toContain("not in Legend I");
-    expect(html).not.toContain("Current trophies");
-    expect(html).not.toContain('class="player-refresh-form"');
-    expect(html).toContain('aria-label="Seasons"');
+    const profile = { name: "Sloothy", clan: null, trophies: 152, league };
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state, profile });
+    const html = await renderRoute(
+      await playerLoader({ request: requestFor(null), params: { tag: TAG } } as never),
+    );
+    expect(html).toMatch(/<h1><bdi>Sloothy<\/bdi><\/h1>/);
+    expect(html).toContain(note);
+    expect(html).not.toMatch(
+      /Season summary|Current Season|Current trophies|refresh-form/,
+    );
+    expect(html).toContain(`?season=${SEASON}`);
   });
 
   it.each([null, SEASON])(

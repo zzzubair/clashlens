@@ -216,6 +216,11 @@ it.each([
     reason: "no_legend_battles",
     profile: { name: "Clasher", clan: null, trophies: "5000" },
   },
+  {
+    tag: "#LQQP",
+    state: "not_in_legend",
+    profile: { name: "Clasher", clan: null, trophies: 0, league: 33 },
+  },
 ])("rejects a mismatched or malformed lookup response", async (payload) => {
   vi.stubGlobal(
     "fetch",
@@ -224,13 +229,19 @@ it.each([
   await expect(getPlayerLookup("#LQQP")).rejects.toMatchObject({ status: 502 });
 });
 
-it("accepts the newest profile of a tracked player without a Season", async () => {
-  const payload = {
+it.each([
+  {
     tag: "#LQQP",
     state: "tracking",
     reason: "no_legend_battles",
     profile: { name: "Clasher", clan: null, trophies: 5000 },
-  };
+  },
+  {
+    tag: "#LQQP",
+    state: "not_in_legend",
+    profile: { name: "Clasher", clan: null, trophies: 0, league: "Electro League 33" },
+  },
+])("accepts the newest profile of a $state player", async (payload) => {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))),

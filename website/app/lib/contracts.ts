@@ -288,8 +288,9 @@ export interface PlayerLookup {
     | "season_unconfirmed"
     | "unknown_tier"
     | "profile_rejected";
-  // The newest profile, shown only on this page because its Season is 0.
-  profile?: { name: string; clan: string | null; trophies: number };
+  // The newest profile: a tracked player's only on this page because its
+  // Season is 0; for a player outside Legend I, with its league when known.
+  profile?: { name: string; clan: string | null; trophies: number; league?: string };
 }
 
 export interface PlayerPage {
