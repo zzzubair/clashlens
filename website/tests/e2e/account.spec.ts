@@ -85,7 +85,7 @@ test("a Clasher can sign in and use account features against the real backend", 
     }),
   ).toBe(true);
   await addToGroup.click();
-  await expect(page).toHaveURL(/\/account\/groups\/add\?tag=%232PP$/);
+  await expect(page).toHaveURL(/\/account\/groups\/add\/2PP$/);
   await expect(page.getByRole("heading", { name: "Add #2PP to a group" })).toBeVisible();
   await expect(page.getByText(/#2PP is already in/).first()).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 720 });
