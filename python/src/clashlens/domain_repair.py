@@ -17,9 +17,9 @@ how a saved day or board comes out, then run it once:
   then, once every such job has finished and none has failed, every Reset
   board of the Season whose
   entries the rules now change (``boundary.queue_board_rebuilds``); then,
-  once every board correction of the Season has finished, every saved
-  Season summary stored again from its days. Run it again until it reports
-  ``phase`` ``done``.
+  once every board correction of the Season requested by the time that step
+  began has finished, every saved Season summary stored again from its
+  days. Run it again until it reports ``phase`` ``done``.
 - ``receipt`` writes nothing: the receipt's before beside the same counts
   now, the jobs that failed, and whether every published view agrees with
   the days: boards the rules would still change, and saved summaries that
@@ -207,16 +207,23 @@ def season_repair(
             (season_id, revision),
         )
         # A summary's final rank reads the Season's last board, so summaries
-        # wait for every board correction to finish.
+        # wait for every board correction requested by the time this step
+        # began. One requested since, as late battles reach a Live board or
+        # pacing reaches a past one, runs as ordinary work and is not waited
+        # for: one arrives every few minutes while the Season runs.
         rebuilding = connection.execute(
             """
             SELECT count(*) FROM boundary_publication_corrections
             WHERE boundary_at > %s AND boundary_at <= %s
               AND state NOT IN ('finalized', 'terminal')
+              AND requested_at <= (
+                  SELECT boards_queued_at FROM season_repairs
+                  WHERE official_season_id = %s AND rule_revision = %s
+              )
             """,
-            (start, start + SEASON_DURATION),
+            (start, start + SEASON_DURATION, season_id, revision),
         ).fetchone()[0]
-    if boards or rebuilding:
+    if rebuilding:
         return {**report, "phase": "boards", "boards": boards,
                 "boards_rebuilding": int(rebuilding)}
     summaries = _refresh_summaries(
