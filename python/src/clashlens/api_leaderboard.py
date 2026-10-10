@@ -104,11 +104,11 @@ def search_live_leaderboard(
     exact = [
         (rank, row) for rank, row in ranked if query.startswith("#") and row[0] == tag
     ]
-    needle = query.lower()
+    needle = query.casefold()
     found = exact or [
         (rank, row)
         for rank, row in ranked
-        if row[0] == tag or needle in _text(row[1]).lower()
+        if row[0] == tag or needle in _text(row[1]).casefold()
     ]
     return {
         "exact_tag": tag if exact else None,
