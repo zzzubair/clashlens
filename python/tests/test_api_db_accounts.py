@@ -191,10 +191,10 @@ def test_public_search_finds_linked_players_without_exposing_private_lists(datab
                     outcome=VerificationOutcome.VERIFIED,
                     account_id=owner_id, completed_at=NOW,
                 )
-            api_accounts.add_saved_player(
+            api_accounts.create_group(
                 database,
-                account_binding(owner_id, "saved_tags.add", "/v1/account/saved-tags", {"tag": "#P0LQ"}),
-                normalized_tag="#P0LQ",
+                account_binding(owner_id, "groups.create", "/v1/account/groups", {"tag": "#P0LQ"}),
+                name="Watch", normalized_name="Watch", normalized_tags=["#P0LQ"],
             )
             expected = [{"username": "groupowner", "display_name": "Group Owner", "linked_player_count": 2}]
             for query in ("GROUPOWNER", "@GroupOwner", "Group Owner", "Player #2PP", "#8PY", "Player"):

@@ -67,7 +67,7 @@ def create_owner(database: ApiDatabase) -> int:
     return account.internal_id
 
 
-def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
+def test_groups_public_user_and_multi_account_stay_separate(
     database_url: str,
 ) -> None:
     # Saving a group can start a player check, which needs the collector tables.
@@ -77,15 +77,6 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
         database = ApiDatabase(connection_info)
         try:
             account_id = create_owner(database)
-            saved = api_accounts.add_saved_player(database,
-                account_binding(
-                    account_id,
-                    "saved_tags.add",
-                    "/v1/account/saved-tags",
-                    {"tag": "#2PP"},
-                ),
-                normalized_tag="#2PP",
-            )
             group = api_accounts.create_group(database,
                 account_binding(
                     account_id,
@@ -98,10 +89,6 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
                 normalized_tags=["#2PP", "#8PY"],
             )
 
-            assert saved.payload == {"tag": "#2PP", "saved": True}
-            assert api_accounts.list_saved_players(database, account_id) == [
-                {"tag": "#2PP", "name": None}
-            ]
             assert group.status_code == 201
             group_id = group.payload["group_id"]
             assert isinstance(group_id, str)
@@ -169,32 +156,28 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
             database.close()
 
 
-def test_profile_saved_state_is_private_even_beyond_the_list_limit(database_url: str) -> None:
-    with migrated_production_database(database_url) as connection_info:
+def test_an_account_holds_at_most_ten_groups(database_url: str) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             owner_id = create_owner(database)
-            tags = ["#P" + "".join(parts) for parts in islice(product("0289", repeat=5), 501)]
-            with psycopg.connect(connection_info) as connection:
-                connection.execute(
-                    "INSERT INTO players (normalized_tag) SELECT unnest(%s::text[])",
-                    (tags,),
+
+            def create(name: str):
+                return api_accounts.create_group(
+                    database,
+                    account_binding(owner_id, "groups.create", "/v1/account/groups",
+                                    {"name": name, "tags": []}),
+                    name=name, normalized_name=name, normalized_tags=[],
                 )
-                connection.execute(
-                    """INSERT INTO account_saved_players (account_id, player_id)
-                    SELECT %s, id FROM players WHERE normalized_tag = ANY(%s)""",
-                    (owner_id, tags),
-                )
-            assert len(api_accounts.list_saved_players(database, owner_id)) == 500
-            assert api_accounts.list_saved_players(
-                database, owner_id, normalized_tag=tags[-1]
-            ) == [{"tag": tags[-1], "name": None}]
-            assert api_accounts.list_saved_players(
-                database, owner_id + 1, normalized_tag=tags[-1]
-            ) == []
-            assert api_accounts.list_saved_players(
-                database, owner_id, normalized_tag="#QQQ"
-            ) == []
+
+            assert [create(f"Group {index}").status_code for index in range(10)] == [201] * 10
+            refused = create("Eleventh")
+            assert (refused.status_code, refused.payload) == (
+                422, {"error": "group_limit_reached"}
+            )
+            assert len(api_accounts.list_groups(database, owner_id, now=NOW)) == 10
         finally:
             database.close()
 

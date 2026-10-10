@@ -4,17 +4,15 @@ Clash Lens makes competitive Clash of Clans ranked data accessible to all. It
 turns official observations into trustworthy tracking and analysis so players
 can make evidence-led decisions.
 
-## Saved Players
+## Saving players in groups
 
-When signed in, use "Add to Saved Players" on a player page, then "Remove from
-Saved Players" to undo it. These controls need JavaScript and are hidden when
-signed out. "View Saved Players" opens your private list at
-`/account/saved-players`, where the player-tag box still lets you add players
-directly.
-
-The list shows at most 500 players, ordered by tag. A saved player outside that
-list still has the correct save/remove state on their profile. If that state
-cannot load, the profile stays visible and "Retry saved players" retries it.
+Players are saved in private groups. When signed in, "Add to group" on a player
+page (and on the dashboard's opponent list) opens `/account/groups/add/<tag>`: with
+no groups you name a first group and the player goes straight into it, with one
+group the player goes there, and with several you choose which one. A group
+that already holds the player, or already has 20 players, says so and cannot
+be chosen. An account holds at most 10 groups. These pages work without
+JavaScript. The old `/account/saved-players` address opens Your groups.
 
 ## Repository map
 

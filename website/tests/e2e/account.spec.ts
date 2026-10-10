@@ -18,49 +18,14 @@ test("a Clasher can sign in and use account features against the real backend", 
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
 
-  await page
-    .getByRole("navigation", { name: "Main navigation" })
-    .getByRole("link", { name: "Saved players" })
-    .click();
+  // Saved Players became groups: no menu link, and the old address opens Your groups.
   await expect(
-    page.getByRole("heading", { name: "Saved players", exact: true }),
-  ).toBeVisible();
-  const emptySavedPlayers = page.getByRole("heading", {
-    name: "No saved players yet",
-  });
-  const savedPlayer = page.getByText("#2PP", { exact: true }).first();
-  await expect(emptySavedPlayers.or(savedPlayer)).toBeVisible();
-  if (await emptySavedPlayers.isVisible()) {
-    await page.getByLabel("Player tag").fill("#2PP");
-    await page.getByRole("button", { name: "Save player" }).click();
-  }
-  await expect(savedPlayer).toBeVisible();
-
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.goto("/players/%232PP");
-  const removeSaved = page.getByRole("button", { name: "Remove from Saved Players" });
-  const addSaved = page.getByRole("button", { name: "Add to Saved Players" });
-  await expect(removeSaved).toBeEnabled();
-  await removeSaved.click();
-  await expect(addSaved).toBeEnabled();
-  await expect(page).toHaveURL(/\/players\/%232PP$/);
-  await page.getByRole("link", { name: "View Saved Players" }).click();
-  await expect(page.getByRole("heading", { name: "No saved players yet" })).toBeVisible();
-  await expect(page.getByLabel("Player tag")).toBeVisible();
-  await page.goto("/players/%232PP");
-  await addSaved.click();
-  await expect(removeSaved).toBeEnabled();
-  await page.reload();
-  await expect(removeSaved).toBeEnabled();
-  expect(
-    await removeSaved.evaluate((element) => {
-      const box = element.getBoundingClientRect();
-      return box.left >= 0 && box.right <= window.innerWidth;
-    }),
-  ).toBe(true);
-  await page.getByRole("link", { name: "View Saved Players" }).click();
-  await expect(savedPlayer).toBeVisible();
-  await page.setViewportSize({ width: 1280, height: 720 });
+    page
+      .getByRole("navigation", { name: "Main navigation" })
+      .getByRole("link", { name: "Saved players" }),
+  ).toHaveCount(0);
+  await page.goto("/account/saved-players");
+  await expect(page).toHaveURL((url) => url.pathname === "/account/groups");
 
   await page.goto("/account/groups");
   if (await page.getByRole("heading", { name: "No private groups yet" }).isVisible()) {
@@ -108,6 +73,23 @@ test("a Clasher can sign in and use account features against the real backend", 
   await editToggle.click();
   await expect(edit).toBeHidden();
   await expect(players).toBeVisible();
+
+  // A profile saves a player into a group; War plan already holds #2PP.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/players/%232PP");
+  const addToGroup = page.getByRole("link", { name: "Add to group" });
+  expect(
+    await addToGroup.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return box.left >= 0 && box.right <= window.innerWidth;
+    }),
+  ).toBe(true);
+  await addToGroup.click();
+  await expect(page).toHaveURL(/\/account\/groups\/add\/2PP$/);
+  await expect(page.getByRole("heading", { name: "Add #2PP to a group" })).toBeVisible();
+  await expect(page.getByText(/#2PP is already in/).first()).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/account/groups");
 
   // Back returns to Your groups in one step, however many views were opened.
   for (const back of [

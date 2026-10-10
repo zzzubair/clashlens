@@ -1,9 +1,8 @@
-import { useNavigate, useFetcher } from "react-router";
+import { Link, useNavigate } from "react-router";
 
 import type { BaseStrength, LegendsHeld, OpponentRow } from "../lib/dashboard";
 import { BASE_STRENGTH_MIN_DEFENSES, baseStrength } from "../lib/dashboard";
-import { canonicalPlayerPath } from "../lib/player-tag";
-import type { DashboardActionData } from "../routes/dashboard";
+import { addToGroupPath, canonicalPlayerPath } from "../lib/player-tag";
 import { signed, starText, timeFormatter } from "./LegendClock";
 
 const STRENGTH_LABELS: Record<BaseStrength, string> = {
@@ -19,47 +18,6 @@ function heldShare(defenses: OpponentRow["defenses"]): number {
   return defenses.filter((defense) => defense.stars < 3).length / defenses.length;
 }
 
-function SaveButton({
-  tag,
-  saved,
-  idempotencyKey,
-}: {
-  tag: string;
-  saved: boolean;
-  idempotencyKey: string;
-}) {
-  const fetcher = useFetcher<DashboardActionData>();
-  const done = saved || fetcher.data?.saved === true;
-  return (
-    <>
-      <button
-        type="button"
-        className="button button-secondary dash-small-button"
-        aria-pressed={done}
-        disabled={done || fetcher.state !== "idle"}
-        onClick={(event) => {
-          event.stopPropagation();
-          fetcher.submit(
-            {
-              intent: "save-player",
-              tag,
-              idempotencyKey: fetcher.data?.idempotencyKey ?? idempotencyKey,
-            },
-            { method: "post" },
-          );
-        }}
-      >
-        {done ? "✓ In saved players" : "Add to saved players"}
-      </button>
-      {fetcher.state === "idle" && fetcher.data?.error ? (
-        <span className="dash-save-error" role="alert">
-          {fetcher.data.error}
-        </span>
-      ) : null}
-    </>
-  );
-}
-
 /**
  * Card 3: one row per attack today, hardest bases first. Strength compares
  * the base's held share today with today's held share across tracked Legend
@@ -68,14 +26,10 @@ function SaveButton({
 export function OpponentsCard({
   rows,
   legends,
-  savedTags,
-  saveKeys,
   timeZone,
 }: {
   rows: OpponentRow[];
   legends: LegendsHeld | null;
-  savedTags: string[];
-  saveKeys: Record<string, string>;
   timeZone: string;
 }) {
   const navigate = useNavigate();
@@ -153,11 +107,13 @@ export function OpponentsCard({
               </span>
             </div>
             <div className="opponents-action">
-              <SaveButton
-                tag={row.tag}
-                saved={savedTags.includes(row.tag)}
-                idempotencyKey={saveKeys[row.tag] ?? ""}
-              />
+              <Link
+                className="button button-secondary dash-small-button"
+                to={addToGroupPath(row.tag)}
+                onClick={(event) => event.stopPropagation()}
+              >
+                Add to group
+              </Link>
             </div>
           </div>
         );

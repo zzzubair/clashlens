@@ -806,7 +806,7 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    that log line is the replay time; `pg_last_wal_replay_lsn()` minus the
    backup's `start_lsn` is the WAL it replayed, and the two give the replay rate
    that decides how much WAL fits in the restore target. Compare expected
-   accounts, saved-player links, player history, battle links and army
+   accounts, group memberships, player history, battle links and army
    summaries. Read every retained raw object referenced by the sample and
    verify its hash, timing it as the raw-check time. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.

@@ -53,9 +53,6 @@ export type DashboardLoaderData =
       ranges: Record<string, RankRange>;
       opponents: Record<string, OpponentRow[]>;
       legendsHeld: LegendsHeld | null;
-      savedTags: string[];
-      /** One request key per opponent, for saving that player. */
-      saveKeys: Record<string, string>;
       /** The Reset that ends the Legend day the players' numbers were read for. */
       dayEndsMs: number;
       idempotencyKey: string;
@@ -146,12 +143,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   const ranges: Record<string, RankRange> = {};
   const opponents: Record<string, OpponentRow[]> = {};
   let legendsHeld: LegendsHeld | null = null;
-  const [savedTags] = await Promise.all([
-    createPythonClient(identity)
-      .listSavedTags()
-      .then((saved) => saved.map((player) => player.tag))
-      .catch(() => [] as string[]),
-    ...[...dayTags].slice(0, MAX_PLAYER_DAYS).map(async (tag) => {
+  await Promise.all(
+    [...dayTags].slice(0, MAX_PLAYER_DAYS).map(async (tag) => {
       const [page, today] = await Promise.all([
         publicClient.getPlayer(tag).catch(() => null),
         getPlayerToday(tag).catch(() => null),
@@ -162,9 +155,6 @@ export async function loader({ request }: Route.LoaderArgs) {
       if (today) opponents[tag] = today.opponents;
       legendsHeld ??= today?.legendsHeld ?? null;
     }),
-  ]);
-  const opponentTags = new Set(
-    Object.values(opponents).flatMap((rows) => rows.map((row) => row.tag)),
   );
 
   return data<DashboardLoaderData>(
@@ -178,10 +168,6 @@ export async function loader({ request }: Route.LoaderArgs) {
       ranges,
       opponents,
       legendsHeld,
-      savedTags,
-      saveKeys: Object.fromEntries(
-        [...opponentTags].map((tag) => [tag, freshIdempotencyKey()]),
-      ),
       dayEndsMs,
       idempotencyKey: freshIdempotencyKey(),
     },
@@ -271,21 +257,6 @@ export async function action({ request }: Route.ActionArgs) {
   const idempotencyKey = form?.["idempotencyKey"] ?? "";
   if (form === null || !actions.isIdempotencyKey(idempotencyKey)) {
     return fail(400, "That layout could not be read.");
-  }
-  if (form["intent"] === "save-player") {
-    const tag = normalizePlayerTag(form["tag"] ?? "");
-    if (tag === null) return fail(400, "That player tag could not be read.");
-    try {
-      const { createPythonClient } = await import("../services/python.server");
-      await createPythonClient(identity).addSavedTag(tag, idempotencyKey);
-    } catch (cause) {
-      if (actions.isAccountNotFoundError(cause)) throw redirect("/account/setup");
-      return fail(503, "That player could not be saved. Try again.");
-    }
-    return data<DashboardActionData>(
-      { saved: true, error: null, idempotencyKey: actions.freshIdempotencyKey() },
-      { headers: NO_STORE },
-    );
   }
   let posted: unknown;
   try {
@@ -516,8 +487,6 @@ export default function DashboardRoute() {
         ranges={loaderData.ranges}
         opponents={loaderData.opponents}
         legends={loaderData.legendsHeld}
-        savedTags={loaderData.savedTags}
-        saveKeys={loaderData.saveKeys}
         dayEndsMs={loaderData.dayEndsMs}
         idempotencyKey={loaderData.idempotencyKey}
         renderTabs={(meta) => <DashboardTabs tab={tab} meta={meta} />}

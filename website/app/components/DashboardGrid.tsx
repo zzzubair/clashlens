@@ -148,10 +148,8 @@ interface CardContext {
   range: RankRange | null;
   opponents: OpponentRow[] | null;
   legends: LegendsHeld | null;
-  savedTags: string[];
   nowMs: number | null;
   timeZone: string;
-  saveKeys: Record<string, string>;
 }
 
 interface CardContent {
@@ -212,8 +210,6 @@ const CARD_CONTENT: Partial<
         <OpponentsCard
           rows={context.opponents}
           legends={context.legends}
-          savedTags={context.savedTags}
-          saveKeys={context.saveKeys}
           timeZone={context.timeZone}
         />
       ),
@@ -409,8 +405,6 @@ export function DashboardGrid({
   ranges,
   opponents,
   legends,
-  savedTags,
-  saveKeys,
   dayEndsMs,
   idempotencyKey,
   renderTabs,
@@ -424,8 +418,6 @@ export function DashboardGrid({
   ranges: Record<string, RankRange>;
   opponents: Record<string, OpponentRow[]>;
   legends: LegendsHeld | null;
-  savedTags: string[];
-  saveKeys: Record<string, string>;
   dayEndsMs: number;
   idempotencyKey: string;
   renderTabs: (meta: ReactNode) => ReactNode;
@@ -617,10 +609,8 @@ export function DashboardGrid({
                   range: ranges[player.tag] ?? null,
                   opponents: opponents[player.tag] ?? null,
                   legends,
-                  savedTags,
                   nowMs,
                   timeZone,
-                  saveKeys,
                 })
               : null;
           if (content) {
