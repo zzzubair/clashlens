@@ -175,7 +175,7 @@ def complete_verification(
             api_db._lock_api_player(connection, normalized_tag)
             player = connection.execute(
                 """
-                SELECT id, active FROM players WHERE normalized_tag = %s
+                SELECT id FROM players WHERE normalized_tag = %s
                 FOR NO KEY UPDATE NOWAIT
                 """,
                 (normalized_tag,),
@@ -183,7 +183,6 @@ def complete_verification(
             if player is None:
                 raise RuntimeError("verification player reservation was lost")
             player_id = int(player[0])
-            tracked = bool(player[1])
             if outcome is VerificationOutcome.INVALID_TOKEN:
                 audit_outcome = "invalid_token"
                 result = OperationResult(
@@ -271,10 +270,10 @@ def complete_verification(
                             "verification_request_id": binding.request_id,
                         },
                     )
-            if audit_outcome in ("linked", "already_linked") and not tracked:
+            if audit_outcome in ("linked", "already_linked"):
                 # Check a linked player's profile at once, as a player page
-                # visit does, so its name shows and its own profile decides
-                # whether it is tracked.
+                # visit does, so its name and league show and its own profile
+                # decides whether it is tracked.
                 connection.execute(
                     "SELECT * FROM clashlens_enqueue_interactive('initial_collection', %s, 30)",
                     (normalized_tag,),

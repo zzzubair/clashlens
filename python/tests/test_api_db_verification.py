@@ -607,7 +607,7 @@ def test_verification_reservation_has_recovery_state_and_stale_reuse_fails_close
             database.close()
 
 
-def test_a_link_checks_the_players_profile_at_once_unless_already_tracked(
+def test_every_link_checks_the_players_profile_at_once(
     database_url: str,
 ) -> None:
     with migrated_production_database(
@@ -667,13 +667,14 @@ def test_a_link_checks_the_players_profile_at_once_unless_already_tracked(
             assert checks() == [
                 ("#2PP", "initial_collection", "interactive", True),
                 ("#8PY", "initial_collection", "interactive", True),
+                ("#9PY", "initial_collection", "interactive", True),
             ]
             # Linking again reuses the waiting check instead of adding one.
             assert link("#2PP", VerificationOutcome.VERIFIED) == "already_linked"
-            assert len(checks()) == 2
+            assert len(checks()) == 3
             collector = CollectorDatabase(info)
             try:
-                assert len(collector.pending_intents(10, interactive=True)) == 2
+                assert len(collector.pending_intents(10, interactive=True)) == 3
             finally:
                 collector.close()
         finally:

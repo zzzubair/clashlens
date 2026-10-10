@@ -89,7 +89,7 @@ export interface LinkedPlayerCard extends VerifiedPlayer {
   seasonResetPending: boolean;
   /** Live Leaderboard position; null when not on the board. */
   rank: number | null;
-  /** Newest saved league of a player outside Legend I. */
+  /** League its newest saved profile names; shown when it has no rank. */
   league: string | null;
   /** Today's battles so far; `net` only once every one is recorded. */
   today: { net: number | null; attacks: number | null; defenses: number | null } | null;
