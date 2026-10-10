@@ -304,6 +304,18 @@ describe("crew page", () => {
     expect(html).toMatch(/aria-current="page"[^>]*>Today<\/a>/);
   });
 
+  it("says which battles a board is missing when only the other kind were seen", async () => {
+    const payload = boardsPayload("today");
+    payload.boards.attackers.rows = [];
+    payload.boards.streaks.rows = [];
+    mocks.requestJson.mockImplementation(async (target: string) =>
+      target.includes("/boards") ? payload : crewPayload,
+    );
+    const html = await render(`/crews/${CREW_ID}?period=today`, crewRoute);
+    expect(html.match(/No attacks yet today/g)).toHaveLength(2);
+    expect(html).not.toContain("No battles");
+  });
+
   it("reads a crew the account is not in as a missing page", async () => {
     mocks.requestJson.mockRejectedValue(
       new PythonApiError(404, { error: "crew_not_found" }),
@@ -423,7 +435,7 @@ describe("create a crew", () => {
     mocks.requestJson.mockRejectedValue(
       new PythonApiError(422, { error: "player_not_in_legend", tag: TAGS[0] }),
     );
-    const result = unwrap<{ fieldErrors: { accounts?: string } }>(
+    const result = unwrap<{ idempotencyKey: string; fieldErrors: { accounts?: string } }>(
       await createAction(
         createRequest({
           name: "Red Dawn",
@@ -435,5 +447,55 @@ describe("create a crew", () => {
     expect(result.data.fieldErrors.accounts).toBe(
       `${TAGS[0]} is not in Legend League, so it can't join.`,
     );
+    expect(result.data.idempotencyKey).not.toBe(IDEMPOTENCY_KEY);
+  });
+
+  it("keeps the form's key after a lost answer, so Create again replays the same requests", async () => {
+    const fields = { name: "Red Dawn", size: "20", [`join:${TAGS[0]}`]: "on" };
+    mocks.checkPlayerTag.mockResolvedValue({ tag: TAGS[0], state: "tracking" });
+    mocks.requestJson
+      .mockRejectedValueOnce(
+        new PythonApiError(409, { error: "player_not_checked", tag: TAGS[0] }),
+      )
+      .mockRejectedValueOnce(new PythonApiError(503, { error: "timeout" }))
+      .mockRejectedValueOnce(
+        new PythonApiError(409, { error: "player_not_checked", tag: TAGS[0] }),
+      )
+      .mockResolvedValueOnce({ crew_id: CREW_ID, name: "Red Dawn", size: 20 });
+    const lost = unwrap<{ idempotencyKey: string }>(
+      await createAction(createRequest(fields) as never),
+    );
+    expect(lost.status).toBe(503);
+    expect(lost.data.idempotencyKey).toBe(IDEMPOTENCY_KEY);
+    const response = await thrown(() => createAction(createRequest(fields) as never));
+    expect((response as Response).headers.get("Location")).toBe(`/crews/${CREW_ID}`);
+    const keys = mocks.requestJson.mock.calls.map((call) => call[4]);
+    expect(keys[0]).toBe(IDEMPOTENCY_KEY);
+    expect(keys[1]).not.toBe(IDEMPOTENCY_KEY);
+    expect(keys.slice(2)).toEqual(keys.slice(0, 2));
+  });
+
+  it("keeps the form when checking an account fails", async () => {
+    mocks.requestJson.mockRejectedValue(
+      new PythonApiError(409, { error: "player_not_checked", tag: TAGS[0] }),
+    );
+    mocks.checkPlayerTag.mockRejectedValue(
+      new PythonApiError(429, { error: "rate_limited" }),
+    );
+    const result = unwrap<{
+      values: { tags: string[] };
+      generalError: { error: { code: string } };
+    }>(
+      await createAction(
+        createRequest({
+          name: "Red Dawn",
+          size: "20",
+          [`join:${TAGS[0]}`]: "on",
+        }) as never,
+      ),
+    );
+    expect(result.status).toBe(429);
+    expect(result.data.values.tags).toEqual([TAGS[0]]);
+    expect(result.data.generalError.error.code).toBe("rate_limited");
   });
 });

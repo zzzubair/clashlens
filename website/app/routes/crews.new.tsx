@@ -121,7 +121,8 @@ export function headers() {
  * POST /crews/new — make a crew with the picked accounts; the maker is its
  * owner. The private API repeats every check and has the final say. An
  * account Clash Lens has not checked yet is checked with the game, then
- * the crew is made again.
+ * the crew is made again. The form keeps its key until the private API
+ * answers, so pressing Create again after a lost answer makes no second crew.
  */
 export async function action({ request, context }: Route.ActionArgs) {
   const identity = await guard(request);
@@ -131,10 +132,11 @@ export async function action({ request, context }: Route.ActionArgs) {
     status: number,
     values: NewCrewActionData["values"],
     outcome: Partial<NewCrewActionData>,
+    idempotencyKey = actions.freshIdempotencyKey(),
   ) =>
     data<NewCrewActionData>(
       {
-        idempotencyKey: actions.freshIdempotencyKey(),
+        idempotencyKey,
         values,
         fieldErrors: {},
         generalError: null,
@@ -174,7 +176,9 @@ export async function action({ request, context }: Route.ActionArgs) {
   else if (Number.isInteger(size) && tags.length > size) {
     fieldErrors.accounts = `Pick at most ${size} accounts, or add places.`;
   }
-  if (Object.keys(fieldErrors).length > 0) return reply(400, values, { fieldErrors });
+  if (Object.keys(fieldErrors).length > 0) {
+    return reply(400, values, { fieldErrors }, idempotencyKey);
+  }
 
   const { createCrew, crewErrorCode } = await import("../services/crews.server");
   const { checkPlayerTag } = await import("../services/group-players.server");
@@ -195,21 +199,30 @@ export async function action({ request, context }: Route.ActionArgs) {
       const code = crewErrorCode(cause);
       const tag = (cause as { payload?: { tag?: unknown } }).payload?.tag;
       const status = (cause as { status?: number }).status ?? 503;
+      const { safeWebsiteError } = await import("../server/errors.server");
       if (
         code === "player_not_checked" &&
         typeof tag === "string" &&
         attempt < tags.length
       ) {
-        const lookup = await checkPlayerTag(context?.get(clientAddressContext), tag);
+        let lookup;
+        try {
+          lookup = await checkPlayerTag(context?.get(clientAddressContext), tag);
+        } catch (lookupCause) {
+          const lookupStatus = (lookupCause as { status?: number }).status ?? 503;
+          return reply(lookupStatus, values, {
+            generalError: safeWebsiteError(lookupCause),
+          });
+        }
         if (lookup.state !== "checking") {
-          key = actions.freshIdempotencyKey();
+          key = actions.followUpIdempotencyKey(key, tag);
           continue;
         }
       }
       const refusal = createRefusal(code, typeof tag === "string" ? tag : "");
       if (refusal !== null) return reply(status, values, refusal);
-      const { safeWebsiteError } = await import("../server/errors.server");
-      return reply(status, values, { generalError: safeWebsiteError(cause) });
+      const unanswered = status >= 500 ? idempotencyKey : undefined;
+      return reply(status, values, { generalError: safeWebsiteError(cause) }, unanswered);
     }
   }
   return reply(409, values, {

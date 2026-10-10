@@ -47,9 +47,10 @@ export function emptyBoardText(board: BoardKey, period: CrewPeriod, dayNumber: n
   if (board === "live") return "Nobody on the Live leaderboard yet";
   if (board === "top")
     return dayNumber === 1 ? "No finished day yet" : "No Reset reading yet";
-  if (period === "today") return "No battles yet today";
+  const battles = board === "attackers" || board === "streaks" ? "attacks" : "defenses";
+  if (period === "today") return `No ${battles} yet today`;
   if (dayNumber === 1 && board !== "streaks") return "No finished day yet";
-  return "No Legend battles in this period";
+  return `No Legend ${battles} in this period`;
 }
 
 /**
