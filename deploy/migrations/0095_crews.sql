@@ -74,9 +74,14 @@ CREATE INDEX IF NOT EXISTS crew_invites_by_crew_creator
 
 -- A non-owner left with no places is out of the crew, however the last
 -- place went: a kick, removing it, or the game account's link moving.
+-- Locking the member first makes two places going at once check in turn,
+-- so the second sees the first gone.
 CREATE OR REPLACE FUNCTION clashlens_crew_member_without_places()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    PERFORM 1 FROM crew_accounts
+    WHERE crew_id = OLD.crew_id AND account_id = OLD.account_id
+    FOR UPDATE;
     DELETE FROM crew_accounts AS member
     WHERE member.crew_id = OLD.crew_id
       AND member.account_id = OLD.account_id

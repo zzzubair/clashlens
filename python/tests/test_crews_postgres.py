@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from typing import Any
 from uuid import uuid4
 
+import psycopg
 import pytest
 from domain_test_support import as_api_role, domain_database
 from test_api_db_public_ops import seed_profile
@@ -305,7 +306,7 @@ def test_invite_links_are_reused_then_replaced(site: Site) -> None:
     codes = [first, second]
     for hour in (26, 27):
         codes.append(site.invite("owner", crew_id, new=True, now=NOW + timedelta(hours=hour)))
-    # Making a fourth live link turned the oldest off.
+    # Making more links turns none of the earlier ones off.
     later = NOW + timedelta(hours=28)
     live = site.sql(
         """
@@ -314,7 +315,7 @@ def test_invite_links_are_reused_then_replaced(site: Site) -> None:
         """,
         (later,),
     )
-    assert [row[0] for row in live] == codes[1:]
+    assert [row[0] for row in live] == codes
     # Expired links are deleted when the crew makes a new one.
     site.invite("owner", crew_id, new=True, now=NOW + timedelta(hours=49))
     assert site.sql(
@@ -528,3 +529,88 @@ def test_support_transfer_takes_the_account_out_of_its_crews(site: Site) -> None
     assert site.sql(
         "SELECT count(*) FROM crew_players AS place JOIN players ON players.id = place.player_id WHERE normalized_tag = '#2PP'"
     ) == [(0,)]
+
+
+_DELETE_PLACE = """
+    DELETE FROM crew_players AS place USING players AS player
+    WHERE player.id = place.player_id AND player.normalized_tag = %s
+"""
+
+
+def _while_held(site: Site, hold: Any, call: Any) -> Any:
+    """Run ``call`` while another transaction that ran ``hold`` is still
+    open, give it time to queue behind that, then commit and return what
+    ``call`` returned."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with psycopg.connect(site.info) as held:
+            with held.transaction():
+                hold(held)
+                queued = pool.submit(call)
+                wait([queued], timeout=0.5)
+        return queued.result()
+
+
+def _crew_of(site: Site, members: dict[str, list[str]]) -> str:
+    for name, tags in members.items():
+        site.account(name)
+        for tag in tags:
+            site.link(name, tag)
+    owner, *joiners = members
+    crew_id = site.make(owner, members[owner])
+    code = site.invite(owner, crew_id)
+    for name in joiners:
+        assert site.accept(name, code, members[name]).status_code == 200
+    return crew_id
+
+
+def test_two_places_going_at_once_take_the_member_out(site: Site) -> None:
+    crew_id = _crew_of(site, {"owner": ["#2PP"], "member": ["#8PY", "#9QQ"]})
+
+    def remove_other() -> None:
+        with psycopg.connect(site.info) as other:
+            other.execute(_DELETE_PLACE, ("#9QQ",))
+
+    _while_held(site, lambda held: held.execute(_DELETE_PLACE, ("#8PY",)), remove_other)
+    assert site.crew("member", crew_id) is None
+
+
+def test_a_demoted_admin_queued_behind_the_demotion_cannot_kick(site: Site) -> None:
+    crew_id = _crew_of(site, {"owner": ["#2PP"], "admin": ["#8PY"], "member": ["#9QQ"]})
+    assert site.call(
+        "owner", api_crews.set_member_role, crew_id=crew_id, username="admin", role="admin"
+    ).status_code == 200
+
+    def demote(held: Any) -> None:
+        held.execute("SELECT 1 FROM crews WHERE public_id = %s FOR UPDATE", (crew_id,))
+        held.execute(
+            "UPDATE crew_accounts SET role = 'member' WHERE account_id = %s",
+            (site.ids["admin"],),
+        )
+
+    kick = _while_held(
+        site,
+        demote,
+        lambda: site.call("admin", api_crews.remove_player, crew_id=crew_id, tag="#9QQ"),
+    )
+    assert (kick.status_code, kick.payload) == (403, {"error": "crew_forbidden"})
+    assert site.crew("member", crew_id) is not None
+
+
+def test_handing_over_to_someone_leaving_keeps_the_owner(site: Site) -> None:
+    crew_id = _crew_of(site, {"owner": ["#2PP"], "leaver": ["#8PY"], "stayer": ["#9QQ"]})
+    handed = _while_held(
+        site,
+        lambda held: held.execute(_DELETE_PLACE, ("#8PY",)),
+        lambda: site.call("owner", api_crews.hand_over, crew_id=crew_id, username="leaver"),
+    )
+    assert (handed.status_code, handed.payload) == (404, {"error": "member_not_found"})
+    assert site.crew("owner", crew_id)["my_role"] == "owner"
+    # An owner whose accounts all went keeps the crew, and is out of it once
+    # they hand it over.
+    site.sql(_DELETE_PLACE, ("#2PP",))
+    assert site.crew("owner", crew_id)["my_role"] == "owner"
+    assert site.call(
+        "owner", api_crews.hand_over, crew_id=crew_id, username="stayer"
+    ).status_code == 200
+    assert site.crew("owner", crew_id) is None
+    assert site.crew("stayer", crew_id)["my_role"] == "owner"

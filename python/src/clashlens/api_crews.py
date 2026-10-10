@@ -39,7 +39,6 @@ INVITE_LIFETIME = timedelta(hours=48)
 # Opening Invite shows the caller's newest link again while it has this long
 # left, so a link shared yesterday keeps working.
 INVITE_REUSE_MIN_LEFT = timedelta(hours=24)
-MAX_LIVE_INVITES_PER_MEMBER = 3
 
 _ROLE_ORDER = {"owner": 0, "admin": 1, "member": 2}
 
@@ -74,22 +73,22 @@ def _write(
 def _membership(
     connection: Any, crew_id: str, account_id: int, *, lock: bool
 ) -> tuple[int, int, str]:
-    """The crew's row id, size and the caller's role, locking the crew row
-    for a write."""
-    row = connection.execute(
-        f"""
-        SELECT crew.id, crew.size, member.role
-        FROM crews AS crew
-        JOIN crew_accounts AS member
-          ON member.crew_id = crew.id AND member.account_id = %s
-        WHERE crew.public_id = %s
-        {"FOR UPDATE OF crew" if lock else ""}
-        """,
-        (account_id, crew_id),
+    """The crew's row id, size and the caller's role. A write locks the crew
+    row first and reads the role afterwards, so a role changed while it
+    waited is the one it sees."""
+    crew = connection.execute(
+        f"SELECT id, size FROM crews WHERE public_id = %s {'FOR UPDATE' if lock else ''}",
+        (crew_id,),
     ).fetchone()
-    if row is None:
+    member = None
+    if crew is not None:
+        member = connection.execute(
+            "SELECT role FROM crew_accounts WHERE crew_id = %s AND account_id = %s",
+            (crew[0], account_id),
+        ).fetchone()
+    if member is None:
         raise _Refused(404, {"error": "crew_not_found"})
-    return int(row[0]), int(row[1]), _text(row[2])
+    return int(crew[0]), int(crew[1]), _text(member[0])
 
 
 def _require(role: str, *allowed: str) -> None:
@@ -545,18 +544,30 @@ def remove_player(
 
 
 def _member(connection: Any, crew_row: int, username: str) -> tuple[int, str, str]:
+    """The member, locked so a game account moving away can't take them out
+    of the crew before the write finishes."""
     row = connection.execute(
         """
         SELECT member.account_id, account.display_name, member.role
         FROM crew_accounts AS member
         JOIN clash_lens_accounts AS account ON account.id = member.account_id
         WHERE member.crew_id = %s AND account.normalized_username = %s
+        FOR UPDATE OF member
         """,
         (crew_row, username),
     ).fetchone()
     if row is None:
         raise _Refused(404, {"error": "member_not_found"})
     return int(row[0]), _text(row[1]), _text(row[2])
+
+
+def _set_role(connection: Any, crew_row: int, account_id: int, role: str) -> None:
+    changed = connection.execute(
+        "UPDATE crew_accounts SET role = %s WHERE crew_id = %s AND account_id = %s",
+        (role, crew_row, account_id),
+    ).rowcount
+    if changed != 1:
+        raise _Refused(404, {"error": "member_not_found"})
 
 
 def set_member_role(
@@ -579,10 +590,7 @@ def set_member_role(
         target, display_name, target_role = _member(connection, crew_row, username)
         if target_role == "owner":
             raise _Refused(409, {"error": "owner_role_fixed"})
-        connection.execute(
-            "UPDATE crew_accounts SET role = %s WHERE crew_id = %s AND account_id = %s",
-            (role, crew_row, target),
-        )
+        _set_role(connection, crew_row, target, role)
         return OperationResult(
             200, {"username": username, "display_name": display_name, "role": role}
         )
@@ -606,19 +614,21 @@ def hand_over(
             raise _Refused(409, {"error": "owner_role_fixed"})
         # The old owner steps down first, so the one-owner index holds
         # after every statement.
+        _set_role(connection, crew_row, account_id, "admin")
+        _set_role(connection, crew_row, target, "owner")
+        # An owner whose game accounts all moved away kept the crew; as an
+        # admin with no places they are out of it.
         connection.execute(
             """
-            UPDATE crew_accounts SET role = 'admin'
-            WHERE crew_id = %s AND account_id = %s
+            DELETE FROM crew_accounts AS member
+            WHERE member.crew_id = %s AND member.account_id = %s
+              AND NOT EXISTS (
+                  SELECT 1 FROM crew_players AS place
+                  WHERE place.crew_id = member.crew_id
+                    AND place.account_id = member.account_id
+              )
             """,
             (crew_row, account_id),
-        )
-        connection.execute(
-            """
-            UPDATE crew_accounts SET role = 'owner'
-            WHERE crew_id = %s AND account_id = %s
-            """,
-            (crew_row, target),
         )
         return OperationResult(200, _header(connection, crew_row))
 
@@ -695,17 +705,6 @@ def make_invite(
                     now + INVITE_LIFETIME,
                 ),
             ).fetchone()
-            connection.execute(
-                f"""
-                UPDATE crew_invites SET revoked_at = %s
-                WHERE id IN (
-                    SELECT id {live}
-                    ORDER BY created_at DESC, id DESC
-                    OFFSET %s
-                )
-                """,
-                (now, crew_row, account_id, now, MAX_LIVE_INVITES_PER_MEMBER),
-            )
         live_count = connection.execute(
             f"SELECT count(*) {live}", (crew_row, account_id, now)
         ).fetchone()[0]
