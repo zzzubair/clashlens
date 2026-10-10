@@ -5,8 +5,6 @@ import {
   isRouteErrorResponse,
   useLoaderData,
   useLocation,
-  useMatches,
-  useNavigate,
   type LoaderFunctionArgs,
   Links,
   Meta,
@@ -17,6 +15,7 @@ import {
 
 import type { Route } from "./+types/root";
 import { AccountMenu } from "./components/AccountMenu";
+import { BackLink } from "./components/BackLink";
 import { HeaderSearch } from "./components/PlayerSearch";
 import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import { UpdatesNotice } from "./components/UpdatesNotice";
@@ -124,26 +123,9 @@ export function Layout({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * A route handle that shows Back as a full button. With `to`, Back always
- * leads to that page: it steps back when a link from that page set
- * `state.backTo` to it, and opens the page otherwise.
- */
-export interface BackHandle {
-  back: { to?: string; label?: string };
-}
-
-function useBackHandle(): BackHandle["back"] | undefined {
-  const handles = useMatches().map(
-    (match) => match.handle as Partial<BackHandle> | undefined,
-  );
-  return handles.reverse().find((handle) => handle?.back)?.back;
-}
-
 export default function App() {
   const data = useLoaderData<typeof loader>();
   const location = useLocation();
-  const navigate = useNavigate();
   const previousPath = useRef(location.pathname);
   useRememberShownPage();
   usePreloadInlineAnswerCode();
@@ -153,34 +135,6 @@ export default function App() {
     }
     previousPath.current = location.pathname;
   }, [location.pathname, location.hash]);
-  const back = useBackHandle();
-  const backLink = (
-    <Link
-      className={back ? "button button-secondary" : "header-back"}
-      to={back?.to ?? "/"}
-      replace={back?.to === undefined}
-      onClick={(event) => {
-        if (back?.to !== undefined) {
-          // Step back only when the previous page is that page.
-          if (location.state?.backTo === back.to) {
-            event.preventDefault();
-            void navigate(-1);
-          }
-          return;
-        }
-        const hasSameOriginReferrer =
-          window.history.length > 1 &&
-          document.referrer !== "" &&
-          new URL(document.referrer).origin === window.location.origin;
-        if ((window.history.state?.idx ?? 0) > 0 || hasSameOriginReferrer) {
-          event.preventDefault();
-          void navigate(-1);
-        }
-      }}
-    >
-      <span aria-hidden="true">←</span> {back?.label ?? "Back"}
-    </Link>
-  );
   return (
     <>
       <header className="site-header">
@@ -238,7 +192,7 @@ export default function App() {
         </nav>
       </header>
       {data.updateStatus ? <UpdatesNotice status={data.updateStatus} /> : null}
-      {location.pathname !== "/" ? <div className="page-back">{backLink}</div> : null}
+      <BackLink />
       <Outlet />
     </>
   );

@@ -1,8 +1,4 @@
 /* Private groups list: members with names, and add and edit opened below the buttons. */
-/* Back lines up with this narrower page. */
-.page-back:has(+ .narrow-shell) {
-  width: min(100% - 2rem, 54rem);
-}
 
 .group-card-head {
   display: flex;

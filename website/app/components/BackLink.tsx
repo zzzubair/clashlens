@@ -1,0 +1,69 @@
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation, useMatches } from "react-router";
+
+/** Where Back leads: the page this one sits under, and its name. */
+export interface BackTarget {
+  to: string;
+  label: string;
+}
+
+/**
+ * A route handle for a page that sits under another page. Pages reached
+ * from the header have no handle and no Back.
+ */
+export interface BackHandle {
+  back: BackTarget;
+}
+
+/**
+ * Link state for a list's player links, so the player page's Back returns
+ * to this list, on the same view, by a normal link.
+ */
+export function useBackState(label: string): { back: BackTarget } {
+  const location = useLocation();
+  return { back: { to: `${location.pathname}${location.search}`, label } };
+}
+
+function stateBack(state: unknown): BackTarget | null {
+  const back = (state as { back?: Partial<BackTarget> } | null)?.back;
+  return typeof back?.to === "string" &&
+    typeof back.label === "string" &&
+    back.to.startsWith("/") &&
+    !back.to.startsWith("//")
+    ? { to: back.to, label: back.label }
+    : null;
+}
+
+/**
+ * The one Back on the site: an arrow and the parent page's name, always a
+ * normal link to that page, never a step through browser history. A page
+ * with a Back handle always shows it; a page opened from a list shows Back
+ * to that list, and keeps it while its own views change the address.
+ */
+export function BackLink() {
+  const location = useLocation();
+  const handle = useMatches()
+    .map((match) => (match.handle as Partial<BackHandle> | undefined)?.back)
+    .reverse()
+    .find(Boolean);
+  // Link state only exists in the browser, so it waits for the first render there.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+  const fromList = useRef<{ pathname: string; back: BackTarget } | null>(null);
+  const carried = stateBack(location.state);
+  if (carried) fromList.current = { pathname: location.pathname, back: carried };
+  else if (fromList.current?.pathname !== location.pathname) fromList.current = null;
+  const back = handle ?? (hydrated ? fromList.current?.back : undefined);
+  if (!back) return null;
+  return (
+    <div className="page-back">
+      <Link className="back-link" to={back.to}>
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M15 5l-7 7 7 7" />
+        </svg>
+        <span className="sr-only">Back to </span>
+        <span>{back.label}</span>
+      </Link>
+    </div>
+  );
+}

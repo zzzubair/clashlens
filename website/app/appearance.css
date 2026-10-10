@@ -275,18 +275,12 @@ main {
   color: var(--cl-ink);
   background: var(--cl-panel);
 }
-[data-theme="dark"] .header-back:focus-visible {
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
-  border-color: var(--cl-action-border);
-}
 @media (hover: hover) and (pointer: fine) {
   [data-theme="dark"] .legend-day[open] > summary:hover {
     background: var(--cl-action-soft);
   }
   [data-theme="dark"]
     :is(
-      .header-back,
       .home-page .analytics-link,
       .home-leaderboard .leaderboard-more,
       .battle-army,

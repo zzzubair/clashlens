@@ -1,9 +1,12 @@
 import { redirect, useLoaderData } from "react-router";
 
+import type { BackHandle } from "../components/BackLink";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/account.providers";
 
 const NO_STORE = { "Cache-Control": "no-store" };
+
+export const handle: BackHandle = { back: { to: "/account", label: "Your account" } };
 
 const PROVIDER_LABELS: Record<string, string> = {
   discord: "Discord",
@@ -121,11 +124,6 @@ export default function AccountProvidersRoute() {
           <strong>Sign-in connections could not be loaded.</strong>{" "}
           <a href="/account/providers">Try again</a>
         </aside>
-        <p className="hero-actions">
-          <a className="button button-primary" href="/account">
-            Back to your account
-          </a>
-        </p>
       </main>
     );
   }
@@ -188,12 +186,6 @@ export default function AccountProvidersRoute() {
           })}
         </ul>
       </section>
-
-      <p className="hero-actions">
-        <a className="button button-primary" href="/account">
-          Back to your account
-        </a>
-      </p>
     </main>
   );
 }

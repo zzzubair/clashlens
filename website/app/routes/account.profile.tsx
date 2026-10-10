@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { data, redirect, useActionData, useLoaderData } from "react-router";
 
+import type { BackHandle } from "../components/BackLink";
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
   isInappropriateName,
@@ -11,6 +12,8 @@ import type { WebsiteErrorResponse } from "../lib/contracts";
 import type { Route } from "./+types/account.profile";
 
 const NO_STORE = { "Cache-Control": "no-store" };
+
+export const handle: BackHandle = { back: { to: "/account", label: "Your account" } };
 
 export interface ProfileLoaderData {
   username: string;

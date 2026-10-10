@@ -562,19 +562,28 @@ test("season navigation clears refresh state for the same player", async ({ page
   await expect(refresh).toHaveCount(0);
 });
 
-test("Back after switching Seasons returns to Saved players in one step", async ({
+test("Back after switching Seasons returns to Your groups in one step", async ({
   page,
 }) => {
   await refuseRefreshes(page);
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
-  await page.goto("/account/saved-players");
-  const savedPlayer = page.getByRole("listitem").filter({ hasText: "#2PP" });
-  if ((await savedPlayer.count()) === 0) {
-    await page.getByLabel("Player tag").fill("#2PP");
-    await page.getByRole("button", { name: "Save player" }).click();
+  await page.goto("/account/groups");
+  const group = page.locator(".group-card").filter({
+    has: page.getByRole("heading", { name: "War plan" }),
+  });
+  if ((await group.count()) === 0) {
+    await page.getByLabel("Group name").first().fill("War plan");
+    await page.getByRole("button", { name: "Create group" }).click();
   }
-  await expect(savedPlayer).toBeVisible();
+  const members = group.getByRole("list", { name: "Players in War plan" });
+  if ((await members.filter({ hasText: "#2PP" }).count()) === 0) {
+    await group.getByRole("link", { name: "Add player" }).click();
+    await group.getByLabel("Player tag").fill("#2PP");
+    await group.getByRole("button", { name: "Add", exact: true }).click();
+  }
+  const groupPlayer = members.getByRole("listitem").filter({ hasText: "#2PP" });
+  await expect(groupPlayer).toBeVisible();
 
   // Give the saved player past Seasons to switch between.
   const html = await (await page.request.get("/players/%232PP")).text();
@@ -601,7 +610,7 @@ test("Back after switching Seasons returns to Saved players in one step", async 
     }),
   );
 
-  await savedPlayer.getByRole("link").first().click();
+  await groupPlayer.getByRole("link").first().click();
   await expect(page).toHaveURL(/\/players\/%232PP$/);
   const seasons = page.getByRole("navigation", { name: "Seasons", exact: true });
   await seasons.getByRole("link").first().click();
@@ -609,11 +618,11 @@ test("Back after switching Seasons returns to Saved players in one step", async 
   await seasons.getByRole("link", { name: "Current Season" }).click();
   await expect(page).toHaveURL(/\/players\/%232PP$/);
 
-  await page.getByRole("link", { name: "Back", exact: true }).click();
-  await expect(page).toHaveURL(/\/account\/saved-players$/);
-  await expect(
-    page.getByRole("heading", { name: "Saved players", exact: true }),
-  ).toBeVisible();
+  await page.getByRole("link", { name: "Back to Your groups" }).click();
+  await expect(page).toHaveURL(/\/account\/groups$/);
+  await expect(page.getByRole("heading", { name: "Your groups" })).toBeVisible();
+  // The groups list sits in the main menu, so it has no Back.
+  await expect(page.locator(".back-link")).toHaveCount(0);
 });
 
 test("unknown tag starts anonymously, shows progress, and enters tracking", async ({
