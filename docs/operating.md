@@ -712,7 +712,10 @@ day starts where the day before now ends; once every such job has finished,
 `boards`, one rebuild of each Reset board whose entries the rules now change,
 every such board in one run, at most one per Reset (28 per Season), at the
 normal publication priority, not backfill, until every board correction of
-the Season has finished (`boards_rebuilding`); then `summaries`, storing each saved Season summary
+the Season requested by the time this step began has finished
+(`boards_rebuilding`; one requested since, as late battles reach a Live board
+or pacing reaches a past one, runs as ordinary work and is not waited for);
+then `summaries`, storing each saved Season summary
 again from its days, since a summary's final rank reads the Season's last
 board, then each one that still differs from its days, as when a board
 correction since moved an earlier player's final rank, reading every summary

@@ -693,10 +693,25 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
                 database, NEXT_SEASON, "receipt", max_jobs=100
             )
             with database.pool.connection() as connection:
-                # As once the worker has rebuilt the board.
+                # As late battles reaching the board since the step began.
+                connection.execute(
+                    """
+                    INSERT INTO boundary_publication_corrections
+                        (boundary_at, source_generation_id, affected_artifacts)
+                    SELECT boundary_at, source_generation_id, ARRAY['snapshot']
+                    FROM boundary_publication_corrections
+                    """
+                )
+            still = domain_repair.season_repair(
+                database, NEXT_SEASON, "queue", max_jobs=100
+            )
+            with database.pool.connection() as connection:
+                # As once the worker has rebuilt the board, the later
+                # correction still queued.
                 connection.execute("SET LOCAL session_replication_role = replica")
                 connection.execute(
                     "UPDATE boundary_publication_corrections SET state = 'finalized'"
+                    " WHERE id = (SELECT min(id) FROM boundary_publication_corrections)"
                 )
                 connection.execute("UPDATE leaderboard_snapshot_entries SET trophies = 4931")
             done = domain_repair.season_repair(
@@ -729,6 +744,9 @@ def test_season_repair_recalculates_days_then_rebuilds_boards_with_a_receipt(
         "stored": 0, "stale": 0, "stale_players": [],
     }
     assert receipt["rule_revision"] == domain_repair.DAY_RULES_REVISION
+    # The correction requested by the time the step began still holds the
+    # summaries; the one requested since does not.
+    assert (still["phase"], still["boards_rebuilding"]) == ("boards", 1)
     # A Season in progress has no summaries to store again.
     assert (done["phase"], done["summaries_refreshed"]) == ("done", 0)
 
