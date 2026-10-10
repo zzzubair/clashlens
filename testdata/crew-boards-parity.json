@@ -1,0 +1,95 @@
+{
+  "about": "Saved Legend days for two players on Day 25 of the Season that started 2026-07-13 05:00 UTC, with hand-worked totals. The website's Season summary (battleStatistics) and the Python crew boards must both give these. 'week' is the last 7 finished days, 2026-07-30 to 2026-08-05. #2PP: the 2026-07-12 day is last Season's; a4 is saved on two days and counts once; a3 belongs to 2026-07-30 but was played before that day's Reset, so only the Season counts it; 2026-08-02 is a Legend day without battles; 2026-08-03 is not (not signed up yet); today's battles never count.",
+  "now": "2026-08-06T12:00:00Z",
+  "season_start": "2026-07-13T05:00:00Z",
+  "season_day": 25,
+  "players": [
+    {
+      "tag": "#2PP",
+      "days": [
+        {
+          "start": "2026-07-12T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "a0", "battle_timestamp": "2026-07-12T10:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "defense", "battle_id": "d0", "battle_timestamp": "2026-07-12T11:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": -40}
+          ]
+        },
+        {
+          "start": "2026-07-20T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "a1", "battle_timestamp": "2026-07-20T06:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "offense", "battle_id": "a2", "battle_timestamp": "2026-07-20T07:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 2, "destruction_percentage": 88, "trophy_change": 30},
+            {"lens": "defense", "battle_id": "d1", "battle_timestamp": "2026-07-20T08:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 2, "destruction_percentage": 61, "trophy_change": -20}
+          ]
+        },
+        {
+          "start": "2026-07-30T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "a3", "battle_timestamp": "2026-07-30T04:30:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "offense", "battle_id": "a4", "battle_timestamp": "2026-07-30T09:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "defense", "battle_id": "d2", "battle_timestamp": "2026-07-30T10:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 2, "destruction_percentage": 90, "trophy_change": -32}
+          ]
+        },
+        {
+          "start": "2026-07-31T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "a4", "battle_timestamp": "2026-07-30T09:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "offense", "battle_id": "a5", "battle_timestamp": "2026-07-31T09:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 1, "destruction_percentage": 52, "trophy_change": 10}
+          ]
+        },
+        {"start": "2026-08-02T05:00:00Z", "partial_reasons": ["missing_battle_log"], "battles": []},
+        {"start": "2026-08-03T05:00:00Z", "partial_reasons": ["not_enrolled"], "battles": []},
+        {
+          "start": "2026-08-05T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "a6", "battle_timestamp": "2026-08-05T06:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "offense", "battle_id": "a7", "battle_timestamp": "2026-08-05T07:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "defense", "battle_id": "d3", "battle_timestamp": "2026-08-05T08:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": -40}
+          ]
+        },
+        {
+          "start": "2026-08-06T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "a8", "battle_timestamp": "2026-08-06T06:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "defense", "battle_id": "d4", "battle_timestamp": "2026-08-06T07:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 1, "destruction_percentage": 70, "trophy_change": -16}
+          ]
+        }
+      ],
+      "expected": {
+        "season": {"attack": {"total": 240, "days": 5, "battles": 7}, "defense": {"total": 92, "days": 5, "battles": 3}},
+        "week": {"attack": {"total": 130, "days": 4, "battles": 4}, "defense": {"total": 72, "days": 4, "battles": 2}}
+      }
+    },
+    {
+      "tag": "#8PY",
+      "days": [
+        {
+          "start": "2026-08-04T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "b1", "battle_timestamp": "2026-08-04T06:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "offense", "battle_id": "b2", "battle_timestamp": "2026-08-04T07:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 3, "destruction_percentage": 100, "trophy_change": 40},
+            {"lens": "defense", "battle_id": "e1", "battle_timestamp": "2026-08-04T08:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 1, "destruction_percentage": 45, "trophy_change": -10}
+          ]
+        },
+        {
+          "start": "2026-08-05T05:00:00Z",
+          "partial_reasons": [],
+          "battles": [
+            {"lens": "offense", "battle_id": "b3", "battle_timestamp": "2026-08-05T09:00:00Z", "opponent": {"tag": "#LQ2", "name": "Rival"}, "stars": 2, "destruction_percentage": 75, "trophy_change": 25}
+          ]
+        }
+      ],
+      "expected": {
+        "season": {"attack": {"total": 105, "days": 2, "battles": 3}, "defense": {"total": 10, "days": 2, "battles": 1}},
+        "week": {"attack": {"total": 105, "days": 2, "battles": 3}, "defense": {"total": 10, "days": 2, "battles": 1}}
+      }
+    }
+  ]
+}
