@@ -245,6 +245,13 @@ describe("login loader", () => {
     expect(result).toEqual({ loginAvailable: true, returnPath: "/account/profile" });
   });
 
+  it("returns a sign-in started from a page's data request to the page", async () => {
+    const result = await loginLoader({
+      request: new Request(`${ORIGIN}/login?returnPath=%2Faccount%2Fgroups.data`),
+    } as never);
+    expect(result).toEqual({ loginAvailable: true, returnPath: "/account/groups" });
+  });
+
   it("falls back to the default path for unsafe return paths", async () => {
     const result = await loginLoader({
       request: new Request(

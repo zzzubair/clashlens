@@ -7,6 +7,11 @@
  * public origin is the only base that may be used, so an attacker-supplied
  * value can never redirect the browser off-site. Invalid values yield null and
  * the caller falls back to a safe default path.
+ *
+ * A page's data request (React Router's `/page.data`, or `/_.data` for the
+ * home page) names the page it loads for, so it is mapped back to that page
+ * before validation. Otherwise signing in from an in-app link would return
+ * the browser to the raw data instead of the page.
  */
 
 export const MAX_RETURN_PATH_LENGTH = 200;
@@ -25,6 +30,7 @@ export function safeReturnPath(
 ): string | null {
   if (typeof value !== "string") return null;
   if (value.length === 0 || value.length > MAX_RETURN_PATH_LENGTH) return null;
+  value = pagePathOfDataRequest(value);
   if (!value.startsWith("/") || value.startsWith("//")) return null;
   if (!RETURN_PATH_CHARS.test(value)) return null;
   if (value.split("/").some((segment) => segment === "." || segment === "..")) {
@@ -41,6 +47,12 @@ export function safeReturnPath(
     return null;
   }
   return value;
+}
+
+function pagePathOfDataRequest(path: string): string {
+  if (path.endsWith("/_.data")) return path.slice(0, -"_.data".length);
+  if (path.endsWith(".data")) return path.slice(0, -".data".length);
+  return path;
 }
 
 export const ACCOUNT_SETUP_PATH = "/account/setup";
