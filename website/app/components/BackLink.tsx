@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useMatches } from "react-router";
 
 /** Where Back leads: the page this one sits under, and its name. */
@@ -38,7 +38,7 @@ function stateBack(state: unknown): BackTarget | null {
  * The one Back on the site: an arrow and the parent page's name, always a
  * normal link to that page, never a step through browser history. A page
  * with a Back handle always shows it; a page opened from a list shows Back
- * to that list, and keeps it while its own views change the address.
+ * to that list, and its own view links carry that along.
  */
 export function BackLink() {
   const location = useLocation();
@@ -49,11 +49,7 @@ export function BackLink() {
   // Link state only exists in the browser, so it waits for the first render there.
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
-  const fromList = useRef<{ pathname: string; back: BackTarget } | null>(null);
-  const carried = stateBack(location.state);
-  if (carried) fromList.current = { pathname: location.pathname, back: carried };
-  else if (fromList.current?.pathname !== location.pathname) fromList.current = null;
-  const back = handle ?? (hydrated ? fromList.current?.back : undefined);
+  const back = handle ?? (hydrated ? stateBack(location.state) : null);
   if (!back) return null;
   return (
     <div className="page-back">
