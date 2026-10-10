@@ -5,7 +5,6 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pytest
 from domain_test_support import domain_database
@@ -54,42 +53,19 @@ def seed_day(
     battles: list[dict[str, Any]] = (),
     *,
     reasons: list[str] = (),
-    start_trophies: int | None = None,
-    net: int | None = None,
-    adjustments: list[dict[str, Any]] = (),
 ) -> None:
-    """Publish a newer saved log of one Legend day, with its Reset reading."""
+    """Publish a newer saved log of one Legend day."""
     day = ranked_day_for(start)
-    version = None
-    if start_trophies is not None:
-        version = site.sql(
-            """
-            INSERT INTO ranked_day_versions (
-                player_id, ranked_day_start, ranked_day_end, official_season_id,
-                season_day_number, season_anchor_rule_version,
-                reconciliation_rule_version, result_hash, version, state,
-                confidence, start_trophies
-            ) VALUES (
-                (SELECT id FROM players WHERE normalized_tag = %s), %s, %s, %s,
-                %s, 'test-anchor', 'test-rules', %s, 1, 'Live', 'exact', %s
-            ) RETURNING id
-            """,
-            (
-                tag, day.start, day.end, day.official_season_id, day.day_number,
-                uuid4().hex * 2, start_trophies,
-            ),
-        )[0][0]
     attacks = sum(item["lens"] == "offense" for item in battles)
     site.sql(
         """
         INSERT INTO api_player_daily_logs (
             player_id, ranked_day_start, ranked_day_end, official_season_id,
             season_day_number, version, state, coverage, confidence, battles,
-            partial_reasons, adjustments, net_trophy_change, attack_count,
-            defense_count, ranked_day_version_id
+            partial_reasons, attack_count, defense_count
         )
         SELECT player.id, %s, %s, %s, %s, COALESCE(MAX(log.version), 0) + 1,
-               'Complete', 'complete', 'exact', %s, %s, %s, %s, %s, %s, %s
+               'Complete', 'complete', 'exact', %s, %s, %s, %s
         FROM players AS player
         LEFT JOIN api_player_daily_logs AS log
             ON log.player_id = player.id AND log.ranked_day_start = %s
@@ -98,10 +74,45 @@ def seed_day(
         """,
         (
             day.start, day.end, day.official_season_id, day.day_number,
-            Jsonb(list(battles)), Jsonb(list(reasons)), Jsonb(list(adjustments)),
-            net, attacks, len(battles) - attacks, version, day.start, tag,
+            Jsonb(list(battles)), Jsonb(list(reasons)), attacks,
+            len(battles) - attacks, day.start, tag,
         ),
     )
+
+
+def seed_reset_board(
+    site: Site, reset: datetime, trophies: dict[str, int], state: str = "published"
+) -> None:
+    """Save a Reset board with these accounts in this order."""
+    board = site.sql(
+        """
+        INSERT INTO leaderboard_snapshots (
+            snapshot_kind, boundary_at, version, ordering_rule_version,
+            freshness_rule_version, state, measured_coverage, stale_entry_count
+        ) VALUES (
+            'frozen', %s,
+            (SELECT COALESCE(MAX(version), 0) + 1 FROM leaderboard_snapshots
+             WHERE boundary_at = %s),
+            'ordering-v1', 'freshness-v1', %s, 1.0, 0
+        ) RETURNING id
+        """,
+        (reset, reset, state),
+    )[0][0]
+    for position, (tag, total) in enumerate(trophies.items(), start=1):
+        site.sql(
+            """
+            INSERT INTO leaderboard_snapshot_entries (
+                snapshot_id, position, player_id, trophies, trophy_observation_id,
+                trophy_observed_at, observation_age_seconds, freshness,
+                confidence, tie_hash
+            )
+            SELECT %s, %s, player_id, %s, observation_id, %s, 0, 'fresh',
+                   'confirmed', repeat('c', 64)
+            FROM player_profile_versions WHERE normalized_tag = %s
+            ORDER BY id DESC LIMIT 1
+            """,
+            (board, position, total, reset, tag),
+        )
 
 
 def seed_parity(site: Site) -> None:
@@ -209,13 +220,14 @@ def test_today_and_streaks(site: Site) -> None:
     assert missing(today["boards"]["best_defenders"])[0] == ("#8PY", "no_defenses_today")
     # #2PP's attacks in order are 3, 2, 3, 3, 1, 3, 3 stars, then today's 3:
     # a run of three still going. The 2026-07-12 attack was last Season's.
+    # The last seven days stop at today's Reset: 3, 1, 3, 3.
     streaks = {
         period: rows(boards(site, crew_id, period)["boards"]["streaks"], "best", "going", "attacks")
         for period in ("season", "week", "today")
     }
     assert streaks == {
         "season": [("#2PP", 3, True, 8), ("#8PY", 2, False, 3)],
-        "week": [("#2PP", 3, True, 5), ("#8PY", 2, False, 3)],
+        "week": [("#2PP", 2, True, 4), ("#8PY", 2, False, 3)],
         "today": [("#2PP", 1, True, 1)],
     }
 
@@ -228,22 +240,15 @@ def test_live_and_top_players(site: Site) -> None:
         WHERE normalized_tag = '#2PP'
         """
     )
-    # #2PP has today's Reset reading. #8PY has none, so its last Reset is
-    # yesterday's start plus that day's battles and the weekly reset; the
-    # automatic defense loss is already in the day's change.
-    seed_day(site, "#2PP", TODAY, start_trophies=5280)
-    seed_day(
-        site,
-        "#8PY",
-        TODAY - DAY,
-        [battle("offense", "b9", TODAY - DAY + timedelta(hours=2), 2, 25)],
-        start_trophies=5200,
-        net=25,
-        adjustments=[
-            {"type": "automatic_defense", "amount": -40},
-            {"type": "weekly_reset", "amount": -20},
-        ],
-    )
+    # #LQ2 is on the board but not in the crew.
+    site.account("cyrus")
+    site.link("cyrus", "#LQ2")
+    # Today's Reset board, before #2PP's automatic defense loss, in its own
+    # order for the tie. Only the board now published counts, and only
+    # today's Reset.
+    seed_reset_board(site, TODAY, {"#2PP": 5100, "#8PY": 5000}, "superseded")
+    seed_reset_board(site, TODAY, {"#8PY": 5400, "#2PP": 5400, "#LQ2": 5600})
+    seed_reset_board(site, TODAY - DAY, {"#9QQ": 5200})
     result = boards(site, crew_id, "season", who="bea")
     live = result["boards"]["live"]
     assert rows(live, "trophies", "you") == [
@@ -251,7 +256,7 @@ def test_live_and_top_players(site: Site) -> None:
     ]
     assert missing(live) == [("#PPP", "not_in_legend")]
     top = result["boards"]["top"]
-    assert rows(top, "trophies") == [("#2PP", 5280), ("#8PY", 5205)]
+    assert rows(top, "trophies", "you") == [("#8PY", 5400, True), ("#2PP", 5400, False)]
     assert missing(top) == [
         ("#9QQ", "no_battles_this_season"), ("#PPP", "not_in_legend"),
     ]
@@ -265,8 +270,8 @@ def test_a_new_season_starts_every_board_fresh(site: Site) -> None:
     seed_day(
         site, "#8PY", last_day,
         [battle("offense", "old", last_day + timedelta(hours=3), 3, 40)],
-        start_trophies=5400, net=40,
     )
+    seed_reset_board(site, day_one.replace(hour=5), {"#8PY": 5440})
     seed_day(
         site, "#8PY", day_one.replace(hour=5),
         [battle("offense", "new", day_one - timedelta(hours=1), 3, 40)],
@@ -294,10 +299,16 @@ def test_a_new_season_starts_every_board_fresh(site: Site) -> None:
     assert missing(result["boards"]["top"])[:2] == [
         ("#2PP", "no_reset_reading"), ("#8PY", "no_reset_reading"),
     ]
-    for period in ("season", "week"):
-        streaks = boards(site, crew_id, period, day_one)["boards"]["streaks"]
-        assert rows(streaks, "best", "attacks") == [("#8PY", 1, 1)]
-        assert missing(streaks)[0] == ("#2PP", "no_attacks_in_period")
+    # Today counts for the Season's streaks, but the last seven days have
+    # none finished yet.
+    streaks = boards(site, crew_id, "season", day_one)["boards"]["streaks"]
+    assert rows(streaks, "best", "attacks") == [("#8PY", 1, 1)]
+    assert missing(streaks)[0] == ("#2PP", "no_attacks_in_period")
+    streaks = boards(site, crew_id, "week", day_one)["boards"]["streaks"]
+    assert streaks["rows"] == []
+    assert missing(streaks)[:2] == [
+        ("#2PP", "no_attacks_in_period"), ("#8PY", "no_attacks_in_period"),
+    ]
 
     # Day 2: the week so far is Day 1 alone, and last Season's days never
     # count, so the week and the Season agree.

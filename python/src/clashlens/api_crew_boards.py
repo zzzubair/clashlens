@@ -9,8 +9,9 @@ The average boards follow the player page's Season summary
 (``website/app/lib/battle-statistics.ts``): finished Legend days only, each
 recorded battle counted once, trophies divided by the Legend days in the
 window. "Last 7 days" is the last seven finished days of this Season, so it
-is shorter in the first week and empty on Day 1. Streaks also count today's
-attacks, and only attacks Clash Lens saw.
+is shorter in the first week and empty on Day 1. Streaks count only attacks
+Clash Lens saw, and today's too except over the last seven days. Top players
+is the saved Reset board for today's Reset, in its order.
 """
 
 from __future__ import annotations
@@ -20,36 +21,40 @@ from typing import Any
 
 from . import api_crews
 from .api_accounts import _MEMBER_JOINS
-from .api_db import (
-    ApiDatabase,
-    _battle_id_sort_key,
-    _screen_events,
-    _shown_total,
-    _text,
-)
+from .api_db import ApiDatabase, _battle_id_sort_key, _screen_events, _text
 from .api_leaderboard import _LIVE_ORDER_SQL, _LIVE_PLAYERS_SQL, _season_params
 from .domain import RANKED_DAY_DURATION, ranked_day_for
 
 PERIODS = ("today", "week", "season")
 _WEEK_DAYS = 7
 
-# Each place's newest saved log per Legend day from ``%(first)s`` to today,
-# with that day's Reset reading.
+# Each place's newest saved log per Legend day from ``%(first)s`` to today.
 _DAYS_SQL = """
 SELECT DISTINCT ON (daily.player_id, daily.ranked_day_start)
        player.normalized_tag, daily.ranked_day_start, daily.battles,
-       daily.partial_reasons, daily.adjustments, daily.net_trophy_change,
-       daily.coverage, daily.attack_count, daily.defense_count,
-       ranked_day.start_trophies
+       daily.partial_reasons
 FROM crew_players AS place
 JOIN players AS player ON player.id = place.player_id
 JOIN api_player_daily_logs AS daily ON daily.player_id = place.player_id
-LEFT JOIN ranked_day_versions AS ranked_day
-    ON ranked_day.id = daily.ranked_day_version_id
 WHERE place.crew_id = %(crew)s
   AND daily.ranked_day_start >= %(first)s
   AND daily.ranked_day_start <= %(today)s
 ORDER BY daily.player_id, daily.ranked_day_start, daily.version DESC
+"""
+
+# The places on the published Reset board for the Reset at ``%(reset)s``, in
+# that board's order.
+_RESET_BOARD_SQL = """
+SELECT player.normalized_tag, entry.trophies
+FROM leaderboard_snapshots AS board
+JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
+JOIN crew_players AS place ON place.player_id = entry.player_id
+JOIN players AS player ON player.id = entry.player_id
+WHERE board.snapshot_kind = 'frozen'
+  AND board.state = 'published'
+  AND board.boundary_at = %(reset)s
+  AND place.crew_id = %(crew)s
+ORDER BY entry.position
 """
 
 
@@ -60,18 +65,6 @@ class _Day:
         # The player page's rule: a day is a Legend day unless it has no
         # battles and saved profiles prove the player had not signed up yet.
         self.legend = bool(self.offense or self.defense) or "not_enrolled" not in reasons
-        self.start_trophies = None if row[9] is None else int(row[9])
-        self.net = _shown_total(row[5], _text(row[6]), row[7], row[8], reasons)
-        reset = next(
-            (
-                item.get("amount")
-                for item in row[4] or []
-                if isinstance(item, dict)
-                and item.get("type") in {"weekly_reset", "season_reset"}
-            ),
-            0,
-        )
-        self.reset = reset if isinstance(reset, int) else 0
 
 
 def _events(
@@ -118,9 +111,8 @@ def get_crew_boards(
     today = day.start
     finished = [day.season_start + n * RANKED_DAY_DURATION for n in range(day.day_number - 1)]
     window = {"today": [today], "week": finished[-_WEEK_DAYS:], "season": finished}[period]
-    # Streaks count from the window's first day and include today.
-    streak_start = window[0] if window else today
-    first = finished[-1] if period == "today" and finished else streak_start
+    streak_window = [*finished, today] if period == "season" else window
+    first = streak_window[0] if streak_window else today
     with database.pool.connection() as connection:
         try:
             crew_row, _size, _role = api_crews._membership(
@@ -149,6 +141,12 @@ def get_crew_boards(
             _DAYS_SQL, {"crew": crew_row, "first": first, "today": today}
         ):
             saved.setdefault(_text(row[0]), {})[row[1].astimezone(UTC)] = _Day(row)
+        # A Season's first day has no Reset of its own yet.
+        reset_board = (
+            connection.execute(_RESET_BOARD_SQL, {"crew": crew_row, "reset": today}).fetchall()
+            if finished
+            else []
+        )
 
     players = {player["tag"]: player for _owner, player in places}
     mine = {player["tag"] for owner, player in places if owner == account_id}
@@ -178,29 +176,7 @@ def get_crew_boards(
         entry(_text(tag), trophies=int(trophies), observed_at=observed_at.astimezone(UTC))
         for tag, trophies, observed_at in live
     ]
-    position = {row["tag"]: index for index, row in enumerate(live_rows)}
-
-    # Trophies at the last Reset: today's Reset reading, or failing that
-    # yesterday's start plus its battles and any reset at its closing Reset.
-    # None on a Season's first day, which has no finished day yet.
-    top_rows = []
-    if finished:
-        for tag in players:
-            days = saved.get(tag, {})
-            reading = days[today].start_trophies if today in days else None
-            yesterday = days.get(finished[-1])
-            if (
-                reading is None
-                and yesterday is not None
-                and yesterday.start_trophies is not None
-                and yesterday.net is not None
-            ):
-                reading = yesterday.start_trophies + yesterday.net + yesterday.reset
-            if reading is not None:
-                top_rows.append(entry(tag, trophies=reading))
-    top_rows.sort(
-        key=lambda row: (-row["trophies"], position.get(row["tag"], len(position)), *name_key(row))
-    )
+    top_rows = [entry(_text(tag), trophies=int(trophies)) for tag, trophies in reset_board]
 
     averages: dict[str, list[dict[str, Any]]] = {"offense": [], "defense": []}
     streak_rows = []
@@ -214,8 +190,8 @@ def get_crew_boards(
                     listed.append(entry(tag, **values))
             elif legend:
                 listed.append(entry(tag, **_average_row(legend, side, window[0], now)))
-        streak_days = [saved_day for start, saved_day in days.items() if start >= streak_start]
-        attacks = _events(streak_days, "offense", streak_start, now)
+        streak_days = [days[start] for start in streak_window if start in days]
+        attacks = _events(streak_days, "offense", streak_window[0], now) if streak_days else []
         if attacks:
             streak_rows.append(entry(tag, **_streak(attacks)))
 
