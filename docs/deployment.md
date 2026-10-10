@@ -475,8 +475,8 @@ Crews use the same setting: they ship with the dashboard and have no switch of
 their own. While it is off, every private API crew route
 (`/v1/account/crews…` and `/v1/account/crew-invites/…`) answers 404
 `crews_disabled` before reading anything, every `/crews` page shows the normal
-page-not-found page, and the navigation bar has no Crews link. Migration 0095 creates the crew
-tables either way; they stay empty while the setting is off.
+page-not-found page, and the navigation bar has no Crews link. Migration 0095
+creates the crew tables either way; they stay empty while the setting is off.
 
 Build from the checkout to be released, review the resulting commit, then run
 the already-built release:
