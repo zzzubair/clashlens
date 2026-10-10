@@ -886,7 +886,9 @@ function SeasonNav({
             {selectedSeason === null ? (
               <strong aria-current="page">Current Season</strong>
             ) : (
-              <Link to={canonicalPlayerPath(tag)}>Current Season</Link>
+              <Link to={canonicalPlayerPath(tag)} replace>
+                Current Season
+              </Link>
             )}
           </li>
         ) : null}
@@ -897,6 +899,7 @@ function SeasonNav({
             ) : (
               <Link
                 to={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
+                replace
               >
                 {seasonLabel(season.seasonId)}
               </Link>
