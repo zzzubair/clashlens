@@ -1075,8 +1075,7 @@ h3 {
 }
 
 .header-back,
-.nav-link,
-.nav-button {
+.nav-link {
   max-width: 100%;
   min-height: 2.75rem;
   padding: 0.55rem 0.9rem;
@@ -1097,8 +1096,7 @@ h3 {
   white-space: normal;
 }
 
-.site-nav .nav-link:not(.nav-link-primary),
-.site-nav .nav-button {
+.site-nav .nav-link:not(.nav-link-primary) {
   color: var(--cl-header-ink);
   border-color: var(--cl-header-soft);
 }
@@ -1106,16 +1104,13 @@ h3 {
 .header-back:hover,
 .header-back:focus-visible,
 .nav-link:hover,
-.nav-link:focus-visible,
-.nav-button:hover,
-.nav-button:focus-visible {
+.nav-link:focus-visible {
   color: var(--cl-accent-contrast);
   background: var(--cl-action-soft);
   border-color: var(--cl-action-border);
 }
 
-.site-nav .nav-link:not(.nav-link-primary):is(:hover, :focus-visible),
-.site-nav .nav-button:is(:hover, :focus-visible) {
+.site-nav .nav-link:not(.nav-link-primary):is(:hover, :focus-visible) {
   color: var(--cl-header-ink);
   background: var(--cl-header-soft);
   border-color: transparent;
@@ -1156,31 +1151,6 @@ h3 {
     transform: scale(0.97);
     box-shadow: none;
   }
-}
-
-.nav-form {
-  min-width: 0;
-  margin: 0;
-}
-
-.nav-account {
-  gap: 0.5rem;
-}
-
-.nav-account svg {
-  flex-shrink: 0;
-}
-
-.nav-account-name {
-  min-width: 0;
-  max-width: 8rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nav-button {
-  cursor: pointer;
 }
 
 .login-panel,
@@ -1442,8 +1412,7 @@ h3 {
   }
 
   .header-back,
-  .nav-link,
-  .nav-button {
+  .nav-link {
     padding: 0.45rem 0.5rem;
     font-size: 0.7rem;
   }
@@ -1467,8 +1436,7 @@ h3 {
   }
 
   .header-back,
-  .nav-link,
-  .nav-button {
+  .nav-link {
     padding: 0.45rem 0.55rem;
     font-size: 0.7rem;
   }

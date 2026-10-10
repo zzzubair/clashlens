@@ -1,0 +1,105 @@
+/* Signed-in account name: opens a small list with Account and Log out. */
+.account-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.nav-account {
+  gap: 0.5rem;
+  list-style: none;
+  cursor: pointer;
+}
+
+.nav-account::-webkit-details-marker {
+  display: none;
+}
+
+.nav-account svg {
+  flex-shrink: 0;
+}
+
+.nav-account-name {
+  min-width: 0;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu-chevron {
+  margin-left: -0.15rem;
+}
+
+.account-menu[open] > .nav-account .account-menu-chevron {
+  transform: rotate(180deg);
+}
+
+:root .site-nav .account-menu[open] > .nav-account {
+  background: var(--cl-header-soft);
+}
+
+.account-menu-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  min-width: 10rem;
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  box-shadow: var(--cl-shadow);
+}
+
+.account-menu-panel form {
+  margin: 0;
+}
+
+.account-menu-panel :is(a, button) {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--cl-ink);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--cl-radius) - 2px);
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.account-menu-panel :is(a, button):is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+  background: var(--cl-action-soft);
+}
+
+/* Where the header is tight the account shows only its icon, and phones read
+   "Discord"; screen readers still hear the full words. */
+@media (max-width: 34rem), (min-width: 64.0625rem) and (max-width: 70rem) {
+  .nav-account-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 34rem) {
+  .nav-discord-join {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
