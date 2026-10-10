@@ -239,23 +239,6 @@
   margin-top: 1.25rem;
 }
 
-.compare-key {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
-  gap: 0.8rem 1.5rem;
-  margin: 1.5rem 0 0;
-}
-
-.compare-key dt {
-  font-weight: 700;
-}
-
-.compare-key dd {
-  margin: 0.15rem 0 0;
-  color: var(--cl-muted);
-  font-size: 0.88rem;
-}
-
 /* On a phone each player becomes a card with one full-width row per section:
    label and headline number on the left, details on the right. A shared
    subgrid keeps both columns aligned down the whole card. */
