@@ -1007,12 +1007,6 @@
   margin-top: 1.5rem;
 }
 
-.filter-details {
-  flex: 1;
-  min-width: 0;
-}
-
-.filter-details summary,
 .analytics-breakdown summary {
   width: fit-content;
   min-height: 2.75rem;
@@ -1020,15 +1014,6 @@
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 600;
-}
-
-.filter-details[open] summary {
-  margin-bottom: 0.5rem;
-}
-
-.filter-details .form-help {
-  margin-top: 0.85rem;
-  font-size: 0.8rem;
 }
 
 .filter-footer .button {
@@ -1173,10 +1158,6 @@
 
   .filter-footer {
     flex-wrap: wrap;
-  }
-
-  .filter-details {
-    flex-basis: 100%;
   }
 
   .filter-footer .button {

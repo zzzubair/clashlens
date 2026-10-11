@@ -39,10 +39,8 @@ const sortFields = {
 } as const;
 
 export function recentArmyAnalytics(source: URLSearchParams) {
-  const lensValue = source.get("lens");
-  if (lensValue !== null && lensValue !== "offense" && lensValue !== "defense")
-    return null;
-  const lens = lensValue ?? "offense";
+  // The page shows attacks only; the capture's defense side stays unused.
+  const lens = "offense";
   const requestedPopulation = source.get("population") ?? "top-100";
   if (!Object.hasOwn(capture.groups, requestedPopulation)) return null;
   const population = requestedPopulation;

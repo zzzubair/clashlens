@@ -611,6 +611,14 @@ def create_app(
             raise ApiError(404, "army_analytics_unavailable")
         return JSONResponse(status_code=200, content=_json_safe(result))
 
+    @app.get("/v1/analytics/armies/seasons")
+    def army_seasons(request: Request) -> JSONResponse:
+        _authorize(request, "analytics.read", production_database)
+        return JSONResponse(
+            status_code=200,
+            content={"seasons": api_analytics.list_army_seasons(production_database)},
+        )
+
     @app.get("/v1/analytics/armies/seasons/{season_id}")
     def army_season_summary(
         season_id: str,

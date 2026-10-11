@@ -434,6 +434,15 @@ def test_historical_season_endpoint_serves_summary_without_facts(
                     bad_lens, headers=signed_headers(bad_lens)
                 )
                 assert rejected.status_code == 422
+                # The Season picker lists finished seasons with army data.
+                listing = "/v1/analytics/armies/seasons"
+                assert client.get(listing).status_code == 401
+                listed = client.get(listing, headers=signed_headers(listing))
+                assert listed.json() == {"seasons": [SEASON]}
+                with database.pool.connection() as connection:
+                    connection.execute("DELETE FROM army_season_summaries")
+                listed = client.get(listing, headers=signed_headers(listing))
+                assert listed.json() == {"seasons": []}
         finally:
             database.close()
 

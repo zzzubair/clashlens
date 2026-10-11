@@ -11,7 +11,7 @@ test("army analytics loads the real backend's current honest state", async ({ pa
   await expect(
     page.getByRole("region", { name: "Army statistics" }).or(
       page.getByRole("heading", {
-        name: /^(A new season is underway|No army stats for these days yet)$/,
+        name: /^(A new season is underway|No army stats for this season yet)$/,
       }),
     ),
   ).toBeVisible();
@@ -22,14 +22,14 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
   page,
 }) => {
   const response = await page.goto(
-    "/analytics/armies?recent=1&lens=defense&population=top-100&category=troops&sort=usage-rate",
+    "/analytics/armies?recent=1&population=top-100&category=troops&sort=usage-rate",
   );
 
   expect(response?.status()).toBe(200);
   const coverage = page.getByLabel("Battle coverage");
-  await expect(coverage).toContainText(/Battle records\s*1,593\s*Recorded/);
-  await expect(coverage).toContainText(/Records included\s*1,591/);
-  await expect(coverage).toContainText(/Records excluded\s*2/);
+  await expect(coverage).toContainText(/Battle records\s*1,600\s*Recorded/);
+  await expect(coverage).toContainText(/Records included\s*1,600/);
+  await expect(coverage).toContainText(/Records excluded\s*0/);
 
   await page.getByLabel("Show").selectOption("spells");
   await expect(page).toHaveURL(/category=spells/);
@@ -40,11 +40,6 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
     .getByLabel("Players")
     .selectOption("top-50");
   await expect(page).toHaveURL(/population=top-50/);
-  await page
-    .getByRole("form", { name: "Army analytics filters" })
-    .getByText("Attacks", { exact: true })
-    .click();
-  await expect(page).toHaveURL(/lens=offense/);
 
   const table = page.getByRole("table", { name: "Army analytics results" });
   await table.getByRole("button", { name: "Sort by Name, A to Z" }).click();
@@ -72,115 +67,76 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test("a reversed day range is explained, not silently ignored", async ({ page }) => {
-  await page.goto("/analytics/armies?saved=1&season=current");
-  const form = page.getByRole("form", { name: "Army analytics filters" });
-  await form.getByText("Season & day range").click();
-  const from = form.getByLabel("From Legend day");
-  const to = form.getByLabel("To Legend day");
-  // Both edits land inside the 350 ms wait, so only the reversed pair is checked.
-  await from.fill("27");
-  await to.fill("26");
-
-  await expect(form.getByRole("alert")).toHaveText(
-    "From Legend day can’t be after To Legend day.",
-  );
-  await expect(from).toHaveAttribute("aria-invalid", "true");
-  await expect(to).toHaveAttribute("aria-invalid", "true");
-  await expect(page).not.toHaveURL(/end_day=26/);
-  await expect(to).toBeEditable();
-
-  await to.fill("28");
-  await expect(form.getByRole("alert")).toHaveCount(0);
-  await expect(to).toHaveAttribute("aria-invalid", "false");
-});
-
-test("a reversed day range is explained while a custom trophy range is unfinished", async ({
+test("the saved-data page shows attacks over the whole season with no day range", async ({
   page,
 }) => {
-  await page.goto("/analytics/armies?saved=1&season=current");
-  // A dropdown change made before the page's JavaScript loads is ignored.
-  await page.waitForLoadState("networkidle");
+  await page.goto("/analytics/armies?saved=1&season=current&lens=defense&start_day=3");
   const form = page.getByRole("form", { name: "Army analytics filters" });
-  await form.getByLabel("Players").selectOption("trophies");
-  await form.getByLabel("Min trophies").fill("5000");
-  await form.getByText("Season & day range").click();
-  const from = form.getByLabel("From Legend day");
-  const to = form.getByLabel("To Legend day");
-  await from.fill("27");
-  await to.fill("26");
-
-  await expect(form.getByRole("alert")).toHaveText(
-    "From Legend day can’t be after To Legend day.",
-  );
-  await expect(from).toHaveAttribute("aria-invalid", "true");
-  await expect(to).toHaveAttribute("aria-invalid", "true");
-  await expect(page).not.toHaveURL(/end_day=26/);
+  await expect(form.getByText("Defenses", { exact: true })).toHaveCount(0);
+  await expect(form.getByLabel("From Legend day")).toHaveCount(0);
+  await expect(form.getByLabel("To Legend day")).toHaveCount(0);
+  const season = form.getByRole("combobox", { name: "Season", exact: true });
+  await expect(season).toBeVisible();
+  await expect(season).toHaveValue("current");
+  await expect(form.getByLabel("Show")).toContainText("Hero equipment combos");
+  await expect(form.getByLabel("Show")).toContainText("Hero and both equipments");
 });
 
-for (const lens of ["offense", "defense"]) {
-  test(`trophy drafts explain unchanged ${lens} results and recover to rank filtering`, async ({
-    page,
-  }) => {
-    await page.goto(
-      `/analytics/armies?saved=1&season=current&lens=${lens}&population=top-100`,
-    );
-    await page.waitForLoadState("networkidle");
-    const form = page.getByRole("form", { name: "Army analytics filters" });
-    const players = form.getByLabel("Players");
-    await expect(players).toHaveValue("top-100");
-    expect(await players.locator("option").first().getAttribute("value")).toBe(
-      "trophies",
-    );
-    const appliedURL = page.url();
-    const results = page.getByRole("region", { name: "Army statistics" });
-    const appliedResults = (await results.count()) ? await results.innerText() : null;
-    await players.selectOption("trophies");
-    const status = form.locator("#trophy-range-status");
+test("trophy drafts explain unchanged results and recover to rank filtering", async ({
+  page,
+}) => {
+  await page.goto("/analytics/armies?saved=1&season=current&population=top-100");
+  await page.waitForLoadState("networkidle");
+  const form = page.getByRole("form", { name: "Army analytics filters" });
+  const players = form.getByLabel("Players");
+  await expect(players).toHaveValue("top-100");
+  expect(await players.locator("option").first().getAttribute("value")).toBe("trophies");
+  const appliedURL = page.url();
+  const results = page.getByRole("region", { name: "Army statistics" });
+  const appliedResults = (await results.count()) ? await results.innerText() : null;
+  await players.selectOption("trophies");
+  const status = form.locator("#trophy-range-status");
+  await expect(status).toContainText(
+    "Enter both trophy limits to update results. This range has not been applied.",
+  );
+  if (appliedResults !== null) {
+    await expect(status).toContainText("Results below still show top-100 players.");
+  }
+  await form.getByLabel("Min trophies").fill("5500");
+  await expect(status).toContainText("This range has not been applied.");
+  await expect(page).toHaveURL(appliedURL);
+  if (appliedResults !== null) {
+    await expect.poll(() => results.innerText()).toBe(appliedResults);
+  }
+
+  await form.getByLabel("Max trophies").fill("5400");
+  await expect(form.getByRole("alert")).toContainText("can’t be above");
+  await expect(page).toHaveURL(appliedURL);
+  await form.getByLabel("Max trophies").clear();
+  await expect(form.getByRole("alert")).toHaveCount(0);
+  await expect(status).toContainText("This range has not been applied.");
+
+  await form.getByLabel("Max trophies").fill("5600");
+  await expect(page).toHaveURL(/population=trophies-5500-5600/);
+  await expect(status).toBeEmpty();
+  await expect(form.locator("#trophy-range-help")).toHaveText(
+    "Each battle counts if the player’s trophies at that moment fall in this range.",
+  );
+  const rangeURL = page.url();
+  await form.getByLabel("Min trophies").clear();
+  await expect(status).toContainText("This range has not been applied.");
+  await expect(page).toHaveURL(rangeURL);
+  if (await results.count()) {
     await expect(status).toContainText(
-      "Enter both trophy limits to update results. This range has not been applied.",
+      "Results below still show players with 5,500 to 5,600 trophies at battle time.",
     );
-    if (appliedResults !== null) {
-      await expect(status).toContainText("Results below still show top-100 players.");
-    }
-    await expect(form.getByText(/choose days tracked throughout/)).toHaveCount(0);
-    await form.getByLabel("Min trophies").fill("5500");
-    await expect(status).toContainText("This range has not been applied.");
-    await expect(page).toHaveURL(appliedURL);
-    if (appliedResults !== null) {
-      await expect.poll(() => results.innerText()).toBe(appliedResults);
-    }
-
-    await form.getByLabel("Max trophies").fill("5400");
-    await expect(form.getByRole("alert")).toContainText("can’t be above");
-    await expect(page).toHaveURL(appliedURL);
-    await form.getByLabel("Max trophies").clear();
-    await expect(form.getByRole("alert")).toHaveCount(0);
-    await expect(status).toContainText("This range has not been applied.");
-
-    await form.getByLabel("Max trophies").fill("5600");
-    await expect(page).toHaveURL(/population=trophies-5500-5600/);
-    await expect(status).toBeEmpty();
-    await expect(form.locator("#trophy-range-help")).toHaveText(
-      "Each battle counts if the player’s trophies at that moment fall in this range.",
-    );
-    await expect(form.getByText(/choose days tracked throughout/)).toHaveCount(0);
-    const rangeURL = page.url();
-    await form.getByLabel("Min trophies").clear();
-    await expect(status).toContainText("This range has not been applied.");
-    await expect(page).toHaveURL(rangeURL);
-    if (await results.count()) {
-      await expect(status).toContainText(
-        "Results below still show players with 5,500 to 5,600 trophies at battle time.",
-      );
-    }
-    await players.selectOption("top-50");
-    await expect(page).toHaveURL(/population=top-50/);
-    await expect(form.getByLabel("Min trophies")).toHaveCount(0);
-    await expect(status).toHaveCount(0);
-    await expectNoSeriousAccessibilityViolations(page);
-  });
-}
+  }
+  await players.selectOption("top-50");
+  await expect(page).toHaveURL(/population=top-50/);
+  await expect(form.getByLabel("Min trophies")).toHaveCount(0);
+  await expect(status).toHaveCount(0);
+  await expectNoSeriousAccessibilityViolations(page);
+});
 
 test("Clan Castle switches between individual and regular troop results", async ({
   page,
@@ -243,15 +199,15 @@ test("large army view keeps every row and shows the browser's local time", async
   try {
     const page = await context.newPage();
     await page.goto(
-      "/analytics/armies?recent=1&lens=defense&population=top-200&category=cc-composition&sort=usage-rate",
+      "/analytics/armies?recent=1&population=top-200&category=cc-composition&sort=usage-rate",
     );
     await expect(
       page.getByRole("table", { name: "Army analytics results" }).getByRole("row"),
-    ).toHaveCount(113);
+    ).toHaveCount(49);
     await page.getByText("Full star breakdown & coverage").click();
     await expect(
       page.getByRole("table", { name: "Army star breakdown" }).getByRole("row"),
-    ).toHaveCount(113);
+    ).toHaveCount(49);
 
     const timestamp = page.getByLabel("Real battle data").locator("time");
     const value = await timestamp.getAttribute("datetime");
@@ -329,7 +285,7 @@ test("retired IDs render honest labels, quantities and stars before and after na
     await expect(row.getByRole("cell").nth(5)).toContainText("0 battles");
     await expect(page.getByRole("columnheader", { name: "Quantity" })).toBeVisible();
     await expect(page.getByRole("columnheader", { name: /Avg\. stars/ })).toHaveCount(0);
-    await expect(page.getByLabel("From Legend day")).toBeDisabled();
+    await expect(page.getByLabel("From Legend day")).toHaveCount(0);
     if (!unknown && (category === "troops" || category === "siege")) {
       await expect(
         page

@@ -1106,6 +1106,28 @@ describe("server-only Python client response boundary", () => {
     expect(mapped.rows[0].starCounts).toBeUndefined();
   });
 
+  it("reads the finished seasons that have army data and rejects a malformed list", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ seasons: ["1785714000", "1783296000"] }))
+      .mockResolvedValueOnce(Response.json({ seasons: [1785714000] }));
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(createPythonClient().getArmySeasons()).resolves.toEqual([
+      "1785714000",
+      "1783296000",
+    ]);
+    expect((fetchMock.mock.calls[0][0] as URL).pathname).toBe(
+      "/v1/analytics/armies/seasons",
+    );
+    await expect(createPythonClient().getArmySeasons()).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
+    });
+  });
+
   it("rejects an army analytics payload with malformed evidence coverage", async () => {
     const payload = armyAnalyticsPayload();
     delete (payload as Record<string, unknown>).cohort_evidence;

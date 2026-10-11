@@ -14,11 +14,7 @@ import {
 import { ErrorNotice } from "../components/ErrorNotice";
 import { LocalTimestamp } from "../components/Provenance";
 import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
-import {
-  dayRangeProblem,
-  TROPHY_RANGE_LIMITS,
-  trophyRangeProblem,
-} from "../lib/validation";
+import { TROPHY_RANGE_LIMITS, trophyRangeProblem } from "../lib/validation";
 import detailsStyles from "../details.css?url";
 
 export function links() {
@@ -26,7 +22,6 @@ export function links() {
 }
 
 const allowed = {
-  lens: ["offense", "defense"],
   category: [
     "troops",
     "spells",
@@ -69,6 +64,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           seasonEmpty: null,
           historicalSummary: false,
           requestedSeason: "current",
+          pastSeasons: [] as string[],
         },
         { status: 422 },
       );
@@ -109,6 +105,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           seasonEmpty: null,
           historicalSummary: false,
           requestedSeason: "current",
+          pastSeasons: [] as string[],
         },
         { status: 422 },
       );
@@ -120,46 +117,49 @@ export async function loader({ request }: LoaderFunctionArgs) {
       seasonEmpty: null,
       historicalSummary: false,
       requestedSeason: "current",
+      pastSeasons: [] as string[],
     };
   }
+  // Attacks only, over the whole Season: the API's defaults are the attack
+  // view and every finished Legend day from Day 1.
   const season = source.get("season") ?? "current";
-  const lens = source.get("lens") ?? "offense";
   const category = source.get("category") ?? "troops";
   const sort = source.get("sort") ?? "usage-rate";
   const python = await import("../services/python.server");
+  let pastSeasonsRead: Promise<string[]> = Promise.resolve([]);
   try {
+    const client = python.createPythonClient();
+    pastSeasonsRead = armySeasons(client);
     if (season !== "current") {
-      const summaryQuery = new URLSearchParams({ lens, category, sort });
+      const summaryQuery = new URLSearchParams({ category, sort });
       if (source.has("offset")) summaryQuery.set("offset", source.get("offset")!);
       return {
         recentAvailable,
-        analytics: await python
-          .createPythonClient()
-          .getArmySeasonSummary(season, summaryQuery),
+        analytics: await client.getArmySeasonSummary(season, summaryQuery),
         error: null,
         seasonEmpty: null,
         historicalSummary: true,
         requestedSeason: season,
+        pastSeasons: await pastSeasonsRead,
       };
     }
     const query = new URLSearchParams({
       season,
-      lens,
-      start_day: source.get("start_day") ?? "1",
-      end_day: source.get("end_day") ?? "28",
       population: source.get("population") ?? "top-100",
       category,
       sort,
     });
     return {
       recentAvailable,
-      analytics: await python.createPythonClient().getArmyAnalytics(query),
+      analytics: await client.getArmyAnalytics(query),
       error: null,
       seasonEmpty: null,
       historicalSummary: false,
       requestedSeason: season,
+      pastSeasons: await pastSeasonsRead,
     };
   } catch (cause) {
+    const pastSeasons = await pastSeasonsRead;
     if (cause instanceof python.NoCompletedLegendDaysError) {
       // The current season has no completed Legend day; show the agreed empty
       // state and link to the previous season instead of serving its data.
@@ -171,6 +171,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           seasonEmpty: { previousSeasonId: cause.previousSeasonId },
           historicalSummary: false,
           requestedSeason: season,
+          pastSeasons,
         },
         { status: 404 },
       );
@@ -222,6 +223,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           seasonEmpty: null,
           historicalSummary: season !== "current",
           requestedSeason: season,
+          pastSeasons,
         },
         { status: pythonError.status },
       );
@@ -239,14 +241,27 @@ export async function loader({ request }: LoaderFunctionArgs) {
               code: "unavailable",
               message: source.get("population")?.startsWith("trophies")
                 ? "This trophy range is too wide to load right now. Try a narrower range."
-                : "This player group took too long to load right now. Try a smaller group or fewer Legend days.",
+                : "This player group took too long to load right now. Try a smaller group.",
             },
           } satisfies WebsiteErrorResponse)
         : safeWebsiteError(cause),
       seasonEmpty: null,
       historicalSummary: false,
       requestedSeason: season,
+      pastSeasons,
     };
+  }
+}
+
+// The list only adds finished Seasons to the picker, so the page still works
+// without it.
+async function armySeasons(
+  client: ReturnType<typeof import("../services/python.server").createPythonClient>,
+) {
+  try {
+    return await client.getArmySeasons();
+  } catch {
+    return [];
   }
 }
 
@@ -261,10 +276,10 @@ const filterLabels: Record<string, string> = {
   heroes: "Heroes",
   pets: "Hero pets",
   equipment: "Hero equipment",
-  "equipment-for-hero": "Equipment by hero",
+  "equipment-for-hero": "Hero equipment combos",
   "cc-troops": "Clan Castle troops",
   "hero-pet": "Hero and pet",
-  "hero-equipment": "Hero and equipment",
+  "hero-equipment": "Hero and both equipments",
   "cc-composition": "Clan Castle army",
 };
 const topPlayers = [5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
@@ -287,7 +302,7 @@ const usageLabels: Record<string, string> = {
   "equipment-for-hero": "Equipment",
   "cc-troops": "Clan Castle troop",
   "hero-pet": "Hero and pet",
-  "hero-equipment": "Hero and equipment",
+  "hero-equipment": "Hero and both equipments",
   "cc-composition": "Clan Castle army",
 };
 
@@ -296,7 +311,7 @@ function populationDescription(population: string) {
   const [start, end] = numbers.map((value) => Number(value).toLocaleString());
   if (kind === "all") return "all players";
   if (kind === "top") return `top-${start} players`;
-  if (kind === "streak") return `players in the top ${end} on every selected day`;
+  if (kind === "streak") return `players in the top ${end} on every Legend day so far`;
   if (kind === "band") return `players ranked ${start} to ${end}`;
   if (kind === "trophies")
     return `players with ${start} to ${end} trophies at battle time`;
@@ -470,7 +485,7 @@ const ArmyBreakdownRow = memo(function ArmyBreakdownRow({ row }: { row: ArmyRow 
 
 export default function ArmyAnalyticsRoute() {
   const result = useLoaderData<typeof loader>();
-  const { error, historicalSummary, requestedSeason } = result;
+  const { error, historicalSummary, requestedSeason, pastSeasons } = result;
   const [clock, setClock] = useState(0);
   // A current-season result stops being current when its 28 days end, even
   // if the page stays open or the reply arrives after the Reset.
@@ -493,16 +508,13 @@ export default function ArmyAnalyticsRoute() {
   const pendingChange = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selected = analytics?.selection;
   const isHistorical = historicalSummary === true;
-  const requestedStartDay = params.get("start_day") ?? "1";
-  const requestedEndDay = params.get("end_day") ?? "28";
   const coveredDays = analytics?.collectionCoverage.coveredDays ?? [];
   const untrackedDays = coveredDays.length
     ? Array.from(
-        { length: coveredDays[coveredDays.length - 1] - Number(requestedStartDay) + 1 },
-        (_, index) => Number(requestedStartDay) + index,
+        { length: coveredDays[coveredDays.length - 1] },
+        (_, index) => index + 1,
       ).filter((day) => !coveredDays.includes(day))
     : [];
-  const lens = selected?.lens ?? params.get("lens") ?? "offense";
   const population = selected?.population ?? params.get("population") ?? "top-100";
   // A custom trophy range shows as one choice plus its two number fields.
   const trophyRange = /^trophies-(\d+)-(\d+)$/.exec(population)?.slice(1);
@@ -510,7 +522,6 @@ export default function ArmyAnalyticsRoute() {
   const [customTrophies, setCustomTrophies] = useState(playerGroup === "trophies");
   const [incompleteTrophies, setIncompleteTrophies] = useState(false);
   const [trophyProblem, setTrophyProblem] = useState<string | null>(null);
-  const [dayProblem, setDayProblem] = useState<string | null>(null);
   const category =
     selected?.category ??
     ((params.get("category") ?? "troops") === "troops" && params.get("cc") === "1"
@@ -524,22 +535,11 @@ export default function ArmyAnalyticsRoute() {
   const streakTop = population.startsWith("streak-top-")
     ? Number(population.slice(11)).toLocaleString()
     : null;
-  // Consistent top needs a saved board and army data on every selected ended
-  // day, so offer it only when the API reports no such day missing.
+  // Consistent top needs a saved board and army data on every ended day of
+  // the Season, so offer it only when the API reports no such day missing.
   const streakGapDays = analytics?.collectionCoverage.streakGapDays;
   const showConsistent =
     !snapshot && !isHistorical && (streakTop !== null || streakGapDays?.length === 0);
-  const rankedDays = coveredDays.filter((day) => !streakGapDays?.includes(day));
-  let trackedRunStart = rankedDays.length - 1;
-  while (
-    trackedRunStart > 0 &&
-    rankedDays[trackedRunStart - 1] === rankedDays[trackedRunStart] - 1
-  )
-    trackedRunStart -= 1;
-  const trackedRun = rankedDays.slice(Math.max(trackedRunStart, 0));
-  const trackedRunQuery = new URLSearchParams(params);
-  trackedRunQuery.set("start_day", String(trackedRun[0]));
-  trackedRunQuery.set("end_day", String(trackedRun[trackedRun.length - 1]));
   const cohortPlayers = analytics?.cohortEvidence.cohortPlayers ?? 0;
   const oldTrophyPlayers = analytics?.cohortEvidence.staleOrUncertainCohortMembers ?? 0;
   const unreadableArmyRecords = analytics
@@ -589,7 +589,7 @@ export default function ArmyAnalyticsRoute() {
     return () => clearTimeout(timer);
   }, [currentSeasonEnd, seasonEnded, clock]);
 
-  // Leaving through a link must cancel a day edit that is still waiting.
+  // Leaving through a link must cancel a trophy edit that is still waiting.
   useEffect(() => {
     if (
       navigation.state !== "idle" &&
@@ -602,7 +602,7 @@ export default function ArmyAnalyticsRoute() {
   }, [navigation.state, navigation.formData]);
 
   // Update existing controls after URL navigation without replacing the form,
-  // which would lose keyboard focus and close the day-range disclosure.
+  // which would lose keyboard focus.
   useEffect(() => {
     if (
       !filterForm.current ||
@@ -613,17 +613,13 @@ export default function ArmyAnalyticsRoute() {
     setCustomTrophies(playerGroup === "trophies");
     setIncompleteTrophies(false);
     setTrophyProblem(null);
-    setDayProblem(null);
     const values = {
-      lens,
       population: isHistorical ? "all" : playerGroup,
       trophy_min: trophyRange?.[0] ?? params.get("trophy_min") ?? "",
       trophy_max: trophyRange?.[1] ?? params.get("trophy_max") ?? "",
       category: showCategory,
       sort: selected?.sort ?? params.get("sort") ?? "usage-rate",
       season: requestedSeason,
-      start_day: requestedStartDay,
-      end_day: requestedEndDay,
     };
     for (const [name, value] of Object.entries(values)) {
       const control = filterForm.current.elements.namedItem(name);
@@ -640,7 +636,6 @@ export default function ArmyAnalyticsRoute() {
   }, [
     params,
     selected,
-    lens,
     population,
     showCategory,
     clanCastle,
@@ -704,14 +699,6 @@ export default function ArmyAnalyticsRoute() {
           const apply = () => {
             pendingChange.current = null;
             const values = new FormData(form);
-            // Disabled or absent day fields send nothing and need no check.
-            const startDay = values.get("start_day");
-            const endDay = values.get("end_day");
-            const days =
-              startDay !== null && endDay !== null
-                ? dayRangeProblem(String(startDay), String(endDay))
-                : null;
-            setDayProblem(days);
             if (values.get("population") === "trophies") {
               const minimum = String(values.get("trophy_min") ?? "");
               const maximum = String(values.get("trophy_max") ?? "");
@@ -729,7 +716,7 @@ export default function ArmyAnalyticsRoute() {
               values.delete("trophy_min");
               values.delete("trophy_max");
             }
-            if (days !== null || !form.checkValidity()) return;
+            if (!form.checkValidity()) return;
             void submit(values, {
               method: "get",
               replace: true,
@@ -760,21 +747,6 @@ export default function ArmyAnalyticsRoute() {
           <input type="hidden" name="saved" value="1" />
         ) : null}
         <div className="filter-heading">
-          <fieldset className="segmented-control">
-            <legend className="sr-only">Battle perspective</legend>
-            {allowed.lens.map((value) => (
-              <label key={value}>
-                <input
-                  className="sr-only"
-                  type="radio"
-                  name="lens"
-                  value={value}
-                  defaultChecked={lens === value}
-                />
-                <span>{value === "offense" ? "Attacks" : "Defenses"}</span>
-              </label>
-            ))}
-          </fieldset>
           <span className="analytics-season" role="status">
             {navigation.state !== "idle"
               ? "Updating…"
@@ -872,7 +844,7 @@ export default function ArmyAnalyticsRoute() {
                     ))}
                 </optgroup>
                 {showConsistent ? (
-                  <optgroup label="Top players on every selected day">
+                  <optgroup label="Top players on every Legend day">
                     {topPlayers
                       .filter((count) => count <= consistentLimit)
                       .map((count) => (
@@ -952,19 +924,6 @@ export default function ArmyAnalyticsRoute() {
             ) : null}
           </div>
         </div>
-        {!customTrophies &&
-        !showConsistent &&
-        !snapshot &&
-        !isHistorical &&
-        trackedRun.length > 0 ? (
-          <p className="form-help">
-            To compare players who stayed in the top ranks on every selected day, choose
-            days tracked throughout.{" "}
-            <Link to={`?${trackedRunQuery}`} preventScrollReset replace>
-              Use {dayRange(trackedRun)}
-            </Link>
-          </p>
-        ) : null}
         <div className="filter-footer">
           {snapshot ? (
             <p className="form-help">
@@ -972,66 +931,30 @@ export default function ArmyAnalyticsRoute() {
               records saved in this snapshot, not every battle from a complete Legend day.
             </p>
           ) : (
-            <details className="filter-details">
-              <summary>Season & day range</summary>
-              <div className="filter-grid">
-                <label className="filter-field">
-                  Season
-                  <select name="season" defaultValue={requestedSeason}>
-                    <option value="current">Current season</option>
-                    {requestedSeason !== "current" ? (
-                      <option value={requestedSeason}>
-                        {seasonName(requestedSeason)}
-                      </option>
-                    ) : null}
-                    {seasonEmpty?.previousSeasonId &&
-                    seasonEmpty.previousSeasonId !== requestedSeason ? (
-                      <option value={seasonEmpty.previousSeasonId}>
-                        {seasonName(seasonEmpty.previousSeasonId)}
-                      </option>
-                    ) : null}
-                  </select>
-                </label>
-                <label className="filter-field">
-                  From Legend day
-                  <input
-                    name="start_day"
-                    type="number"
-                    required
-                    min="1"
-                    max="28"
-                    defaultValue={requestedStartDay}
-                    disabled={isHistorical}
-                    aria-invalid={dayProblem !== null}
-                    aria-describedby="day-range-help"
-                  />
-                </label>
-                <label className="filter-field">
-                  To Legend day
-                  <input
-                    name="end_day"
-                    type="number"
-                    required
-                    min="1"
-                    max="28"
-                    defaultValue={requestedEndDay}
-                    disabled={isHistorical}
-                    aria-invalid={dayProblem !== null}
-                    aria-describedby="day-range-help"
-                  />
-                </label>
-              </div>
-              <p
-                id="day-range-help"
-                className={dayProblem ? "field-error" : "form-help"}
-                role={dayProblem ? "alert" : undefined}
-              >
-                {dayProblem ??
-                  (isHistorical
-                    ? "Past seasons include all players across all 28 Legend days."
-                    : "Only completed Legend days are included. Each day starts at 05:00 UTC.")}
+            <div className="analytics-show-filter">
+              <label className="filter-field">
+                Season
+                <select name="season" defaultValue={requestedSeason}>
+                  <option value="current">Current season</option>
+                  {[
+                    ...pastSeasons,
+                    ...(requestedSeason !== "current" &&
+                    !pastSeasons.includes(requestedSeason)
+                      ? [requestedSeason]
+                      : []),
+                  ].map((season) => (
+                    <option key={season} value={season}>
+                      {seasonName(season)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="form-help">
+                {isHistorical
+                  ? "Past seasons include all players across all 28 Legend days."
+                  : "Attacks from every completed Legend day this season, from Day 1. Each day starts at 05:00 UTC."}
               </p>
-            </details>
+            </div>
           )}
         </div>
         <noscript>
@@ -1046,18 +969,19 @@ export default function ArmyAnalyticsRoute() {
           <h2>
             {seasonEmpty
               ? "A new season is underway"
-              : "No army stats for these days yet"}
+              : "No army stats for this season yet"}
           </h2>
           <p>
             {seasonEmpty
               ? "Stats will appear after the first Legend day is complete."
               : (error?.error.message ??
-                "We don’t have the complete daily records needed for this selection. Try a different day range or player group.")}
+                "We don’t have the complete daily records needed for this selection. Try a different player group.")}
           </p>
-          {seasonEmpty?.previousSeasonId ? (
+          {seasonEmpty?.previousSeasonId &&
+          pastSeasons.includes(seasonEmpty.previousSeasonId) ? (
             <Link
               className="button button-secondary"
-              to={`?season=${encodeURIComponent(seasonEmpty.previousSeasonId)}&lens=offense&category=troops&sort=usage-rate`}
+              to={`?season=${encodeURIComponent(seasonEmpty.previousSeasonId)}&category=troops&sort=usage-rate`}
             >
               View previous season
             </Link>
@@ -1076,15 +1000,14 @@ export default function ArmyAnalyticsRoute() {
           aria-busy={navigation.state !== "idle"}
         >
           <p className="section-note analytics-coverage-note" id="army-selection-help">
-            {usageLabels[category]} usage in attacks{" "}
-            <strong>{lens === "defense" ? "against" : "by"}</strong>{" "}
+            {usageLabels[category]} usage in attacks <strong>by</strong>{" "}
             {populationDescription(population)}.
           </p>
           {streakTop !== null ? (
             <p className="section-note analytics-coverage-note">
               {cohortPlayers === 0
-                ? `No player was in the top ${streakTop} on every selected day.`
-                : `${cohortPlayers.toLocaleString()} ${cohortPlayers === 1 ? "player was" : "players were"} in the top ${streakTop} on every selected day.`}{" "}
+                ? `No player was in the top ${streakTop} on every Legend day so far.`
+                : `${cohortPlayers.toLocaleString()} ${cohortPlayers === 1 ? "player was" : "players were"} in the top ${streakTop} on every Legend day so far.`}{" "}
               Top {streakTop} on a day means the top {streakTop} of the leaderboard saved
               just before that day’s Reset (05:00 UTC), ranked by each player’s total at
               that Reset, before the game’s automatic defense loss: their last value saved
@@ -1099,7 +1022,7 @@ export default function ArmyAnalyticsRoute() {
           ) : null}
           {/^(top|band)-/.test(population) && oldTrophyPlayers > 0 ? (
             <p className="section-note analytics-coverage-note">
-              Ranks come from the leaderboard saved just before the last selected day’s
+              Ranks come from the leaderboard saved just before the latest included day’s
               Reset (05:00 UTC).{" "}
               {cohortPlayers === 1
                 ? "This player"
@@ -1138,7 +1061,7 @@ export default function ArmyAnalyticsRoute() {
               {snapshot
                 ? `${shortDate(snapshot.battleFrom)} – ${shortDate(snapshot.battleTo)} (UTC)`
                 : `Days ${analytics.selection.startDay}–${analytics.selection.endDay}`}{" "}
-              · {analytics.selection.lens === "offense" ? "Attacks" : "Defenses"}
+              · Attacks
             </span>
           </div>
           {!isHistorical && !snapshot && untrackedDays.length > 0 ? (
@@ -1269,7 +1192,7 @@ export default function ArmyAnalyticsRoute() {
               {analytics.pagination.nextOffset !== null ? (
                 <Link
                   className="button button-secondary"
-                  to={`?${new URLSearchParams({ season: requestedSeason, lens: analytics.selection.lens, category: analytics.selection.category, sort: analytics.selection.sort, offset: String(analytics.pagination.nextOffset) })}`}
+                  to={`?${new URLSearchParams({ season: requestedSeason, category: analytics.selection.category, sort: analytics.selection.sort, offset: String(analytics.pagination.nextOffset) })}`}
                 >
                   Next results →
                 </Link>
@@ -1292,12 +1215,6 @@ function seasonName(seasonId: string) {
         year: "numeric",
         timeZone: "UTC",
       });
-}
-
-function dayRange(days: number[]) {
-  const first = days[0];
-  const last = days[days.length - 1];
-  return first === last ? `day ${first}` : `days ${first}–${last}`;
 }
 
 function dayList(days: number[]) {
