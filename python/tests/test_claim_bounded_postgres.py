@@ -929,14 +929,17 @@ def test_claims_at_a_reset_backlog_skip_reset_work_they_cannot_take(
 
 
 @pytest.mark.parametrize(
-    ("reset_first", "retried_first"), [(None, True), (False, True), (True, False)]
+    ("status", "reset_first", "retried_first"),
+    [("waiting_retry", None, True), ("waiting_retry", False, True),
+     ("waiting_retry", True, False), ("pending", None, True)],
 )
 def test_a_retried_live_job_is_not_hidden_behind_newer_live_work(
-    database_url: str, reset_first: bool | None, retried_first: bool
+    database_url: str, status: str, reset_first: bool | None, retried_first: bool
 ) -> None:
-    # A live job that failed is due again from its retry time, so 40 live jobs
-    # that arrived a minute ago, each waiting behind the Reset backlog, used to
-    # fill the 32 live jobs a claim looks at and hide it until they were done.
+    # A live job that failed is due again from its retry time, so 40 newer live
+    # jobs, retrying or pending, used to fill the 32 live jobs a claim looks at
+    # and hide it while they all waited behind the Reset backlog. A retried job
+    # whose lease ran out is back to pending with the same recent due time.
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             for index in range(40):
@@ -949,11 +952,12 @@ def test_a_retried_live_job_is_not_hidden_behind_newer_live_work(
                     created_at = clock_timestamp() - CASE WHEN id = %(retried)s
                         THEN interval '30 minutes' ELSE interval '1 minute' END,
                     due_at = clock_timestamp() - CASE WHEN id = %(retried)s
-                        THEN interval '10 seconds' ELSE interval '1 minute' END,
-                    status = CASE WHEN id = %(retried)s THEN 'waiting_retry' ELSE status END,
-                    attempt_count = CASE WHEN id = %(retried)s THEN 1 ELSE 0 END
+                        THEN interval '10 seconds' ELSE interval '50 seconds' END,
+                    status = CASE WHEN priority = %(reset)s THEN 'pending' ELSE %(status)s END,
+                    attempt_count = CASE WHEN id = %(retried)s OR (priority <> %(reset)s
+                        AND %(status)s = 'waiting_retry') THEN 1 ELSE 0 END
                 """,
-                {"retried": retried},
+                {"retried": retried, "reset": PYTHON_RESET_PRIORITY, "status": status},
             )
             connection.commit()
         database = Database(connection_info)

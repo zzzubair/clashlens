@@ -449,7 +449,7 @@ def _claim_select_statement(
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT for up to ``limit`` jobs and its named parameters.
 
-    The candidate CTE probes indexed oldest-first ordinary, retry and dependency
+    The candidate CTE probes indexed oldest-first ordinary, retried and dependency
     ranges per declared priority, matching catch-all probes outside those classes
     (scored exactly like the known probes so ordering stays globally
     correct), and the indexed expired-lease set. Every probe applies the full
@@ -499,9 +499,10 @@ def _claim_select_statement(
     # Dependency resumptions do not consume the ordinary attempt budget. Keep
     # them in their own partial-index probe rather than expressing that rule as
     # an OR across every state, which makes PostgreSQL bitmap-scan the queue
-    # before applying LIMIT. Retries get their own probe too: due again from
-    # their retry time, they hid behind 32 newer jobs of their priority.
-    def state_probe(state: str, job_filter: str) -> str:
+    # before applying LIMIT. Jobs that already failed get their own probe too,
+    # oldest first: due again from their retry time, they hid behind 32 newer
+    # jobs of their priority.
+    def state_probe(state: str, job_filter: str, order: str = "job.due_at, job.created_at") -> str:
         return f"""(
                         SELECT job.id, job.due_at, job.created_at
                         FROM {jobs_relation} AS job
@@ -509,16 +510,18 @@ def _claim_select_statement(
                             ON source_observation.id = COALESCE(
                                 job.observation_id, job.replay_observation_id
                             )
-                        WHERE job.state = '{state}'
+                        WHERE {state}
                           AND job.priority = claim_priority.priority
                           AND job.due_at <= statement_timestamp()
                           AND {job_filter}
-                        ORDER BY job.due_at, job.created_at, job.id
+                        ORDER BY {order}, job.id
                         LIMIT {_CLAIM_CANDIDATE_LIMIT}
                     )"""
 
-    dependency_probe = (" UNION ALL " + state_probe("waiting_dependency", supported_filter)
-                        if supports_dependency else "")
+    dependency_probe = (" UNION ALL " + state_probe("job.state = 'waiting_dependency'",
+                        supported_filter) if supports_dependency else "")
+    retried_probe = state_probe("job.state IN ('pending', 'waiting_retry') AND job.attempt_count > 0",
+                                ordinary_job_filter, "job.created_at")
 
     def other_priorities(state: str, job_filter: str) -> str:
         return "" if backfill else "".join(f"""
@@ -570,13 +573,13 @@ def _claim_select_statement(
                 CROSS JOIN LATERAL (
                     (
                         SELECT eligible.id
-                        FROM ({state_probe("pending", ordinary_job_filter)}
-                            {dependency_probe}) AS eligible
+                        FROM ({state_probe("job.state IN ('pending', 'waiting_retry')",
+                                           ordinary_job_filter)} {dependency_probe}) AS eligible
                         ORDER BY eligible.due_at, eligible.created_at, eligible.id
                         LIMIT {_CLAIM_CANDIDATE_LIMIT}
                     )
-                    UNION ALL
-                    SELECT retry.id FROM {state_probe("waiting_retry", ordinary_job_filter)} AS retry
+                    UNION
+                    SELECT retried.id FROM {retried_probe} AS retried
                 ) AS claim_id
                 {other_priorities("job.state IN ('pending', 'waiting_retry')", ordinary_job_filter)}
                 {unknown_dependency_probe}
