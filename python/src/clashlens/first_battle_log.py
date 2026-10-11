@@ -17,6 +17,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import battle, domain, reset_baselines
+from .analytics import unplayed_profile_sql
 from .battle import ParsedBattleRow
 from .db import (
     ANALYTICS_RULE_VERSION,
@@ -83,15 +84,46 @@ def coverage_start(
     return int(first[1]), first[2] >= window_end
 
 
+def _first_seen_at_5000(
+    connection: Any, player_id: int, boundary_at: datetime
+) -> tuple[int | None, datetime | None]:
+    """The player's first profile read from ``boundary_at`` to the end of its
+    Season that can show them not played yet
+    (``analytics.unplayed_profile_sql``), and when it was read."""
+    row = connection.execute(
+        f"""
+        SELECT profile.id, COALESCE(effect.observed_at, profile.observed_at)
+        FROM player_profile_versions AS profile
+        LEFT JOIN player_profile_effects AS effect
+          ON effect.profile_version_id = profile.id
+        WHERE profile.player_id = %s
+          AND {unplayed_profile_sql("profile")}
+          AND COALESCE(effect.observed_at, profile.observed_at) >= %s
+          AND COALESCE(effect.observed_at, profile.observed_at) < %s
+        ORDER BY 2, profile.id
+        LIMIT 1
+        """,
+        (player_id, boundary_at, domain.ranked_day_for(boundary_at).season_end),
+    ).fetchone()
+    return (None, None) if row is None else (int(row[0]), row[1])
+
+
 def season_rule_start(
-    connection: Any, player_id: int, ranked_day: RankedDay, *, complete: bool
+    connection: Any, player_id: int, boundary_at: datetime, *, complete: bool
 ) -> dict[str, Any] | None:
-    """Day 1's start of 5,000 by the Season rule, for a player with no saved
-    reading from the Season-opening Reset, once they have an accepted
-    Legend I profile naming the Season. ``complete`` is whether a battle log
-    proves the day's battles from the Reset."""
-    if not domain.is_season_boundary(ranked_day.start) or not (
-        reset_baselines._season_rule_holds(connection, player_id, ranked_day.start)
+    """The 5,000 by the Season rule at the Reset ``boundary_at``, for a
+    player with no saved reading from it: on Day 1 once they have an
+    accepted Legend I profile naming the Season, and at any Reset once a
+    Legend I profile at 5,000 read from it in the Season, whatever Season it
+    names, came before their first Legend battle of the Season. ``complete``
+    is whether a battle log proves the day's battles up to the Reset."""
+    if not (
+        domain.is_season_boundary(boundary_at)
+        and reset_baselines._season_rule_holds(connection, player_id, boundary_at)
+        or reset_baselines._unplayed(
+            connection, player_id, boundary_at,
+            *_first_seen_at_5000(connection, player_id, boundary_at),
+        )
     ):
         return None
     return {
@@ -165,7 +197,9 @@ def queue_earlier_days(
 ) -> None:
     """When a player's earliest saved battle log, even one processed after
     newer ones, was saved on Day 1, or holds their battles from an earlier
-    day of the Season it was saved in, recalculate from that day."""
+    day of the Season it was saved in, recalculate from that day. Either way
+    it proves the 0/0 days before the player's first sighting at 5,000
+    (``queue_unplayed_days``)."""
     saved_day = domain.ranked_day_for(observed_at)
     earlier = [
         row.battle.ranked_day_start
@@ -175,10 +209,11 @@ def queue_earlier_days(
     ]
     if saved_day.start == saved_day.season_start:
         earlier = [saved_day.start]
-    if not earlier:
-        return
     first = _first_log(connection, player_id)
     if first[2] < observed_at:
+        return
+    queue_unplayed_days(connection, player_id, observed_at, int(first[1]))
+    if not earlier:
         return
     day = min(earlier)
     if domain.is_season_boundary(day):
@@ -193,8 +228,7 @@ def queue_earlier_days(
 def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> None:
     """When a player's first accepted Legend I profile naming a Season is
     saved after their first battle log of that Season, recalculate from Day 1
-    as ``backfill`` would, now that the Season rule can start it. Also
-    check whether it proves a late sign-up for the Season."""
+    as ``backfill`` would, now that the Season rule can start it."""
     row = connection.execute(
         """
         SELECT profile.current_league_season_id
@@ -214,10 +248,6 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         """,
         (profile_version_id,),
     ).fetchone()
-    if row is not None:
-        queue_not_enrolled(
-            connection, player_id, datetime.fromtimestamp(int(row[0]), UTC)
-        )
     first = _first_log(connection, player_id)
     if row is None or first is None:
         return
@@ -237,51 +267,35 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         _queue(connection, player_id, first_day.season_start, int(first[1]))
 
 
-def queue_not_enrolled(connection: Any, player_id: int, observed_at: datetime) -> None:
-    """Once saved profiles prove a late sign-up for the Season of
-    ``observed_at``, recalculate each day of it that ended before a confirmed
-    Legend I profile still showed no Season, Season ID 0, followed by a
-    profile showing the sign-up, so it can be shown as not enrolled. Either
-    profile may be processed last."""
-    day = domain.ranked_day_for(observed_at)
-    latest = connection.execute(
-        """
-        SELECT max(waiting_seen.observed_at)
-        FROM player_profile_versions AS waiting
-        JOIN player_profile_effects AS waiting_seen
-          ON waiting_seen.profile_version_id = waiting.id
-        WHERE waiting.player_id = %(player)s
-          AND waiting.eligibility_state = 'eligible'
-          AND waiting.eligibility_reason = 'confirmed_legend_i'
-          AND waiting.current_league_season_id = '0'
-          AND waiting_seen.observed_at >= %(start)s
-          AND EXISTS (
-              SELECT 1
-              FROM player_profile_versions AS joined
-              JOIN player_profile_effects AS joined_seen
-                ON joined_seen.profile_version_id = joined.id
-              WHERE joined.player_id = waiting.player_id
-                AND joined.current_league_season_id = %(season)s
-                AND joined.eligibility_state = 'eligible'
-                AND joined.source_contract_state = 'accepted'
-                AND joined_seen.observed_at > waiting_seen.observed_at
-                AND joined_seen.observed_at < %(end)s
-          )
-        """,
-        {
-            "player": player_id,
-            "start": day.season_start,
-            "season": day.official_season_id,
-            "end": day.season_end,
-        },
-    ).fetchone()[0]
+def queue_unplayed_days(
+    connection: Any, player_id: int, observed_at: datetime, observation_id: int
+) -> None:
+    """When the player's first profile of the Season of ``observed_at`` that
+    can show them not played yet (``_first_seen_at_5000``) came before their
+    first Legend battle of the Season, whatever Season it names, recalculate
+    each day of the Season before that profile's Legend day, so each shows
+    as a 0/0 day at 5,000. Queued from each such new profile and from the
+    player's first battle log, which proves those days' battles, whichever
+    is processed last, once per day and triggering ``observation_id``."""
+    if _first_log(connection, player_id) is None:
+        return
+    profile_id, seen_at = _first_seen_at_5000(
+        connection, player_id, domain.ranked_day_for(observed_at).season_start
+    )
+    if seen_at is None:
+        return
+    day = domain.ranked_day_for(seen_at)
+    if not reset_baselines._unplayed(
+        connection, player_id, day.start, profile_id, seen_at
+    ):
+        return
     day_start = day.season_start
-    while latest is not None and day_start + timedelta(days=1) <= latest:
+    while day_start < day.start:
         day_text = day_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         _queue(
             connection, player_id, day_start, None,
-            key=f"reconcile:not-enrolled:{player_id}:{day_text}",
-            trigger="late_enrollment", later_days=False,
+            key=f"reconcile:unplayed:{player_id}:{day_text}:{observation_id}",
+            trigger="unplayed", later_days=False,
         )
         day_start += timedelta(days=1)
 

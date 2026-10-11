@@ -132,6 +132,13 @@ def get_player_page(
 ) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         metadata_join, metadata_columns = database._current_profile_metadata(connection)
+        # A player who has not played yet this Season shows the newest
+        # profile that ranks them at 5,000, as the Live Leaderboard does.
+        unplayed = connection.execute(
+            api_leaderboard.UNPLAYED_PROFILE_SQL,
+            {**api_leaderboard._season_params(now), "tag": normalized_tag},
+        ).fetchone()
+        unplayed_id = None if unplayed is None else int(unplayed[0])
         row = connection.execute(
             f"""
             SELECT player.normalized_tag, player.active, player.eligibility_state,
@@ -155,21 +162,25 @@ def get_player_page(
                            OR checked.last_not_found_at > checked.last_success_at))
             FROM players AS player
             JOIN player_profile_versions AS profile
-                ON profile.id = player.current_profile_version_id
+                ON profile.id = COALESCE(%s::bigint, player.current_profile_version_id)
             {metadata_join}
             WHERE player.normalized_tag = %s
-              AND profile.source_contract_state = 'accepted'
+              AND (profile.source_contract_state = 'accepted'
+                   OR profile.id = %s::bigint)
             """,
-            (season_opening_reset(now), season_opening_reset(now), normalized_tag),
+            (season_opening_reset(now), season_opening_reset(now), unplayed_id,
+             normalized_tag, unplayed_id),
         ).fetchone()
         if row is None:
             return None
-        observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
+        observed_at = (
+            max(row[5], row[11] or row[5]) if unplayed is None else unplayed[1]
+        ).astimezone(UTC)
         not_found_at = None if row[16] is None else row[16].astimezone(UTC)
         # A profile naming an earlier Season, or still showing the frozen
         # pre-Reset trophies on a Season's first day, shows trophies from
         # before this player's Season reset, not their current Season total.
-        season_reset_pending = awaits_season_reset(
+        season_reset_pending = unplayed_id is None and awaits_season_reset(
             _text(row[12]), int(row[4]), row[13], row[14], now
         )
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
@@ -498,7 +509,7 @@ def player_cards(
     }
     cards = []
     for player_id, tag, name, clan, league in players:
-        lookup = api_player_lookup._lookup(connection, tag)
+        lookup = api_player_lookup._lookup(connection, tag, now)
         profile = profiles.get(player_id)
         reason = lookup.get("reason")
         if lookup["state"] == "tracking" and reason is None and profile is None:

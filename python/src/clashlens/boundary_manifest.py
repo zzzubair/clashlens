@@ -22,10 +22,15 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .analytics import latest_trophy_changes
+from .analytics import latest_trophy_changes, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import Database, _text_value
-from .domain import RANKED_DAY_DURATION, season_is_current
+from .domain import (
+    RANKED_DAY_DURATION,
+    SEASON_START_TROPHIES,
+    ranked_day_for,
+    season_is_current,
+)
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -474,55 +479,26 @@ def _snapshot_rows(
         cutoff=boundary_at,
         player_ids=player_ids,
     )
-    # Each player's newest accepted profile at the Reset, chosen exactly as
-    # for one player, with the population in one query: the newest of each
-    # profile's sightings (its effects, or the profile itself when it has
-    # none) up to the Reset, ordered by time and then id. Each profile's
-    # newest sighting comes from the effects' own time index and the
-    # profiles from migration 0098's index, so the query reads index entries
-    # instead of every profile's and sighting's row. On 10 October 2026
-    # reading those rows took over 6 of the freeze's 10 minutes.
     profiles = {
         int(row[0]): row[1:]
         for row in connection.execute(
-            """
-            SELECT member.player_id, profile.id,
-                   COALESCE(effect.observation_id, profile.observation_id),
-                   newest.observed_at, profile.profile_json,
-                   profile.normalized_tag, profile.name, profile.trophies,
-                   profile.eligibility_state, profile.current_league_season_id
-            FROM unnest(%(players)s::bigint[]) AS member (player_id)
-            CROSS JOIN LATERAL (
-                SELECT version.id AS profile_id, sighting.id AS effect_id,
-                       COALESCE(sighting.observed_at, version.observed_at)
-                           AS observed_at
-                FROM player_profile_versions AS version
-                LEFT JOIN LATERAL (
-                    SELECT effect.id, effect.observed_at
-                    FROM player_profile_effects AS effect
-                    WHERE effect.profile_version_id = version.id
-                      AND effect.observed_at <= %(boundary)s
-                    ORDER BY effect.observed_at DESC, effect.id DESC
-                    LIMIT 1
-                ) AS sighting ON true
-                WHERE version.player_id = member.player_id
-                  AND version.source_contract_state = 'accepted'
-                  AND (sighting.id IS NOT NULL
-                       OR version.observed_at <= %(boundary)s
-                          AND NOT EXISTS (
-                              SELECT FROM player_profile_effects AS effect
-                              WHERE effect.profile_version_id = version.id
-                          ))
-                ORDER BY COALESCE(sighting.observed_at, version.observed_at) DESC,
-                         COALESCE(sighting.id, version.id) DESC
-                LIMIT 1
-            ) AS newest
-            JOIN player_profile_versions AS profile ON profile.id = newest.profile_id
-            LEFT JOIN player_profile_effects AS effect ON effect.id = newest.effect_id
-            """,
+            _NEWEST_PROFILES_SQL.replace("{versions}", _ACCEPTED_VERSIONS),
             {"players": player_ids, "boundary": boundary_at},
         ).fetchall()
     }
+    unplayed = unplayed_profiles(
+        connection, boundary_at,
+        [
+            player_id for player_id in player_ids
+            if player_id not in profiles
+            or profiles[player_id][6] == SEASON_START_TROPHIES
+            or not season_is_current(
+                _text_value(profiles[player_id][8]),
+                boundary_at - RANKED_DAY_DURATION,
+            )
+        ],
+    )
+    profiles.update(unplayed)
     # Why a player with no accepted profile has none: their newest profile's
     # source state and their newest profile response's failure.
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
@@ -571,7 +547,12 @@ def _snapshot_rows(
     for row in members:
         player_id, version_id, input_hash, status = _member(row, "snapshot")
         classification = _STATUS_CLASSIFICATIONS.get(status, "Pending")
-        if _rechecks(status, version_id):
+        # A member ranked at 5,000 before their first Legend battle was saved
+        # missing, as boundary._boundary_snapshot_status finds no accepted
+        # profile.
+        if _rechecks(status, version_id) or (
+            status == "missing" and player_id in unplayed and version_id is not None
+        ):
             # The member's status, checked again against its ranked day and
             # accepted profile now, as boundary._boundary_snapshot_status.
             snapshot_status = _RANKED_SNAPSHOT_STATUSES.get(
@@ -621,7 +602,7 @@ def _snapshot_rows(
             }
             if _text_value(profile[7]) != "eligible":
                 identity["snapshot_quality"] = "invalid"
-            elif not season_is_current(
+            elif player_id not in unplayed and not season_is_current(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
             ):
                 # Trophies from before this player's Season reset never
@@ -659,6 +640,88 @@ def _snapshot_rows(
             identity["snapshot_quality"] = snapshot_quality
         manifest_rows.append(identity)
     return manifest_rows
+
+
+# Each player's newest accepted profile at the Reset, chosen exactly as
+# for one player, with the population in one query: the newest of each
+# profile's sightings (its effects, or the profile itself when it has
+# none) up to the Reset, ordered by time and then id. Each profile's
+# newest sighting comes from the effects' own time index and the
+# profiles from migration 0098's index, so the query reads index entries
+# instead of every profile's and sighting's row. On 10 October 2026
+# reading those rows took over 6 of the freeze's 10 minutes.
+# The same lookup of any source state lists the player's profiles from the
+# (tag, time) index instead.
+_ACCEPTED_VERSIONS = (
+    "version.player_id = member.player_id"
+    " AND version.source_contract_state = 'accepted'"
+)
+_ANY_VERSIONS = """version.normalized_tag = (
+            SELECT owner.normalized_tag FROM players AS owner
+            WHERE owner.id = member.player_id)"""
+_NEWEST_PROFILES_SQL = """
+    SELECT member.player_id, profile.id,
+           COALESCE(effect.observation_id, profile.observation_id),
+           newest.observed_at, profile.profile_json,
+           profile.normalized_tag, profile.name, profile.trophies,
+           profile.eligibility_state, profile.current_league_season_id
+    FROM unnest(%(players)s::bigint[]) AS member (player_id)
+    CROSS JOIN LATERAL (
+        SELECT version.id AS profile_id, sighting.id AS effect_id,
+               COALESCE(sighting.observed_at, version.observed_at)
+                   AS observed_at
+        FROM player_profile_versions AS version
+        LEFT JOIN LATERAL (
+            SELECT effect.id, effect.observed_at
+            FROM player_profile_effects AS effect
+            WHERE effect.profile_version_id = version.id
+              AND effect.observed_at <= %(boundary)s
+            ORDER BY effect.observed_at DESC, effect.id DESC
+            LIMIT 1
+        ) AS sighting ON true
+        WHERE {versions}
+          AND (sighting.id IS NOT NULL
+               OR version.observed_at <= %(boundary)s
+                  AND NOT EXISTS (
+                      SELECT FROM player_profile_effects AS effect
+                      WHERE effect.profile_version_id = version.id
+                  ))
+        ORDER BY COALESCE(sighting.observed_at, version.observed_at) DESC,
+                 COALESCE(sighting.id, version.id) DESC
+        LIMIT 1
+    ) AS newest
+    JOIN player_profile_versions AS profile ON profile.id = newest.profile_id
+    LEFT JOIN player_profile_effects AS effect ON effect.id = newest.effect_id
+    """
+
+
+def unplayed_profiles(
+    connection: Any, boundary_at: datetime, player_ids: list[int]
+) -> dict[int, tuple[Any, ...]]:
+    """The players among ``player_ids`` the board at ``boundary_at`` ranks at
+    5,000 with their newest profile at the Reset, as the population freeze
+    reads a profile: a Legend I one at 5,000 when their saved days of the
+    Season hold no battle. They have not played yet, whatever Season it
+    names. On 11 October 2026, 1,374 such players' profiles named Season 0."""
+    if not player_ids:
+        return {}
+    return {
+        int(row[0]): row[1:]
+        for row in connection.execute(
+            f"""
+            SELECT newest.* FROM ({_NEWEST_PROFILES_SQL.replace("{versions}", _ANY_VERSIONS)})
+                AS newest (player_id, id, observation_id, observed_at,
+                           profile_json, normalized_tag, name, trophies,
+                           eligibility_state, current_league_season_id)
+            JOIN player_profile_versions AS version ON version.id = newest.id
+            WHERE {unplayed_sql("newest.player_id", "version",
+                                "%(season_start)s", "%(boundary)s")}
+            """,
+            {"players": player_ids, "boundary": boundary_at,
+             "season_start": ranked_day_for(
+                 boundary_at - RANKED_DAY_DURATION).season_start},
+        ).fetchall()
+    }
 
 
 def profiles_not_found(

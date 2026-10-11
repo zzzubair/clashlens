@@ -696,9 +696,11 @@ A regular check of a player whose last profile from this collector reported
 Legend I with Season ID 0, with the same trophies, attackWins, defenseWins and
 Unbreakable count as the profile before it, fetches the profile only when that
 profile is at least 15 minutes old. This includes a player whose older,
-accepted profile is still their current one; it stays current and the Season 0
-profile's trophies are never used. The worker's own profile rules decide what
-counts as Season 0, so an empty, malformed or non-Legend profile does not wait.
+accepted profile is still their current one; it stays current, and the Season 0
+profile's trophies are used only to rank a player who has not played yet at
+5,000 ([Live Leaderboard ordering](domain.md#live-leaderboard-ordering)).
+The worker's own profile rules decide what counts as Season 0, so an empty,
+malformed or non-Legend profile does not wait.
 The battle log keeps every rule above, but sees a profile change only at the
 15-minute recheck, so a battle can wait up to about 15 minutes; the game keeps
 recent battles in the log, so none is lost. A Season 0 profile with changed

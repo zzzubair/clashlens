@@ -207,8 +207,9 @@ CURRENT_PROFILE = """
 
 
 @pytest.mark.parametrize("kind,conflict", [
+    # The day before's 6,400 named this Season, so the player has played:
+    # a Season 0 reading at 5,000 is not their total (test_unplayed_5000).
     ("ordinary", "season_zero"),
-    ("season", "season_zero"),
     ("ordinary", "tier_name"),
 ])
 def test_rejected_reset_profile_gives_no_start(
@@ -453,7 +454,9 @@ def test_flip_at_login_starts_the_season_at_5000_once_a_legend_i_profile_appears
     assert before[day_1][2] is None
     if later_tier == "Legend I":
         assert after[day_28][:4] == ("Complete", "inferred", 6400, 5000)
-        assert after[day_1][2:] == (5000, None, "season_rule")
+        # The login day's Reset saves an empty battle log and 5,000, so Day 1
+        # ends there too.
+        assert after[day_1][2:] == (5000, 5000, "season_rule")
         assert (built, rebuilt_again) == (1, 0)
         assert (opening_day["start_trophies"], opening_day["start_trophies_source"]) == (
             5000, "season_rule"

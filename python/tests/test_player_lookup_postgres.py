@@ -534,7 +534,8 @@ def _process_profile(info, archive_server, processor, key, **changes) -> None:
         (Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json").read_bytes()
     )
     body.update(changes)
-    store_observation(
+    # A profile at 5,000 queues earlier days, so process this profile's own job.
+    _, job = store_observation(
         info,
         archive_server,
         occurrence_key=key,
@@ -544,7 +545,7 @@ def _process_profile(info, archive_server, processor, key, **changes) -> None:
         normalized_tag="#2PP",
         parser_version=PROFILE_PARSER_VERSION,
     )
-    result = processor.process_once(owner="lookup-test")
+    result = processor.process_job(job, owner="lookup-test")
     assert result is not None and result.outcome == "processed"
 
 
@@ -559,7 +560,7 @@ def _claim(info) -> list:
         collector.close()
 
 
-def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
+def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
     database_url, archive_server
 ):
     with migrated_production_database(
@@ -574,26 +575,29 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
                 trophies=5000, currentLeagueSeasonId=0,
             )
 
+            # With no Legend battle yet the player has not played: nothing
+            # to explain, so the page shows them at 5,000.
             assert api_player_lookup.get_lookup(database, "#2PP") == {
-                "tag": "#2PP",
-                "state": "tracking",
-                "reason": "no_legend_battles",
-                "profile": {
-                    "name": "Synthetic Legend I", "clan": "Synthetic Clan", "trophies": 5000,
-                },
+                "tag": "#2PP", "state": "tracking",
             }
             # Collection continues.
             assert [work.normalized_tag for work in _claim(info)] == ["#2PP"]
-            # Its trophies reach no page, search, board or group total.
-            assert api_players.get_player_page(
+            page = api_players.get_player_page(
                 database, "#2PP", now=NOW, freshness_seconds=900
-            ) is None
+            )
+            assert (page["trophies"], page["season_reset_pending"]) == (5000, False)
+            # Its trophies reach no search, but it ranks at 5,000 on the Live
+            # Leaderboard.
             assert api_players.search_known_players(
                 database, "Synthetic", now=NOW, freshness_seconds=900
             ) == []
-            board = api_leaderboard.get_live_leaderboard(database, limit=50, now=NOW)
-            assert "#2PP" not in json.dumps(board)
-            assert submit(database)["reason"] == "no_legend_battles"
+
+            def on_board() -> bool:
+                board = api_leaderboard.get_live_leaderboard(database, limit=50, now=NOW)
+                return '"tag": "#2PP", "name": "Synthetic Legend I", "trophies": 5000' in json.dumps(board)
+
+            assert on_board()
+            assert "reason" not in submit(database)
 
             def publish_day(version: int, battles: str) -> str:
                 with database.pool.connection() as connection:
@@ -606,13 +610,25 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
                         """,
                         (ranked_day_for(datetime.now(UTC)).season_start, version, battles),
                     )
-                return api_player_lookup.get_lookup(database, "#2PP")["reason"]
+                return api_player_lookup.get_lookup(database, "#2PP").get("reason")
 
             # A battle a newer result moved out of this Season does not count.
             assert publish_day(1, "[{}]") == "season_unconfirmed"
-            assert publish_day(2, "[]") == "no_legend_battles"
+            assert publish_day(2, "[]") is None
             # A recorded Legend battle this Season means the Season is the problem.
             assert publish_day(3, "[{}]") == "season_unconfirmed"
+            # A Legend battle in the board's Season takes it off the board.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, version, state, coverage, battles
+                    )
+                    SELECT id, %s, 1, 'Live', 'partial', '[{}]' FROM players
+                    """,
+                    (ranked_day_for(NOW).season_start,),
+                )
+            assert not on_board()
 
             _process_profile(info, archive_server, processor, "valid", trophies=5040)
 

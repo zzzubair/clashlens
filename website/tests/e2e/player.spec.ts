@@ -758,7 +758,7 @@ test("a Legend I player without a Season is explained, not prepared forever", as
     page.getByRole("heading", { name: "Lookup Season 0 Clasher" }),
   ).toBeVisible();
   await expect(page.locator(".player-identity")).toHaveText("#LQQCSynthetic Clan");
-  await expect(page.locator(".player-trophy-count")).toHaveText("5,000");
+  await expect(page.locator(".player-trophy-count")).toHaveText("5,123");
   await expect(page.getByText("Current trophies", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Daily Legend log" })).toHaveCount(0);
 

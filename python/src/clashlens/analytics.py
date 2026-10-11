@@ -7,7 +7,7 @@ from fractions import Fraction
 from time import monotonic
 from typing import Any
 
-from .domain import ranked_day_for
+from .domain import SEASON_START_TROPHIES, ranked_day_for
 from .profile import normalize_player_tag
 
 # v3 orders equal trophies by the latest trophy change first; v2 by Season
@@ -117,6 +117,36 @@ def latest_trophy_changes(
             {"day_start": day_start, "cutoff": cutoff, "player_ids": player_ids},
         ).fetchall()
     }
+
+
+def unplayed_profile_sql(profile: str) -> str:
+    """SQL true when the profile version ``profile`` can show a player who
+    has not played yet: Legend I at 5,000, and accepted or naming Season 0,
+    which the game sends before sign-up. Any other rejected profile, such as
+    one with a malformed Season, stays rejected."""
+    return f"""({profile}.eligibility_state = 'eligible'
+        AND {profile}.trophies = {SEASON_START_TROPHIES}
+        AND ({profile}.source_contract_state = 'accepted'
+             OR {profile}.current_league_season_id = '0'))"""
+
+
+def unplayed_sql(player_id: str, profile: str, season_start: str, before: str) -> str:
+    """SQL true when the profile version ``profile`` can show a player who
+    has not played yet (``unplayed_profile_sql``) and the player's saved
+    Legend days from ``season_start`` to ``before`` hold no battle: both
+    boards rank them at 5,000."""
+    return f"""({unplayed_profile_sql(profile)} AND NOT EXISTS (
+        SELECT 1 FROM api_player_daily_logs AS played
+        WHERE played.player_id = {player_id}
+          AND played.ranked_day_start >= {season_start}
+          AND played.ranked_day_start < {before}
+          AND jsonb_array_length(played.battles) > 0
+          -- A battle a newer result moved out of this Season does not count.
+          AND NOT EXISTS (
+              SELECT 1 FROM api_player_daily_logs AS newer
+              WHERE newer.player_id = played.player_id
+                AND newer.ranked_day_start = played.ranked_day_start
+                AND newer.version > played.version)))"""
 
 
 # Each attacker's attacks and summed attack destruction on the battle days

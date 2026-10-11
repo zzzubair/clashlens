@@ -134,46 +134,6 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
             )
 
 
-def _known_not_enrolled(connection: Any, player_id: int, ranked_day: Any) -> bool:
-    """Whether a Legend I profile saved after the day ended still showed no
-    Season, and a later one in the same Season showed the player signed up.
-    A player cannot leave a Season once signed up, so neither answer alone is
-    enough: the first proves no sign-up yet, the second that this Season is
-    the one they joined."""
-    return bool(
-        connection.execute(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                FROM player_profile_versions AS waiting
-                JOIN player_profile_effects AS waiting_seen
-                  ON waiting_seen.profile_version_id = waiting.id
-                JOIN player_profile_versions AS joined
-                  ON joined.player_id = waiting.player_id
-                JOIN player_profile_effects AS joined_seen
-                  ON joined_seen.profile_version_id = joined.id
-                WHERE waiting.player_id = %(player)s
-                  AND waiting.eligibility_state = 'eligible'
-                  AND waiting.eligibility_reason = 'confirmed_legend_i'
-                  AND waiting.current_league_season_id = '0'
-                  AND waiting_seen.observed_at >= %(day_end)s
-                  AND joined.current_league_season_id = %(season)s
-                  AND joined.eligibility_state = 'eligible'
-                  AND joined.source_contract_state = 'accepted'
-                  AND joined_seen.observed_at > waiting_seen.observed_at
-                  AND joined_seen.observed_at < %(season_end)s
-            )
-            """,
-            {
-                "player": player_id,
-                "day_end": ranked_day.end,
-                "season": ranked_day.official_season_id,
-                "season_end": ranked_day.season_end,
-            },
-        ).fetchone()[0]
-    )
-
-
 def recalculate_ranked_day(
     database: Database,
     connection: Any,
@@ -269,8 +229,21 @@ def recalculate_ranked_day(
             end_battle_log_observation_id = start_battle_log_observation_id
     if start_baseline is None:
         start_baseline = first_battle_log.season_rule_start(
-            connection, player_id, ranked_day,
+            connection, player_id, ranked_day.start,
             complete=start_battle_log_observation_id is not None,
+        )
+    # Within the Season, a player who has not played yet ends the day at
+    # 5,000 too, once a battle log saved after the day shows no battle of it.
+    if end_baseline is None and ranked_day.end <= now and (
+        ranked_day.end < ranked_day.season_end
+    ) and connection.execute(
+        "SELECT EXISTS (SELECT 1 FROM battle_log_observations"
+        " WHERE player_id = %s AND observed_at >= %s)",
+        (player_id, ranked_day.end),
+    ).fetchone()[0]:
+        end_baseline = first_battle_log.season_rule_start(
+            connection, player_id, ranked_day.end,
+            complete=end_battle_log_observation_id is not None,
         )
     coverage = ranked_day_inputs.load_coverage(
         database,
@@ -502,8 +475,6 @@ def recalculate_ranked_day(
             else False
         ),
         player_eligible=player_eligible,
-        not_enrolled=not contributions
-        and _known_not_enrolled(connection, player_id, ranked_day),
         perspective_disagreement=perspective_disagreement,
         malformed_evidence=malformed_evidence,
         unclassified_evidence=unclassified_evidence,
@@ -823,7 +794,7 @@ def _dropped_after_reading(
     without one, and before the next Reset, shows a league below Legend I:
     the player dropped at ``reset``."""
     reading_at = (
-        baseline["evidence"]["profile"]["observed_at"]
+        baseline["evidence"].get("profile", {}).get("observed_at")
         if baseline is not None
         else None
     )

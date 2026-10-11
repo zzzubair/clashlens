@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
-from .analytics import tie_order_sql
+from .analytics import tie_order_sql, unplayed_sql
 from .api_db import (
     ApiDatabase,
     _public_confidence,
@@ -15,7 +15,7 @@ from .api_db import (
     _season_reset_waiting_sql,
     _text,
 )
-from .domain import ranked_day_for, season_opening_reset
+from .domain import SEASON_START_TROPHIES, ranked_day_for, season_opening_reset
 
 _LIVE_FRESHNESS_SECONDS = 600
 # Rows kept beside a selected player when their page edge would hide them.
@@ -31,29 +31,89 @@ _FOCUS_NEIGHBORS = 5
 _OPENING_DAY_WAITING_SQL = _season_reset_waiting_sql(
     "player.id", "profile.trophies", "%(opening_reset)s"
 )
-_LIVE_CANDIDATES_SQL = f"""
-SELECT player.normalized_tag, profile.name, profile.trophies,
-       greatest(
-           player.current_observed_at, player.current_profile_confirmed_at
-       ) AS observed_at,
-       player.eligibility_state,
-       profile.profile_json -> 'clan' ->> 'name' AS clan,
-       COALESCE(profile.current_league_season_id = %(season_id)s, false)
-           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current,
-       tally.attacks, tally.destruction
-FROM players AS player
-JOIN LATERAL (
-    SELECT name, trophies, profile_json, source_contract_state,
-           current_league_season_id
+# A tracked Legend I player at 5,000 with no Legend battle saved this Season
+# has not played yet, so they rank at 5,000 from their newest profile even
+# when it names no current Season, such as Season ID 0, or was rejected for
+# it. On 11 October 2026, 1,374 tracked players waited off the board so.
+_UNPLAYED_SQL = unplayed_sql(
+    "player.id", "version", "%(season_start)s", "%(season_end)s"
+)
+# The player's current accepted profile, and whether it ranks them this Season.
+_CURRENT_PROFILE_JOINS = f"""
+LEFT JOIN LATERAL (
+    SELECT name, trophies, profile_json, current_league_season_id
     FROM player_profile_versions
     WHERE id = player.current_profile_version_id
+      AND source_contract_state = 'accepted'
     -- Keep one indexed current-profile lookup per player as history grows.
     OFFSET 0
 ) AS profile ON true
+CROSS JOIN LATERAL (
+    SELECT COALESCE(profile.current_league_season_id = %(season_id)s, false)
+           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
+) AS current
+"""
+# Their newest profile, when it ranks them at 5,000 instead.
+_UNPLAYED_PROFILE_SQL = f"""
+    SELECT version.id, version.name, version.trophies, version.profile_json,
+           -- A successful unchanged check of the profile confirms it
+           -- without another sighting.
+           greatest(newest.observed_at, CASE
+               WHEN version.id = player.current_profile_version_id
+               THEN player.current_profile_confirmed_at
+           END, (
+               SELECT checked.last_success_at
+               FROM collector_response_state AS checked
+               WHERE checked.scope = 'player'
+                 AND checked.identity_key = player.normalized_tag
+                 AND checked.endpoint = 'profile'
+                 AND (checked.last_observation_id = version.observation_id
+                      OR EXISTS (
+                          SELECT 1 FROM player_profile_effects AS retained
+                          WHERE retained.observation_id
+                                = checked.last_observation_id
+                            AND retained.profile_version_id = version.id))
+           )) AS observed_at
+    FROM (
+        -- The newest sighting of any of the player's profiles: a repeated
+        -- profile is saved once and sighted again.
+        SELECT version.id,
+               COALESCE(sighting.observed_at, version.observed_at) AS observed_at
+        FROM player_profile_versions AS version
+        LEFT JOIN LATERAL (
+            SELECT effect.observed_at FROM player_profile_effects AS effect
+            WHERE effect.profile_version_id = version.id
+            ORDER BY effect.observed_at DESC, effect.id DESC
+            LIMIT 1
+        ) AS sighting ON true
+        -- Look only for players the current profile leaves off the board
+        -- or shows at 5,000, which a newer profile may show instead.
+        WHERE (NOT current.season_current
+               OR profile.trophies = {SEASON_START_TROPHIES})
+          AND version.normalized_tag = player.normalized_tag
+        ORDER BY 2 DESC, version.id DESC
+        LIMIT 1
+    ) AS newest
+    JOIN player_profile_versions AS version ON version.id = newest.id
+    WHERE {_UNPLAYED_SQL}
+"""
+_LIVE_CANDIDATES_SQL = f"""
+SELECT player.normalized_tag, COALESCE(unplayed.name, profile.name) AS name,
+       COALESCE(unplayed.trophies, profile.trophies) AS trophies,
+       COALESCE(unplayed.observed_at, greatest(
+           player.current_observed_at, player.current_profile_confirmed_at
+       )) AS observed_at,
+       player.eligibility_state,
+       COALESCE(unplayed.profile_json, profile.profile_json) -> 'clan' ->> 'name'
+           AS clan,
+       current.season_current OR unplayed.trophies IS NOT NULL AS season_current,
+       tally.attacks, tally.destruction
+FROM players AS player
+{_CURRENT_PROFILE_JOINS}LEFT JOIN LATERAL ({_UNPLAYED_PROFILE_SQL}) AS unplayed ON true
 LEFT JOIN live_attack_tallies AS tally
   ON tally.player_id = player.id AND tally.official_season_id = %(season_id)s
 WHERE player.active = true
-  AND profile.source_contract_state = 'accepted'
+  AND (profile.name IS NOT NULL OR unplayed.name IS NOT NULL)
   AND NOT EXISTS (
       SELECT 1 FROM collector_response_state AS checked
       WHERE checked.scope = 'player'
@@ -66,6 +126,13 @@ WHERE player.active = true
 """
 _LIVE_PLAYERS_SQL = f"""
 SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
+"""
+# The profile that ranks one player at 5,000 when their current one does not.
+UNPLAYED_PROFILE_SQL = f"""
+SELECT unplayed.id, unplayed.observed_at
+FROM players AS player
+{_CURRENT_PROFILE_JOINS}JOIN LATERAL ({_UNPLAYED_PROFILE_SQL}) AS unplayed ON true
+WHERE player.normalized_tag = %(tag)s
 """
 
 # Equal trophies in the Daily board's order (analytics.tie_order_key), from
@@ -82,9 +149,12 @@ FROM ({_LIVE_PLAYERS_SQL}) AS live
 
 
 def _season_params(now: datetime) -> dict[str, Any]:
+    day = ranked_day_for(now)
     return {
-        "season_id": ranked_day_for(now).official_season_id,
+        "season_id": day.official_season_id,
         "opening_reset": season_opening_reset(now),
+        "season_start": day.season_start,
+        "season_end": day.season_end,
     }
 
 
