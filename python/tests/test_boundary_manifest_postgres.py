@@ -1338,9 +1338,10 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
     a reading requested at 04:54:59 may or may not hold a defense stamped
     04:52. Within 15 minutes of the day's Reset, the previous day's last
     reports and automatic defense loss can still land after a reading taken
-    at 05:02 or 05:06. A day whose trophies don't add up proves nothing.
-    Each keeps its reading and is marked uncertain; an attack stamped 04:52,
-    and a reading taken at 05:16, still count their battles."""
+    at 05:02 or 05:06. Each keeps its reading and is marked uncertain; an
+    attack stamped 04:52, a reading taken at 05:16, and a day whose trophies
+    don't add up but whose logs are continuous, like #PVVQPGRQL's on 11
+    October 2026, still count their battles, as uncertain."""
     readings = [
         ("#GRJC0", 5160, _october(7, 4, 55)),  # defended
         ("#GRJC2", 5150, _october(7, 4, 55)),  # attacked
@@ -1348,6 +1349,7 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
         ("#GRJC9", 5210, _october(6, 5, 6)),  # refreshed
         ("#GRJCU", 5100, _october(6, 5, 16)),  # settled
         ("#GRJCV", 5120, _october(7, 4, 40)),  # mismatch
+        ("#GRJCY", 5130, _october(7, 4, 40)),  # mismatch with a log gap
     ]
     days = {
         1: (True, [("defense", 32, _october(7, 4, 52), True)]),
@@ -1358,7 +1360,8 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
         3: (True, [("offense", 40, _october(6, 6), True)]),
         4: (True, [("offense", 40, _october(6, 6), True)]),
         5: (True, [("offense", 40, _october(6, 6), True)]),
-        6: (True, [("offense", 40, _october(7, 4, 50), True)]),
+        6: (True, [("defense", 30, _october(7, 4, 50), True)]),
+        7: (False, [("offense", 40, _october(7, 4, 50), True)]),
     }
     with domain_database(database_url, include_coordinator=True) as connection_info:
         generation_id = _seed_board(connection_info, readings)
@@ -1369,7 +1372,7 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
                 "UPDATE ranked_day_versions"
                 " SET state = 'Inconsistent', confidence = 'partial',"
                 " failure_reasons = '[\"trophy_equation_mismatch\"]'"
-                " WHERE id = 6"
+                " WHERE id IN (6, 7)"
             )
         database = Database(connection_info)
         try:
@@ -1379,7 +1382,8 @@ def test_board_keeps_a_reading_its_timing_or_day_cannot_prove(
                 ("#GRJC2", 5190, "uncertain"),  # attacked
                 ("#GRJC0", 5160, "uncertain"),  # defended
                 ("#GRJCU", 5140, "uncertain"),  # settled
-                ("#GRJCV", 5120, "uncertain"),  # mismatch
+                ("#GRJCY", 5130, "uncertain"),  # mismatch with a log gap
+                ("#GRJCV", 5090, "uncertain"),  # mismatch
             ]
             season = ranked_day_for(DAY_2_RESET - RANKED_DAY_DURATION).official_season_id
             assert boundary.queue_board_rebuilds(database, season, queue=False)[

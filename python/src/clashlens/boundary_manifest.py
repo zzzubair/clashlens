@@ -788,17 +788,21 @@ def reset_trophies(
     proves only the start, so there the reading must agree too.
 
     Otherwise the total is the reading plus the day's battles stamped after
-    it, which needs the day's continuous battle logs with no trophy
-    mismatch, a reading taken at least 15 minutes into that day, after the
-    previous day's last reports and automatic defense loss, a time on every
-    battle the day counts, none stamped between the reading's request and its
-    response, no defense stamped in the 4 minutes before that request, since
-    its attack can end up to 4 minutes after the defender's report, and no
-    battle amount the two players' logs disagree on. A reading proves no
-    battle stamped before it, and a Partial or inferred day's start and end
-    are calculations or readings no rule judged, so that total is never
-    proven. Without the battles' proof the total is the reading alone; any
-    total not proven is marked uncertain.
+    it, which needs the day's continuous battle logs, a reading taken at
+    least 15 minutes into that day, after the previous day's last reports
+    and automatic defense loss, a time on every battle the day counts, none
+    stamped between the reading's request and its response, no defense
+    stamped in the 4 minutes before that request, since its attack can end
+    up to 4 minutes after the defender's report, and no battle amount the
+    two players' logs disagree on. A reading proves no battle stamped before
+    it, and a Partial or inferred day's start and end are calculations or
+    readings no rule judged, so that total is never proven. A day whose
+    trophies don't add up still counts the battles after the reading: on
+    11 October 2026 #PVVQPGRQL's reading of 5,232 missed a later defense
+    for 30, and the reading plus it, 5,202, matched the game's order, where
+    the reading alone broke 31 country order pairs with three other such
+    players. Without the battles' proof the total is
+    the reading alone; any total not proven is marked uncertain.
 
     The total is taken at exactly the Reset, as the game's own Reset rank
     is: a battle whose attack ended at or after it still counts for the
@@ -827,7 +831,6 @@ def reset_trophies(
                    ranked.coverage_complete
                    AND reading.observed_at
                        >= ranked.ranked_day_start + interval '15 minutes'
-                   AND ranked.state <> 'Inconsistent'
                    AND NOT ranked.failure_reasons ?| %s::text[]
                    AND battles.every_battle_proven IS NOT FALSE,
                    battles.after_reading, battles.after_reset,
