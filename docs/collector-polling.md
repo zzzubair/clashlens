@@ -785,10 +785,10 @@ on 2026-10-03 one worker transaction kept such rows for 14 minutes while it
 built a Reset publication, and saving waited behind it for 4 minutes. A saved
 response's database update waits at most 3 seconds for a lock the worker holds,
 such as its player. It then stays saved on disk and the collector moves on,
-retrying the update in the background after any earlier saved response for
-the same player and request type, while other players' responses never wait
-behind it, until it lands or the collector restarts and replays it. Work such as a
-Refresh or a Reset check waits for its own saved responses to land instead of
+retrying the update in the background, 2 seconds after each try that gave
+up, after any earlier saved response for the same player and request type,
+while other players' responses never wait behind it, until it lands or the
+collector restarts and replays it. Work such as a Refresh or a Reset check waits for its own saved responses to land instead of
 fetching them again, and work whose responses a restart left waiting is not
 picked until they land. Starting a Reset sweep also waits at most 3 seconds,
 then tries again on a later pass. Restart replay, the update that checks a Clasher who

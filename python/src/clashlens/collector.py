@@ -522,12 +522,15 @@ class Collector:
                                 raise asyncio.CancelledError
                             return "capacity_paused"
                         committed_now = False
-                        if behind is None or behind.done():
+                        tried = behind is None or behind.done()
+                        if tried:
                             with suppress(psycopg.errors.LockNotAvailable):
                                 await self._commit_saved(handoff, name)
                                 committed_now = True
                         if not committed_now:
-                            later = collector_commits.commit_later(self, behind, handoff, name)
+                            later = collector_commits.commit_later(
+                                self, behind, handoff, name, held=tried
+                            )
                     except BaseException as error:
                         if published or self._sidecar_exists(name):
                             self._handoff_recovery_required = True

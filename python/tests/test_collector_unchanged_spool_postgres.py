@@ -247,7 +247,7 @@ def test_collection_moves_on_while_the_worker_holds_its_player(
 
 
 def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
-    database_url: str, tmp_path: Path
+    database_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A Clasher who finished the Legend day is checked less often; that
     # scheduling update must not wait for the worker either.
@@ -257,6 +257,15 @@ def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
         spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
         collector = _collector(spool, database, _Profiles([_profile(1), _profile(2)]))  # type: ignore[arg-type]
         work = CollectorWork(player_id, "#2PP", datetime.now(UTC))
+        defer = database.defer_regular_check
+
+        def late(player: int, until: datetime) -> None:
+            # A slow machine reaches the scheduling update late; the saved
+            # response's background retry must not queue ahead of it.
+            time.sleep(0.5)
+            defer(player, until)
+
+        monkeypatch.setattr(database, "defer_regular_check", late)
 
         async def scenario() -> None:
             first = collector.collect_player(work, lane="ordinary", endpoints=("profile",))

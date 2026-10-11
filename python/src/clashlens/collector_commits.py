@@ -37,9 +37,13 @@ def commit_later(
     handoff: ResponseHandoff,
     name: str,
     serialized: bool | None = None,
+    *,
+    held: bool = False,
 ) -> asyncio.Task[None]:
     collector._count("commit_deferred")
-    task = asyncio.create_task(_retry(collector, behind, handoff, name, serialized))
+    task = asyncio.create_task(
+        _retry(collector, behind, handoff, name, serialized, held)
+    )
     collector._later_commits[task] = handoff.collector_work_id
     identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
 
@@ -80,12 +84,20 @@ async def _retry(
     handoff: ResponseHandoff,
     name: str,
     serialized: bool | None,
+    held: bool,
 ) -> None:
     try:
         if behind is not None:
             await asyncio.wait({behind})
             if behind.cancelled() or behind.exception() is not None:
                 raise RuntimeError("an earlier saved response did not commit")
+        if held:
+            # The check's own try just gave up on the lock. Trying again at
+            # once would queue first for the row and make the check's next
+            # update, such as checking a finished Clasher less often, wait
+            # 6 seconds instead of 3.
+            with suppress(TimeoutError):
+                await asyncio.wait_for(collector._stopping.wait(), _RETRY_SECONDS)
         while not (
             collector._handoff_recovery_required or collector._stopping.is_set()
         ):
