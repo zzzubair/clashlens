@@ -558,6 +558,20 @@
   font-weight: 700;
 }
 
+/* Trophies equal to another player's; the Rank still orders them. */
+.tie-pill {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--cl-outline);
+  border-radius: 999px;
+  color: var(--cl-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.3;
+  vertical-align: 0.1rem;
+}
+
 .trophy-mark {
   display: inline-block;
   width: 1rem;

@@ -46,6 +46,8 @@ export interface TrackedPlayerEntry {
   freshness: Freshness;
   state: "available" | "stale" | "uncertain";
   confidence: ConfidenceState;
+  /** Another player on the board has the same trophies. */
+  tied?: boolean;
 }
 
 export interface SnapshotSelector {

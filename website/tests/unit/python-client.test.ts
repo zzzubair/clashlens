@@ -493,6 +493,7 @@ describe("server-only Python client response boundary", () => {
                 confidence: "exact",
                 public_confidence: "partial",
                 official_rank: 1,
+                tied: true,
               },
             ],
           }),
@@ -509,7 +510,7 @@ describe("server-only Python client response boundary", () => {
     });
     expect(leaderboard).toMatchObject({
       view: "daily",
-      entries: [{ name: "Unknown", clan: "Unknown" }],
+      entries: [{ name: "Unknown", clan: "Unknown", tied: true }],
       page: 1,
       pageSize: 25,
       daily: {

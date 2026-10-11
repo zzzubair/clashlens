@@ -11,9 +11,11 @@ from . import boundary
 from .analytics import (
     FRESHNESS_RULE_VERSION,
     PROFILE_FRESHNESS_SECONDS,
+    SEASON_DESTRUCTION_ORDERING_RULE_VERSION,
     SNAPSHOT_ORDERING_RULE_VERSION,
     deterministic_tag_hash,
-    season_attack_tallies,
+    latest_change_order_key,
+    latest_trophy_changes,
     tie_order_key,
 )
 from .boundary_manifest import reset_trophies
@@ -232,15 +234,14 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     """,
                     (boundary_at, ended_season_id),
                 ).fetchall()
-                season_attacks = season_attack_tallies(
+                latest_changes = latest_trophy_changes(
                     connection,
-                    season_start=ranked_day_for(
-                        boundary_at - RANKED_DAY_DURATION
-                    ).season_start,
+                    day_start=boundary_at - RANKED_DAY_DURATION,
                     cutoff=boundary_at,
                     player_ids=[int(row[0]) for row in profile_rows],
                 )
-                frozen_attacks = True
+                season_attacks: dict[int, tuple[int, int]] = {}
+                frozen_changes = frozen_attacks = True
             else:
                 manifest_profiles = connection.execute(
                     """
@@ -249,12 +250,20 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                            input_identity->>'snapshot_quality',
                            ranked_day_version_id,
                            input_identity->'season_attacks',
-                           input_identity ? 'season_attacks'
+                           input_identity ? 'season_attacks',
+                           input_identity->>'latest_change_at',
+                           input_identity ? 'latest_change_at'
                     FROM boundary_publication_manifest_entries(%s)
                     """,
                     (generation_row[4],),
                 ).fetchall()
+                frozen_changes = all(row[8] for row in manifest_profiles)
                 frozen_attacks = all(row[6] for row in manifest_profiles)
+                latest_changes = {
+                    int(row[0]): datetime.fromisoformat(str(row[7])).astimezone(UTC)
+                    for row in manifest_profiles
+                    if row[7] is not None
+                }
                 season_attacks = {
                     int(row[0]): (
                         int(row[5]["attacks"]), int(row[5]["destruction"])
@@ -354,16 +363,22 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     and row[3] is not None
                 }
 
-            # Inputs frozen with Season attacks order by the current rule.
-            # Inputs frozen before it hold none, so their board keeps its
-            # generation's older rule and SHA-256 tag hash order until the
-            # board rebuild check (boundary.queue_board_rebuilds) rebuilds it.
+            # Inputs frozen with latest trophy changes order by the current
+            # rule. Inputs frozen before it keep the rule they were frozen
+            # under, Season attacks or else the generation's SHA-256 tag hash
+            # order, until the board rebuild check
+            # (boundary.queue_board_rebuilds) rebuilds the board.
             ordering_rule_version = (
                 SNAPSHOT_ORDERING_RULE_VERSION
+                if frozen_changes
+                else SEASON_DESTRUCTION_ORDERING_RULE_VERSION
                 if frozen_attacks
                 else _text_value(generation_row[8])
             )
-            older_order = ordering_rule_version != SNAPSHOT_ORDERING_RULE_VERSION
+            older_order = ordering_rule_version not in {
+                SNAPSHOT_ORDERING_RULE_VERSION,
+                SEASON_DESTRUCTION_ORDERING_RULE_VERSION,
+            }
             entries: list[dict[str, Any]] = []
             for row in profile_rows:
                 # Without proof, a reading stays as it is and is marked
@@ -399,6 +414,7 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                         ),
                         "official": official_by_player.get(int(row[0])),
                         "season_attacks": season_attacks.get(int(row[0]), (0, 0)),
+                        "latest_change_at": latest_changes.get(int(row[0])),
                     }
                 )
             entries.sort(
@@ -407,6 +423,10 @@ def complete_snapshot(database: Database, claim: Claim) -> None:
                     *(
                         (str(item["tie_hash"]), str(item["tag"]))
                         if older_order
+                        else latest_change_order_key(
+                            item["latest_change_at"], str(item["tag"])
+                        )
+                        if ordering_rule_version == SNAPSHOT_ORDERING_RULE_VERSION
                         else tie_order_key(*item["season_attacks"], str(item["tag"]))
                     ),
                 )

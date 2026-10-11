@@ -38,6 +38,8 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
     database = board_database
     board = api_leaderboard.get_live_leaderboard(database, limit=200, now=NOW)
     target = board["entries"][102]
+    # All 105 share 6,000 trophies: each row is a tie, with its own rank.
+    assert all(entry["tied"] for entry in board["entries"])
     with database.pool.connection() as connection:
         connection.execute(
             "UPDATE player_profile_versions SET name = %s WHERE normalized_tag = %s",
@@ -71,6 +73,8 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
     assert moved["page"] == 1
     assert moved["entries"][0]["tag"] == target["tag"]
     assert moved["entries"][0]["position"] == 1
+    # Alone on 7,000 it is no longer a tie; the rest still are.
+    assert [entry["tied"] for entry in moved["entries"][:3]] == [False, True, True]
     assert len(moved["entries"]) == 100
 
 

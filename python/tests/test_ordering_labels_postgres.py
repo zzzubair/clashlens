@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from domain_test_support import domain_database, seed_attacks, store_observation, text
+from domain_test_support import domain_database, seed_battles, store_observation, text
 from psycopg.types.json import Jsonb
 from test_boundary_publication_postgres import (
     BOUNDARY,
@@ -27,8 +27,8 @@ from clashlens.domain import RANKED_DAY_DURATION, ranked_day_for
 OLDER = "tracked-player-order-v1"
 SEASON = ranked_day_for(BOUNDARY - RANKED_DAY_DURATION).official_season_id
 # Both tag hashes, the older rule's SHA-256 and the current MD5, put #2PP
-# ahead; #28's higher Season average attack destruction puts it ahead.
-BY_TAG, BY_ATTACKS = ["#2PP", "#28"], ["#28", "#2PP"]
+# ahead; #28's later trophy change in the ended day puts it ahead.
+BY_TAG, BY_LATEST_CHANGE = ["#2PP", "#28"], ["#28", "#2PP"]
 
 
 def _run(database: Database, connection, work_type: str, complete) -> None:
@@ -189,10 +189,10 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                     )[0]
                     for tag in BY_TAG
                 }
-                for destruction, (tag, (player_id, day_version)) in zip(
-                    (50, 60), players.items(), strict=True
+                for hours, (tag, (player_id, day_version)) in zip(
+                    (1, 2), players.items(), strict=True
                 ):
-                    seed_attacks(connection, player_id, [(BOUNDARY - timedelta(days=2), destruction)])
+                    seed_battles(connection, player_id, [(DAY_START + timedelta(hours=hours), 30)])
                     # Tied at the Reset, read without parsing the responses.
                     connection.execute("SET LOCAL session_replication_role = replica")
                     connection.execute(
@@ -235,11 +235,11 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                         ranked_day_input_hash="a" * 64,
                     )
                 monkeypatch.undo()
-                # Its input list was frozen before Season attacks were.
+                # Its input list was frozen before latest trophy changes were.
                 connection.execute("SET LOCAL session_replication_role = replica")
                 connection.execute(
                     "UPDATE boundary_publication_manifest_rows"
-                    " SET input_identity = input_identity - 'season_attacks'"
+                    " SET input_identity = input_identity - 'latest_change_at'"
                 )
                 _publish(database, connection)
                 assert _labels(connection, 1) == [OLDER] * 6
@@ -364,10 +364,10 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                     _publish(database, connection)
                     assert _labels(connection, 2)[0] == OLDER
                     assert _labels(connection, 3) == [SNAPSHOT_ORDERING_RULE_VERSION] * 6
-                    assert _order(connection, 3) == BY_ATTACKS
+                    assert _order(connection, 3) == BY_LATEST_CHANGE
                     assert connection.execute(
                         """
-                        SELECT bool_and(entry.input_identity ? 'season_attacks')
+                        SELECT bool_and(entry.input_identity ? 'latest_change_at')
                         FROM boundary_publication_generations AS g,
                              boundary_publication_manifest_entries(g.snapshot_manifest_id) AS entry
                         WHERE g.generation = 3
@@ -378,6 +378,6 @@ def test_a_replacement_saves_one_ordering_label_everywhere(
                 assert _labels(connection, 2) == [
                     SNAPSHOT_ORDERING_RULE_VERSION if reordered else OLDER
                 ] * 6
-                assert _order(connection, 2) == (BY_ATTACKS if reordered else BY_TAG)
+                assert _order(connection, 2) == (BY_LATEST_CHANGE if reordered else BY_TAG)
         finally:
             database.close()

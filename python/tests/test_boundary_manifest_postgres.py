@@ -14,7 +14,7 @@ import psycopg
 from domain_test_support import domain_database, store_observation, text
 
 from clashlens import battle_day_repair, boundary
-from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, season_attack_tallies
+from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, latest_trophy_changes
 from clashlens.army_decoder import CURRENT_DECODES, DECODER_VERSION
 from clashlens.boundary_manifest import _moved_decode_ids, _moved_side_arrays
 from clashlens.catalog import CATALOG_VERSION
@@ -464,14 +464,14 @@ def per_player_inputs(
                 if official_entry
                 else None
             )
-            tally = season_attack_tallies(
+            latest_change = latest_trophy_changes(
                 connection,
-                season_start=ranked_day_for(generation[0] - RANKED_DAY_DURATION).season_start,
+                day_start=generation[0] - RANKED_DAY_DURATION,
                 cutoff=generation[0],
                 player_ids=[player_id],
             ).get(player_id)
-            identity["season_attacks"] = (
-                {"attacks": tally[0], "destruction": tally[1]} if tally else None
+            identity["latest_change_at"] = (
+                latest_change.astimezone(UTC).isoformat() if latest_change else None
             )
             profile = connection.execute(
                 """
