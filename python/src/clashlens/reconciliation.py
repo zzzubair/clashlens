@@ -388,10 +388,10 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     # 5,000 whatever the day ended on: that reading proves neither the end total nor the loss.
     end_hidden_by_reset = False
 
-    # A reading during the day shows its start plus the battles landed by then, with the day before's
-    # late credits and loss, before a weekly raise or a Season's reset, which can land after 05:15.
+    # Readings during the day (reading_rule.contradiction_during_day); a pre-reset Day 1 shows the official total.
     previous = None if data.season_first_day or season_rule_start else data.previous_day
-    reset = data.season_first_day and data.previous_day and data.previous_day.final_trophies
+    reset = data.season_first_day and (data.start_baseline_evidence.get("official_final_trophies")
+                                       or data.previous_day and data.previous_day.final_trophies)
     raised = previous and (previous.final_trophies or 5000) < 5000 == start_trophies
     earlier = _deduplicate_contributions(data.previous_day_contributions)[0] if previous else ()
     during, history = reading_rule.contradiction_during_day(
