@@ -704,12 +704,12 @@ def unplayed_profiles(
         int(row[0]): row[1:]
         for row in connection.execute(
             f"""
-            SELECT * FROM ({_NEWEST_PROFILES_SQL.replace("{accepted}", "")})
+            SELECT newest.* FROM ({_NEWEST_PROFILES_SQL.replace("{accepted}", "")})
                 AS newest (player_id, id, observation_id, observed_at,
                            profile_json, normalized_tag, name, trophies,
                            eligibility_state, current_league_season_id)
-            WHERE newest.eligibility_state = 'eligible'
-              AND {unplayed_sql("newest.player_id", "newest.trophies",
+            JOIN player_profile_versions AS version ON version.id = newest.id
+            WHERE {unplayed_sql("newest.player_id", "version",
                                 "%(season_start)s", "%(boundary)s")}
             """,
             {"players": player_ids, "boundary": boundary_at,

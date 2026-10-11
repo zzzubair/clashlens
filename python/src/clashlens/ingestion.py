@@ -233,7 +233,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 and profile.trophies == SEASON_START_TROPHIES
             ):
                 first_battle_log.queue_unplayed_days(
-                    connection, player[0], profile.observed_at
+                    connection, player[0], profile.observed_at, observation_id
                 )
             connection.execute(
                 """

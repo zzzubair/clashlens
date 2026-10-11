@@ -119,12 +119,23 @@ def latest_trophy_changes(
     }
 
 
-def unplayed_sql(player_id: str, trophies: str, season_start: str, before: str) -> str:
-    """SQL true when a Legend I profile's ``trophies`` are 5,000 and the
-    player's saved Legend days from ``season_start`` to ``before`` hold no
-    battle: they have not played yet this Season, so both boards rank them at
-    5,000 whatever Season the profile names."""
-    return f"""({trophies} = {SEASON_START_TROPHIES} AND NOT EXISTS (
+def unplayed_profile_sql(profile: str) -> str:
+    """SQL true when the profile version ``profile`` can show a player who
+    has not played yet: Legend I at 5,000, and accepted or naming Season 0,
+    which the game sends before sign-up. Any other rejected profile, such as
+    one with a malformed Season, stays rejected."""
+    return f"""({profile}.eligibility_state = 'eligible'
+        AND {profile}.trophies = {SEASON_START_TROPHIES}
+        AND ({profile}.source_contract_state = 'accepted'
+             OR {profile}.current_league_season_id = '0'))"""
+
+
+def unplayed_sql(player_id: str, profile: str, season_start: str, before: str) -> str:
+    """SQL true when the profile version ``profile`` can show a player who
+    has not played yet (``unplayed_profile_sql``) and the player's saved
+    Legend days from ``season_start`` to ``before`` hold no battle: both
+    boards rank them at 5,000."""
+    return f"""({unplayed_profile_sql(profile)} AND NOT EXISTS (
         SELECT 1 FROM api_player_daily_logs AS played
         WHERE played.player_id = {player_id}
           AND played.ranked_day_start >= {season_start}

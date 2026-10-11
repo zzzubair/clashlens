@@ -17,6 +17,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import battle, domain, reset_baselines
+from .analytics import unplayed_profile_sql
 from .battle import ParsedBattleRow
 from .db import (
     ANALYTICS_RULE_VERSION,
@@ -85,24 +86,26 @@ def coverage_start(
 
 def _first_seen_at_5000(
     connection: Any, player_id: int, boundary_at: datetime
-) -> datetime | None:
-    """When a Legend I profile of the player at 5,000 was first read from
-    ``boundary_at`` to the end of its Season."""
-    return connection.execute(
-        """
-        SELECT min(COALESCE(effect.observed_at, profile.observed_at))
+) -> tuple[int | None, datetime | None]:
+    """The player's first profile read from ``boundary_at`` to the end of its
+    Season that can show them not played yet
+    (``analytics.unplayed_profile_sql``), and when it was read."""
+    row = connection.execute(
+        f"""
+        SELECT profile.id, COALESCE(effect.observed_at, profile.observed_at)
         FROM player_profile_versions AS profile
         LEFT JOIN player_profile_effects AS effect
           ON effect.profile_version_id = profile.id
         WHERE profile.player_id = %s
-          AND profile.eligibility_state = 'eligible'
-          AND profile.trophies = %s
+          AND {unplayed_profile_sql("profile")}
           AND COALESCE(effect.observed_at, profile.observed_at) >= %s
           AND COALESCE(effect.observed_at, profile.observed_at) < %s
+        ORDER BY 2, profile.id
+        LIMIT 1
         """,
-        (player_id, SEASON_START_TROPHIES, boundary_at,
-         domain.ranked_day_for(boundary_at).season_end),
-    ).fetchone()[0]
+        (player_id, boundary_at, domain.ranked_day_for(boundary_at).season_end),
+    ).fetchone()
+    return (None, None) if row is None else (int(row[0]), row[1])
 
 
 def season_rule_start(
@@ -118,8 +121,8 @@ def season_rule_start(
         domain.is_season_boundary(boundary_at)
         and reset_baselines._season_rule_holds(connection, player_id, boundary_at)
         or reset_baselines._unplayed(
-            connection, player_id, boundary_at, SEASON_START_TROPHIES,
-            _first_seen_at_5000(connection, player_id, boundary_at),
+            connection, player_id, boundary_at,
+            *_first_seen_at_5000(connection, player_id, boundary_at),
         )
     ):
         return None
@@ -194,7 +197,8 @@ def queue_earlier_days(
 ) -> None:
     """When a player's earliest saved battle log, even one processed after
     newer ones, was saved on Day 1, or holds their battles from an earlier
-    day of the Season it was saved in, recalculate from that day."""
+    day of the Season it was saved in, recalculate from that day; otherwise
+    recalculate any earlier days it proves at 0/0 (``queue_unplayed_days``)."""
     saved_day = domain.ranked_day_for(observed_at)
     earlier = [
         row.battle.ranked_day_start
@@ -204,10 +208,11 @@ def queue_earlier_days(
     ]
     if saved_day.start == saved_day.season_start:
         earlier = [saved_day.start]
-    if not earlier:
-        return
     first = _first_log(connection, player_id)
     if first[2] < observed_at:
+        return
+    if not earlier:
+        queue_unplayed_days(connection, player_id, observed_at, int(first[1]))
         return
     day = min(earlier)
     if domain.is_season_boundary(day):
@@ -261,14 +266,19 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         _queue(connection, player_id, first_day.season_start, int(first[1]))
 
 
-def queue_unplayed_days(connection: Any, player_id: int, observed_at: datetime) -> None:
-    """When a new Legend I profile at 5,000 read at ``observed_at`` came
-    before the player's first Legend battle of the Season, whatever Season it
-    names, recalculate each day of that Season that ended by then, so each
-    shows as a 0/0 day at 5,000. Each day is queued once per player."""
+def queue_unplayed_days(
+    connection: Any, player_id: int, observed_at: datetime, observation_id: int
+) -> None:
+    """When a profile read from the start of the Legend day of
+    ``observed_at`` shows the player not played yet, whatever Season it
+    names, recalculate each earlier day of that Season, so each shows as a
+    0/0 day at 5,000. Queued from each such new profile and from the
+    player's first battle log, which proves those days' battles, whichever
+    is processed last, once per day and triggering ``observation_id``."""
     day = domain.ranked_day_for(observed_at)
     if not reset_baselines._unplayed(
-        connection, player_id, day.start, SEASON_START_TROPHIES, observed_at
+        connection, player_id, day.start,
+        *_first_seen_at_5000(connection, player_id, day.start),
     ):
         return
     day_start = day.season_start
@@ -276,7 +286,7 @@ def queue_unplayed_days(connection: Any, player_id: int, observed_at: datetime) 
         day_text = day_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         _queue(
             connection, player_id, day_start, None,
-            key=f"reconcile:unplayed:{player_id}:{day_text}",
+            key=f"reconcile:unplayed:{player_id}:{day_text}:{observation_id}",
             trigger="unplayed", later_days=False,
         )
         day_start += timedelta(days=1)

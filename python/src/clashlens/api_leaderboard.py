@@ -36,7 +36,7 @@ _OPENING_DAY_WAITING_SQL = _season_reset_waiting_sql(
 # when it names no current Season, such as Season ID 0, or was rejected for
 # it. On 11 October 2026, 1,374 tracked players waited off the board so.
 _UNPLAYED_SQL = unplayed_sql(
-    "player.id", "version.trophies", "%(season_start)s", "%(season_end)s"
+    "player.id", "version", "%(season_start)s", "%(season_end)s"
 )
 # The player's current accepted profile, and whether it ranks them this Season.
 _CURRENT_PROFILE_JOINS = f"""
@@ -78,8 +78,7 @@ _UNPLAYED_PROFILE_SQL = f"""
         LIMIT 1
     ) AS newest
     JOIN player_profile_versions AS version ON version.id = newest.id
-    WHERE version.eligibility_state = 'eligible'
-      AND {_UNPLAYED_SQL}
+    WHERE {_UNPLAYED_SQL}
 """
 _LIVE_CANDIDATES_SQL = f"""
 SELECT player.normalized_tag, COALESCE(unplayed.name, profile.name) AS name,

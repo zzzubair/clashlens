@@ -31,7 +31,7 @@ progress link also works without JavaScript. A tracked player whose newest
 profile was rejected is not waiting, so the page explains why there are no
 current results and rereads saved data once a minute while visible instead of
 once a second. A Legend I profile at 5,000 with no Legend battle this Season,
-whatever Season it names, Season ID 0 included, needs no explanation: the
+accepted or naming Season ID 0, whatever Season it names, needs no explanation: the
 player has not played yet, so their normal page shows them at 5,000 with a
 daily log of 0/0 days from 5,000 to 5,000, and every board ranks them at
 5,000. Another Legend I profile with Season ID 0 and no Legend battle this

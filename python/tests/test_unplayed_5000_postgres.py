@@ -389,3 +389,73 @@ def test_every_day_before_a_player_first_seen_unplayed_is_a_0_0_day_at_5000(
         for day in range(9):
             assert days[tag, DAY_1 + timedelta(days=day)][:4] == (0, 0, 5000, 5000)
     assert not_enrolled == 0
+
+
+def test_days_before_first_seen_are_recalculated_once_the_first_battle_log_lands(
+    database_url: str, archive_server
+) -> None:
+    # The Day 8 profile and its days are processed before the first battle
+    # log, which then proves those days had no battle.
+    day_8 = DAY_1 + timedelta(days=7)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        profile_job, log_job = _sweep(connection_info, archive_server, day_8, {
+            UNPLAYED: (_season_zero(UNPLAYED), _log()),
+        })
+        _run(connection_info, archive_server, [profile_job])
+        _run(connection_info, archive_server, [log_job])
+        with psycopg.connect(connection_info) as connection:
+            days = {
+                row[0]: row[1:]
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
+                           attack_count, defense_count, start_trophies,
+                           next_start_trophies, net_trophy_change
+                    FROM ranked_day_versions
+                    ORDER BY ranked_day_start, version DESC
+                    """
+                )
+            }
+
+    for day in range(7):
+        assert days[DAY_1 + timedelta(days=day)] == (0, 0, 5000, 5000, 0)
+
+
+def test_a_malformed_season_at_5000_stays_rejected(
+    database_url: str, archive_server
+) -> None:
+    # Legend I at 5,000 with no battle, but the Season ID reads "00".
+    malformed = json.loads(_new_season_profile(5000, UNPLAYED))
+    malformed["currentLeagueSeasonId"] = "00"
+    malformed = json.dumps(malformed).encode()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        for boundary in (DAY_2, DAY_3):
+            _run(connection_info, archive_server, _sweep(
+                connection_info, archive_server, boundary, {
+                    UNPLAYED: (malformed, _log()),
+                    ORDINARY: (_new_season_profile(5000, ORDINARY), _log()),
+                },
+            ))
+        now = DAY_3 + timedelta(hours=1)
+        with psycopg.connect(connection_info) as connection:
+            rejected = connection.execute(
+                """
+                SELECT count(*) FROM reset_baseline_evidence AS evidence
+                JOIN players AS player ON player.id = evidence.player_id
+                WHERE player.normalized_tag = %s
+                  AND evidence.failure_reasons ? 'profile_invalid'
+                """,
+                (UNPLAYED,),
+            ).fetchone()[0]
+            live = _read_live_board(connection, now)
+            boards = _boards(connection)
+        api = ApiDatabase(connection_info)
+        try:
+            page = get_player_page(api, UNPLAYED, now=now, freshness_seconds=900)
+        finally:
+            api.close()
+
+    assert rejected == 2
+    assert [row[0] for row in live.rows] == [ORDINARY]
+    assert boards[DAY_3] == [(ORDINARY, 5000)]
+    assert page is None

@@ -9,6 +9,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import boundary, ranked_day_inputs
+from .analytics import unplayed_profile_sql
 from .db import (
     ANALYTICS_RULE_VERSION,
     DEFAULT_PARSER_VERSION,
@@ -1054,12 +1055,12 @@ def _load_reset_endpoint_evidence(
             hard_failure = True
         elif endpoint == "profile":
             # A Legend I profile at 5,000 before the player's first Legend
-            # battle of the Season passes whatever Season it names.
+            # battle of the Season passes, accepted or naming Season 0.
             if (
                 row[9] is None
                 or _text_value(row[11]) != "eligible"
                 or _text_value(row[10]) != "accepted"
-                and not _unplayed(connection, player_id, boundary_at, row[16], row[4])
+                and not _unplayed(connection, player_id, boundary_at, row[9], row[4])
             ):
                 reasons.append("profile_invalid")
                 hard_failure = True
@@ -1206,8 +1207,7 @@ def _load_reset_baseline(
     season_rule = bool(
         not reading_starts
         and (
-            profile_eligible
-            and _unplayed(connection, player_id, row[14], row[16], row[19])
+            _unplayed(connection, player_id, row[14], row[15], row[19])
             or is_season_boundary(row[14])
             and _season_rule_holds(connection, player_id, row[14])
         )
@@ -1313,21 +1313,25 @@ def _season_rule_holds(
 
 def _unplayed(
     connection: Any, player_id: int, boundary_at: datetime,
-    trophies: int | None, read_at: datetime | None,
+    profile_id: int | None, read_at: datetime | None,
 ) -> bool:
-    """Whether a profile read at ``read_at`` showing ``trophies`` came before
+    """Whether the profile ``profile_id``, read at ``read_at``, came before
     the player's first Legend battle of the Season of the Legend day starting
-    at ``boundary_at``: it shows 5,000, no battle of that Season was fought
+    at ``boundary_at``: it can show a player who has not played yet
+    (``analytics.unplayed_profile_sql``), no battle of that Season was fought
     before it, and no accepted profile naming that Season, or read in Legend
     I during the ended day, showed another total before it. The game also
-    sends Season 0 to players already signed up, so the Season a profile
-    names decides nothing more here."""
-    if trophies != SEASON_START_TROPHIES or read_at is None:
+    sends Season 0 to players already signed up, so a profile naming Season 0
+    decides nothing more here."""
+    if profile_id is None or read_at is None:
         return False
     day = ranked_day_for(boundary_at)
-    return not connection.execute(
-        """
+    return bool(connection.execute(
+        f"""
         SELECT EXISTS (
+            SELECT 1 FROM player_profile_versions AS reading
+            WHERE reading.id = %(profile)s AND {unplayed_profile_sql("reading")}
+        ) AND NOT EXISTS (
             SELECT 1
             FROM player_profile_versions AS profile
             LEFT JOIN player_profile_effects AS effect
@@ -1342,7 +1346,7 @@ def _unplayed(
               AND profile.source_contract_state = 'accepted'
               AND profile.trophies <> %(start)s
               AND COALESCE(effect.observed_at, profile.observed_at) < %(before)s
-        ) OR EXISTS (
+        ) AND NOT EXISTS (
             SELECT 1 FROM battle_evidence AS evidence
             JOIN legend_battles AS battle ON battle.id = evidence.battle_id
             WHERE (battle.attacker_player_id = %(player)s
@@ -1351,11 +1355,12 @@ def _unplayed(
               AND evidence.battle_timestamp < %(before)s
         )
         """,
-        {"player": player_id, "season": day.official_season_id,
+        {"player": player_id, "profile": profile_id,
+         "season": day.official_season_id,
          "start": SEASON_START_TROPHIES, "before": read_at,
          "season_start": day.season_start,
          "ended_day": boundary_at - RANKED_DAY_DURATION},
-    ).fetchone()[0]
+    ).fetchone()[0])
 
 
 def _enqueue_reset_reconciliation(
