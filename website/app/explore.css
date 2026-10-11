@@ -558,10 +558,18 @@
   font-weight: 700;
 }
 
+/* Every row keeps room for the Tie pill after its trophies, so trophies line
+   up whether or not a row has one. */
+.tie-slot {
+  display: inline-block;
+  width: 2.5rem;
+  margin-left: 0.4rem;
+  text-align: left;
+}
+
 /* Trophies equal to another player's; the Rank still orders them. */
 .tie-pill {
   display: inline-block;
-  margin-left: 0.4rem;
   padding: 0.05rem 0.45rem;
   border: 1px solid var(--cl-outline);
   border-radius: 999px;

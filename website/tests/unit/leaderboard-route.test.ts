@@ -137,7 +137,7 @@ it.each([
   },
 );
 
-it("marks only rows on equal trophies as a tie and keeps each rank its own", async () => {
+it("marks only rows on equal trophies as a tie, keeps each rank its own and reserves the tie slot on every row", async () => {
   const fixture = structuredClone(board);
   const row = fixture.entries[0];
   fixture.entries = [
@@ -159,8 +159,10 @@ it("marks only rows on equal trophies as a tie and keeps each rank its own", asy
     false,
   ]);
   expect(rows[0]).toContain(
-    '<strong>5,300</strong><span class="tie-pill" title="Same trophies as another player">Tie</span>',
+    '<strong>5,300</strong><span class="tie-slot"><span class="tie-pill" title="Same trophies as another player">Tie</span></span>',
   );
+  // Untied rows keep the same empty slot, so every row's trophies line up.
+  expect(rows[2]).toContain('<strong>5,290</strong><span class="tie-slot"></span>');
 });
 
 it("formats large ranks without explaining unlisted tracked players", async () => {
