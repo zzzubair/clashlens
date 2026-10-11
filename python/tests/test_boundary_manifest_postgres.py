@@ -191,6 +191,19 @@ _SEED = [
            %(boundary)s + interval '1 minute', 200, 'v1', 'v1', 'parser'
     FROM generate_series(1, %(players)s) AS i
     WHERE i %% 22 = 0 AND i %% 17 <> 0
+    UNION ALL
+    -- Every 9th player's profile is seen again after the Reset, every 10th's
+    -- before it, every 14th's after-Reset profile was seen before it, and
+    -- every 13th's two profiles are seen at one time, the newer one first.
+    SELECT version, (12 + kind) * %(players)s + i, 'current_profile',
+           %(boundary)s + make_interval(secs => seconds), 200, 'v1', 'v1', 'parser'
+    FROM generate_series(1, %(players)s) AS i
+    CROSS JOIN LATERAL (VALUES
+        (0, i, 120, i %% 9 = 0), (1, i, -40, i %% 10 = 0),
+        (2, %(players)s + i, -10, i %% 14 = 0),
+        (3, 3 * %(players)s + i, -20, i %% 13 = 0), (4, i, -20, i %% 13 = 0)
+    ) AS sighting (kind, version, seconds, seeded)
+    WHERE seeded AND i %% 17 <> 0
     """,
     # Every 51st player's only profile conflicts with its source.
     """

@@ -475,32 +475,52 @@ def _snapshot_rows(
         player_ids=player_ids,
     )
     # Each player's newest accepted profile at the Reset, chosen exactly as
-    # for one player, with the population in one query.
+    # for one player, with the population in one query: the newest of each
+    # profile's sightings (its effects, or the profile itself when it has
+    # none) up to the Reset, ordered by time and then id. Each profile's
+    # newest sighting comes from the effects' own time index and the
+    # profiles from migration 0098's index, so the query reads index entries
+    # instead of every profile's and sighting's row. On 10 October 2026
+    # reading those rows took over 6 of the freeze's 10 minutes.
     profiles = {
         int(row[0]): row[1:]
         for row in connection.execute(
             """
-            SELECT member.player_id, profile.*
-            FROM unnest(%s::bigint[]) AS member (player_id)
+            SELECT member.player_id, profile.id,
+                   COALESCE(effect.observation_id, profile.observation_id),
+                   newest.observed_at, profile.profile_json,
+                   profile.normalized_tag, profile.name, profile.trophies,
+                   profile.eligibility_state, profile.current_league_season_id
+            FROM unnest(%(players)s::bigint[]) AS member (player_id)
             CROSS JOIN LATERAL (
-                SELECT profile.id,
-                       COALESCE(effect.observation_id, profile.observation_id),
-                       COALESCE(effect.observed_at, profile.observed_at),
-                       profile.profile_json, profile.normalized_tag,
-                       profile.name, profile.trophies, profile.eligibility_state,
-                       profile.current_league_season_id
-                FROM player_profile_versions AS profile
-                LEFT JOIN player_profile_effects AS effect
-                  ON effect.profile_version_id = profile.id
-                WHERE profile.player_id = member.player_id
-                  AND COALESCE(effect.observed_at, profile.observed_at) <= %s
-                  AND profile.source_contract_state = 'accepted'
-                ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC,
-                         COALESCE(effect.id, profile.id) DESC
+                SELECT version.id AS profile_id, sighting.id AS effect_id,
+                       COALESCE(sighting.observed_at, version.observed_at)
+                           AS observed_at
+                FROM player_profile_versions AS version
+                LEFT JOIN LATERAL (
+                    SELECT effect.id, effect.observed_at
+                    FROM player_profile_effects AS effect
+                    WHERE effect.profile_version_id = version.id
+                      AND effect.observed_at <= %(boundary)s
+                    ORDER BY effect.observed_at DESC, effect.id DESC
+                    LIMIT 1
+                ) AS sighting ON true
+                WHERE version.player_id = member.player_id
+                  AND version.source_contract_state = 'accepted'
+                  AND (sighting.id IS NOT NULL
+                       OR version.observed_at <= %(boundary)s
+                          AND NOT EXISTS (
+                              SELECT FROM player_profile_effects AS effect
+                              WHERE effect.profile_version_id = version.id
+                          ))
+                ORDER BY COALESCE(sighting.observed_at, version.observed_at) DESC,
+                         COALESCE(sighting.id, version.id) DESC
                 LIMIT 1
-            ) AS profile
+            ) AS newest
+            JOIN player_profile_versions AS profile ON profile.id = newest.profile_id
+            LEFT JOIN player_profile_effects AS effect ON effect.id = newest.effect_id
             """,
-            (player_ids, boundary_at),
+            {"players": player_ids, "boundary": boundary_at},
         ).fetchall()
     }
     # Why a player with no accepted profile has none: their newest profile's
