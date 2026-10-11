@@ -53,12 +53,13 @@ CREATE TABLE game_ranking_scores (
 CREATE FUNCTION clashlens_game_ranking_board(reset_at timestamptz)
 RETURNS TABLE (
     snapshot_id bigint, snapshot_version integer, normalized_tag text,
-    board_position integer, trophies integer, confidence text
+    board_position integer, trophies integer, confidence text,
+    measured_coverage numeric
 )
 LANGUAGE sql STABLE SECURITY DEFINER
 AS $$
     WITH board AS (
-        SELECT snapshot.id, snapshot.version
+        SELECT snapshot.id, snapshot.version, snapshot.measured_coverage
         FROM leaderboard_snapshots AS snapshot
         WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
           AND snapshot.boundary_at = reset_at
@@ -71,34 +72,36 @@ AS $$
         LIMIT 1
     )
     SELECT board.id, board.version, player.normalized_tag, entry.position,
-           entry.trophies, entry.confidence
+           entry.trophies, entry.confidence, board.measured_coverage
     FROM board
     JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
     JOIN players AS player ON player.id = entry.player_id
     ORDER BY entry.position;
 $$;
 
--- Of these tags, the players whose own accepted profile showed trophies other
--- than 5,000 in this Season before the Reset, so they have battled this Season.
+-- Of these tags, the players with a stored Legend battle, as attacker or
+-- defender, on a Legend day of this Season before the Reset. Saved profiles
+-- do not keep their attack and defense counts, so the battles are the proof.
+-- Each side reads the Season's battles once against the few tags asked.
 CREATE FUNCTION clashlens_game_ranking_season_battlers(
-    list_tags text[], list_season_id text, list_season_start timestamptz,
-    list_reset_at timestamptz
+    list_tags text[], list_season_start timestamptz, list_reset_at timestamptz
 )
 RETURNS TABLE (normalized_tag text)
 LANGUAGE sql STABLE SECURITY DEFINER
 AS $$
-    SELECT player.normalized_tag
-    FROM players AS player
-    WHERE player.normalized_tag = ANY(list_tags)
-      AND EXISTS (
-          SELECT 1 FROM player_profile_versions AS version
-          WHERE version.player_id = player.id
-            AND version.source_contract_state = 'accepted'
-            AND version.observed_at >= list_season_start
-            AND version.observed_at < list_reset_at
-            AND version.current_league_season_id = list_season_id
-            AND version.trophies <> 5000
-      );
+    WITH wanted AS (
+        SELECT player.id, player.normalized_tag
+        FROM players AS player WHERE player.normalized_tag = ANY(list_tags)
+    )
+    SELECT wanted.normalized_tag
+    FROM wanted JOIN legend_battles AS battle ON battle.attacker_player_id = wanted.id
+    WHERE battle.ranked_day_start >= list_season_start
+      AND battle.ranked_day_start < list_reset_at
+    UNION
+    SELECT wanted.normalized_tag
+    FROM wanted JOIN legend_battles AS battle ON battle.defender_player_id = wanted.id
+    WHERE battle.ranked_day_start >= list_season_start
+      AND battle.ranked_day_start < list_reset_at;
 $$;
 
 DO $$
@@ -108,7 +111,7 @@ BEGIN
         current_schema(), current_schema()
     );
     EXECUTE format(
-        'ALTER FUNCTION %I.clashlens_game_ranking_season_battlers(text[], text, timestamptz, timestamptz) SET search_path TO pg_catalog, %I, pg_temp',
+        'ALTER FUNCTION %I.clashlens_game_ranking_season_battlers(text[], timestamptz, timestamptz) SET search_path TO pg_catalog, %I, pg_temp',
         current_schema(), current_schema()
     );
 END $$;
@@ -117,10 +120,10 @@ REVOKE ALL ON TABLE game_ranking_pulls, game_ranking_scores
 GRANT SELECT, INSERT, DELETE ON TABLE game_ranking_pulls TO clashlens_collector;
 GRANT SELECT, INSERT ON TABLE game_ranking_scores TO clashlens_collector;
 REVOKE ALL ON FUNCTION clashlens_game_ranking_board(timestamptz),
-    clashlens_game_ranking_season_battlers(text[], text, timestamptz, timestamptz)
+    clashlens_game_ranking_season_battlers(text[], timestamptz, timestamptz)
     FROM PUBLIC, clashlens_python_worker, clashlens_python_api, clashlens_collector;
 GRANT EXECUTE ON FUNCTION clashlens_game_ranking_board(timestamptz),
-    clashlens_game_ranking_season_battlers(text[], text, timestamptz, timestamptz)
+    clashlens_game_ranking_season_battlers(text[], timestamptz, timestamptz)
     TO clashlens_collector;
 
 INSERT INTO clash_lens_schema_migrations(version) VALUES (99)

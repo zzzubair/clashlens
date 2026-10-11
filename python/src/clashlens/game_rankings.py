@@ -104,9 +104,9 @@ def read_countries(body: bytes) -> list[tuple[int, str]]:
 
 
 def switched(rows: list[Row], reference: list[Row]) -> bool:
-    """Whether ``rows`` hold a newer Reset's ranks than ``reference``."""
-    before = {row.tag: row.previous_rank for row in reference}
-    common = [row for row in rows if row.tag in before]
+    """Whether ``rows`` hold a newer Reset's ranks than ``reference``; unknown ranks are no evidence."""
+    before = {row.tag: row.previous_rank for row in reference if row.previous_rank}
+    common = [row for row in rows if row.previous_rank and row.tag in before]
     changed = sum(row.previous_rank != before[row.tag] for row in common)
     return bool(common) and changed >= SWITCHED_SHARE * len(common)
 
@@ -129,7 +129,8 @@ def score(
     """Score one board, ``{tag: (position, trophies, confidence)}``, against the pulls.
 
     ``stuck`` are the game's stuck 5,000 rows; they and tags in two country
-    lists are left out of every number and listed instead.
+    lists are left out of every number and listed instead. Rank comparisons
+    still use the published positions and trophies of the whole board.
     """
     value = {tag: entry[1] for tag, entry in board.items()}
     position = {tag: entry[0] for tag, entry in board.items()}
@@ -175,7 +176,8 @@ def score(
         same = bisect_right(ordered, value[row.tag]) - bisect_left(ordered, value[row.tag])
         inside += above < row.previous_rank <= above + same
         exact += position[row.tag] == row.previous_rank
-    uncertain = len(board) - len(confirmed)
+    counted = board.keys() - faults
+    uncertain = len(counted - confirmed)
     return {
         "s1_country_order_breaks_per_100k": round(1e5 * breaks / pairs, 1) if pairs else None,
         "country_pairs": pairs,
@@ -188,9 +190,9 @@ def score(
         "s4_tags": missing_active,
         "s5_legend_i_on_board_percent": _percent(len(legend_i & board.keys()), len(legend_i)),
         "legend_i_in_country_lists": len(legend_i),
-        "s6_uncertain_percent": _percent(uncertain, len(board)),
+        "s6_uncertain_percent": _percent(uncertain, len(counted)),
         "uncertain_entries": uncertain,
-        "board_entries": len(board),
+        "board_entries": len(counted),
         "global_exact_rank": exact,
         "tied_pairs": tied,
         "tie_order_agreement_percent": _percent(tie_agree, tied),
@@ -258,11 +260,30 @@ def save_pull(
     failure: str | None,
     *,
     discover: list[Row] = (),
-) -> int:
-    """Save one pull and hand its untracked Legend I players to discovery; returns how many were added."""
+) -> tuple[int, str | None]:
+    """Save one pull and hand its untracked Legend I players to discovery.
+
+    Returns how many were added and the pull's failure: a pull with a player
+    another job holds is saved as failed, so it is tried again.
+    """
     body = None if response is None else response.body
     added = 0
     with database._connection() as connection, connection.transaction():
+        tags = sorted({row.tag for row in discover if row.legend_i})
+        tracked = {
+            str(tag) for (tag,) in connection.execute(
+                "SELECT normalized_tag FROM players WHERE normalized_tag = ANY(%s) AND active",
+                (tags,),
+            )
+        }
+        for tag in tags:
+            if tag not in tracked:
+                handed, new = connection.execute(
+                    "SELECT handed, added FROM clashlens_queue_promoted_player(%s)", (tag,)
+                ).fetchone()
+                added += new
+                if not handed:
+                    failure = failure or "discovery_not_handed"
         connection.execute(
             """
             INSERT INTO game_ranking_pulls (
@@ -284,19 +305,7 @@ def save_pull(
                 None if body is None else gzip.compress(body, mtime=0),
             ),
         )
-        tags = sorted({row.tag for row in discover if row.legend_i})
-        tracked = {
-            str(tag) for (tag,) in connection.execute(
-                "SELECT normalized_tag FROM players WHERE normalized_tag = ANY(%s) AND active",
-                (tags,),
-            )
-        }
-        for tag in tags:
-            if tag not in tracked:
-                added += connection.execute(
-                    "SELECT added FROM clashlens_queue_promoted_player(%s)", (tag,)
-                ).fetchone()[0]
-    return added
+    return added, failure
 
 
 def _prune(database: CollectorDatabase, now: datetime) -> int:
@@ -343,18 +352,18 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
         reasons.append(f"countries_missing:{len(expected) - len(countries)}")
     board = {str(row[2]): (int(row[3]), int(row[4]), str(row[5])) for row in board_rows}
     # A stuck 5,000 row: the list shows 5,000 trophies and 0 attack wins for a
-    # player whose own profile showed other trophies earlier this Season.
+    # player with a stored Legend battle, attack or defense, earlier this Season.
     at_5000 = sorted({row.tag for rows in countries.values() for row in rows
                       if row.legend_i and row.trophies == 5000 and row.attack_wins == 0})
-    day = ranked_day_for(boundary)
     with database._connection() as connection:
         stuck = {str(tag) for (tag,) in connection.execute(
-            "SELECT * FROM clashlens_game_ranking_season_battlers(%s, %s, %s, %s)",
-            (at_5000, day.official_season_id, day.season_start, boundary),
+            "SELECT * FROM clashlens_game_ranking_season_battlers(%s, %s, %s)",
+            (at_5000, ranked_day_for(boundary).season_start, boundary),
         )}
     country_times = [pull.requested_at for pull in pulls if pull.purpose == "country"]
     result = {
         "unknown_reasons": reasons,
+        "board_measured_coverage": float(board_rows[0][6]),
         "global_early_at": None if early is None else _utc(early.requested_at),
         "global_reset_at": None if reset is None else _utc(reset.requested_at),
         "countries_expected": len(expected),
@@ -389,7 +398,7 @@ def _days_to_score(database: CollectorDatabase, now: datetime) -> list[datetime]
         first = connection.execute("SELECT min(boundary_at) FROM game_ranking_pulls").fetchone()[0]
     if first is None:
         return []
-    days = [reset_at(now) - _DAY * back for back in range(KEEP_PULLS // _DAY)]
+    days = [reset_at(now) - _DAY * back for back in range(KEEP_PULLS // _DAY + 1)]
     return [day for day in days if day >= first and now >= day + SCORE_FROM]
 
 
@@ -445,10 +454,11 @@ async def pull_due(collector: Collector, puller: _Puller) -> Counter[str]:
         rows = None if failure or target is None else read_rows(response.body)
         if judge is not None and rows is not None and judge(rows):
             purpose = "global_reset"
-        counts["added_to_discovery"] += await collector._database_call(
+        added, failure = await collector._database_call(
             save_pull, database, boundary, purpose, location, requested_at, response, failure,
             discover=rows if purpose == "country" and rows else [],
         )
+        counts["added_to_discovery"] += added
         counts[purpose if failure is None else "failed"] += 1
         pulls.append(Pull(purpose, None if location is None else location[0], requested_at,
                           failure, None if response is None else response.body))

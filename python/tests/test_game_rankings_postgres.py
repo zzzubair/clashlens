@@ -146,7 +146,7 @@ def _seed(info: str) -> None:
                 snapshot_kind, boundary_at, version, ordering_rule_version,
                 freshness_rule_version, state, measured_coverage,
                 stale_entry_count, published_at
-            ) VALUES ('frozen', %s, 3, 'test', 'test', 'published', 1, 0, %s)
+            ) VALUES ('frozen', %s, 3, 'test', 'test', 'published', 0.6, 0, %s)
             RETURNING id
             """,
             (RESET, RESET + timedelta(hours=1)),
@@ -174,20 +174,20 @@ def _seed(info: str) -> None:
             """,
             (RESET, RESET, snapshot, superseded),
         )
-        # #2LL's and #2VV's own profiles showed other trophies this Season.
-        for tag, trophies in (("#2LL", 5180), ("#2VV", 5060)):
+        # Stored battles this Season: #2LL attacked; #2VV defended, so the
+        # balanced loss left them at 5,000. Untracked #2CC's was last Season.
+        ids["#2CC"] = connection.execute(
+            "INSERT INTO players (normalized_tag, active) VALUES ('#2CC', false) RETURNING id"
+        ).fetchone()[0]
+        for day, attacker, defender in (
+            (RESET - timedelta(days=1), "#2LL", "#2PP"),
+            (RESET - timedelta(days=2), "#2QQ", "#2VV"),
+            (ranked_day_for(RESET).season_start - timedelta(days=1), "#2CC", "#2PP"),
+        ):
             connection.execute(
-                """
-                INSERT INTO player_profile_versions (
-                    player_id, observation_id, normalized_tag, endpoint_version,
-                    schema_version, parser_version, observed_at, source_http_status,
-                    name, trophies, league_tier_id, league_tier_name,
-                    eligibility_state, current_league_season_id, profile_json
-                ) VALUES (%s, %s, %s, 'profile-v1', 'profile-schema-v1', %s, %s, 200,
-                          'Player', %s, 105000036, 'Legend I', 'eligible', %s, '{}'::jsonb)
-                """,
-                (ids[tag], observation, tag, f"test-{tag}", RESET - timedelta(hours=1),
-                 trophies, ranked_day_for(RESET).official_season_id),
+                "INSERT INTO legend_battles (ranked_day_start, attacker_player_id,"
+                " defender_player_id) VALUES (%s, %s, %s)",
+                (day, ids[attacker], ids[defender]),
             )
         for tag, position, trophies, confidence in BOARD:
             connection.execute(
@@ -288,8 +288,8 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
         assert later == Counter()
         assert len(_Game.asked) == 6
 
-        # First scored 4 days later, as after a collector outage.
-        printed = _printed_score(info, capsys, timedelta(days=4, hours=2, minutes=1))
+        # First scored 28 days later, the last day its lists are kept.
+        printed = _printed_score(info, capsys, timedelta(days=28, hours=2, minutes=1))
         with psycopg.connect(info) as connection:
             due = connection.execute(
                 "SELECT normalized_tag FROM players"
@@ -323,7 +323,9 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     assert printed["s3_confirmed_entries_contradicted"] == 2
     assert printed["s4_active_legend_i_missing"] == 1 and printed["s4_tags"] == ["#2RR"]
     assert printed["s5_legend_i_on_board_percent"] == 66.67
-    assert printed["s6_uncertain_percent"] == 16.67
+    # One uncertain entry among the four left once the faults are out.
+    assert (printed["s6_uncertain_percent"], printed["board_entries"]) == (25.0, 4)
+    assert printed["board_measured_coverage"] == 0.6
     assert printed["early_trophies_equal"] == 3
     assert printed["game_faults"] == {
         "stuck_5000": ["#2LL", "#2VV"], "tag_in_two_countries": [],
@@ -342,10 +344,13 @@ def test_a_list_never_seen_to_switch_leaves_the_day_unknown(
     }
     with domain_database(database_url) as info, _game(answers) as origin:
         _seed(info)
-        # The first day collected: every list until 06:00 holds yesterday's ranks.
-        _day(info, origin, tmp_path, [timedelta(seconds=40)] + [
-            timedelta(minutes=minute) for minute in (3, 20, 59, 60)
-        ])
+        _day(info, origin, tmp_path, [timedelta(seconds=40)])
+        # The first day collected: until 06:00 the list holds yesterday's ranks,
+        # except two that turn unknown, which is no switch.
+        answers["/v1/locations/global/rankings/players"] = (
+            200, _global({**YESTERDAY_RANKS, "#2PP": 0, "#2QQ": 0}),
+        )
+        _day(info, origin, tmp_path, [timedelta(minutes=minute) for minute in (3, 20, 59, 60)])
         printed = _printed_score(info, capsys)
     # The early pull and polls at 05:03, 05:20 and 05:59; no country list.
     assert [path.split("?")[0] for path in _Game.asked] == [
@@ -371,12 +376,25 @@ def test_a_failed_country_pull_makes_the_day_unknown(
         _day(info, origin, tmp_path, [timedelta(seconds=40)])
         # The first day collected switches against its own early pull.
         answers["/v1/locations/global/rankings/players"] = (200, _global(TODAY_RANKS))
-        _day(info, origin, tmp_path, [timedelta(minutes=minute) for minute in (3, 4, 5.5)])
+        # At 05:03 another job holds #2RR's record, so France's pull can't
+        # hand #2RR on to discovery and is tried again 2 minutes later.
+        with psycopg.connect(info) as holder:
+            holder.execute("INSERT INTO players (normalized_tag, active) VALUES ('#2RR', false)")
+            holder.commit()
+            holder.execute("SELECT 1 FROM players WHERE normalized_tag = '#2RR' FOR UPDATE")
+            _day(info, origin, tmp_path, [timedelta(minutes=3)])
+        _day(info, origin, tmp_path, [timedelta(minutes=minute) for minute in (4, 5.5)])
         printed = _printed_score(info, capsys)
+        with psycopg.connect(info) as connection:
+            [(rr_due,)] = connection.execute(
+                "SELECT eligibility_due_at IS NOT NULL FROM players WHERE normalized_tag = '#2RR'"
+            ).fetchall()
     paths = Counter(path.split("?")[0] for path in _Game.asked)
-    # The early pull, then switched at 05:03; the US list tried then and again 2 minutes later.
+    # The early pull, then switched at 05:03; each country tried then and 2 minutes later.
     assert paths["/v1/locations/global/rankings/players"] == 2
+    assert paths["/v1/locations/32000087/rankings/players"] == 2
     assert paths["/v1/locations/32000249/rankings/players"] == 2
+    assert rr_due
     assert printed["status"] == "unknown"
     assert printed["unknown_reasons"] == ["countries_missing:1"]
     assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 1)
