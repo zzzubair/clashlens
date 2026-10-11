@@ -1319,10 +1319,10 @@ def _unplayed(
     the player's first Legend battle of the Season of the Legend day starting
     at ``boundary_at``: it can show a player who has not played yet
     (``analytics.unplayed_profile_sql``), no battle of that Season was fought
-    before it, and no accepted profile naming that Season, or read in Legend
-    I during the ended day, showed another total before it. The game also
-    sends Season 0 to players already signed up, so a profile naming Season 0
-    decides nothing more here."""
+    before it, and no accepted profile naming that Season, or, when it names
+    another real Season, read in Legend I during the ended day, showed
+    another total before it. The game also sends Season 0 to players already
+    signed up, so a profile naming Season 0 decides nothing more here."""
     if profile_id is None or read_at is None:
         return False
     day = ranked_day_for(boundary_at)
@@ -1338,11 +1338,15 @@ def _unplayed(
               ON effect.profile_version_id = profile.id
             WHERE profile.player_id = %(player)s
               AND (profile.current_league_season_id = %(season)s
-                   -- At a Season's opening Reset, a 5,000 after a Legend I
-                   -- day at another total may still be the old Season's.
+                   -- At a Season's opening Reset, a 5,000 naming the old
+                   -- Season after a Legend I day at another total may
+                   -- still be the old Season's.
                    OR profile.eligibility_state = 'eligible'
                    AND COALESCE(effect.observed_at, profile.observed_at)
-                       >= %(ended_day)s)
+                       >= %(ended_day)s
+                   AND (SELECT reading.current_league_season_id
+                        FROM player_profile_versions AS reading
+                        WHERE reading.id = %(profile)s) NOT IN ('0', %(season)s))
               AND profile.source_contract_state = 'accepted'
               AND profile.trophies <> %(start)s
               AND COALESCE(effect.observed_at, profile.observed_at) < %(before)s

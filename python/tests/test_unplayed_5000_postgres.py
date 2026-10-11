@@ -270,6 +270,28 @@ def test_unplayed_players_rank_at_5000_until_their_first_battle(
         assert shown[tag, day.isoformat()] == (0, 0, 5000, 0, "Complete", [])
 
 
+def test_season_zero_after_a_higher_season_end_starts_at_5000(
+    database_url: str, archive_server
+) -> None:
+    # Legend I at 6,400 on the previous Season's last day, then Season 0 at
+    # 5,000 with no battle from the opening Reset on.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        for boundary, profile in (
+            (DAY_0, _profile(6400, UNPLAYED)),
+            (DAY_1, _season_zero(UNPLAYED)),
+            (DAY_2, _season_zero(UNPLAYED)),
+            (DAY_3, _season_zero(UNPLAYED)),
+        ):
+            _run(connection_info, archive_server, _sweep(
+                connection_info, archive_server, boundary, {UNPLAYED: (profile, _log())},
+            ))
+        with psycopg.connect(connection_info) as connection:
+            days = _days(connection)
+
+    for day in (DAY_1, DAY_2):
+        assert days[UNPLAYED, day][:4] == (0, 0, 5000, 5000)
+
+
 def test_the_season_repair_brings_days_and_boards_saved_before_the_rule(
     database_url: str, archive_server, monkeypatch
 ) -> None:
