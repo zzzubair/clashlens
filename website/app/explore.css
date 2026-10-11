@@ -1276,12 +1276,9 @@
     padding-right: 0.75rem;
   }
 
-  /* No room beside the trophies on phones, so the Tie pill sits under them. */
-  .tie-slot {
-    display: block;
-    width: auto;
-    margin: 0.15rem 0 0;
-    text-align: right;
+  /* Long player tags wrap so the Tie slot still fits beside the trophies. */
+  .leaderboard-table .player-tag {
+    overflow-wrap: anywhere;
   }
 
   .leaderboard-table th,
