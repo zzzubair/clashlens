@@ -8,12 +8,12 @@ read too early, so the evidence queues one more. From 16:41 on 9 Oct 2026, 21,08
 rechecks in 39 minutes were for 3,782 player days. A recheck of every active
 player's last two ended days twice a day catches anything else, in the same
 lane: about 25,000 at once at backfill priority held Season repair and the
-Reset's day-end recalculations back for 6 to 7 hours a day (10 Oct 2026). The
-lane takes the earliest due first, so each pass is queued in full with due
-times spread evenly over ``RECHECK_SPREAD`` and each created when due, and
-a recheck for new evidence waits behind only the daily ones that came due
-before it, not the whole pass. Evidence merges only into a recheck already
-due; one not yet due still runs later."""
+Reset's day-end recalculations back for 6 to 7 hours a day (10 Oct 2026). So
+each pass is queued in full with due times spread evenly over
+``RECHECK_SPREAD`` and each created when due, and in the lane a recheck for
+new evidence goes before it (``background_pacing``). Evidence merges only
+into a recheck already due, which then goes first as evidence; one not yet
+due still runs later."""
 
 from __future__ import annotations
 
@@ -65,20 +65,26 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
                jobs: tuple[str, str] = _WORKER_JOBS, **params: Any) -> None:
     """Queue a recheck of ``day_start`` unless one has not started. That one
     stays locked until this transaction ends, so no worker starts it before
-    this evidence is saved; one a worker is starting is skipped, so this
-    evidence queues the next. Two saves committing at once can each queue
-    one; both run."""
+    this evidence is saved, and one from the twice-daily pass takes this
+    evidence's trigger, so it goes first as evidence does; one a worker is
+    starting is skipped, so this evidence queues the next. Two saves
+    committing at once can each queue one; both run."""
     day, (relation, state) = _day_text(day_start), jobs
     connection.execute(
         f"""
         WITH waiting AS MATERIALIZED (
-            SELECT FROM {relation} AS job
+            SELECT job.id FROM {relation} AS job
             WHERE job.work_type = 'reconcile_ranked_day' AND job.{state} = 'pending'
               AND job.priority = {DAY_RECHECK_PRIORITY}
               AND job.due_at <= clock_timestamp()
               AND job.input_json ->> 'player_id' = %(player)s
               AND job.input_json ->> 'ranked_day_start' = %(day)s
-            LIMIT 1 FOR SHARE SKIP LOCKED)
+            LIMIT 1 FOR UPDATE SKIP LOCKED),
+        upgraded AS (
+            UPDATE {relation} AS job
+            SET input_json = job.input_json || jsonb_build_object('trigger', %(trigger)s::text)
+            FROM waiting WHERE job.id = waiting.id
+              AND job.input_json ->> 'trigger' = 'recheck' AND {only_if})
         INSERT INTO {relation} (observation_id, work_type,
             deduplication_key, input_json, {state}, due_at, parser_version,
             processing_version, domain_rule_version, analytics_rule_version, priority)
@@ -88,7 +94,7 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
         WHERE NOT EXISTS (SELECT FROM waiting) AND {only_if}
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
-        {**_VERSIONS, **params, "player": str(player_id), "day": day,
+        {**_VERSIONS, **params, "player": str(player_id), "day": day, "trigger": trigger,
          "key": f"{key}:{day}", "input": Jsonb({
              "player_id": int(player_id), "ranked_day_start": day, "trigger": trigger})},
     )
@@ -198,8 +204,7 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> int:
     """Queue each active player's saved days ending at ``boundary`` and the
     Reset before, once per ``slot``, unless already waiting, due evenly over
     ``RECHECK_SPREAD`` from now; count them. Each is created when it falls
-    due, as the claim ranks a lane's jobs by time since creation: a recheck
-    for evidence that came due earlier goes first."""
+    due, so the backlog metrics count it from then."""
     with database.pool.connection() as connection, connection.transaction():
         return connection.execute(
             """

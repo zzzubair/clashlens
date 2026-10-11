@@ -584,15 +584,21 @@ active player's last two ended days are also queued twice a day in the same
 lane, once the day-end recheck has finished and from 23:00 UTC, never from
 04:00 to 07:00 UTC, skipping days already waiting: about 26,000 jobs each
 time at 13,000 players, and evidence for such a day merges into its waiting
-job only once that job is due. Each pass is queued in full, in one
+job only once that job is due, which then counts as a recheck for evidence.
+Each pass is queued in full, in one
 statement, so a Reset or restart drops none; its jobs are due evenly over 4
-hours, each with that due time as its creation time, as the lane takes the
-longest waiting first: a recheck for new evidence waits behind only the
-daily rechecks that came due before it, not all of them, which four at a
-time at about 130 a minute would take about 3 hours. Outside the claim, job
-creation times are read only by the backlog metrics, which count a job from
-the later of its creation and due time. The worker logs each run's count as
-`daily_recheck`. Before
+hours, each with that due time as its creation time. In the lane a recheck
+for new evidence goes before every due daily recheck, which fill only what
+evidence leaves, in the order they came due (migration 0100). From 11:30 to
+16:50 UTC on 2026-10-11, with daily rechecks taken in the order they came
+due, evidence waited behind every one due before it: 55 minutes to 2 hours on
+average, against 1 to 15 minutes on 2026-10-10, as the pass added about 105
+jobs a minute to 50 to 90 for evidence and the lane finished 140 to 230.
+The order changes only which job waits, not how many the lane finishes, so a
+pass still ends when the lane's backlog clears. Outside the
+claim, job creation times are read only by the backlog metrics, which count
+a job from the later of its creation and due time. The worker logs each
+run's count as `daily_recheck`. Before
 October 2026 a player switched off during a day, such as the 2,037 moved out
 of Legend I when the 2026-10-05 Season started, got no Reset reading, so their
 day stayed `Live`; finish those with this command.

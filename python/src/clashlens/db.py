@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from psycopg_pool import ConnectionPool
 
+from . import background_pacing
 from .background_pacing import DAY_RECHECK_PRIORITY, background_lanes
 from .operating import database_pool_health
 from .past_reset_pacing import (
@@ -491,6 +492,7 @@ def _claim_select_statement(
     score = f"""{first}CASE WHEN job.priority IN ({_BACKGROUND})
         THEN 0 ELSE 1 END,
         CASE WHEN job.priority = {PYTHON_RESET_PRIORITY} THEN job.priority
+        WHEN {background_pacing.RECHECK_PASS} THEN job.priority - 1
         ELSE job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
         / 60)::integer * 10 END"""
     dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
@@ -507,9 +509,7 @@ def _claim_select_statement(
                         SELECT job.id, job.due_at, job.created_at
                         FROM {jobs_relation} AS job
                         LEFT JOIN collector_observations AS source_observation
-                            ON source_observation.id = COALESCE(
-                                job.observation_id, job.replay_observation_id
-                            )
+                            ON source_observation.id = COALESCE(job.observation_id, job.replay_observation_id)
                         WHERE {state}
                           AND job.priority = claim_priority.priority
                           AND job.due_at <= statement_timestamp()
@@ -523,28 +523,27 @@ def _claim_select_statement(
     retried_probe = state_probe("job.state IN ('pending', 'waiting_retry') AND job.attempt_count > 0",
                                 ordinary_job_filter, "job.created_at")
 
-    def other_priorities(state: str, job_filter: str) -> str:
-        return "" if backfill else "".join(f"""
-                UNION ALL
+    def other_priorities(state: str, job_filter: str, classes: Collection[str] = () if backfill
+                         else _PYTHON_OTHER_CLAIM_PRIORITIES, union: str = "UNION ALL") -> str:
+        return "".join(f"""
+                {union}
                 (
                     SELECT job.id
                     FROM {jobs_relation} AS job
                     LEFT JOIN collector_observations AS source_observation
-                        ON source_observation.id = COALESCE(
-                            job.observation_id, job.replay_observation_id
-                        )
+                        ON source_observation.id = COALESCE(job.observation_id, job.replay_observation_id)
                     WHERE {state}
                       AND {priority}
                       AND job.due_at <= statement_timestamp()
                       AND {job_filter}
                     ORDER BY job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
-                )""" for priority in _PYTHON_OTHER_CLAIM_PRIORITIES)
+                )""" for priority in classes)
 
-    unknown_dependency_probe = (
-        other_priorities("job.state = 'waiting_dependency'", supported_filter)
-        if supports_dependency else ""
-    )
+    unknown_dependency_probe = other_priorities(
+        "job.state = 'waiting_dependency'", supported_filter) if supports_dependency else ""
+    evidence_probe = other_priorities("job.state IN ('pending', 'waiting_retry')", ordinary_job_filter, [
+        background_pacing.EVIDENCE_RECHECK] if DAY_RECHECK_PRIORITY in (backfill or ()) else [], "UNION")
     if job_ids is not None:
         probe = f"""
             SELECT job.id
@@ -582,6 +581,7 @@ def _claim_select_statement(
                     SELECT retried.id FROM {retried_probe} AS retried
                 ) AS claim_id
                 {other_priorities("job.state IN ('pending', 'waiting_retry')", ordinary_job_filter)}
+                {evidence_probe}
                 {unknown_dependency_probe}
                 UNION ALL
                 (

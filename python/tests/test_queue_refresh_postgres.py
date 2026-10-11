@@ -582,36 +582,110 @@ def test_evidence_merges_only_into_a_daily_recheck_already_due(
     ]
 
 
-def test_an_evidence_recheck_due_before_a_daily_one_is_claimed_first(
+def test_an_evidence_recheck_goes_before_the_daily_pass_due_before_it(
     database_url: str, archive_server
 ) -> None:
-    # The claim ranks a lane's jobs by time since creation, so a daily pass
-    # created at once but due over hours must not rank a recheck that came
-    # due later ahead of evidence that came due before it.
+    # From 11:30 to 16:50 UTC on 11 Oct 2026 evidence waited 55 minutes to
+    # 2 hours behind pass rechecks due before it. The pass fills what evidence
+    # leaves, however many of its rechecks came due first, then goes in the
+    # order they came due.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
         try:
             queue_refresh.queue_recheck(database, "night", DAY_D)
             with psycopg.connect(connection_info) as connection:
+                # The rest of the pass: more than a claim looks at in order.
+                connection.execute(
+                    "INSERT INTO python_processing_jobs (work_type, deduplication_key,"
+                    " input_json, status, due_at, created_at, parser_version, processing_version,"
+                    " domain_rule_version, analytics_rule_version, priority)"
+                    " SELECT work_type, deduplication_key || ':' || other, input_json"
+                    " || jsonb_build_object('player_id', other), status, due_at, created_at,"
+                    " parser_version, processing_version, domain_rule_version,"
+                    " analytics_rule_version, priority FROM python_processing_jobs,"
+                    " generate_series(1000, 1039) AS other"
+                    " WHERE deduplication_key LIKE 'reconcile:recheck:%'"
+                )
+                # Evidence before any of the pass is due merges into none of it.
+                connection.execute(
+                    "UPDATE python_processing_jobs SET due_at = now() + interval '1 hour'"
+                    " WHERE deduplication_key LIKE 'reconcile:recheck:%'"
+                )
                 queue_refresh.queue_for_reading(
                     connection, player_id, "log:1", DAY_C + timedelta(hours=1))
-                for key, back in (("reconcile:recheck:%", 3), ("reconcile:log:%", 2)):
-                    connection.execute(
-                        "UPDATE python_processing_jobs SET due_at = due_at - %(back)s,"
-                        " created_at = created_at - %(back)s WHERE deduplication_key LIKE %(key)s",
-                        {"back": timedelta(hours=back), "key": key},
-                    )
-            claimed = [claim.deduplication_key for _ in range(3)
+                # The pass came due a second apart from 3 hours ago, the
+                # evidence an hour ago, after all of it.
+                connection.execute(
+                    "UPDATE python_processing_jobs AS job SET due_at = due.at, created_at = due.at"
+                    " FROM (SELECT id, now() - interval '3 hours' + interval '1 second'"
+                    " * row_number() OVER (ORDER BY id DESC) AS at FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:recheck:%'"
+                    " UNION ALL SELECT id, now() - interval '1 hour' FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:log:%') AS due WHERE job.id = due.id"
+                )
+                pass_order = [key for (key,) in connection.execute(
+                    "SELECT deduplication_key FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:recheck:%' ORDER BY due_at, id"
+                )]
+            claimed = [claim.deduplication_key for _ in range(4)
                        for claim in database.claim_jobs(
                            owner="worker-1", work_types=["reconcile_ranked_day"])]
         finally:
             database.close()
 
-    day_b, day_c = (f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C))
-    assert claimed == [f"reconcile:recheck:night:{player_id}:{day_b}",
-                       f"reconcile:log:1:{player_id}:{day_c}",
-                       f"reconcile:recheck:night:{player_id}:{day_c}"]
+    assert len(pass_order) == 82
+    assert set(claimed[:2]) == {f"reconcile:log:1:{player_id}:{day:%Y-%m-%dT%H:%M:%SZ}"
+                                for day in (DAY_B, DAY_C)}
+    assert claimed[2:] == pass_order[:2]
+
+
+def test_evidence_merged_into_a_due_daily_recheck_goes_before_the_pass(
+    database_url: str, archive_server
+) -> None:
+    # Evidence for a day whose pass recheck is already due, behind 80 others
+    # due before it, adds no job: that recheck runs as one for evidence.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        database = Database(connection_info)
+        try:
+            queue_refresh.queue_recheck(database, "night", DAY_D)
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "INSERT INTO python_processing_jobs (work_type, deduplication_key,"
+                    " input_json, status, due_at, created_at, parser_version, processing_version,"
+                    " domain_rule_version, analytics_rule_version, priority)"
+                    " SELECT work_type, deduplication_key || ':' || other, input_json"
+                    " || jsonb_build_object('player_id', other), status, due_at, created_at,"
+                    " parser_version, processing_version, domain_rule_version,"
+                    " analytics_rule_version, priority FROM python_processing_jobs,"
+                    " generate_series(1000, 1039) AS other"
+                    " WHERE deduplication_key LIKE 'reconcile:recheck:%'"
+                )
+                connection.execute(
+                    "UPDATE python_processing_jobs AS job SET due_at = due.at, created_at = due.at"
+                    " FROM (SELECT id, now() - interval '3 hours' + interval '1 second'"
+                    " * row_number() OVER (ORDER BY id DESC) AS at FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:recheck:%') AS due"
+                    " WHERE job.id = due.id"
+                )
+                pass_order = [key for (key,) in connection.execute(
+                    "SELECT deduplication_key FROM python_processing_jobs"
+                    " WHERE deduplication_key LIKE 'reconcile:recheck:%' ORDER BY due_at, id"
+                )]
+                queue_refresh.queue_for_reading(
+                    connection, player_id, "log:1", DAY_C + timedelta(hours=1))
+            claimed = [claim.deduplication_key for _ in range(4)
+                       for claim in database.claim_jobs(
+                           owner="worker-1", work_types=["reconcile_ranked_day"])]
+        finally:
+            database.close()
+
+    merged = {f"reconcile:recheck:night:{player_id}:{day:%Y-%m-%dT%H:%M:%SZ}"
+              for day in (DAY_B, DAY_C)}
+    assert set(pass_order[-2:]) == merged
+    assert set(claimed[:2]) == merged
+    assert claimed[2:] == pass_order[:2]
 
 
 def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -> None:

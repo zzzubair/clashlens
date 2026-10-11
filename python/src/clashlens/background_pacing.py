@@ -13,7 +13,13 @@ A day's recheck after new evidence, or in the twice-daily recheck
 (``queue_refresh``), is background work in its own lane, at
 ``DAY_RECHECK_PRIORITY``, with its own limit: from 16:41 on 9 Oct 2026 about
 530 a minute were queued, two at a time finished about 350, and Season
-repair would have waited behind them, or they behind it.
+repair would have waited behind them, or they behind it. In that lane a
+recheck for evidence goes before the twice-daily pass, which fills what
+evidence leaves: from 11:30 to 16:50 on 11 Oct 2026, with the pass taken
+in the order it came due, evidence waited 55 minutes to 2 hours on average
+behind pass rechecks due before it, against 1 to 15 minutes the day before.
+The claim finds evidence through its own index (migration 0100), however
+many pass rechecks came due first.
 
 Both limits are settings, so more can run while live work keeps up, and each
 halves, rounded up, as soon as live work strains: live jobs waiting
@@ -56,6 +62,12 @@ PERMIT_WAIT = "500ms"
 BACKGROUND_JOB_LIMIT = int(os.environ.get("CLASHLENS_BACKGROUND_JOB_LIMIT", "2"))
 DAY_RECHECK_PRIORITY = 26
 DAY_RECHECK_JOB_LIMIT = int(os.environ.get("CLASHLENS_DAY_RECHECK_JOB_LIMIT", "4"))
+# Claim alias ``job``: a recheck in the twice-daily pass, which ranks below
+# evidence, and one for evidence, written exactly as migration 0100's index
+# condition. Its claim probe overlaps the lane's, so an id found twice counts once.
+RECHECK_PASS = f"job.priority = {DAY_RECHECK_PRIORITY} AND job.input_json ->> 'trigger' = 'recheck'"
+EVIDENCE_RECHECK = (f"job.priority = {DAY_RECHECK_PRIORITY}"
+                    " AND job.input_json ->> 'trigger' IS DISTINCT FROM 'recheck'")
 # No background job starts while enough live responses and daily results have
 # been due this long, well before the website's delayed-updates notice at 15 minutes.
 LIVE_LAG_PAUSE_SECONDS = 120
