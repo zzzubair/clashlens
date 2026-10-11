@@ -12,7 +12,8 @@ Reset's day-end recalculations back for 6 to 7 hours a day (10 Oct 2026). So
 each pass is queued in full with due times spread evenly over
 ``RECHECK_SPREAD`` and each created when due, and in the lane a recheck for
 new evidence goes before it (``background_pacing``). Evidence merges only
-into a recheck already due; one not yet due still runs later."""
+into a recheck already due, which then goes first as evidence; one not yet
+due still runs later."""
 
 from __future__ import annotations
 
@@ -64,20 +65,26 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
                jobs: tuple[str, str] = _WORKER_JOBS, **params: Any) -> None:
     """Queue a recheck of ``day_start`` unless one has not started. That one
     stays locked until this transaction ends, so no worker starts it before
-    this evidence is saved; one a worker is starting is skipped, so this
-    evidence queues the next. Two saves committing at once can each queue
-    one; both run."""
+    this evidence is saved, and one from the twice-daily pass takes this
+    evidence's trigger, so it goes first as evidence does; one a worker is
+    starting is skipped, so this evidence queues the next. Two saves
+    committing at once can each queue one; both run."""
     day, (relation, state) = _day_text(day_start), jobs
     connection.execute(
         f"""
         WITH waiting AS MATERIALIZED (
-            SELECT FROM {relation} AS job
+            SELECT job.id FROM {relation} AS job
             WHERE job.work_type = 'reconcile_ranked_day' AND job.{state} = 'pending'
               AND job.priority = {DAY_RECHECK_PRIORITY}
               AND job.due_at <= clock_timestamp()
               AND job.input_json ->> 'player_id' = %(player)s
               AND job.input_json ->> 'ranked_day_start' = %(day)s
-            LIMIT 1 FOR SHARE SKIP LOCKED)
+            LIMIT 1 FOR UPDATE SKIP LOCKED),
+        upgraded AS (
+            UPDATE {relation} AS job
+            SET input_json = job.input_json || jsonb_build_object('trigger', %(trigger)s::text)
+            FROM waiting WHERE job.id = waiting.id
+              AND job.input_json ->> 'trigger' = 'recheck' AND {only_if})
         INSERT INTO {relation} (observation_id, work_type,
             deduplication_key, input_json, {state}, due_at, parser_version,
             processing_version, domain_rule_version, analytics_rule_version, priority)
@@ -87,7 +94,7 @@ def _queue_day(connection: Any, player_id: int, day_start: datetime, key: str,
         WHERE NOT EXISTS (SELECT FROM waiting) AND {only_if}
         ON CONFLICT (deduplication_key) DO NOTHING
         """,
-        {**_VERSIONS, **params, "player": str(player_id), "day": day,
+        {**_VERSIONS, **params, "player": str(player_id), "day": day, "trigger": trigger,
          "key": f"{key}:{day}", "input": Jsonb({
              "player_id": int(player_id), "ranked_day_start": day, "trigger": trigger})},
     )

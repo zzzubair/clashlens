@@ -584,7 +584,8 @@ active player's last two ended days are also queued twice a day in the same
 lane, once the day-end recheck has finished and from 23:00 UTC, never from
 04:00 to 07:00 UTC, skipping days already waiting: about 26,000 jobs each
 time at 13,000 players, and evidence for such a day merges into its waiting
-job only once that job is due. Each pass is queued in full, in one
+job only once that job is due, which then counts as a recheck for evidence.
+Each pass is queued in full, in one
 statement, so a Reset or restart drops none; its jobs are due evenly over 4
 hours, each with that due time as its creation time. In the lane a recheck
 for new evidence goes before every due daily recheck, which fill only what
