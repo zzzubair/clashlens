@@ -26,8 +26,8 @@ how a saved day or board comes out, then run it once:
   differ from a fresh projection.
 
 With a ``scope`` from ``REPAIR_SCOPES`` it recalculates only the players a
-rule change can affect, chosen as the repair began (``_scoped_players``),
-with its own receipt, so the full repair of the same revision still
+rule change can affect, chosen when its first queue runs
+(``_scoped_players``) and kept on its own receipt, so the full repair of the same revision still
 recalculates everyone. Every other step is the full repair's.
 
 Recalculating a day that comes out the same saves nothing new.
@@ -124,25 +124,27 @@ def season_repair(
         receipt = connection.execute(
             """
             SELECT before_days, before_boards, queued_through_player_id,
-                   boards_queued_at, summaries_through_player_id, started_at
+                   boards_queued_at, summaries_through_player_id, players
             FROM season_repairs
             WHERE official_season_id = %s AND rule_revision = %s
             """,
             (season_id, revision),
         ).fetchone()
-        began = receipt[5] if receipt is not None else connection.execute(
-            "SELECT clock_timestamp()"
-        ).fetchone()[0]
-        players = _scoped_players(connection, start, began) if scope else [
-            int(row[0]) for row in connection.execute(
-                """
-                SELECT DISTINCT player_id FROM ranked_day_versions
-                WHERE ranked_day_start >= %s AND ranked_day_start < %s
-                ORDER BY player_id
-                """,
-                (start, start + SEASON_DURATION),
-            ).fetchall()
-        ]
+        if scope and receipt is not None:
+            players = [int(player) for player in receipt[5]]
+        elif scope:
+            players = _scoped_players(connection, start)
+        else:
+            players = [
+                int(row[0]) for row in connection.execute(
+                    """
+                    SELECT DISTINCT player_id FROM ranked_day_versions
+                    WHERE ranked_day_start >= %s AND ranked_day_start < %s
+                    ORDER BY player_id
+                    """,
+                    (start, start + SEASON_DURATION),
+                ).fetchall()
+            ]
         through = int(receipt[2]) if receipt is not None else 0
         report = {
             "season": season_id, "rule_revision": revision, "scope": scope,
@@ -190,11 +192,11 @@ def season_repair(
                 """
                 INSERT INTO season_repairs (
                     official_season_id, rule_revision, before_days, before_boards,
-                    started_at
+                    players
                 ) VALUES (%s, %s, %s, %s, %s)
                 """,
                 (season_id, revision, Jsonb(_day_counts(connection, start)),
-                 Jsonb(_board_counts(connection, start)), began),
+                 Jsonb(_board_counts(connection, start)), players if scope else None),
             )
     inputs = _repair_inputs(database, season_id, start, max_jobs)
     if inputs["queued"] or inputs["unfinished"] or inputs["failed"]:
@@ -249,10 +251,9 @@ def season_repair(
             "summaries_refreshed": summaries}
 
 
-def _scoped_players(connection: Any, start: datetime, began: datetime) -> list[int]:
+def _scoped_players(connection: Any, start: datetime) -> list[int]:
     """The players with saved days of the Season whose results the 11 October
-    2026 day rules can change, as saved when the repair began, so the list
-    stays the same while it runs: those whose Day 1 was saved Inconsistent,
+    2026 day rules can change: those whose Day 1 was saved Inconsistent,
     the only Day 1 results judging a Day 1 reading against the official
     Season-end total can change, and those whose newest profile shows
     Legend I at 5,000, accepted or naming Season 0 (sent before sign-up),
@@ -264,29 +265,25 @@ def _scoped_players(connection: Any, start: datetime, began: datetime) -> list[i
             WITH saved AS (
                 SELECT DISTINCT player_id FROM ranked_day_versions
                 WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
-                  AND created_at <= %(began)s
             ), played AS (
                 SELECT attacker_player_id AS player_id FROM legend_battles
                 WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
-                  AND created_at <= %(began)s
                 UNION
                 SELECT defender_player_id FROM legend_battles
                 WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
-                  AND created_at <= %(began)s
             )
             SELECT saved.player_id FROM saved
             JOIN players AS player ON player.id = saved.player_id
             WHERE (
                 SELECT day.state FROM ranked_day_versions AS day
                 WHERE day.player_id = saved.player_id
-                  AND day.ranked_day_start = %(start)s AND day.created_at <= %(began)s
+                  AND day.ranked_day_start = %(start)s
                 ORDER BY day.version DESC, day.id DESC LIMIT 1
             ) = 'Inconsistent'
                OR saved.player_id NOT IN (SELECT player_id FROM played) AND EXISTS (
                 SELECT 1 FROM (
                     SELECT * FROM player_profile_versions AS profile
                     WHERE profile.normalized_tag = player.normalized_tag
-                      AND profile.observed_at <= %(began)s
                     ORDER BY profile.observed_at DESC, profile.id DESC LIMIT 1
                 ) AS newest
                 WHERE newest.eligibility_state = 'eligible'
@@ -296,7 +293,7 @@ def _scoped_players(connection: Any, start: datetime, began: datetime) -> list[i
             )
             ORDER BY saved.player_id
             """,
-            {"start": start, "end": start + SEASON_DURATION, "began": began,
+            {"start": start, "end": start + SEASON_DURATION,
              "trophies": SEASON_START_TROPHIES},
         ).fetchall()
     ]

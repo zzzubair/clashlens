@@ -763,9 +763,13 @@ the only Day 1 results the official Season-end total check (#441) can
 change, and those whose newest profile shows Legend I at 5,000 (accepted,
 or naming Season 0 before sign-up) with no Legend battle of the Season
 saved, whose days rank at 5,000 with no battles once that rule is deployed.
-It chooses them when its first `queue` runs and keeps that list, so a
-player who plays meanwhile stays in it; `preview` shows how many
-(`players`) before anything is queued. Each chosen player's job
+If PR #451 (never-played players ranked at 5,000) has not deployed when
+this repair runs, run the scoped repair again after it deploys, so this
+group is recalculated under that rule; its new rule revision gives it a
+fresh receipt. It chooses the players when its
+first `queue` runs and saves that list on its receipt, so a player whose
+days change meanwhile stays in it; `preview` shows how many (`players`)
+before anything is queued. Each chosen player's job
 recalculates every saved day of the Season from the first, as above; the
 `inputs`, `boards` and `summaries` steps are the full repair's, except that
 summaries are stored again only for the chosen players before the check of

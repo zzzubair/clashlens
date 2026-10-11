@@ -1257,3 +1257,62 @@ def test_scoped_season_repair_recalculates_only_the_players_a_rule_change_affect
     assert {player for player, _day in calculated} == {affected}
     assert after == untouched
     assert (full["scope"], full["players"], full["left_to_queue"]) == (None, 2, 2)
+
+
+def test_scoped_season_repair_keeps_its_players_after_their_day_1_is_saved_again(
+    database_url: str,
+) -> None:
+    """A player whose Day 1 was saved Inconsistent is chosen when the scoped
+    repair first queues. A recheck then saves a newer Day 1 and the scheduled
+    compaction deletes the Inconsistent one, so choosing again would leave the
+    player out. The repair still counts that player and their unfinished job,
+    and does not move on to the boards."""
+    from test_player_season_summaries_postgres import _log, _ranked
+
+    scope = "day-1-or-unplayed"
+    with _campaign_database(database_url) as (connection_info, worker):
+        with _owner(connection_info) as connection:
+            affected, ordinary = _player(connection, "#2PP"), _player(connection, "#2QQ")
+            for player in (affected, ordinary):
+                for number, start in enumerate([START, START + DAY], start=1):
+                    version_id = _ranked(
+                        connection, player, number, start, start + DAY, season=SEASON
+                    )
+                    _log(connection, player, number, version_id, start, season=SEASON)
+            connection.execute(
+                "UPDATE ranked_day_versions SET state = 'Inconsistent',"
+                " confidence = 'uncertain'"
+                " WHERE player_id = %s AND ranked_day_start = %s",
+                (affected, START),
+            )
+
+        queued = domain_repair.season_repair(
+            worker, SEASON, "queue", max_jobs=100, scope=scope
+        )
+        with _owner(connection_info) as connection:
+            inconsistent = connection.execute(
+                "SELECT id FROM ranked_day_versions"
+                " WHERE player_id = %s AND ranked_day_start = %s",
+                (affected, START),
+            ).fetchone()[0]
+            _ranked(connection, affected, 1, START, START + DAY, season=SEASON, version=2)
+            connection.execute(
+                "DELETE FROM api_player_daily_logs WHERE ranked_day_version_id = %s",
+                (inconsistent,),
+            )
+            connection.execute(
+                "DELETE FROM ranked_day_versions WHERE id = %s", (inconsistent,)
+            )
+        with worker.pool.connection() as connection:
+            chosen_now = domain_repair._scoped_players(connection, START)
+        receipt = domain_repair.season_repair(
+            worker, SEASON, "receipt", max_jobs=100, scope=scope
+        )
+        again = domain_repair.season_repair(
+            worker, SEASON, "queue", max_jobs=100, scope=scope
+        )
+
+    assert (queued["phase"], queued["queued"]) == ("days", 1)
+    assert chosen_now == []
+    assert (receipt["players"], receipt["left_to_queue"], receipt["unfinished"]) == (1, 0, 1)
+    assert (again["phase"], again["queued"], again["unfinished"]) == ("days", 0, 1)
