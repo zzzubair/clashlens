@@ -11,6 +11,11 @@ Each Season keeps only its newest leaderboard's totals: about 10,500 rows and
 season retirement deletes its completed-day marker. A row holds the day's marker
 hash it was counted from; once a day is rebuilt the row no longer matches,
 the page reads facts instead, and the next check here counts again.
+
+A Reset's leaderboard is republished every 10-15 minutes, mostly with the same
+players in every band, and counting takes minutes. A band's totals depend only
+on its players and their facts, so totals counted for one version serve every
+version whose bands hold the same players.
 """
 
 from __future__ import annotations
@@ -39,6 +44,9 @@ _LAST_POSITION = BANDS[-1][1]
 # late in a Season, so a failed one waits before trying again.
 RETRY_SECONDS = 600
 _retry_at = float("-inf")
+# The saved board and the newest board last found to hold the same players
+# in every band; published boards never change, so they need no second look.
+_same_players: tuple[int, int] | None = None
 # Totals saved before unnamed ids counted like any other unit carry these
 # tallies and leave those ids out; they are counted again, never served.
 _CURRENT_FORMAT = (
@@ -90,6 +98,7 @@ def refresh_rank_band_totals(database: Any) -> None:
 
 
 def _refresh(database: Any) -> int | None:
+    global _same_players
     with database.pool.connection() as connection, connection.transaction():
         # One snapshot for the day markers and the facts they describe.
         connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -124,23 +133,34 @@ def _refresh(database: Any) -> int | None:
             ).fetchall()
         }
         # Totals saved before a rank band was added lack its rows.
-        saved = {
-            (int(row[0]), _text(row[1]), int(row[2]))
-            for row in connection.execute(
-                f"""
-                SELECT DISTINCT season_day_number, fact_input_hash, first_position
-                FROM army_analytics_rank_band_totals
-                WHERE snapshot_id = %s AND {_CURRENT_FORMAT}
-                """,
-                (snapshot_id,),
-            ).fetchall()
-        }
-        if saved == {
+        saved_rows = connection.execute(
+            f"""
+            SELECT DISTINCT snapshot_id, season_day_number, fact_input_hash,
+                   first_position
+            FROM army_analytics_rank_band_totals
+            WHERE official_season_id = %s AND {_CURRENT_FORMAT}
+            """,
+            (season_id,),
+        ).fetchall()
+        saved_snapshots = {int(row[0]) for row in saved_rows}
+        if {
+            (int(row[1]), _text(row[2]), int(row[3])) for row in saved_rows
+        } == {
             (day, marker, first)
             for day, (_start, marker) in days.items()
             for first, _last in BANDS
-        }:
-            return None
+        } and len(saved_snapshots) == 1:
+            saved_snapshot = saved_snapshots.pop()
+            if saved_snapshot == snapshot_id or _same_players == (
+                saved_snapshot,
+                snapshot_id,
+            ):
+                return None
+            if band_players(
+                connection, saved_snapshot, 1, _LAST_POSITION
+            ) == band_players(connection, snapshot_id, 1, _LAST_POSITION):
+                _same_players = (saved_snapshot, snapshot_id)
+                return None
         _count(connection, snapshot_id, season_id, days)
         return snapshot_id
 
@@ -151,16 +171,7 @@ def _count(
     season_id: str,
     days: dict[int, tuple[Any, str]],
 ) -> None:
-    band_by_player = {
-        int(player_id): band_of(int(position))
-        for player_id, position in connection.execute(
-            """
-            SELECT player_id, position FROM leaderboard_snapshot_entries
-            WHERE snapshot_id = %s AND position <= %s
-            """,
-            (snapshot_id, _LAST_POSITION),
-        ).fetchall()
-    }
+    band_by_player = band_players(connection, snapshot_id, 1, _LAST_POSITION)
     players = sorted(band_by_player)
     fact_filter = """
         fact.is_current AND fact.official_season_id = %s
@@ -241,12 +252,18 @@ def read_rank_band_totals(
     connection: Any,
     snapshot_id: int,
     *,
+    season_id: str,
+    band_by_player: dict[int, int],
     lens: str,
     category: str,
     population: str,
     day_markers: dict[int, str],
 ) -> tuple[dict[str, Any], str] | None:
     """Add up saved totals for a Top N or rank-band view, if all are current.
+
+    ``band_by_player`` is the view's players on ``snapshot_id`` and their
+    bands. Totals counted for another version of the board serve when the
+    view's bands hold the same players there.
 
     Returns the totals and their ``rank_band_digest``, or None when any
     selected day's totals are missing, were counted from an older build of
@@ -255,6 +272,29 @@ def read_rank_band_totals(
     bands = _bands(population)
     if bands is None:
         return None
+    saved = [
+        int(row[0])
+        for row in connection.execute(
+            """
+            SELECT DISTINCT snapshot_id FROM army_analytics_rank_band_totals
+            WHERE official_season_id = %s
+            """,
+            (season_id,),
+        ).fetchall()
+    ]
+    if snapshot_id not in saved:
+        last = next(last for first, last in BANDS if first == bands[-1])
+        snapshot_id = next(
+            (
+                candidate
+                for candidate in saved
+                if band_players(connection, candidate, bands[0], last)
+                == band_by_player
+            ),
+            None,
+        )
+        if snapshot_id is None:
+            return None
     rows = connection.execute(
         f"""
         SELECT season_day_number, first_position, fact_input_hash,
@@ -277,6 +317,22 @@ def read_rank_band_totals(
         merge_army_totals(totals, row[4])
     digests = {(int(row[0]), int(row[1])): row[3] for row in rows}
     return totals, rank_band_digest(population, day_markers, digests)
+
+
+def band_players(
+    connection: Any, snapshot_id: int, low: int, high: int
+) -> dict[int, int]:
+    """The players at ranks low-high of a board, each with its band's first rank."""
+    return {
+        int(player_id): band_of(int(position))
+        for player_id, position in connection.execute(
+            """
+            SELECT player_id, position FROM leaderboard_snapshot_entries
+            WHERE snapshot_id = %s AND position BETWEEN %s AND %s
+            """,
+            (snapshot_id, low, high),
+        ).fetchall()
+    }
 
 
 def band_of(position: int) -> int:

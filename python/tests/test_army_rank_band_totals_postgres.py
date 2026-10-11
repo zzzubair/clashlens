@@ -22,7 +22,7 @@ from test_army_analytics_publication_postgres import (
 
 from clashlens import api_analytics, army_rank_bands
 from clashlens.api_db import ApiDatabase
-from clashlens.army_analytics import CATEGORIES
+from clashlens.army_analytics import CATEGORIES, TOP_PRESETS
 
 POPULATIONS = (
     "top-5",
@@ -36,6 +36,71 @@ POPULATIONS = (
     "band-1001-2000",
     "band-5001-10000",
 )
+
+# The Top N views and rank ranges the Armies page offers.
+OFFERED = (
+    *(f"top-{count}" for count in sorted(TOP_PRESETS)),
+    *(f"band-{first}-{first + 99}" for first in range(1, 1000, 100)),
+    "band-1001-2000",
+    "band-2001-5000",
+    "band-5001-10000",
+)
+HOLDING_RANKS_101_300 = {
+    *(f"top-{count}" for count in TOP_PRESETS if count > 100),
+    "band-101-200",
+    "band-201-300",
+}
+
+
+def _republish(database, boundary, positions: dict[int, int]) -> int:
+    """Publish the next version of a board, moving players to new positions."""
+    with database.pool.connection() as connection:
+        old = connection.execute(
+            """
+            SELECT id FROM leaderboard_snapshots
+            WHERE snapshot_kind = 'frozen' AND state = 'published'
+              AND boundary_at = %s
+            ORDER BY version DESC LIMIT 1
+            """,
+            (boundary,),
+        ).fetchone()[0]
+        new = connection.execute(
+            """
+            INSERT INTO leaderboard_snapshots (
+                snapshot_kind, boundary_at, version, ordering_rule_version,
+                freshness_rule_version, state, measured_coverage, stale_entry_count
+            )
+            SELECT snapshot_kind, boundary_at, version + 1, ordering_rule_version,
+                   freshness_rule_version, state, measured_coverage, stale_entry_count
+            FROM leaderboard_snapshots WHERE id = %s
+            RETURNING id
+            """,
+            (old,),
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO leaderboard_snapshot_entries (
+                snapshot_id, position, player_id, trophies, trophy_observation_id,
+                trophy_observed_at, observation_age_seconds, freshness,
+                confidence, tie_hash
+            )
+            SELECT %s, COALESCE(moved.position, entry.position), entry.player_id,
+                   trophies, trophy_observation_id, trophy_observed_at,
+                   observation_age_seconds, freshness, confidence, tie_hash
+            FROM leaderboard_snapshot_entries AS entry
+            LEFT JOIN unnest(%s::bigint[], %s::integer[])
+                AS moved(player_id, position) USING (player_id)
+            WHERE entry.snapshot_id = %s
+            """,
+            (new, list(positions), list(positions.values()), old),
+        )
+        return int(new)
+
+
+def _results_from_facts(api: ApiDatabase, monkeypatch, days) -> dict:
+    with monkeypatch.context() as patch:
+        patch.setattr(api_analytics, "read_rank_band_totals", lambda *a, **k: None)
+        return _results(api, days)
 
 
 def _results(
@@ -289,6 +354,56 @@ def test_saved_rank_band_totals_serve_the_same_results_without_reading_facts(
                 key: value for key, value in moved_forward.items() if key[3] == 24
             }
             assert fact_queries == []
+
+            # A Reset's board is republished every few minutes. With the same
+            # players in every band (#9PP moves within ranks 101-200), the
+            # page and the worker keep the saved totals.
+            counted: list[int] = []
+            count = army_rank_bands._count
+
+            def counting(connection, snapshot_id, *rest) -> None:
+                counted.append(snapshot_id)
+                count(connection, snapshot_id, *rest)
+
+            monkeypatch.setattr(army_rank_bands, "_count", counting)
+            board = DAY_START + timedelta(days=2)
+            _republish(database, board, {ids["#9PP"]: 160})
+            same_from_facts = _results_from_facts(api, monkeypatch, ((24, 24),))
+            army_rank_bands.refresh_rank_band_totals(database)
+            assert counted == []
+            fact_queries.clear()
+            assert _results(api, ((24, 24),)) == same_from_facts
+            assert fact_queries == []
+
+            # #9PP moves to ranks 201-300: views holding either band read
+            # facts until the worker counts the new board; others keep totals.
+            # Every Top N and rank range the page offers loads either way.
+            moved = _republish(database, board, {ids["#9PP"]: 250})
+            selections = {
+                population: _selection(population=population, start_day=24, end_day=24)
+                for population in OFFERED
+            }
+            with monkeypatch.context() as patch:
+                patch.setattr(
+                    api_analytics, "read_rank_band_totals", lambda *a, **k: None
+                )
+                moved_from_facts = {
+                    population: api_analytics.get_army_analytics(api, selection)
+                    for population, selection in selections.items()
+                }
+            assert moved_from_facts["top-10000"]["total_attacks"] == 1
+            for refreshed in (False, True):
+                for population, selection in selections.items():
+                    fact_queries.clear()
+                    assert (
+                        api_analytics.get_army_analytics(api, selection)
+                        == moved_from_facts[population]
+                    )
+                    assert bool(fact_queries) == (
+                        not refreshed and population in HOLDING_RANKS_101_300
+                    )
+                army_rank_bands.refresh_rank_band_totals(database)
+                assert counted == [moved]
         finally:
             api.close()
             cached_api.close()
