@@ -866,6 +866,52 @@ def test_reset_and_settlement_checks_use_the_regular_slots_while_other_work_keep
     assert sorted(started) == expected
 
 
+def test_work_claimed_while_the_collector_stops_is_not_started() -> None:
+    # Until 11 Oct 2026 a stop that arrived while the loop waited on the
+    # database still started the checks it had claimed.
+    spool = _Spool()
+    request_stop: list[Callable[[], object]] = []
+
+    class IntentStore(_Store):
+        def pending_intents(
+            self, limit: int, _now: datetime | None = None, *,
+            interactive: bool | None = None, **_kwargs: object,
+        ) -> list[CollectorIntent]:
+            if interactive:
+                return []
+            request_stop[0]()
+            now = datetime.now(UTC)
+            return [CollectorIntent("reset_baseline", now, 1, "#1", work_id=1, sweep_id=1)]
+
+        @staticmethod
+        def begin_reset(_boundary: datetime, *, local_regular_inflight: int) -> None:
+            return None
+
+        @staticmethod
+        def expire_settlement_checks(_now: datetime) -> int:
+            return 0
+
+    collector = _collector(spool, IntentStore(spool), _Client(spool))
+    started: list[CollectorIntent] = []
+
+    async def collect_intent(intent: CollectorIntent) -> str:
+        started.append(intent)
+        return "complete"
+
+    collector.collect_intent = collect_intent  # type: ignore[method-assign]
+
+    async def run() -> None:
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        # Queued before the claim's answer, so the stop lands during that wait.
+        request_stop.append(lambda: loop.call_soon_threadsafe(stop.set))
+        await asyncio.wait_for(collector._intent_loop(stop, False, 0.001), timeout=5)
+
+    asyncio.run(run())
+
+    assert started == []
+
+
 def test_cancelled_thread_waits_for_immutable_operation_to_finish() -> None:
     started = threading.Event()
     release = threading.Event()

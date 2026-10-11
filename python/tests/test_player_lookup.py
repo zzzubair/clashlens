@@ -65,7 +65,7 @@ def test_profile_processing_keeps_lookup_checking_after_collection_failure(
     work, processing
 ):
     database = lookup_database(
-        (1, False, "uncertain", False, False), (work, "provider_failure", processing)
+        (1, False, "uncertain", False, False), (work, "provider_failure", processing, False)
     )
     assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "checking"
 
@@ -77,7 +77,7 @@ def test_explicit_not_found_remains_terminal_while_profile_processing_is_outstan
     processing,
 ):
     database = lookup_database(
-        (1, False, "uncertain", False, False), ("failed", "player_not_found", processing)
+        (1, False, "uncertain", False, False), ("failed", "player_not_found", processing, False)
     )
     assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "not_found"
 
