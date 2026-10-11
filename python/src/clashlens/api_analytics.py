@@ -53,6 +53,22 @@ from .domain import (
 )
 
 
+def list_army_seasons(database: ApiDatabase) -> list[str]:
+    """Finished seasons with saved attack summaries, newest first."""
+    with database.pool.connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT official_season_id FROM army_season_summaries
+            WHERE lens = 'offense' AND category = 'troops'
+              AND projection_version = %s
+            """,
+            (ARMY_HISTORY_VERSION,),
+        ).fetchall()
+    seasons = [_text(row[0]) for row in rows]
+    # Season ids are the season's start in Unix seconds.
+    return sorted(seasons, key=lambda season: (len(season), season), reverse=True)
+
+
 def get_army_season_summary(
     database: ApiDatabase,
     official_season_id: str,

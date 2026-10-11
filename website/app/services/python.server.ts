@@ -94,6 +94,7 @@ export interface PythonClient {
   getPlayerSeason(tag: string, seasonId: string): Promise<HistoricalSeasonSummary>;
   getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics>;
   getArmySeasonSummary(season: string, query: URLSearchParams): Promise<ArmyAnalytics>;
+  getArmySeasons(): Promise<string[]>;
   requestRefresh(tag: string, idempotencyKey: string): Promise<RefreshWork>;
   getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus>;
   createAccount(
@@ -181,6 +182,7 @@ export function createPythonClient(
     getPlayerSeason,
     getArmyAnalytics,
     getArmySeasonSummary,
+    getArmySeasons,
     requestRefresh: requestPlayerRefresh,
     getRefreshStatus,
     ...accountOperations,
@@ -277,6 +279,24 @@ async function getArmySeasonSummary(
     undefined,
   );
   return mapArmyAnalytics(payload);
+}
+
+// Finished seasons with saved attack summaries, newest first.
+async function getArmySeasons(): Promise<string[]> {
+  const payload = await requestJson<unknown>(
+    "/v1/analytics/armies/seasons",
+    "GET",
+    undefined,
+    undefined,
+  );
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload.seasons) ||
+    !payload.seasons.every(isString)
+  ) {
+    throw new PythonApiError(502, { error: "malformed" });
+  }
+  return payload.seasons;
 }
 
 export class NoCompletedLegendDaysError extends Error {

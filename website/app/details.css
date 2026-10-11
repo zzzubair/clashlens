@@ -537,13 +537,8 @@
   align-items: center;
   margin-top: 0.75rem;
 }
-.analytics-page .filter-details summary,
 .analytics-page .analytics-breakdown summary {
   min-height: 2.75rem;
-}
-.analytics-page .filter-details[open] {
-  padding-top: 0.45rem;
-  border-top: 1px solid var(--cl-border);
 }
 .analytics-page .filter-footer .button {
   min-height: 2.75rem;
