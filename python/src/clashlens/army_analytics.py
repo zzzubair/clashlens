@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from . import army_types
 from .catalog import CATALOG_VERSION, unit_label
 
 ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
@@ -111,8 +112,10 @@ class ArmyAnalyticsSelection:
         category: str,
         sort: str,
     ) -> ArmyAnalyticsSelection:
-        if lens not in LENSES or category not in CATEGORIES or sort not in SORTS:
+        if lens not in LENSES or category not in {*CATEGORIES, army_types.CATEGORY} or sort not in SORTS:
             raise ValueError("unsupported army analytics selection")
+        if category == army_types.CATEGORY and lens != "offense":
+            raise ValueError("army types count attacks only")
         if not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", season):
             raise ValueError("invalid season")
         if not 1 <= start_day <= end_day <= 28:

@@ -486,6 +486,12 @@ these steps, all run by the worker:
    rebuilt since its totals were counted, and, until that recount finishes,
    views with a changed band read facts instead. The worker log shows each
    count as an `army_rank_band_totals` event.
+5. The same timer gives each saved distinct army its
+   [army type](domain.md#army-types), 50,000 a run after a rules change, then
+   counts one completed day's attacks per type, outside 04:30-07:00 UTC. The
+   Armies view stays unavailable until that labelling finishes. The worker
+   log shows each run as an `army_types` event; a `failed` run is retried
+   after 10 minutes.
 
 **First checks**, read-only:
 

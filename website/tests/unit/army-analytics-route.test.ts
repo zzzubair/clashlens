@@ -289,6 +289,108 @@ describe("army analytics route historical reads", () => {
     expect(data).toMatchObject({ error: null, seasonEmpty: null });
   });
 
+  it("opens on armies, attacks only, with a picker for unit usage", async () => {
+    const getArmyAnalytics = vi.fn().mockResolvedValue({
+      ...currentAnalytics("top-100", [1, 2], 0),
+      selection: {
+        ...currentAnalytics("top-100", [1, 2], 0).selection,
+        category: "army-types",
+      },
+      totalAttacks: 12,
+      usableArmySample: 10,
+      perspectiveDisagreementCount: 0,
+      rows: [
+        {
+          key: "army-type:3",
+          label: "Thrower",
+          usageCount: 6,
+          usageDenominator: 12,
+          usageRate: 0.5,
+          starCounts: [0, 1, 2, 3],
+          starRates: [0, 1 / 6, 2 / 6, 3 / 6],
+          threeStarRate: 0.5,
+          averageStars: 2.33,
+          averageDestruction: 91,
+          unknownExcludedAttacks: 0,
+        },
+        {
+          key: "army-type:2",
+          label: "Unreadable",
+          usageCount: 2,
+          usageDenominator: 12,
+          usageRate: 2 / 12,
+          starCounts: [1, 1, 0, 0],
+          starRates: [0.5, 0.5, 0, 0],
+          threeStarRate: 0,
+          averageStars: 0.5,
+          averageDestruction: 40,
+          unknownExcludedAttacks: 0,
+        },
+      ],
+    });
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    const html = await renderArmyRoute("season=current&lens=defense");
+    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
+    expect(query.get("category")).toBe("army-types");
+    expect(query.has("lens")).toBe(false);
+    const text = renderedText(html);
+    // Attacks only: the Armies view offers no Attacks/Defenses choice.
+    expect(html).not.toContain('name="lens"');
+    expect(text).toContain("Armies Unit usage");
+    expect(html).toMatch(/aria-current="page"[^>]*>Armies</);
+    expect(text).toContain("Thrower 6 / 12 50.0%");
+    expect(text).toContain("not which army is best");
+    // Unreadable attacks are a row of their own, not excluded.
+    expect(text).toContain("Records included 12 Every attack, Unreadable included");
+    expect(text).toContain("Records excluded 0");
+    expect(text).toContain(
+      "2 attacks had missing or unreadable army details and count as Unreadable.",
+    );
+    expect(text).not.toContain("conflicting reports");
+    expect(text).not.toContain("excluded from every row");
+    expect(text).not.toContain("Additional exclusions");
+    expect(html).toContain(
+      'href="/analytics/armies?season=current&amp;lens=defense&amp;category=troops"',
+    );
+  });
+
+  it("opens a past Season chosen from the Armies view on its unit usage", async () => {
+    const getArmySeasonSummary = vi.fn().mockResolvedValue({ selection: {} });
+    mocks.createPythonClient.mockReturnValue({ getArmySeasonSummary });
+    const result = await armyLoader({
+      request: requestFor(`season=${SEASON}&category=army-types&lens=offense`),
+      params: {},
+    } as never);
+    const [season, query] = getArmySeasonSummary.mock.calls[0] as [
+      string,
+      URLSearchParams,
+    ];
+    expect(season).toBe(SEASON);
+    expect(query.get("category")).toBe("troops");
+    expect(result).toMatchObject({ historicalSummary: true, error: null });
+  });
+
+  it("opens a visit with no query on armies, not the captured unit preview", async () => {
+    const getArmyAnalytics = vi
+      .fn()
+      .mockResolvedValue(currentAnalytics("top-100", [1], 0));
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+    const result = await armyLoader({ request: requestFor(""), params: {} } as never);
+    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
+    expect(query.get("category")).toBe("army-types");
+    expect(result).toMatchObject({ requestedSeason: "current", error: null });
+
+    const units = await armyLoader({
+      request: requestFor("category=troops"),
+      params: {},
+    } as never);
+    expect(getArmyAnalytics).toHaveBeenCalledTimes(1);
+    expect(units).toMatchObject({
+      analytics: { selection: { category: "troops" } },
+      error: null,
+    });
+  });
+
   it("names the finished days covered when current-season days are missing", async () => {
     const untracked = Array.from({ length: 22 }, (_, index) => index + 1).concat(24);
     mocks.createPythonClient.mockReturnValue({
