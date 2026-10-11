@@ -15,6 +15,7 @@ from test_reset_reading_before_loss_postgres import DAY_B, DAY_C, DAY_D
 from test_reset_settlement_state_postgres import TAG, _process, _reset_work
 
 from clashlens import queue_refresh, reconciliation_db
+from clashlens.background_pacing import DAY_RECHECK_PRIORITY
 from clashlens.collector_db import CollectorDatabase
 from clashlens.db import Database
 from clashlens.domain import ranked_day_for
@@ -524,6 +525,9 @@ def test_a_third_shielded_day_in_a_row_is_saved(database_url: str, archive_serve
 def test_the_daily_recheck_queues_the_last_two_ended_days(
     database_url: str, archive_server
 ) -> None:
+    # In the day recheck lane, not backfill's, where about 25,000 at once
+    # held Season repair and day-end recalculations back for hours, so new
+    # evidence for such a day merges into its waiting recheck.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
@@ -532,9 +536,20 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
         finally:
             database.close()
         queued = _queued(connection_info, "reconcile:recheck:night:")
+        with psycopg.connect(connection_info) as connection:
+            queue_refresh.queue_for_reading(
+                connection, player_id, "log:1", DAY_D + timedelta(hours=1))
+            waiting = connection.execute(
+                "SELECT deduplication_key, priority FROM python_processing_jobs"
+                " WHERE work_type = 'reconcile_ranked_day' AND status = 'pending'"
+            ).fetchall()
 
     assert count == 2
     assert queued == [(str(player_id), f"{day:%Y-%m-%dT%H:%M:%SZ}") for day in (DAY_B, DAY_C)]
+    assert sorted(waiting) == [
+        (f"reconcile:recheck:night:{player_id}:{day:%Y-%m-%dT%H:%M:%SZ}", DAY_RECHECK_PRIORITY)
+        for day in (DAY_B, DAY_C)
+    ]
 
 
 def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -> None:

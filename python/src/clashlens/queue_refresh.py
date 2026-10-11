@@ -6,8 +6,9 @@ evidence for a day whose recheck has not started adds nothing, as that
 recheck reads the newest evidence when it runs; one already running may have
 read too early, so the evidence queues one more. From 16:41 on 9 Oct 2026, 21,088
 rechecks in 39 minutes were for 3,782 player days. A recheck of every active
-player's last two ended days twice a day catches anything else, as bulk
-background work."""
+player's last two ended days twice a day catches anything else, in the same
+lane: about 25,000 at once at backfill priority held Season repair and the
+Reset's day-end recalculations back for 6 to 7 hours a day (10 Oct 2026)."""
 
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ CHECK_INTERVAL_SECONDS = 600
 _VERSIONS = {
     "parser": db.DEFAULT_PARSER_VERSION, "processing": db.PROCESSING_VERSION,
     "domain": db.DOMAIN_RULE_VERSION, "analytics": db.ANALYTICS_RULE_VERSION,
-    "priority": db.PYTHON_BACKFILL_PRIORITY, "rule": RECONCILIATION_RULE_VERSION,
+    "rule": RECONCILIATION_RULE_VERSION,
 }
 
 
@@ -218,7 +219,8 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> int:
                   AND job.input_json ->> 'ranked_day_start' = day.day_text)
             ON CONFLICT (deduplication_key) DO NOTHING
             """,
-            {**_VERSIONS, "slot": slot, "last": boundary - timedelta(days=1),
+            {**_VERSIONS, "priority": DAY_RECHECK_PRIORITY, "slot": slot,
+             "last": boundary - timedelta(days=1),
              "before": boundary - timedelta(days=2)},
         ).rowcount
 

@@ -580,10 +580,11 @@ can each queue one, and both run. From 16:40 to 17:19 UTC on 9 October 2026 the 
 queued about 535 jobs a minute for 3,782 player days; replayed with this
 rule and 4 at a time, about 410 a minute, none waiting over 10 seconds. They
 are removed with other finished jobs after 48 hours. Every
-active player's last two ended days are also queued twice a day, once the
-day-end recheck has finished and from 23:00 UTC, never from 04:00 to 07:00
-UTC, skipping days already waiting: about 26,000 jobs each time at 13,000
-players. The worker logs each run's count as `daily_recheck`. Before
+active player's last two ended days are also queued twice a day in the same
+lane, once the day-end recheck has finished and from 23:00 UTC, never from
+04:00 to 07:00 UTC, skipping days already waiting: about 26,000 jobs each
+time at 13,000 players, and evidence for such a day merges into its waiting
+job. The worker logs each run's count as `daily_recheck`. Before
 October 2026 a player switched off during a day, such as the 2,037 moved out
 of Legend I when the 2026-10-05 Season started, got no Reset reading, so their
 day stayed `Live`; finish those with this command.
