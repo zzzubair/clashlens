@@ -164,7 +164,9 @@ regular keys, one request at a time and at most two a second
   scores `unknown`;
 - once switched, every country's top 200, with the location list first when
   the saved one is over 7 days old. A failed pull is tried again 2 minutes
-  later, until 07:00.
+  later, until 07:00. A location list already over 7 days old at the Reset
+  is never used: while it can't be refreshed no country list is pulled, and
+  the day scores `unknown`.
 
 That is about 258 requests a day plus up to 19 polls. Each pull keeps its raw
 bytes gzip-compressed, its request time and location in `game_ranking_pulls`,
@@ -179,7 +181,7 @@ the board; tracked ones are skipped.
 From 07:00, each newly published frozen Daily board for a Reset up to 28 days
 old, while its pulls are kept, is scored against those pulls: the
 board the website shows, including one a later correction or Season repair
-republished. The score is kept forever in `game_ranking_scores` (about 2 KB a
+republished, and one with no entries. The score is kept forever in `game_ranking_scores` (about 2 KB a
 day per board version). A score is `unknown`, never a pass, when any pull
 above failed or is missing, including a day with no pulls since collection
 began; its numbers then cover only what arrived. The game's own faults are

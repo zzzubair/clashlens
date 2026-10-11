@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import gzip
 import json
 import threading
 from collections import Counter
@@ -398,3 +399,53 @@ def test_a_failed_country_pull_makes_the_day_unknown(
     assert printed["status"] == "unknown"
     assert printed["unknown_reasons"] == ["countries_missing:1"]
     assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 1)
+
+
+def test_an_expired_country_list_leaves_an_empty_board_unknown(
+    database_url: str, tmp_path, capsys, monkeypatch
+) -> None:
+    monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
+    answers = {
+        "/v1/locations": (503, b'{"reason": "inMaintenance"}'),
+        "/v1/locations/global/rankings/players": (200, _global(YESTERDAY_RANKS)),
+        "/v1/locations/32000087/rankings/players": (200, FRANCE),
+        "/v1/locations/32000249/rankings/players": (200, UNITED_STATES),
+    }
+    with domain_database(database_url) as info, _game(answers) as origin:
+        with psycopg.connect(info) as connection:
+            # A published board every member was left out of.
+            connection.execute(
+                """
+                INSERT INTO leaderboard_snapshots (
+                    snapshot_kind, boundary_at, version, ordering_rule_version,
+                    freshness_rule_version, state, measured_coverage,
+                    stale_entry_count, published_at
+                ) VALUES ('frozen', %s, 1, 'test', 'test', 'published', 0, 0, %s)
+                """,
+                (RESET, RESET + timedelta(hours=1)),
+            )
+            # The only country list was saved 8 days ago.
+            pulled = RESET - timedelta(days=8) + timedelta(minutes=5)
+            connection.execute(
+                """
+                INSERT INTO game_ranking_pulls (boundary_at, purpose, requested_at,
+                    completed_at, http_status, body_gzip)
+                VALUES (%s, 'locations', %s, %s, 200, %s)
+                """,
+                (RESET - timedelta(days=8), pulled, pulled, gzip.compress(LOCATIONS)),
+            )
+        _day(info, origin, tmp_path, [timedelta(seconds=40)])
+        answers["/v1/locations/global/rankings/players"] = (200, _global(TODAY_RANKS))
+        _day(info, origin, tmp_path, [timedelta(minutes=3)])
+        printed = _printed_score(info, capsys)
+    # Switched at 05:03; the refresh failed, so no country list was pulled.
+    assert [path.split("?")[0] for path in _Game.asked] == [
+        "/v1/locations/global/rankings/players",
+        "/v1/locations/global/rankings/players",
+        "/v1/locations",
+    ]
+    assert printed["status"] == "unknown"
+    assert printed["unknown_reasons"] == ["locations_missing"]
+    assert (printed["countries_expected"], printed["countries_pulled"]) == (0, 0)
+    assert (printed["board_entries"], printed["board_measured_coverage"]) == (0, 0.0)
+    assert printed["global_on_board"] == 0

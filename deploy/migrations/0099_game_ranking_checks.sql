@@ -49,7 +49,8 @@ CREATE TABLE game_ranking_scores (
 
 -- The published frozen Daily board for one Reset, as the website shows it:
 -- the newest version with no publication or one not superseded, so a board
--- an army-only correction carried into a new publication still counts.
+-- an army-only correction carried into a new publication still counts. A
+-- board with no entries is one row with no player.
 CREATE FUNCTION clashlens_game_ranking_board(reset_at timestamptz)
 RETURNS TABLE (
     snapshot_id bigint, snapshot_version integer, normalized_tag text,
@@ -74,8 +75,9 @@ AS $$
     SELECT board.id, board.version, player.normalized_tag, entry.position,
            entry.trophies, entry.confidence, board.measured_coverage
     FROM board
-    JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
-    JOIN players AS player ON player.id = entry.player_id
+    LEFT JOIN (leaderboard_snapshot_entries AS entry
+               JOIN players AS player ON player.id = entry.player_id)
+      ON entry.snapshot_id = board.id
     ORDER BY entry.position;
 $$;
 

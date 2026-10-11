@@ -209,6 +209,8 @@ def load_pulls(
 ) -> list[Pull]:
     """R's pulls and the latest locations pull before R+2 h, oldest first.
 
+    An earlier locations pull counts only within its 7-day refresh window at R.
+
     Only pulls whose purpose is in ``bodies`` carry their raw bytes.
     """
     with database._connection() as connection:
@@ -222,12 +224,13 @@ def load_pulls(
                        CASE WHEN purpose = ANY(%(bodies)s) THEN body_gzip END
                 FROM game_ranking_pulls
                 WHERE purpose = 'locations' AND failure IS NULL AND requested_at < %(until)s
-                  AND boundary_at <> %(boundary)s
+                  AND requested_at > %(expired)s AND boundary_at <> %(boundary)s
                 ORDER BY requested_at DESC LIMIT 1
             )
             ORDER BY requested_at
             """,
-            {"boundary": boundary, "until": boundary + SCORE_FROM, "bodies": list(bodies)},
+            {"boundary": boundary, "until": boundary + SCORE_FROM,
+             "expired": boundary - LOCATIONS_EVERY, "bodies": list(bodies)},
         ).fetchall()
     return [
         Pull(row[0], row[1], row[2], row[3],
@@ -350,7 +353,8 @@ def score_day(database: CollectorDatabase, boundary: datetime) -> dict[str, Any]
             countries[location_id] = read_rows(pull.body)
     if len(countries) < len(expected):
         reasons.append(f"countries_missing:{len(expected) - len(countries)}")
-    board = {str(row[2]): (int(row[3]), int(row[4]), str(row[5])) for row in board_rows}
+    board = {str(row[2]): (int(row[3]), int(row[4]), str(row[5]))
+             for row in board_rows if row[2] is not None}
     # A stuck 5,000 row: the list shows 5,000 trophies and 0 attack wins for a
     # player with a stored Legend battle, attack or defense, earlier this Season.
     at_5000 = sorted({row.tag for rows in countries.values() for row in rows
