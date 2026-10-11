@@ -181,8 +181,11 @@ the board; tracked ones are skipped.
 From 07:00, each newly published frozen Daily board for a Reset up to 28 days
 old, while its pulls are kept, is scored against those pulls: the
 board the website shows, including one a later correction or Season repair
-republished, and one with no entries. The score is kept forever in `game_ranking_scores` (about 2 KB a
-day per board version). A score is `unknown`, never a pass, when any pull
+republished, and one with no entries. Scoring a board republished later is
+best effort: the location list a Reset used can be up to 7 days older than
+its Reset and is deleted 28 days after its own, so once it is gone that
+board's country part is `unknown`, never scored. The score is kept forever in
+`game_ranking_scores` (about 2 KB a day per board version). A score is `unknown`, never a pass, when any pull
 above failed or is missing, including a day with no pulls since collection
 began; its numbers then cover only what arrived. The game's own faults are
 left out of every number, S6 included, but listed: stuck 5,000 rows, which
