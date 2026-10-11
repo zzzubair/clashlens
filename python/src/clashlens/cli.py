@@ -30,6 +30,7 @@ from . import (
     api_verification,
     battle_day_repair,
     collector_http,
+    game_rankings,
     league_history_refresh,
     population,
     promotion_candidates,
@@ -301,6 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     league_history_refresh.add_command(subparsers, _database_argument)
     promotion_candidates.add_command(subparsers, _database_argument)
     population.add_command(subparsers, _database_argument)
+    game_rankings.add_command(subparsers, _database_argument)
 
     materialize_seasons = subparsers.add_parser(
         "materialize-season-summaries",
@@ -547,6 +549,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return promotion_candidates.run_command(_database_url(arguments))
         if arguments.command == "population-status":
             return population.run_command(_database_url(arguments), repair=arguments.repair)
+        if arguments.command == "game-ranking-score":
+            return game_rankings.run_command(_database_url(arguments), days=arguments.days)
         if arguments.command == "materialize-season-summaries":
             import psycopg
 

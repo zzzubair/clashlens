@@ -463,6 +463,10 @@ Keep `CLASHLENS_GLOBAL_RANKINGS_ENABLED=false` until real collection is
 approved; with it off and no tracked players, the collector makes no
 official API calls at all.
 
+`CLASHLENS_GAME_RANKINGS_ENABLED=true` turns on the daily pulls of the game's
+ranking lists and the Daily board's score against them (default `false`;
+[collector polling](collector-polling.md#the-games-ranking-lists-once-a-day)).
+
 The dashboard stays hidden until `CLASHLENS_DASHBOARD_ENABLED=true` is set in
 `app.env` (`true` or `false`, default `false`). While it is off, `/dashboard`
 shows the normal page-not-found page, the navigation bar has no Dashboard

@@ -23,6 +23,7 @@ from . import (
     collector_intents,
     collector_liveness,
     collector_reset,
+    game_rankings,
     promotion_recheck,
     weekly_eligibility,
 )
@@ -788,6 +789,7 @@ class Collector:
             if self.weekly_eligibility_enabled:
                 tasks.append(asyncio.create_task(weekly_eligibility.run(self, stop_requested)))
             tasks.append(asyncio.create_task(promotion_recheck.run(self, stop_requested)))
+            tasks.append(asyncio.create_task(game_rankings.run(self, stop_requested)))
             done, _pending = await asyncio.wait(
                 [*tasks, stop_task], return_when=asyncio.FIRST_COMPLETED
             )
