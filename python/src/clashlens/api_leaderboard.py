@@ -56,12 +56,24 @@ CROSS JOIN LATERAL (
 # Their newest profile, when it ranks them at 5,000 instead.
 _UNPLAYED_PROFILE_SQL = f"""
     SELECT version.id, version.name, version.trophies, version.profile_json,
-           -- A successful unchanged check of the current profile confirms it
+           -- A successful unchanged check of the profile confirms it
            -- without another sighting.
            greatest(newest.observed_at, CASE
                WHEN version.id = player.current_profile_version_id
                THEN player.current_profile_confirmed_at
-           END) AS observed_at
+           END, (
+               SELECT checked.last_success_at
+               FROM collector_response_state AS checked
+               WHERE checked.scope = 'player'
+                 AND checked.identity_key = player.normalized_tag
+                 AND checked.endpoint = 'profile'
+                 AND (checked.last_observation_id = version.observation_id
+                      OR EXISTS (
+                          SELECT 1 FROM player_profile_effects AS retained
+                          WHERE retained.observation_id
+                                = checked.last_observation_id
+                            AND retained.profile_version_id = version.id))
+           )) AS observed_at
     FROM (
         -- The newest sighting of any of the player's profiles: a repeated
         -- profile is saved once and sighted again.
