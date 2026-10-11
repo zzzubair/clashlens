@@ -285,6 +285,23 @@ test("new search does not show suggestions from the previous query", async ({ pa
   }
 });
 
+test("search typed before the page's scripts start still shows suggestions", async ({
+  page,
+}) => {
+  // The browser reports the page loaded before it runs this script, so typing can win.
+  await page.route("**/assets/entry.client-*.js", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await route.continue();
+  });
+  await page.goto("/");
+  await page
+    .getByRole("searchbox", { name: "Search players and Clash Lens profiles" })
+    .fill("Synthetic Clasher 001");
+  await expect(
+    page.getByRole("region", { name: "Player and profile search suggestions" }),
+  ).toContainText("Synthetic Clasher 001");
+});
+
 test("public pages render without browser JavaScript", async ({ browser }) => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();
