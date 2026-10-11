@@ -541,14 +541,14 @@ class CollectorDatabase:
     def defer_regular_check(self, player_id: int, until: datetime) -> None:
         """Make an active player's next regular check due no earlier than `until`."""
         with self._connection() as connection:
-            connection.execute(_WORKER_LOCK_WAIT)
-            connection.execute(
-                """
-                UPDATE players SET next_due_at = %s
-                WHERE id = %s AND active = true AND next_due_at < %s
-                """,
-                (until, player_id, until),
-            )
+            connection.execute("SET LOCAL statement_timeout = '3s'")
+            try:
+                connection.execute(
+                    "UPDATE players SET next_due_at = %s WHERE id = %s AND active = true AND next_due_at < %s",
+                    (until, player_id, until),
+                )
+            except psycopg.errors.QueryCanceled as error:
+                raise psycopg.errors.LockNotAvailable(str(error)) from error
 
     def regular_admission_open(self, now: datetime) -> bool:
         with self._connection() as connection:

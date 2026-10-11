@@ -260,9 +260,17 @@ def test_full_regular_check_moves_on_while_the_worker_holds_its_player(
         defer = database.defer_regular_check
 
         def late(player: int, until: datetime) -> None:
-            # A slow machine reaches the scheduling update late; the saved
-            # response's background retry must not queue ahead of it.
-            time.sleep(0.5)
+            # Reach the scheduling update only once the saved response's
+            # background retry is queued for the player ahead of it.
+            waiting = (
+                "SELECT count(*) FROM pg_stat_activity"
+                " WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            )
+            with psycopg.connect(connection_info, autocommit=True) as watcher:
+                for _ in range(100):
+                    if watcher.execute(waiting).fetchone()[0]:  # type: ignore[index]
+                        break
+                    time.sleep(0.05)
             defer(player, until)
 
         monkeypatch.setattr(database, "defer_regular_check", late)
