@@ -7,7 +7,7 @@ from fractions import Fraction
 from time import monotonic
 from typing import Any
 
-from .domain import ranked_day_for
+from .domain import SEASON_START_TROPHIES, ranked_day_for
 from .profile import normalize_player_tag
 
 # v3 orders equal trophies by the latest trophy change first; v2 by Season
@@ -117,6 +117,19 @@ def latest_trophy_changes(
             {"day_start": day_start, "cutoff": cutoff, "player_ids": player_ids},
         ).fetchall()
     }
+
+
+def unplayed_sql(player_id: str, trophies: str, season_start: str, before: str) -> str:
+    """SQL true when a Legend I profile's ``trophies`` are 5,000 and the
+    player's saved Legend days from ``season_start`` to ``before`` hold no
+    battle: they have not played yet this Season, so both boards rank them at
+    5,000 whatever Season the profile names."""
+    return f"""({trophies} = {SEASON_START_TROPHIES} AND NOT EXISTS (
+        SELECT 1 FROM api_player_daily_logs AS played
+        WHERE played.player_id = {player_id}
+          AND played.ranked_day_start >= {season_start}
+          AND played.ranked_day_start < {before}
+          AND jsonb_array_length(played.battles) > 0))"""
 
 
 # Each attacker's attacks and summed attack destruction on the battle days

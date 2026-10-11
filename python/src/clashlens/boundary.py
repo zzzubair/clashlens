@@ -15,6 +15,7 @@ from .boundary_manifest import (
     _moved_decode_ids,
     profiles_not_found,
     reset_trophies,
+    unplayed_profiles,
 )
 from .boundary_manifest import (
     freeze_boundary_manifest as _freeze_boundary_manifest,
@@ -1239,7 +1240,15 @@ def queue_board_rebuilds(
                     rule is not None
                     and _text_value(rule[0]) != SNAPSHOT_ORDERING_RULE_VERSION
                 )
-                if not not_found and not late_battles and not reordered:
+                # Players left out whom the board now ranks at 5,000.
+                unplayed = len(unplayed_profiles(connection, boundary_at, [
+                    int(row[0]) for row in connection.execute(
+                        "SELECT player_id FROM boundary_publication_manifest_entries(%s)"
+                        " WHERE input_identity->>'snapshot_quality' <> 'eligible'",
+                        (manifest_id,),
+                    )
+                ]))
+                if not not_found and not late_battles and not reordered and not unplayed:
                     continue
                 queued = connection.execute(
                     """

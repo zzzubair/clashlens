@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
-from .analytics import tie_order_sql
+from .analytics import tie_order_sql, unplayed_sql
 from .api_db import (
     ApiDatabase,
     _public_confidence,
@@ -31,29 +31,56 @@ _FOCUS_NEIGHBORS = 5
 _OPENING_DAY_WAITING_SQL = _season_reset_waiting_sql(
     "player.id", "profile.trophies", "%(opening_reset)s"
 )
+# A tracked Legend I player at 5,000 with no Legend battle saved this Season
+# has not played yet, so they rank at 5,000 from their newest profile even
+# when it names no current Season, such as Season ID 0, or was rejected for
+# it. On 11 October 2026, 1,374 tracked players waited off the board so.
+_UNPLAYED_SQL = unplayed_sql(
+    "player.id", "newest.trophies", "%(season_start)s", "%(season_end)s"
+)
 _LIVE_CANDIDATES_SQL = f"""
-SELECT player.normalized_tag, profile.name, profile.trophies,
-       greatest(
+SELECT player.normalized_tag, COALESCE(unplayed.name, profile.name) AS name,
+       COALESCE(unplayed.trophies, profile.trophies) AS trophies,
+       COALESCE(unplayed.observed_at, greatest(
            player.current_observed_at, player.current_profile_confirmed_at
-       ) AS observed_at,
+       )) AS observed_at,
        player.eligibility_state,
-       profile.profile_json -> 'clan' ->> 'name' AS clan,
-       COALESCE(profile.current_league_season_id = %(season_id)s, false)
-           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current,
+       COALESCE(unplayed.profile_json, profile.profile_json) -> 'clan' ->> 'name'
+           AS clan,
+       current.season_current OR unplayed.trophies IS NOT NULL AS season_current,
        tally.attacks, tally.destruction
 FROM players AS player
-JOIN LATERAL (
-    SELECT name, trophies, profile_json, source_contract_state,
-           current_league_season_id
+LEFT JOIN LATERAL (
+    SELECT name, trophies, profile_json, current_league_season_id
     FROM player_profile_versions
     WHERE id = player.current_profile_version_id
+      AND source_contract_state = 'accepted'
     -- Keep one indexed current-profile lookup per player as history grows.
     OFFSET 0
 ) AS profile ON true
+CROSS JOIN LATERAL (
+    SELECT COALESCE(profile.current_league_season_id = %(season_id)s, false)
+           AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
+) AS current
+LEFT JOIN LATERAL (
+    SELECT newest.name, newest.trophies, newest.profile_json,
+           (SELECT max(effect.observed_at) FROM player_profile_effects AS effect
+            WHERE effect.profile_version_id = newest.id) AS observed_at
+    FROM (
+        SELECT * FROM player_profile_versions
+        -- Look only for players the current profile leaves off the board.
+        WHERE NOT current.season_current
+          AND normalized_tag = player.normalized_tag
+        ORDER BY observed_at DESC, id DESC
+        LIMIT 1
+    ) AS newest
+    WHERE newest.eligibility_state = 'eligible'
+      AND {_UNPLAYED_SQL}
+) AS unplayed ON true
 LEFT JOIN live_attack_tallies AS tally
   ON tally.player_id = player.id AND tally.official_season_id = %(season_id)s
 WHERE player.active = true
-  AND profile.source_contract_state = 'accepted'
+  AND (profile.name IS NOT NULL OR unplayed.name IS NOT NULL)
   AND NOT EXISTS (
       SELECT 1 FROM collector_response_state AS checked
       WHERE checked.scope = 'player'
@@ -82,9 +109,12 @@ FROM ({_LIVE_PLAYERS_SQL}) AS live
 
 
 def _season_params(now: datetime) -> dict[str, Any]:
+    day = ranked_day_for(now)
     return {
-        "season_id": ranked_day_for(now).official_season_id,
+        "season_id": day.official_season_id,
         "opening_reset": season_opening_reset(now),
+        "season_start": day.season_start,
+        "season_end": day.season_end,
     }
 
 

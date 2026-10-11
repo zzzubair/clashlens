@@ -146,11 +146,7 @@ def test_sign_up_day_starts_at_5000_by_the_season_rule(
                             log=_log((DAY_2 + timedelta(hours=1), True)))
         if saved_before_rule:
             # Saved before the rule: only a Season's first Reset used it.
-            original = reset_baselines._season_rule_holds
-            monkeypatch.setattr(
-                reset_baselines, "_season_rule_holds",
-                lambda *args, before=None: True if before else original(*args),
-            )
+            monkeypatch.setattr(reset_baselines, "_unplayed", lambda *args: False)
         _process(connection_info, archive_server, jobs)
         if saved_before_rule:
             monkeypatch.undo()

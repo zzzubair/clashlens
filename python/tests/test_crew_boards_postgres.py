@@ -325,16 +325,16 @@ def test_a_new_season_starts_every_board_fresh(site: Site) -> None:
         site, "#2PP", day_one.replace(hour=5),
         [battle("defense", "held", day_one - timedelta(hours=2), 1, -10)],
     )
-    # Day 1: no finished day yet, and nobody has a reading for the new
-    # Season on the Live Leaderboard.
+    # Day 1: no finished day yet, and only #9QQ, at 5,000 without a battle
+    # this Season, is on the Live Leaderboard before a new-Season reading.
     result = boards(site, crew_id, "season", day_one)
     assert (result["day_number"], result["window_days"]) == (1, [])
-    for name in ("live", "top", "attackers", "best_defenders", "worst_defenders"):
+    for name in ("top", "attackers", "best_defenders", "worst_defenders"):
         assert result["boards"][name]["rows"] == [], name
+    assert rows(result["boards"]["live"], "trophies") == [("#9QQ", 5000)]
     assert missing(result["boards"]["live"]) == [
         ("#2PP", "not_on_live_board"),
         ("#8PY", "not_on_live_board"),
-        ("#9QQ", "no_battles_this_season"),
         ("#PPP", "not_in_legend"),
     ]
     assert missing(result["boards"]["attackers"])[:2] == [

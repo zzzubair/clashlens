@@ -584,15 +584,20 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
             }
             # Collection continues.
             assert [work.normalized_tag for work in _claim(info)] == ["#2PP"]
-            # Its trophies reach no page, search, board or group total.
+            # Its trophies reach no page or search, but with no Legend battle
+            # yet it ranks at 5,000 on the Live Leaderboard.
             assert api_players.get_player_page(
                 database, "#2PP", now=NOW, freshness_seconds=900
             ) is None
             assert api_players.search_known_players(
                 database, "Synthetic", now=NOW, freshness_seconds=900
             ) == []
-            board = api_leaderboard.get_live_leaderboard(database, limit=50, now=NOW)
-            assert "#2PP" not in json.dumps(board)
+
+            def on_board() -> bool:
+                board = api_leaderboard.get_live_leaderboard(database, limit=50, now=NOW)
+                return '"tag": "#2PP", "name": "Synthetic Legend I", "trophies": 5000' in json.dumps(board)
+
+            assert on_board()
             assert submit(database)["reason"] == "no_legend_battles"
 
             def publish_day(version: int, battles: str) -> str:
@@ -613,6 +618,18 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
             assert publish_day(2, "[]") == "no_legend_battles"
             # A recorded Legend battle this Season means the Season is the problem.
             assert publish_day(3, "[{}]") == "season_unconfirmed"
+            # A Legend battle in the board's Season takes it off the board.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, version, state, coverage, battles
+                    )
+                    SELECT id, %s, 1, 'Live', 'partial', '[{}]' FROM players
+                    """,
+                    (ranked_day_for(NOW).season_start,),
+                )
+            assert not on_board()
 
             _process_profile(info, archive_server, processor, "valid", trophies=5040)
 

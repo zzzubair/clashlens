@@ -22,10 +22,10 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .analytics import latest_trophy_changes
+from .analytics import latest_trophy_changes, unplayed_sql
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .db import Database, _text_value
-from .domain import RANKED_DAY_DURATION, season_is_current
+from .domain import RANKED_DAY_DURATION, ranked_day_for, season_is_current
 from .reconciliation import DISPUTED_BATTLE_REASONS
 
 _STATUS_CLASSIFICATIONS = {
@@ -523,6 +523,18 @@ def _snapshot_rows(
             {"players": player_ids, "boundary": boundary_at},
         ).fetchall()
     }
+    unplayed = unplayed_profiles(
+        connection, boundary_at,
+        [
+            player_id for player_id in player_ids
+            if player_id not in profiles
+            or not season_is_current(
+                _text_value(profiles[player_id][8]),
+                boundary_at - RANKED_DAY_DURATION,
+            )
+        ],
+    )
+    profiles.update(unplayed)
     # Why a player with no accepted profile has none: their newest profile's
     # source state and their newest profile response's failure.
     unprofiled = [player_id for player_id in player_ids if player_id not in profiles]
@@ -571,7 +583,12 @@ def _snapshot_rows(
     for row in members:
         player_id, version_id, input_hash, status = _member(row, "snapshot")
         classification = _STATUS_CLASSIFICATIONS.get(status, "Pending")
-        if _rechecks(status, version_id):
+        # A member ranked at 5,000 before their first Legend battle was saved
+        # missing, as boundary._boundary_snapshot_status finds no accepted
+        # profile.
+        if _rechecks(status, version_id) or (
+            status == "missing" and player_id in unplayed and version_id is not None
+        ):
             # The member's status, checked again against its ranked day and
             # accepted profile now, as boundary._boundary_snapshot_status.
             snapshot_status = _RANKED_SNAPSHOT_STATUSES.get(
@@ -621,7 +638,7 @@ def _snapshot_rows(
             }
             if _text_value(profile[7]) != "eligible":
                 identity["snapshot_quality"] = "invalid"
-            elif not season_is_current(
+            elif player_id not in unplayed and not season_is_current(
                 _text_value(profile[8]), generation[0] - RANKED_DAY_DURATION
             ):
                 # Trophies from before this player's Season reset never
@@ -659,6 +676,54 @@ def _snapshot_rows(
             identity["snapshot_quality"] = snapshot_quality
         manifest_rows.append(identity)
     return manifest_rows
+
+
+def unplayed_profiles(
+    connection: Any, boundary_at: datetime, player_ids: list[int]
+) -> dict[int, tuple[Any, ...]]:
+    """The players among ``player_ids`` the board at ``boundary_at`` ranks at
+    5,000 with their newest profile at the Reset, as the population freeze
+    reads a profile: a Legend I one at 5,000 when their saved days of the
+    Season hold no battle. They have not played yet, whatever Season it
+    names. On 11 October 2026, 1,374 such players' profiles named Season 0.
+    The Season's last board is its final ranking, which leaves them out, as
+    the game's own final ranking left out all 1,242 such players last
+    Season."""
+    ended_day = ranked_day_for(boundary_at - RANKED_DAY_DURATION)
+    if boundary_at == ended_day.season_end or not player_ids:
+        return {}
+    return {
+        int(row[0]): row[1:]
+        for row in connection.execute(
+            f"""
+            SELECT member.player_id, newest.id, newest.seen_observation_id,
+                   newest.seen_at, newest.profile_json,
+                   newest.normalized_tag, newest.name, newest.trophies,
+                   newest.eligibility_state, newest.current_league_season_id
+            FROM unnest(%(players)s::bigint[]) AS member (player_id)
+            CROSS JOIN LATERAL (
+                SELECT profile.*, COALESCE(effect.observation_id,
+                           profile.observation_id) AS seen_observation_id,
+                       COALESCE(effect.observed_at, profile.observed_at)
+                           AS seen_at
+                FROM player_profile_versions AS profile
+                LEFT JOIN player_profile_effects AS effect
+                  ON effect.profile_version_id = profile.id
+                WHERE profile.player_id = member.player_id
+                  AND COALESCE(effect.observed_at, profile.observed_at)
+                      <= %(boundary)s
+                ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC,
+                         COALESCE(effect.id, profile.id) DESC
+                LIMIT 1
+            ) AS newest
+            WHERE newest.eligibility_state = 'eligible'
+              AND {unplayed_sql("member.player_id", "newest.trophies",
+                                "%(season_start)s", "%(boundary)s")}
+            """,
+            {"players": player_ids, "boundary": boundary_at,
+             "season_start": ended_day.season_start},
+        ).fetchall()
+    }
 
 
 def profiles_not_found(

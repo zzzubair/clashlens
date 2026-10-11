@@ -36,7 +36,9 @@ player hasn't played a Legend League battle this Season, and shows no daily
 log. A rejected newest profile is explained even when older results were
 accepted; those stay as saved history, never as current trophies, until a
 lookup shows an accepted profile again. Season 0
-trophies stay out of search, the Live board and groups.
+trophies stay out of search and groups. The Live and Daily boards rank a
+Legend I player at 5,000 with no Legend battle this Season at 5,000, whatever
+Season their profile names.
 
 Player profiles reread their own data in the background: these progress checks
 and after Refresh, including when a phone wakes mid-wait. When one of those rereads

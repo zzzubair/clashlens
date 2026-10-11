@@ -207,8 +207,9 @@ CURRENT_PROFILE = """
 
 
 @pytest.mark.parametrize("kind,conflict", [
+    # The day before's 6,400 named this Season, so the player has played:
+    # a Season 0 reading at 5,000 is not their total (test_unplayed_5000).
     ("ordinary", "season_zero"),
-    ("season", "season_zero"),
     ("ordinary", "tier_name"),
 ])
 def test_rejected_reset_profile_gives_no_start(
