@@ -25,6 +25,11 @@ how a saved day or board comes out, then run it once:
   the days: boards the rules would still change, and saved summaries that
   differ from a fresh projection.
 
+With a ``scope`` from ``REPAIR_SCOPES`` it recalculates only the players a
+rule change can affect, chosen as the repair began (``_scoped_players``),
+with its own receipt, so the full repair of the same revision still
+recalculates everyone. Every other step is the full repair's.
+
 Recalculating a day that comes out the same saves nothing new.
 
 A dormant campaign design follows. Three fixes change results already
@@ -83,6 +88,7 @@ from .domain import (
     RANKED_DAY_DURATION,
     SEASON_ANCHOR_RULE_VERSION,
     SEASON_DURATION,
+    SEASON_START_TROPHIES,
     TROPHY_ALLOCATION_RULE_VERSION,
 )
 from .reconciliation import RECONCILIATION_RULE_VERSION
@@ -91,11 +97,13 @@ from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 # The rules saved days and Daily boards come out by; see season_repair.
 DAY_RULES_REVISION = "2026-10-11-day-1-official-total"
 REPAIR_ACTIONS = ("preview", "queue", "receipt")
+REPAIR_SCOPES = ("day-1-or-unplayed",)
 _UNFINISHED_JOB_STATES = ("pending", "waiting_retry", "waiting_dependency", "leased")
 
 
 def season_repair(
-    database: Database, season_id: str, action: str, *, max_jobs: int
+    database: Database, season_id: str, action: str, *, max_jobs: int,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     """Run one Season repair action; see the module notes."""
     from . import battle_day_repair, boundary
@@ -103,7 +111,9 @@ def season_repair(
     start = datetime.fromtimestamp(int(season_id), UTC)
     if not domain.is_season_boundary(start):
         raise ValueError(f"{season_id} is not a Season's start")
-    revision = DAY_RULES_REVISION
+    if scope is not None and scope not in REPAIR_SCOPES:
+        raise ValueError(f"{scope} is not a Season repair scope")
+    revision = DAY_RULES_REVISION if scope is None else f"{DAY_RULES_REVISION}:{scope}"
     with database.pool.connection() as connection, connection.transaction():
         if connection.execute(
             "SELECT 1 FROM season_detail_retirements WHERE official_season_id = %s",
@@ -114,13 +124,16 @@ def season_repair(
         receipt = connection.execute(
             """
             SELECT before_days, before_boards, queued_through_player_id,
-                   boards_queued_at, summaries_through_player_id
+                   boards_queued_at, summaries_through_player_id, started_at
             FROM season_repairs
             WHERE official_season_id = %s AND rule_revision = %s
             """,
             (season_id, revision),
         ).fetchone()
-        players = [
+        began = receipt[5] if receipt is not None else connection.execute(
+            "SELECT clock_timestamp()"
+        ).fetchone()[0]
+        players = _scoped_players(connection, start, began) if scope else [
             int(row[0]) for row in connection.execute(
                 """
                 SELECT DISTINCT player_id FROM ranked_day_versions
@@ -132,7 +145,7 @@ def season_repair(
         ]
         through = int(receipt[2]) if receipt is not None else 0
         report = {
-            "season": season_id, "rule_revision": revision,
+            "season": season_id, "rule_revision": revision, "scope": scope,
             "players": len(players),
             "left_to_queue": sum(player > through for player in players),
             **_repair_jobs(connection, revision, season_id,
@@ -176,11 +189,12 @@ def season_repair(
             connection.execute(
                 """
                 INSERT INTO season_repairs (
-                    official_season_id, rule_revision, before_days, before_boards
-                ) VALUES (%s, %s, %s, %s)
+                    official_season_id, rule_revision, before_days, before_boards,
+                    started_at
+                ) VALUES (%s, %s, %s, %s, %s)
                 """,
                 (season_id, revision, Jsonb(_day_counts(connection, start)),
-                 Jsonb(_board_counts(connection, start))),
+                 Jsonb(_board_counts(connection, start)), began),
             )
     inputs = _repair_inputs(database, season_id, start, max_jobs)
     if inputs["queued"] or inputs["unfinished"] or inputs["failed"]:
@@ -229,16 +243,72 @@ def season_repair(
     summaries = _refresh_summaries(
         database, season_id, revision,
         int(receipt[4]) if receipt is not None else 0, max_jobs,
+        None if scope is None else players,
     )
     return {**report, "phase": "summaries" if summaries else "done",
             "summaries_refreshed": summaries}
 
 
+def _scoped_players(connection: Any, start: datetime, began: datetime) -> list[int]:
+    """The players with saved days of the Season whose results the 11 October
+    2026 day rules can change, as saved when the repair began, so the list
+    stays the same while it runs: those whose Day 1 was saved Inconsistent,
+    the only Day 1 results judging a Day 1 reading against the official
+    Season-end total can change, and those whose newest profile shows
+    Legend I at 5,000, accepted or naming Season 0 (sent before sign-up),
+    with no Legend battle of the Season saved, whose days rank at 5,000 with
+    no battles."""
+    return [
+        int(row[0]) for row in connection.execute(
+            """
+            WITH saved AS (
+                SELECT DISTINCT player_id FROM ranked_day_versions
+                WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+                  AND created_at <= %(began)s
+            ), played AS (
+                SELECT attacker_player_id AS player_id FROM legend_battles
+                WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+                  AND created_at <= %(began)s
+                UNION
+                SELECT defender_player_id FROM legend_battles
+                WHERE ranked_day_start >= %(start)s AND ranked_day_start < %(end)s
+                  AND created_at <= %(began)s
+            )
+            SELECT saved.player_id FROM saved
+            JOIN players AS player ON player.id = saved.player_id
+            WHERE (
+                SELECT day.state FROM ranked_day_versions AS day
+                WHERE day.player_id = saved.player_id
+                  AND day.ranked_day_start = %(start)s AND day.created_at <= %(began)s
+                ORDER BY day.version DESC, day.id DESC LIMIT 1
+            ) = 'Inconsistent'
+               OR saved.player_id NOT IN (SELECT player_id FROM played) AND EXISTS (
+                SELECT 1 FROM (
+                    SELECT * FROM player_profile_versions AS profile
+                    WHERE profile.normalized_tag = player.normalized_tag
+                      AND profile.observed_at <= %(began)s
+                    ORDER BY profile.observed_at DESC, profile.id DESC LIMIT 1
+                ) AS newest
+                WHERE newest.eligibility_state = 'eligible'
+                  AND newest.trophies = %(trophies)s
+                  AND (newest.source_contract_state = 'accepted'
+                       OR newest.current_league_season_id = '0')
+            )
+            ORDER BY saved.player_id
+            """,
+            {"start": start, "end": start + SEASON_DURATION, "began": began,
+             "trophies": SEASON_START_TROPHIES},
+        ).fetchall()
+    ]
+
+
 def _refresh_summaries(
-    database: Database, season_id: str, revision: str, through: int, limit: int
+    database: Database, season_id: str, revision: str, through: int, limit: int,
+    only: list[int] | None,
 ) -> int:
-    """Store again up to ``limit`` of the Season's saved summaries, each from
-    its days as they are now, in its own transaction; how many it stored.
+    """Store again up to ``limit`` of the Season's saved summaries, or of
+    ``only`` those players', each from its days as they are now, in its own
+    transaction; how many it stored.
     Once every one has been, it stores again those that differ from their
     days now, as a board correction since can leave an earlier one, until
     none does. A Season still in progress has none."""
@@ -250,9 +320,10 @@ def _refresh_summaries(
                 """
                 SELECT player_id FROM player_season_summaries
                 WHERE official_season_id = %s AND player_id > %s
+                  AND (%s::bigint[] IS NULL OR player_id = ANY(%s))
                 ORDER BY player_id LIMIT %s
                 """,
-                (season_id, through, limit),
+                (season_id, through, only, only, limit),
             ).fetchall()
         ]
         stale = not players
