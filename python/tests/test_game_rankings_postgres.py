@@ -200,12 +200,13 @@ def _seed(info: str) -> None:
                 """,
                 (snapshot, position, ids[tag], trophies, observation, RESET, confidence),
             )
-        # A pull 29 days old, which the daily prune removes.
+        # A country directory pulled 29 days ago, which the daily prune removes
+        # even when it is the newest one.
         connection.execute(
             """
-            INSERT INTO game_ranking_pulls (boundary_at, purpose, location_id, country_code,
-                requested_at, completed_at, http_status)
-            VALUES (%s, 'country', 32000087, 'FR', %s, %s, 200)
+            INSERT INTO game_ranking_pulls (boundary_at, purpose, requested_at,
+                completed_at, http_status)
+            VALUES (%s, 'locations', %s, %s, 200)
             """,
             (RESET - timedelta(days=29),) * 3,
         )
@@ -353,6 +354,12 @@ def test_a_list_never_seen_to_switch_leaves_the_day_unknown(
         )
         _day(info, origin, tmp_path, [timedelta(minutes=minute) for minute in (3, 20, 59, 60)])
         printed = _printed_score(info, capsys)
+        with psycopg.connect(info) as connection:
+            [(kept_old,)] = connection.execute(
+                "SELECT count(*) FROM game_ranking_pulls WHERE boundary_at < %s",
+                (RESET - timedelta(days=28),),
+            ).fetchall()
+    assert kept_old == 0
     # The early pull and polls at 05:03, 05:20 and 05:59; no country list.
     assert [path.split("?")[0] for path in _Game.asked] == [
         "/v1/locations/global/rankings/players"

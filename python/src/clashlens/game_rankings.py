@@ -314,9 +314,7 @@ def save_pull(
 def _prune(database: CollectorDatabase, now: datetime) -> int:
     with database._connection() as connection, connection.transaction():
         return connection.execute(
-            "DELETE FROM game_ranking_pulls WHERE boundary_at < %s"
-            " AND NOT (purpose = 'locations' AND id = (SELECT id FROM game_ranking_pulls"
-            " WHERE purpose = 'locations' AND failure IS NULL ORDER BY requested_at DESC LIMIT 1))",
+            "DELETE FROM game_ranking_pulls WHERE boundary_at < %s",
             (reset_at(now) - KEEP_PULLS,),
         ).rowcount
 
