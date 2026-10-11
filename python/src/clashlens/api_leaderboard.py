@@ -36,20 +36,10 @@ _OPENING_DAY_WAITING_SQL = _season_reset_waiting_sql(
 # when it names no current Season, such as Season ID 0, or was rejected for
 # it. On 11 October 2026, 1,374 tracked players waited off the board so.
 _UNPLAYED_SQL = unplayed_sql(
-    "player.id", "newest.trophies", "%(season_start)s", "%(season_end)s"
+    "player.id", "version.trophies", "%(season_start)s", "%(season_end)s"
 )
-_LIVE_CANDIDATES_SQL = f"""
-SELECT player.normalized_tag, COALESCE(unplayed.name, profile.name) AS name,
-       COALESCE(unplayed.trophies, profile.trophies) AS trophies,
-       COALESCE(unplayed.observed_at, greatest(
-           player.current_observed_at, player.current_profile_confirmed_at
-       )) AS observed_at,
-       player.eligibility_state,
-       COALESCE(unplayed.profile_json, profile.profile_json) -> 'clan' ->> 'name'
-           AS clan,
-       current.season_current OR unplayed.trophies IS NOT NULL AS season_current,
-       tally.attacks, tally.destruction
-FROM players AS player
+# The player's current accepted profile, and whether it ranks them this Season.
+_CURRENT_PROFILE_JOINS = f"""
 LEFT JOIN LATERAL (
     SELECT name, trophies, profile_json, current_league_season_id
     FROM player_profile_versions
@@ -62,21 +52,46 @@ CROSS JOIN LATERAL (
     SELECT COALESCE(profile.current_league_season_id = %(season_id)s, false)
            AND NOT {_OPENING_DAY_WAITING_SQL} AS season_current
 ) AS current
-LEFT JOIN LATERAL (
-    SELECT newest.name, newest.trophies, newest.profile_json,
-           (SELECT max(effect.observed_at) FROM player_profile_effects AS effect
-            WHERE effect.profile_version_id = newest.id) AS observed_at
+"""
+# Their newest profile, when it ranks them at 5,000 instead.
+_UNPLAYED_PROFILE_SQL = f"""
+    SELECT version.id, version.name, version.trophies, version.profile_json,
+           newest.observed_at
     FROM (
-        SELECT * FROM player_profile_versions
+        -- The newest sighting of any of the player's profiles: a repeated
+        -- profile is saved once and sighted again.
+        SELECT version.id,
+               COALESCE(sighting.observed_at, version.observed_at) AS observed_at
+        FROM player_profile_versions AS version
+        LEFT JOIN LATERAL (
+            SELECT effect.observed_at FROM player_profile_effects AS effect
+            WHERE effect.profile_version_id = version.id
+            ORDER BY effect.observed_at DESC, effect.id DESC
+            LIMIT 1
+        ) AS sighting ON true
         -- Look only for players the current profile leaves off the board.
         WHERE NOT current.season_current
-          AND normalized_tag = player.normalized_tag
-        ORDER BY observed_at DESC, id DESC
+          AND version.normalized_tag = player.normalized_tag
+        ORDER BY 2 DESC, version.id DESC
         LIMIT 1
     ) AS newest
-    WHERE newest.eligibility_state = 'eligible'
+    JOIN player_profile_versions AS version ON version.id = newest.id
+    WHERE version.eligibility_state = 'eligible'
       AND {_UNPLAYED_SQL}
-) AS unplayed ON true
+"""
+_LIVE_CANDIDATES_SQL = f"""
+SELECT player.normalized_tag, COALESCE(unplayed.name, profile.name) AS name,
+       COALESCE(unplayed.trophies, profile.trophies) AS trophies,
+       COALESCE(unplayed.observed_at, greatest(
+           player.current_observed_at, player.current_profile_confirmed_at
+       )) AS observed_at,
+       player.eligibility_state,
+       COALESCE(unplayed.profile_json, profile.profile_json) -> 'clan' ->> 'name'
+           AS clan,
+       current.season_current OR unplayed.trophies IS NOT NULL AS season_current,
+       tally.attacks, tally.destruction
+FROM players AS player
+{_CURRENT_PROFILE_JOINS}LEFT JOIN LATERAL ({_UNPLAYED_PROFILE_SQL}) AS unplayed ON true
 LEFT JOIN live_attack_tallies AS tally
   ON tally.player_id = player.id AND tally.official_season_id = %(season_id)s
 WHERE player.active = true
@@ -93,6 +108,13 @@ WHERE player.active = true
 """
 _LIVE_PLAYERS_SQL = f"""
 SELECT * FROM ({_LIVE_CANDIDATES_SQL}) AS candidate WHERE season_current
+"""
+# The profile that ranks one player at 5,000 when their current one does not.
+UNPLAYED_PROFILE_SQL = f"""
+SELECT unplayed.id, unplayed.observed_at
+FROM players AS player
+{_CURRENT_PROFILE_JOINS}JOIN LATERAL ({_UNPLAYED_PROFILE_SQL}) AS unplayed ON true
+WHERE player.normalized_tag = %(tag)s
 """
 
 # Equal trophies in the Daily board's order (analytics.tie_order_key), from

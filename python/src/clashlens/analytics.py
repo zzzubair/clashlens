@@ -129,7 +129,13 @@ def unplayed_sql(player_id: str, trophies: str, season_start: str, before: str) 
         WHERE played.player_id = {player_id}
           AND played.ranked_day_start >= {season_start}
           AND played.ranked_day_start < {before}
-          AND jsonb_array_length(played.battles) > 0))"""
+          AND jsonb_array_length(played.battles) > 0
+          -- A battle a newer result moved out of this Season does not count.
+          AND NOT EXISTS (
+              SELECT 1 FROM api_player_daily_logs AS newer
+              WHERE newer.player_id = played.player_id
+                AND newer.ranked_day_start = played.ranked_day_start
+                AND newer.version > played.version)))"""
 
 
 # Each attacker's attacks and summed attack destruction on the battle days

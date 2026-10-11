@@ -30,15 +30,16 @@ that arrives after that limit still replaces the waiting message. The Check
 progress link also works without JavaScript. A tracked player whose newest
 profile was rejected is not waiting, so the page explains why there are no
 current results and rereads saved data once a minute while visible instead of
-once a second. For a Legend I profile with Season ID 0 and no Legend battle
-this Season it shows that profile's name, tag, clan and trophies, says the
-player hasn't played a Legend League battle this Season, and shows no daily
-log. A rejected newest profile is explained even when older results were
-accepted; those stay as saved history, never as current trophies, until a
-lookup shows an accepted profile again. Season 0
-trophies stay out of search and groups. The Live and Daily boards rank a
-Legend I player at 5,000 with no Legend battle this Season at 5,000, whatever
-Season their profile names.
+once a second. A Legend I profile at 5,000 with no Legend battle this Season,
+whatever Season it names, Season ID 0 included, needs no explanation: the
+player has not played yet, so their normal page shows them at 5,000 with a
+daily log of 0/0 days from 5,000 to 5,000, and every board ranks them at
+5,000. Another Legend I profile with Season ID 0 and no Legend battle this
+Season shows that profile's name, tag, clan and trophies and says the player
+hasn't played a Legend League battle this Season. A rejected newest profile
+is explained even when older results were accepted; those stay as saved
+history, never as current trophies, until a lookup shows an accepted profile
+again. Season 0 trophies stay out of search and groups.
 
 Player profiles reread their own data in the background: these progress checks
 and after Refresh, including when a phone wakes mid-wait. When one of those rereads

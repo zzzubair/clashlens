@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from . import api_db
+from . import api_db, api_leaderboard
 from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
 from .domain import ranked_day_for
 
 
-def _lookup(connection: Any, tag: str) -> dict[str, Any]:
+def _lookup(
+    connection: Any, tag: str, now: datetime | None = None
+) -> dict[str, Any]:
     row = connection.execute(
         """
         SELECT player.id, player.active, player.eligibility_state,
@@ -24,9 +26,9 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
     if row is not None:
         player_id, active, eligibility, confirmed, no_current_profile = row
         if active:
-            why = _why_no_results(connection, player_id)
+            why = _why_no_results(connection, player_id, tag, now or datetime.now(UTC))
             # A newest rejected profile is explained even after accepted ones.
-            if no_current_profile or why["reason"] != "pending":
+            if no_current_profile or why.get("reason", "pending") != "pending":
                 return {"tag": tag, "state": "tracking", **why}
             state = "tracking"
         elif confirmed:
@@ -93,7 +95,9 @@ def _lookup(connection: Any, tag: str) -> dict[str, Any]:
     return {"tag": tag, "state": state}
 
 
-def _newest_profile(connection: Any, player_id: int) -> Any:
+def _newest_profile(
+    connection: Any, player_id: int, now: datetime | None = None
+) -> Any:
     """The player's newest processed profile, read without accepting it."""
     return connection.execute(
         """
@@ -119,18 +123,22 @@ def _newest_profile(connection: Any, player_id: int) -> Any:
         ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC, profile.id DESC
         LIMIT 1
         """,
-        (ranked_day_for(datetime.now(UTC)).season_start, player_id),
+        (ranked_day_for(now or datetime.now(UTC)).season_start, player_id),
     ).fetchone()
 
 
-def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
+def _why_no_results(
+    connection: Any, player_id: int, tag: str, now: datetime
+) -> dict[str, Any]:
     """Explain why a tracked player's newest processed profile gives no
     current results.
 
     Among tracked players, only a Legend I profile whose Season ID is 0 shows
-    its name, clan and trophies, and only on the player's own page.
+    its name, clan and trophies, and only on the player's own page. One the
+    Live Leaderboard ranks at 5,000 needs none: the player has not played
+    yet, and their page shows them at 5,000.
     """
-    row = _newest_profile(connection, player_id)
+    row = _newest_profile(connection, player_id, now)
     if row is None:
         return {"reason": "pending"}
     season, reason, eligibility, contract, name, clan, trophies, battles, _league = row
@@ -139,6 +147,11 @@ def _why_no_results(connection: Any, player_id: int) -> dict[str, Any]:
         and _text(reason) == "confirmed_legend_i"
         and _text(contract) == "conflict"
     ):
+        if not battles and connection.execute(
+            api_leaderboard.UNPLAYED_PROFILE_SQL,
+            {**api_leaderboard._season_params(now), "tag": tag},
+        ).fetchone():
+            return {}
         return {
             # Every such player checked on 2026-10-03 had no Legend battle
             # this Season, so a recorded battle means something else is wrong.

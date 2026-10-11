@@ -27,7 +27,9 @@ from test_reconciliation_postgres import _processor, _profile
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 from clashlens import boundary_manifest, domain_repair, reset_baselines
+from clashlens.api_db import ApiDatabase
 from clashlens.api_leaderboard import _read_live_board
+from clashlens.api_players import get_player_page
 from clashlens.db import Database
 from clashlens.domain import ranked_day_for
 
@@ -210,6 +212,16 @@ def test_unplayed_players_rank_at_5000_until_their_first_battle(
                 """
             ).fetchall()
             live = _read_live_board(connection, DAY_4 + timedelta(hours=1))
+        api = ApiDatabase(connection_info)
+        try:
+            pages = {
+                tag: get_player_page(
+                    api, tag, now=DAY_4 + timedelta(hours=1), freshness_seconds=900
+                )
+                for tag in (UNPLAYED, STARTER)
+            }
+        finally:
+            api.close()
 
     # No Reset reading was rejected.
     assert rejected == []
@@ -231,12 +243,26 @@ def test_unplayed_players_rank_at_5000_until_their_first_battle(
     assert boards[DAY_2] == [(ORDINARY, ordinary_end), (STARTER, 5000), (UNPLAYED, 5000)]
     assert boards[DAY_3] == [(STARTER, 5000 + WIN), (ORDINARY, ordinary_end), (UNPLAYED, 5000)]
     assert boards[DAY_4] == [(STARTER, 5000 + WIN), (ORDINARY, ordinary_end), (UNPLAYED, 5000)]
-    # The previous Season's last board is its Season-end ranking, which the
-    # game's own final ranking leaves never-played players out of.
-    assert boards[DAY_1] == [(ORDINARY, 5000)]
+    # The previous Season's last board, its final ranking, ranks them at
+    # 5,000 too. No one attacked, so the tag hash orders all three.
+    assert boards[DAY_1] == [(STARTER, 5000), (UNPLAYED, 5000), (ORDINARY, 5000)]
     assert [(row[0], row[2]) for row in live.rows] == [
         (STARTER, 5000 + WIN), (ORDINARY, ordinary_end), (UNPLAYED, 5000),
     ]
+    # Their pages show them at 5,000 with each day before their first battle
+    # complete: 0 attacks and 0 defenses from 5,000, a change of 0.
+    assert (pages[UNPLAYED]["trophies"], pages[UNPLAYED]["season_reset_pending"]) == (
+        5000, False,
+    )
+    shown = {
+        (tag, day["ranked_day_start"]): (
+            day["attack_count"], day["defense_count"], day["start_trophies"],
+            day["net_trophy_change"], day["state"], day["partial_reasons"],
+        )
+        for tag, page in pages.items() for day in page["screen_ready"]["days"]
+    }
+    for tag, day in ((UNPLAYED, DAY_1), (UNPLAYED, DAY_2), (UNPLAYED, DAY_3), (STARTER, DAY_1)):
+        assert shown[tag, day.isoformat()] == (0, 0, 5000, 0, "Complete", [])
 
 
 def test_the_season_repair_brings_days_and_boards_saved_before_the_rule(

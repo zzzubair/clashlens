@@ -193,8 +193,7 @@ def queue_earlier_days(
 def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> None:
     """When a player's first accepted Legend I profile naming a Season is
     saved after their first battle log of that Season, recalculate from Day 1
-    as ``backfill`` would, now that the Season rule can start it. Also
-    check whether it proves a late sign-up for the Season."""
+    as ``backfill`` would, now that the Season rule can start it."""
     row = connection.execute(
         """
         SELECT profile.current_league_season_id
@@ -214,10 +213,6 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         """,
         (profile_version_id,),
     ).fetchone()
-    if row is not None:
-        queue_not_enrolled(
-            connection, player_id, datetime.fromtimestamp(int(row[0]), UTC)
-        )
     first = _first_log(connection, player_id)
     if row is None or first is None:
         return
@@ -235,55 +230,6 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
         {"day": first_day.season_start, "player": player_id},
     ).fetchone()[0]:
         _queue(connection, player_id, first_day.season_start, int(first[1]))
-
-
-def queue_not_enrolled(connection: Any, player_id: int, observed_at: datetime) -> None:
-    """Once saved profiles prove a late sign-up for the Season of
-    ``observed_at``, recalculate each day of it that ended before a confirmed
-    Legend I profile still showed no Season, Season ID 0, followed by a
-    profile showing the sign-up, so it can be shown as not enrolled. Either
-    profile may be processed last."""
-    day = domain.ranked_day_for(observed_at)
-    latest = connection.execute(
-        """
-        SELECT max(waiting_seen.observed_at)
-        FROM player_profile_versions AS waiting
-        JOIN player_profile_effects AS waiting_seen
-          ON waiting_seen.profile_version_id = waiting.id
-        WHERE waiting.player_id = %(player)s
-          AND waiting.eligibility_state = 'eligible'
-          AND waiting.eligibility_reason = 'confirmed_legend_i'
-          AND waiting.current_league_season_id = '0'
-          AND waiting_seen.observed_at >= %(start)s
-          AND EXISTS (
-              SELECT 1
-              FROM player_profile_versions AS joined
-              JOIN player_profile_effects AS joined_seen
-                ON joined_seen.profile_version_id = joined.id
-              WHERE joined.player_id = waiting.player_id
-                AND joined.current_league_season_id = %(season)s
-                AND joined.eligibility_state = 'eligible'
-                AND joined.source_contract_state = 'accepted'
-                AND joined_seen.observed_at > waiting_seen.observed_at
-                AND joined_seen.observed_at < %(end)s
-          )
-        """,
-        {
-            "player": player_id,
-            "start": day.season_start,
-            "season": day.official_season_id,
-            "end": day.season_end,
-        },
-    ).fetchone()[0]
-    day_start = day.season_start
-    while latest is not None and day_start + timedelta(days=1) <= latest:
-        day_text = day_start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _queue(
-            connection, player_id, day_start, None,
-            key=f"reconcile:not-enrolled:{player_id}:{day_text}",
-            trigger="late_enrollment", later_days=False,
-        )
-        day_start += timedelta(days=1)
 
 
 def queue_weekly_drop(connection: Any, player_id: int, observed_at: datetime) -> None:

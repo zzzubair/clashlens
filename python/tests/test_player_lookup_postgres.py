@@ -559,7 +559,7 @@ def _claim(info) -> list:
         collector.close()
 
 
-def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
+def test_season_zero_player_at_5000_has_a_page_and_ranks_until_a_legend_battle(
     database_url, archive_server
 ):
     with migrated_production_database(
@@ -574,21 +574,19 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
                 trophies=5000, currentLeagueSeasonId=0,
             )
 
+            # With no Legend battle yet the player has not played: nothing
+            # to explain, so the page shows them at 5,000.
             assert api_player_lookup.get_lookup(database, "#2PP") == {
-                "tag": "#2PP",
-                "state": "tracking",
-                "reason": "no_legend_battles",
-                "profile": {
-                    "name": "Synthetic Legend I", "clan": "Synthetic Clan", "trophies": 5000,
-                },
+                "tag": "#2PP", "state": "tracking",
             }
             # Collection continues.
             assert [work.normalized_tag for work in _claim(info)] == ["#2PP"]
-            # Its trophies reach no page or search, but with no Legend battle
-            # yet it ranks at 5,000 on the Live Leaderboard.
-            assert api_players.get_player_page(
+            page = api_players.get_player_page(
                 database, "#2PP", now=NOW, freshness_seconds=900
-            ) is None
+            )
+            assert (page["trophies"], page["season_reset_pending"]) == (5000, False)
+            # Its trophies reach no search, but it ranks at 5,000 on the Live
+            # Leaderboard.
             assert api_players.search_known_players(
                 database, "Synthetic", now=NOW, freshness_seconds=900
             ) == []
@@ -598,7 +596,7 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
                 return '"tag": "#2PP", "name": "Synthetic Legend I", "trophies": 5000' in json.dumps(board)
 
             assert on_board()
-            assert submit(database)["reason"] == "no_legend_battles"
+            assert "reason" not in submit(database)
 
             def publish_day(version: int, battles: str) -> str:
                 with database.pool.connection() as connection:
@@ -611,11 +609,11 @@ def test_season_zero_player_is_explained_but_never_ranked_until_a_valid_profile(
                         """,
                         (ranked_day_for(datetime.now(UTC)).season_start, version, battles),
                     )
-                return api_player_lookup.get_lookup(database, "#2PP")["reason"]
+                return api_player_lookup.get_lookup(database, "#2PP").get("reason")
 
             # A battle a newer result moved out of this Season does not count.
             assert publish_day(1, "[{}]") == "season_unconfirmed"
-            assert publish_day(2, "[]") == "no_legend_battles"
+            assert publish_day(2, "[]") is None
             # A recorded Legend battle this Season means the Season is the problem.
             assert publish_day(3, "[{}]") == "season_unconfirmed"
             # A Legend battle in the board's Season takes it off the board.

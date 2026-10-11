@@ -1240,14 +1240,19 @@ def queue_board_rebuilds(
                     rule is not None
                     and _text_value(rule[0]) != SNAPSHOT_ORDERING_RULE_VERSION
                 )
-                # Players left out whom the board now ranks at 5,000.
-                unplayed = len(unplayed_profiles(connection, boundary_at, [
+                # Players left out whom the board now ranks at 5,000, unless
+                # "player not found" since keeps them out of the rebuild too.
+                added = unplayed_profiles(connection, boundary_at, [
                     int(row[0]) for row in connection.execute(
                         "SELECT player_id FROM boundary_publication_manifest_entries(%s)"
                         " WHERE input_identity->>'snapshot_quality' <> 'eligible'",
                         (manifest_id,),
                     )
-                ]))
+                ])
+                unplayed = len(added) - len(profiles_not_found(
+                    connection, boundary_at,
+                    {player_id: row[2] for player_id, row in added.items()},
+                ))
                 if not not_found and not late_battles and not reordered and not unplayed:
                     continue
                 queued = connection.execute(
