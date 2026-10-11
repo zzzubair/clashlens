@@ -31,6 +31,7 @@ from psycopg_pool import PoolTimeout, TooManyRequests
 
 from . import (
     analytics,
+    api_leaderboard,
     army_ingestion,
     army_rank_bands,
     army_types,
@@ -381,6 +382,7 @@ class TimedMaintenance:
                     army_rank_bands.refresh_rank_band_totals(self.database)
                     army_types.refresh_army_types(self.database)
                     analytics.refresh_live_attack_tallies(self.database)
+                    api_leaderboard.refresh_live_unplayed(self.database)
             finally:
                 if derived_turns is not None:
                     derived_turns.release()

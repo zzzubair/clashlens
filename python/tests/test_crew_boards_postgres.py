@@ -11,7 +11,7 @@ from domain_test_support import domain_database
 from psycopg.types.json import Jsonb
 from test_crews_postgres import Site
 
-from clashlens import api_crew_boards
+from clashlens import api_crew_boards, api_leaderboard
 from clashlens.domain import ranked_day_for
 
 # The same saved days and hand-worked totals the website's Season summary
@@ -154,6 +154,9 @@ def crew_of_four(site: Site) -> str:
 
 
 def boards(site: Site, crew_id: str, period: str, now: datetime = NOW, who="akira"):
+    # The worker's save of who the Live board ranks at 5,000 unplayed.
+    with site.seed.pool.connection() as connection:
+        api_leaderboard.save_live_unplayed(connection, now)
     return api_crew_boards.get_crew_boards(
         site.api, site.ids[who], crew_id, period=period, now=now
     )

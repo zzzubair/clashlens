@@ -400,7 +400,13 @@ Every five minutes the worker also recounts each player's attacks and attack
 destruction this Season into `live_attack_tallies`, which orders equal trophies
 on the Live Leaderboard, and logs a `live_attack_tallies` line with status
 `complete` and how many players' counts changed, or `failed`; the board keeps
-the last counts until the next one succeeds.
+the last counts until the next one succeeds. On the same timer it saves into
+`live_unplayed_profiles` each tracked Legend I player the Live Leaderboard
+ranks at 5,000 because they have not played this Season, and logs a
+`live_unplayed_profiles` line with status `complete`, how many players it
+found and how many rows changed, or `failed`; the board keeps the last list
+until the next one succeeds. On 11 October 2026 the search found 1,328 players
+and took about 6 s with its pages read from disk.
 
 A waiting upload with `oldest_pending_upload_age_seconds` over 15 minutes
 points at the archive or the uploads process: see
