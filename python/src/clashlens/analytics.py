@@ -10,9 +10,10 @@ from typing import Any
 from .domain import ranked_day_for
 from .profile import normalize_player_tag
 
-# v2 orders equal trophies by the shared tie order below; v1 by SHA-256 of
-# the tag alone.
-SNAPSHOT_ORDERING_RULE_VERSION = "tracked-player-order-v2"
+# v3 orders equal trophies by the latest trophy change first; v2 by Season
+# average attack destruction; v1 by SHA-256 of the tag alone.
+SNAPSHOT_ORDERING_RULE_VERSION = "tracked-player-order-v3"
+SEASON_DESTRUCTION_ORDERING_RULE_VERSION = "tracked-player-order-v2"
 FRESHNESS_RULE_VERSION = "profile-freshness-10m-v1"
 PROFILE_FRESHNESS_SECONDS = 600
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"
@@ -27,8 +28,8 @@ def deterministic_tag_hash(tag: str) -> str:
     return hashlib.md5(normalized_tag.encode("ascii")).hexdigest()
 
 
-# The owner's order for equal trophies on the Live and Daily boards (8
-# October 2026): the higher Season average attack destruction first,
+# The owner's order for equal trophies on the Live board, and on Daily
+# boards frozen before the latest-change order (8 October 2026): the higher Season average attack destruction first,
 # destruction over attacks made, zero-star attacks included, compared as
 # exact fractions, with players who have made no attack last; then more
 # attacks; then the tag hash; then the tag. The game's own Season-end
@@ -50,6 +51,72 @@ def tie_order_sql(attacks: str, destruction: str, tag: str) -> str:
         f"{destruction}::numeric / NULLIF({attacks}, 0) DESC NULLS LAST, "
         f"COALESCE({attacks}, 0) DESC, md5({tag}) COLLATE \"C\", {tag} COLLATE \"C\""
     )
+
+
+# The order for equal trophies on Daily boards (owner, 11 October 2026:
+# "based on most accurate"): the player whose trophies changed latest in the
+# ended Legend day comes first, players with no change that day last, then
+# the tag hash, then the tag. At the 11 October 2026 Reset the game's own
+# Reset ranks agreed with this on 70.4% of 1,237 equal-trophy pairs, against
+# 48.1% for Season average attack destruction and 53.8% for the tag hash.
+def latest_change_order_key(
+    latest_change_at: datetime | None, tag: str
+) -> tuple[Any, ...]:
+    """Sort key among equal trophies, smallest first."""
+    return (
+        latest_change_at is None,
+        -latest_change_at.timestamp() if latest_change_at else 0.0,
+        deterministic_tag_hash(tag),
+        tag,
+    )
+
+
+# Each player's latest trophy change in the Legend day starting
+# %(day_start)s, before %(cutoff)s: the end of their newest battle of the day
+# that moved their trophies. A battle ends at the attacker's report time; with
+# only the defender's report, 155 seconds after it, the median attack length
+# (999 battles on 11 October 2026). Each side's change comes from its own
+# report when there is one.
+_LATEST_CHANGE_SQL = """
+SELECT side.player_id, max(ended.at) AS latest_change_at
+FROM legend_battles AS battle
+LEFT JOIN battle_perspectives AS attacker_side
+  ON attacker_side.battle_id = battle.id AND attacker_side.perspective = 'attacker'
+LEFT JOIN battle_evidence AS attacker ON attacker.id = attacker_side.evidence_id
+LEFT JOIN battle_perspectives AS defender_side
+  ON defender_side.battle_id = battle.id AND defender_side.perspective = 'defender'
+LEFT JOIN battle_evidence AS defender ON defender.id = defender_side.evidence_id
+CROSS JOIN LATERAL (
+    SELECT COALESCE(attacker.battle_timestamp,
+                    defender.battle_timestamp + interval '155 seconds') AS at
+) AS ended
+CROSS JOIN LATERAL (VALUES
+    (battle.attacker_player_id,
+     COALESCE(attacker.attacker_gain, defender.attacker_gain)),
+    (battle.defender_player_id,
+     COALESCE(defender.defender_loss, attacker.defender_loss))
+) AS side (player_id, change)
+WHERE battle.ranked_day_start = %(day_start)s
+  AND (battle.attacker_player_id = ANY(%(player_ids)s::bigint[])
+       OR battle.defender_player_id = ANY(%(player_ids)s::bigint[]))
+  AND side.player_id = ANY(%(player_ids)s::bigint[])
+  AND side.change <> 0
+  AND ended.at < %(cutoff)s
+GROUP BY side.player_id
+"""
+
+
+def latest_trophy_changes(
+    connection: Any, *, day_start: datetime, cutoff: datetime, player_ids: list[int]
+) -> dict[int, datetime]:
+    """Each player's latest trophy change in the day before ``cutoff``."""
+    return {
+        int(row[0]): row[1]
+        for row in connection.execute(
+            _LATEST_CHANGE_SQL,
+            {"day_start": day_start, "cutoff": cutoff, "player_ids": player_ids},
+        ).fetchall()
+    }
 
 
 # Each attacker's attacks and summed attack destruction on the battle days

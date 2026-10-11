@@ -7,7 +7,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, seed_attacks, store_observation, text
+from domain_test_support import domain_database, seed_battles, store_observation, text
 from psycopg.types.json import Jsonb
 
 from clashlens import api_leaderboard, boundary, snapshots
@@ -15,7 +15,6 @@ from clashlens.analytics import SNAPSHOT_ORDERING_RULE_VERSION, deterministic_ta
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
-from clashlens.domain import ranked_day_for
 from clashlens.worker import ObservationProcessor
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -810,8 +809,8 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
                 ).fetchall()
             assert len(snapshots) == 2
             assert [text(row[5]) for row in snapshots] == [
-                "tracked-player-order-v2",
-                "tracked-player-order-v2",
+                "tracked-player-order-v3",
+                "tracked-player-order-v3",
             ]
             for row in snapshots:
                 assert text(row[6]) == "profile-freshness-10m-v1"
@@ -958,59 +957,71 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
             database.close()
 
 
-@pytest.mark.parametrize("frozen_before", [False, True])
-def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
+@pytest.mark.parametrize("frozen_under", ["current", "season-attacks", "tag-hash"])
+def test_daily_board_orders_equal_trophies_by_latest_trophy_change(
     database_url: str,
     archive_server,
-    frozen_before: bool,
+    frozen_under: str,
 ) -> None:
+    """From saved profile responses and battles to the published Daily
+    board's order and Tie marks. Inputs frozen under an earlier rule keep it."""
     boundary = datetime(2026, 8, 5, 5, tzinfo=UTC)
-    season_start = ranked_day_for(boundary - timedelta(days=1)).season_start
     # The MD5 tag hash puts ``first`` ahead. The older rule's SHA-256 tag
-    # hash agrees for #28, so only the attacks put ``second`` ahead; for
-    # #8PY it puts ``second`` ahead, so only that hash does.
+    # hash agrees for #28, so only the latest change puts ``second`` ahead;
+    # for #8PY it puts ``second`` ahead, so only that hash does.
     first, second = sorted(
-        ("#2PP", "#8PY" if frozen_before else "#28"), key=deterministic_tag_hash
+        ("#2PP", "#8PY" if frozen_under == "tag-hash" else "#28"),
+        key=deterministic_tag_hash,
     )
     with domain_database(database_url) as connection_info:
-        for tag in (first, second):
+        for tag, trophies in ((first, 6123), (second, 6123), ("#2PY", 6200)):
             _process_profile(
                 connection_info,
                 archive_server,
                 occurrence_key=f"tie-order-{tag}",
                 tag=tag,
-                trophies=6123,
+                trophies=trophies,
                 observed_at=boundary - timedelta(hours=1),
             )
         with psycopg.connect(connection_info) as connection:
             ids = dict(connection.execute("SELECT normalized_tag, id FROM players").fetchall())
-            seed_attacks(connection, ids[second], [(boundary - timedelta(days=2), 60)])
-            # 50% in the Season before the Reset; 87.5% counting the attacks
-            # from before the Season or after the Reset as well.
-            seed_attacks(
+            seed_battles(connection, ids[second], [(boundary - timedelta(hours=2), -20)])
+            # Later, but moving no trophies, or ending after the Reset
+            # although the ended day counts it.
+            seed_battles(
                 connection,
                 ids[first],
                 [
-                    (boundary - timedelta(days=2), 50),
-                    (season_start - timedelta(days=1), 100),
-                    (boundary, 100),
-                    (boundary, 100),
+                    (boundary - timedelta(hours=3), 30),
+                    (boundary - timedelta(minutes=90), 0),
+                    (boundary + timedelta(minutes=1), 40),
                 ],
             )
         snapshot_job_id = _seed_snapshot_job(
             connection_info, player_id=ids[first], boundary_at=boundary, end_trophies=6123,
             ordering_rule_version=(
-                "tracked-player-order-v1" if frozen_before else SNAPSHOT_ORDERING_RULE_VERSION
+                "tracked-player-order-v1"
+                if frozen_under == "tag-hash"
+                else SNAPSHOT_ORDERING_RULE_VERSION
             ),
         )
-        if frozen_before:
-            # An input list frozen before the shared tie order holds no
-            # Season attacks.
+        if frozen_under != "current":
+            # An input list frozen before latest trophy changes holds Season
+            # attacks, or before those, neither.
             with psycopg.connect(connection_info) as connection:
                 connection.execute("SET LOCAL session_replication_role = replica")
                 connection.execute(
-                    "UPDATE boundary_publication_manifest_rows"
-                    " SET input_identity = input_identity - 'season_attacks'"
+                    """
+                    UPDATE boundary_publication_manifest_rows
+                    SET input_identity = input_identity - 'latest_change_at'
+                        || CASE WHEN %s THEN jsonb_build_object(
+                               'season_attacks',
+                               jsonb_build_object('attacks', 1, 'destruction',
+                                                  CASE WHEN player_id = %s THEN 90
+                                                       ELSE 50 END))
+                           ELSE '{}'::jsonb END
+                    """,
+                    (frozen_under == "season-attacks", ids[first]),
                 )
         database, processor = _processor(connection_info, archive_server)
         try:
@@ -1018,21 +1029,10 @@ def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
                 connection_info, database, processor, snapshot_job_id, owner_prefix="tie-order"
             )
             with database.pool.connection() as connection:
-                order = connection.execute(
-                    """
-                    SELECT p.normalized_tag, e.trophies, s.ordering_rule_version
-                    FROM leaderboard_snapshot_entries AS e
-                    JOIN leaderboard_snapshots AS s ON s.id = e.snapshot_id
-                    JOIN players AS p ON p.id = e.player_id
-                    WHERE s.boundary_at = %s AND s.snapshot_kind = 'frozen'
-                    ORDER BY e.position
-                    """,
-                    (boundary,),
-                ).fetchall()
                 frozen = dict(
                     connection.execute(
                         """
-                        SELECT player_id, input_identity->'season_attacks'
+                        SELECT player_id, input_identity->>'latest_change_at'
                         FROM boundary_publication_manifest_entries((
                             SELECT snapshot_manifest_id
                             FROM boundary_publication_generations
@@ -1042,21 +1042,34 @@ def test_daily_board_orders_equal_trophies_by_season_attack_destruction(
                         (boundary,),
                     ).fetchall()
                 )
+            api = ApiDatabase(connection_info)
+            try:
+                board = api_leaderboard.get_frozen_leaderboard(api, limit=10, now=boundary)
+            finally:
+                api.close()
         finally:
             database.close()
-    if frozen_before:
+    assert board is not None
+    order = [(entry["tag"], entry["trophies"], entry["tied"]) for entry in board["entries"]]
+    if frozen_under == "tag-hash":
         # Ordered and labelled by the older rule, so the board rebuild check
         # rebuilds it.
-        assert [(text(row[0]), row[1], text(row[2])) for row in order] == [
-            (second, 6123, "tracked-player-order-v1"),
-            (first, 6123, "tracked-player-order-v1"),
-        ]
-        assert frozen == {ids[first]: None, ids[second]: None}
+        assert order == [("#2PY", 6200, False), (second, 6123, True), (first, 6123, True)]
+        assert board["ordering_rule_version"] == "tracked-player-order-v1"
         return
-    assert [(text(row[0]), row[1]) for row in order] == [(second, 6123), (first, 6123)]
-    assert {text(row[2]) for row in order} == {SNAPSHOT_ORDERING_RULE_VERSION}
-    assert frozen[ids[second]] == {"attacks": 1, "destruction": 60}
-    assert frozen[ids[first]] == {"attacks": 1, "destruction": 50}
+    if frozen_under == "season-attacks":
+        assert order == [("#2PY", 6200, False), (first, 6123, True), (second, 6123, True)]
+        assert board["ordering_rule_version"] == "tracked-player-order-v2"
+        return
+    assert order == [("#2PY", 6200, False), (second, 6123, True), (first, 6123, True)]
+    assert [entry["position"] for entry in board["entries"]] == [1, 2, 3]
+    assert board["ordering_rule_version"] == SNAPSHOT_ORDERING_RULE_VERSION
+    assert frozen == {
+        # A defense seen only in the defender's report ends 155 seconds later.
+        ids[second]: (boundary - timedelta(hours=2, seconds=-155)).isoformat(),
+        ids[first]: (boundary - timedelta(hours=3)).isoformat(),
+        ids["#2PY"]: None,
+    }
 
 
 def test_snapshot_quality_counts_and_reader_ignore_building_candidate(

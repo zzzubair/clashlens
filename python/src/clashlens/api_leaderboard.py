@@ -181,6 +181,14 @@ class _LiveBoard:
     # (tag, name, trophies, observed_at, eligibility_state, clan) in rank order.
     rows: list[tuple[Any, ...]]
 
+    def tied(self, index: int) -> bool:
+        """Whether the row at ``index`` shares its trophies with a neighbor."""
+        trophies = self.rows[index][2]
+        return any(
+            0 <= other < len(self.rows) and self.rows[other][2] == trophies
+            for other in (index - 1, index + 1)
+        )
+
 
 def _read_live_board(connection: Any, now: datetime) -> _LiveBoard:
     season = _season_params(now)
@@ -301,6 +309,7 @@ def get_live_leaderboard(
                 "public_confidence": _public_confidence(True, _text(row[4])),
                 "clan": None if row[5] is None else _text(row[5]),
                 "official_rank": None,
+                "tied": board.tied(position - 1),
             }
         )
     page_count = (total_entries + limit - 1) // limit
@@ -571,7 +580,14 @@ def get_frozen_leaderboard(
                 SELECT entry.position, player.normalized_tag, profile.name,
                        profile.profile_json -> 'clan' ->> 'name',
                        entry.trophies, entry.observed_at, entry.freshness,
-                       entry.confidence, entry.official_rank
+                       entry.confidence, entry.official_rank,
+                       EXISTS (
+                           SELECT FROM api_frozen_leaderboard_entries AS other
+                           WHERE other.leaderboard_id = entry.leaderboard_id
+                             AND other.position IN (entry.position - 1,
+                                                    entry.position + 1)
+                             AND other.trophies = entry.trophies
+                       )
                 FROM api_frozen_leaderboard_entries AS entry
                 JOIN players AS player ON player.id = entry.player_id
                 LEFT JOIN player_profile_versions AS profile
@@ -651,6 +667,7 @@ def get_frozen_leaderboard(
                             _text(row[7])
                         ),
                         "official_rank": None if row[8] is None else int(row[8]),
+                        "tied": bool(row[9]),
                     }
                     for row in rows
                 ],
@@ -672,7 +689,15 @@ def get_frozen_leaderboard(
             SELECT entry.position, player.normalized_tag, profile.name,
                    entry.trophies, entry.profile_observed_at,
                    entry.profile_freshness, entry.profile_confidence,
-                   entry.official_rank, profile.clan
+                   entry.official_rank, profile.clan,
+                   -- Equal trophies sit next to each other on the board.
+                   EXISTS (
+                       SELECT FROM leaderboard_snapshot_entries AS other
+                       WHERE other.snapshot_id = entry.snapshot_id
+                         AND other.position IN (entry.position - 1,
+                                                entry.position + 1)
+                         AND other.trophies = entry.trophies
+                   )
             FROM leaderboard_snapshot_entries AS entry
             JOIN players AS player ON player.id = entry.player_id
             LEFT JOIN LATERAL (
@@ -749,6 +774,7 @@ def get_frozen_leaderboard(
                     "public_confidence": _public_snapshot_confidence(_text(row[6])),
                     "official_rank": None if row[7] is None else int(row[7]),
                     "clan": None if row[8] is None else _text(row[8]),
+                    "tied": bool(row[9]),
                 }
                 for row in rows
             ],

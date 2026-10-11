@@ -95,7 +95,9 @@ it("keeps rank and update explanations off the page but in hover and screen-read
   expect(html).toMatch(
     /<th scope="col" aria-describedby="rank-explanation" title="Rank among players tracked by Clash Lens, not the official global rank/,
   );
-  expect(html).toContain("higher average attack destruction this Season");
+  expect(html).toContain(
+    "Equal trophies are marked Tie and go to the higher average attack destruction this Season",
+  );
   expect(html).toContain(
     'title="When we last confirmed each player&#x27;s profile, even if it was unchanged."',
   );
@@ -134,6 +136,32 @@ it.each([
     expect(html.includes("Over 10 min old")).toBe(stale);
   },
 );
+
+it("marks only rows on equal trophies as a tie and keeps each rank its own", async () => {
+  const fixture = structuredClone(board);
+  const row = fixture.entries[0];
+  fixture.entries = [
+    { ...row, rank: 101, tag: "#2PP", trophies: 5300, tied: true },
+    { ...row, rank: 102, tag: "#9PJYL8RQ0", trophies: 5300, tied: true },
+    { ...row, rank: 103, tag: "#LQ2UV9GJC", trophies: 5290, tied: false },
+  ];
+  mocks.getTrackedLeaderboard.mockResolvedValue(fixture);
+  const { html } = await render();
+  const rows = html.split('<tr class="leaderboard-row"').slice(1);
+  expect(rows.map((item) => item.match(/class="rank-mark">(\d+)</)![1])).toEqual([
+    "101",
+    "102",
+    "103",
+  ]);
+  expect(rows.map((item) => item.includes('class="tie-pill"'))).toEqual([
+    true,
+    true,
+    false,
+  ]);
+  expect(rows[0]).toContain(
+    '<strong>5,300</strong><span class="tie-pill" title="Same trophies as another player">Tie</span>',
+  );
+});
 
 it("formats large ranks without explaining unlisted tracked players", async () => {
   mocks.getTrackedLeaderboard.mockResolvedValue({
@@ -315,6 +343,9 @@ it("heads a Daily board with its Reset time in UTC and no explanation", async ()
   expect(html).not.toContain("not rebuilt since");
   expect(html).not.toContain("Legend season");
   expect(html).toContain("7,211");
+  expect(html).toContain(
+    "the player whose trophies changed most recently that Legend day",
+  );
   expect(html).not.toContain("Incomplete:");
   // The Live board's Season-reset rule never applies to a frozen day.
   expect(html).not.toContain("waiting for their Season reset");

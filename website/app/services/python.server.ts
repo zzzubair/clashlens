@@ -641,7 +641,8 @@ function mapLeaderboard(
           ] as const)
         : !isOneOf(entry.confidence, ["exact", "confirmed", "uncertain"] as const)) ||
       !isOneOf(entry.public_confidence, ["high", "partial", "uncertain"] as const) ||
-      !(entry.official_rank === null || isInteger(entry.official_rank))
+      !(entry.official_rank === null || isInteger(entry.official_rank)) ||
+      !(entry.tied === undefined || typeof entry.tied === "boolean")
     )
       throw new PythonApiError(502, { error: "malformed" });
     return {
@@ -662,6 +663,7 @@ function mapLeaderboard(
             ? "stale"
             : "available",
       confidence: entry.public_confidence,
+      tied: entry.tied === true,
     };
   });
   const mapSelector = (value: unknown) => {

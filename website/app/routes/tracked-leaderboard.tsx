@@ -36,8 +36,15 @@ function formatReset(value: string) {
   const time = date.toISOString().slice(11, 16);
   return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}, ${time} UTC`;
 }
-const RANK_EXPLANATION =
-  "Rank among players tracked by Clash Lens, not the official global rank. Equal trophies go to the higher average attack destruction this Season, then more attacks, then a fixed order based on player tags.";
+// The Live board still orders ties by attack destruction; Daily boards by the
+// latest trophy change, which matched the game's Reset order more often.
+function rankExplanation(view: "live" | "daily") {
+  return `Rank among players tracked by Clash Lens, not the official global rank. Equal trophies are marked Tie and go to ${
+    view === "daily"
+      ? "the player whose trophies changed most recently that Legend day"
+      : "the higher average attack destruction this Season, then more attacks"
+  }, then a fixed order based on player tags.`;
+}
 
 function leaderboardUrl(
   view: "live" | "daily",
@@ -393,7 +400,7 @@ export default function TrackedLeaderboardRoute() {
           ) : (
             <>
               <p className="sr-only" id="rank-explanation">
-                {RANK_EXPLANATION}
+                {rankExplanation(view)}
               </p>
               <div
                 aria-label={`${view === "daily" ? "Daily" : "Live"} leaderboard table`}
@@ -415,7 +422,7 @@ export default function TrackedLeaderboardRoute() {
                       <th
                         scope="col"
                         aria-describedby="rank-explanation"
-                        title={RANK_EXPLANATION}
+                        title={rankExplanation(view)}
                       >
                         Rank
                       </th>
@@ -483,6 +490,14 @@ export default function TrackedLeaderboardRoute() {
                         <td className="trophy-cell" data-label="Trophies">
                           <TrophyMark />
                           <strong>{entry.trophies.toLocaleString()}</strong>
+                          {entry.tied ? (
+                            <span
+                              className="tie-pill"
+                              title="Same trophies as another player"
+                            >
+                              Tie
+                            </span>
+                          ) : null}
                         </td>
                         <td data-label="Last updated">
                           <LocalTimestamp value={entry.freshness.observedAt} />
