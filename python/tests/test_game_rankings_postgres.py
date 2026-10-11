@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import threading
 from collections import Counter
@@ -18,8 +19,11 @@ from test_reset_settlement_collection_postgres import _collector
 
 from clashlens import game_rankings
 from clashlens.collector_db import CollectorDatabase
+from clashlens.domain import ranked_day_for
 
 RESET = datetime(2026, 10, 11, 5, tzinfo=UTC)
+# Each request waits this long for a key before it is sent.
+SENT_AFTER = timedelta(seconds=2)
 LEGEND_I = {"id": 105000036, "name": "Legend I"}
 LEGEND_II = {"id": 105000035, "name": "Legend II"}
 # Our published board: (tag, position, trophies, confidence).
@@ -64,13 +68,13 @@ FRANCE = _list([
     ("#2QQ", 5310, 40, 1, LEGEND_I),
     ("#2PP", 5390, 41, 2, LEGEND_I),  # the game ranks #2QQ above: a break
     ("#2LL", 5000, 0, 3, LEGEND_I),  # the game's stuck 5,000 row; board says 5,200
-    ("#2RR", 5050, 12, 4, LEGEND_I),  # an active Legend I player we don't track
+    ("#2RR", 5050, 12, 0, LEGEND_I),  # an active Legend I player we don't track, rank unknown
     ("#2CC", 5000, 0, 5, LEGEND_I),  # never played this Season, not tracked
 ])
 UNITED_STATES = _list([
     ("#2GG", 5300, 40, 1, LEGEND_I),
     ("#2UU", 5100, 40, 2, LEGEND_I),
-    ("#2VV", 5000, 0, 3, LEGEND_I),  # really at 5,000 on the board too
+    ("#2VV", 5000, 0, 3, LEGEND_I),  # stuck too, though back at 5,000 on the board
     ("#2JJ", 4900, 30, 4, LEGEND_II),
 ])
 
@@ -111,7 +115,7 @@ def _game(answers: dict[str, tuple[int, bytes]]):
 
 
 def _seed(info: str) -> None:
-    """Tracked players, their published Daily board, and yesterday's Reset pull."""
+    """Tracked players, their published Daily board, and an old pull."""
     with psycopg.connect(info) as connection:
         ids = {
             tag: connection.execute(
@@ -147,6 +151,44 @@ def _seed(info: str) -> None:
             """,
             (RESET, RESET + timedelta(hours=1)),
         ).fetchone()[0]
+        # An army-only correction carried the board into a new publication.
+        superseded = connection.execute(
+            """
+            INSERT INTO boundary_publication_generations (
+                boundary_at, generation, ordering_rule_version, freshness_rule_version,
+                expected_population_count, expected_population_hash, target_at,
+                snapshot_id, snapshot_state, army_state
+            ) VALUES (%s, 1, 'test', 'test', 6, repeat('c', 64), %s, %s,
+                      'superseded', 'superseded')
+            RETURNING id
+            """,
+            (RESET, RESET, snapshot),
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO boundary_publication_generations (
+                boundary_at, generation, ordering_rule_version, freshness_rule_version,
+                expected_population_count, expected_population_hash, target_at,
+                snapshot_id, snapshot_state, supersedes_id
+            ) VALUES (%s, 2, 'test', 'test', 6, repeat('c', 64), %s, %s, 'published', %s)
+            """,
+            (RESET, RESET, snapshot, superseded),
+        )
+        # #2LL's and #2VV's own profiles showed other trophies this Season.
+        for tag, trophies in (("#2LL", 5180), ("#2VV", 5060)):
+            connection.execute(
+                """
+                INSERT INTO player_profile_versions (
+                    player_id, observation_id, normalized_tag, endpoint_version,
+                    schema_version, parser_version, observed_at, source_http_status,
+                    name, trophies, league_tier_id, league_tier_name,
+                    eligibility_state, current_league_season_id, profile_json
+                ) VALUES (%s, %s, %s, 'profile-v1', 'profile-schema-v1', %s, %s, 200,
+                          'Player', %s, 105000036, 'Legend I', 'eligible', %s, '{}'::jsonb)
+                """,
+                (ids[tag], observation, tag, f"test-{tag}", RESET - timedelta(hours=1),
+                 trophies, ranked_day_for(RESET).official_season_id),
+            )
         for tag, position, trophies, confidence in BOARD:
             connection.execute(
                 """
@@ -174,29 +216,37 @@ def _database(info: str) -> CollectorDatabase:
 
 
 def _day(info: str, origin: str, tmp_path, times: list[timedelta]) -> list[Counter[str]]:
-    """Run the collector's pulls at each time after the Reset."""
+    """Run the collector's pulls at each time after the Reset; each is sent SENT_AFTER later."""
     database = _database(info)
     try:
         collector = _collector(origin, database, tmp_path)
+        now = [RESET]
+        client = collector.client
+        for fetch in (client.fetch_rankings, client.fetch_locations):
+            async def sent_late(*args, fetch=fetch):
+                response = await fetch(*args)
+                return dataclasses.replace(response, request_started_at=now[0] + SENT_AFTER)
+            setattr(client, fetch.__name__, sent_late)
 
         async def pulls() -> list[Counter[str]]:
-            return [
-                await game_rankings.pull_due(
-                    collector, game_rankings._Puller(collector, lambda after=after: RESET + after)
-                )
-                for after in times
-            ]
+            counts = []
+            for after in times:
+                now[0] = RESET + after
+                counts.append(await game_rankings.pull_due(
+                    collector, game_rankings._Puller(collector, lambda: now[0])
+                ))
+            return counts
 
         return asyncio.run(pulls())
     finally:
         database.close()
 
 
-def _printed_score(info: str, capsys) -> dict:
-    """Score and prune at 07:01, then what the operator's game-ranking-score command prints."""
+def _printed_score(info: str, capsys, after: timedelta = timedelta(hours=2, minutes=1)) -> dict:
+    """Score and prune at ``after`` the Reset, then what the operator's game-ranking-score command prints."""
     database = _database(info)
     try:
-        now = RESET + timedelta(hours=2, minutes=1)
+        now = RESET + after
         for day in game_rankings._days_to_score(database, now):
             game_rankings.score_day(database, day)
         game_rankings._prune(database, now)
@@ -223,33 +273,23 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     }
     with domain_database(database_url) as info, _game(answers) as origin:
         _seed(info)
-        database = _database(info)
-        try:
-            game_rankings.save_pull(
-                database, RESET - timedelta(days=1), "global_reset", None,
-                RESET - timedelta(hours=23, minutes=40),
-                type("Answer", (), {"body": _global(YESTERDAY_RANKS), "http_status": 200,
-                                    "response_completed_at": RESET - timedelta(hours=23)})(),
-                None, switch_basis="changed",
-            )
-        finally:
-            database.close()
         # 05:00:40 early pull; 05:03 poll still shows yesterday's ranks.
         early, still_yesterday = _day(
             info, origin, tmp_path, [timedelta(seconds=40), timedelta(minutes=3)]
         )
         assert early == Counter(global_early=1, added_to_discovery=0)
         assert still_yesterday == Counter(global_poll=1, added_to_discovery=0)
-        # By 05:06 previousRank has switched: the Reset pull, then the countries.
+        # By 05:07 previousRank has switched: the Reset pull, then the countries.
         answers["/v1/locations/global/rankings/players"] = (200, _global(TODAY_RANKS))
-        [switched] = _day(info, origin, tmp_path, [timedelta(minutes=6)])
+        [switched] = _day(info, origin, tmp_path, [timedelta(minutes=7)])
         assert switched == Counter(global_reset=1, locations=1, country=2, added_to_discovery=2)
         # Nothing more is due, even long after.
         [later] = _day(info, origin, tmp_path, [timedelta(minutes=40)])
         assert later == Counter()
         assert len(_Game.asked) == 6
 
-        printed = _printed_score(info, capsys)
+        # First scored 4 days later, as after a collector outage.
+        printed = _printed_score(info, capsys, timedelta(days=4, hours=2, minutes=1))
         with psycopg.connect(info) as connection:
             due = connection.execute(
                 "SELECT normalized_tag FROM players"
@@ -264,24 +304,56 @@ def test_a_reset_morning_of_game_lists_ends_in_a_stored_score(
     # The old pull is pruned; every pull today kept its raw bytes.
     assert pulls == [
         ("country", 2, True, True), ("global_early", 1, True, True),
-        ("global_poll", 1, True, True), ("global_reset", 2, True, True),
+        ("global_poll", 1, True, True), ("global_reset", 1, True, True),
         ("locations", 1, True, True),
     ]
     assert printed["unknown_reasons"] == [] and printed["status"] == "scored"
     assert printed["reset"] == RESET.isoformat() and printed["board_version"] == 3
-    assert printed["switch_basis"] == "changed"
+    # Times are when each request was sent, not when it was asked for.
+    assert printed["global_early_at"] == (RESET + timedelta(seconds=40) + SENT_AFTER).isoformat()
+    assert printed["global_reset_at"] == (RESET + timedelta(minutes=7) + SENT_AFTER).isoformat()
     assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 2)
-    # France: #2LL's stuck row is left out, so one pair, and it breaks. US: three pairs.
-    assert (printed["country_pairs"], printed["country_order_breaks"]) == (4, 1)
-    assert printed["s1_country_order_breaks_per_100k"] == 25000.0
-    assert printed["s2_global_inside_trophy_group"] == 6
-    assert printed["global_exact_rank"] == 4
-    assert printed["s3_confirmed_entries_contradicted"] == 1
+    # The stuck rows #2LL and #2VV are left out of every number.
+    # France: one pair, and it breaks. US: one pair.
+    assert (printed["country_pairs"], printed["country_order_breaks"]) == (2, 1)
+    assert printed["s1_country_order_breaks_per_100k"] == 50000.0
+    assert (printed["global_ranked"], printed["s2_global_inside_trophy_group"]) == (4, 4)
+    assert printed["global_exact_rank"] == 2
+    # Both confirmed entries in France's break.
+    assert printed["s3_confirmed_entries_contradicted"] == 2
     assert printed["s4_active_legend_i_missing"] == 1 and printed["s4_tags"] == ["#2RR"]
-    assert printed["s5_legend_i_on_board_percent"] == 75.0
+    assert printed["s5_legend_i_on_board_percent"] == 66.67
     assert printed["s6_uncertain_percent"] == 16.67
-    assert printed["early_trophies_equal"] == 5
-    assert printed["game_faults"] == {"stuck_5000": ["#2LL"], "tag_in_two_countries": []}
+    assert printed["early_trophies_equal"] == 3
+    assert printed["game_faults"] == {
+        "stuck_5000": ["#2LL", "#2VV"], "tag_in_two_countries": [],
+    }
+
+
+def test_a_list_never_seen_to_switch_leaves_the_day_unknown(
+    database_url: str, tmp_path, capsys, monkeypatch
+) -> None:
+    monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
+    answers = {
+        "/v1/locations": (200, LOCATIONS),
+        "/v1/locations/global/rankings/players": (200, _global(YESTERDAY_RANKS)),
+        "/v1/locations/32000087/rankings/players": (200, FRANCE),
+        "/v1/locations/32000249/rankings/players": (200, UNITED_STATES),
+    }
+    with domain_database(database_url) as info, _game(answers) as origin:
+        _seed(info)
+        # The first day collected: every list until 06:00 holds yesterday's ranks.
+        _day(info, origin, tmp_path, [timedelta(seconds=40)] + [
+            timedelta(minutes=minute) for minute in (3, 20, 59, 60)
+        ])
+        printed = _printed_score(info, capsys)
+    # The early pull and polls at 05:03, 05:20 and 05:59; no country list.
+    assert [path.split("?")[0] for path in _Game.asked] == [
+        "/v1/locations/global/rankings/players"
+    ] * 4
+    assert printed["status"] == "unknown"
+    assert printed["unknown_reasons"] == ["previous_rank_not_switched", "locations_missing"]
+    assert printed["global_reset_at"] is None and printed["countries_pulled"] == 0
 
 
 def test_a_failed_country_pull_makes_the_day_unknown(
@@ -290,21 +362,21 @@ def test_a_failed_country_pull_makes_the_day_unknown(
     monkeypatch.setattr(game_rankings, "REQUEST_SECONDS", 0.0)
     answers = {
         "/v1/locations": (200, LOCATIONS),
-        "/v1/locations/global/rankings/players": (200, _global(TODAY_RANKS)),
+        "/v1/locations/global/rankings/players": (200, _global(YESTERDAY_RANKS)),
         "/v1/locations/32000087/rankings/players": (200, FRANCE),
         "/v1/locations/32000249/rankings/players": (503, b'{"reason": "inMaintenance"}'),
     }
     with domain_database(database_url) as info, _game(answers) as origin:
         _seed(info)
-        # The collector starts at 05:10, after the early pull's window, with
-        # no previous day's pull: the clock judges the switch from 05:20.
-        _day(info, origin, tmp_path, [timedelta(minutes=minute) for minute in (10, 20, 21, 23)])
+        _day(info, origin, tmp_path, [timedelta(seconds=40)])
+        # The first day collected switches against its own early pull.
+        answers["/v1/locations/global/rankings/players"] = (200, _global(TODAY_RANKS))
+        _day(info, origin, tmp_path, [timedelta(minutes=minute) for minute in (3, 4, 5.5)])
         printed = _printed_score(info, capsys)
     paths = Counter(path.split("?")[0] for path in _Game.asked)
-    # Polled at 05:10 and 05:20; the US list tried at 05:20 and again 2 minutes later.
+    # The early pull, then switched at 05:03; the US list tried then and again 2 minutes later.
     assert paths["/v1/locations/global/rankings/players"] == 2
     assert paths["/v1/locations/32000249/rankings/players"] == 2
     assert printed["status"] == "unknown"
-    assert printed["unknown_reasons"] == ["global_early_missing", "countries_missing:1"]
-    assert printed["switch_basis"] == "clock"
+    assert printed["unknown_reasons"] == ["countries_missing:1"]
     assert (printed["countries_expected"], printed["countries_pulled"]) == (2, 1)

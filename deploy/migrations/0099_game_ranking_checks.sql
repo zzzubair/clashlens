@@ -14,7 +14,7 @@ CREATE TABLE game_ranking_pulls (
     -- locations: the weekly country list; global_early: the global top 200
     -- just after the Reset; global_poll: a global pull taken while waiting
     -- for previousRank to switch; global_reset: the first global pull whose
-    -- previousRank holds this Reset's ranks; country: one country's top 200.
+    -- previousRank differs from global_early's; country: one country's top 200.
     purpose text NOT NULL CHECK (
         purpose IN ('locations', 'global_early', 'global_poll', 'global_reset', 'country')
     ),
@@ -27,13 +27,9 @@ CREATE TABLE game_ranking_pulls (
     http_status integer,
     -- NULL for a readable 200 answer; otherwise why the pull failed.
     failure text,
-    -- How a global_reset pull was judged switched: 'changed' from the previous
-    -- day's, or 'clock' when there was no previous day's to compare.
-    switch_basis text CHECK (switch_basis IN ('changed', 'clock')),
     body_sha256 text CHECK (body_sha256 ~ '^[0-9a-f]{64}$'),
     body_bytes integer CHECK (body_bytes >= 0),
-    body_gzip bytea,
-    CHECK ((purpose = 'global_reset') = (switch_basis IS NOT NULL))
+    body_gzip bytea
 );
 CREATE INDEX game_ranking_pulls_boundary
     ON game_ranking_pulls (boundary_at, purpose, location_id);
@@ -51,7 +47,9 @@ CREATE TABLE game_ranking_scores (
     UNIQUE (boundary_at, snapshot_id)
 );
 
--- The published frozen Daily board for one Reset, as the website shows it.
+-- The published frozen Daily board for one Reset, as the website shows it:
+-- the newest version with no publication or one not superseded, so a board
+-- an army-only correction carried into a new publication still counts.
 CREATE FUNCTION clashlens_game_ranking_board(reset_at timestamptz)
 RETURNS TABLE (
     snapshot_id bigint, snapshot_version integer, normalized_tag text,
@@ -59,19 +57,48 @@ RETURNS TABLE (
 )
 LANGUAGE sql STABLE SECURITY DEFINER
 AS $$
-    SELECT snapshot.id, snapshot.version, player.normalized_tag, entry.position,
+    WITH board AS (
+        SELECT snapshot.id, snapshot.version
+        FROM leaderboard_snapshots AS snapshot
+        WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+          AND snapshot.boundary_at = reset_at
+          AND (NOT EXISTS (SELECT 1 FROM boundary_publication_generations AS generation
+                           WHERE generation.snapshot_id = snapshot.id)
+               OR EXISTS (SELECT 1 FROM boundary_publication_generations AS generation
+                          WHERE generation.snapshot_id = snapshot.id
+                            AND generation.snapshot_state <> 'superseded'))
+        ORDER BY snapshot.version DESC, snapshot.id DESC
+        LIMIT 1
+    )
+    SELECT board.id, board.version, player.normalized_tag, entry.position,
            entry.trophies, entry.confidence
-    FROM leaderboard_snapshots AS snapshot
-    JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = snapshot.id
+    FROM board
+    JOIN leaderboard_snapshot_entries AS entry ON entry.snapshot_id = board.id
     JOIN players AS player ON player.id = entry.player_id
-    WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-      AND snapshot.boundary_at = reset_at
-      AND NOT EXISTS (
-          SELECT 1 FROM boundary_publication_generations AS generation
-          WHERE generation.snapshot_id = snapshot.id
-            AND generation.snapshot_state = 'superseded'
-      )
     ORDER BY entry.position;
+$$;
+
+-- Of these tags, the players whose own accepted profile showed trophies other
+-- than 5,000 in this Season before the Reset, so they have battled this Season.
+CREATE FUNCTION clashlens_game_ranking_season_battlers(
+    list_tags text[], list_season_id text, list_season_start timestamptz,
+    list_reset_at timestamptz
+)
+RETURNS TABLE (normalized_tag text)
+LANGUAGE sql STABLE SECURITY DEFINER
+AS $$
+    SELECT player.normalized_tag
+    FROM players AS player
+    WHERE player.normalized_tag = ANY(list_tags)
+      AND EXISTS (
+          SELECT 1 FROM player_profile_versions AS version
+          WHERE version.player_id = player.id
+            AND version.source_contract_state = 'accepted'
+            AND version.observed_at >= list_season_start
+            AND version.observed_at < list_reset_at
+            AND version.current_league_season_id = list_season_id
+            AND version.trophies <> 5000
+      );
 $$;
 
 DO $$
@@ -80,14 +107,21 @@ BEGIN
         'ALTER FUNCTION %I.clashlens_game_ranking_board(timestamptz) SET search_path TO pg_catalog, %I, pg_temp',
         current_schema(), current_schema()
     );
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_game_ranking_season_battlers(text[], text, timestamptz, timestamptz) SET search_path TO pg_catalog, %I, pg_temp',
+        current_schema(), current_schema()
+    );
 END $$;
 REVOKE ALL ON TABLE game_ranking_pulls, game_ranking_scores
     FROM PUBLIC, clashlens_python_worker, clashlens_python_api, clashlens_collector;
 GRANT SELECT, INSERT, DELETE ON TABLE game_ranking_pulls TO clashlens_collector;
 GRANT SELECT, INSERT ON TABLE game_ranking_scores TO clashlens_collector;
-REVOKE ALL ON FUNCTION clashlens_game_ranking_board(timestamptz)
+REVOKE ALL ON FUNCTION clashlens_game_ranking_board(timestamptz),
+    clashlens_game_ranking_season_battlers(text[], text, timestamptz, timestamptz)
     FROM PUBLIC, clashlens_python_worker, clashlens_python_api, clashlens_collector;
-GRANT EXECUTE ON FUNCTION clashlens_game_ranking_board(timestamptz) TO clashlens_collector;
+GRANT EXECUTE ON FUNCTION clashlens_game_ranking_board(timestamptz),
+    clashlens_game_ranking_season_battlers(text[], text, timestamptz, timestamptz)
+    TO clashlens_collector;
 
 INSERT INTO clash_lens_schema_migrations(version) VALUES (99)
 ON CONFLICT (version) DO NOTHING;
