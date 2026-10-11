@@ -37,7 +37,7 @@ from .army_analytics import (
 from .army_decoder import CURRENT_DECODES, DECODER_VERSION
 from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
 from .army_rank_bands import (
-    band_of,
+    band_players,
     fact_rank_band_digest,
     rank_band_digest,
     read_rank_band_totals,
@@ -428,17 +428,10 @@ def get_army_analytics(
                         low, high = map(
                             int, population.removeprefix("band-").split("-")
                         )
-                    members = connection.execute(
-                        """
-                        SELECT player_id, position FROM leaderboard_snapshot_entries
-                        WHERE snapshot_id=%s AND position BETWEEN %s AND %s
-                        """,
-                        (snapshot_ids[0], low, high),
-                    ).fetchall()
-                    band_by_player = {
-                        int(row[0]): band_of(int(row[1])) for row in members
-                    }
-                    member_ids = sorted({int(row[0]) for row in members})
+                    band_by_player = band_players(
+                        connection, snapshot_ids[0], low, high
+                    )
+                    member_ids = sorted(band_by_player)
                 excluded_players = 0
                 shielded_player_days = 0
                 if population.startswith("streak-top-"):
@@ -606,6 +599,8 @@ def get_army_analytics(
                 banded = read_rank_band_totals(
                     connection,
                     snapshot_ids[0],
+                    season_id=resolved.season,
+                    band_by_player=band_by_player,
                     lens=resolved.lens,
                     category=resolved.category,
                     population=population,

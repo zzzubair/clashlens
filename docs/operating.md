@@ -480,9 +480,12 @@ these steps, all run by the worker:
    the worker's maintenance timer counts `army_analytics_rank_band_totals`:
    each Legend day's totals for the 17 rank bands covering ranks 1-10,000 of
    that Season's newest leaderboard. Top N and rank-band views add these up.
-   Streak views, trophy ranges, ranges ending before the newest day, and any
-   day rebuilt since its totals were counted read facts instead. The worker
-   log shows each count as an `army_rank_band_totals` event.
+   A republished leaderboard reuses the saved totals of bands holding the
+   same players, and the worker recounts only the bands whose players changed.
+   Streak views, trophy ranges, ranges ending before the newest day, any day
+   rebuilt since its totals were counted, and, until that recount finishes,
+   views with a changed band read facts instead. The worker log shows each
+   count as an `army_rank_band_totals` event.
 
 **First checks**, read-only:
 
