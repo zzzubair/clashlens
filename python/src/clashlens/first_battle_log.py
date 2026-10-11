@@ -197,8 +197,9 @@ def queue_earlier_days(
 ) -> None:
     """When a player's earliest saved battle log, even one processed after
     newer ones, was saved on Day 1, or holds their battles from an earlier
-    day of the Season it was saved in, recalculate from that day; otherwise
-    recalculate any earlier days it proves at 0/0 (``queue_unplayed_days``)."""
+    day of the Season it was saved in, recalculate from that day. Either way
+    it proves the 0/0 days before the player's first sighting at 5,000
+    (``queue_unplayed_days``)."""
     saved_day = domain.ranked_day_for(observed_at)
     earlier = [
         row.battle.ranked_day_start
@@ -211,8 +212,8 @@ def queue_earlier_days(
     first = _first_log(connection, player_id)
     if first[2] < observed_at:
         return
+    queue_unplayed_days(connection, player_id, observed_at, int(first[1]))
     if not earlier:
-        queue_unplayed_days(connection, player_id, observed_at, int(first[1]))
         return
     day = min(earlier)
     if domain.is_season_boundary(day):
@@ -269,16 +270,21 @@ def queue_day_1(connection: Any, player_id: int, profile_version_id: int) -> Non
 def queue_unplayed_days(
     connection: Any, player_id: int, observed_at: datetime, observation_id: int
 ) -> None:
-    """When a profile read from the start of the Legend day of
-    ``observed_at`` shows the player not played yet, whatever Season it
-    names, recalculate each earlier day of that Season, so each shows as a
-    0/0 day at 5,000. Queued from each such new profile and from the
+    """When the player's first profile of the Season of ``observed_at`` that
+    can show them not played yet (``_first_seen_at_5000``) came before their
+    first Legend battle of the Season, whatever Season it names, recalculate
+    each day of the Season before that profile's Legend day, so each shows
+    as a 0/0 day at 5,000. Queued from each such new profile and from the
     player's first battle log, which proves those days' battles, whichever
     is processed last, once per day and triggering ``observation_id``."""
-    day = domain.ranked_day_for(observed_at)
+    profile_id, seen_at = _first_seen_at_5000(
+        connection, player_id, domain.ranked_day_for(observed_at).season_start
+    )
+    if seen_at is None:
+        return
+    day = domain.ranked_day_for(seen_at)
     if not reset_baselines._unplayed(
-        connection, player_id, day.start,
-        *_first_seen_at_5000(connection, player_id, day.start),
+        connection, player_id, day.start, profile_id, seen_at
     ):
         return
     day_start = day.season_start

@@ -394,31 +394,46 @@ def test_every_day_before_a_player_first_seen_unplayed_is_a_0_0_day_at_5000(
 def test_days_before_first_seen_are_recalculated_once_the_first_battle_log_lands(
     database_url: str, archive_server
 ) -> None:
-    # The Day 8 profile and its days are processed before the first battle
-    # log, which then proves those days had no battle.
+    # Each Day 8 profile and its days are processed before the first battle
+    # log, which then proves those days had no battle: read at the same
+    # Reset, or first read a day later.
     day_8 = DAY_1 + timedelta(days=7)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         profile_job, log_job = _sweep(connection_info, archive_server, day_8, {
             UNPLAYED: (_season_zero(UNPLAYED), _log()),
         })
-        _run(connection_info, archive_server, [profile_job])
-        _run(connection_info, archive_server, [log_job])
+        late_profile, late_log = (
+            store_observation(
+                connection_info, archive_server, occurrence_key=f"late-{endpoint}",
+                endpoint=endpoint, body=body, observed_at=at, normalized_tag=STARTER,
+            )[1]
+            for endpoint, body, at in (
+                ("profile", _season_zero(STARTER), day_8 + READ_AFTER),
+                ("battle_log", _log(), day_8 + timedelta(days=1) + READ_AFTER),
+            )
+        )
+        _run(connection_info, archive_server, [profile_job, late_profile])
+        _run(connection_info, archive_server, [log_job, late_log])
         with psycopg.connect(connection_info) as connection:
             days = {
-                row[0]: row[1:]
+                (row[0], row[1]): row[2:]
                 for row in connection.execute(
                     """
-                    SELECT DISTINCT ON (ranked_day_start) ranked_day_start,
-                           attack_count, defense_count, start_trophies,
-                           next_start_trophies, net_trophy_change
-                    FROM ranked_day_versions
-                    ORDER BY ranked_day_start, version DESC
+                    SELECT DISTINCT ON (player.normalized_tag, day.ranked_day_start)
+                           player.normalized_tag, day.ranked_day_start,
+                           day.attack_count, day.defense_count, day.start_trophies,
+                           day.next_start_trophies, day.net_trophy_change
+                    FROM ranked_day_versions AS day
+                    JOIN players AS player ON player.id = day.player_id
+                    ORDER BY player.normalized_tag, day.ranked_day_start,
+                             day.version DESC
                     """
                 )
             }
 
-    for day in range(7):
-        assert days[DAY_1 + timedelta(days=day)] == (0, 0, 5000, 5000, 0)
+    for tag in (UNPLAYED, STARTER):
+        for day in range(7):
+            assert days[tag, DAY_1 + timedelta(days=day)] == (0, 0, 5000, 5000, 0)
 
 
 def test_a_malformed_season_at_5000_stays_rejected(
