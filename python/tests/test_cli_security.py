@@ -722,6 +722,10 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
     (["--repair", "queue"], None),
     (["--repair", "queue", "--boards", "queue", "--season", "1791176400"], None),
     (["--repair", "queue", "--armies", "queue", "--season", "1791176400"], None),
+    (["--repair", "preview", "--players", "day-1-or-unplayed", "--season", "1791176400"],
+     "preview"),
+    (["--boards", "queue", "--players", "day-1-or-unplayed", "--season", "1791176400"],
+     None),
 ])
 def test_season_repair_needs_a_season_and_runs_alone(
     monkeypatch, extra: list[str], action: str | None
@@ -731,8 +735,8 @@ def test_season_repair_needs_a_season_and_runs_alone(
                         lambda url: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(
         "clashlens.domain_repair.season_repair",
-        lambda database, season, action, *, max_jobs: calls.append(
-            (season, action, max_jobs)) or {},
+        lambda database, season, action, *, max_jobs, scope: calls.append(
+            (season, action, max_jobs, scope)) or {},
     )
     arguments = ["republish-current-season", "--database-url",
                  "postgresql://worker@postgres/clashlens", *extra]
@@ -742,7 +746,8 @@ def test_season_repair_needs_a_season_and_runs_alone(
         assert calls == []
     else:
         assert main(arguments) == 0
-        assert calls == [("1791176400", action, 100)]
+        scope = "day-1-or-unplayed" if "--players" in extra else None
+        assert calls == [("1791176400", action, 100, scope)]
 
 
 @pytest.mark.parametrize("report,status", [({"resets": []}, 0), ({"refused": "window"}, 1)])

@@ -756,6 +756,26 @@ Reset's newest generation shows `snapshot_state` and `army_state` as
 The receipt is kept per Season and rule revision, so the same revision is
 repaired once.
 
+To recalculate only the players a rule change can affect, add
+`--players day-1-or-unplayed` to each of the three commands. It takes the
+players with saved days of the Season whose Day 1 was saved Inconsistent,
+the only Day 1 results the official Season-end total check (#441) can
+change, and those whose newest profile shows Legend I at 5,000 (accepted,
+or naming Season 0 before sign-up) with no Legend battle of the Season
+saved, whose days rank at 5,000 with no battles once that rule is deployed.
+If PR #451 (never-played players ranked at 5,000) has not deployed when
+this repair runs, run the scoped repair again after it deploys, so this
+group is recalculated under that rule; its new rule revision gives it a
+fresh receipt. It chooses the players when its
+first `queue` runs and saves that list on its receipt, so a player whose
+days change meanwhile stays in it; `preview` shows how many (`players`)
+before anything is queued. Each chosen player's job
+recalculates every saved day of the Season from the first, as above; the
+`inputs`, `boards` and `summaries` steps are the full repair's, except that
+summaries are stored again only for the chosen players before the check of
+every summary. It keeps its own receipt, so a full repair of the same
+revision afterwards still recalculates every player.
+
 **Known limits of refresh triggers:** these cases queue no recalculation of
 their own. A battle report is compared with that side's report before it, in
 time, length, stars, destruction and trophies, so one repeating it exactly
