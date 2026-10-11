@@ -948,7 +948,9 @@ class Collector:
     ) -> None:
         active: dict[int, tuple[str, asyncio.Task[str]]] = {}
         # Reset pairs hold regular checks until they finish, so they may use
-        # the regular checks' slots; other work keeps its own few.
+        # the regular checks' slots. Settlement checks, due once those pairs
+        # are done, share them behind any pair still owed: each holds its slot
+        # through two saves, so 32 slots took hours. Other work keeps its few.
         slots = {
             "interactive": 6,
             "reset": self.regular_parallelism,
@@ -1012,7 +1014,7 @@ class Collector:
                             "interactive"
                             if is_interactive
                             else "reset"
-                            if intent.kind == "reset_baseline"
+                            if intent.kind in {"reset_baseline", "reset_settlement"}
                             else "ordinary"
                         )
                         if (

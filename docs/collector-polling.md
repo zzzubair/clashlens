@@ -666,8 +666,11 @@ work row keeps pointing at them, so the worker processes them behind newer
 responses instead of skipping them. Settlement checks fetch no league history;
 a Season-opening Reset schedules a separate refresh for that (below).
 
-The checks run in the 32 ordinary intent slots behind any unfinished Reset
-work, with the same retries as Reset work. They never block regular
+The checks share the Reset pairs' slots (`CLASHLENS_REGULAR_PARALLELISM`,
+300 with six keys), behind any unfinished Reset pair, with the same retries
+as Reset work; the pairs finished by 05:13 on 8-10 October 2026, so the slots
+are otherwise idle at 05:20. Regular checks keep running beside them and the
+keys' start and concurrency limits still bound every request. They never block regular
 admission, the next Reset or the 05:30 late-battle check, which does not wait
 for their responses' processing: every attempt's processing job, including
 one a retry replaced, has a `process-settlement:` key. No request starts 23 hours 55 minutes after
@@ -681,12 +684,21 @@ processed. The worker judges the check's profile like any other reading
 when it calculates the day.
 
 Budget at 13,263 members (October 3, 2026): 26,526 extra requests per Reset.
-Six regular keys at 25 starts per second take at least 177 seconds, but the
-32 slots are the real limit: production's early Reset pass, the same work,
-finished in 7m45s and 10m10s on October 1 and 2, but the October 6 pass ran
-from 05:20 to 08:18. Discovery and ranking checks go ahead of the pass and of
-the season-end league-history refresh, so a player first seen at 05:30 is
-checked within seconds, not after the pass. Each finished check keeps a work
+Six regular keys at 25 starts per second take at least 177 seconds. Each
+check holds its slot from its profile request until its battle log is saved,
+and both answers are always written to the spool and the database, never
+skipped as unchanged. In the 32 ordinary slots it used until October 2026
+that took about 21-28 seconds a check once regular checks resumed: production
+finished about 60-100 checks a minute (05:20 to 08:18 on October 6; 5,986 of
+13,251 by 06:28 on October 8; 1,872 of 13,393 by 05:47 on October 10). On
+October 10 the Reset pass, the same requests and saves in 300 slots with
+regular checks held, read 13,393 profiles from 05:03:40 to 05:07:00 and their
+logs from 05:07:20 to 05:13:00. In the Reset slots the settlement pass gets
+about nine times the room; how much faster it finishes beside regular checks
+is not yet measured. Due discovery and ranking checks are fetched ahead of
+the pass and of the season-end league-history refresh and keep their own 32
+slots, so a player first seen at 05:30 is checked within seconds, not after
+the pass. Each finished check keeps a work
 row, about 220 bytes plus three index entries: 3-5 MB a day, about 1.8 GB a
 year, never deleted. A saved profile and log average 23 KB and 74 KB of raw
 bytes, up to 1.3 GB a day before identical bytes are stored once.

@@ -796,17 +796,26 @@ def test_intent_lane_refills_around_active_rows_without_overadmitting(
 
 
 @pytest.mark.parametrize(
-    ("kind", "most_at_once"), [("reset_baseline", 4), ("reset_settlement", 2)]
+    ("kinds", "expected"),
+    [
+        (["reset_baseline"] * 6, [1, 2, 3, 4]),
+        (["reset_settlement"] * 6, [1, 2, 3, 4]),
+        (["reset_baseline"] + ["reset_settlement"] * 5, [1, 2, 3, 4]),
+        (["discovery_profile"] * 6, [1, 2]),
+        # Due discovery checks come first and keep their own slots.
+        (["discovery_profile"] * 2 + ["reset_settlement"] * 6, [1, 2, 3, 4, 5, 6]),
+    ],
 )
-def test_reset_pairs_use_the_regular_slots_while_other_work_keeps_its_own(
-    monkeypatch: pytest.MonkeyPatch, kind: str, most_at_once: int
+def test_reset_and_settlement_checks_use_the_regular_slots_while_other_work_keeps_its_own(
+    monkeypatch: pytest.MonkeyPatch, kinds: list[str], expected: list[int]
 ) -> None:
-    # Regular checks wait for every Reset pair, so their slots are free for them.
+    # Regular checks wait for every Reset pair, so their slots are free for
+    # them and, once the pairs are done, for the settlement checks behind them.
     spool = _Spool()
     now = datetime.now(UTC)
     due = [
         CollectorIntent(kind, now, index, f"#{index}", work_id=index, sweep_id=1)
-        for index in range(1, 7)
+        for index, kind in enumerate(kinds, start=1)
     ]
 
     class IntentStore(_Store):
@@ -842,7 +851,11 @@ def test_reset_pairs_use_the_regular_slots_while_other_work_keeps_its_own(
         stop = asyncio.Event()
         task = asyncio.create_task(collector._intent_loop(stop, False, 0.001))
         try:
-            await asyncio.sleep(0.1)
+            async with asyncio.timeout(5):
+                while len(started) < len(expected):
+                    await asyncio.sleep(0.001)
+            # Further loop passes must find every slot taken.
+            await asyncio.sleep(0.05)
         finally:
             stop.set()
             release.set()
@@ -850,7 +863,7 @@ def test_reset_pairs_use_the_regular_slots_while_other_work_keeps_its_own(
 
     asyncio.run(run())
 
-    assert sorted(started) == list(range(1, most_at_once + 1))
+    assert sorted(started) == expected
 
 
 def test_cancelled_thread_waits_for_immutable_operation_to_finish() -> None:
