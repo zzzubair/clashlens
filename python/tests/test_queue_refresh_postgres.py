@@ -552,47 +552,53 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
     ]
 
 
-def test_the_daily_recheck_fills_its_lane_a_batch_at_a_time(
+def test_the_daily_recheck_fills_its_lane_a_batch_at_a_time_and_finishes_each_pass(
     database_url: str, archive_server, monkeypatch, capsys
 ) -> None:
     # The lane takes the oldest first, so a whole pass queued at once would
     # keep a recheck for any other day's evidence waiting behind it for hours.
+    # A worker started at 23:00 first finishes the morning pass a restart may
+    # have cut short, then the night pass, across the 04:00 to 07:00 pause.
     monkeypatch.setattr(queue_refresh, "RECHECK_BATCH", 1)
     monkeypatch.setattr(queue_refresh, "BATCH_INTERVAL_SECONDS", 0)
     monkeypatch.setattr(queue_refresh, "CHECK_INTERVAL_SECONDS", 0)
-    night = DAY_D + timedelta(hours=18)
+    night, paused, after = (DAY_D + timedelta(hours=hours) for hours in (18, 23.5, 26))
+    days = [f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C)]
     with domain_database(database_url, include_coordinator=True) as connection_info:
-        _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         capsys.readouterr()
 
-        def drain() -> list[str]:
+        def drain() -> None:
             with psycopg.connect(connection_info) as connection:
-                return [str(row[0]) for row in connection.execute(
+                connection.execute(
                     "UPDATE python_processing_jobs SET status = 'complete',"
                     " completed_at = clock_timestamp()"
-                    " WHERE priority = %s AND status = 'pending'"
-                    " RETURNING input_json ->> 'ranked_day_start'",
+                    " WHERE priority = %s AND status = 'pending'",
                     (DAY_RECHECK_PRIORITY,),
-                )]
+                )
 
         database = Database(connection_info)
         recheck = queue_refresh.DailyRecheck(database)
         try:
-            recheck.run_when_due(night)
-            recheck.run_when_due(night)
-            first = drain()
-            recheck.run_when_due(night)
-            second = drain()
-            recheck.run_when_due(night)
-            recheck.run_when_due(night)
+            for now in (night, night, None, night, None, night, night, None,
+                        paused, None, after, None, after):
+                if now is None:
+                    drain()
+                else:
+                    recheck.run_when_due(now)
         finally:
             database.close()
+        morning = _queued(connection_info, f"reconcile:recheck:{DAY_D:%Y-%m-%d}:morning:")
+        tonight = _queued(connection_info, f"reconcile:recheck:{DAY_D:%Y-%m-%d}:night:")
 
-    logged = [json.loads(line) for line in capsys.readouterr().out.splitlines()
-              if '"daily_recheck"' in line]
-    assert [(line["status"], line["days"]) for line in logged] == [
-        ("queuing", 1), ("queuing", 1), ("queued", 0)]
-    assert sorted(first + second) == [f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C)]
+    logged = [(line["slot"].split(":")[1], line["status"], line["days"])
+              for line in map(json.loads, [
+                  line for line in capsys.readouterr().out.splitlines()
+                  if '"daily_recheck"' in line])]
+    assert logged == [
+        ("morning", "queuing", 1), ("morning", "queuing", 1), ("morning", "queued", 0),
+        ("night", "queuing", 1), ("night", "queuing", 1), ("night", "queued", 0)]
+    assert morning == tonight == [(str(player_id), day) for day in days]
 
 
 def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -> None:

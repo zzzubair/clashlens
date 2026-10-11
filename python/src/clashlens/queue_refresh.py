@@ -248,10 +248,8 @@ def queue_recheck(database: db.Database, slot: str, boundary: datetime) -> tuple
 
 def due_recheck_slot(connection: Any, now: datetime) -> tuple[str, datetime] | None:
     """The recheck due at ``now`` and its Reset: the morning one once no
-    day-end recheck waits, the night one from 23:00; none from 04:00 to 07:00."""
+    day-end recheck waits, the night one from 23:00."""
     boundary = domain.ranked_day_for(now).start
-    if 4 <= now.astimezone(UTC).hour < 7:
-        return None
     if now >= boundary.replace(hour=23):
         return f"{boundary:%Y-%m-%d}:night", boundary
     waiting = connection.execute(
@@ -265,31 +263,54 @@ def due_recheck_slot(connection: Any, now: datetime) -> tuple[str, datetime] | N
     return None if waiting else (f"{boundary:%Y-%m-%d}:morning", boundary)
 
 
+def previous_recheck_slot(now: datetime) -> tuple[str, datetime]:
+    """The recheck before the one due at ``now``: the Reset's morning one
+    from 23:00, until then the night one of the Reset before."""
+    boundary = domain.ranked_day_for(now).start
+    if now >= boundary.replace(hour=23):
+        return f"{boundary:%Y-%m-%d}:morning", boundary
+    before = boundary - timedelta(days=1)
+    return f"{before:%Y-%m-%d}:night", before
+
+
 class DailyRecheck:
     """Run the twice-daily recheck from the worker loop, a batch each
-    ``BATCH_INTERVAL_SECONDS`` until a slot is queued, logging its counts."""
+    ``BATCH_INTERVAL_SECONDS`` until a slot is queued, the oldest unfinished
+    slot first, none from 04:00 to 07:00, logging its counts. The first
+    check after the worker starts also finishes the slot before the due
+    one, which a restart may have left unfinished."""
 
     def __init__(self, database: db.Database) -> None:
         self.database, self.next_check_at, self.done = database, float("-inf"), set()
+        self.unfinished: list[tuple[str, datetime]] | None = None
 
     def run_when_due(self, now: datetime | None = None) -> None:
         if not isinstance(self.database, db.Database) or monotonic() < self.next_check_at:
             return
         self.next_check_at = monotonic() + CHECK_INTERVAL_SECONDS
-        with self.database.pool.connection() as connection:
-            due = due_recheck_slot(connection, now or datetime.now(UTC))
-        if due is None or due[0] in self.done:
+        now = now or datetime.now(UTC)
+        if 4 <= now.astimezone(UTC).hour < 7:
             return
+        if self.unfinished is None:
+            self.unfinished = [previous_recheck_slot(now)]
+        with self.database.pool.connection() as connection:
+            due = due_recheck_slot(connection, now)
+        if due is not None and due[0] not in self.done and due not in self.unfinished:
+            self.unfinished.append(due)
+        if not self.unfinished:
+            return
+        slot = self.unfinished[0]
         try:
-            queued, room = queue_recheck(self.database, *due)
+            queued, room = queue_recheck(self.database, *slot)
         except Exception as error:  # noqa: BLE001 - retry at the next check
             result = {"status": "failed", "error": repr(error)[:300]}
         else:
             if queued < room:
-                self.done.add(due[0])
-            else:
+                self.done.add(slot[0])
+                self.unfinished.remove(slot)
+            if self.unfinished:
                 self.next_check_at = monotonic() + BATCH_INTERVAL_SECONDS
-                if not queued:  # the lane is full
-                    return
+            if not room:  # the lane is full
+                return
             result = {"status": "queued" if queued < room else "queuing", "days": queued}
-        print(json.dumps({"event": "daily_recheck", "slot": due[0], **result}), flush=True)
+        print(json.dumps({"event": "daily_recheck", "slot": slot[0], **result}), flush=True)
