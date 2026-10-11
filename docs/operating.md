@@ -584,7 +584,12 @@ active player's last two ended days are also queued twice a day in the same
 lane, once the day-end recheck has finished and from 23:00 UTC, never from
 04:00 to 07:00 UTC, skipping days already waiting: about 26,000 jobs each
 time at 13,000 players, and evidence for such a day merges into its waiting
-job. The worker logs each run's count as `daily_recheck`. Before
+job. The lane takes the oldest first, so these are queued in batches, each
+minute only while fewer than 500 day rechecks wait, so evidence for any
+other day waits behind at most those; all at once, four at a time at about
+130 a minute, it would have waited up to about 3 hours. A pass not queued by
+04:00 UTC stops there. The worker logs each batch's count as `daily_recheck`,
+`queuing` until the pass is queued, then `queued`. Before
 October 2026 a player switched off during a day, such as the 2,037 moved out
 of Legend I when the 2026-10-05 Season started, got no Reset reading, so their
 day stayed `Live`; finish those with this command.

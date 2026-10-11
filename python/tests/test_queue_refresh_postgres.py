@@ -532,7 +532,7 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
         player_id = _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
         database = Database(connection_info)
         try:
-            count = queue_refresh.queue_recheck(database, "night", DAY_D)
+            count, _ = queue_refresh.queue_recheck(database, "night", DAY_D)
         finally:
             database.close()
         queued = _queued(connection_info, "reconcile:recheck:night:")
@@ -550,6 +550,49 @@ def test_the_daily_recheck_queues_the_last_two_ended_days(
         (f"reconcile:recheck:night:{player_id}:{day:%Y-%m-%dT%H:%M:%SZ}", DAY_RECHECK_PRIORITY)
         for day in (DAY_B, DAY_C)
     ]
+
+
+def test_the_daily_recheck_fills_its_lane_a_batch_at_a_time(
+    database_url: str, archive_server, monkeypatch, capsys
+) -> None:
+    # The lane takes the oldest first, so a whole pass queued at once would
+    # keep a recheck for any other day's evidence waiting behind it for hours.
+    monkeypatch.setattr(queue_refresh, "RECHECK_BATCH", 1)
+    monkeypatch.setattr(queue_refresh, "BATCH_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(queue_refresh, "CHECK_INTERVAL_SECONDS", 0)
+    night = DAY_D + timedelta(hours=18)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _quiet_days(connection_info, archive_server, [DAY_B, DAY_C])
+        capsys.readouterr()
+
+        def drain() -> list[str]:
+            with psycopg.connect(connection_info) as connection:
+                return [str(row[0]) for row in connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete',"
+                    " completed_at = clock_timestamp()"
+                    " WHERE priority = %s AND status = 'pending'"
+                    " RETURNING input_json ->> 'ranked_day_start'",
+                    (DAY_RECHECK_PRIORITY,),
+                )]
+
+        database = Database(connection_info)
+        recheck = queue_refresh.DailyRecheck(database)
+        try:
+            recheck.run_when_due(night)
+            recheck.run_when_due(night)
+            first = drain()
+            recheck.run_when_due(night)
+            second = drain()
+            recheck.run_when_due(night)
+            recheck.run_when_due(night)
+        finally:
+            database.close()
+
+    logged = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if '"daily_recheck"' in line]
+    assert [(line["status"], line["days"]) for line in logged] == [
+        ("queuing", 1), ("queuing", 1), ("queued", 0)]
+    assert sorted(first + second) == [f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C)]
 
 
 def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -> None:
