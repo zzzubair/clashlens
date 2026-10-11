@@ -135,7 +135,10 @@ def unplayed_sql(player_id: str, profile: str, season_start: str, before: str) -
     has not played yet (``unplayed_profile_sql``) and the player's saved
     Legend days from ``season_start`` to ``before`` hold no battle: both
     boards rank them at 5,000."""
-    return f"""({unplayed_profile_sql(profile)} AND NOT EXISTS (
+    # A one-row lookup rather than NOT EXISTS, which the planner may answer
+    # by reading every saved day of the Season with its battles: on 11
+    # October 2026 that took the Live Leaderboard past its 10 second limit.
+    return f"""({unplayed_profile_sql(profile)} AND (
         SELECT 1 FROM api_player_daily_logs AS played
         WHERE played.player_id = {player_id}
           AND played.ranked_day_start >= {season_start}
@@ -146,7 +149,8 @@ def unplayed_sql(player_id: str, profile: str, season_start: str, before: str) -
               SELECT 1 FROM api_player_daily_logs AS newer
               WHERE newer.player_id = played.player_id
                 AND newer.ranked_day_start = played.ranked_day_start
-                AND newer.version > played.version)))"""
+                AND newer.version > played.version)
+        LIMIT 1) IS NULL)"""
 
 
 # Each attacker's attacks and summed attack destruction on the battle days
