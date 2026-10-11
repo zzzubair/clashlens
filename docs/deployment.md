@@ -1176,9 +1176,11 @@ jobs every thread claims, however recently the live work arrived. On
 2026-10-08 the rest still went by waiting time, so live responses that arrived
 after 05:09 waited 21 minutes behind the Reset backlog. Build claims always
 take Reset-priority work first, so the board's build and checks never wait
-behind an army build. Among live work, a claim looks only at the 32 jobs that
-became due first, so a retried live job, due again from its retry time, can
-wait behind older live work. On 2026-10-07 the collector's outage delayed about 19,000
+behind an army build. Among live work, a claim looks at the 32 jobs that
+became due first and, separately, the 32 oldest jobs that already failed once,
+so a retried live job, due again from its retry time, still goes ahead of
+Reset work 20 minutes after it first arrived instead of waiting behind newer
+live work. On 2026-10-07 the collector's outage delayed about 19,000
 Reset readings by 35 minutes; while they also earned the waiting bonus, no live
 reading was processed until they were all done, 40 minutes later, and live
 pages fell up to 59 minutes behind. Operator batches
