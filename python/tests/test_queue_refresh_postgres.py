@@ -602,14 +602,16 @@ def test_an_evidence_recheck_due_before_a_daily_one_is_claimed_first(
                         " created_at = created_at - %(back)s WHERE deduplication_key LIKE %(key)s",
                         {"back": timedelta(hours=back), "key": key},
                     )
-            claimed = [claim.deduplication_key for _ in range(2)
-                       for claim in database.claim_jobs(owner="worker-1")]
+            claimed = [claim.deduplication_key for _ in range(3)
+                       for claim in database.claim_jobs(
+                           owner="worker-1", work_types=["reconcile_ranked_day"])]
         finally:
             database.close()
 
     day_b, day_c = (f"{day:%Y-%m-%dT%H:%M:%SZ}" for day in (DAY_B, DAY_C))
     assert claimed == [f"reconcile:recheck:night:{player_id}:{day_b}",
-                       f"reconcile:log:1:{player_id}:{day_c}"]
+                       f"reconcile:log:1:{player_id}:{day_c}",
+                       f"reconcile:recheck:night:{player_id}:{day_c}"]
 
 
 def test_evidence_for_a_day_merges_into_its_waiting_recheck(database_url: str) -> None:
