@@ -495,14 +495,16 @@ export default function TrackedLeaderboardRoute() {
                         <td className="trophy-cell" data-label="Trophies">
                           <TrophyMark />
                           <strong>{entry.trophies.toLocaleString()}</strong>
-                          {entry.tied ? (
-                            <span
-                              className="tie-pill"
-                              title="Same trophies as another player"
-                            >
-                              Tie
-                            </span>
-                          ) : null}
+                          <span className="tie-slot">
+                            {entry.tied ? (
+                              <span
+                                className="tie-pill"
+                                title="Same trophies as another player"
+                              >
+                                Tie
+                              </span>
+                            ) : null}
+                          </span>
                         </td>
                         <td data-label="Last updated">
                           <LocalTimestamp value={entry.freshness.observedAt} />

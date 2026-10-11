@@ -537,6 +537,11 @@
   font-size: 0.8rem;
 }
 
+/* Long clan names wrap like player names, leaving room for the Tie slot. */
+.leaderboard-table td:nth-child(3) {
+  overflow-wrap: anywhere;
+}
+
 .local-time {
   cursor: help;
 }
@@ -558,10 +563,18 @@
   font-weight: 700;
 }
 
+/* Every row keeps room for the Tie pill after its trophies, so trophies line
+   up whether or not a row has one. */
+.tie-slot {
+  display: inline-block;
+  width: 2.5rem;
+  margin-left: 0.4rem;
+  text-align: left;
+}
+
 /* Trophies equal to another player's; the Rank still orders them. */
 .tie-pill {
   display: inline-block;
-  margin-left: 0.4rem;
   padding: 0.05rem 0.45rem;
   border: 1px solid var(--cl-outline);
   border-radius: 999px;
@@ -1261,6 +1274,11 @@
   .leaderboard-table td:nth-child(4) {
     width: 1%;
     padding-right: 0.75rem;
+  }
+
+  /* Long player tags wrap so the Tie slot still fits beside the trophies. */
+  .leaderboard-table .player-tag {
+    overflow-wrap: anywhere;
   }
 
   .leaderboard-table th,
