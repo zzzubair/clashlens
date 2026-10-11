@@ -488,7 +488,8 @@ these steps, all run by the worker:
    count as an `army_rank_band_totals` event.
 5. The same timer gives each saved distinct army its
    [army type](domain.md#army-types), 50,000 a run after a rules change, then
-   counts one completed day's attacks per type, outside 04:30-07:00 UTC. The
+   saves one completed day's attack counts per attacker and distinct army in
+   `army_package_day_counts`, outside 04:30-07:00 UTC. The
    Armies view stays unavailable until that labelling finishes. The worker
    log shows each run as an `army_types` event; a `failed` run is retried
    after 10 minutes.

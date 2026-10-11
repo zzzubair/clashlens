@@ -114,8 +114,8 @@ SUPPORT_TROOPS = frozenset({
 })
 # Otherwise the main troop (any troop not in support) with the most camp
 # space names the army when it is clearly ahead of the other main troops: at
-# least 3 of it, at least 35% of their camp space, and at least 10% more than
-# the next main troop. Leaders not listed here make it Other.
+# least 3 of it, at least 35% of their camp space, and ahead of the next main
+# troop by at least 10% of that space. Leaders not listed here make it Other.
 LEADER_TYPES = {
     "troop:132": THROWER,
     "troop:80": SUPER_BOWLER,
